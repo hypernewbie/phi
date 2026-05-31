@@ -110,6 +110,11 @@ export class SessionsManager {
             this.activeCWD = data.active_cwd || data.workspaces[0] || '';
             this.workspaceSelect.value = this.activeCWD;
             
+            if (data.theme_color) {
+                this.app.accentColorSelect.value = data.theme_color;
+                this.app.applyAccentTheme(data.theme_color);
+            }
+            
             this.loadSessions();
         } catch (e) {
             console.error("[config] Failed to load workspace config:", e);

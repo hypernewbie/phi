@@ -59,7 +59,7 @@ export class DiffController {
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
-                cursor: '#7c6af7',
+                cursor: document.documentElement.style.getPropertyValue('--accent') || '#7c6af7',
                 cursorAccent: '#08080a',
                 black: '#08080a',
                 red: '#ef4444',

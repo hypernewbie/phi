@@ -25,6 +25,7 @@ var (
 
 type Config struct {
 	Workspaces []string `json:"workspaces"`
+	ThemeColor string   `json:"theme_color"`
 }
 
 func expandHome(path string) string {
@@ -46,6 +47,9 @@ func loadConfig() Config {
 	}
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
+	}
+	if cfg.ThemeColor == "" {
+		cfg.ThemeColor = "purple"
 	}
 	return cfg
 }
@@ -102,6 +106,7 @@ func main() {
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
+	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -302,8 +307,9 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"workspaces": cfg.Workspaces,
-		"active_cwd": activeCWD,
+		"workspaces":  cfg.Workspaces,
+		"active_cwd":  activeCWD,
+		"theme_color": cfg.ThemeColor,
 	})
 }
 
@@ -399,4 +405,28 @@ func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(suggestions)
+}
+
+func handleThemeUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	color := req["color"]
+	if color == "" {
+		http.Error(w, "Missing color", http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.ThemeColor = color
+	saveConfig(cfg)
+
+	w.WriteHeader(http.StatusOK)
 }
