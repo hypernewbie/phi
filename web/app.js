@@ -107,6 +107,23 @@ class App {
             this.applyAccentTheme(color);
             this.saveTheme(color);
         });
+
+        // 6. Setup mobile sidebar drawer toggle
+        const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
+        const sidebar = document.getElementById('sidebar-panel');
+        if (mobileSidebarToggle && sidebar) {
+            mobileSidebarToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sidebar.classList.toggle('drawer-open');
+            });
+            
+            // Close drawer when clicking outside it
+            document.addEventListener('click', (e) => {
+                if (sidebar.classList.contains('drawer-open') && !sidebar.contains(e.target) && e.target !== mobileSidebarToggle) {
+                    sidebar.classList.remove('drawer-open');
+                }
+            });
+        }
         
         console.log("[app] Phi initialized successfully");
     }

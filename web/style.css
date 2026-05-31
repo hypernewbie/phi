@@ -985,3 +985,121 @@ body {
 .hidden {
     display: none !important;
 }
+
+/* Default state for hamburger toggle on desktop */
+.mobile-only-btn {
+    display: none !important;
+}
+
+/* MOBILE RESPONSIVE DRAWERS */
+@media (max-width: 768px) {
+    /* Hide resize handles on mobile */
+    .resize-handle {
+        display: none !important;
+    }
+
+    /* Sidebar as a Slide-out Drawer */
+    .sidebar-panel {
+        position: fixed;
+        left: 0;
+        top: 48px;
+        bottom: 0;
+        width: 280px !important; /* Force fixed width on drawer */
+        height: calc(100vh - 48px);
+        z-index: 1000;
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+        border-right: 1px solid var(--bg-border);
+    }
+
+    .sidebar-panel.drawer-open {
+        transform: translateX(0);
+    }
+
+    /* Diff panel as a slide-out drawer on mobile if opened */
+    .diff-panel {
+        position: fixed;
+        right: 0;
+        top: 48px;
+        bottom: 0;
+        width: 320px !important;
+        height: calc(100vh - 48px);
+        z-index: 1000;
+        transform: translateX(100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        border-left: 1px solid var(--bg-border);
+    }
+    
+    .diff-panel:not(.hidden) {
+        display: flex !important;
+        transform: translateX(0);
+    }
+    
+    .diff-panel.hidden {
+        transform: translateX(100%);
+        display: flex !important; /* Keep it flex so transition works */
+    }
+
+    /* Show hamburger menu toggle on mobile only */
+    .mobile-only-btn {
+        display: flex !important;
+    }
+    
+    /* Workspace Area responsiveness */
+    .workspace-area {
+        max-width: 140px;
+    }
+    .workspace-area select {
+        min-width: 80px;
+        max-width: 120px;
+        font-size: 11px;
+    }
+    .workspace-area button {
+        font-size: 13px;
+    }
+    
+    /* Hide hostname on very small screens to fit workspace selector */
+    .hostname-display {
+        display: none !important;
+    }
+    
+    /* Panel headings styling for mobile layout */
+    .app-header {
+        padding: 0 8px;
+    }
+    
+    .header-actions {
+        gap: 6px;
+    }
+    
+    .theme-area {
+        padding: 4px 6px;
+    }
+    
+    .theme-area select {
+        min-width: 40px;
+        max-width: 60px;
+        font-size: 11px;
+    }
+    
+    .header-btn {
+        padding: 6px 8px;
+        font-size: 11px;
+    }
+    .header-btn span {
+        display: none; /* Hide label to save space, icon is enough on mobile */
+    }
+    
+    /* Preset buttons container styling for mobile */
+    .presets-container {
+        padding: 6px;
+        gap: 4px;
+    }
+    
+    .preset-btn {
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+}
