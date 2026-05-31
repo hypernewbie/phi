@@ -24,6 +24,7 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 		SELECT s.id, s.title, s.directory, p.worktree, s.time_updated
 		FROM session s
 		LEFT JOIN project p ON s.project_id = p.id
+		WHERE s.parent_id IS NULL OR s.parent_id = ''
 		ORDER BY s.time_updated DESC
 	`
 	rows, err := db.Query(query)
