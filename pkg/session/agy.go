@@ -6,10 +6,47 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+var (
+	agyBackslashRun = regexp.MustCompile(`\\+`)
+	agyDrivePathRe  = regexp.MustCompile(`[A-Za-z]:/[^"]*`)
+)
+
+// extractAgyCwdFromBrain recovers the workspace directory for a conversation
+// from agy's own transcript log, which records a "Cwd" field per step. This is
+// the authoritative source — history.jsonl / last_conversations.json only cover
+// a handful of conversations. The path is double-escaped in the log
+// (e.g. "Cwd":"\"C:\\\\code\\\\github\\\\vrhi\""), so collapse backslash runs to
+// a single forward slash and pull out the drive-letter path. Returns "" if the
+// transcript is absent or has no Cwd.
+func extractAgyCwdFromBrain(uuid string) string {
+	p := expandHome("~/.gemini/antigravity-cli/brain/" + uuid + "/.system_generated/logs/transcript.jsonl")
+	f, err := os.Open(p)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		idx := strings.Index(line, `"Cwd":`)
+		if idx < 0 {
+			continue
+		}
+		seg := agyBackslashRun.ReplaceAllString(line[idx:], "/")
+		if m := agyDrivePathRe.FindString(seg); m != "" {
+			return strings.TrimRight(filepath.ToSlash(m), "/")
+		}
+	}
+	return ""
+}
 
 type AgyMeta struct {
 	Name   string `json:"name"`
@@ -112,6 +149,7 @@ func syncAgyCwdMappings(m map[string]AgyMeta) {
 				if uuid == "" || dir == "" {
 					continue
 				}
+				dir = filepath.ToSlash(dir)
 				if meta, exists := m[uuid]; exists {
 					if meta.Cwd == "" {
 						meta.Cwd = dir
@@ -139,14 +177,15 @@ func syncAgyCwdMappings(m map[string]AgyMeta) {
 			}
 			if err := json.Unmarshal(scanner.Bytes(), &entry); err == nil {
 				if entry.ConversationId != "" && entry.Workspace != "" {
+					ws := filepath.ToSlash(entry.Workspace)
 					if meta, exists := m[entry.ConversationId]; exists {
 						if meta.Cwd == "" {
-							meta.Cwd = entry.Workspace
+							meta.Cwd = ws
 							m[entry.ConversationId] = meta
 						}
 					} else {
 						m[entry.ConversationId] = AgyMeta{
-							Cwd:    entry.Workspace,
+							Cwd:    ws,
 							SeenAt: time.Now().Format(time.RFC3339),
 						}
 					}
@@ -197,6 +236,17 @@ func ListAgySessions(cwd string) ([]Session, error) {
 		// Look up in sidecar metadata
 		meta, exists := m[uuid]
 
+		// Recover the real workspace from agy's transcript log if we don't
+		// already have one cached. This covers the bulk of conversations that
+		// history.jsonl / last_conversations.json never recorded.
+		if meta.Cwd == "" {
+			if bc := extractAgyCwdFromBrain(uuid); bc != "" {
+				meta.Cwd = bc
+				m[uuid] = meta
+				exists = true
+			}
+		}
+
 		// Fallback for newly spawned sessions (created in the last 60 seconds)
 		if meta.Cwd == "" && time.Since(info.ModTime()) < 60*time.Second {
 			meta.Cwd = cwd
@@ -204,12 +254,19 @@ func ListAgySessions(cwd string) ([]Session, error) {
 			exists = true
 		}
 
-		// Group / filter sessions matching current directory
-		// If meta has a CWD, we filter by CWD (cwd matches exactly).
-		// If meta CWD is empty, we treat it as global/unassigned and show it as a fallback,
-		// allowing the user to resume and associate it.
-		if cwd != "" && meta.Cwd != "" && meta.Cwd != cwd {
-			continue
+		// Filter by workspace. Normalize separators — git returns forward slashes
+		// on Windows but agy may record backslashes.
+		// Special sentinel "--no-workspace--": return only sessions with no cwd.
+		// Otherwise: return sessions matching the given cwd (strict — no global
+		// fallback for empty-cwd sessions so they don't pollute every worktree).
+		if cwd == "--no-workspace--" {
+			if meta.Cwd != "" {
+				continue
+			}
+		} else if cwd != "" {
+			if meta.Cwd == "" || filepath.ToSlash(meta.Cwd) != filepath.ToSlash(cwd) {
+				continue
+			}
 		}
 
 		title := meta.Name
