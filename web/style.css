@@ -468,8 +468,17 @@ body {
     cursor: pointer;
     height: 34px;
     max-width: 180px;
-    white-space: nowrap;
+    min-width: 80px;
     transition: all 0.15s;
+    overflow: hidden;
+}
+
+.tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
 }
 
 .tab:hover {
