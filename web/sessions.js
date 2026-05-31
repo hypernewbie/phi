@@ -440,8 +440,11 @@ export class SessionsManager {
                     session_id: ''
                 })
             });
-            if (!res.ok) throw new Error("Failed to spawn session");
-            
+            if (!res.ok) {
+                const errText = await res.text().catch(() => 'unknown error');
+                throw new Error(errText.trim() || 'Failed to spawn session');
+            }
+
             const data = await res.json();
             let coderName = 'Shell';
             if (this.activeCoder === 'opencode') coderName = 'OpenCode';
@@ -453,7 +456,7 @@ export class SessionsManager {
             
             this.loadSessions();
         } catch (e) {
-            alert(`Failed to launch new session: ${e.message}`);
+            this.app.showToast(e.message, { type: 'error' });
         }
     }
     
@@ -468,14 +471,17 @@ export class SessionsManager {
                     session_id: sessionId
                 })
             });
-            if (!res.ok) throw new Error("Failed to connect session");
+            if (!res.ok) {
+                const errText = await res.text().catch(() => 'unknown error');
+                throw new Error(errText.trim() || 'Failed to connect session');
+            }
             
             const data = await res.json();
             this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder);
             
             this.highlightActiveSession(sessionId);
         } catch (e) {
-            alert(`Failed to launch session: ${e.message}`);
+            this.app.showToast(e.message, { type: 'error' });
         }
     }
     
