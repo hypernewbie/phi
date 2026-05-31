@@ -106,3 +106,41 @@ func TestAgySessionCwdAndSync(t *testing.T) {
 	// This should run without errors even if cache or history files do not exist or are empty
 	syncAgyCwdMappings(m)
 }
+
+func TestListGitWorktrees(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err == nil {
+		wts, err := ListGitWorktrees(cwd)
+		if err != nil {
+			t.Errorf("Unexpected error listing worktrees in active directory: %v", err)
+		}
+		if len(wts) < 1 {
+			t.Error("Expected at least 1 worktree for active git repository, got 0")
+		}
+		found := false
+		for _, wt := range wts {
+			if wt.Path != "" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected to find valid worktree paths")
+		}
+	}
+
+	tempDir := t.TempDir()
+	wts, err := ListGitWorktrees(tempDir)
+	if err != nil {
+		t.Errorf("Unexpected error listing worktrees in temp directory: %v", err)
+	}
+	if len(wts) != 1 {
+		t.Errorf("Expected fallback worktrees size to be 1, got %d", len(wts))
+	}
+	if wts[0].Path != tempDir {
+		t.Errorf("Expected fallback path to be %q, got %q", tempDir, wts[0].Path)
+	}
+	if wts[0].Branch != "" {
+		t.Errorf("Expected fallback branch to be empty, got %q", wts[0].Branch)
+	}
+}
