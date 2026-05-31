@@ -166,6 +166,8 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 		sessions, err = session.ListClaudeSessions(cwd)
 	case "agy":
 		sessions, err = session.ListAgySessions(cwd)
+	case "bash":
+		sessions = []session.Session{}
 	default:
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
