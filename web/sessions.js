@@ -126,6 +126,7 @@ export class SessionsManager {
                 if (hostEl) {
                     hostEl.innerText = ` — ${data.hostname}`;
                 }
+                document.title = `Φ phi — ${data.hostname}`;
             }
             
             this.loadSessions();
