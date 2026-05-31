@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
@@ -25,9 +26,16 @@ var crGapDur = func() time.Duration {
 }()
 
 type Pty struct {
-	cmd    *gopty.Cmd
-	pt     gopty.Pty
-	Closed chan struct{}
+	cmd       *gopty.Cmd
+	pt        gopty.Pty
+	Closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (p *Pty) closePTY() {
+	p.closeOnce.Do(func() {
+		_ = p.pt.Close()
+	})
 }
 
 // ResolveCommand checks if a specific binary exists, particularly for agy
@@ -84,7 +92,7 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 
 	go func() {
 		_ = cmd.Wait()
-		_ = pt.Close()
+		p.closePTY()
 		close(p.Closed)
 	}()
 
@@ -145,6 +153,6 @@ func (p *Pty) Kill() error {
 	if p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
-	_ = p.pt.Close()
+	p.closePTY()
 	return nil
 }
