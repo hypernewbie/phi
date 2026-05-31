@@ -78,14 +78,14 @@ export class TabManager {
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
                 this.sendRawInput('\x03');
-                this.inputTextArea.focus();
+                this.inputTextArea.focus({ preventScroll: true });
             });
         }
 
         if (this.copyInputBtn) {
             this.copyInputBtn.addEventListener('click', () => {
                 this.sendRawInput('/copy\r');
-                this.inputTextArea.focus();
+                this.inputTextArea.focus({ preventScroll: true });
             });
         }
 
@@ -114,7 +114,7 @@ export class TabManager {
             if (activeTab.directMode) {
                 this.focusActiveTerminal();
             } else {
-                this.inputTextArea.focus();
+                this.inputTextArea.focus({ preventScroll: true });
             }
         });
         
@@ -122,10 +122,8 @@ export class TabManager {
         let resizeTimeout;
         window.addEventListener('resize', () => {
             const activeTab = this.getActiveTab();
-            if (activeTab && !activeTab.isDead && activeTab.isAtBottom === undefined) {
-                const buffer = activeTab.term.buffer.active;
-                activeTab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
-                activeTab.lastScrollY = buffer.viewportY;
+            if (activeTab && !activeTab.isDead) {
+                activeTab.isAtBottom = true;
             }
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
@@ -239,6 +237,15 @@ export class TabManager {
         // Open in DOM
         term.open(termContainer);
         
+        // Prevent browser viewport jump when xterm focuses its hidden textarea
+        const textarea = termContainer.querySelector('textarea.xterm-helper-textarea');
+        if (textarea) {
+            const originalFocus = textarea.focus.bind(textarea);
+            textarea.focus = (options) => {
+                originalFocus({ preventScroll: true, ...options });
+            };
+        }
+        
         // Prevent browser default behavior for standard CLI shortcuts in Direct mode
         term.attachCustomKeyEventHandler((e) => {
             if (tabInfo && tabInfo.directMode && e.ctrlKey && !e.altKey && !e.shiftKey) {
@@ -326,7 +333,7 @@ export class TabManager {
                 if (tab.directMode) {
                     term.focus();
                 } else {
-                    this.inputTextArea.focus();
+                    this.inputTextArea.focus({ preventScroll: true });
                 }
                 
                 // 4. Update UI and fit (which will restore the scroll perfectly)
@@ -450,7 +457,7 @@ export class TabManager {
             }, 300);
         }
         
-        this.inputTextArea.focus();
+        this.inputTextArea.focus({ preventScroll: true });
     }
     
     sendRawInput(bytes) {
@@ -474,17 +481,39 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
         
         try {
+            // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
             const isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
             const scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
             
             activeTab.fitAddon.fit();
             
-            if (isAtBottom) {
-                activeTab.term.scrollToBottom();
-            } else {
-                activeTab.term.scrollToLine(scrollY);
+            // Restore scroll state POST-FIT
+            // Brute-force spinlock scroll-spam BRRRRRR for 300ms
+            if (!activeTab.spamInterval) {
+                activeTab.spamInterval = setInterval(() => {
+                    if (isAtBottom) {
+                        activeTab.term.scrollToBottom();
+                    } else {
+                        activeTab.term.scrollToLine(scrollY);
+                    }
+                }, 10);
             }
+            
+            if (activeTab.stopSpamTimeout) {
+                clearTimeout(activeTab.stopSpamTimeout);
+            }
+            
+            activeTab.stopSpamTimeout = setTimeout(() => {
+                clearInterval(activeTab.spamInterval);
+                activeTab.spamInterval = null;
+                activeTab.stopSpamTimeout = null;
+                if (isAtBottom) {
+                    activeTab.term.scrollToBottom();
+                } else {
+                    activeTab.term.scrollToLine(scrollY);
+                }
+            }, 300);
             
             // Clear temporary saved scroll state
             activeTab.isAtBottom = undefined;
