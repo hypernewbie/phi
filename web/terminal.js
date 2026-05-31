@@ -282,7 +282,14 @@ export class TabManager {
         const val = this.inputTextArea.value;
         if (!val) return;
         
-        activeTab.ws.sendInput(val + '\r');
+        // Wrap in bracketed paste markers for large prompts or multiline text
+        // to prevent TUI trickle-rendering / autocomplete lagging.
+        let payload = val;
+        if (val.length > 16 || val.includes('\n')) {
+            payload = '\x1b[200~' + val + '\x1b[201~';
+        }
+        
+        activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
         this.focusActiveTerminal();
     }
