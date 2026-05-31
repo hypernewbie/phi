@@ -311,11 +311,15 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
+	hName, _ := os.Hostname()
+	hName = strings.ToUpper(hName)
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"workspaces":  cfg.Workspaces,
 		"active_cwd":  activeCWD,
 		"theme_color": cfg.ThemeColor,
+		"hostname":    hName,
 	})
 }
 
