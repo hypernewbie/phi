@@ -101,6 +101,7 @@ func main() {
 	http.HandleFunc("/api/diff", handleGetDiff)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
+	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -345,4 +346,53 @@ func handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
+	typed := r.URL.Query().Get("path")
+	expanded := expandHome(typed)
+
+	parent := filepath.Dir(expanded)
+	prefix := filepath.Base(expanded)
+
+	if strings.HasSuffix(typed, "/") || typed == "" {
+		parent = expanded
+		if parent == "" {
+			parent = "/"
+		}
+		prefix = ""
+	}
+
+	files, err := os.ReadDir(parent)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]string{})
+		return
+	}
+
+	var suggestions []string
+	for _, f := range files {
+		if !f.IsDir() || strings.HasPrefix(f.Name(), ".") {
+			continue // Skip non-directories and hidden items
+		}
+		name := f.Name()
+		if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			suggPath := filepath.Join(parent, name)
+			// Return path starting with ~ if the user typed ~
+			if strings.HasPrefix(typed, "~") {
+				home, err := os.UserHomeDir()
+				if err == nil {
+					suggPath = strings.Replace(suggPath, home, "~", 1)
+				}
+			}
+			suggestions = append(suggestions, suggPath)
+		}
+	}
+
+	if len(suggestions) > 10 {
+		suggestions = suggestions[:10]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(suggestions)
 }
