@@ -1088,9 +1088,11 @@ body {
         font-size: 13px;
     }
     
-    /* Hide hostname on very small screens to fit workspace selector */
-    .hostname-display {
-        display: none !important;
+    /* Show hostname on mobile next to brand logo */
+    .brand .hostname-display {
+        display: inline-block !important;
+        font-size: 11px;
+        margin-left: 2px;
     }
     
     /* Panel headings styling for mobile layout */
@@ -1103,16 +1105,47 @@ body {
         gap: 6px;
     }
     
+    /* Convert theme area to a premium, compact circular icon dropdown button on mobile */
     .theme-area {
-        padding: 4px 6px;
+        display: flex !important;
+        position: relative;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 50%;
+        justify-content: center;
+        align-items: center;
+        background-color: var(--bg-elevated);
+        border: 1px solid var(--bg-border);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     
-    /* Increase the width of the theme select selector so "Purple" isn't cut off! */
+    .theme-area:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 8px var(--accent-glow);
+    }
+    
     .theme-area select {
-        min-width: 70px;
-        max-width: 90px;
-        font-size: 12px;
-        padding-right: 14px;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        cursor: pointer;
+        min-width: 0;
+        max-width: none;
+        padding: 0;
+        margin: 0;
+        background: none;
+    }
+    
+    .theme-area select option {
+        background-color: var(--bg-panel);
+        color: var(--text-primary);
+        font-size: 14px;
     }
     
     .header-btn {
