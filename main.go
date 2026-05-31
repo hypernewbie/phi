@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
@@ -245,6 +247,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	command := c.Command
 	var args []string
 	if req.SessionID != "" && c.ResumeArg != "" {
 		args = append(c.Args, c.ResumeArg, req.SessionID)
@@ -252,12 +255,21 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		args = c.Args
 	}
 
+	// On Windows, if the requested shell is "bash", fall back to "powershell.exe"
+	// since "bash" is typically absent, is WSL, or is a non-interactive shell that hangs.
+	if req.Coder == "bash" && runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("bash"); err != nil {
+			command = "powershell.exe"
+			args = []string{"-NoLogo"}
+		}
+	}
+
 	spawnDir := req.Cwd
 	if spawnDir == "" {
 		spawnDir = activeCWD
 	}
 
-	inst, err := ptyManager.Spawn(spawnDir, c.Command, args, req.Coder, req.SessionID)
+	inst, err := ptyManager.Spawn(spawnDir, command, args, req.Coder, req.SessionID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to spawn PTY: %v", err), http.StatusInternalServerError)
 		return
