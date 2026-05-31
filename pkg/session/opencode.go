@@ -42,8 +42,13 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 			continue
 		}
 
+		sessionCwd := directory
+		if sessionCwd == "" {
+			sessionCwd = worktree
+		}
+
 		// Group/filter sessions matching current directory
-		if cwd != "" && worktree != cwd {
+		if cwd != "" && sessionCwd != cwd {
 			continue
 		}
 
@@ -52,7 +57,7 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 		sessions = append(sessions, Session{
 			ID:          id,
 			Title:       title,
-			Cwd:         worktree,
+			Cwd:         sessionCwd,
 			Coder:       "opencode",
 			TimeUpdated: t,
 		})
