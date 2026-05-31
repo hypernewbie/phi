@@ -124,12 +124,19 @@ export class SessionsManager {
                 this.app.applyAccentTheme(data.theme_color);
             }
 
+            // Save the model presets list and redraw current tab presets.
+            this.app.modelPresets = data.model_presets || [];
+            const activeTab = this.app.tabManager.getActiveTab();
+            if (activeTab) {
+                this.app.tabManager.renderPresets(activeTab.coder);
+            }
+
             if (data.hostname) {
                 const hostEl = document.getElementById('hostname-display');
                 if (hostEl) {
                     hostEl.innerText = ` — ${data.hostname}`;
                 }
-                document.title = `Φ phi — ${data.hostname}`;
+                document.title = `Φ ${data.hostname}`;
             }
             
             await this.loadSessions();

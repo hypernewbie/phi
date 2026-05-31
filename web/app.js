@@ -229,6 +229,34 @@ class App {
         if (this.tabManager) {
             this.tabManager.applyThemeToAllActiveTerminals(theme.accent);
         }
+
+        // Dynamically update SVG favicon to match the selected theme
+        this.updateFavicon(theme.accent, theme.accentDim);
+    }
+
+    updateFavicon(accent, accentDim) {
+        let link = document.querySelector("link[rel~='icon']");
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            link.type = 'image/svg+xml';
+            document.getElementsByTagName('head')[0].appendChild(link);
+        }
+        
+        const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="${accent}" />
+      <stop offset="100%" stop-color="${accentDim}" />
+    </radialGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#glow)"/>
+  <text x="50%" y="60%" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">Φ</text>
+</svg>
+        `.trim();
+        
+        link.href = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
     }
 
     async saveTheme(colorKey) {

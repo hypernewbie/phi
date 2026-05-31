@@ -18,9 +18,6 @@ export class TabManager {
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         
-        // History preset queue
-        this.recentCommands = JSON.parse(localStorage.getItem('phi_recent_commands')) || [];
-        
         this.setupEventListeners();
     }
     
@@ -124,10 +121,26 @@ export class TabManager {
         // Fit active terminal on window resize
         let resizeTimeout;
         window.addEventListener('resize', () => {
+            const activeTab = this.getActiveTab();
+            if (activeTab && !activeTab.isDead && activeTab.isAtBottom === undefined) {
+                const buffer = activeTab.term.buffer.active;
+                activeTab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+                activeTab.lastScrollY = buffer.viewportY;
+            }
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 this.fitActiveTerminal();
             }, 100);
+        });
+
+        // Close model presets dropup on clicking outside
+        document.addEventListener('click', (e) => {
+            const dropup = document.getElementById('model-presets-dropup');
+            if (dropup && !dropup.classList.contains('hidden')) {
+                if (!e.target.closest('#model-presets-dropup') && !e.target.closest('.model-trigger-btn')) {
+                    dropup.classList.add('hidden');
+                }
+            }
         });
     }
     
@@ -143,6 +156,13 @@ export class TabManager {
     }
     
     updateDirectModeUI(tab) {
+        // Save scroll state before DOM changes alter the terminal height
+        if (tab && !tab.isDead && tab.isAtBottom === undefined) {
+            const buffer = tab.term.buffer.active;
+            tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+            tab.lastScrollY = buffer.viewportY;
+        }
+
         if (tab.directMode) {
             this.directModeToggle.classList.add('active');
             this.inputBarContainer.classList.add('direct-mode-active');
@@ -219,6 +239,25 @@ export class TabManager {
         // Open in DOM
         term.open(termContainer);
         
+        // Prevent browser default behavior for standard CLI shortcuts in Direct mode
+        term.attachCustomKeyEventHandler((e) => {
+            if (tabInfo && tabInfo.directMode && e.ctrlKey && !e.altKey && !e.shiftKey) {
+                const key = e.key.toLowerCase();
+                if (['o', 's', 'p', 'f', 'r', 'g'].includes(key)) {
+                    e.preventDefault();
+                }
+            }
+            return true;
+        });
+        
+        // Setup terminal bell notification sound.
+        const bellAudio = new Audio('vendor/bell.wav');
+        bellAudio.volume = 0.3;
+        term.onBell(() => {
+            bellAudio.currentTime = 0;
+            bellAudio.play().catch(() => {});
+        });
+        
         // Graceful WebGL/Canvas renderer
         try {
             const webgl = new window.WebglAddon.WebglAddon();
@@ -240,7 +279,9 @@ export class TabManager {
             tabEl,
             termContainer,
             directMode: false, // Hybrid focus model by default
-            isDead: false
+            isDead: false,
+            isAtBottom: true,
+            lastScrollY: 0
         };
         
         ws = new PTYWebSocket(
@@ -268,14 +309,29 @@ export class TabManager {
             }
         });
         
-        // Click terminal → enter direct input mode
-        termContainer.addEventListener('click', () => {
+        // Double click terminal → toggle direct focus mode
+        termContainer.addEventListener('dblclick', (e) => {
+            e.preventDefault();
             const tab = this.tabs.get(paneId);
-            if (tab && !tab.directMode) {
-                tab.directMode = true;
+            if (tab) {
+                // 1. Capture scroll state BEFORE any focus or UI changes
+                const buffer = tab.term.buffer.active;
+                tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+                tab.lastScrollY = buffer.viewportY;
+                
+                // 2. Toggle mode
+                tab.directMode = !tab.directMode;
+                
+                // 3. Focus first so focus-induced browser scroll resets are captured
+                if (tab.directMode) {
+                    term.focus();
+                } else {
+                    this.inputTextArea.focus();
+                }
+                
+                // 4. Update UI and fit (which will restore the scroll perfectly)
                 this.updateDirectModeUI(tab);
             }
-            term.focus();
         });
         
         // Switch to the newly created tab
@@ -295,6 +351,8 @@ export class TabManager {
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
+            prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY - 1;
+            prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
         }
@@ -392,18 +450,6 @@ export class TabManager {
             }, 300);
         }
         
-        // Save to unique recent commands list
-        const trimmed = val.trim();
-        if (trimmed) {
-            this.recentCommands = this.recentCommands.filter(cmd => cmd !== trimmed);
-            this.recentCommands.push(trimmed);
-            if (this.recentCommands.length > 10) {
-                this.recentCommands.shift();
-            }
-            localStorage.setItem('phi_recent_commands', JSON.stringify(this.recentCommands));
-            this.renderPresets(activeTab.coder);
-        }
-        
         this.inputTextArea.focus();
     }
     
@@ -428,7 +474,22 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
         
         try {
+            const buffer = activeTab.term.buffer.active;
+            const isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
+            const scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
+            
             activeTab.fitAddon.fit();
+            
+            if (isAtBottom) {
+                activeTab.term.scrollToBottom();
+            } else {
+                activeTab.term.scrollToLine(scrollY);
+            }
+            
+            // Clear temporary saved scroll state
+            activeTab.isAtBottom = undefined;
+            activeTab.lastScrollY = undefined;
+            
             this.sendResizeToBackend(activeTab);
         } catch (e) {
             console.error("[term] Fit error:", e);
@@ -456,12 +517,6 @@ export class TabManager {
             return;
         }
         
-        // Hide presets container if absolutely nothing to show
-        if (!hasCoderPresets && this.recentCommands.length === 0) {
-            this.presetsContainer.classList.add('hidden');
-            return;
-        }
-        
         this.presetsContainer.classList.remove('hidden');
         
         // 1. Render Static Coder Presets
@@ -477,28 +532,117 @@ export class TabManager {
             });
         }
         
-        // 2. Render Vertical Divider if both types exist
-        if (hasCoderPresets && this.recentCommands.length > 0) {
+        // 2. Render Divider if static presets exist
+        if (hasCoderPresets) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
         }
         
-        // 3. Render Rotating Unique Recent Commands
-        const reversedRecents = [...this.recentCommands].reverse();
-        reversedRecents.forEach(cmd => {
-            const btn = document.createElement('button');
-            btn.className = 'preset-btn recent-cmd-btn';
-            
-            const label = cmd.length > 16 ? cmd.substring(0, 15) + '…' : cmd;
-            btn.innerText = `⏱ ${label}`;
-            btn.title = cmd;
-            
-            btn.addEventListener('click', () => {
-                this.sendRawInput(cmd + '\r');
-            });
-            this.presetsContainer.appendChild(btn);
+        // 3. Render single Models trigger button
+        const modelsTriggerBtn = document.createElement('button');
+        modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
+        modelsTriggerBtn.innerText = '🤖 Models ▾';
+        modelsTriggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropup = document.getElementById('model-presets-dropup');
+            if (dropup) {
+                const wasHidden = dropup.classList.contains('hidden');
+                if (wasHidden) {
+                    dropup.classList.remove('hidden');
+                    // Position the dropup above the button
+                    const btnRect = modelsTriggerBtn.getBoundingClientRect();
+                    const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
+                    dropup.style.left = `${btnRect.left - containerRect.left}px`;
+                    this.renderModelDropup();
+                } else {
+                    dropup.classList.add('hidden');
+                }
+            }
         });
+        this.presetsContainer.appendChild(modelsTriggerBtn);
+        
+        // Auto-refresh the dropup content if it's currently open
+        const dropup = document.getElementById('model-presets-dropup');
+        if (dropup && !dropup.classList.contains('hidden')) {
+            this.renderModelDropup();
+        }
+    }
+    
+    renderModelDropup() {
+        const dropup = document.getElementById('model-presets-dropup');
+        if (!dropup) return;
+        dropup.innerHTML = '';
+        
+        const modelPresets = this.app.modelPresets || [];
+        
+        // 1. Header
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.innerText = 'Model Presets';
+        dropup.appendChild(header);
+        
+        // 2. Render preset rows
+        modelPresets.forEach(model => {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+            
+            const btn = document.createElement('button');
+            btn.className = 'dropup-model-btn';
+            btn.innerText = model;
+            btn.addEventListener('click', () => {
+                this.sendRawInput(`/model ${model}\r`);
+                dropup.classList.add('hidden');
+            });
+            row.appendChild(btn);
+            
+            const delBtn = document.createElement('button');
+            delBtn.className = 'dropup-del-btn';
+            delBtn.innerHTML = '×';
+            delBtn.title = `Delete model preset ${model}`;
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (confirm(`Remove model preset "${model}"?`)) {
+                    try {
+                        await fetch('/api/config/models', {
+                            method: 'DELETE',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model })
+                        });
+                        await this.app.sessionsManager.loadConfig();
+                    } catch (err) {
+                        console.error("Failed to delete model preset:", err);
+                    }
+                }
+            });
+            row.appendChild(delBtn);
+            dropup.appendChild(row);
+        });
+        
+        // 3. Add Preset Action Row
+        const addRow = document.createElement('div');
+        addRow.className = 'dropup-add-row';
+        
+        const addBtn = document.createElement('button');
+        addBtn.className = 'dropup-add-btn';
+        addBtn.innerText = '+ Add Model Preset...';
+        addBtn.addEventListener('click', async () => {
+            const model = prompt("Enter model name (e.g. deepseek/deepseek-v4-flash):");
+            if (model && model.trim()) {
+                try {
+                    await fetch('/api/config/models', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: model.trim() })
+                    });
+                    await this.app.sessionsManager.loadConfig();
+                } catch (err) {
+                    console.error("Failed to add model preset:", err);
+                }
+            }
+        });
+        addRow.appendChild(addBtn);
+        dropup.appendChild(addRow);
     }
 
     applyThemeToAllActiveTerminals(color) {

@@ -778,12 +778,20 @@ body {
 /* PRESETS PANEL */
 .presets-container {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    align-items: center;
     gap: 6px;
     padding: 8px 12px;
     background-color: var(--bg-panel);
     border-top: 1px solid var(--bg-border);
     flex-shrink: 0;
+    scrollbar-width: none; /* Hide scrollbar Firefox */
+    -ms-overflow-style: none;  /* Hide scrollbar IE/Edge */
+}
+
+.presets-container::-webkit-scrollbar {
+    display: none; /* Hide scrollbar Chrome/Safari/Opera */
 }
 
 .preset-btn {
@@ -824,6 +832,131 @@ body {
     border-color: var(--accent);
     color: var(--accent-bright);
 }
+
+/* Custom Model Presets Drop-up Floating Menu */
+.model-presets-dropup {
+    position: absolute;
+    bottom: 40px; /* sits right above presets bar */
+    z-index: 1000;
+    width: 260px;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: slideUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.model-presets-dropup.hidden {
+    display: none !important;
+}
+
+.dropup-header {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--bg-border);
+    background-color: var(--bg-elevated);
+}
+
+.dropup-row {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.dropup-row:hover {
+    background-color: rgba(124, 106, 247, 0.06);
+}
+
+.dropup-model-btn {
+    flex: 1;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 8px 12px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.1s;
+}
+
+.dropup-model-btn:hover {
+    color: var(--accent-bright);
+}
+
+.dropup-del-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 15px;
+    padding: 0 12px;
+    cursor: pointer;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    transition: all 0.15s;
+    border-left: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.dropup-del-btn:hover {
+    color: #f43f5e;
+    background-color: rgba(244, 63, 94, 0.1);
+}
+
+.dropup-add-row {
+    background-color: var(--bg-elevated);
+    border-top: 1px solid var(--bg-border);
+}
+
+.dropup-add-btn {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--accent-bright);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.dropup-add-btn:hover {
+    background-color: rgba(124, 106, 247, 0.1);
+    color: var(--text-primary);
+}
+
+.preset-btn.model-trigger-btn {
+    border-color: var(--accent);
+    color: var(--accent-bright);
+}
+
+.preset-btn.model-trigger-btn:hover {
+    background-color: rgba(124, 106, 247, 0.15);
+    color: var(--text-primary);
+}
+
 
 /* RIGHT PANEL: DIFF / LOG VIEW */
 .diff-panel {

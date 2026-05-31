@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Φ phi — AI Multiplexer</title>
+    <title>Φ phi</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3CradialGradient id='glow' cx='50%25' cy='50%25' r='50%25'%3E%3Cstop offset='0%25' stop-color='%239a8dfa' /%3E%3Cstop offset='100%25' stop-color='%237c6af7' /%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23glow)'/%3E%3Ctext x='50%25' y='60%25' font-family='sans-serif' font-size='20' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EΦ%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="vendor/xterm.css">
     <script src="vendor/xterm.js"></script>
     <script src="vendor/xterm-addon-fit.js"></script>
@@ -166,6 +167,9 @@
                     </div>
                     
                     <div id="presets-container" class="presets-container hidden"></div>
+                    
+                    <!-- Floating Drop-up for Model Presets -->
+                    <div id="model-presets-dropup" class="model-presets-dropup hidden"></div>
                 </div>
             </main>
 
@@ -178,6 +182,7 @@
                     <div class="diff-tabs">
                         <button class="diff-tab-btn" data-tab="diff">GIT DIFF</button>
                         <button class="diff-tab-btn active" data-tab="log">GIT LOG</button>
+                        <button class="diff-tab-btn" data-tab="status">GIT STATUS</button>
                     </div>
                     <div class="diff-actions">
                         <button id="refresh-diff-btn" title="Refresh">
