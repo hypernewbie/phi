@@ -76,10 +76,12 @@ export class TabManager {
     updateDirectModeUI(tab) {
         if (tab.directMode) {
             this.directModeToggle.classList.add('active');
-            this.inputBarContainer.classList.add('hidden');
+            this.inputBarContainer.classList.add('direct-mode-active');
+            this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.add('hidden');
         } else {
             this.directModeToggle.classList.remove('active');
+            this.inputBarContainer.classList.remove('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
             this.presetsContainer.classList.remove('hidden');
             // Make sure presets exist and are populated
