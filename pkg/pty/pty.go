@@ -91,6 +91,9 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	if !hasTerm {
 		cmd.Env = append(cmd.Env, "TERM=xterm-256color")
 	}
+	// Enable 24-bit true colour support for agents.
+	cmd.Env = append(cmd.Env, "COLORTERM=truecolor")
+
 
 	if err := cmd.Start(); err != nil {
 		_ = pt.Close()
