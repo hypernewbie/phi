@@ -251,7 +251,26 @@ class App {
             if (!res.ok) throw new Error("Failed to fetch remote clipboard");
             const data = await res.json();
             if (data.text !== undefined) {
-                await navigator.clipboard.writeText(data.text);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(data.text);
+                } else {
+                    // Fallback to classic execCommand method for insecure contexts (e.g. remoting via local HTTP IP address)
+                    const textArea = document.createElement("textarea");
+                    textArea.value = data.text;
+                    textArea.style.position = "fixed";
+                    textArea.style.top = "0";
+                    textArea.style.left = "0";
+                    textArea.style.opacity = "0";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        const success = document.execCommand("copy");
+                        if (!success) throw new Error("execCommand copy returned false");
+                    } finally {
+                        document.body.removeChild(textArea);
+                    }
+                }
                 console.log("[clipboard] Successfully synced remote clipboard content:", data.text);
                 
                 // Provide visual feedback with a brief success state
