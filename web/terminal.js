@@ -327,7 +327,10 @@ export class TabManager {
     closeTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
-        
+
+        // Kill the server-side PTY process (fire-and-forget)
+        fetch(`/api/terminals/${paneId}`, { method: 'DELETE' }).catch(() => {});
+
         try {
             if (tab.ws) tab.ws.close();
         } catch (e) {
