@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,18 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	cmd := pt.Command(resolvedPath, args...)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
+
+	// On Windows, strip any stray UNIX-like SHELL environment variable to prevent
+	// cross-platform tools (like Pi Coder) from trying to run commands via a broken/WSL bash.
+	if runtime.GOOS == "windows" {
+		var cleanEnv []string
+		for _, env := range cmd.Env {
+			if !strings.HasPrefix(strings.ToUpper(env), "SHELL=") {
+				cleanEnv = append(cleanEnv, env)
+			}
+		}
+		cmd.Env = cleanEnv
+	}
 
 	hasTerm := false
 	for _, env := range cmd.Env {
