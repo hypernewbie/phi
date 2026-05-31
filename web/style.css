@@ -273,13 +273,22 @@ body {
     background: transparent;
     border: 1px solid transparent;
     color: var(--text-muted);
-    padding: 5px 0;
-    font-size: 12px;
+    padding: 6px 4px;
+    font-size: 11px;
     font-weight: 500;
     cursor: pointer;
     border-radius: 4px;
     transition: all 0.15s;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.coder-logo {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
 }
 
 .coder-tab:hover {
@@ -1189,6 +1198,10 @@ body {
     }
     .header-btn span {
         display: none; /* Hide label to save space, icon is enough on mobile */
+    }
+    
+    .coder-tab span {
+        display: none;
     }
     
     /* Make the staged input bar and action buttons compact for small screens */
