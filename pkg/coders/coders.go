@@ -24,12 +24,12 @@ var Registry = map[string]Coder{
 		ResumeArg:     "--session",
 		SessionSource: "opencode_sqlite",
 		Presets: []Preset{
-			{Name: "/exit", Value: "/exit\n"},
-			{Name: "/context", Value: "/context\n"},
+			{Name: "/exit", Value: "/exit\r"},
+			{Name: "/context", Value: "/context\r"},
 			{Name: "ctrl+c", Value: "\x03"},
-			{Name: "y↵", Value: "y\n"},
+			{Name: "y↵", Value: "y\r"},
 			{Name: "esc", Value: "\x1b"},
-			{Name: "/clear", Value: "/clear\n"},
+			{Name: "/clear", Value: "/clear\r"},
 		},
 	},
 	"claude": {
@@ -40,12 +40,12 @@ var Registry = map[string]Coder{
 		ResumeArg:     "--resume",
 		SessionSource: "claude_files",
 		Presets: []Preset{
-			{Name: "/exit", Value: "/exit\n"},
+			{Name: "/exit", Value: "/exit\r"},
 			{Name: "ctrl+c", Value: "\x03"},
-			{Name: "y↵", Value: "y\n"},
+			{Name: "y↵", Value: "y\r"},
 			{Name: "esc", Value: "\x1b"},
-			{Name: "/clear", Value: "/clear\n"},
-			{Name: "/compact", Value: "/compact\n"},
+			{Name: "/clear", Value: "/clear\r"},
+			{Name: "/compact", Value: "/compact\r"},
 		},
 	},
 	"agy": {
@@ -56,10 +56,10 @@ var Registry = map[string]Coder{
 		ResumeArg:     "--conversation",
 		SessionSource: "agy_files",
 		Presets: []Preset{
-			{Name: "/exit", Value: "/exit\n"},
+			{Name: "/exit", Value: "/exit\r"},
 			{Name: "ctrl+c", Value: "\x03"},
-			{Name: "y↵", Value: "y\n"},
-			{Name: "/clear", Value: "/clear\n"},
+			{Name: "y↵", Value: "y\r"},
+			{Name: "/clear", Value: "/clear\r"},
 		},
 	},
 }
