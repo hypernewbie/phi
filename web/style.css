@@ -684,6 +684,13 @@ body {
     background-color: var(--bg-base) !important;
 }
 
+/* Force helper textarea to be fixed relative to screen so browser focusing does not scroll the viewport */
+.xterm-helper-textarea {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+}
+
 /* SMART INPUT BAR */
 .input-bar-container {
     border-top: 1px solid var(--bg-border);
