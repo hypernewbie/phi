@@ -110,4 +110,18 @@ var Registry = map[string]Coder{
 			{Name: "exit", Value: "exit\r"},
 		},
 	},
+	"pwsh": {
+		ID:            "pwsh",
+		Name:          "PowerShell",
+		Command:       "pwsh",
+		Args:          []string{"-NoLogo"},
+		ResumeArg:     "",
+		SessionSource: "",
+		Presets: []Preset{
+			{Name: "ctrl+c", Value: "\x03"},
+			{Name: "ctrl+d", Value: "\x04"},
+			{Name: "cls", Value: "cls\r"},
+			{Name: "exit", Value: "exit\r"},
+		},
+	},
 }

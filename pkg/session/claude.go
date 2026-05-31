@@ -80,6 +80,13 @@ func decodeClaudePath(dirName string) string {
 	if len(dirName) == 0 {
 		return ""
 	}
+	// Windows path: single drive letter + "--" (e.g. "C--code-github-phi" → "C:/code/github/phi")
+	if len(dirName) >= 3 && dirName[1] == '-' && dirName[2] == '-' &&
+		((dirName[0] >= 'A' && dirName[0] <= 'Z') || (dirName[0] >= 'a' && dirName[0] <= 'z')) {
+		rest := strings.ReplaceAll(dirName[3:], "-", "/")
+		return string(dirName[0]) + ":/" + rest
+	}
+	// Unix path: leading "/" encoded as leading "-"
 	if dirName[0] == '-' {
 		return "/" + strings.ReplaceAll(dirName[1:], "-", "/")
 	}

@@ -3,6 +3,7 @@ package session
 import (
 	"database/sql"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
@@ -47,8 +48,9 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 			sessionCwd = worktree
 		}
 
-		// Group/filter sessions matching current directory
-		if cwd != "" && sessionCwd != cwd {
+		// Normalize separators before comparing — git returns forward slashes on
+		// Windows but OpenCode stores backslashes in the DB.
+		if cwd != "" && filepath.ToSlash(sessionCwd) != filepath.ToSlash(cwd) {
 			continue
 		}
 
