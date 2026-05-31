@@ -158,7 +158,7 @@ export class SessionsManager {
             const sessions = await res.json();
             this.sessionList.innerHTML = '';
             
-            if (sessions.length === 0) {
+            if (!sessions || sessions.length === 0) {
                 this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No sessions found</div>';
                 return;
             }
