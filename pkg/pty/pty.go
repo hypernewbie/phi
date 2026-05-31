@@ -2,8 +2,10 @@ package pty
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -39,15 +41,37 @@ func (p *Pty) closePTY() {
 	})
 }
 
-// ResolveCommand checks if a specific binary exists, particularly for agy
+// ResolveCommand checks if a specific binary exists, particularly for agy.
+// It tries common install locations across platforms before falling back to PATH lookup.
 func ResolveCommand(command string) string {
 	if command == "agy" {
-		const agyPath = "/home/hypernewbie/.gemini/antigravity-cli/bin/agy"
-		if _, err := os.Stat(agyPath); err == nil {
-			return agyPath
+		home, _ := os.UserHomeDir()
+		candidates := []string{
+			filepath.Join(home, ".gemini", "antigravity-cli", "bin", "agy"),
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
 		}
 	}
 	return command
+}
+
+// validateWorkingDir confirms dir exists and is a directory. An empty dir is allowed
+// (the PTY inherits the server process's cwd). A missing dir is reported with a clear,
+// actionable error rather than letting it surface later as the kernel's misleading
+// "fork/exec <shell>: no such file or directory" — which blames the binary, not the
+// path. This commonly happens when a config carries paths from another machine.
+func validateWorkingDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("project directory %q doesn't exist on this machine", dir)
+	}
+	return nil
 }
 
 func Start(dir string, command string, args []string) (*Pty, error) {
@@ -57,7 +81,13 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	// path resolver incorrectly joins Dir+command when Dir is set.
 	resolvedPath, err := exec.LookPath(resolvedCmd)
 	if err != nil {
-		resolvedPath = resolvedCmd
+		return nil, fmt.Errorf("command %q not found in PATH — is it installed?", resolvedCmd)
+	}
+
+	// Validate the working directory up front so a stale/cross-platform path produces a
+	// clear message instead of the kernel's misleading "fork/exec <shell>" ENOENT later.
+	if err := validateWorkingDir(dir); err != nil {
+		return nil, err
 	}
 
 	pt, err := gopty.New()

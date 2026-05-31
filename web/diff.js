@@ -141,7 +141,10 @@ export class DiffController {
         const cwd = this.app.sessionsManager.activeCWD;
         try {
             const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}`);
-            if (!res.ok) throw new Error("Spawn error");
+            if (!res.ok) {
+                const errText = await res.text().catch(() => 'unknown error');
+                throw new Error(errText.trim() || 'Spawn error');
+            }
             
             const data = await res.json();
             

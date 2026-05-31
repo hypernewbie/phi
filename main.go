@@ -270,6 +270,16 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		args = c.Args
 	}
 
+	// On Unix, prefer the user's login shell ($SHELL) over hardcoded bash so that PATH
+	// and aliases from the user's shell config (e.g. ~/.zshrc on macOS) are available.
+	if req.Coder == "bash" && runtime.GOOS != "windows" {
+		if shell := os.Getenv("SHELL"); shell != "" {
+			if _, err := exec.LookPath(shell); err == nil {
+				command = shell
+			}
+		}
+	}
+
 	// On Windows, if the requested shell is "bash", fall back to PowerShell
 	// since "bash" is typically either absent or points to the WSL launcher in C:\Windows\System32
 	// (which fails if Hyper-V or Virtual Machine Platform is disabled in BIOS).
@@ -317,7 +327,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := ptyManager.Spawn(spawnDir, command, args, req.Coder, req.SessionID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to spawn PTY: %v", err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -378,7 +388,7 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to spawn git PTY: %v", err), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 

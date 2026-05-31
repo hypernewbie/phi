@@ -271,6 +271,71 @@ class App {
         }
     }
 
+    /**
+     * Show a transient toast notification in the top-right corner.
+     * @param {string} message - body text (the precise error/info)
+     * @param {object} [opts]
+     * @param {'error'|'info'} [opts.type='info']
+     * @param {string} [opts.title] - bold heading; defaults based on type
+     * @param {number} [opts.duration=6000] - ms before auto-dismiss; 0 to persist
+     */
+    showToast(message, opts = {}) {
+        const { type = 'info', duration = 6000 } = opts;
+        const title = opts.title || (type === 'error' ? "Couldn't open session" : 'Notice');
+
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+
+        const icon = document.createElement('span');
+        icon.className = 'toast-icon';
+        icon.textContent = type === 'error' ? '⚠' : 'ℹ';
+
+        const body = document.createElement('div');
+        body.className = 'toast-body';
+        const titleEl = document.createElement('div');
+        titleEl.className = 'toast-title';
+        titleEl.textContent = title;
+        const msgEl = document.createElement('div');
+        msgEl.className = 'toast-message';
+        msgEl.textContent = message;
+        body.appendChild(titleEl);
+        body.appendChild(msgEl);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.innerHTML = '×';
+        closeBtn.title = 'Dismiss';
+
+        toast.appendChild(icon);
+        toast.appendChild(body);
+        toast.appendChild(closeBtn);
+        container.appendChild(toast);
+
+        // Animate in on next frame
+        requestAnimationFrame(() => toast.classList.add('show'));
+
+        let dismissTimer;
+        const dismiss = () => {
+            if (dismissTimer) clearTimeout(dismissTimer);
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 200);
+        };
+        closeBtn.addEventListener('click', dismiss);
+        if (duration > 0) {
+            dismissTimer = setTimeout(dismiss, duration);
+        }
+
+        return dismiss;
+    }
+
     async syncRemoteClipboard() {
         const btn = document.getElementById('header-clipboard-btn');
         try {
