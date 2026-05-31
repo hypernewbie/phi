@@ -654,6 +654,24 @@ body {
     background-color: var(--bg-border);
 }
 
+.presets-divider {
+    width: 1px;
+    height: 18px;
+    background-color: var(--bg-border);
+    margin: 0 4px;
+    align-self: center;
+}
+
+.preset-btn.recent-cmd-btn {
+    border-color: rgba(124, 106, 247, 0.2);
+    color: var(--text-muted);
+}
+
+.preset-btn.recent-cmd-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-bright);
+}
+
 /* RIGHT PANEL: DIFF / LOG VIEW */
 .diff-panel {
     background-color: var(--bg-panel);
