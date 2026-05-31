@@ -315,7 +315,8 @@ export class TabManager {
         newTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
         this.saveTabsState();
         
-        // Update sidebar select state
+        // Update sidebar select state and active coder tab
+        this.app.sessionsManager.switchCoder(newTab.coder);
         this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
         
         // Trigger resize calculation
