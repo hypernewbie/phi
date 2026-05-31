@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -56,4 +57,52 @@ func TestListAgySessionsRobutness(t *testing.T) {
 	if sessions == nil {
 		t.Error("Expected empty sessions slice, got nil")
 	}
+}
+
+func TestAgySessionCwdAndSync(t *testing.T) {
+	metaPath := getMetaFilePath()
+	// Backup original file
+	var backup []byte
+	var backupExists bool
+	if b, err := os.ReadFile(metaPath); err == nil {
+		backup = b
+		backupExists = true
+	}
+
+	// Clean up or restore at the end
+	defer func() {
+		if backupExists {
+			_ = os.WriteFile(metaPath, backup, 0644)
+		} else {
+			_ = os.Remove(metaPath)
+		}
+	}()
+
+	// 1. Test SaveAgySessionCwd
+	testID := "test-session-uuid-12345"
+	testCwd := "/home/hypernewbie/code/test-cwd"
+	
+	err := SaveAgySessionCwd(testID, testCwd)
+	if err != nil {
+		t.Fatalf("Failed to save session cwd: %v", err)
+	}
+
+	// Load and check
+	m, err := LoadAgyMetaMap()
+	if err != nil {
+		t.Fatalf("Failed to load meta map: %v", err)
+	}
+
+	meta, exists := m[testID]
+	if !exists {
+		t.Fatalf("Session %s not found in meta map", testID)
+	}
+
+	if meta.Cwd != testCwd {
+		t.Errorf("Expected Cwd %q, got %q", testCwd, meta.Cwd)
+	}
+
+	// 2. Test syncAgyCwdMappings robustness
+	// This should run without errors even if cache or history files do not exist or are empty
+	syncAgyCwdMappings(m)
 }
