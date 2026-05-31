@@ -45,6 +45,7 @@ export class SessionsManager {
         // Workspace Toggle
         this.workspaceSelect.addEventListener('change', () => {
             this.activeCWD = this.workspaceSelect.value;
+            localStorage.setItem('phi_last_chosen_project', this.activeCWD);
             this.loadSessions();
             this.app.diffController.refreshDiff(); // Refresh diff panel on workspace change
         });
@@ -107,7 +108,12 @@ export class SessionsManager {
                 this.workspaceSelect.appendChild(opt);
             });
             
-            this.activeCWD = data.active_cwd || data.workspaces[0] || '';
+            const lastChosen = localStorage.getItem('phi_last_chosen_project');
+            if (lastChosen && data.workspaces.includes(lastChosen)) {
+                this.activeCWD = lastChosen;
+            } else {
+                this.activeCWD = data.active_cwd || data.workspaces[0] || '';
+            }
             this.workspaceSelect.value = this.activeCWD;
             
             if (data.theme_color) {
@@ -139,6 +145,7 @@ export class SessionsManager {
                 await this.loadConfig();
                 this.workspaceSelect.value = path;
                 this.activeCWD = path;
+                localStorage.setItem('phi_last_chosen_project', path);
                 this.loadSessions();
             }
         } catch (e) {
