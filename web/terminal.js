@@ -24,7 +24,43 @@ export class TabManager {
         this.setupEventListeners();
     }
     
+    saveTabsState() {
+        const tabsData = [];
+        for (const tab of this.tabs.values()) {
+            tabsData.push({ paneId: tab.paneId, sessionId: tab.sessionId, title: tab.title, coder: tab.coder });
+        }
+        localStorage.setItem('phi_tabs', JSON.stringify(tabsData));
+        localStorage.setItem('phi_active_pane', this.activePaneId || '');
+    }
+
+    restoreTabsState() {
+        let tabsData;
+        try {
+            tabsData = JSON.parse(localStorage.getItem('phi_tabs') || '[]');
+        } catch (e) {
+            return;
+        }
+        if (!tabsData.length) return;
+
+        const savedActive = localStorage.getItem('phi_active_pane') || '';
+        for (const t of tabsData) {
+            this.createTab(t.paneId, t.sessionId, t.title, t.coder);
+        }
+        if (savedActive && this.tabs.has(savedActive)) {
+            this.switchTab(savedActive);
+        }
+    }
+
     setupEventListeners() {
+        // Click/focus input bar → exit direct mode
+        this.inputTextArea.addEventListener('focus', () => {
+            const activeTab = this.getActiveTab();
+            if (activeTab && activeTab.directMode) {
+                activeTab.directMode = false;
+                this.updateDirectModeUI(activeTab);
+            }
+        });
+
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -232,13 +268,19 @@ export class TabManager {
             }
         });
         
-        // Force focus terminal when clicked
+        // Click terminal → enter direct input mode
         termContainer.addEventListener('click', () => {
+            const tab = this.tabs.get(paneId);
+            if (tab && !tab.directMode) {
+                tab.directMode = true;
+                this.updateDirectModeUI(tab);
+            }
             term.focus();
         });
         
         // Switch to the newly created tab
         this.switchTab(paneId);
+        this.saveTabsState();
         
         // Initial fit delay to let rendering engine draw
         setTimeout(() => {
@@ -271,6 +313,7 @@ export class TabManager {
         
         // Scroll tabs bar to active tab
         newTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        this.saveTabsState();
         
         // Update sidebar select state
         this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
@@ -306,6 +349,8 @@ export class TabManager {
         
         this.tabs.delete(paneId);
         
+        this.saveTabsState();
+
         // If we closed the active tab, switch to another
         if (this.activePaneId === paneId) {
             const remainingKeys = Array.from(this.tabs.keys());
