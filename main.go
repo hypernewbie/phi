@@ -24,8 +24,10 @@ var (
 )
 
 type Config struct {
-	Workspaces []string `json:"workspaces"`
-	ThemeColor string   `json:"theme_color"`
+	Workspaces        []string          `json:"workspaces"`
+	ThemeColor        string            `json:"theme_color"`
+	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
+	ActiveWorktrees   map[string]string `json:"active_worktrees"`
 }
 
 func expandHome(path string) string {
@@ -50,6 +52,12 @@ func loadConfig() Config {
 	}
 	if cfg.ThemeColor == "" {
 		cfg.ThemeColor = "purple"
+	}
+	if cfg.ExpandedWorktrees == nil {
+		cfg.ExpandedWorktrees = make(map[string]bool)
+	}
+	if cfg.ActiveWorktrees == nil {
+		cfg.ActiveWorktrees = make(map[string]string)
 	}
 	return cfg
 }
@@ -107,6 +115,8 @@ func main() {
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
+	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
+	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -438,5 +448,92 @@ func handleThemeUpdate(w http.ResponseWriter, r *http.Request) {
 	cfg.ThemeColor = color
 	saveConfig(cfg)
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	wts, err := session.ListGitWorktrees(cwd)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	cfg := loadConfig()
+	activeWT := cfg.ActiveWorktrees[cwd]
+
+	// Find if we have an active worktree. If not, default to current cwd or first one.
+	hasActive := false
+	for i := range wts {
+		if activeWT != "" && wts[i].Path == activeWT {
+			wts[i].Active = true
+			hasActive = true
+		}
+		if exp, exists := cfg.ExpandedWorktrees[wts[i].Path]; exists {
+			wts[i].Expanded = exp
+		} else {
+			wts[i].Expanded = false // Default closed
+		}
+	}
+
+	// Fallback to mark active
+	if !hasActive && len(wts) > 0 {
+		// Try to match exact cwd first, otherwise fallback to first one
+		matched := false
+		for i := range wts {
+			if wts[i].Path == cwd {
+				wts[i].Active = true
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			wts[0].Active = true
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(wts)
+}
+
+type WorktreeStateRequest struct {
+	Workspace      string          `json:"workspace"`
+	ActiveWorktree string          `json:"active_worktree"`
+	Expanded       map[string]bool `json:"expanded"`
+}
+
+func handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req WorktreeStateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	if cfg.ExpandedWorktrees == nil {
+		cfg.ExpandedWorktrees = make(map[string]bool)
+	}
+	if cfg.ActiveWorktrees == nil {
+		cfg.ActiveWorktrees = make(map[string]string)
+	}
+
+	if req.ActiveWorktree != "" && req.Workspace != "" {
+		cfg.ActiveWorktrees[req.Workspace] = req.ActiveWorktree
+	}
+
+	for path, exp := range req.Expanded {
+		cfg.ExpandedWorktrees[path] = exp
+	}
+
+	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }

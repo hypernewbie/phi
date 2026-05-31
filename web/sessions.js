@@ -4,6 +4,7 @@ export class SessionsManager {
     constructor(app) {
         this.app = app;
         this.activeCoder = 'opencode';
+        this.activeWorkspace = '';
         this.activeCWD = '';
         
         this.sessionList = document.getElementById('session-list');
@@ -44,10 +45,12 @@ export class SessionsManager {
         
         // Workspace Toggle
         this.workspaceSelect.addEventListener('change', () => {
-            this.activeCWD = this.workspaceSelect.value;
-            localStorage.setItem('phi_last_chosen_project', this.activeCWD);
-            this.loadSessions();
-            this.app.diffController.refreshDiff(); // Refresh diff panel on workspace change
+            this.activeWorkspace = this.workspaceSelect.value;
+            this.loadWorktrees();
+            // Refresh diff on current active worktree (which is updated inside loadWorktrees)
+            setTimeout(() => {
+                this.app.diffController.refreshDiff();
+            }, 100);
         });
         
         this.addWorkspaceBtn.addEventListener('click', () => {
@@ -55,8 +58,8 @@ export class SessionsManager {
         });
         
         this.removeWorkspaceBtn.addEventListener('click', () => {
-            if (confirm(`Remove workspace: ${this.activeCWD}?`)) {
-                this.removeWorkspace(this.activeCWD);
+            if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
+                this.removeWorkspace(this.activeWorkspace);
             }
         });
 
@@ -110,11 +113,11 @@ export class SessionsManager {
             
             const lastChosen = localStorage.getItem('phi_last_chosen_project');
             if (lastChosen && data.workspaces.includes(lastChosen)) {
-                this.activeCWD = lastChosen;
+                this.activeWorkspace = lastChosen;
             } else {
-                this.activeCWD = data.active_cwd || data.workspaces[0] || '';
+                this.activeWorkspace = data.active_cwd || data.workspaces[0] || '';
             }
-            this.workspaceSelect.value = this.activeCWD;
+            this.workspaceSelect.value = this.activeWorkspace;
             
             if (data.theme_color) {
                 this.app.accentColorSelect.value = data.theme_color;
@@ -145,9 +148,8 @@ export class SessionsManager {
             if (res.ok) {
                 await this.loadConfig();
                 this.workspaceSelect.value = path;
-                this.activeCWD = path;
-                localStorage.setItem('phi_last_chosen_project', path);
-                this.loadSessions();
+                this.activeWorkspace = path;
+                this.loadWorktrees();
             }
         } catch (e) {
             console.error("[config] Failed to add workspace:", e);
@@ -168,18 +170,113 @@ export class SessionsManager {
             console.error("[config] Failed to remove workspace:", e);
         }
     }
-    
+
     async loadSessions() {
-        this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning sessions...</div>';
+        await this.loadWorktrees();
+    }
+
+    async loadWorktrees() {
+        this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
-            const res = await fetch(`/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(this.activeCWD)}`);
-            if (!res.ok) throw new Error("Failed to scan");
+            const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(this.activeWorkspace)}`);
+            if (!res.ok) throw new Error("Failed to scan worktrees");
             
-            const sessions = await res.json();
+            const worktrees = await res.json();
             this.sessionList.innerHTML = '';
             
+            if (!worktrees || worktrees.length === 0) {
+                this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
+                return;
+            }
+            
+            const activeWT = worktrees.find(wt => wt.active);
+            if (activeWT) {
+                this.activeCWD = activeWT.path;
+            } else {
+                this.activeCWD = worktrees[0].path;
+            }
+
+            localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+
+            worktrees.forEach(wt => {
+                const wtSection = document.createElement('div');
+                wtSection.className = 'worktree-section';
+                wtSection.setAttribute('data-worktree-path', wt.path);
+                if (wt.expanded || wt.active) {
+                    wtSection.classList.add('expanded');
+                }
+                if (wt.active) {
+                    wtSection.classList.add('active');
+                }
+
+                const parts = wt.path.split('/');
+                const baseName = parts[parts.length - 1] || wt.path;
+
+                wtSection.innerHTML = `
+                    <div class="worktree-header">
+                        <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                        <span class="worktree-name" title="${wt.path}">${baseName}</span>
+                        ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
+                    </div>
+                    <div class="worktree-sessions-container">
+                        <div class="scanning-sessions">Scanning sessions...</div>
+                    </div>
+                `;
+
+                const header = wtSection.querySelector('.worktree-header');
+                header.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const isExpanded = wtSection.classList.toggle('expanded');
+                    
+                    document.querySelectorAll('.worktree-section').forEach(sec => {
+                        sec.classList.remove('active');
+                        if (sec !== wtSection) {
+                            sec.classList.remove('expanded');
+                        }
+                    });
+
+                    wtSection.classList.add('active');
+                    this.activeCWD = wt.path;
+
+                    this.app.diffController.refreshDiff();
+
+                    const activeTab = this.app.tabManager.getActiveTab();
+                    if (activeTab && activeTab.coder === this.activeCoder) {
+                        this.highlightActiveSession(activeTab.sessionId);
+                    }
+
+                    await this.saveWorktreeState();
+
+                    if (isExpanded) {
+                        await this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
+                    }
+                });
+
+                this.sessionList.appendChild(wtSection);
+
+                if (wt.expanded || wt.active) {
+                    this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
+                }
+            });
+
+        } catch (e) {
+            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${e.message}</div>`;
+        }
+    }
+
+    async loadWorktreeSessions(wtPath, container) {
+        container.innerHTML = '<div class="scanning-sessions">Scanning sessions...</div>';
+        try {
+            const res = await fetch(`/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`);
+            if (!res.ok) throw new Error("Failed to scan sessions");
+            
+            const sessions = await res.json();
+            container.innerHTML = '';
+            
             if (!sessions || sessions.length === 0) {
-                this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No sessions found</div>';
+                container.innerHTML = '<div class="no-sessions-found">No sessions found</div>';
                 return;
             }
             
@@ -187,6 +284,7 @@ export class SessionsManager {
                 const item = document.createElement('div');
                 item.className = 'session-item';
                 item.setAttribute('data-session-id', sess.id);
+                item.setAttribute('data-worktree-path', wtPath);
                 
                 const timeStr = new Date(sess.time_updated).toLocaleDateString(undefined, {
                     month: 'short',
@@ -195,7 +293,6 @@ export class SessionsManager {
                     minute: '2-digit'
                 });
                 
-                // Check if actively running in TabManager
                 let isRunning = false;
                 for (const t of this.app.tabManager.tabs.values()) {
                     if (t.sessionId === sess.id && t.coder === this.activeCoder && !t.isDead) {
@@ -219,20 +316,16 @@ export class SessionsManager {
                     </div>
                 `;
                 
-                // Launch / Resume Session Click Listener
                 item.addEventListener('click', (e) => {
-                    // Prevent launch trigger if clicking action buttons
                     if (e.target.closest('.session-action-btn')) return;
                     this.launchSession(sess.id, sess.title);
                     
-                    // On mobile, automatically close the sidebar drawer
                     const sidebar = document.getElementById('sidebar-panel');
                     if (sidebar) {
                         sidebar.classList.remove('drawer-open');
                     }
                 });
                 
-                // Inline rename logic for Agy
                 if (this.activeCoder === 'agy') {
                     const renameBtn = item.querySelector('.rename-btn');
                     renameBtn.addEventListener('click', (e) => {
@@ -241,16 +334,37 @@ export class SessionsManager {
                     });
                 }
                 
-                this.sessionList.appendChild(item);
+                container.appendChild(item);
             });
             
-            // Re-highlight active item if running
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab && activeTab.coder === this.activeCoder) {
                 this.highlightActiveSession(activeTab.sessionId);
             }
         } catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning sessions: ${e.message}</div>`;
+            container.innerHTML = `<div class="error-sessions">Error: ${e.message}</div>`;
+        }
+    }
+
+    async saveWorktreeState() {
+        const expandedStates = {};
+        document.querySelectorAll('.worktree-section').forEach(sec => {
+            const path = sec.getAttribute('data-worktree-path');
+            expandedStates[path] = sec.classList.contains('expanded');
+        });
+
+        try {
+            await fetch('/api/config/worktree-state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    workspace: this.activeWorkspace,
+                    active_worktree: this.activeCWD,
+                    expanded: expandedStates
+                })
+            });
+        } catch (e) {
+            console.error("[worktree-state] Failed to save worktree state:", e);
         }
     }
     
@@ -265,7 +379,6 @@ export class SessionsManager {
     }
     
     async spawnNewSession() {
-        // Spawns a fresh session (no sessionId passed to trigger empty launcher)
         try {
             const res = await fetch('/api/terminals', {
                 method: 'POST',
@@ -286,7 +399,6 @@ export class SessionsManager {
             
             this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder);
             
-            // Refresh list
             this.loadSessions();
         } catch (e) {
             alert(`Failed to launch new session: ${e.message}`);
@@ -309,7 +421,6 @@ export class SessionsManager {
             const data = await res.json();
             this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder);
             
-            // Mark active item
             this.highlightActiveSession(sessionId);
         } catch (e) {
             alert(`Failed to launch session: ${e.message}`);

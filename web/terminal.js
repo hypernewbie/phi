@@ -55,6 +55,20 @@ export class TabManager {
                 this.inputTextArea.focus();
             });
         }
+
+        const closeAllBtn = document.getElementById('close-all-tabs-btn');
+        if (closeAllBtn) {
+            closeAllBtn.addEventListener('click', () => {
+                if (this.tabs.size === 0) return;
+                if (confirm(`Are you sure you want to close all ${this.tabs.size} active sessions?`)) {
+                    const keys = Array.from(this.tabs.keys());
+                    keys.forEach(paneId => {
+                        this.closeTab(paneId);
+                    });
+                    this.app.sessionsManager.loadSessions();
+                }
+            });
+        }
         
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
@@ -421,5 +435,16 @@ export class TabManager {
             });
             this.presetsContainer.appendChild(btn);
         });
+    }
+
+    applyThemeToAllActiveTerminals(color) {
+        for (const tab of this.tabs.values()) {
+            if (tab.term) {
+                tab.term.options.theme = {
+                    ...tab.term.options.theme,
+                    cursor: color
+                };
+            }
+        }
     }
 }
