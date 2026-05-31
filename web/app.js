@@ -92,23 +92,26 @@ class App {
         // 1. Fetch coder templates & presets from API
         await this.fetchCoderPresets();
         
-        // 2. Load workspace selector and configurations
+        // 2. Restore previously open terminal tabs (reconnects live PTY sessions)
+        this.tabManager.restoreTabsState();
+
+        // 3. Load workspace selector and configurations
         await this.sessionsManager.loadConfig();
-        
-        // 3. Setup panel resize handles
+
+        // 4. Setup panel resize handles
         this.initResizers();
-        
-        // 4. Initialize Diff terminal engine
+
+        // 5. Initialize Diff terminal engine
         this.diffController.initTerminal();
-        
-        // 5. Setup theme accent listener
+
+        // 6. Setup theme accent listener
         this.accentColorSelect.addEventListener('change', () => {
             const color = this.accentColorSelect.value;
             this.applyAccentTheme(color);
             this.saveTheme(color);
         });
 
-        // 6. Setup mobile sidebar drawer toggle
+        // 7. Setup mobile sidebar drawer toggle
         const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
         const sidebar = document.getElementById('sidebar-panel');
         if (mobileSidebarToggle && sidebar) {
