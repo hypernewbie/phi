@@ -78,6 +78,16 @@ body {
     letter-spacing: 0.5px;
 }
 
+.brand .hostname-display {
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.75px;
+    margin-left: 2px;
+    opacity: 0.9;
+    text-shadow: 0 0 8px var(--accent-glow);
+}
+
 .workspace-area {
     display: flex;
     align-items: center;

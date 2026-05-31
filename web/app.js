@@ -38,6 +38,42 @@ const ACCENT_COLORS = {
         accentGlow: 'rgba(236, 72, 153, 0.15)',
         accentDim: '#be185d',
         accentBright: '#f472b6'
+    },
+    teal: {
+        accent: '#14b8a6',
+        accentGlow: 'rgba(20, 184, 166, 0.15)',
+        accentDim: '#0f766e',
+        accentBright: '#5eead4'
+    },
+    indigo: {
+        accent: '#6366f1',
+        accentGlow: 'rgba(99, 102, 241, 0.15)',
+        accentDim: '#4338ca',
+        accentBright: '#818cf8'
+    },
+    orange: {
+        accent: '#f97316',
+        accentGlow: 'rgba(249, 115, 22, 0.15)',
+        accentDim: '#c2410c',
+        accentBright: '#fdba74'
+    },
+    cyan: {
+        accent: '#06b6d4',
+        accentGlow: 'rgba(6, 182, 212, 0.15)',
+        accentDim: '#0e7490',
+        accentBright: '#67e8f9'
+    },
+    rose: {
+        accent: '#f43f5e',
+        accentGlow: 'rgba(244, 63, 94, 0.15)',
+        accentDim: '#be123c',
+        accentBright: '#fb7185'
+    },
+    lime: {
+        accent: '#84cc16',
+        accentGlow: 'rgba(132, 204, 22, 0.15)',
+        accentDim: '#4d7c0f',
+        accentBright: '#a3e635'
     }
 };
 

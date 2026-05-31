@@ -114,6 +114,13 @@ export class SessionsManager {
                 this.app.accentColorSelect.value = data.theme_color;
                 this.app.applyAccentTheme(data.theme_color);
             }
+
+            if (data.hostname) {
+                const hostEl = document.getElementById('hostname-display');
+                if (hostEl) {
+                    hostEl.innerText = ` — ${data.hostname}`;
+                }
+            }
             
             this.loadSessions();
         } catch (e) {
