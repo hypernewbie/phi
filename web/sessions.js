@@ -209,7 +209,7 @@ export class SessionsManager {
                     wtSection.classList.add('active');
                 }
 
-                const parts = wt.path.split('/');
+                const parts = wt.path.split(/[/\\]/);
                 const baseName = parts[parts.length - 1] || wt.path;
 
                 wtSection.innerHTML = `
