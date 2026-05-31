@@ -1,0 +1,348 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"phi/pkg/coders"
+	"phi/pkg/diff"
+	"phi/pkg/pty"
+	"phi/pkg/session"
+	"phi/pkg/ws"
+)
+
+var (
+	ptyManager *pty.Manager
+	wsHub      *ws.Hub
+	activeCWD  string
+)
+
+type Config struct {
+	Workspaces []string `json:"workspaces"`
+}
+
+func expandHome(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home + path[1:]
+		}
+	}
+	return path
+}
+
+func loadConfig() Config {
+	path := expandHome("~/.phi/config.json")
+	var cfg Config
+	b, err := os.ReadFile(path)
+	if err == nil {
+		_ = json.Unmarshal(b, &cfg)
+	}
+	if cfg.Workspaces == nil {
+		cfg.Workspaces = []string{}
+	}
+	return cfg
+}
+
+func saveConfig(cfg Config) {
+	path := expandHome("~/.phi/config.json")
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(path, b, 0644)
+}
+
+func main() {
+	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
+	cwdFlag := flag.String("cwd", "", "Active project workspace directory")
+	flag.Parse()
+
+	// Resolve CWD
+	var err error
+	if *cwdFlag != "" {
+		activeCWD, err = filepath.Abs(expandHome(*cwdFlag))
+	} else {
+		activeCWD, err = os.Getwd()
+	}
+	if err != nil {
+		log.Fatalf("Failed to resolve current working directory: %v", err)
+	}
+
+	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
+
+	// Ensure config directory exists and contains CWD as a workspace
+	cfg := loadConfig()
+	found := false
+	for _, wsPath := range cfg.Workspaces {
+		if wsPath == activeCWD {
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.Workspaces = append(cfg.Workspaces, activeCWD)
+		saveConfig(cfg)
+	}
+
+	// Initialize PTY and WebSocket subsystems
+	ptyManager = pty.NewManager()
+	wsHub = ws.NewHub()
+
+	// API Routing
+	http.HandleFunc("/api/coders", handleGetCoders)
+	http.HandleFunc("/api/sessions", handleGetSessions)
+	http.HandleFunc("/api/terminals", handleSpawnTerminal)
+	http.HandleFunc("/api/session-meta", handleSessionMeta)
+	http.HandleFunc("/api/diff", handleGetDiff)
+	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
+
+	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Log requests briefly
+		log.Printf("[http] %s %s", r.Method, r.URL.Path)
+
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
+			id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+			err := ptyManager.Kill(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, "/ws/pane/") {
+			id := strings.TrimPrefix(r.URL.Path, "/ws/pane/")
+			inst, ok := ptyManager.Get(id)
+			if !ok {
+				http.Error(w, "Pane not found", http.StatusNotFound)
+				return
+			}
+			ws.HandleWS(w, r, inst, ptyManager, wsHub)
+			return
+		}
+
+		// Fallback to static file server
+		http.FileServer(http.Dir("./web")).ServeHTTP(w, r)
+	})
+
+	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
+	log.Printf("[main] Server running on http://%s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func handleGetCoders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(coders.Registry)
+}
+
+func handleGetSessions(w http.ResponseWriter, r *http.Request) {
+	coder := r.URL.Query().Get("coder")
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	var sessions []session.Session
+	var err error
+
+	switch coder {
+	case "opencode":
+		sessions, err = session.ListOpenCodeSessions(cwd)
+	case "claude":
+		sessions, err = session.ListClaudeSessions(cwd)
+	case "agy":
+		sessions, err = session.ListAgySessions(cwd)
+	default:
+		http.Error(w, "Invalid coder", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sessions)
+}
+
+type SpawnRequest struct {
+	Coder     string `json:"coder"`
+	Cwd       string `json:"cwd"`
+	SessionID string `json:"session_id"`
+}
+
+func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SpawnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Re-attach to running PTY instance if already spawned
+	if req.SessionID != "" {
+		for _, inst := range ptyManager.ListActive() {
+			if inst.Coder == req.Coder && inst.SessionID == req.SessionID {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"pane_id":    inst.ID,
+					"session_id": inst.SessionID,
+				})
+				return
+			}
+		}
+	}
+
+	c, ok := coders.Registry[req.Coder]
+	if !ok {
+		http.Error(w, "Unknown coder type", http.StatusBadRequest)
+		return
+	}
+
+	var args []string
+	if req.SessionID != "" && c.ResumeArg != "" {
+		args = append(c.Args, c.ResumeArg, req.SessionID)
+	} else {
+		args = c.Args
+	}
+
+	spawnDir := req.Cwd
+	if spawnDir == "" {
+		spawnDir = activeCWD
+	}
+
+	inst, err := ptyManager.Spawn(spawnDir, c.Command, args, req.Coder, req.SessionID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to spawn PTY: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	ws.StartPTYReadLoop(inst, wsHub)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"pane_id":    inst.ID,
+		"session_id": inst.SessionID,
+	})
+}
+
+type MetaRequest struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func handleSessionMeta(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req MetaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	err := session.SaveAgySessionName(req.ID, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleGetDiff(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	diffType := r.URL.Query().Get("type")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	var inst *pty.PTYInstance
+	var err error
+
+	if diffType == "log" {
+		inst, err = diff.SpawnLog(cwd, ptyManager)
+	} else {
+		inst, err = diff.SpawnDiff(cwd, ptyManager)
+	}
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to spawn git PTY: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	ws.StartPTYReadLoop(inst, wsHub)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"pane_id": inst.ID,
+	})
+}
+
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := loadConfig()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"workspaces": cfg.Workspaces,
+		"active_cwd": activeCWD,
+	})
+}
+
+func handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	path := expandHome(req["path"])
+	if path == "" {
+		http.Error(w, "Missing path", http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+
+	if r.Method == http.MethodPost {
+		found := false
+		for _, wsPath := range cfg.Workspaces {
+			if wsPath == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Workspaces = append(cfg.Workspaces, path)
+			saveConfig(cfg)
+		}
+	} else if r.Method == http.MethodDelete {
+		newWS := []string{}
+		for _, wsPath := range cfg.Workspaces {
+			if wsPath != path {
+				newWS = append(newWS, wsPath)
+			}
+		}
+		cfg.Workspaces = newWS
+		saveConfig(cfg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
