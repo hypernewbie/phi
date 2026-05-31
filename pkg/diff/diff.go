@@ -15,3 +15,11 @@ func SpawnLog(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	args := []string{"log", "--oneline", "-10", "--color=always"}
 	return manager.Spawn(dir, "git", args, "git-log", "")
 }
+
+func SpawnStatus(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
+	// Run git status with brief output and branch info.
+	// We override colour settings using the global configuration flag -c.
+	args := []string{"-c", "color.status=always", "status", "--short", "--branch"}
+	return manager.Spawn(dir, "git", args, "git-status", "")
+}
+

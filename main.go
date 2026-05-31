@@ -36,6 +36,7 @@ type Config struct {
 	ThemeColor        string            `json:"theme_color"`
 	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
 	ActiveWorktrees   map[string]string `json:"active_worktrees"`
+	ModelPresets      []string          `json:"model_presets"`
 }
 
 func expandHome(path string) string {
@@ -66,6 +67,12 @@ func loadConfig() Config {
 	}
 	if cfg.ActiveWorktrees == nil {
 		cfg.ActiveWorktrees = make(map[string]string)
+	}
+	if cfg.ModelPresets == nil {
+		cfg.ModelPresets = []string{
+			"deepseek/deepseek-v4-flash",
+			"deepseek/deepseek-v4-pro",
+		}
 	}
 	return cfg
 }
@@ -123,6 +130,7 @@ func main() {
 	http.HandleFunc("/api/diff", handleGetDiff)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
+	http.HandleFunc("/api/config/models", handleModelPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
@@ -363,6 +371,8 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 
 	if diffType == "log" {
 		inst, err = diff.SpawnLog(cwd, ptyManager)
+	} else if diffType == "status" {
+		inst, err = diff.SpawnStatus(cwd, ptyManager)
 	} else {
 		inst, err = diff.SpawnDiff(cwd, ptyManager)
 	}
@@ -387,10 +397,11 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"workspaces":  cfg.Workspaces,
-		"active_cwd":  activeCWD,
-		"theme_color": cfg.ThemeColor,
-		"hostname":    hName,
+		"workspaces":    cfg.Workspaces,
+		"active_cwd":    activeCWD,
+		"theme_color":   cfg.ThemeColor,
+		"hostname":      hName,
+		"model_presets": cfg.ModelPresets,
 	})
 }
 
@@ -433,6 +444,51 @@ func handleWorkspaceToggle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		cfg.Workspaces = newWS
+		saveConfig(cfg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleModelPresets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	model := req["model"]
+	if model == "" {
+		http.Error(w, "Missing model", http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+
+	if r.Method == http.MethodPost {
+		found := false
+		for _, m := range cfg.ModelPresets {
+			if m == model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.ModelPresets = append(cfg.ModelPresets, model)
+			saveConfig(cfg)
+		}
+	} else if r.Method == http.MethodDelete {
+		newPresets := []string{}
+		for _, m := range cfg.ModelPresets {
+			if m != model {
+				newPresets = append(newPresets, m)
+			}
+		}
+		cfg.ModelPresets = newPresets
 		saveConfig(cfg)
 	}
 
