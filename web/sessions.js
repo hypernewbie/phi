@@ -223,6 +223,12 @@ export class SessionsManager {
                     // Prevent launch trigger if clicking action buttons
                     if (e.target.closest('.session-action-btn')) return;
                     this.launchSession(sess.id, sess.title);
+                    
+                    // On mobile, automatically close the sidebar drawer
+                    const sidebar = document.getElementById('sidebar-panel');
+                    if (sidebar) {
+                        sidebar.classList.remove('drawer-open');
+                    }
                 });
                 
                 // Inline rename logic for Agy
