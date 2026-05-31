@@ -112,6 +112,25 @@
                     <div id="diff-term-container" class="diff-term-container"></div>
                 </div>
             </aside>
+    </div>
+
+    <!-- WORKSPACE MODAL DIALOG -->
+    <div id="ws-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Add Workspace</h3>
+                <button id="ws-modal-close" class="modal-close-btn">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-autocomplete-wrapper">
+                    <input type="text" id="ws-modal-input" placeholder="Type absolute path... (e.g., /home/user/code)" autocomplete="off">
+                    <div id="ws-modal-suggestions" class="autocomplete-suggestions hidden"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="ws-modal-cancel-btn" class="btn btn-primary">Cancel</button>
+                <button id="ws-modal-add-btn" class="btn btn-accent">Add Workspace</button>
+            </div>
         </div>
     </div>
 

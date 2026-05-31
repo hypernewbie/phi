@@ -14,6 +14,15 @@ export class SessionsManager {
         this.addWorkspaceBtn = document.getElementById('add-workspace-btn');
         this.removeWorkspaceBtn = document.getElementById('remove-workspace-btn');
         
+        // Workspace Modal Controls
+        this.wsModal = document.getElementById('ws-modal');
+        this.wsModalClose = document.getElementById('ws-modal-close');
+        this.wsModalInput = document.getElementById('ws-modal-input');
+        this.wsModalSuggestions = document.getElementById('ws-modal-suggestions');
+        this.wsModalCancelBtn = document.getElementById('ws-modal-cancel-btn');
+        this.wsModalAddBtn = document.getElementById('ws-modal-add-btn');
+        this.selectedSuggestionIndex = -1;
+        
         this.setupEventListeners();
     }
     
@@ -41,15 +50,46 @@ export class SessionsManager {
         });
         
         this.addWorkspaceBtn.addEventListener('click', () => {
-            const path = prompt("Enter absolute path for the new workspace:");
-            if (path) {
-                this.addWorkspace(path);
-            }
+            this.openWorkspaceModal();
         });
         
         this.removeWorkspaceBtn.addEventListener('click', () => {
             if (confirm(`Remove workspace: ${this.activeCWD}?`)) {
                 this.removeWorkspace(this.activeCWD);
+            }
+        });
+
+        // Modal Action Bindings
+        this.wsModalClose.addEventListener('click', () => this.closeWorkspaceModal());
+        this.wsModalCancelBtn.addEventListener('click', () => this.closeWorkspaceModal());
+        this.wsModalAddBtn.addEventListener('click', () => this.submitWorkspaceModal());
+
+        this.wsModalInput.addEventListener('input', () => {
+            this.fetchAutocompleteSuggestions();
+        });
+
+        this.wsModalInput.addEventListener('keydown', (e) => {
+            const items = this.wsModalSuggestions.querySelectorAll('.suggestion-item');
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.selectedSuggestionIndex = (this.selectedSuggestionIndex + 1) % items.length;
+                this.highlightSuggestion(items);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.selectedSuggestionIndex = (this.selectedSuggestionIndex - 1 + items.length) % items.length;
+                this.highlightSuggestion(items);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (this.selectedSuggestionIndex >= 0 && this.selectedSuggestionIndex < items.length) {
+                    this.wsModalInput.value = items[this.selectedSuggestionIndex].innerText;
+                    this.wsModalSuggestions.classList.add('hidden');
+                    this.selectedSuggestionIndex = -1;
+                } else {
+                    this.submitWorkspaceModal();
+                }
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                this.closeWorkspaceModal();
             }
         });
     }
@@ -290,6 +330,80 @@ export class SessionsManager {
         
         input.addEventListener('blur', () => {
             saveRename();
+        });
+    }
+
+    openWorkspaceModal() {
+        this.wsModalInput.value = '';
+        this.wsModalSuggestions.innerHTML = '';
+        this.wsModalSuggestions.classList.add('hidden');
+        this.selectedSuggestionIndex = -1;
+        this.wsModal.classList.remove('hidden');
+        setTimeout(() => this.wsModalInput.focus(), 50);
+    }
+
+    closeWorkspaceModal() {
+        this.wsModal.classList.add('hidden');
+    }
+
+    submitWorkspaceModal() {
+        const path = this.wsModalInput.value.trim();
+        if (path) {
+            this.addWorkspace(path);
+            this.closeWorkspaceModal();
+        }
+    }
+
+    async fetchAutocompleteSuggestions() {
+        const val = this.wsModalInput.value;
+        if (!val) {
+            this.wsModalSuggestions.innerHTML = '';
+            this.wsModalSuggestions.classList.add('hidden');
+            this.selectedSuggestionIndex = -1;
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/fs/autocomplete?path=${encodeURIComponent(val)}`);
+            if (!res.ok) throw new Error();
+            const suggestions = await res.json();
+
+            this.wsModalSuggestions.innerHTML = '';
+            this.selectedSuggestionIndex = -1;
+
+            if (suggestions.length === 0) {
+                this.wsModalSuggestions.classList.add('hidden');
+                return;
+            }
+
+            this.wsModalSuggestions.classList.remove('hidden');
+            suggestions.forEach((sugg, idx) => {
+                const div = document.createElement('div');
+                div.className = 'suggestion-item';
+                div.innerText = sugg;
+                
+                div.addEventListener('click', () => {
+                    this.wsModalInput.value = sugg;
+                    this.wsModalSuggestions.classList.add('hidden');
+                    this.selectedSuggestionIndex = -1;
+                    this.wsModalInput.focus();
+                });
+                
+                this.wsModalSuggestions.appendChild(div);
+            });
+        } catch (e) {
+            console.error("[autocomplete] Suggestion fetch error:", e);
+        }
+    }
+
+    highlightSuggestion(items) {
+        items.forEach((item, idx) => {
+            if (idx === this.selectedSuggestionIndex) {
+                item.classList.add('selected');
+                item.scrollIntoView({ block: 'nearest' });
+            } else {
+                item.classList.remove('selected');
+            }
         });
     }
 }
