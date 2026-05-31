@@ -1,11 +1,28 @@
 package pty
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
+	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
 )
+
+// crGapDur is the pause inserted after the bytes preceding a \r are written to
+// the ConPTY input pipe, before the \r itself. Without it, conhost's ReadFile
+// can pull both writes in a single read and re-coalesce them. Tunable for
+// testing via PHI_CR_GAP_US (microseconds).
+var crGapDur = func() time.Duration {
+	if v := os.Getenv("PHI_CR_GAP_US"); v != "" {
+		if us, err := strconv.Atoi(v); err == nil {
+			return time.Duration(us) * time.Microsecond
+		}
+	}
+	return 10 * time.Millisecond
+}()
 
 type Pty struct {
 	cmd    *gopty.Cmd
@@ -79,7 +96,45 @@ func (p *Pty) Read(b []byte) (int, error) {
 }
 
 func (p *Pty) Write(b []byte) (int, error) {
-	return p.pt.Write(b)
+	// On Windows, a carriage return that shares a single ConPTY input-pipe
+	// write with preceding bytes gets coalesced: charm/Bubble Tea's input
+	// reader (opencode, claude, agy, pi) treats the bulk chunk as a bracketed
+	// paste and inserts the newline literally instead of registering a distinct
+	// Enter keypress. Writing each \r on its own — with a brief flush gap after
+	// the preceding bytes so conhost drains them in a separate ReadFile — makes
+	// Enter fire. A lone \r (direct-mode typing) has no preceding bytes and so
+	// incurs no gap.
+	if runtime.GOOS != "windows" || !bytes.ContainsRune(b, '\r') {
+		return p.pt.Write(b)
+	}
+
+	total := 0
+	rest := b
+	for len(rest) > 0 {
+		i := bytes.IndexByte(rest, '\r')
+		if i < 0 {
+			n, err := p.pt.Write(rest)
+			total += n
+			return total, err
+		}
+		if i > 0 {
+			n, err := p.pt.Write(rest[:i])
+			total += n
+			if err != nil {
+				return total, err
+			}
+			if crGapDur > 0 {
+				time.Sleep(crGapDur)
+			}
+		}
+		n, err := p.pt.Write([]byte{'\r'})
+		total += n
+		if err != nil {
+			return total, err
+		}
+		rest = rest[i+1:]
+	}
+	return total, nil
 }
 
 func (p *Pty) Resize(cols, rows uint16) error {

@@ -1,4 +1,6 @@
 phi
+*.exe
+*.exe~
 *.db
 *.pb
 sessions.json
