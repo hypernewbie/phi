@@ -71,10 +71,33 @@
                 </div>
                 
                 <div class="coder-selector">
-                    <button class="coder-tab active" data-coder="opencode">OpenCode</button>
-                    <button class="coder-tab" data-coder="claude">Claude</button>
-                    <button class="coder-tab" data-coder="agy">Agy</button>
-                    <button class="coder-tab" data-coder="bash">Shell</button>
+                    <button class="coder-tab active" data-coder="opencode" title="OpenCode">
+                        <svg class="coder-logo" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M23.9 6.5l-2.7-2.3c-.3-.3-.8-.3-1.1 0L12 11.3 5.4 6c-.3-.3-.8-.3-1.1 0L.1 9c-.2.2-.2.6 0 .8L4.2 13 .1 16.2c-.2.2-.2.6 0 .8l4.2 3.2c.3.3.8.3 1.1 0l6.6-5.3 8.1 7.1c.3.3.8.3 1.1 0l2.7-2.3c.2-.2.2-.6 0-.8L18.4 13l5.5-5.7c.2-.2.2-.6 0-.8z"/>
+                        </svg>
+                        <span>OpenCode</span>
+                    </button>
+                    <button class="coder-tab" data-coder="claude" title="Claude Code">
+                        <svg class="coder-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.15"></circle>
+                            <path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                        </svg>
+                        <span>Claude</span>
+                    </button>
+                    <button class="coder-tab" data-coder="agy" title="Antigravity / Agy">
+                        <svg class="coder-logo" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2c0 5.523 4.477 10 10 10-5.523 0-10 4.477-10 10 0-5.523-4.477-10-10-10 5.477 0 10-4.477 10-10z"/>
+                            <path d="M19 16c0 1.657 1.343 3 3 3-1.657 0-3 1.343-3 3 0-1.657-1.343-3-3-3 1.657 0 3-1.343 3-3z" opacity="0.7"/>
+                        </svg>
+                        <span>Agy</span>
+                    </button>
+                    <button class="coder-tab" data-coder="bash" title="Shell Prompt">
+                        <svg class="coder-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="3" width="20" height="18" rx="2" ry="2" fill="currentColor" opacity="0.15"></rect>
+                            <path d="M7 8l5 4-5 4M13 16h4"/>
+                        </svg>
+                        <span>Shell</span>
+                    </button>
                 </div>
 
                 <div class="session-list-container">
