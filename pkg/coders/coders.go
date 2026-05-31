@@ -26,7 +26,7 @@ var Registry = map[string]Coder{
 		Presets: []Preset{
 			{Name: "/exit", Value: "/exit\r"},
 			{Name: "/context", Value: "/context\r"},
-			{Name: "/model", Value: "/model\r"},
+			{Name: "/model", Value: "/model\n"},
 			{Name: "/compact", Value: "/compact\r"},
 			{Name: "/undo", Value: "/undo\r"},
 			{Name: "/copy", Value: "/copy\r"},
@@ -46,7 +46,7 @@ var Registry = map[string]Coder{
 		SessionSource: "claude_files",
 		Presets: []Preset{
 			{Name: "/exit", Value: "/exit\r"},
-			{Name: "/model", Value: "/model\r"},
+			{Name: "/model", Value: "/model\n"},
 			{Name: "/compact", Value: "/compact\r"},
 			{Name: "/undo", Value: "/undo\r"},
 			{Name: "/copy", Value: "/copy\r"},
@@ -66,7 +66,7 @@ var Registry = map[string]Coder{
 		SessionSource: "agy_files",
 		Presets: []Preset{
 			{Name: "/exit", Value: "/exit\r"},
-			{Name: "/model", Value: "/model\r"},
+			{Name: "/model", Value: "/model\n"},
 			{Name: "/compact", Value: "/compact\r"},
 			{Name: "/undo", Value: "/undo\r"},
 			{Name: "/copy", Value: "/copy\r"},
