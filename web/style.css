@@ -475,6 +475,15 @@ body {
     background-color: var(--accent-bright);
 }
 
+.btn-red {
+    background-color: var(--red);
+    color: #ffffff;
+}
+
+.btn-red:hover {
+    background-color: #ff5a5a;
+}
+
 /* DRAGGABLE RESIZE HANDLE */
 .resize-handle {
     width: 4px;
@@ -651,6 +660,12 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.input-actions .btn {
+    width: auto;
+    padding: 0 16px;
+    white-space: nowrap;
 }
 
 .direct-mode-btn {

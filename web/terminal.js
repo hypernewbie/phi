@@ -13,6 +13,7 @@ export class TabManager {
         this.inputBarContainer = document.getElementById('input-bar-container');
         this.inputTextArea = document.getElementById('input-textarea');
         this.sendInputBtn = document.getElementById('send-input-btn');
+        this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         
@@ -39,6 +40,13 @@ export class TabManager {
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
         });
+
+        if (this.cancelInputBtn) {
+            this.cancelInputBtn.addEventListener('click', () => {
+                this.sendRawInput('\x03');
+                this.inputTextArea.focus();
+            });
+        }
         
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
@@ -318,7 +326,7 @@ export class TabManager {
             this.renderPresets(activeTab.coder);
         }
         
-        this.focusActiveTerminal();
+        this.inputTextArea.focus();
     }
     
     sendRawInput(bytes) {
