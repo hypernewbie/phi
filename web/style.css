@@ -573,10 +573,14 @@ body {
     border-color: var(--accent);
 }
 
-#send-input-btn {
-    height: 38px;
-    padding: 0 16px;
-    width: auto;
+.input-bar-container.direct-mode-active textarea,
+.input-bar-container.direct-mode-active #send-input-btn {
+    display: none !important;
+}
+
+.input-bar-container.direct-mode-active {
+    justify-content: flex-end;
+    padding: 4px 12px;
 }
 
 /* PRESETS PANEL */
