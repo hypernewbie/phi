@@ -253,7 +253,11 @@ export class SessionsManager {
             if (!res.ok) throw new Error("Failed to spawn session");
             
             const data = await res.json();
-            const coderName = this.activeCoder === 'opencode' ? 'OpenCode' : (this.activeCoder === 'claude' ? 'Claude' : 'Agy');
+            let coderName = 'Shell';
+            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
+            else if (this.activeCoder === 'claude') coderName = 'Claude';
+            else if (this.activeCoder === 'agy') coderName = 'Agy';
+            
             this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder);
             
             // Refresh list

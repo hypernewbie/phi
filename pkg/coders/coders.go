@@ -62,4 +62,18 @@ var Registry = map[string]Coder{
 			{Name: "/clear", Value: "/clear\r"},
 		},
 	},
+	"bash": {
+		ID:            "bash",
+		Name:          "Shell",
+		Command:       "bash",
+		Args:          []string{"-l"},
+		ResumeArg:     "",
+		SessionSource: "",
+		Presets: []Preset{
+			{Name: "ctrl+c", Value: "\x03"},
+			{Name: "ctrl+d", Value: "\x04"},
+			{Name: "clear", Value: "clear\r"},
+			{Name: "exit", Value: "exit\r"},
+		},
+	},
 }
