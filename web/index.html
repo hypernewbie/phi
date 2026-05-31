@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Φ phi — AI Multiplexer</title>
+    <link rel="stylesheet" href="vendor/xterm.css">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- TOP BRAND BAR -->
+        <header class="app-header">
+            <div class="brand">
+                <span class="logo">Φ</span>
+                <span class="brand-name">phi</span>
+            </div>
+            
+            <div class="workspace-area">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                <select id="workspace-select"></select>
+                <button id="add-workspace-btn" title="Add Workspace">+</button>
+                <button id="remove-workspace-btn" title="Remove Active Workspace">-</button>
+            </div>
+        </header>
+
+        <div class="main-layout">
+            <!-- LEFT PANEL: SESSIONS -->
+            <aside class="sidebar-panel" id="sidebar-panel">
+                <div class="panel-header">
+                    <h2>SESSIONS</h2>
+                </div>
+                
+                <div class="coder-selector">
+                    <button class="coder-tab active" data-coder="opencode">OpenCode</button>
+                    <button class="coder-tab" data-coder="claude">Claude</button>
+                    <button class="coder-tab" data-coder="agy">Agy</button>
+                </div>
+
+                <div class="session-list-container">
+                    <div id="session-list" class="session-list"></div>
+                </div>
+
+                <div class="panel-footer">
+                    <button id="new-session-btn" class="btn btn-primary">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        New Session
+                    </button>
+                </div>
+            </aside>
+
+            <!-- LEFT RESIZE HANDLE -->
+            <div class="resize-handle" id="left-resize-handle"></div>
+
+            <!-- MIDDLE PANEL: TABS & TERMINAL -->
+            <main class="terminal-panel">
+                <!-- TABS HEADER -->
+                <div class="terminal-tabs-bar">
+                    <div id="tabs-container" class="tabs-container"></div>
+                </div>
+
+                <!-- ACTIVE TERMINAL CONTAINER -->
+                <div class="terminal-content">
+                    <div id="terminals-wrapper" class="terminals-wrapper"></div>
+                    
+                    <div id="input-bar-container" class="input-bar-container hidden">
+                        <textarea id="input-textarea" placeholder="Type here or paste, Shift+Enter for newline, Enter to send..."></textarea>
+                        <div class="input-actions">
+                            <button id="direct-mode-toggle" title="Toggle Direct Input Mode (Direct keyboard input vs staged text bar)" class="direct-mode-btn">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="6" y1="8" x2="6.01" y2="8"></line><line x1="10" y1="8" x2="10.01" y2="8"></line><line x1="14" y1="8" x2="14.01" y2="8"></line><line x1="18" y1="8" x2="18.01" y2="8"></line><line x1="6" y1="12" x2="6.01" y2="12"></line><line x1="18" y1="12" x2="18.01" y2="12"></line><line x1="7" y1="16" x2="17" y2="16"></line></svg>
+                            </button>
+                            <button id="send-input-btn" class="btn btn-accent">Send ↵</button>
+                        </div>
+                    </div>
+                    
+                    <div id="presets-container" class="presets-container hidden"></div>
+                </div>
+            </main>
+
+            <!-- RIGHT RESIZE HANDLE -->
+            <div class="resize-handle" id="right-resize-handle"></div>
+
+            <!-- RIGHT PANEL: GIT DIFF -->
+            <aside class="diff-panel" id="diff-panel">
+                <div class="panel-header diff-header">
+                    <div class="diff-tabs">
+                        <button class="diff-tab-btn active" data-tab="diff">GIT DIFF</button>
+                        <button class="diff-tab-btn" data-tab="log">GIT LOG</button>
+                    </div>
+                    <div class="diff-actions">
+                        <button id="refresh-diff-btn" title="Refresh">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                        <button id="close-diff-btn" title="Hide Diff Panel">×</button>
+                    </div>
+                </div>
+
+                <div class="diff-content">
+                    <div id="diff-term-container" class="diff-term-container"></div>
+                </div>
+            </aside>
+            
+            <button id="show-diff-btn" class="show-diff-btn hidden" title="Show Diff Panel">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                Diff
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Entry Point -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
