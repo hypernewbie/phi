@@ -113,9 +113,8 @@ export class TabManager {
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
         
-        // Tab click and Close click listeners
         tabEl.addEventListener('click', (e) => {
-            if (e.target.classList.contains('tab-close')) {
+            if (e.target.closest('.tab-close')) {
                 e.stopPropagation();
                 this.closeTab(paneId);
             } else {
@@ -253,12 +252,24 @@ export class TabManager {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
         
-        // Close WS and clean up
-        tab.ws.close();
-        tab.term.dispose();
+        try {
+            if (tab.ws) tab.ws.close();
+        } catch (e) {
+            console.error("[tab] WS close error:", e);
+        }
+
+        try {
+            if (tab.term) tab.term.dispose();
+        } catch (e) {
+            console.error("[tab] Term dispose error:", e);
+        }
         
-        tab.tabEl.remove();
-        tab.termContainer.remove();
+        try {
+            if (tab.tabEl) tab.tabEl.remove();
+            if (tab.termContainer) tab.termContainer.remove();
+        } catch (e) {
+            console.error("[tab] DOM removal error:", e);
+        }
         
         this.tabs.delete(paneId);
         
