@@ -1,21 +1,26 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"phi/pkg/coders"
-	"phi/pkg/diff"
-	"phi/pkg/pty"
-	"phi/pkg/session"
-	"phi/pkg/ws"
+	"github.com/hypernewbie/phi/pkg/coders"
+	"github.com/hypernewbie/phi/pkg/diff"
+	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/session"
+	"github.com/hypernewbie/phi/pkg/ws"
 )
+
+//go:embed all:web
+var webFS embed.FS
 
 var (
 	ptyManager *pty.Manager
@@ -105,6 +110,12 @@ func main() {
 	ptyManager = pty.NewManager()
 	wsHub = ws.NewHub()
 
+	// Embedded web assets (served when running an installed binary from any dir)
+	webRoot, err := fs.Sub(webFS, "web")
+	if err != nil {
+		log.Fatalf("Failed to load embedded web assets: %v", err)
+	}
+
 	// API Routing
 	http.HandleFunc("/api/coders", handleGetCoders)
 	http.HandleFunc("/api/sessions", handleGetSessions)
@@ -145,8 +156,8 @@ func main() {
 			return
 		}
 
-		// Fallback to static file server
-		http.FileServer(http.Dir("./web")).ServeHTTP(w, r)
+		// Fallback to static file server (embedded web assets)
+		http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
 	})
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)

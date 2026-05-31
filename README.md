@@ -43,6 +43,15 @@ phi/
 
 See [`PLAN.md`](PLAN.md) for the full design notes and locked decisions.
 
+## Quickstart
+
+```bash
+go install github.com/hypernewbie/phi@latest
+phi --cwd ~/code/my-project
+```
+
+Then open <http://localhost:7070>. The web UI is embedded in the binary, so it works from any directory.
+
 ## Getting started
 
 ### Prerequisites
@@ -51,9 +60,11 @@ See [`PLAN.md`](PLAN.md) for the full design notes and locked decisions.
 - Whichever agent CLIs you want to drive, on your `PATH`: `opencode`, `claude`, `agy`, `pi`
 - `git` (for the diff/log panels)
 
-### Build & run
+### Build from source
 
 ```bash
+git clone https://github.com/hypernewbie/phi.git
+cd phi
 go build -o phi .
 ./phi --cwd ~/code/my-project
 ```
