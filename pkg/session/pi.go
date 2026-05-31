@@ -41,9 +41,11 @@ func ListPiSessions(cwd string) ([]Session, error) {
 		return []Session{}, nil
 	}
 
-	// 1. Encode CWD to double-dash project name
-	cleaned := strings.Trim(cwd, "/")
-	projectDirName := "--" + strings.ReplaceAll(cleaned, "/", "-") + "--"
+	// 1. Encode CWD to double-dash project name.
+	// Normalize to forward slashes first, then replace both ":" and "/" with "-"
+	// so Windows paths like "C:/code/phi" → "--C--code-phi--" match what Pi stores.
+	normalized := strings.ReplaceAll(strings.Trim(cwd, "/"), ":", "-")
+	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
 	
 	sessionsDir := expandHome("~/.pi/agent/sessions")
 	projectPath := filepath.Join(sessionsDir, projectDirName)
