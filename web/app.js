@@ -1,12 +1,50 @@
-/* Φ phi — Central Client Coordinator */
-
 import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 
+const ACCENT_COLORS = {
+    purple: {
+        accent: '#7c6af7',
+        accentGlow: 'rgba(124, 106, 247, 0.15)',
+        accentDim: '#5b4ec2',
+        accentBright: '#9a8dfa'
+    },
+    blue: {
+        accent: '#38bdf8',
+        accentGlow: 'rgba(56, 189, 248, 0.15)',
+        accentDim: '#0284c7',
+        accentBright: '#7dd3fc'
+    },
+    green: {
+        accent: '#10b981',
+        accentGlow: 'rgba(16, 185, 129, 0.15)',
+        accentDim: '#047857',
+        accentBright: '#34d399'
+    },
+    amber: {
+        accent: '#fbbf24',
+        accentGlow: 'rgba(251, 191, 36, 0.15)',
+        accentDim: '#b45309',
+        accentBright: '#fcd34d'
+    },
+    red: {
+        accent: '#f87171',
+        accentGlow: 'rgba(248, 113, 113, 0.15)',
+        accentDim: '#b91c1c',
+        accentBright: '#fca5a5'
+    },
+    pink: {
+        accent: '#ec4899',
+        accentGlow: 'rgba(236, 72, 153, 0.15)',
+        accentDim: '#be185d',
+        accentBright: '#f472b6'
+    }
+};
+
 class App {
     constructor() {
         this.codersPresetRegistry = {};
+        this.accentColorSelect = document.getElementById('accent-color-select');
         
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -26,6 +64,13 @@ class App {
         
         // 4. Initialize Diff terminal engine
         this.diffController.initTerminal();
+        
+        // 5. Setup theme accent listener
+        this.accentColorSelect.addEventListener('change', () => {
+            const color = this.accentColorSelect.value;
+            this.applyAccentTheme(color);
+            this.saveTheme(color);
+        });
         
         console.log("[app] Phi initialized successfully");
     }
@@ -108,6 +153,30 @@ class App {
             document.addEventListener('mousemove', doDrag);
             document.addEventListener('mouseup', stopDrag);
         });
+    }
+
+    applyAccentTheme(colorKey) {
+        const theme = ACCENT_COLORS[colorKey] || ACCENT_COLORS.purple;
+        document.documentElement.style.setProperty('--accent', theme.accent);
+        document.documentElement.style.setProperty('--accent-glow', theme.accentGlow);
+        document.documentElement.style.setProperty('--accent-dim', theme.accentDim);
+        document.documentElement.style.setProperty('--accent-bright', theme.accentBright);
+        
+        if (this.tabManager) {
+            this.tabManager.applyThemeToAllActiveTerminals(theme.accent);
+        }
+    }
+
+    async saveTheme(colorKey) {
+        try {
+            await fetch('/api/config/theme', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ color: colorKey })
+            });
+        } catch (e) {
+            console.error("[theme] Failed to save theme:", e);
+        }
     }
 }
 

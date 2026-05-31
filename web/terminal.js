@@ -16,6 +16,9 @@ export class TabManager {
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         
+        // History preset queue
+        this.recentCommands = JSON.parse(localStorage.getItem('phi_recent_commands')) || [];
+        
         this.setupEventListeners();
     }
     
@@ -131,7 +134,7 @@ export class TabManager {
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
-                cursor: '#7c6af7',
+                cursor: document.documentElement.style.getPropertyValue('--accent') || '#7c6af7',
                 cursorAccent: '#08080a',
                 black: '#08080a',
                 red: '#ef4444',
@@ -302,6 +305,19 @@ export class TabManager {
         
         activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
+        
+        // Save to unique recent commands list
+        const trimmed = val.trim();
+        if (trimmed) {
+            this.recentCommands = this.recentCommands.filter(cmd => cmd !== trimmed);
+            this.recentCommands.push(trimmed);
+            if (this.recentCommands.length > 10) {
+                this.recentCommands.shift();
+            }
+            localStorage.setItem('phi_recent_commands', JSON.stringify(this.recentCommands));
+            this.renderPresets(activeTab.coder);
+        }
+        
         this.focusActiveTerminal();
     }
     
@@ -334,19 +350,58 @@ export class TabManager {
     
     renderPresets(coderId) {
         this.presetsContainer.innerHTML = '';
+        
         const coderPresetInfo = this.app.codersPresetRegistry[coderId];
-        if (!coderPresetInfo || !coderPresetInfo.presets) {
+        const hasCoderPresets = coderPresetInfo && coderPresetInfo.presets && coderPresetInfo.presets.length > 0;
+        
+        // If direct mode, do not render presets
+        const activeTab = this.getActiveTab();
+        if (activeTab && activeTab.directMode) {
+            this.presetsContainer.classList.add('hidden');
+            return;
+        }
+        
+        // Hide presets container if absolutely nothing to show
+        if (!hasCoderPresets && this.recentCommands.length === 0) {
             this.presetsContainer.classList.add('hidden');
             return;
         }
         
         this.presetsContainer.classList.remove('hidden');
-        coderPresetInfo.presets.forEach(p => {
+        
+        // 1. Render Static Coder Presets
+        if (hasCoderPresets) {
+            coderPresetInfo.presets.forEach(p => {
+                const btn = document.createElement('button');
+                btn.className = 'preset-btn';
+                btn.innerText = p.name;
+                btn.addEventListener('click', () => {
+                    this.sendRawInput(p.value);
+                });
+                this.presetsContainer.appendChild(btn);
+            });
+        }
+        
+        // 2. Render Vertical Divider if both types exist
+        if (hasCoderPresets && this.recentCommands.length > 0) {
+            const divider = document.createElement('div');
+            divider.className = 'presets-divider';
+            this.presetsContainer.appendChild(divider);
+        }
+        
+        // 3. Render Rotating Unique Recent Commands
+        const reversedRecents = [...this.recentCommands].reverse();
+        reversedRecents.forEach(cmd => {
             const btn = document.createElement('button');
-            btn.className = 'preset-btn';
-            btn.innerText = p.name;
+            btn.className = 'preset-btn recent-cmd-btn';
+            
+            // Truncate labels neatly for large prompts
+            const label = cmd.length > 20 ? cmd.substring(0, 18) + '..' : cmd;
+            btn.innerText = `⏱ ${label}`;
+            btn.title = cmd;
+            
             btn.addEventListener('click', () => {
-                this.sendRawInput(p.value);
+                this.sendRawInput(cmd + '\r');
             });
             this.presetsContainer.appendChild(btn);
         });
