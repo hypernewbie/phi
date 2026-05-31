@@ -383,6 +383,13 @@ export class TabManager {
         
         activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
+
+        // Auto sync clipboard on /copy command
+        if (val.includes('/copy')) {
+            setTimeout(() => {
+                this.app.syncRemoteClipboard();
+            }, 300);
+        }
         
         // Save to unique recent commands list
         const trimmed = val.trim();
@@ -406,6 +413,13 @@ export class TabManager {
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         activeTab.ws.sendInput(bytes);
         this.focusActiveTerminal();
+
+        // Auto sync clipboard on /copy command
+        if (bytes.includes('/copy')) {
+            setTimeout(() => {
+                this.app.syncRemoteClipboard();
+            }, 300);
+        }
     }
     
     fitActiveTerminal() {

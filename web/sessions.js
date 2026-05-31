@@ -198,6 +198,33 @@ export class SessionsManager {
 
             localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
 
+            // Append a faint "-- No workspace --" section for sessions with no cwd.
+            // Only relevant for agy (others don't have unworkspaced sessions).
+            // Rendered after real worktrees, collapsed by default.
+            const appendNoWorkspaceSection = () => {
+                if (this.activeCoder !== 'agy') return;
+                const nwSection = document.createElement('div');
+                nwSection.className = 'worktree-section no-workspace-section';
+                nwSection.setAttribute('data-worktree-path', '--no-workspace--');
+                nwSection.innerHTML = `
+                    <div class="worktree-header">
+                        <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                        <span class="worktree-name">— no workspace —</span>
+                    </div>
+                    <div class="worktree-sessions-container"></div>
+                `;
+                const header = nwSection.querySelector('.worktree-header');
+                header.addEventListener('click', async () => {
+                    const isExpanded = nwSection.classList.toggle('expanded');
+                    if (isExpanded) {
+                        await this.loadWorktreeSessions('--no-workspace--', nwSection.querySelector('.worktree-sessions-container'));
+                    }
+                });
+                this.sessionList.appendChild(nwSection);
+            };
+
             worktrees.forEach(wt => {
                 const wtSection = document.createElement('div');
                 wtSection.className = 'worktree-section';
@@ -260,6 +287,8 @@ export class SessionsManager {
                     this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
                 }
             });
+
+            appendNoWorkspaceSection();
 
         } catch (e) {
             this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${e.message}</div>`;
