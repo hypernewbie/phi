@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 type AgyMeta struct {
 	Name   string `json:"name"`
 	SeenAt string `json:"seen_at"`
+	Cwd    string `json:"cwd"`
 }
 
 var agyMu sync.Mutex
@@ -83,6 +85,77 @@ func SaveAgySessionName(id string, name string) error {
 	return SaveAgyMetaMap(m)
 }
 
+func SaveAgySessionCwd(id string, cwd string) error {
+	agyMu.Lock()
+	defer agyMu.Unlock()
+
+	m, err := LoadAgyMetaMap()
+	if err != nil {
+		return err
+	}
+
+	meta := m[id]
+	meta.Cwd = cwd
+	meta.SeenAt = time.Now().Format(time.RFC3339)
+	m[id] = meta
+
+	return SaveAgyMetaMap(m)
+}
+
+func syncAgyCwdMappings(m map[string]AgyMeta) {
+	// 1. Sync from last_conversations.json
+	cachePath := expandHome("~/.gemini/antigravity-cli/cache/last_conversations.json")
+	if b, err := os.ReadFile(cachePath); err == nil {
+		var cacheMap map[string]string
+		if err := json.Unmarshal(b, &cacheMap); err == nil {
+			for dir, uuid := range cacheMap {
+				if uuid == "" || dir == "" {
+					continue
+				}
+				if meta, exists := m[uuid]; exists {
+					if meta.Cwd == "" {
+						meta.Cwd = dir
+						m[uuid] = meta
+					}
+				} else {
+					m[uuid] = AgyMeta{
+						Cwd:    dir,
+						SeenAt: time.Now().Format(time.RFC3339),
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Sync from history.jsonl
+	historyPath := expandHome("~/.gemini/antigravity-cli/history.jsonl")
+	if file, err := os.Open(historyPath); err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var entry struct {
+				Workspace      string `json:"workspace"`
+				ConversationId string `json:"conversationId"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &entry); err == nil {
+				if entry.ConversationId != "" && entry.Workspace != "" {
+					if meta, exists := m[entry.ConversationId]; exists {
+						if meta.Cwd == "" {
+							meta.Cwd = entry.Workspace
+							m[entry.ConversationId] = meta
+						}
+					} else {
+						m[entry.ConversationId] = AgyMeta{
+							Cwd:    entry.Workspace,
+							SeenAt: time.Now().Format(time.RFC3339),
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func ListAgySessions(cwd string) ([]Session, error) {
 	agyMu.Lock()
 	defer agyMu.Unlock()
@@ -102,7 +175,10 @@ func ListAgySessions(cwd string) ([]Session, error) {
 		m = make(map[string]AgyMeta)
 	}
 
-	var sessions []Session
+	// Sync latest workspace directory mappings
+	syncAgyCwdMappings(m)
+
+	sessions := []Session{}
 	activeUUIDs := make(map[string]bool)
 
 	for _, f := range files {
@@ -120,6 +196,22 @@ func ListAgySessions(cwd string) ([]Session, error) {
 
 		// Look up in sidecar metadata
 		meta, exists := m[uuid]
+
+		// Fallback for newly spawned sessions (created in the last 60 seconds)
+		if meta.Cwd == "" && time.Since(info.ModTime()) < 60*time.Second {
+			meta.Cwd = cwd
+			m[uuid] = meta
+			exists = true
+		}
+
+		// Group / filter sessions matching current directory
+		// If meta has a CWD, we filter by CWD (cwd matches exactly).
+		// If meta CWD is empty, we treat it as global/unassigned and show it as a fallback,
+		// allowing the user to resume and associate it.
+		if cwd != "" && meta.Cwd != "" && meta.Cwd != cwd {
+			continue
+		}
+
 		title := meta.Name
 		if !exists || title == "" {
 			shortUUID := uuid
@@ -135,7 +227,7 @@ func ListAgySessions(cwd string) ([]Session, error) {
 		sessions = append(sessions, Session{
 			ID:          uuid,
 			Title:       title,
-			Cwd:         cwd, // agy scopes by CWD natively or default to current cwd
+			Cwd:         meta.Cwd,
 			Coder:       "agy",
 			TimeUpdated: info.ModTime(),
 		})
@@ -151,7 +243,7 @@ func ListAgySessions(cwd string) ([]Session, error) {
 		}
 		_ = SaveAgyMetaMap(pruned)
 	} else if len(files) > 0 {
-		// Just save any new default names we generated
+		// Just save any new default names or CWD assignments we generated/mapped
 		_ = SaveAgyMetaMap(m)
 	}
 

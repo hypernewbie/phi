@@ -240,6 +240,10 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Coder == "agy" && req.SessionID != "" {
+		_ = session.SaveAgySessionCwd(req.SessionID, spawnDir)
+	}
+
 	ws.StartPTYReadLoop(inst, wsHub)
 
 	w.Header().Set("Content-Type", "application/json")

@@ -45,3 +45,15 @@ func TestDecodeClaudePath(t *testing.T) {
 		}
 	}
 }
+
+func TestListAgySessionsRobutness(t *testing.T) {
+	// Verify that ListAgySessions runs fine even if directory is empty or path doesn't exist
+	sessions, err := ListAgySessions("/home/hypernewbie/code/nonexistent")
+	if err != nil {
+		t.Fatalf("Unexpected error listing agy sessions: %v", err)
+	}
+	// We shouldn't crash or return nil if conversations dir doesn't exist
+	if sessions == nil {
+		t.Error("Expected empty sessions slice, got nil")
+	}
+}
