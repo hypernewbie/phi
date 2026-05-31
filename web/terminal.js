@@ -402,14 +402,9 @@ export class TabManager {
     sendRawInput(bytes) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
-        // Send trailing \r as a separate PTY write — Bubble Tea on Windows
-        // (ConPTY) won't treat \r as Enter when it arrives bundled with text.
-        if (bytes.endsWith('\r') && bytes.length > 1) {
-            activeTab.ws.sendInput(bytes.slice(0, -1));
-            activeTab.ws.sendInput('\r');
-        } else {
-            activeTab.ws.sendInput(bytes);
-        }
+        // The backend PTY layer handles the Windows ConPTY quirk where a \r
+        // bundled with preceding text fails to register as Enter — see pkg/pty.
+        activeTab.ws.sendInput(bytes);
         this.focusActiveTerminal();
     }
     
