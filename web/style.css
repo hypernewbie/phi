@@ -1005,8 +1005,18 @@ body {
 
 /* MOBILE RESPONSIVE DRAWERS */
 @media (max-width: 768px) {
+    /* Use dynamic viewport height to perfectly adapt to mobile address/navigation bars and prevent cutoffs */
+    .app-container {
+        height: 100dvh !important;
+    }
+
     /* Hide resize handles on mobile */
     .resize-handle {
+        display: none !important;
+    }
+
+    /* Hide brand text phi to save a lot of space for the project path selector */
+    .brand .brand-name {
         display: none !important;
     }
 
@@ -1017,7 +1027,7 @@ body {
         top: 48px;
         bottom: 0;
         width: 280px !important; /* Force fixed width on drawer */
-        height: calc(100vh - 48px);
+        height: calc(100dvh - 48px);
         z-index: 1000;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1036,7 +1046,7 @@ body {
         top: 48px;
         bottom: 0;
         width: 320px !important;
-        height: calc(100vh - 48px);
+        height: calc(100dvh - 48px);
         z-index: 1000;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1059,14 +1069,20 @@ body {
         display: flex !important;
     }
     
-    /* Workspace Area responsiveness */
+    /* Workspace Area responsiveness - now wider and fully readable! */
     .workspace-area {
-        max-width: 140px;
+        flex: 1;
+        max-width: 240px;
+        min-width: 140px;
+        margin: 0 4px;
+        padding: 4px 6px;
     }
     .workspace-area select {
-        min-width: 80px;
-        max-width: 120px;
-        font-size: 11px;
+        width: 100%;
+        min-width: 100px;
+        max-width: 220px;
+        font-size: 12px;
+        padding-right: 14px;
     }
     .workspace-area button {
         font-size: 13px;
@@ -1080,6 +1096,7 @@ body {
     /* Panel headings styling for mobile layout */
     .app-header {
         padding: 0 8px;
+        gap: 6px;
     }
     
     .header-actions {
@@ -1090,10 +1107,12 @@ body {
         padding: 4px 6px;
     }
     
+    /* Increase the width of the theme select selector so "Purple" isn't cut off! */
     .theme-area select {
-        min-width: 40px;
-        max-width: 60px;
-        font-size: 11px;
+        min-width: 70px;
+        max-width: 90px;
+        font-size: 12px;
+        padding-right: 14px;
     }
     
     .header-btn {
@@ -1102,6 +1121,34 @@ body {
     }
     .header-btn span {
         display: none; /* Hide label to save space, icon is enough on mobile */
+    }
+    
+    /* Make the staged input bar and action buttons compact for small screens */
+    .input-bar-container {
+        padding: 6px 10px;
+        gap: 8px;
+    }
+    
+    .input-bar-container textarea {
+        font-size: 12px;
+        height: 36px;
+        min-height: 36px;
+        padding: 6px 10px;
+    }
+    
+    .input-actions {
+        gap: 4px;
+    }
+    
+    .input-actions .btn {
+        padding: 0 10px;
+        height: 36px;
+        font-size: 12px;
+    }
+    
+    .direct-mode-btn {
+        width: 36px;
+        height: 36px;
     }
     
     /* Preset buttons container styling for mobile */
