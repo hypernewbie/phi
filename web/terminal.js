@@ -402,7 +402,14 @@ export class TabManager {
     sendRawInput(bytes) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
-        activeTab.ws.sendInput(bytes);
+        // Send trailing \r as a separate PTY write — Bubble Tea on Windows
+        // (ConPTY) won't treat \r as Enter when it arrives bundled with text.
+        if (bytes.endsWith('\r') && bytes.length > 1) {
+            activeTab.ws.sendInput(bytes.slice(0, -1));
+            activeTab.ws.sendInput('\r');
+        } else {
+            activeTab.ws.sendInput(bytes);
+        }
         this.focusActiveTerminal();
     }
     
@@ -473,8 +480,7 @@ export class TabManager {
             const btn = document.createElement('button');
             btn.className = 'preset-btn recent-cmd-btn';
             
-            // Truncate labels neatly for large prompts
-            const label = cmd.length > 20 ? cmd.substring(0, 18) + '..' : cmd;
+            const label = cmd.length > 16 ? cmd.substring(0, 15) + '…' : cmd;
             btn.innerText = `⏱ ${label}`;
             btn.title = cmd;
             
