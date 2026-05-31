@@ -282,7 +282,7 @@ export class TabManager {
         const val = this.inputTextArea.value;
         if (!val) return;
         
-        activeTab.ws.sendInput(val + '\n');
+        activeTab.ws.sendInput(val + '\r');
         this.inputTextArea.value = '';
         this.focusActiveTerminal();
     }
