@@ -14,6 +14,7 @@ export class TabManager {
         this.inputTextArea = document.getElementById('input-textarea');
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
+        this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         
@@ -44,6 +45,13 @@ export class TabManager {
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
                 this.sendRawInput('\x03');
+                this.inputTextArea.focus();
+            });
+        }
+
+        if (this.copyInputBtn) {
+            this.copyInputBtn.addEventListener('click', () => {
+                this.sendRawInput('/copy\r');
                 this.inputTextArea.focus();
             });
         }
