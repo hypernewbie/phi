@@ -693,6 +693,18 @@ body {
     border-color: var(--accent);
 }
 
+.cancel-btn-icon {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.cancel-btn-icon:hover {
+    color: #ffffff !important;
+    background-color: var(--red) !important;
+    border-color: var(--red) !important;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
 .input-bar-container.direct-mode-active textarea,
 .input-bar-container.direct-mode-active #send-input-btn {
     display: none !important;
