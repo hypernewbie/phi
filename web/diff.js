@@ -5,7 +5,7 @@ import { PTYWebSocket } from './ws.js';
 export class DiffController {
     constructor(app) {
         this.app = app;
-        this.activeTab = 'diff'; // 'diff' | 'log'
+        this.activeTab = 'log'; // 'diff' | 'log'
         this.currentWs = null;
         this.term = null;
         this.fitAddon = null;
