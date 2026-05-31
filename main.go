@@ -256,9 +256,17 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// On Windows, if the requested shell is "bash", fall back to "powershell.exe"
-	// since "bash" is typically absent, is WSL, or is a non-interactive shell that hangs.
+	// since "bash" is typically either absent or points to the WSL launcher in C:\Windows\System32
+	// (which fails if Hyper-V or Virtual Machine Platform is disabled in BIOS).
 	if req.Coder == "bash" && runtime.GOOS == "windows" {
-		if _, err := exec.LookPath("bash"); err != nil {
+		usePowerShell := true
+		if lp, err := exec.LookPath("bash"); err == nil {
+			// Git Bash or MSYS2 is safe, but System32/bash.exe is the WSL launcher.
+			if !strings.Contains(strings.ToLower(lp), "system32") {
+				usePowerShell = false
+			}
+		}
+		if usePowerShell {
 			command = "powershell.exe"
 			args = []string{"-NoLogo"}
 		}
