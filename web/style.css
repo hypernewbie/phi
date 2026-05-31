@@ -812,7 +812,7 @@ body {
     flex-direction: column;
     width: 340px;
     min-width: 200px;
-    max-width: 600px;
+    max-width: 1200px;
     flex-shrink: 0;
 }
 
