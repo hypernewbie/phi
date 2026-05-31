@@ -175,6 +175,21 @@ export class SessionsManager {
         await this.loadWorktrees();
     }
 
+    switchCoder(coderId) {
+        if (this.activeCoder === coderId) return;
+        this.activeCoder = coderId;
+        
+        document.querySelectorAll('.coder-tab').forEach(tab => {
+            if (tab.getAttribute('data-coder') === coderId) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+        
+        this.loadSessions();
+    }
+
     async loadWorktrees() {
         this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
