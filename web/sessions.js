@@ -132,7 +132,7 @@ export class SessionsManager {
                 document.title = `Φ phi — ${data.hostname}`;
             }
             
-            this.loadSessions();
+            await this.loadSessions();
         } catch (e) {
             console.error("[config] Failed to load workspace config:", e);
         }
