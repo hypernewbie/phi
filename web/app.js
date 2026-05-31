@@ -127,6 +127,14 @@ class App {
                 }
             });
         }
+
+        // 8. Setup clipboard sync listener
+        const clipboardBtn = document.getElementById('header-clipboard-btn');
+        if (clipboardBtn) {
+            clipboardBtn.addEventListener('click', async () => {
+                await this.syncRemoteClipboard();
+            });
+        }
         
         console.log("[app] Phi initialized successfully");
     }
@@ -232,6 +240,46 @@ class App {
             });
         } catch (e) {
             console.error("[theme] Failed to save theme:", e);
+        }
+    }
+
+    async syncRemoteClipboard() {
+        const btn = document.getElementById('header-clipboard-btn');
+        try {
+            if (btn) btn.classList.add('loading');
+            const res = await fetch('/api/clipboard');
+            if (!res.ok) throw new Error("Failed to fetch remote clipboard");
+            const data = await res.json();
+            if (data.text !== undefined) {
+                await navigator.clipboard.writeText(data.text);
+                console.log("[clipboard] Successfully synced remote clipboard content:", data.text);
+                
+                // Provide visual feedback with a brief success state
+                if (btn) {
+                    btn.classList.add('success');
+                    const span = btn.querySelector('span');
+                    const origText = span.innerText;
+                    span.innerText = "Synced!";
+                    setTimeout(() => {
+                        btn.classList.remove('success');
+                        span.innerText = origText;
+                    }, 1500);
+                }
+            }
+        } catch (e) {
+            console.error("[clipboard] Sync error:", e);
+            if (btn) {
+                btn.classList.add('error');
+                const span = btn.querySelector('span');
+                const origText = span.innerText;
+                span.innerText = "Failed!";
+                setTimeout(() => {
+                    btn.classList.remove('error');
+                    span.innerText = origText;
+                }, 1500);
+            }
+        } finally {
+            if (btn) btn.classList.remove('loading');
         }
     }
 }

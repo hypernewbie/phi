@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/diff"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -124,6 +125,7 @@ func main() {
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
+	http.HandleFunc("/api/clipboard", handleGetClipboard)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -545,4 +547,17 @@ func handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 
 	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
+}
+
+func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
+	text, err := clipboard.Read()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read remote clipboard: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"text": text,
+	})
 }

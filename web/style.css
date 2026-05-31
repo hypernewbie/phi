@@ -170,6 +170,23 @@ body {
     color: var(--accent-bright);
 }
 
+.header-btn.success {
+    background-color: rgba(56, 189, 248, 0.15);
+    border-color: var(--green);
+    color: var(--green);
+}
+
+.header-btn.error {
+    background-color: rgba(239, 68, 68, 0.15);
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.header-btn.loading {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
 .workspace-area select {
     background: transparent;
     border: none;
@@ -1324,6 +1341,22 @@ body {
 
 .worktree-section.expanded .worktree-sessions-container {
     display: flex;
+}
+
+.no-workspace-section {
+    opacity: 0.45;
+    margin-top: 6px;
+}
+
+.no-workspace-section:hover,
+.no-workspace-section.expanded {
+    opacity: 0.75;
+}
+
+.no-workspace-section .worktree-name {
+    font-weight: 400;
+    font-style: italic;
+    color: var(--text-muted);
 }
 
 .scanning-sessions,
