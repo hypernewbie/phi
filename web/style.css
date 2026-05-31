@@ -779,6 +779,10 @@ body {
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
 }
 
 .preset-btn:hover {
