@@ -395,6 +395,7 @@ export class SessionsManager {
             let coderName = 'Shell';
             if (this.activeCoder === 'opencode') coderName = 'OpenCode';
             else if (this.activeCoder === 'claude') coderName = 'Claude';
+            else if (this.activeCoder === 'pi') coderName = 'Pi';
             else if (this.activeCoder === 'agy') coderName = 'Agy';
             
             this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder);

@@ -174,6 +174,8 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 		sessions, err = session.ListOpenCodeSessions(cwd)
 	case "claude":
 		sessions, err = session.ListClaudeSessions(cwd)
+	case "pi":
+		sessions, err = session.ListPiSessions(cwd)
 	case "agy":
 		sessions, err = session.ListAgySessions(cwd)
 	case "bash":
