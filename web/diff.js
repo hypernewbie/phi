@@ -12,7 +12,7 @@ export class DiffController {
         this.isPanelOpen = true;
         
         this.diffPanel = document.getElementById('diff-panel');
-        this.showDiffBtn = document.getElementById('show-diff-btn');
+        this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn');
         this.closeDiffBtn = document.getElementById('close-diff-btn');
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
         this.diffTermContainer = document.getElementById('diff-term-container');
@@ -23,7 +23,9 @@ export class DiffController {
     setupEventListeners() {
         // Toggle panel states
         this.closeDiffBtn.addEventListener('click', () => this.togglePanel(false));
-        this.showDiffBtn.addEventListener('click', () => this.togglePanel(true));
+        this.headerDiffToggleBtn.addEventListener('click', () => {
+            this.togglePanel(!this.isPanelOpen);
+        });
         
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
@@ -92,14 +94,14 @@ export class DiffController {
         
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
-            this.showDiffBtn.classList.add('hidden');
+            this.headerDiffToggleBtn.classList.add('active');
             setTimeout(() => {
                 this.fitTerminal();
                 this.refreshDiff();
             }, 50);
         } else {
             this.diffPanel.classList.add('hidden');
-            this.showDiffBtn.classList.remove('hidden');
+            this.headerDiffToggleBtn.classList.remove('active');
             if (this.currentWs) {
                 this.currentWs.close();
                 this.currentWs = null;

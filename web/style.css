@@ -89,6 +89,40 @@ body {
     max-width: 480px;
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.header-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.header-btn:hover {
+    background-color: var(--bg-border);
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.header-btn.active {
+    background-color: var(--accent-glow);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+}
+
 .workspace-area select {
     background: transparent;
     border: none;
@@ -702,33 +736,6 @@ body {
 
 .diff-term-container .xterm-viewport {
     background-color: var(--bg-base) !important;
-}
-
-/* FLOATING SHOW DIFF BUTTON */
-.show-diff-btn {
-    position: absolute;
-    right: 16px;
-    bottom: 16px;
-    background-color: var(--accent);
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 14px;
-    cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
-    transition: all 0.15s;
-    z-index: 100;
-}
-
-.show-diff-btn:hover {
-    background-color: var(--accent-bright);
-    transform: translateY(-1px);
 }
 
 /* UTILITIES */
