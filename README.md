@@ -47,7 +47,8 @@ See [`PLAN.md`](PLAN.md) for the full design notes and locked decisions.
 
 ```bash
 go install github.com/hypernewbie/phi@latest
-phi --cwd ~/code/my-project
+cd ~/code/my-project
+phi
 ```
 
 Then open <http://localhost:7070>. The web UI is embedded in the binary, so it works from any directory.
@@ -66,17 +67,17 @@ Then open <http://localhost:7070>. The web UI is embedded in the binary, so it w
 git clone https://github.com/hypernewbie/phi.git
 cd phi
 go build -o phi .
-./phi --cwd ~/code/my-project
 ```
 
-Then open <http://localhost:7070>.
+Then run `./phi` from any project directory (or move the binary onto your `PATH`) and open <http://localhost:7070>.
+
+The directory you launch Phi from becomes the default workspace; switch between projects from the workspace picker in the UI and add more with the **+** button.
 
 ### Flags
 
-| Flag    | Default       | Description                          |
-| ------- | ------------- | ------------------------------------ |
-| `-port` | `7070`        | Port for the web server              |
-| `-cwd`  | process CWD   | Active project workspace directory   |
+| Flag    | Default | Description             |
+| ------- | ------- | ----------------------- |
+| `-port` | `7070`  | Port for the web server |
 
 > **Note:** Phi binds to `0.0.0.0` and has no authentication. Only run it on a trusted network (or behind a reverse proxy / SSH tunnel).
 

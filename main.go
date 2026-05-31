@@ -76,16 +76,12 @@ func saveConfig(cfg Config) {
 
 func main() {
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
-	cwdFlag := flag.String("cwd", "", "Active project workspace directory")
 	flag.Parse()
 
-	// Resolve CWD
+	// The directory Phi is launched from becomes the default workspace.
+	// Switch between projects from the workspace picker in the UI.
 	var err error
-	if *cwdFlag != "" {
-		activeCWD, err = filepath.Abs(expandHome(*cwdFlag))
-	} else {
-		activeCWD, err = os.Getwd()
-	}
+	activeCWD, err = os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to resolve current working directory: %v", err)
 	}
