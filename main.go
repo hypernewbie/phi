@@ -209,6 +209,13 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(sessions)
 }
 
+func getPreferredPowerShell() string {
+	if _, err := exec.LookPath("pwsh"); err == nil {
+		return "pwsh.exe"
+	}
+	return "powershell.exe"
+}
+
 type SpawnRequest struct {
 	Coder     string `json:"coder"`
 	Cwd       string `json:"cwd"`
@@ -255,7 +262,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		args = c.Args
 	}
 
-	// On Windows, if the requested shell is "bash", fall back to "powershell.exe"
+	// On Windows, if the requested shell is "bash", fall back to PowerShell
 	// since "bash" is typically either absent or points to the WSL launcher in C:\Windows\System32
 	// (which fails if Hyper-V or Virtual Machine Platform is disabled in BIOS).
 	if req.Coder == "bash" && runtime.GOOS == "windows" {
@@ -267,9 +274,32 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if usePowerShell {
-			command = "powershell.exe"
+			command = getPreferredPowerShell()
 			args = []string{"-NoLogo"}
 		}
+	}
+
+	// On Windows, wrap all coder executions in PowerShell/pwsh to resolve npm/script path wrappers cleanly
+	if req.Coder != "bash" && req.Coder != "pwsh" && runtime.GOOS == "windows" {
+		shellCmd := getPreferredPowerShell()
+		
+		var fullCmd string
+		if len(args) > 0 {
+			var escaped []string
+			for _, a := range args {
+				if strings.Contains(a, " ") {
+					escaped = append(escaped, fmt.Sprintf(`"%s"`, a))
+				} else {
+					escaped = append(escaped, a)
+				}
+			}
+			fullCmd = fmt.Sprintf("%s %s", command, strings.Join(escaped, " "))
+		} else {
+			fullCmd = command
+		}
+		
+		command = shellCmd
+		args = []string{"-NoLogo", "-Command", fullCmd}
 	}
 
 	spawnDir := req.Cwd
