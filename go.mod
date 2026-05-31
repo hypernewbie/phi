@@ -1,4 +1,4 @@
-module phi
+module github.com/hypernewbie/phi
 
 go 1.26.3
 

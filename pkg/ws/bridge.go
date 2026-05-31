@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/pty"
 
 	"github.com/gorilla/websocket"
 )

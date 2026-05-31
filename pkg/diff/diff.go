@@ -1,7 +1,7 @@
 package diff
 
 import (
-	"phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/pty"
 )
 
 func SpawnDiff(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
