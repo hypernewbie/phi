@@ -126,18 +126,38 @@ export class DiffController {
         }
     }
     
+    _setPanel(mode) {
+        const termEl = document.getElementById('diff-term-container');
+        const mdEl = document.getElementById('markdown-file-list');
+        if (mode === 'markdown') {
+            termEl.classList.add('hidden');
+            mdEl.classList.remove('hidden');
+        } else {
+            termEl.classList.remove('hidden');
+            mdEl.classList.add('hidden');
+        }
+    }
+
     async refreshDiff() {
         if (!this.isPanelOpen || !this.term) return;
-        
+
+        if (this.activeTab === 'markdown') {
+            this._setPanel('markdown');
+            this.app.markdownManager.refreshFiles();
+            return;
+        }
+
+        this._setPanel('git');
+
         // Clean up previous socket
         if (this.currentWs) {
             this.currentWs.close();
             this.currentWs = null;
         }
-        
+
         this.term.clear();
         this.term.write('\x1b[35mStreaming git information...\x1b[0m\r\n\r\n');
-        
+
         const cwd = this.app.sessionsManager.activeCWD;
         try {
             const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}`);
