@@ -245,14 +245,40 @@ export class TabManager {
                 originalFocus({ preventScroll: true, ...options });
             };
         }
-        
-        // Prevent browser default behavior for standard CLI shortcuts in Direct mode
+
+        // Right-click on terminal → copy xterm selection.
+        // Uses capture phase on termContainer so we fire BEFORE xterm's own
+        // contextmenu handler (which calls stopPropagation and blocks bubble-phase listeners).
+        termContainer.addEventListener('contextmenu', async (e) => {
+            const sel = term.getSelection();
+            if (!sel) return;
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(sel);
+            } catch {
+                const ta = Object.assign(document.createElement('textarea'), { value: sel });
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+        }, { capture: true });
+
         term.attachCustomKeyEventHandler((e) => {
-            if (tabInfo && tabInfo.directMode && e.ctrlKey && !e.altKey && !e.shiftKey) {
+            // In non-direct mode: redirect printable keystrokes to the input textarea
+            if (!tabInfo.directMode && e.type === 'keydown' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                this.inputTextArea.value += e.key;
+                this.inputTextArea.focus({ preventScroll: true });
+                const len = this.inputTextArea.value.length;
+                this.inputTextArea.setSelectionRange(len, len);
+                return false;
+            }
+            // Prevent browser default for standard CLI shortcuts in direct mode
+            if (tabInfo.directMode && e.ctrlKey && !e.altKey && !e.shiftKey) {
                 const key = e.key.toLowerCase();
-                if (['o', 's', 'p', 'f', 'r', 'g'].includes(key)) {
-                    e.preventDefault();
-                }
+                if (['o', 's', 'p', 'f', 'r', 'g'].includes(key)) e.preventDefault();
             }
             return true;
         });
@@ -293,26 +319,24 @@ export class TabManager {
         
         ws = new PTYWebSocket(
             paneId,
-            (data) => {
-                term.write(data);
-            },
-            (control) => {
-                console.log("[ws] Received control:", control);
-            },
+            (data) => { term.write(data); },
+            (control) => { console.log("[ws] Received control:", control); },
             () => {
-                term.write('\r\n\x1b[31m[Phi Connection Terminated]\x1b[0m\r\n');
+                term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
                 tabInfo.isDead = true;
                 tabEl.classList.add('dead');
+                this._showReconnectOverlay(tabInfo);
             }
         );
         
         tabInfo.ws = ws;
         this.tabs.set(paneId, tabInfo);
         
-        // Direct writing bridge
+        // Direct writing bridge — routes through tabInfo.ws so reconnect can swap the socket
         term.onData((data) => {
             if (tabInfo.directMode && !tabInfo.isDead) {
-                ws.sendInput(data);
+                tabInfo.ws.sendInput(data);
+                if (data.includes('\r')) this._spamScrollToBottom(tabInfo);
             }
         });
         
@@ -449,6 +473,7 @@ export class TabManager {
         
         activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
+        this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
         if (val.includes('/copy')) {
@@ -467,6 +492,7 @@ export class TabManager {
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         activeTab.ws.sendInput(bytes);
         this.focusActiveTerminal();
+        if (bytes.includes('\r')) this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
         if (bytes.includes('/copy')) {
@@ -476,6 +502,73 @@ export class TabManager {
         }
     }
     
+    _showReconnectOverlay(tabInfo) {
+        const existing = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'reconnect-overlay';
+        overlay.innerHTML = `
+            <div class="reconnect-box">
+                <span class="reconnect-msg">session ended</span>
+                <button class="reconnect-btn">⟳ Reconnect</button>
+            </div>`;
+        overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
+            this.reconnectTab(tabInfo);
+        });
+        tabInfo.termContainer.appendChild(overlay);
+    }
+
+    reconnectTab(tabInfo) {
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const msgEl = overlay?.querySelector('.reconnect-msg');
+        const btnEl = overlay?.querySelector('.reconnect-btn');
+
+        if (msgEl) msgEl.innerText = 'connecting…';
+        if (btnEl) btnEl.disabled = true;
+
+        if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
+
+        let opened = false;
+        const newWs = new PTYWebSocket(
+            tabInfo.paneId,
+            (data) => { tabInfo.term.write(data); },
+            null,
+            () => {
+                if (!opened) {
+                    if (msgEl) msgEl.innerText = 'session expired';
+                    if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+                } else {
+                    tabInfo.isDead = true;
+                    tabInfo.tabEl.classList.add('dead');
+                    this._showReconnectOverlay(tabInfo);
+                }
+            },
+            () => {
+                opened = true;
+                tabInfo.isDead = false;
+                tabInfo.tabEl.classList.remove('dead');
+                if (overlay) overlay.remove();
+                tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
+                setTimeout(() => this.sendResizeToBackend(tabInfo), 100);
+            }
+        );
+        tabInfo.ws = newWs;
+    }
+
+    _spamScrollToBottom(tabInfo) {
+        if (!tabInfo || tabInfo.isDead) return;
+        clearInterval(tabInfo.spamInterval);
+        clearTimeout(tabInfo.stopSpamTimeout);
+        tabInfo.spamInterval = setInterval(() => tabInfo.term.scrollToBottom(), 10);
+        tabInfo.stopSpamTimeout = setTimeout(() => {
+            clearInterval(tabInfo.spamInterval);
+            tabInfo.spamInterval = null;
+            tabInfo.stopSpamTimeout = null;
+            tabInfo.term.scrollToBottom();
+        }, 300);
+    }
+
     fitActiveTerminal() {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
@@ -533,6 +626,20 @@ export class TabManager {
         }
     }
     
+    _toggleDropup(dropupId, triggerBtn, renderFn) {
+        const dropup = document.getElementById(dropupId);
+        if (!dropup) return;
+        const wasHidden = dropup.classList.contains('hidden');
+        document.querySelectorAll('.model-presets-dropup').forEach(d => d.classList.add('hidden'));
+        if (wasHidden) {
+            const btnRect = triggerBtn.getBoundingClientRect();
+            const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
+            dropup.style.left = `${btnRect.left - containerRect.left}px`;
+            dropup.classList.remove('hidden');
+            renderFn();
+        }
+    }
+
     renderPresets(coderId) {
         this.presetsContainer.innerHTML = '';
         
@@ -568,33 +675,34 @@ export class TabManager {
             this.presetsContainer.appendChild(divider);
         }
         
-        // 3. Render single Models trigger button
+        // 3. Render QuickCmds trigger button
+        const quickCmdsTriggerBtn = document.createElement('button');
+        quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
+        quickCmdsTriggerBtn.innerText = '⚡ Cmds ▾';
+        quickCmdsTriggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleDropup('quick-commands-dropup', quickCmdsTriggerBtn, () => this.renderQuickCmdsDropup());
+        });
+        this.presetsContainer.appendChild(quickCmdsTriggerBtn);
+
+        // 4. Render Models trigger button
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
         modelsTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const dropup = document.getElementById('model-presets-dropup');
-            if (dropup) {
-                const wasHidden = dropup.classList.contains('hidden');
-                if (wasHidden) {
-                    dropup.classList.remove('hidden');
-                    // Position the dropup above the button
-                    const btnRect = modelsTriggerBtn.getBoundingClientRect();
-                    const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
-                    dropup.style.left = `${btnRect.left - containerRect.left}px`;
-                    this.renderModelDropup();
-                } else {
-                    dropup.classList.add('hidden');
-                }
-            }
+            this._toggleDropup('model-presets-dropup', modelsTriggerBtn, () => this.renderModelDropup());
         });
         this.presetsContainer.appendChild(modelsTriggerBtn);
-        
-        // Auto-refresh the dropup content if it's currently open
+
+        // Auto-refresh dropup content if currently open
         const dropup = document.getElementById('model-presets-dropup');
         if (dropup && !dropup.classList.contains('hidden')) {
             this.renderModelDropup();
+        }
+        const qcDropup = document.getElementById('quick-commands-dropup');
+        if (qcDropup && !qcDropup.classList.contains('hidden')) {
+            this.renderQuickCmdsDropup();
         }
     }
     
@@ -668,6 +776,94 @@ export class TabManager {
                 } catch (err) {
                     console.error("Failed to add model preset:", err);
                 }
+            }
+        });
+        addRow.appendChild(addBtn);
+        dropup.appendChild(addRow);
+    }
+
+    renderQuickCmdsDropup() {
+        const dropup = document.getElementById('quick-commands-dropup');
+        if (!dropup) return;
+        dropup.innerHTML = '';
+
+        const quickCmds = this.app.quickCommands || [];
+
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.innerText = 'Quick Commands';
+        dropup.appendChild(header);
+
+        quickCmds.forEach(cmd => {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+
+            const btn = document.createElement('button');
+            btn.className = 'dropup-model-btn';
+            btn.innerText = cmd.name;
+            btn.title = cmd.command;
+            btn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (!activeTab || activeTab.isDead) return;
+                const prefix = this.inputTextArea.value.trim();
+                const combined = prefix && cmd.command.includes('{}')
+                    ? cmd.command.replace('{}', prefix)
+                    : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+                let payload = combined;
+                if (combined.length > 16 || combined.includes('\n')) {
+                    payload = '\x1b[200~' + combined + '\x1b[201~';
+                }
+                activeTab.ws.sendInput(payload + '\r');
+                this.inputTextArea.value = '';
+                this.inputTextArea.focus({ preventScroll: true });
+                this._spamScrollToBottom(activeTab);
+                dropup.classList.add('hidden');
+            });
+            row.appendChild(btn);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'dropup-del-btn';
+            delBtn.innerHTML = '×';
+            delBtn.title = `Delete quick command "${cmd.name}"`;
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (confirm(`Remove quick command "${cmd.name}"?`)) {
+                    try {
+                        await fetch('/api/config/quick-commands', {
+                            method: 'DELETE',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: cmd.name })
+                        });
+                        await this.app.sessionsManager.loadConfig();
+                    } catch (err) {
+                        console.error("Failed to delete quick command:", err);
+                    }
+                }
+            });
+            row.appendChild(delBtn);
+            dropup.appendChild(row);
+        });
+
+        const addRow = document.createElement('div');
+        addRow.className = 'dropup-add-row';
+
+        const addBtn = document.createElement('button');
+        addBtn.className = 'dropup-add-btn';
+        addBtn.innerText = '+ Add Command...';
+        addBtn.addEventListener('click', async () => {
+            const name = prompt("Command label (e.g. tests):");
+            if (!name || !name.trim()) return;
+            const command = prompt(`Command to send for "${name.trim()}" (e.g. npm test):`);
+            if (!command || !command.trim()) return;
+            try {
+                await fetch('/api/config/quick-commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name.trim(), command: command.trim() })
+                });
+                await this.app.sessionsManager.loadConfig();
+            } catch (err) {
+                console.error("Failed to add quick command:", err);
             }
         });
         addRow.appendChild(addBtn);

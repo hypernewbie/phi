@@ -1,11 +1,12 @@
 /* Φ phi — Binary WebSocket Client */
 
 export class PTYWebSocket {
-    constructor(paneId, onData, onControl, onClose) {
+    constructor(paneId, onData, onControl, onClose, onOpen) {
         this.paneId = paneId;
         this.onData = onData;
         this.onControl = onControl;
         this.onClose = onClose;
+        this.onOpen = onOpen;
         
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.url = `${protocol}//${window.location.host}/ws/pane/${paneId}`;
@@ -14,8 +15,8 @@ export class PTYWebSocket {
         
         this.ws.onopen = () => {
             console.log(`[ws] Connected for pane: ${paneId}`);
-            // Start heartbeats
             this.pingInterval = setInterval(() => this.sendPing(), 15000);
+            if (this.onOpen) this.onOpen();
         };
 
         this.ws.onmessage = (event) => {

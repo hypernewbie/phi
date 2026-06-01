@@ -1,6 +1,7 @@
 import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
+import { MarkdownManager } from './markdown.js';
 
 const ACCENT_COLORS = {
     purple: {
@@ -86,6 +87,7 @@ class App {
         this.tabManager = new TabManager(this);
         this.sessionsManager = new SessionsManager(this);
         this.diffController = new DiffController(this);
+        this.markdownManager = new MarkdownManager(this);
     }
     
     async init() {

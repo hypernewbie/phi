@@ -31,12 +31,19 @@ var (
 	activeCWD  string
 )
 
+type QuickCommand struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+
 type Config struct {
 	Workspaces        []string          `json:"workspaces"`
 	ThemeColor        string            `json:"theme_color"`
 	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
 	ActiveWorktrees   map[string]string `json:"active_worktrees"`
 	ModelPresets      []string          `json:"model_presets"`
+	QuickCommands     []QuickCommand    `json:"quick_commands"`
+	MarkdownDirs      []string          `json:"markdown_dirs"`
 }
 
 func expandHome(path string) string {
@@ -49,8 +56,19 @@ func expandHome(path string) string {
 	return path
 }
 
+// configFilePath returns the active config path. Tests override testConfigPath to
+// point at a temp file so they never touch ~/.phi/config.json.
+var testConfigPath string
+
+func configFilePath() string {
+	if testConfigPath != "" {
+		return testConfigPath
+	}
+	return expandHome("~/.phi/config.json")
+}
+
 func loadConfig() Config {
-	path := expandHome("~/.phi/config.json")
+	path := configFilePath()
 	var cfg Config
 	b, err := os.ReadFile(path)
 	if err == nil {
@@ -74,11 +92,21 @@ func loadConfig() Config {
 			"deepseek/deepseek-v4-pro",
 		}
 	}
+	if cfg.QuickCommands == nil {
+		cfg.QuickCommands = []QuickCommand{
+			{Name: "status", Command: "git status"},
+			{Name: "diff", Command: "git diff"},
+			{Name: "commit", Command: `git commit -m "{}"`},
+		}
+	}
+	if cfg.MarkdownDirs == nil {
+		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
+	}
 	return cfg
 }
 
 func saveConfig(cfg Config) {
-	path := expandHome("~/.phi/config.json")
+	path := configFilePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	_ = os.WriteFile(path, b, 0644)
@@ -135,6 +163,10 @@ func main() {
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
+	http.HandleFunc("/api/config/quick-commands", handleQuickCommands)
+	http.HandleFunc("/api/config/markdown-dirs", handleMarkdownDirs)
+	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
+	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
@@ -407,11 +439,13 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"workspaces":    cfg.Workspaces,
-		"active_cwd":    activeCWD,
-		"theme_color":   cfg.ThemeColor,
-		"hostname":      hName,
-		"model_presets": cfg.ModelPresets,
+		"workspaces":     cfg.Workspaces,
+		"active_cwd":     activeCWD,
+		"theme_color":    cfg.ThemeColor,
+		"hostname":       hName,
+		"model_presets":  cfg.ModelPresets,
+		"quick_commands": cfg.QuickCommands,
+		"markdown_dirs":  cfg.MarkdownDirs,
 	})
 }
 
@@ -503,6 +537,185 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name"`
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "Missing name", http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+
+	if r.Method == http.MethodPost {
+		if req.Command == "" {
+			http.Error(w, "Missing command", http.StatusBadRequest)
+			return
+		}
+		found := false
+		for i, qc := range cfg.QuickCommands {
+			if qc.Name == req.Name {
+				cfg.QuickCommands[i].Command = req.Command
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.QuickCommands = append(cfg.QuickCommands, QuickCommand{Name: req.Name, Command: req.Command})
+		}
+		saveConfig(cfg)
+	} else if r.Method == http.MethodDelete {
+		newCmds := []QuickCommand{}
+		for _, qc := range cfg.QuickCommands {
+			if qc.Name != req.Name {
+				newCmds = append(newCmds, qc)
+			}
+		}
+		cfg.QuickCommands = newCmds
+		saveConfig(cfg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	dir := req["dir"]
+	if dir == "" {
+		http.Error(w, "Missing dir", http.StatusBadRequest)
+		return
+	}
+	cfg := loadConfig()
+	if r.Method == http.MethodPost {
+		for _, d := range cfg.MarkdownDirs {
+			if d == dir {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+		cfg.MarkdownDirs = append(cfg.MarkdownDirs, dir)
+	} else {
+		newDirs := []string{}
+		for _, d := range cfg.MarkdownDirs {
+			if d != dir {
+				newDirs = append(newDirs, d)
+			}
+		}
+		cfg.MarkdownDirs = newDirs
+	}
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+type MDFileEntry struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
+func handleMarkdownFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+	cfg := loadConfig()
+	files := []MDFileEntry{}
+	for _, dir := range cfg.MarkdownDirs {
+		absDir := dir
+		if !filepath.IsAbs(dir) {
+			absDir = filepath.Join(cwd, dir)
+		}
+		entries, err := os.ReadDir(absDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || strings.ToLower(filepath.Ext(entry.Name())) != ".md" {
+				continue
+			}
+			files = append(files, MDFileEntry{
+				Path: filepath.Join(absDir, entry.Name()),
+				Name: entry.Name(),
+				Dir:  dir,
+			})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(files)
+}
+
+func handleMarkdownFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Missing path", http.StatusBadRequest)
+		return
+	}
+	if strings.ToLower(filepath.Ext(path)) != ".md" {
+		http.Error(w, "Only .md files allowed", http.StatusForbidden)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+	cfg := loadConfig()
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	allowed := false
+	for _, dir := range cfg.MarkdownDirs {
+		absDir := dir
+		if !filepath.IsAbs(dir) {
+			absDir = filepath.Join(cwd, dir)
+		}
+		absDir, _ = filepath.Abs(absDir)
+		if strings.HasPrefix(absPath, absDir+string(filepath.Separator)) || absPath == absDir {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "Path not in allowed markdown dirs", http.StatusForbidden)
+		return
+	}
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		http.Error(w, "Failed to read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(content)
 }
 
 func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
