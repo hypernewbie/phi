@@ -124,8 +124,9 @@ export class SessionsManager {
                 this.app.applyAccentTheme(data.theme_color);
             }
 
-            // Save the model presets list and redraw current tab presets.
+            // Save the model presets list and quick commands, then redraw current tab presets.
             this.app.modelPresets = data.model_presets || [];
+            this.app.quickCommands = data.quick_commands || [];
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);
