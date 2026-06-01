@@ -371,13 +371,19 @@ export class SessionsManager {
                 item.addEventListener('click', (e) => {
                     if (e.target.closest('.session-action-btn')) return;
                     this.launchSession(sess.id, sess.title);
-                    
+
                     const sidebar = document.getElementById('sidebar-panel');
                     if (sidebar) {
                         sidebar.classList.remove('drawer-open');
                     }
                 });
-                
+
+                item.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this._showSessionContextMenu(e, item, sess);
+                });
+
                 if (this.activeCoder === 'agy') {
                     const renameBtn = item.querySelector('.rename-btn');
                     renameBtn.addEventListener('click', (e) => {
@@ -461,7 +467,7 @@ export class SessionsManager {
         }
     }
     
-    async launchSession(sessionId, title) {
+    async launchSession(sessionId, title, extraArgs = []) {
         try {
             const res = await fetch('/api/terminals', {
                 method: 'POST',
@@ -469,7 +475,8 @@ export class SessionsManager {
                 body: JSON.stringify({
                     coder: this.activeCoder,
                     cwd: this.activeCWD,
-                    session_id: sessionId
+                    session_id: sessionId,
+                    extra_args: extraArgs
                 })
             });
             if (!res.ok) {
@@ -486,6 +493,113 @@ export class SessionsManager {
         }
     }
     
+    _showSessionContextMenu(e, item, sess) {
+        this._dismissContextMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'session-ctx-menu';
+        menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
+
+        const mkItem = (label, onClick) => {
+            const el = document.createElement('div');
+            el.className = 'session-ctx-item';
+            el.textContent = label;
+            el.addEventListener('click', () => { this._dismissContextMenu(); onClick(); });
+            menu.appendChild(el);
+        };
+
+        mkItem('▶ Launch', () => {
+            this.launchSession(sess.id, sess.title);
+            const sidebar = document.getElementById('sidebar-panel');
+            if (sidebar) sidebar.classList.remove('drawer-open');
+        });
+
+        mkItem('⚙ Launch with args…', () => {
+            this._openArgsInput(item, sess);
+        });
+
+        if (this.activeCoder === 'agy') {
+            mkItem('✏ Rename', () => {
+                this.openInlineRenamer(item, sess.id, sess.title);
+            });
+        }
+
+        document.body.appendChild(menu);
+        this._contextMenu = menu;
+
+        // Adjust if menu would overflow viewport bottom
+        const rect = menu.getBoundingClientRect();
+        if (rect.bottom > window.innerHeight) {
+            menu.style.top = `${e.clientY - rect.height}px`;
+        }
+
+        this._ctxDismissMousedown = (ev) => {
+            if (!menu.contains(ev.target)) this._dismissContextMenu();
+        };
+        this._ctxDismissKey = (ev) => {
+            if (ev.key === 'Escape') this._dismissContextMenu();
+        };
+        setTimeout(() => {
+            document.addEventListener('mousedown', this._ctxDismissMousedown);
+            document.addEventListener('keydown', this._ctxDismissKey);
+        }, 0);
+    }
+
+    _dismissContextMenu() {
+        if (this._contextMenu) {
+            this._contextMenu.remove();
+            this._contextMenu = null;
+        }
+        if (this._ctxDismissMousedown) {
+            document.removeEventListener('mousedown', this._ctxDismissMousedown);
+            this._ctxDismissMousedown = null;
+        }
+        if (this._ctxDismissKey) {
+            document.removeEventListener('keydown', this._ctxDismissKey);
+            this._ctxDismissKey = null;
+        }
+    }
+
+    _openArgsInput(item, sess) {
+        const existing = item.nextElementSibling;
+        if (existing && existing.classList.contains('args-input-row')) existing.remove();
+
+        const row = document.createElement('div');
+        row.className = 'args-input-row';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'rename-input args-input';
+        input.placeholder = 'extra args...';
+
+        const hint = document.createElement('span');
+        hint.className = 'args-input-hint';
+        hint.textContent = '↵ launch · Esc cancel';
+
+        row.appendChild(input);
+        row.appendChild(hint);
+        item.insertAdjacentElement('afterend', row);
+        input.focus();
+
+        const submit = () => {
+            const argsStr = input.value.trim();
+            const extraArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : [];
+            row.remove();
+            this.launchSession(sess.id, sess.title, extraArgs);
+            const sidebar = document.getElementById('sidebar-panel');
+            if (sidebar) sidebar.classList.remove('drawer-open');
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); row.remove(); }
+        });
+
+        input.addEventListener('blur', () => {
+            setTimeout(() => { if (document.body.contains(row)) row.remove(); }, 150);
+        });
+    }
+
     openInlineRenamer(itemEl, sessionId, currentTitle) {
         const titleEl = itemEl.querySelector('.session-title');
         const input = document.createElement('input');
