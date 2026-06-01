@@ -257,9 +257,10 @@ func getPreferredPowerShell() string {
 }
 
 type SpawnRequest struct {
-	Coder     string `json:"coder"`
-	Cwd       string `json:"cwd"`
-	SessionID string `json:"session_id"`
+	Coder     string   `json:"coder"`
+	Cwd       string   `json:"cwd"`
+	SessionID string   `json:"session_id"`
+	ExtraArgs []string `json:"extra_args"`
 }
 
 func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
@@ -301,6 +302,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	} else {
 		args = c.Args
 	}
+	args = append(args, req.ExtraArgs...)
 
 	// On Unix, prefer the user's login shell ($SHELL) over hardcoded bash so that PATH
 	// and aliases from the user's shell config (e.g. ~/.zshrc on macOS) are available.

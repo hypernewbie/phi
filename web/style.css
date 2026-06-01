@@ -1910,3 +1910,46 @@ body {
 
 .reconnect-btn:hover:not(:disabled) { background: var(--accent-bright); }
 .reconnect-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Session right-click context menu */
+.session-ctx-menu {
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 170px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    user-select: none;
+}
+.session-ctx-item {
+    padding: 7px 14px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+.session-ctx-item:hover {
+    background: var(--accent);
+    color: #000;
+}
+
+/* Args inline input row */
+.args-input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 6px;
+    background: var(--bg-elevated);
+}
+.args-input {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+}
+.args-input-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
