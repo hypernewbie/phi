@@ -6,8 +6,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/hypernewbie/phi/pkg/pty"
 )
 
 // withTempConfig points the config system at a fresh temp file for the duration
@@ -374,3 +377,120 @@ func TestHandleMarkdownFile_RejectsPathOutsideAllowedDirs(t *testing.T) {
 		t.Errorf("expected 403 for path outside allowed dirs, got %d", w.Code)
 	}
 }
+
+// ─── API Route Tests (Phase 3) ────────────────────────────────────────────────
+
+func TestHandleGetCoders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	w := httptest.NewRecorder()
+	handleGetCoders(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var registry map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&registry); err != nil {
+		t.Fatalf("Failed to decode registry response: %v", err)
+	}
+
+	// We must ensure that our default coders are all present in the returned JSON.
+	for _, id := range []string{"opencode", "claude", "agy", "pi", "bash", "pwsh"} {
+		if _, ok := registry[id]; !ok {
+			t.Errorf("Expected registry to contain coder preset %q", id)
+		}
+	}
+}
+
+func testMainShell() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "pwsh", []string{"-NoLogo", "-NoProfile", "-NonInteractive"}
+	}
+	return "bash", []string{"--norc", "--noprofile"}
+}
+
+func TestHandleFallback_Pinning(t *testing.T) {
+	// Re-initialise the global manager to ensure a clean state.
+	ptyManager = pty.NewManager()
+	shell, args := testMainShell()
+
+	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY for pinning test: %v", err)
+	}
+	defer func() {
+		_ = ptyManager.Kill(inst.ID)
+	}()
+
+	// Verify posting to a non-existent terminal returns 404.
+	reqNotFound := httptest.NewRequest(http.MethodPost, "/api/terminals/non-existent-id/pin", strings.NewReader(`{"pinned":true}`))
+	wNotFound := httptest.NewRecorder()
+	handleFallback(wNotFound, reqNotFound)
+	if wNotFound.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for non-existent terminal pinning, got %d", wNotFound.Code)
+	}
+
+	// Verify posting invalid JSON returns 400.
+	reqBadJSON := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":`))
+	wBadJSON := httptest.NewRecorder()
+	handleFallback(wBadJSON, reqBadJSON)
+	if wBadJSON.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for malformed JSON request, got %d", wBadJSON.Code)
+	}
+
+	// Verify successful pinning returns 200.
+	reqPin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":true}`))
+	wPin := httptest.NewRecorder()
+	handleFallback(wPin, reqPin)
+	if wPin.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for valid pinning request, got %d", wPin.Code)
+	}
+
+	if !inst.Pinned {
+		t.Error("Expected terminal instance to be pinned in the manager")
+	}
+
+	// Verify successful unpinning returns 200.
+	reqUnpin := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/pin", strings.NewReader(`{"pinned":false}`))
+	wUnpin := httptest.NewRecorder()
+	handleFallback(wUnpin, reqUnpin)
+	if wUnpin.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for valid unpinning request, got %d", wUnpin.Code)
+	}
+
+	if inst.Pinned {
+		t.Error("Expected terminal instance to be unpinned in the manager")
+	}
+}
+
+func TestHandleFallback_Delete(t *testing.T) {
+	ptyManager = pty.NewManager()
+	shell, args := testMainShell()
+
+	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY for delete test: %v", err)
+	}
+
+	// Verify deleting non-existent terminal returns 404.
+	reqNotFound := httptest.NewRequest(http.MethodDelete, "/api/terminals/non-existent-id", nil)
+	wNotFound := httptest.NewRecorder()
+	handleFallback(wNotFound, reqNotFound)
+	if wNotFound.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for non-existent terminal deletion, got %d", wNotFound.Code)
+	}
+
+	// Verify successful deletion returns 200 and cleans up the terminal.
+	reqDelete := httptest.NewRequest(http.MethodDelete, "/api/terminals/"+inst.ID, nil)
+	wDelete := httptest.NewRecorder()
+	handleFallback(wDelete, reqDelete)
+	if wDelete.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for valid deletion request, got %d", wDelete.Code)
+	}
+
+	_, found := ptyManager.Get(inst.ID)
+	if found {
+		t.Error("Expected PTY instance to be removed from manager registry after delete request")
+	}
+}
+
