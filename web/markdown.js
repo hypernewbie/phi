@@ -49,37 +49,74 @@ export class MarkdownManager {
     _renderFileList(files) {
         this.fileListEl.innerHTML = '';
 
-        if (!files || files.length === 0) {
-            this.fileListEl.innerHTML = '<div class="md-list-empty">No .md files found in configured dirs.</div>';
-            return;
-        }
-
-        // Group by dir
+        const allDirs = this.app.markdownDirs || [];
         const byDir = {};
-        files.forEach(f => {
-            if (!byDir[f.dir]) byDir[f.dir] = [];
-            byDir[f.dir].push(f);
+        allDirs.forEach(d => {
+            byDir[d] = [];
         });
 
-        for (const [dir, dirFiles] of Object.entries(byDir)) {
-            const group = document.createElement('div');
-            group.className = 'md-file-group';
-
-            const dirLabel = document.createElement('div');
-            dirLabel.className = 'md-dir-label';
-            dirLabel.innerText = dir;
-            group.appendChild(dirLabel);
-
-            dirFiles.forEach(f => {
-                const item = document.createElement('button');
-                item.className = 'md-file-item';
-                item.innerHTML = `<span class="md-file-icon">📄</span><span class="md-file-name">${f.name}</span>`;
-                item.title = f.path;
-                item.addEventListener('click', () => this.openFile(f));
-                group.appendChild(item);
+        if (files && files.length > 0) {
+            files.forEach(f => {
+                if (!byDir[f.dir]) byDir[f.dir] = [];
+                byDir[f.dir].push(f);
             });
+        }
 
-            this.fileListEl.appendChild(group);
+        if (Object.keys(byDir).length === 0) {
+            this.fileListEl.innerHTML = '<div class="md-list-empty">No markdown directories configured.</div>';
+        } else {
+            for (const [dir, dirFiles] of Object.entries(byDir)) {
+                const group = document.createElement('div');
+                group.className = 'md-file-group';
+
+                const dirLabel = document.createElement('div');
+                dirLabel.className = 'md-dir-label';
+                
+                const nameSpan = document.createElement('span');
+                nameSpan.innerText = dir;
+                dirLabel.appendChild(nameSpan);
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'md-dir-del-btn';
+                delBtn.innerHTML = '×';
+                delBtn.title = `Remove directory "${dir}"`;
+                delBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (confirm(`Remove directory "${dir}" from markdown search list?`)) {
+                        try {
+                            await fetch('/api/config/markdown-dirs', {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ dir })
+                            });
+                            await this.app.sessionsManager.loadConfig(); // Refresh cache!
+                            this.refreshFiles();
+                        } catch (err) {
+                            console.error("Failed to delete markdown dir:", err);
+                        }
+                    }
+                });
+                dirLabel.appendChild(delBtn);
+                group.appendChild(dirLabel);
+
+                if (dirFiles.length === 0) {
+                    const emptyHint = document.createElement('div');
+                    emptyHint.className = 'md-file-empty-hint';
+                    emptyHint.innerText = 'No files found';
+                    group.appendChild(emptyHint);
+                } else {
+                    dirFiles.forEach(f => {
+                        const item = document.createElement('button');
+                        item.className = 'md-file-item';
+                        item.innerHTML = `<span class="md-file-icon">📄</span><span class="md-file-name">${f.name}</span>`;
+                        item.title = f.path;
+                        item.addEventListener('click', () => this.openFile(f));
+                        group.appendChild(item);
+                    });
+                }
+
+                this.fileListEl.appendChild(group);
+            }
         }
 
         // Dir management row at the bottom
@@ -131,6 +168,7 @@ export class MarkdownManager {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dir: dir.trim() })
             });
+            await this.app.sessionsManager.loadConfig(); // Refresh cache!
             this.refreshFiles();
         } catch (e) {
             console.error("Failed to add markdown dir:", e);
