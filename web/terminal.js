@@ -634,7 +634,7 @@ export class TabManager {
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         activeTab.ws.sendInput(bytes);
         this.focusActiveTerminal();
-        if (bytes.includes('\r')) this._spamScrollToBottom(activeTab);
+        this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
         if (bytes.includes('/copy')) {
