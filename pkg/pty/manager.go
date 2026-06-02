@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+var (
+	GracePeriod             = 30 * time.Minute
+	RecentActivityThreshold = 2 * time.Minute
+)
+
 type PTYInstance struct {
 	ID           string        `json:"id"`
 	Pty          *Pty          `json:"-"`
@@ -192,23 +197,22 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 
 func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 	id := inst.ID
-	gracePeriod := 30 * time.Minute
-	inst.DetachTimer = time.AfterFunc(gracePeriod, func() {
+	inst.DetachTimer = time.AfterFunc(GracePeriod, func() {
 		inst.mu.Lock()
 		timeSinceLastOut := time.Since(inst.LastOutputAt)
 		inst.mu.Unlock()
 
 		// If the terminal has been active recently (e.g. output in the last 2 minutes),
-		// reschedule the 30-minute grace period rather than killing it.
-		if timeSinceLastOut < 2 * time.Minute {
-			log.Printf("[pty] 30-min grace period expired for %s, but terminal has been active recently (%v ago). Rescheduling grace period.", id, timeSinceLastOut)
+		// reschedule the grace period rather than killing it.
+		if timeSinceLastOut < RecentActivityThreshold {
+			log.Printf("[pty] grace period expired for %s, but terminal has been active recently (%v ago). Rescheduling grace period.", id, timeSinceLastOut)
 			inst.mu.Lock()
 			m.startGracePeriodTimer(inst)
 			inst.mu.Unlock()
 			return
 		}
 
-		log.Printf("[pty] 30 minute grace period expired for %s with no recent activity. Terminating PTY.", id)
+		log.Printf("[pty] grace period expired for %s with no recent activity. Terminating PTY.", id)
 		m.Kill(id)
 	})
 }
