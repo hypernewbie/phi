@@ -177,6 +177,7 @@ class App {
             e.preventDefault();
             leftHandle.classList.add('dragging');
             document.body.style.cursor = 'col-resize';
+            this.tabManager.startResize(); // Start layout resize tracking
 
             const doDrag = (moveEvent) => {
                 const width = moveEvent.clientX - layout.getBoundingClientRect().left;
@@ -200,6 +201,7 @@ class App {
                 document.removeEventListener('mousemove', doDrag);
                 document.removeEventListener('mouseup', stopDrag);
                 this.tabManager.fitActiveTerminal();
+                this.tabManager.endResize(); // End layout resize tracking
             };
 
             document.addEventListener('mousemove', doDrag);
@@ -211,6 +213,7 @@ class App {
             e.preventDefault();
             rightHandle.classList.add('dragging');
             document.body.style.cursor = 'col-resize';
+            this.tabManager.startResize(); // Start layout resize tracking
 
             const doDrag = (moveEvent) => {
                 const width = layout.getBoundingClientRect().right - moveEvent.clientX;
@@ -229,6 +232,7 @@ class App {
                 document.removeEventListener('mouseup', stopDrag);
                 this.tabManager.fitActiveTerminal();
                 this.diffController.fitTerminal();
+                this.tabManager.endResize(); // End layout resize tracking
             };
 
             document.addEventListener('mousemove', doDrag);
