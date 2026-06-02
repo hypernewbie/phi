@@ -198,6 +198,24 @@ export class SessionsManager {
         this.loadSessions();
     }
 
+    highlightActiveWorktree(cwdPath) {
+        if (!cwdPath) return;
+        document.querySelectorAll('.worktree-section').forEach(sec => {
+            const secPath = sec.getAttribute('data-worktree-path');
+            if (secPath === cwdPath) {
+                sec.classList.add('active');
+                sec.classList.add('expanded');
+                const container = sec.querySelector('.worktree-sessions-container');
+                if (container && (container.innerHTML === '' || container.innerHTML.includes('Scanning sessions...'))) {
+                    this.loadWorktreeSessions(cwdPath, container);
+                }
+            } else {
+                sec.classList.remove('active');
+                sec.classList.remove('expanded');
+            }
+        });
+    }
+
     async loadWorktrees() {
         this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
@@ -459,7 +477,7 @@ export class SessionsManager {
             else if (this.activeCoder === 'pi') coderName = 'Pi';
             else if (this.activeCoder === 'agy') coderName = 'Agy';
             
-            this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder, this.activeWorkspace, this.activeCWD);
             
             this.loadSessions();
         } catch (e) {
@@ -485,7 +503,7 @@ export class SessionsManager {
             }
             
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
             
             this.highlightActiveSession(sessionId);
         } catch (e) {
