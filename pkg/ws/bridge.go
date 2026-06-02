@@ -11,8 +11,9 @@ import (
 )
 
 var Upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024 * 32,
-	WriteBufferSize: 1024 * 32,
+	ReadBufferSize:    1024 * 32,
+	WriteBufferSize:   1024 * 32,
+	EnableCompression: true,
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for localhost and SSH tunnels
 	},
