@@ -24,7 +24,14 @@ export class TabManager {
     saveTabsState() {
         const tabsData = [];
         for (const tab of this.tabs.values()) {
-            tabsData.push({ paneId: tab.paneId, sessionId: tab.sessionId, title: tab.title, coder: tab.coder });
+            tabsData.push({
+                paneId: tab.paneId,
+                sessionId: tab.sessionId,
+                title: tab.title,
+                coder: tab.coder,
+                workspace: tab.workspace,
+                cwd: tab.cwd
+            });
         }
         localStorage.setItem('phi_tabs', JSON.stringify(tabsData));
         localStorage.setItem('phi_active_pane', this.activePaneId || '');
@@ -41,7 +48,7 @@ export class TabManager {
 
         const savedActive = localStorage.getItem('phi_active_pane') || '';
         for (const t of tabsData) {
-            this.createTab(t.paneId, t.sessionId, t.title, t.coder);
+            this.createTab(t.paneId, t.sessionId, t.title, t.coder, t.workspace, t.cwd);
         }
         if (savedActive && this.tabs.has(savedActive)) {
             this.switchTab(savedActive);
@@ -179,7 +186,7 @@ export class TabManager {
         this.fitActiveTerminal();
     }
     
-    createTab(paneId, sessionId, title, coder) {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '') {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId);
@@ -302,6 +309,9 @@ export class TabManager {
             console.warn("[term] Falling back to standard canvas renderer");
         }
         
+        const activeWS = workspace || (this.app.sessionsManager ? this.app.sessionsManager.activeWorkspace : '');
+        const activeCWD = cwd || (this.app.sessionsManager ? this.app.sessionsManager.activeCWD : '');
+
         // Setup WebSocket connection
         let ws;
         const tabInfo = {
@@ -309,6 +319,8 @@ export class TabManager {
             sessionId,
             title,
             coder,
+            workspace: activeWS,
+            cwd: activeCWD,
             term,
             fitAddon,
             tabEl,
@@ -409,6 +421,27 @@ export class TabManager {
         // Update sidebar select state and active coder tab
         this.app.sessionsManager.switchCoder(newTab.coder);
         this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+        
+        // Sync project / workspace context from the tab
+        if (newTab.workspace && this.app.sessionsManager.activeWorkspace !== newTab.workspace) {
+            this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
+            this.app.sessionsManager.activeWorkspace = newTab.workspace;
+            this.app.sessionsManager.activeCWD = newTab.cwd;
+            this.app.sessionsManager.loadWorktrees().then(() => {
+                this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+                this.app.diffController.refreshDiff();
+                if (this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles();
+                }
+            });
+        } else if (newTab.cwd && this.app.sessionsManager.activeCWD !== newTab.cwd) {
+            this.app.sessionsManager.activeCWD = newTab.cwd;
+            this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+            this.app.diffController.refreshDiff();
+            if (this.app.markdownManager) {
+                this.app.markdownManager.refreshFiles();
+            }
+        }
         
         // Trigger resize calculation
         setTimeout(() => {
