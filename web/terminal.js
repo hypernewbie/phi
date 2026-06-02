@@ -2,6 +2,14 @@
 
 import { PTYWebSocket } from './ws.js';
 
+const CODER_FAVICONS = {
+    'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
+    'claude': 'https://www.google.com/s2/favicons?domain=claude.ai&sz=64',
+    'agy': 'https://www.google.com/s2/favicons?domain=antigravity.google&sz=64',
+    'pi': 'https://www.google.com/s2/favicons?domain=pi.dev&sz=64',
+    'bash': 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64'
+};
+
 export class TabManager {
     constructor(app) {
         this.app = app;
@@ -273,6 +281,8 @@ export class TabManager {
             return;
         }
         
+        const faviconUrl = CODER_FAVICONS[coder] || 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64';
+
         // Create elements
         const tabEl = document.createElement('div');
         tabEl.className = 'tab';
@@ -280,6 +290,7 @@ export class TabManager {
         tabEl.setAttribute('data-pane-id', paneId);
         tabEl.innerHTML = `
             <button class="tab-pin" title="Pin session (Keep alive overnight)">📌</button>
+            <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-title">${title}</span>
             <button class="tab-close">×</button>
         `;

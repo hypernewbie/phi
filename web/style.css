@@ -615,8 +615,23 @@ body {
     height: 34px;
     max-width: 180px;
     min-width: 80px;
-    transition: all 0.15s;
-    overflow: hidden;
+}
+
+.tab-favicon {
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
+    border-radius: 2px;
+    flex-shrink: 0;
+    filter: grayscale(100%);
+    opacity: 0.7;
+    transition: filter 0.15s, opacity 0.15s;
+}
+
+.tab:hover .tab-favicon,
+.tab.active .tab-favicon {
+    filter: grayscale(0%);
+    opacity: 1;
 }
 
 .tab-title {
