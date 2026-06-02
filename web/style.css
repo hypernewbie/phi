@@ -1781,7 +1781,7 @@ body {
     background: var(--bg-panel);
     border: 1px solid var(--bg-border);
     border-radius: 10px;
-    width: min(860px, 92vw);
+    width: min(1000px, 92vw);
     max-height: 88vh;
     display: flex;
     flex-direction: column;
