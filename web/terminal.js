@@ -77,7 +77,9 @@ export class TabManager {
 
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
-                this.sendRawInput('\x03');
+                const activeTab = this.getActiveTab();
+                const cancelKey = (activeTab && ['pi', 'claude', 'opencode'].includes(activeTab.coder)) ? '\x1b' : '\x03';
+                this.sendRawInput(cancelKey);
                 this.inputTextArea.focus({ preventScroll: true });
             });
         }
