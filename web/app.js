@@ -161,7 +161,15 @@ class App {
         // Load saved sizes from localStorage
         const savedLeftWidth = localStorage.getItem('phi_panel_left_width');
         const savedRightWidth = localStorage.getItem('phi_panel_right_width');
-        if (savedLeftWidth) sidebar.style.width = savedLeftWidth + 'px';
+        if (savedLeftWidth) {
+            sidebar.style.width = savedLeftWidth + 'px';
+            const widthNum = parseFloat(savedLeftWidth);
+            if (widthNum < 120) {
+                sidebar.classList.add('sidebar-narrow');
+            } else {
+                sidebar.classList.remove('sidebar-narrow');
+            }
+        }
         if (savedRightWidth) diffPanel.style.width = savedRightWidth + 'px';
 
         // Left resizing handler
@@ -172,9 +180,16 @@ class App {
 
             const doDrag = (moveEvent) => {
                 const width = moveEvent.clientX - layout.getBoundingClientRect().left;
-                if (width > 180 && width < 450) {
+                if (width > 60 && width < 450) {
                     sidebar.style.width = width + 'px';
                     localStorage.setItem('phi_panel_left_width', width);
+                    
+                    if (width < 120) {
+                        sidebar.classList.add('sidebar-narrow');
+                    } else {
+                        sidebar.classList.remove('sidebar-narrow');
+                    }
+                    
                     this.tabManager.fitActiveTerminal();
                 }
             };
