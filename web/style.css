@@ -486,6 +486,17 @@ body {
     border-bottom: 1px solid var(--bg-border);
 }
 
+.sidebar-version {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.5;
+    text-align: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.02);
+    user-select: none;
+}
+
 .btn {
     display: flex;
     align-items: center;
@@ -2187,4 +2198,8 @@ body {
     margin: 0;
     width: 16px;
     height: 16px;
+}
+
+.sidebar-narrow .sidebar-version {
+    display: none;
 }
