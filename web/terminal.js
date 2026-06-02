@@ -19,6 +19,23 @@ export class TabManager {
         this.presetsContainer = document.getElementById('presets-container');
         
         this.setupEventListeners();
+
+        // Prompt for OS-level notification permissions on page load if not configured.
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+
+        // Listen for visibility state changes to clear indicators dynamically.
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                this.clearAttentionIndicators();
+            }
+        });
+
+        // Initialise the 1-second background visual idle and prompt detection loop.
+        setInterval(() => {
+            this.pollTerminalIdleAndNotifications();
+        }, 1000);
     }
     
     saveTabsState() {
@@ -353,8 +370,10 @@ export class TabManager {
             directMode: false, // Hybrid focus model by default
             isDead: false,
             isAtBottom: true,
-            lastScrollY: 0,
-            pinned: !!pinned
+            pinned: !!pinned,
+            lastOutputAt: undefined,
+            isBusy: false,
+            isAttention: false
         };
 
         if (pinned) {
@@ -367,7 +386,19 @@ export class TabManager {
         
         ws = new PTYWebSocket(
             paneId,
-            (data) => { term.write(data); },
+            (data) => {
+                term.write(data);
+                
+                // Track PTY activity on output.
+                tabInfo.lastOutputAt = Date.now();
+                if (!tabInfo.isBusy) {
+                    tabInfo.isBusy = true;
+                    // If not manually pinned by the user, dynamically pin on the backend while busy.
+                    if (!tabInfo.pinned) {
+                        this.syncBackendPin(paneId, true);
+                    }
+                }
+            },
             (control) => { console.log("[ws] Received control:", control); },
             () => {
                 term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
@@ -494,14 +525,18 @@ export class TabManager {
             tab.tabEl.classList.remove('pinned');
         }
         
-        // Sync with backend API
+        // Sync with backend API.
+        this.syncBackendPin(paneId, tab.pinned);
+        
+        this.saveTabsState();
+    }
+
+    syncBackendPin(paneId, pinned) {
         fetch(`/api/terminals/${paneId}/pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pinned: tab.pinned })
-        }).catch(err => console.error('[term] Failed to toggle pin on backend:', err));
-        
-        this.saveTabsState();
+            body: JSON.stringify({ pinned: pinned })
+        }).catch(err => console.error('[term] Failed to sync pin on backend:', err));
     }
     
     closeTab(paneId) {
@@ -967,6 +1002,130 @@ export class TabManager {
                     ...tab.term.options.theme,
                     cursor: color
                 };
+            }
+        }
+    }
+
+    pollTerminalIdleAndNotifications() {
+        const isTabVisible = !document.hidden;
+
+        for (const tab of this.tabs.values()) {
+            if (tab.isDead) continue;
+
+            const isActiveAndVisible = (tab.paneId === this.activePaneId) && isTabVisible;
+
+            // If the tab is currently focused and visible, clear attention states immediately.
+            if (isActiveAndVisible) {
+                if (tab.isAttention) {
+                    tab.isAttention = false;
+                    tab.tabEl.classList.remove('has-attention');
+                    this.updateDocumentTitle();
+                }
+            }
+
+            // Track busy-to-idle transition for active terminal connections.
+            if (tab.isBusy && tab.lastOutputAt !== undefined) {
+                const idleTime = Date.now() - tab.lastOutputAt;
+                if (idleTime > 3000) {
+                    // Output has stopped for 3 seconds. The PTY transitioned to idle!
+                    tab.isBusy = false;
+
+                    // Release backend pin if NOT manually pinned by the user.
+                    if (!tab.pinned) {
+                        this.syncBackendPin(tab.paneId, false);
+                    }
+
+                    // Only notify if this tab is NOT currently active and focused.
+                    if (!isActiveAndVisible) {
+                        let promptDetected = false;
+                        if (tab.term && tab.term.buffer && tab.term.buffer.active) {
+                            const buffer = tab.term.buffer.active;
+                            const line = buffer.getLine(buffer.cursorY + buffer.baseY);
+                            const text = line ? line.translateToString(true) : '';
+                            const promptRe = /[$>❯…╰─]|agy>|opencode>/;
+                            promptDetected = promptRe.test(text);
+                        }
+
+                        // Trigger attention indicator.
+                        tab.isAttention = true;
+                        tab.tabEl.classList.add('has-attention');
+                        this.updateDocumentTitle();
+
+                        // Escalate with notification chimes and browser popups.
+                        this.triggerAttentionNotification(tab, promptDetected);
+                    }
+                }
+            }
+        }
+    }
+
+    updateDocumentTitle() {
+        let anyAttention = false;
+        for (const tab of this.tabs.values()) {
+            if (tab.isAttention) {
+                anyAttention = true;
+                break;
+            }
+        }
+
+        const cleanTitle = document.title.startsWith('● ') ? document.title.substring(2) : document.title;
+        if (anyAttention) {
+            document.title = '● ' + cleanTitle;
+        } else {
+            document.title = cleanTitle;
+        }
+    }
+
+    triggerAttentionNotification(tab, promptDetected) {
+        const message = promptDetected
+            ? `Session "${tab.title}" is waiting at a prompt.`
+            : `Session "${tab.title}" completed execution.`;
+
+        // 1. Show in-app toast notification.
+        if (this.app && typeof this.app.showToast === 'function') {
+            this.app.showToast(message, {
+                title: 'Task Done',
+                type: 'info',
+                duration: 6000
+            });
+        }
+
+        // 2. Play subtle chime if backgrounded.
+        const bellAudio = new Audio('vendor/bell.wav');
+        bellAudio.volume = 0.2;
+        bellAudio.play().catch(() => {});
+
+        // 3. Show OS-level notification if tab is hidden / not active.
+        if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try {
+                const n = new Notification('Phi Session Done', {
+                    body: message,
+                    tag: 'phi-pane-' + tab.paneId,
+                    icon: 'screenshot.png',
+                    silent: true
+                });
+                n.onclick = () => {
+                    window.focus();
+                    this.switchTab(tab.paneId);
+                    n.close();
+                };
+            } catch (e) {
+                console.error('[notification] Failed to show OS notification:', e);
+            }
+        }
+    }
+
+    clearAttentionIndicators() {
+        // Restore document title.
+        if (document.title.startsWith('● ')) {
+            document.title = document.title.substring(2);
+        }
+        
+        // Clear isAttention flags.
+        for (const tab of this.tabs.values()) {
+            if (tab.isAttention) {
+                tab.isAttention = false;
+                tab.tabEl.classList.remove('has-attention');
             }
         }
     }

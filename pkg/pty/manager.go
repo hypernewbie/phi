@@ -10,15 +10,22 @@ import (
 )
 
 type PTYInstance struct {
-	ID          string        `json:"id"`
-	Pty         *Pty          `json:"-"`
-	Cwd         string        `json:"cwd"`
-	Coder       string        `json:"coder"`
-	SessionID   string        `json:"session_id"`
-	DetachTimer *time.Timer   `json:"-"`
-	mu          sync.Mutex
-	ActiveWS    bool
-	Pinned      bool          `json:"pinned"`
+	ID           string        `json:"id"`
+	Pty          *Pty          `json:"-"`
+	Cwd          string        `json:"cwd"`
+	Coder        string        `json:"coder"`
+	SessionID    string        `json:"session_id"`
+	DetachTimer  *time.Timer   `json:"-"`
+	mu           sync.Mutex
+	ActiveWS     bool
+	Pinned       bool          `json:"pinned"`
+	LastOutputAt time.Time     `json:"-"`
+}
+
+func (inst *PTYInstance) UpdateActivity() {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	inst.LastOutputAt = time.Now()
 }
 
 type Manager struct {
@@ -46,11 +53,12 @@ func (m *Manager) Spawn(dir, command string, args []string, coder, sessionID str
 	}
 
 	inst := &PTYInstance{
-		ID:        GenerateID(),
-		Pty:       p,
-		Cwd:       dir,
-		Coder:     coder,
-		SessionID: sessionID,
+		ID:           GenerateID(),
+		Pty:          p,
+		Cwd:          dir,
+		Coder:        coder,
+		SessionID:    sessionID,
+		LastOutputAt: time.Now(),
 	}
 
 	m.mu.Lock()
@@ -120,12 +128,7 @@ func (m *Manager) UnregisterWS(id string) {
 		return
 	}
 
-	// Grace period: 30 minutes
-	gracePeriod := 30 * time.Minute
-	inst.DetachTimer = time.AfterFunc(gracePeriod, func() {
-		log.Printf("[pty] 30 minute grace period expired for %s. Terminating PTY.", id)
-		m.Kill(id)
-	})
+	m.startGracePeriodTimer(inst)
 	log.Printf("[pty] WS disconnected from %s, started 30-min detach timer", id)
 }
 
@@ -177,11 +180,7 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 		if inst.DetachTimer != nil {
 			inst.DetachTimer.Stop()
 		}
-		gracePeriod := 30 * time.Minute
-		inst.DetachTimer = time.AfterFunc(gracePeriod, func() {
-			log.Printf("[pty] 30 minute grace period expired for %s. Terminating PTY.", id)
-			m.Kill(id)
-		})
+		m.startGracePeriodTimer(inst)
 		log.Printf("[pty] Session %s unpinned while disconnected. Started 30-min detach timer.", id)
 	} else if pinned && inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
@@ -189,4 +188,27 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 		log.Printf("[pty] Session %s pinned. Stopped active detach timer.", id)
 	}
 	return nil
+}
+
+func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
+	id := inst.ID
+	gracePeriod := 30 * time.Minute
+	inst.DetachTimer = time.AfterFunc(gracePeriod, func() {
+		inst.mu.Lock()
+		timeSinceLastOut := time.Since(inst.LastOutputAt)
+		inst.mu.Unlock()
+
+		// If the terminal has been active recently (e.g. output in the last 2 minutes),
+		// reschedule the 30-minute grace period rather than killing it.
+		if timeSinceLastOut < 2 * time.Minute {
+			log.Printf("[pty] 30-min grace period expired for %s, but terminal has been active recently (%v ago). Rescheduling grace period.", id, timeSinceLastOut)
+			inst.mu.Lock()
+			m.startGracePeriodTimer(inst)
+			inst.mu.Unlock()
+			return
+		}
+
+		log.Printf("[pty] 30 minute grace period expired for %s with no recent activity. Terminating PTY.", id)
+		m.Kill(id)
+	})
 }
