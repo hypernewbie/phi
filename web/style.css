@@ -1658,6 +1658,9 @@ body {
 }
 
 .md-dir-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     font-size: 10px;
     font-family: var(--font-mono);
     color: var(--text-muted);
@@ -1666,6 +1669,34 @@ body {
     letter-spacing: 0.06em;
     border-bottom: 1px solid var(--bg-border);
     margin-bottom: 2px;
+}
+
+.md-dir-del-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.1s;
+}
+
+.md-dir-del-btn:hover {
+    color: var(--red);
+    background: rgba(239, 68, 68, 0.15);
+}
+
+.md-file-empty-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    padding: 6px 10px;
+    font-style: italic;
 }
 
 .md-file-item {
