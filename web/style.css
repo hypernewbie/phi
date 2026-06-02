@@ -2043,6 +2043,7 @@ body {
 
 /* Narrow Sidebar Mode */
 .sidebar-panel.sidebar-narrow {
+    min-width: 0 !important; /* Override layout minimum width constraints */
     padding: 0;
     display: flex;
     flex-direction: column;
@@ -2060,6 +2061,7 @@ body {
 }
 
 .sidebar-narrow .coder-tab {
+    flex: none; /* Stay as fixed square tiles, do not expand vertically */
     width: 32px;
     height: 32px;
     padding: 0;
