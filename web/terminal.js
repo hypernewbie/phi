@@ -716,17 +716,34 @@ export class TabManager {
         tabInfo.ws = newWs;
     }
 
-    _spamScrollToBottom(tabInfo) {
+    _spamScroll(tabInfo, isAtBottom, scrollY = null) {
         if (!tabInfo || tabInfo.isDead) return;
+        
         clearInterval(tabInfo.spamInterval);
         clearTimeout(tabInfo.stopSpamTimeout);
-        tabInfo.spamInterval = setInterval(() => tabInfo.term.scrollToBottom(), 10);
+        
+        tabInfo.spamInterval = setInterval(() => {
+            if (isAtBottom) {
+                tabInfo.term.scrollToBottom();
+            } else if (scrollY !== null) {
+                tabInfo.term.scrollToLine(scrollY);
+            }
+        }, 10);
+        
         tabInfo.stopSpamTimeout = setTimeout(() => {
             clearInterval(tabInfo.spamInterval);
             tabInfo.spamInterval = null;
             tabInfo.stopSpamTimeout = null;
-            tabInfo.term.scrollToBottom();
+            if (isAtBottom) {
+                tabInfo.term.scrollToBottom();
+            } else if (scrollY !== null) {
+                tabInfo.term.scrollToLine(scrollY);
+            }
         }, 300);
+    }
+
+    _spamScrollToBottom(tabInfo) {
+        this._spamScroll(tabInfo, true);
     }
 
     fitActiveTerminal() {
@@ -741,32 +758,8 @@ export class TabManager {
             
             activeTab.fitAddon.fit();
             
-            // Restore scroll state POST-FIT
-            // Brute-force spinlock scroll-spam BRRRRRR for 300ms
-            if (!activeTab.spamInterval) {
-                activeTab.spamInterval = setInterval(() => {
-                    if (isAtBottom) {
-                        activeTab.term.scrollToBottom();
-                    } else {
-                        activeTab.term.scrollToLine(scrollY);
-                    }
-                }, 10);
-            }
-            
-            if (activeTab.stopSpamTimeout) {
-                clearTimeout(activeTab.stopSpamTimeout);
-            }
-            
-            activeTab.stopSpamTimeout = setTimeout(() => {
-                clearInterval(activeTab.spamInterval);
-                activeTab.spamInterval = null;
-                activeTab.stopSpamTimeout = null;
-                if (isAtBottom) {
-                    activeTab.term.scrollToBottom();
-                } else {
-                    activeTab.term.scrollToLine(scrollY);
-                }
-            }, 300);
+            // Restore scroll state POST-FIT using the unified helper to synchronise viewport
+            this._spamScroll(activeTab, isAtBottom, scrollY);
             
             // Clear temporary saved scroll state
             activeTab.isAtBottom = undefined;
