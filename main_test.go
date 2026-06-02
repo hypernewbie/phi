@@ -86,7 +86,7 @@ func TestSaveAndLoadConfig_RoundTrip(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
 	cfg.ThemeColor = "amber"
-	cfg.ModelPresets = []string{"test/model-a", "test/model-b"}
+	cfg.ModelPresets = ModelPresetsMap{"pi": {"test/model-a", "test/model-b"}}
 	cfg.QuickCommands = []QuickCommand{{Name: "foo", Command: "bar"}}
 	cfg.MarkdownDirs = []string{"./notes"}
 	saveConfig(cfg)
@@ -95,7 +95,7 @@ func TestSaveAndLoadConfig_RoundTrip(t *testing.T) {
 	if got.ThemeColor != "amber" {
 		t.Errorf("ThemeColor: want amber, got %q", got.ThemeColor)
 	}
-	if len(got.ModelPresets) != 2 || got.ModelPresets[0] != "test/model-a" {
+	if len(got.ModelPresets["pi"]) != 2 || got.ModelPresets["pi"][0] != "test/model-a" {
 		t.Errorf("ModelPresets round-trip failed: %v", got.ModelPresets)
 	}
 	if len(got.QuickCommands) != 1 || got.QuickCommands[0].Name != "foo" {
@@ -103,6 +103,49 @@ func TestSaveAndLoadConfig_RoundTrip(t *testing.T) {
 	}
 	if len(got.MarkdownDirs) != 1 || got.MarkdownDirs[0] != "./notes" {
 		t.Errorf("MarkdownDirs round-trip failed: %v", got.MarkdownDirs)
+	}
+}
+
+func TestModelPresets_BackwardCompatibilityAndDefaults(t *testing.T) {
+	// JSON payload in legacy list format
+	legacyJSON := `{"model_presets": ["test-model-1", "test-model-2"]}`
+
+	var cfg Config
+	err := json.Unmarshal([]byte(legacyJSON), &cfg)
+	if err != nil {
+		t.Fatalf("failed to unmarshal legacy config: %v", err)
+	}
+
+	// Verify legacy models migrated under "pi"
+	piModels := cfg.ModelPresets["pi"]
+	if len(piModels) != 2 || piModels[0] != "test-model-1" || piModels[1] != "test-model-2" {
+		t.Errorf("expected legacy presets to migrate to 'pi', got %v", cfg.ModelPresets)
+	}
+
+	// Trigger defaults merging helper
+	cfg.ModelPresets = ensureModelPresetDefaults(cfg.ModelPresets)
+
+	// Verify defaults merged for other backends
+	opencodeModels := cfg.ModelPresets["opencode"]
+	if len(opencodeModels) != 1 || opencodeModels[0] != "opencode/big-pickle" {
+		t.Errorf("expected 'opencode' default 'opencode/big-pickle', got %v", opencodeModels)
+	}
+
+	claudeModels := cfg.ModelPresets["claude"]
+	if len(claudeModels) == 0 || claudeModels[0] != "claude-sonnet-4-6" {
+		t.Errorf("expected 'claude' defaults populated, got %v", claudeModels)
+	}
+
+	// Test mapping format unmarshal works natively too
+	mapJSON := `{"model_presets": {"opencode": ["custom-pickle"], "pi": ["pi-model"]}}`
+	var mapCfg Config
+	err = json.Unmarshal([]byte(mapJSON), &mapCfg)
+	if err != nil {
+		t.Fatalf("failed to unmarshal map config: %v", err)
+	}
+
+	if mapCfg.ModelPresets["opencode"][0] != "custom-pickle" || mapCfg.ModelPresets["pi"][0] != "pi-model" {
+		t.Errorf("expected map unmarshal to load presets directly, got %v", mapCfg.ModelPresets)
 	}
 }
 
