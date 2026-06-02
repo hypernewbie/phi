@@ -876,7 +876,7 @@ export class TabManager {
         
         const backend = activeTab.coder;
         const allPresets = this.app.modelPresets || {};
-        const modelPresets = allPresets[backend] || [];
+        const modelPresets = [...(allPresets[backend] || [])].sort((a, b) => a.localeCompare(b));
         
         // 1. Header
         const header = document.createElement('div');
