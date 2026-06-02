@@ -624,6 +624,36 @@ body {
     font-weight: 500;
 }
 
+.tab-pin {
+    border: none;
+    background: transparent;
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin: 0;
+    opacity: 0.25;
+    transition: opacity 0.15s, transform 0.15s;
+    filter: grayscale(1);
+}
+
+.tab:hover .tab-pin {
+    opacity: 0.65;
+}
+
+.tab-pin:hover {
+    opacity: 1 !important;
+    transform: scale(1.15);
+    filter: none;
+}
+
+.tab.pinned .tab-pin {
+    opacity: 1;
+    filter: none;
+}
+
 .tab-close {
     border: none;
     background: transparent;

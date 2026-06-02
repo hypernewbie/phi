@@ -175,6 +175,27 @@ func main() {
 		// Log requests briefly
 		log.Printf("[http] %s %s", r.Method, r.URL.Path)
 
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/pin") {
+			id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+			id = strings.TrimSuffix(id, "/pin")
+
+			var req struct {
+				Pinned bool `json:"pinned"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			err := ptyManager.SetPinned(id, req.Pinned)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 			id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
 			err := ptyManager.Kill(id)
