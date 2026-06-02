@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
@@ -244,6 +245,11 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	if sessions == nil {
 		sessions = []session.Session{}
 	}
+
+	// Sort sessions so that the most recently updated sessions are returned first.
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].TimeUpdated.After(sessions[j].TimeUpdated)
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessions)
