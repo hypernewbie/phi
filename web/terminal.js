@@ -680,11 +680,19 @@ export class TabManager {
         overlay.innerHTML = `
             <div class="reconnect-box">
                 <span class="reconnect-msg">session ended</span>
-                <button class="reconnect-btn">⟳ Reconnect</button>
+                <div class="reconnect-buttons">
+                    <button class="reconnect-btn">⟳ Reconnect</button>
+                    <button class="restart-btn">⚡ Restart</button>
+                </div>
             </div>`;
+
         overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
             this.reconnectTab(tabInfo);
         });
+        overlay.querySelector('.restart-btn').addEventListener('click', () => {
+            this.restartTab(tabInfo);
+        });
+
         tabInfo.termContainer.appendChild(overlay);
     }
 
@@ -692,9 +700,11 @@ export class TabManager {
         const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const btnEl = overlay?.querySelector('.reconnect-btn');
+        const restartBtn = overlay?.querySelector('.restart-btn');
 
         if (msgEl) msgEl.innerText = 'connecting…';
         if (btnEl) btnEl.disabled = true;
+        if (restartBtn) restartBtn.disabled = true;
 
         if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
 
@@ -707,6 +717,7 @@ export class TabManager {
                 if (!opened) {
                     if (msgEl) msgEl.innerText = 'session expired';
                     if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+                    if (restartBtn) restartBtn.disabled = false;
                 } else {
                     tabInfo.isDead = true;
                     tabInfo.tabEl.classList.add('dead');
@@ -723,6 +734,98 @@ export class TabManager {
             }
         );
         tabInfo.ws = newWs;
+    }
+
+    restartTab(tabInfo) {
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const msgEl = overlay?.querySelector('.reconnect-msg');
+        const reconnectBtn = overlay?.querySelector('.reconnect-btn');
+        const restartBtn = overlay?.querySelector('.restart-btn');
+
+        if (msgEl) msgEl.innerText = 'restarting…';
+        if (reconnectBtn) reconnectBtn.disabled = true;
+        if (restartBtn) restartBtn.disabled = true;
+
+        if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
+
+        fetch('/api/terminals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                coder: tabInfo.coder,
+                cwd: tabInfo.cwd,
+                session_id: ''
+            })
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('failed to spawn restarted session');
+            return res.json();
+        })
+        .then(data => {
+            const oldPaneId = tabInfo.paneId;
+            
+            // Update paneId and sessionId
+            tabInfo.paneId = data.pane_id;
+            tabInfo.sessionId = data.session_id;
+            
+            // Update DOM element references to synchronise new IDs
+            tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
+            tabInfo.termContainer.id = `term-${data.pane_id}`;
+            
+            // Update TabManager map tracking
+            this.tabs.delete(oldPaneId);
+            this.tabs.set(data.pane_id, tabInfo);
+            
+            if (this.activePaneId === oldPaneId) {
+                this.activePaneId = data.pane_id;
+            }
+            
+            // Reset terminal screen and print visual cue
+            tabInfo.term.reset();
+            tabInfo.term.write('\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n');
+
+            let opened = false;
+            const newWs = new PTYWebSocket(
+                tabInfo.paneId,
+                (msg) => { this.writeToTerminal(tabInfo, msg); },
+                null,
+                () => {
+                    if (!opened) {
+                        if (msgEl) msgEl.innerText = 'session expired';
+                        if (reconnectBtn) reconnectBtn.disabled = false;
+                        if (restartBtn) restartBtn.disabled = false;
+                    } else {
+                        tabInfo.isDead = true;
+                        tabInfo.tabEl.classList.add('dead');
+                        this._showReconnectOverlay(tabInfo);
+                    }
+                },
+                () => {
+                    opened = true;
+                    tabInfo.isDead = false;
+                    tabInfo.tabEl.classList.remove('dead');
+                    if (overlay) overlay.remove();
+                    
+                    // Trigger terminal fit & backend resize to synchronise viewport
+                    setTimeout(() => {
+                        this.fitActiveTerminal();
+                        this.sendResizeToBackend(tabInfo);
+                    }, 100);
+                }
+            );
+            tabInfo.ws = newWs;
+            
+            // Sync with session list in sidebar
+            if (this.app.sessionsManager) {
+                this.app.sessionsManager.loadSessions();
+            }
+        })
+        .catch(err => {
+            console.error('[restart] Failed to restart tab:', err);
+            if (msgEl) msgEl.innerText = 'restart failed';
+            if (reconnectBtn) reconnectBtn.disabled = false;
+            if (restartBtn) restartBtn.disabled = false;
+        });
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {

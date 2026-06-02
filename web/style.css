@@ -2013,6 +2013,35 @@ body {
 .reconnect-btn:hover:not(:disabled) { background: var(--accent-bright); }
 .reconnect-btn:disabled { opacity: 0.5; cursor: default; }
 
+.reconnect-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.restart-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--bg-border);
+    border-radius: 5px;
+    padding: 3px 12px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.restart-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border-color: var(--text-muted);
+}
+
+.restart-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* Session right-click context menu */
 .session-ctx-menu {
     background: var(--bg-elevated);
