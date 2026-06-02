@@ -68,6 +68,25 @@ export class TabManager {
 
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
+            // When input is empty, capture arrows and enter keys to control PTY directly.
+            if (this.inputTextArea.value === '') {
+                const keys = {
+                    'ArrowUp': '\u001b[A',
+                    'ArrowDown': '\u001b[B',
+                    'ArrowLeft': '\u001b[D',
+                    'ArrowRight': '\u001b[C',
+                    'Enter': '\r'
+                };
+                if (keys[e.key]) {
+                    e.preventDefault();
+                    const activeTab = this.getActiveTab();
+                    if (activeTab && !activeTab.isDead) {
+                        activeTab.ws.sendInput(keys[e.key]);
+                    }
+                    return;
+                }
+            }
+
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 this.sendStagedInput();
