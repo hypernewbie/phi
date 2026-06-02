@@ -85,20 +85,38 @@ export class TabManager {
 
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
-            // When input is empty, capture arrows and enter keys to control PTY directly.
+            // When input is empty, capture arrows, enter, escape and ctrl key shortcuts to control PTY directly.
             if (this.inputTextArea.value === '') {
                 const keys = {
                     'ArrowUp': '\u001b[A',
                     'ArrowDown': '\u001b[B',
                     'ArrowLeft': '\u001b[D',
                     'ArrowRight': '\u001b[C',
-                    'Enter': '\r'
+                    'Enter': '\r',
+                    'Escape': '\x1b'
                 };
+                
+                let sendChar = null;
                 if (keys[e.key]) {
+                    sendChar = keys[e.key];
+                } else if (e.ctrlKey) {
+                    const ctrlKeys = {
+                        'c': '\x03',
+                        'o': '\x0f',
+                        'p': '\x10'
+                    };
+                    const lowerKey = e.key.toLowerCase();
+                    if (ctrlKeys[lowerKey]) {
+                        sendChar = ctrlKeys[lowerKey];
+                    }
+                }
+
+                if (sendChar !== null) {
                     e.preventDefault();
                     const activeTab = this.getActiveTab();
                     if (activeTab && !activeTab.isDead) {
-                        activeTab.ws.sendInput(keys[e.key]);
+                        activeTab.ws.sendInput(sendChar);
+                        this._spamScrollToBottom(activeTab); // Keep viewport pinned to the bottom during reaction
                     }
                     return;
                 }
