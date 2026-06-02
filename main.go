@@ -38,12 +38,32 @@ type QuickCommand struct {
 	Command string `json:"command"`
 }
 
+type ModelPresetsMap map[string][]string
+
+func (m *ModelPresetsMap) UnmarshalJSON(data []byte) error {
+	var mapVal map[string][]string
+	if err := json.Unmarshal(data, &mapVal); err == nil {
+		*m = mapVal
+		return nil
+	}
+
+	var listVal []string
+	if err := json.Unmarshal(data, &listVal); err == nil {
+		*m = map[string][]string{
+			"pi": listVal,
+		}
+		return nil
+	}
+
+	return json.Unmarshal(data, &mapVal)
+}
+
 type Config struct {
 	Workspaces        []string          `json:"workspaces"`
 	ThemeColor        string            `json:"theme_color"`
 	ExpandedWorktrees map[string]bool   `json:"expanded_worktrees"`
 	ActiveWorktrees   map[string]string `json:"active_worktrees"`
-	ModelPresets      []string          `json:"model_presets"`
+	ModelPresets      ModelPresetsMap   `json:"model_presets"`
 	QuickCommands     []QuickCommand    `json:"quick_commands"`
 	MarkdownDirs      []string          `json:"markdown_dirs"`
 }
@@ -88,12 +108,7 @@ func loadConfig() Config {
 	if cfg.ActiveWorktrees == nil {
 		cfg.ActiveWorktrees = make(map[string]string)
 	}
-	if cfg.ModelPresets == nil {
-		cfg.ModelPresets = []string{
-			"deepseek/deepseek-v4-flash",
-			"deepseek/deepseek-v4-pro",
-		}
-	}
+	cfg.ModelPresets = ensureModelPresetDefaults(cfg.ModelPresets)
 	if cfg.QuickCommands == nil {
 		cfg.QuickCommands = []QuickCommand{
 			{Name: "status", Command: "git status"},
@@ -105,6 +120,43 @@ func loadConfig() Config {
 		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
 	}
 	return cfg
+}
+
+func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
+	if m == nil {
+		m = make(ModelPresetsMap)
+	}
+	defaults := map[string][]string{
+		"pi": {
+			"gemini-1.5-pro",
+			"gemini-1.5-flash",
+			"deepseek-coder",
+			"gpt-4o",
+			"gpt-4-turbo",
+			"claude-3-5-sonnet",
+		},
+		"opencode": {
+			"opencode/big-pickle",
+		},
+		"claude": {
+			"claude-sonnet-4-6",
+			"claude-opus-4-8",
+			"sonnet[1m]",
+			"opus[1m]",
+		},
+		"agy": {
+			"gemini-2.5-pro",
+			"gemini-2.5-flash",
+			"gemini-1.5-pro",
+		},
+	}
+
+	for coder, defaultList := range defaults {
+		if _, exists := m[coder]; !exists || m[coder] == nil {
+			m[coder] = defaultList
+		}
+	}
+	return m
 }
 
 func saveConfig(cfg Config) {
@@ -538,35 +590,44 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	model := req["model"]
+	model := strings.TrimSpace(req["model"])
+	coder := strings.TrimSpace(req["coder"])
 	if model == "" {
 		http.Error(w, "Missing model", http.StatusBadRequest)
 		return
+	}
+	if coder == "" {
+		coder = "pi"
 	}
 
 	cfg := loadConfig()
 
 	if r.Method == http.MethodPost {
+		if cfg.ModelPresets == nil {
+			cfg.ModelPresets = make(ModelPresetsMap)
+		}
 		found := false
-		for _, m := range cfg.ModelPresets {
+		for _, m := range cfg.ModelPresets[coder] {
 			if m == model {
 				found = true
 				break
 			}
 		}
 		if !found {
-			cfg.ModelPresets = append(cfg.ModelPresets, model)
+			cfg.ModelPresets[coder] = append(cfg.ModelPresets[coder], model)
 			saveConfig(cfg)
 		}
 	} else if r.Method == http.MethodDelete {
-		newPresets := []string{}
-		for _, m := range cfg.ModelPresets {
-			if m != model {
-				newPresets = append(newPresets, m)
+		if cfg.ModelPresets != nil {
+			newPresets := []string{}
+			for _, m := range cfg.ModelPresets[coder] {
+				if m != model {
+					newPresets = append(newPresets, m)
+				}
 			}
+			cfg.ModelPresets[coder] = newPresets
+			saveConfig(cfg)
 		}
-		cfg.ModelPresets = newPresets
-		saveConfig(cfg)
 	}
 
 	w.WriteHeader(http.StatusOK)
