@@ -199,6 +199,33 @@ export class TabManager {
         }
     }
     
+    writeToTerminal(tabInfo, data) {
+        if (tabInfo.isDead) return;
+
+        tabInfo.writeBuffer += data;
+
+        // Track PTY activity on output.
+        tabInfo.lastOutputAt = Date.now();
+        if (!tabInfo.isBusy) {
+            tabInfo.isBusy = true;
+            // If not manually pinned by the user, dynamically pin on the backend while busy.
+            if (!tabInfo.pinned) {
+                this.syncBackendPin(tabInfo.paneId, true);
+            }
+        }
+
+        if (!tabInfo.writePending) {
+            tabInfo.writePending = true;
+            requestAnimationFrame(() => {
+                if (tabInfo.writeBuffer.length > 0 && !tabInfo.isDead) {
+                    tabInfo.term.write(tabInfo.writeBuffer);
+                    tabInfo.writeBuffer = '';
+                }
+                tabInfo.writePending = false;
+            });
+        }
+    }
+    
     updateDirectModeUI(tab) {
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
@@ -373,7 +400,9 @@ export class TabManager {
             pinned: !!pinned,
             lastOutputAt: undefined,
             isBusy: false,
-            isAttention: false
+            isAttention: false,
+            writeBuffer: '',
+            writePending: false
         };
 
         if (pinned) {
@@ -386,19 +415,7 @@ export class TabManager {
         
         ws = new PTYWebSocket(
             paneId,
-            (data) => {
-                term.write(data);
-                
-                // Track PTY activity on output.
-                tabInfo.lastOutputAt = Date.now();
-                if (!tabInfo.isBusy) {
-                    tabInfo.isBusy = true;
-                    // If not manually pinned by the user, dynamically pin on the backend while busy.
-                    if (!tabInfo.pinned) {
-                        this.syncBackendPin(paneId, true);
-                    }
-                }
-            },
+            (data) => { this.writeToTerminal(tabInfo, data); },
             (control) => { console.log("[ws] Received control:", control); },
             () => {
                 term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
@@ -657,7 +674,7 @@ export class TabManager {
         let opened = false;
         const newWs = new PTYWebSocket(
             tabInfo.paneId,
-            (data) => { tabInfo.term.write(data); },
+            (data) => { this.writeToTerminal(tabInfo, data); },
             null,
             () => {
                 if (!opened) {
