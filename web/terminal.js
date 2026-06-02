@@ -185,13 +185,11 @@ export class TabManager {
         // Fit active terminal on window resize
         let resizeTimeout;
         window.addEventListener('resize', () => {
-            const activeTab = this.getActiveTab();
-            if (activeTab && !activeTab.isDead) {
-                activeTab.isAtBottom = true;
-            }
+            this.startResize();
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 this.fitActiveTerminal();
+                this.endResize();
             }, 100);
         });
 
@@ -746,6 +744,28 @@ export class TabManager {
         this._spamScroll(tabInfo, true);
     }
 
+    startResize() {
+        const activeTab = this.getActiveTab();
+        if (!activeTab || activeTab.isDead) return;
+        
+        // Save the correct, stable scroll state before the continuous resize begins
+        if (activeTab.isAtBottom === undefined) {
+            const buffer = activeTab.term.buffer.active;
+            activeTab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+            activeTab.lastScrollY = buffer.viewportY;
+        }
+        this.isResizing = true;
+    }
+
+    endResize() {
+        this.isResizing = false;
+        const activeTab = this.getActiveTab();
+        if (activeTab) {
+            activeTab.isAtBottom = undefined;
+            activeTab.lastScrollY = undefined;
+        }
+    }
+
     fitActiveTerminal() {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
@@ -756,14 +776,22 @@ export class TabManager {
             const isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
             const scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
             
+            // If we are resizing continuously, cache these stable coordinates on the tab
+            if (this.isResizing) {
+                activeTab.isAtBottom = isAtBottom;
+                activeTab.lastScrollY = scrollY;
+            }
+
             activeTab.fitAddon.fit();
             
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
             
-            // Clear temporary saved scroll state
-            activeTab.isAtBottom = undefined;
-            activeTab.lastScrollY = undefined;
+            // Clear temporary saved scroll state only if NOT in the middle of a continuous resize
+            if (!this.isResizing) {
+                activeTab.isAtBottom = undefined;
+                activeTab.lastScrollY = undefined;
+            }
             
             this.sendResizeToBackend(activeTab);
         } catch (e) {
