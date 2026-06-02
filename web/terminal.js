@@ -853,7 +853,12 @@ export class TabManager {
         if (!dropup) return;
         dropup.innerHTML = '';
         
-        const modelPresets = this.app.modelPresets || [];
+        const activeTab = this.getActiveTab();
+        if (!activeTab) return;
+        
+        const backend = activeTab.coder;
+        const allPresets = this.app.modelPresets || {};
+        const modelPresets = allPresets[backend] || [];
         
         // 1. Header
         const header = document.createElement('div');
@@ -886,7 +891,7 @@ export class TabManager {
                         await fetch('/api/config/models', {
                             method: 'DELETE',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model })
+                            body: JSON.stringify({ model, coder: backend })
                         });
                         await this.app.sessionsManager.loadConfig();
                     } catch (err) {
@@ -912,7 +917,7 @@ export class TabManager {
                     await fetch('/api/config/models', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ model: model.trim() })
+                        body: JSON.stringify({ model: model.trim(), coder: backend })
                     });
                     await this.app.sessionsManager.loadConfig();
                 } catch (err) {

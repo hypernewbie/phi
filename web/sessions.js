@@ -125,7 +125,7 @@ export class SessionsManager {
             }
 
             // Save the model presets list and quick commands, then redraw current tab presets.
-            this.app.modelPresets = data.model_presets || [];
+            this.app.modelPresets = data.model_presets || {};
             this.app.quickCommands = data.quick_commands || [];
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
