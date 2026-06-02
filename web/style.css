@@ -624,6 +624,17 @@ body {
     font-weight: 500;
 }
 
+.tab.has-attention {
+    animation: tab-pulse 2s infinite ease-in-out;
+    color: var(--accent, #7c6af7) !important;
+}
+
+@keyframes tab-pulse {
+    0% { opacity: 0.8; }
+    50% { opacity: 1; text-shadow: 0 0 8px rgba(124, 106, 247, 0.6); }
+    100% { opacity: 0.8; }
+}
+
 .tab-pin {
     border: none;
     background: transparent;

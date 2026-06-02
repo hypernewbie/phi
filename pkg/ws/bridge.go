@@ -71,6 +71,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 				break
 			}
 			if n > 0 {
+				inst.UpdateActivity()
 				hub.Broadcast(inst.ID, 0x01, buf[:n])
 			}
 		}
