@@ -302,6 +302,10 @@ export class TabManager {
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
         
+        // Clean up the initial loader placeholder if it exists on first tab creation
+        const loader = this.terminalsWrapper.querySelector('#initial-loader');
+        if (loader) loader.remove();
+        
         tabEl.addEventListener('click', (e) => {
             if (e.target.closest('.tab-close')) {
                 e.stopPropagation();

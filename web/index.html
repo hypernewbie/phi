@@ -137,7 +137,12 @@
 
                 <!-- ACTIVE TERMINAL CONTAINER -->
                 <div class="terminal-content">
-                    <div id="terminals-wrapper" class="terminals-wrapper"></div>
+                    <div id="terminals-wrapper" class="terminals-wrapper">
+                        <div class="initial-loader" id="initial-loader">
+                            <div class="spinner-ring"></div>
+                            <div class="loader-text">Loading Phi Session...</div>
+                        </div>
+                    </div>
                     
                     <div id="input-bar-container" class="input-bar-container hidden">
                         <textarea id="input-textarea" placeholder="Type a prompt, Enter to send... (Empty: Arrows, Enter, Esc, Ctrl+C/O/P send directly to PTY)"></textarea>
