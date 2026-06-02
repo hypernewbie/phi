@@ -30,7 +30,8 @@ export class TabManager {
                 title: tab.title,
                 coder: tab.coder,
                 workspace: tab.workspace,
-                cwd: tab.cwd
+                cwd: tab.cwd,
+                pinned: !!tab.pinned
             });
         }
         localStorage.setItem('phi_tabs', JSON.stringify(tabsData));
@@ -48,7 +49,7 @@ export class TabManager {
 
         const savedActive = localStorage.getItem('phi_active_pane') || '';
         for (const t of tabsData) {
-            this.createTab(t.paneId, t.sessionId, t.title, t.coder, t.workspace, t.cwd);
+            this.createTab(t.paneId, t.sessionId, t.title, t.coder, t.workspace, t.cwd, t.pinned);
         }
         if (savedActive && this.tabs.has(savedActive)) {
             this.switchTab(savedActive);
@@ -186,7 +187,7 @@ export class TabManager {
         this.fitActiveTerminal();
     }
     
-    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '') {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId);
@@ -196,8 +197,10 @@ export class TabManager {
         // Create elements
         const tabEl = document.createElement('div');
         tabEl.className = 'tab';
+        if (pinned) tabEl.classList.add('pinned');
         tabEl.setAttribute('data-pane-id', paneId);
         tabEl.innerHTML = `
+            <button class="tab-pin" title="Pin session (Keep alive overnight)">📌</button>
             <span class="tab-title">${title}</span>
             <button class="tab-close">×</button>
         `;
@@ -213,6 +216,9 @@ export class TabManager {
             if (e.target.closest('.tab-close')) {
                 e.stopPropagation();
                 this.closeTab(paneId);
+            } else if (e.target.closest('.tab-pin')) {
+                e.stopPropagation();
+                this.togglePinTab(paneId);
             } else {
                 this.switchTab(paneId);
             }
@@ -328,8 +334,17 @@ export class TabManager {
             directMode: false, // Hybrid focus model by default
             isDead: false,
             isAtBottom: true,
-            lastScrollY: 0
+            lastScrollY: 0,
+            pinned: !!pinned
         };
+
+        if (pinned) {
+            fetch(`/api/terminals/${paneId}/pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pinned: true })
+            }).catch(err => console.error('[term] Failed to sync pin on backend:', err));
+        }
         
         ws = new PTYWebSocket(
             paneId,
@@ -447,6 +462,27 @@ export class TabManager {
         setTimeout(() => {
             this.fitActiveTerminal();
         }, 50);
+    }
+    
+    togglePinTab(paneId) {
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        
+        tab.pinned = !tab.pinned;
+        if (tab.pinned) {
+            tab.tabEl.classList.add('pinned');
+        } else {
+            tab.tabEl.classList.remove('pinned');
+        }
+        
+        // Sync with backend API
+        fetch(`/api/terminals/${paneId}/pin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: tab.pinned })
+        }).catch(err => console.error('[term] Failed to toggle pin on backend:', err));
+        
+        this.saveTabsState();
     }
     
     closeTab(paneId) {

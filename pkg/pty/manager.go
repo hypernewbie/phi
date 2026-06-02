@@ -18,6 +18,7 @@ type PTYInstance struct {
 	DetachTimer *time.Timer   `json:"-"`
 	mu          sync.Mutex
 	ActiveWS    bool
+	Pinned      bool          `json:"pinned"`
 }
 
 type Manager struct {
@@ -111,6 +112,12 @@ func (m *Manager) UnregisterWS(id string) {
 	inst.ActiveWS = false
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
+		inst.DetachTimer = nil
+	}
+
+	if inst.Pinned {
+		log.Printf("[pty] WS disconnected from %s, but session is pinned. Skipping detach timer.", id)
+		return
 	}
 
 	// Grace period: 30 minutes
@@ -151,4 +158,35 @@ func (m *Manager) ListActive() []*PTYInstance {
 		list = append(list, inst)
 	}
 	return list
+}
+
+func (m *Manager) SetPinned(id string, pinned bool) error {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("terminal instance %s not found", id)
+	}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	inst.Pinned = pinned
+	if !pinned && !inst.ActiveWS {
+		if inst.DetachTimer != nil {
+			inst.DetachTimer.Stop()
+		}
+		gracePeriod := 30 * time.Minute
+		inst.DetachTimer = time.AfterFunc(gracePeriod, func() {
+			log.Printf("[pty] 30 minute grace period expired for %s. Terminating PTY.", id)
+			m.Kill(id)
+		})
+		log.Printf("[pty] Session %s unpinned while disconnected. Started 30-min detach timer.", id)
+	} else if pinned && inst.DetachTimer != nil {
+		inst.DetachTimer.Stop()
+		inst.DetachTimer = nil
+		log.Printf("[pty] Session %s pinned. Stopped active detach timer.", id)
+	}
+	return nil
 }
