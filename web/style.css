@@ -308,6 +308,19 @@ body {
     flex-shrink: 0;
     object-fit: contain;
     border-radius: 2px;
+    filter: grayscale(100%);
+    opacity: 0.6;
+    transition: all 0.2s ease;
+}
+
+.coder-tab:hover .coder-logo {
+    filter: grayscale(0%);
+    opacity: 0.9;
+}
+
+.coder-tab.active .coder-logo {
+    filter: grayscale(0%);
+    opacity: 1;
 }
 
 .coder-tab:hover {
