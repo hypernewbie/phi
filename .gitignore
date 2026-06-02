@@ -5,3 +5,5 @@ phi
 *.pb
 sessions.json
 config.json
+temp/
+
