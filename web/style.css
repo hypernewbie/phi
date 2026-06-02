@@ -481,6 +481,11 @@ body {
     border-top: 1px solid var(--bg-border);
 }
 
+.new-session-container {
+    padding: 12px;
+    border-bottom: 1px solid var(--bg-border);
+}
+
 .btn {
     display: flex;
     align-items: center;
@@ -2160,7 +2165,7 @@ body {
     display: none;
 }
 
-.sidebar-narrow .panel-footer {
+.sidebar-narrow .new-session-container {
     padding: 12px 6px;
     display: flex;
     justify-content: center;
