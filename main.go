@@ -30,6 +30,7 @@ var (
 	ptyManager *pty.Manager
 	wsHub      *ws.Hub
 	activeCWD  string
+	webRoot    fs.FS
 )
 
 type QuickCommand struct {
@@ -146,9 +147,10 @@ func main() {
 	wsHub = ws.NewHub()
 
 	// Embedded web assets (served when running an installed binary from any dir)
-	webRoot, err := fs.Sub(webFS, "web")
-	if err != nil {
-		log.Fatalf("Failed to load embedded web assets: %v", err)
+	var subErr error
+	webRoot, subErr = fs.Sub(webFS, "web")
+	if subErr != nil {
+		log.Fatalf("Failed to load embedded web assets: %v", subErr)
 	}
 
 	// API Routing
@@ -171,60 +173,62 @@ func main() {
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Log requests briefly
-		log.Printf("[http] %s %s", r.Method, r.URL.Path)
-
-		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/pin") {
-			id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
-			id = strings.TrimSuffix(id, "/pin")
-
-			var req struct {
-				Pinned bool `json:"pinned"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-
-			err := ptyManager.SetPinned(id, req.Pinned)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
-			id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
-			err := ptyManager.Kill(id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if strings.HasPrefix(r.URL.Path, "/ws/pane/") {
-			id := strings.TrimPrefix(r.URL.Path, "/ws/pane/")
-			inst, ok := ptyManager.Get(id)
-			if !ok {
-				http.Error(w, "Pane not found", http.StatusNotFound)
-				return
-			}
-			ws.HandleWS(w, r, inst, ptyManager, wsHub)
-			return
-		}
-
-		// Fallback to static file server (embedded web assets)
-		http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
-	})
+	http.HandleFunc("/", handleFallback)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 	log.Printf("[main] Server running on http://%s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func handleFallback(w http.ResponseWriter, r *http.Request) {
+	// Log requests briefly.
+	log.Printf("[http] %s %s", r.Method, r.URL.Path)
+
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/pin") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+		id = strings.TrimSuffix(id, "/pin")
+
+		var req struct {
+			Pinned bool `json:"pinned"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		err := ptyManager.SetPinned(id, req.Pinned)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+		err := ptyManager.Kill(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/ws/pane/") {
+		id := strings.TrimPrefix(r.URL.Path, "/ws/pane/")
+		inst, ok := ptyManager.Get(id)
+		if !ok {
+			http.Error(w, "Pane not found", http.StatusNotFound)
+			return
+		}
+		ws.HandleWS(w, r, inst, ptyManager, wsHub)
+		return
+	}
+
+	// Fallback to static file server (embedded web assets).
+	http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
 }
 
 func handleGetCoders(w http.ResponseWriter, r *http.Request) {
