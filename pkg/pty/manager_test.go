@@ -171,3 +171,63 @@ func TestDynamicPinToggle(t *testing.T) {
 		t.Error("Expected DetachTimer to be re-created after unpinning disconnected session")
 	}
 }
+
+func TestSmartGracePeriodRescheduling(t *testing.T) {
+	// Backup original timing constants.
+	origGracePeriod := GracePeriod
+	origThreshold := RecentActivityThreshold
+
+	// Configure short durations to allow quick unit testing.
+	GracePeriod = 150 * time.Millisecond
+	RecentActivityThreshold = 100 * time.Millisecond
+
+	defer func() {
+		GracePeriod = origGracePeriod
+		RecentActivityThreshold = origThreshold
+	}()
+
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst.ID)
+	}()
+
+	// Disconnect WS to trigger the grace period timer.
+	manager.UnregisterWS(inst.ID)
+
+	if inst.DetachTimer == nil {
+		t.Fatal("Expected DetachTimer to be active after unregistering WS")
+	}
+
+	// Wait briefly, then simulate active terminal output by updating activity.
+	time.Sleep(60 * time.Millisecond)
+	inst.UpdateActivity()
+
+	// Wait for the original 150ms grace period timer to expire.
+	// Since activity was updated recently (90ms ago), it should have rescheduled rather than terminating.
+	time.Sleep(120 * time.Millisecond)
+
+	// Assert the instance is still registered and alive.
+	_, found := manager.Get(inst.ID)
+	if !found {
+		t.Error("PTY instance was prematurely killed despite active output")
+	}
+
+	if inst.DetachTimer == nil {
+		t.Error("Expected DetachTimer to be rescheduled and non-nil")
+	}
+
+	// Wait without calling UpdateActivity to let the rescheduled timer expire and terminate the PTY.
+	time.Sleep(200 * time.Millisecond)
+
+	// The instance should now be terminated due to inactivity.
+	_, foundAfterIdle := manager.Get(inst.ID)
+	if foundAfterIdle {
+		t.Error("Expected PTY instance to be killed after grace period expired with no activity")
+	}
+}
