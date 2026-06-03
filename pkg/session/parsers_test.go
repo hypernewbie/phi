@@ -172,6 +172,7 @@ func TestListOpenCodeSessions_DBQuery(t *testing.T) {
 			directory TEXT,
 			project_id TEXT,
 			parent_id TEXT,
+			time_archived INTEGER,
 			time_updated TEXT
 		);
 	`)
@@ -184,14 +185,17 @@ func TestListOpenCodeSessions_DBQuery(t *testing.T) {
 		INSERT INTO project (id, worktree) VALUES ('proj1', '/mock/cwd');
 		INSERT INTO project (id, worktree) VALUES ('proj2', '/mock/cwd');
 
-		INSERT INTO session (id, title, directory, project_id, parent_id, time_updated) 
-		VALUES ('sess-db-1', 'Mock OpenCode Session 1', '', 'proj1', NULL, '2026-05-31T07:57:06Z');
+		INSERT INTO session (id, title, directory, project_id, parent_id, time_archived, time_updated) 
+		VALUES ('sess-db-1', 'Mock OpenCode Session 1', '', 'proj1', NULL, 0, '2026-05-31T07:57:06Z');
 
-		INSERT INTO session (id, title, directory, project_id, parent_id, time_updated) 
-		VALUES ('sess-db-2', 'Mock OpenCode Session 2', '/mock/cwd', 'proj2', NULL, '2026-06-01T12:00:00Z');
+		INSERT INTO session (id, title, directory, project_id, parent_id, time_archived, time_updated) 
+		VALUES ('sess-db-2', 'Mock OpenCode Session 2', '/mock/cwd', 'proj2', NULL, 0, '2026-06-01T12:00:00Z');
 
-		INSERT INTO session (id, title, directory, project_id, parent_id, time_updated) 
-		VALUES ('sess-db-child', 'Child Session', '/mock/cwd', 'proj2', 'sess-db-2', '2026-06-01T12:05:00Z');
+		INSERT INTO session (id, title, directory, project_id, parent_id, time_archived, time_updated) 
+		VALUES ('sess-db-child', 'Child Session', '/mock/cwd', 'proj2', 'sess-db-2', 0, '2026-06-01T12:05:00Z');
+
+		INSERT INTO session (id, title, directory, project_id, parent_id, time_archived, time_updated) 
+		VALUES ('sess-db-archived', 'Archived Session', '/mock/cwd', 'proj2', NULL, 123456789, '2026-06-01T12:10:00Z');
 	`)
 	if err != nil {
 		t.Fatalf("Failed to insert mock data: %v", err)
