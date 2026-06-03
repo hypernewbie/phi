@@ -110,7 +110,35 @@ export class MarkdownManager {
                         item.className = 'md-file-item';
                         item.innerHTML = `<span class="md-file-icon">📄</span><span class="md-file-name">${f.name}</span>`;
                         item.title = f.path;
-                        item.addEventListener('click', () => this.openFile(f));
+                        
+                        item.addEventListener('click', (e) => {
+                            if (e.ctrlKey || e.metaKey) {
+                                e.preventDefault();
+                                this._insertRelativePath(f);
+                            } else {
+                                this.openFile(f);
+                            }
+                        });
+
+                        item.addEventListener('contextmenu', async (e) => {
+                            e.preventDefault();
+                            try {
+                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    await navigator.clipboard.writeText(f.name);
+                                } else {
+                                    const ta = Object.assign(document.createElement('textarea'), { value: f.name });
+                                    ta.style.cssText = 'position:fixed;opacity:0';
+                                    document.body.appendChild(ta);
+                                    ta.select();
+                                    document.execCommand('copy');
+                                    ta.remove();
+                                }
+                                this.app.showToast(`Copied "${f.name}" to clipboard`, { type: 'info', title: 'Clipboard' });
+                            } catch (err) {
+                                this.app.showToast('Failed to copy filename', { type: 'error' });
+                            }
+                        });
+
                         group.appendChild(item);
                     });
                 }
@@ -177,5 +205,37 @@ export class MarkdownManager {
 
     _escape(text) {
         return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    _insertRelativePath(f) {
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        const cleanPath = f.path.replace(/\\/g, '/');
+        const cleanCwd = cwd.replace(/\\/g, '/');
+        
+        let relPath = cleanPath;
+        if (cleanCwd && cleanPath.startsWith(cleanCwd)) {
+            relPath = cleanPath.slice(cleanCwd.length);
+            if (relPath.startsWith('/')) {
+                relPath = relPath.slice(1);
+            }
+        }
+        
+        const textarea = document.getElementById('input-textarea');
+        if (textarea) {
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            const text = textarea.value;
+            const before = text.substring(0, start);
+            const after = text.substring(end, text.length);
+            
+            const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
+            const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
+            
+            textarea.value = before + padBefore + relPath + padAfter + after;
+            
+            const newPos = start + padBefore.length + relPath.length;
+            textarea.setSelectionRange(newPos, newPos);
+            textarea.focus();
+        }
     }
 }
