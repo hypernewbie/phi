@@ -17,6 +17,7 @@ export class DiffController {
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
         this.diffTermContainer = document.getElementById('diff-term-container');
         this.commitSelect = document.getElementById('diff-commit-select');
+        this.actionBar = document.getElementById('diff-action-bar');
         this.richDiffBtn = document.getElementById('rich-diff-btn');
         this.diffModal = document.getElementById('diff-modal');
         this.diffModalClose = document.getElementById('diff-modal-close');
@@ -161,11 +162,13 @@ export class DiffController {
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
+            this.actionBar?.classList.add('hidden');
             this.commitSelect?.classList.add('hidden');
             this.richDiffBtn?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
+            this.actionBar?.classList.remove('hidden');
             if (this.activeTab === 'diff') {
                 this.commitSelect?.classList.remove('hidden');
                 this.richDiffBtn?.classList.remove('hidden');

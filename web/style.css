@@ -1131,10 +1131,38 @@ body {
     border-bottom-color: var(--accent);
 }
 
-.diff-actions {
+.close-diff-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    width: 24px;
+    height: 24px;
+    transition: all 0.15s;
+}
+
+.close-diff-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-border);
+}
+
+.diff-action-bar {
     display: flex;
     align-items: center;
     gap: 8px;
+    padding: 6px 12px;
+    background-color: var(--bg-panel);
+    border-bottom: 1px solid var(--bg-border);
+    height: 38px;
+}
+
+.diff-action-bar.hidden {
+    display: none !important;
 }
 
 .diff-commit-select {
@@ -1147,7 +1175,8 @@ body {
     font-family: inherit;
     outline: none;
     cursor: pointer;
-    max-width: 180px;
+    flex: 1;
+    min-width: 0;
     transition: all 0.15s;
 }
 
@@ -1155,7 +1184,7 @@ body {
     border-color: var(--accent);
 }
 
-.diff-actions button {
+.diff-action-bar button {
     background: transparent;
     border: none;
     color: var(--text-muted);
@@ -1170,7 +1199,7 @@ body {
     transition: all 0.15s;
 }
 
-.diff-actions button:hover {
+.diff-action-bar button:hover {
     color: var(--text-primary);
     background-color: var(--bg-border);
 }
