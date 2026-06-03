@@ -23,7 +23,10 @@ export class DiffController {
         this.diffModalClose = document.getElementById('diff-modal-close');
         this.diffModalBody = document.getElementById('diff-modal-body');
         this.contextToggleBtn = document.getElementById('diff-context-toggle-btn');
+        this.layoutToggleBtn = document.getElementById('diff-layout-toggle-btn');
         this.currentContextLines = 3;
+        this.currentLayout = 'line-by-line'; // Default unified
+        this.lastRawDiffText = '';
         
         this.setupEventListeners();
     }
@@ -49,6 +52,9 @@ export class DiffController {
         }
         if (this.contextToggleBtn) {
             this.contextToggleBtn.addEventListener('click', () => this.toggleRichDiffContext());
+        }
+        if (this.layoutToggleBtn) {
+            this.layoutToggleBtn.addEventListener('click', () => this.toggleRichDiffLayout());
         }
         
         // Manual Refresh trigger
@@ -290,6 +296,30 @@ export class DiffController {
         await this.loadRichDiff();
     }
 
+    toggleRichDiffLayout() {
+        this.currentLayout = this.currentLayout === 'line-by-line' ? 'side-by-side' : 'line-by-line';
+        if (this.layoutToggleBtn) {
+            this.layoutToggleBtn.innerText = this.currentLayout === 'line-by-line' ? 'Side-by-Side' : 'Unified';
+        }
+        this.renderRichDiff(this.lastRawDiffText);
+    }
+
+    renderRichDiff(rawDiffText) {
+        if (!rawDiffText || !rawDiffText.trim()) {
+            this.diffModalBody.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
+            return;
+        }
+
+        const diffHtml = window.Diff2Html.html(rawDiffText, {
+            drawFileList: true,
+            matching: 'lines',
+            outputFormat: this.currentLayout,
+            colorScheme: 'dark'
+        });
+
+        this.diffModalBody.innerHTML = diffHtml;
+    }
+
     async loadRichDiff() {
         if (!this.diffModalBody) return;
         this.diffModalBody.innerHTML = '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
@@ -305,20 +335,8 @@ export class DiffController {
             }
 
             const rawDiffText = await res.text();
-            
-            if (!rawDiffText.trim()) {
-                this.diffModalBody.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
-                return;
-            }
-
-            const diffHtml = window.Diff2Html.html(rawDiffText, {
-                drawFileList: true,
-                matching: 'lines',
-                outputFormat: 'side-by-side',
-                colorScheme: 'dark'
-            });
-
-            this.diffModalBody.innerHTML = diffHtml;
+            this.lastRawDiffText = rawDiffText;
+            this.renderRichDiff(rawDiffText);
         } catch (e) {
             this.diffModalBody.innerHTML = `<div style="padding: 20px; color: var(--red); font-family: var(--font-mono); font-size: 13px;">Error: ${e.message}</div>`;
         }
