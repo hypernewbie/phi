@@ -379,7 +379,7 @@ export class SessionsManager {
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
-                        ${this.activeCoder === 'agy' ? `
+                        ${(this.activeCoder === 'agy' || this.activeCoder === 'claude') ? `
                         <button class="session-action-btn rename-btn" title="Rename Session">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                         </button>
@@ -403,7 +403,7 @@ export class SessionsManager {
                     this._showSessionContextMenu(e, item, sess);
                 });
 
-                if (this.activeCoder === 'agy') {
+                if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
                     const renameBtn = item.querySelector('.rename-btn');
                     renameBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -537,7 +537,7 @@ export class SessionsManager {
             this._openArgsInput(item, sess);
         });
 
-        if (this.activeCoder === 'agy') {
+        if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
             mkItem('✏ Rename', () => {
                 this.openInlineRenamer(item, sess.id, sess.title);
             });

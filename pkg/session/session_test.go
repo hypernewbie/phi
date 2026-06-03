@@ -2,6 +2,7 @@ package session
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -142,5 +143,72 @@ func TestListGitWorktrees(t *testing.T) {
 	}
 	if wts[0].Branch != "" {
 		t.Errorf("Expected fallback branch to be empty, got %q", wts[0].Branch)
+	}
+}
+
+func TestClaudeSessionRename(t *testing.T) {
+	metaPath := getMetaFilePath()
+	// Backup original file
+	var backup []byte
+	var backupExists bool
+	if b, err := os.ReadFile(metaPath); err == nil {
+		backup = b
+		backupExists = true
+	}
+
+	defer func() {
+		if backupExists {
+			_ = os.WriteFile(metaPath, backup, 0644)
+		} else {
+			_ = os.Remove(metaPath)
+		}
+	}()
+
+	// Setup mock Claude projects directory
+	tempHome := t.TempDir()
+	homeKey := "USERPROFILE"
+	if os.Getenv(homeKey) == "" {
+		homeKey = "HOME"
+	}
+	origHomeVal := os.Getenv(homeKey)
+	err := os.Setenv(homeKey, tempHome)
+	if err != nil {
+		t.Fatalf("setenv failed: %v", err)
+	}
+	defer os.Setenv(homeKey, origHomeVal)
+
+	// Create project directory path: ~ / .claude / projects / C--mock-path
+	projectDirName := "C--mock-path"
+	mockSessionID := "conv_abc123"
+	
+	claudeProjPath := filepath.Join(tempHome, ".claude", "projects", projectDirName)
+	if err := os.MkdirAll(claudeProjPath, 0755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	
+	jsonlPath := filepath.Join(claudeProjPath, mockSessionID+".jsonl")
+	// Write standard JSONL file containing history but no summary
+	if err := os.WriteFile(jsonlPath, []byte(`{"type":"message","text":"hello"}`+"\n"), 0644); err != nil {
+		t.Fatalf("write mock session file failed: %v", err)
+	}
+
+	// Initialise the rename in the sidecar mapping
+	renameTitle := "Renamed Custom Claude Session"
+	if err := SaveAgySessionName(mockSessionID, renameTitle); err != nil {
+		t.Fatalf("SaveAgySessionName failed: %v", err)
+	}
+
+	// Run ListClaudeSessions
+	sessions, err := ListClaudeSessions("C:/mock/path")
+	if err != nil {
+		t.Fatalf("ListClaudeSessions failed: %v", err)
+	}
+
+	if len(sessions) != 1 {
+		t.Fatalf("Expected 1 Claude session, got %d", len(sessions))
+	}
+
+	if sessions[0].Title != renameTitle {
+		t.Errorf("Expected title %q, got %q", renameTitle, sessions[0].Title)
 	}
 }
