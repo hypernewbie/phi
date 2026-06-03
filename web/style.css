@@ -2221,3 +2221,89 @@ body {
 .sidebar-narrow .sidebar-version {
     display: none;
 }
+
+/* Wide modal layout for side-by-side diffs */
+.md-modal-content.wide-modal {
+    width: min(1500px, 95vw);
+    max-height: 92vh;
+}
+
+.md-modal-body.diff-modal-body {
+    padding: 0;
+    overflow-y: auto;
+    background-color: var(--bg-panel);
+}
+
+/* diff2html Dark Theme customisation overrides */
+.d2h-wrapper {
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+}
+
+.d2h-file-header {
+    background-color: var(--bg-elevated) !important;
+    border-bottom: 1px solid var(--bg-border) !important;
+    color: var(--text-primary) !important;
+}
+
+.d2h-file-name {
+    font-family: var(--font-mono) !important;
+    font-size: 13px !important;
+    color: var(--accent-bright) !important;
+}
+
+.d2h-file-wrapper {
+    border: 1px solid var(--bg-border) !important;
+    background-color: var(--bg-base) !important;
+    margin-bottom: 20px !important;
+    border-radius: 6px !important;
+    overflow: hidden !important;
+}
+
+.d2h-diff-table {
+    font-family: var(--font-mono) !important;
+}
+
+.d2h-code-line, .d2h-code-side-line {
+    padding: 0 8px !important;
+}
+
+.d2h-code-linenumber, .d2h-code-side-linenumber {
+    background-color: var(--bg-elevated) !important;
+    border-right: 1px solid var(--bg-border) !important;
+    color: var(--text-muted) !important;
+}
+
+.d2h-emptyplaceholder {
+    background-color: var(--bg-base) !important;
+    border-color: var(--bg-border) !important;
+}
+
+/* Context lines (unmodified) */
+.d2h-cntx {
+    background-color: var(--bg-panel) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Inserted lines */
+.d2h-ins {
+    background-color: rgba(56, 189, 248, 0.1) !important; /* Teal accent tinted */
+    color: #e4e3e9 !important;
+}
+
+.d2h-code-line ins, .d2h-code-side-line ins {
+    background-color: rgba(56, 189, 248, 0.3) !important;
+    text-decoration: none !important;
+}
+
+/* Deleted lines */
+.d2h-del {
+    background-color: rgba(239, 68, 68, 0.1) !important; /* Red accent tinted */
+    color: #e4e3e9 !important;
+}
+
+.d2h-code-line del, .d2h-code-side-line del {
+    background-color: rgba(239, 68, 68, 0.3) !important;
+    text-decoration: none !important;
+}
+

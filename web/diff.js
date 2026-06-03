@@ -17,6 +17,12 @@ export class DiffController {
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
         this.diffTermContainer = document.getElementById('diff-term-container');
         this.commitSelect = document.getElementById('diff-commit-select');
+        this.richDiffBtn = document.getElementById('rich-diff-btn');
+        this.diffModal = document.getElementById('diff-modal');
+        this.diffModalClose = document.getElementById('diff-modal-close');
+        this.diffModalBody = document.getElementById('diff-modal-body');
+        this.contextToggleBtn = document.getElementById('diff-context-toggle-btn');
+        this.currentContextLines = 3;
         
         this.setupEventListeners();
     }
@@ -27,6 +33,22 @@ export class DiffController {
         this.headerDiffToggleBtn.addEventListener('click', () => {
             this.togglePanel(!this.isPanelOpen);
         });
+        
+        // Rich diff modal triggering
+        if (this.richDiffBtn) {
+            this.richDiffBtn.addEventListener('click', () => this.openRichDiffModal());
+        }
+        if (this.diffModalClose) {
+            this.diffModalClose.addEventListener('click', () => this.closeRichDiffModal());
+        }
+        if (this.diffModal) {
+            this.diffModal.addEventListener('click', (e) => {
+                if (e.target === this.diffModal) this.closeRichDiffModal();
+            });
+        }
+        if (this.contextToggleBtn) {
+            this.contextToggleBtn.addEventListener('click', () => this.toggleRichDiffContext());
+        }
         
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
@@ -140,13 +162,16 @@ export class DiffController {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
             this.commitSelect?.classList.add('hidden');
+            this.richDiffBtn?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
             if (this.activeTab === 'diff') {
                 this.commitSelect?.classList.remove('hidden');
+                this.richDiffBtn?.classList.remove('hidden');
             } else {
                 this.commitSelect?.classList.add('hidden');
+                this.richDiffBtn?.classList.add('hidden');
             }
         }
     }
@@ -238,6 +263,61 @@ export class DiffController {
             
         } catch (e) {
             this.term.write(`\x1b[31mFailed to load: ${e.message}\x1b[0m\r\n`);
+        }
+    }
+
+    async openRichDiffModal() {
+        if (this.diffModal) {
+            this.diffModal.classList.remove('hidden');
+            await this.loadRichDiff();
+        }
+    }
+
+    closeRichDiffModal() {
+        if (this.diffModal) {
+            this.diffModal.classList.add('hidden');
+        }
+    }
+
+    async toggleRichDiffContext() {
+        this.currentContextLines = this.currentContextLines === 3 ? 30 : 3;
+        if (this.contextToggleBtn) {
+            this.contextToggleBtn.innerText = this.currentContextLines === 3 ? "Show 30 lines of context" : "Show 3 lines of context";
+        }
+        await this.loadRichDiff();
+    }
+
+    async loadRichDiff() {
+        if (!this.diffModalBody) return;
+        this.diffModalBody.innerHTML = '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
+
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+
+        try {
+            const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`);
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || 'Failed to fetch raw diff');
+            }
+
+            const rawDiffText = await res.text();
+            
+            if (!rawDiffText.trim()) {
+                this.diffModalBody.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
+                return;
+            }
+
+            const diffHtml = window.Diff2Html.html(rawDiffText, {
+                drawFileList: true,
+                matching: 'lines',
+                outputFormat: 'side-by-side',
+                colorScheme: 'dark'
+            });
+
+            this.diffModalBody.innerHTML = diffHtml;
+        } catch (e) {
+            this.diffModalBody.innerHTML = `<div style="padding: 20px; color: var(--red); font-family: var(--font-mono); font-size: 13px;">Error: ${e.message}</div>`;
         }
     }
 }
