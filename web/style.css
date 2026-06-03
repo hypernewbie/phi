@@ -2298,6 +2298,7 @@ body {
 }
 
 .d2h-code-linenumber, .d2h-code-side-linenumber {
+    position: relative !important;
     background-color: var(--bg-elevated) !important;
     border-right: 1px solid var(--bg-border) !important;
     color: var(--text-muted) !important;
