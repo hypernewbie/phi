@@ -4,9 +4,13 @@ import (
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
-func SpawnDiff(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
-	// Run git diff with color and ignoring whitespace changes
-	args := []string{"diff", "--color=always", "-w"}
+func SpawnDiff(dir string, commit string, manager *pty.Manager) (*pty.PTYInstance, error) {
+	var args []string
+	if commit == "" || commit == "unstaged" {
+		args = []string{"diff", "--color=always", "-w"}
+	} else {
+		args = []string{"show", "--color=always", "-w", commit}
+	}
 	return manager.Spawn(dir, "git", args, "diff", "")
 }
 

@@ -469,6 +469,16 @@ export class TabManager {
             console.warn("[term] Falling back to standard canvas renderer");
         }
         
+        // Load Unicode 11 Addon for correct emoji cell width measurements
+        try {
+            const unicode11 = new window.Unicode11Addon.Unicode11Addon();
+            term.loadAddon(unicode11);
+            term.unicode.activeVersion = '11';
+            console.log("[term] Loaded Unicode 11 character width addon");
+        } catch (e) {
+            console.warn("[term] Failed to load Unicode 11 addon:", e);
+        }
+        
         const activeWS = workspace || (this.app.sessionsManager ? this.app.sessionsManager.activeWorkspace : '');
         const activeCWD = cwd || (this.app.sessionsManager ? this.app.sessionsManager.activeCWD : '');
 

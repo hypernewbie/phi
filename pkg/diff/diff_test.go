@@ -2,6 +2,7 @@ package diff
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -34,7 +35,7 @@ func TestSpawnDiff(t *testing.T) {
 	dir := initialiseGitRepo(t)
 	manager := pty.NewManager()
 
-	inst, err := SpawnDiff(dir, manager)
+	inst, err := SpawnDiff(dir, "", manager)
 	if err != nil {
 		t.Fatalf("SpawnDiff failed: %v", err)
 	}
@@ -97,5 +98,42 @@ func TestSpawnStatus(t *testing.T) {
 	_, found := manager.Get(inst.ID)
 	if !found {
 		t.Error("Spawned instance was not registered in manager")
+	}
+}
+
+func TestSpawnDiff_WithCommit(t *testing.T) {
+	dir := initialiseGitRepo(t)
+
+	// Create a mock commit to fetch
+	cmdAddFile := exec.Command("git", "commit", "--allow-empty", "-m", "Initial mock commit")
+	cmdAddFile.Dir = dir
+	if err := cmdAddFile.Run(); err != nil {
+		t.Fatalf("Failed to create mock commit: %v", err)
+	}
+
+	// Resolve the commit hash
+	cmdHash := exec.Command("git", "rev-parse", "HEAD")
+	cmdHash.Dir = dir
+	out, err := cmdHash.Output()
+	if err != nil {
+		t.Fatalf("Failed to resolve HEAD: %v", err)
+	}
+	hash := strings.TrimSpace(string(out))
+
+	manager := pty.NewManager()
+
+	inst, err := SpawnDiff(dir, hash, manager)
+	if err != nil {
+		t.Fatalf("SpawnDiff with commit failed: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst.ID)
+	}()
+
+	if inst.Coder != "diff" {
+		t.Errorf("Expected coder to be 'diff', got %q", inst.Coder)
+	}
+	if inst.Cwd != dir {
+		t.Errorf("Expected cwd to be %q, got %q", dir, inst.Cwd)
 	}
 }
