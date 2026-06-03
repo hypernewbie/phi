@@ -25,6 +25,7 @@ export class TabManager {
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
+        this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         
         this.setupEventListeners();
 
@@ -177,6 +178,16 @@ export class TabManager {
             });
         }
 
+        if (this.ctrlTBtn) {
+            this.ctrlTBtn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (activeTab && !activeTab.isDead) {
+                    this.sendRawInput('\x14');
+                    this.focusActiveTerminal();
+                }
+            });
+        }
+
         const closeAllBtn = document.getElementById('close-all-tabs-btn');
         if (closeAllBtn) {
             closeAllBtn.addEventListener('click', () => {
@@ -287,6 +298,16 @@ export class TabManager {
             // Make sure presets exist and are populated
             this.renderPresets(tab.coder);
         }
+
+        // Toggle Ctrl+T button visibility based on backend
+        if (this.ctrlTBtn) {
+            if (['opencode', 'pi'].includes(tab.coder)) {
+                this.ctrlTBtn.classList.remove('hidden');
+            } else {
+                this.ctrlTBtn.classList.add('hidden');
+            }
+        }
+
         this.fitActiveTerminal();
     }
     
