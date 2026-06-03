@@ -16,6 +16,7 @@ export class DiffController {
         this.closeDiffBtn = document.getElementById('close-diff-btn');
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
         this.diffTermContainer = document.getElementById('diff-term-container');
+        this.commitSelect = document.getElementById('diff-commit-select');
         
         this.setupEventListeners();
     }
@@ -36,9 +37,15 @@ export class DiffController {
                 document.querySelector('.diff-tab-btn.active').classList.remove('active');
                 btn.classList.add('active');
                 this.activeTab = btn.getAttribute('data-tab');
-                this.refreshDiff();
+                this.refreshDiff(false); // Reload commit list when changing tabs
             });
         });
+
+        if (this.commitSelect) {
+            this.commitSelect.addEventListener('change', () => {
+                this.refreshDiff(true); // Don't reload the list when user just changes selection
+            });
+        }
         
         // Debounced resize fitting
         let resizeTimeout;
@@ -132,13 +139,50 @@ export class DiffController {
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
+            this.commitSelect?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
+            if (this.activeTab === 'diff') {
+                this.commitSelect?.classList.remove('hidden');
+            } else {
+                this.commitSelect?.classList.add('hidden');
+            }
         }
     }
 
-    async refreshDiff() {
+    async loadCommits() {
+        if (!this.commitSelect) return;
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        try {
+            const res = await fetch(`/api/git/commits?cwd=${encodeURIComponent(cwd)}`);
+            if (!res.ok) throw new Error("Failed to load commits");
+            const commits = await res.json();
+            
+            const currentSelected = this.commitSelect.value || 'unstaged';
+            
+            this.commitSelect.innerHTML = '<option value="unstaged">Unstaged Changes</option>';
+            
+            if (Array.isArray(commits)) {
+                commits.forEach(commit => {
+                    const opt = document.createElement('option');
+                    opt.value = commit.hash;
+                    opt.innerText = `${commit.hash} - ${commit.subject}`;
+                    this.commitSelect.appendChild(opt);
+                });
+            }
+            
+            if ([...this.commitSelect.options].some(o => o.value === currentSelected)) {
+                this.commitSelect.value = currentSelected;
+            } else {
+                this.commitSelect.value = 'unstaged';
+            }
+        } catch (e) {
+            console.error("[diff] Failed to load commits list:", e);
+        }
+    }
+
+    async refreshDiff(skipLoadCommits = false) {
         if (!this.isPanelOpen || !this.term) return;
 
         if (this.activeTab === 'markdown') {
@@ -158,9 +202,15 @@ export class DiffController {
         this.term.clear();
         this.term.write('\x1b[35mStreaming git information...\x1b[0m\r\n\r\n');
 
+        if (this.activeTab === 'diff' && !skipLoadCommits) {
+            await this.loadCommits();
+        }
+
         const cwd = this.app.sessionsManager.activeCWD;
+        const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+
         try {
-            const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}`);
+            const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`);
             if (!res.ok) {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Spawn error');

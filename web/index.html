@@ -10,6 +10,7 @@
     <script src="vendor/xterm.js"></script>
     <script src="vendor/xterm-addon-fit.js"></script>
     <script src="vendor/xterm-addon-webgl.js"></script>
+    <script src="vendor/xterm-addon-unicode11.js"></script>
     <script src="vendor/marked.min.js"></script>
     <script src="vendor/highlight.min.js"></script>
     <link rel="stylesheet" href="style.css">
@@ -210,6 +211,7 @@
                         <button class="diff-tab-btn active" data-tab="markdown">md</button>
                     </div>
                     <div class="diff-actions">
+                        <select id="diff-commit-select" class="diff-commit-select hidden" title="Select commit to diff"></select>
                         <button id="refresh-diff-btn" title="Refresh">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
