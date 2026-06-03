@@ -24,6 +24,11 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 		return nil, err
 	}
 
+	m, err := LoadAgyMetaMap()
+	if err != nil {
+		m = make(map[string]AgyMeta)
+	}
+
 	var sessions []Session
 
 	for _, d := range dirs {
@@ -55,7 +60,13 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 			}
 
 			sessionID := strings.TrimSuffix(f.Name(), ".jsonl")
-			title := extractClaudeSummary(filePath)
+			title := ""
+			if meta, exists := m[sessionID]; exists && meta.Name != "" {
+				title = meta.Name
+			}
+			if title == "" {
+				title = extractClaudeSummary(filePath)
+			}
 			if title == "" {
 				shortID := sessionID
 				if len(shortID) > 8 {
