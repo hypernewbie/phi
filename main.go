@@ -214,6 +214,7 @@ func main() {
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
 	http.HandleFunc("/api/session-meta", handleSessionMeta)
 	http.HandleFunc("/api/diff", handleGetDiff)
+	http.HandleFunc("/api/git/raw-diff", handleRawDiff)
 	http.HandleFunc("/api/git/commits", handleGetCommits)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/export", handleConfigExport)
@@ -522,6 +523,42 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"pane_id": inst.ID,
 	})
+}
+
+func handleRawDiff(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	commit := r.URL.Query().Get("commit")
+	contextVal := r.URL.Query().Get("context")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	// Validate context parameter to prevent arbitrary flags
+	contextLines := "3"
+	if contextVal == "30" {
+		contextLines = "30"
+	}
+
+	var cmd *exec.Cmd
+	if commit == "" || commit == "unstaged" {
+		cmd = exec.Command("git", "diff", "-w", "--no-color", "-U"+contextLines)
+	} else {
+		cmd = exec.Command("git", "show", "-w", "--no-color", "-U"+contextLines, commit)
+	}
+	cmd.Dir = cwd
+
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			http.Error(w, fmt.Sprintf("Git error: %s", string(exitErr.Stderr)), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Git error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(out)
 }
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -536,4 +537,86 @@ func TestHandleFallback_Delete(t *testing.T) {
 		t.Error("Expected PTY instance to be removed from manager registry after delete request")
 	}
 }
+
+func TestHandleRawDiff(t *testing.T) {
+	// Create a temporary directory that represents our Git workspace
+	tempDir := t.TempDir()
+
+	// Initialise a new Git repository
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	runGit("init")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+
+	// Create and commit a base file with multiple lines
+	filePath := filepath.Join(tempDir, "file.txt")
+	lines := []string{
+		"line 1",
+		"line 2",
+		"line 3",
+		"line 4",
+		"line 5",
+		"line 6",
+		"line 7",
+		"line 8",
+		"line 9",
+		"line 10",
+	}
+	err := os.WriteFile(filePath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	if err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	runGit("add", "file.txt")
+	runGit("commit", "-m", "initial commit")
+
+	// Modify the file at line 5
+	lines[4] = "line 5 modified"
+	err = os.WriteFile(filePath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	if err != nil {
+		t.Fatalf("write file modification: %v", err)
+	}
+
+	// Test raw-diff of unstaged changes with default context (3 lines)
+	req := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&context=3", nil)
+	w := httptest.NewRecorder()
+	handleRawDiff(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "-line 5") || !strings.Contains(body, "+line 5 modified") {
+		t.Errorf("Diff body does not contain expected changes: %s", body)
+	}
+
+	// The diff should contain line 2 but not line 10 under U3 (since line 5 is modified, lines 2, 3, 4 and 6, 7, 8 are context)
+	if strings.Contains(body, "line 10") {
+		t.Errorf("Diff body should not contain line 10 under context=3, got: %s", body)
+	}
+
+	// Test raw-diff of unstaged changes with extended context (30 lines)
+	req30 := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&context=30", nil)
+	w30 := httptest.NewRecorder()
+	handleRawDiff(w30, req30)
+
+	if w30.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w30.Code)
+	}
+
+	body30 := w30.Body.String()
+	if !strings.Contains(body30, "line 1") {
+		t.Errorf("Diff body should contain line 1 under context=30, got: %s", body30)
+	}
+}
+
 
