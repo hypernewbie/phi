@@ -95,6 +95,17 @@ export class TabManager {
         this.inputTextArea.addEventListener('keydown', (e) => {
             // When input is empty, capture arrows, enter, escape and ctrl key shortcuts to control PTY directly.
             if (this.inputTextArea.value === '') {
+                // Capture Shift+Tab (Backtab) to prevent browser focus shift
+                if (e.key === 'Tab' && e.shiftKey) {
+                    e.preventDefault();
+                    const activeTab = this.getActiveTab();
+                    if (activeTab && !activeTab.isDead) {
+                        activeTab.ws.sendInput('\x1b[Z');
+                        this._spamScrollToBottom(activeTab);
+                    }
+                    return;
+                }
+
                 const keys = {
                     'ArrowUp': '\u001b[A',
                     'ArrowDown': '\u001b[B',
@@ -111,7 +122,8 @@ export class TabManager {
                     const ctrlKeys = {
                         'c': '\x03',
                         'o': '\x0f',
-                        'p': '\x10'
+                        'p': '\x10',
+                        't': '\x14'
                     };
                     const lowerKey = e.key.toLowerCase();
                     if (ctrlKeys[lowerKey]) {
