@@ -307,14 +307,15 @@ export class TabManager {
         if (loader) loader.remove();
         
         tabEl.addEventListener('click', (e) => {
+            const currentPaneId = tabEl.getAttribute('data-pane-id');
             if (e.target.closest('.tab-close')) {
                 e.stopPropagation();
-                this.closeTab(paneId);
+                this.closeTab(currentPaneId);
             } else if (e.target.closest('.tab-pin')) {
                 e.stopPropagation();
-                this.togglePinTab(paneId);
+                this.togglePinTab(currentPaneId);
             } else {
-                this.switchTab(paneId);
+                this.switchTab(currentPaneId);
             }
         });
         
@@ -470,7 +471,7 @@ export class TabManager {
         // Double click terminal → toggle direct focus mode
         termContainer.addEventListener('dblclick', (e) => {
             e.preventDefault();
-            const tab = this.tabs.get(paneId);
+            const tab = tabInfo;
             if (tab) {
                 // 1. Capture scroll state BEFORE any focus or UI changes
                 const buffer = tab.term.buffer.active;
@@ -758,7 +759,7 @@ export class TabManager {
             body: JSON.stringify({
                 coder: tabInfo.coder,
                 cwd: tabInfo.cwd,
-                session_id: ''
+                session_id: tabInfo.sessionId || ''
             })
         })
         .then(res => {
