@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -212,6 +215,8 @@ func main() {
 	http.HandleFunc("/api/session-meta", handleSessionMeta)
 	http.HandleFunc("/api/diff", handleGetDiff)
 	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/api/config/export", handleConfigExport)
+	http.HandleFunc("/api/config/import", handleConfigImport)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", handleModelPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
@@ -983,4 +988,113 @@ func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"text": text,
 	})
+}
+
+func handleConfigExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := loadConfig()
+	exportData := struct {
+		ThemeColor    string          `json:"theme_color"`
+		ModelPresets  ModelPresetsMap `json:"model_presets"`
+		QuickCommands []QuickCommand  `json:"quick_commands"`
+	}{
+		ThemeColor:    cfg.ThemeColor,
+		ModelPresets:  cfg.ModelPresets,
+		QuickCommands: cfg.QuickCommands,
+	}
+
+	jsonData, err := json.Marshal(exportData)
+	if err != nil {
+		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	b64Payload := base64.StdEncoding.EncodeToString(jsonData)
+	
+	const salt = "phi_super_secret_salt_2026"
+	hasher := sha256.New()
+	hasher.Write([]byte(b64Payload + salt))
+	hashHex := hex.EncodeToString(hasher.Sum(nil))
+
+	formatted := fmt.Sprintf("PHICONFIG:%s:%s", hashHex, b64Payload)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"config": formatted,
+	})
+}
+
+func handleConfigImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	raw := strings.TrimSpace(req.Config)
+	if !strings.HasPrefix(raw, "PHICONFIG:") {
+		http.Error(w, "Invalid configuration format (missing sentinel)", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.Split(raw, ":")
+	if len(parts) != 3 {
+		http.Error(w, "Malformed configuration string", http.StatusBadRequest)
+		return
+	}
+
+	hashHex := parts[1]
+	b64Payload := parts[2]
+
+	const salt = "phi_super_secret_salt_2026"
+	hasher := sha256.New()
+	hasher.Write([]byte(b64Payload + salt))
+	expectedHash := hex.EncodeToString(hasher.Sum(nil))
+
+	if hashHex != expectedHash {
+		http.Error(w, "Configuration signature verification failed (corrupted or altered data)", http.StatusBadRequest)
+		return
+	}
+
+	jsonData, err := base64.StdEncoding.DecodeString(b64Payload)
+	if err != nil {
+		http.Error(w, "Failed to decode configuration payload", http.StatusBadRequest)
+		return
+	}
+
+	var importedData struct {
+		ThemeColor    string          `json:"theme_color"`
+		ModelPresets  ModelPresetsMap `json:"model_presets"`
+		QuickCommands []QuickCommand  `json:"quick_commands"`
+	}
+
+	if err := json.Unmarshal(jsonData, &importedData); err != nil {
+		http.Error(w, "Failed to parse configuration JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	if importedData.ThemeColor != "" {
+		cfg.ThemeColor = importedData.ThemeColor
+	}
+	if importedData.ModelPresets != nil {
+		cfg.ModelPresets = importedData.ModelPresets
+	}
+	if len(importedData.QuickCommands) > 0 {
+		cfg.QuickCommands = importedData.QuickCommands
+	}
+
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
 }

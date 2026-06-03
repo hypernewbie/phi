@@ -137,6 +137,20 @@ class App {
                 await this.syncRemoteClipboard();
             });
         }
+
+        const exportBtn = document.getElementById('header-export-btn');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', async () => {
+                await this.exportConfig();
+            });
+        }
+
+        const importBtn = document.getElementById('header-import-btn');
+        if (importBtn) {
+            importBtn.addEventListener('click', async () => {
+                await this.importConfig();
+            });
+        }
         
         console.log("[app] Phi initialized successfully");
     }
@@ -406,6 +420,130 @@ class App {
                 const span = btn.querySelector('span');
                 const origText = span.innerText;
                 span.innerText = "Failed!";
+                setTimeout(() => {
+                    btn.classList.remove('error');
+                    span.innerText = origText;
+                }, 1500);
+            }
+        } finally {
+            if (btn) btn.classList.remove('loading');
+        }
+    }
+
+    async exportConfig() {
+        const btn = document.getElementById('header-export-btn');
+        try {
+            if (btn) btn.classList.add('loading');
+            const res = await fetch('/api/config/export');
+            if (!res.ok) throw new Error("Failed to export config");
+            const data = await res.json();
+            
+            if (data.config) {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(data.config);
+                } else {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = data.config;
+                    textArea.style.position = "fixed";
+                    textArea.style.top = "0";
+                    textArea.style.left = "0";
+                    textArea.style.opacity = "0";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        const success = document.execCommand("copy");
+                        if (!success) throw new Error("execCommand copy failed");
+                    } finally {
+                        document.body.removeChild(textArea);
+                    }
+                }
+                
+                if (btn) {
+                    btn.classList.add('success');
+                    const span = btn.querySelector('span');
+                    const origText = span.innerText;
+                    span.innerText = "Copied!";
+                    setTimeout(() => {
+                        btn.classList.remove('success');
+                        span.innerText = origText;
+                    }, 1500);
+                }
+            }
+        } catch (e) {
+            console.error("[config] Export error:", e);
+            if (btn) {
+                btn.classList.add('error');
+                const span = btn.querySelector('span');
+                const origText = span.innerText;
+                span.innerText = "Failed!";
+                setTimeout(() => {
+                    btn.classList.remove('error');
+                    span.innerText = origText;
+                }, 1500);
+            }
+        } finally {
+            if (btn) btn.classList.remove('loading');
+        }
+    }
+
+    async importConfig() {
+        const btn = document.getElementById('header-import-btn');
+        try {
+            if (btn) btn.classList.add('loading');
+            
+            let configText = "";
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                    configText = await navigator.clipboard.readText();
+                } catch (e) {
+                    console.warn("[config] Browser blocked clipboard read, falling back to prompt", e);
+                    configText = prompt("Paste your config string here (starts with PHICONFIG:):");
+                }
+            } else {
+                configText = prompt("Paste your config string here (starts with PHICONFIG:):");
+            }
+            
+            if (!configText) {
+                if (btn) btn.classList.remove('loading');
+                return; // User cancelled or pasted empty string
+            }
+            
+            configText = configText.trim();
+            if (!configText.startsWith("PHICONFIG:")) {
+                throw new Error("Invalid format. Config must start with PHICONFIG:");
+            }
+            
+            const res = await fetch('/api/config/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config: configText })
+            });
+            
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || "Failed to import config");
+            }
+            
+            if (btn) {
+                btn.classList.add('success');
+                const span = btn.querySelector('span');
+                const origText = span.innerText;
+                span.innerText = "Imported!";
+                setTimeout(() => {
+                    btn.classList.remove('success');
+                    span.innerText = origText;
+                    location.reload(); // Reload to apply import changes
+                }, 1500);
+            }
+        } catch (e) {
+            console.error("[config] Import error:", e);
+            if (btn) {
+                btn.classList.add('error');
+                const span = btn.querySelector('span');
+                const origText = span.innerText;
+                span.innerText = "Failed!";
+                alert("Import failed: " + e.message);
                 setTimeout(() => {
                     btn.classList.remove('error');
                     span.innerText = origText;

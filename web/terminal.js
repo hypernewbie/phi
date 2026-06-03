@@ -113,6 +113,8 @@ export class TabManager {
                     'ArrowDown': '\u001b[B',
                     'ArrowLeft': '\u001b[D',
                     'ArrowRight': '\u001b[C',
+                    'PageUp': '\u001b[5~',
+                    'PageDown': '\u001b[6~',
                     'Enter': '\r',
                     'Escape': '\x1b'
                 };
@@ -413,6 +415,21 @@ export class TabManager {
             }
             return true;
         });
+        
+        // Alternate screen wheel scrolling
+        termContainer.addEventListener('wheel', (e) => {
+            // Only apply this hack to the 'opencode' agent to avoid breaking other terminal apps
+            if (tabInfo.coder === 'opencode' && term.buffer.active.type === 'alternate') {
+                e.preventDefault();
+                const isUp = e.deltaY < 0;
+                const seq = isUp ? '\x1b[A' : '\x1b[B';
+                const payload = seq.repeat(3); // 3 lines per scroll tick
+                
+                if (tabInfo.ws && !tabInfo.isDead) {
+                    tabInfo.ws.sendInput(payload);
+                }
+            }
+        }, { passive: false });
         
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
@@ -1080,7 +1097,14 @@ export class TabManager {
             btn.className = 'dropup-model-btn';
             btn.innerText = model;
             btn.addEventListener('click', () => {
-                this.sendRawInput(`/model ${model}\r`);
+                if (backend === 'opencode') {
+                    this.sendRawInput('/models\r');
+                    setTimeout(() => {
+                        this.sendRawInput(`${model}\r`);
+                    }, 200);
+                } else {
+                    this.sendRawInput(`/model ${model}\r`);
+                }
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);
