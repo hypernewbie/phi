@@ -90,7 +90,6 @@ var Registry = map[string]Coder{
 			{Name: "/exit", Value: "/exit\r"},
 			{Name: "/model", Value: "/model\r"},
 			{Name: "/compact", Value: "/compact\r"},
-			{Name: "/undo", Value: "/undo\r"},
 			{Name: "/copy", Value: "/copy\r"},
 			{Name: "/help", Value: "/help\r"},
 			{Name: "ctrl+c", Value: "\x03"},
