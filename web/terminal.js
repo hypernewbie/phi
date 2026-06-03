@@ -1100,7 +1100,10 @@ export class TabManager {
                 if (backend === 'opencode') {
                     this.sendRawInput('/models\r');
                     setTimeout(() => {
-                        this.sendRawInput(`${model}\r`);
+                        this.sendRawInput(model);
+                        setTimeout(() => {
+                            this.sendRawInput('\r');
+                        }, 200);
                     }, 200);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
