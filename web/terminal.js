@@ -82,6 +82,8 @@ export class TabManager {
     }
 
     setupEventListeners() {
+        document.addEventListener('keydown', (e) => this.handleGlobalTabShortcuts(e));
+
         // Click/focus input bar → exit direct mode
         this.inputTextArea.addEventListener('focus', () => {
             const activeTab = this.getActiveTab();
@@ -389,6 +391,13 @@ export class TabManager {
         }, { capture: true });
 
         term.attachCustomKeyEventHandler((e) => {
+            // Support Alt+1..9 tab switching inside xterm
+            if (e.altKey && e.key >= '1' && e.key <= '9') {
+                if (e.type === 'keydown') {
+                    this.handleGlobalTabShortcuts(e);
+                }
+                return false;
+            }
             // In non-direct mode: redirect printable keystrokes to the input textarea
             if (!tabInfo.directMode && e.type === 'keydown' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 this.inputTextArea.value += e.key;
@@ -843,6 +852,32 @@ export class TabManager {
             if (reconnectBtn) reconnectBtn.disabled = false;
             if (restartBtn) restartBtn.disabled = false;
         });
+    }
+
+    handleGlobalTabShortcuts(e) {
+        if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
+            const num = parseInt(e.key, 10);
+            const paneIds = Array.from(this.tabs.keys());
+            if (paneIds.length === 0) return;
+
+            e.preventDefault();
+            
+            let targetPaneId;
+            if (num === 9) {
+                // Alt+9 switches to the last tab
+                targetPaneId = paneIds[paneIds.length - 1];
+            } else {
+                // Alt+1 to Alt+8 switch to corresponding index
+                const idx = num - 1;
+                if (idx < paneIds.length) {
+                    targetPaneId = paneIds[idx];
+                }
+            }
+
+            if (targetPaneId !== undefined) {
+                this.switchTab(targetPaneId);
+            }
+        }
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
