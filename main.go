@@ -214,6 +214,7 @@ func main() {
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
 	http.HandleFunc("/api/session-meta", handleSessionMeta)
 	http.HandleFunc("/api/diff", handleGetDiff)
+	http.HandleFunc("/api/git/commits", handleGetCommits)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)
@@ -494,6 +495,7 @@ func handleSessionMeta(w http.ResponseWriter, r *http.Request) {
 func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	diffType := r.URL.Query().Get("type")
+	commit := r.URL.Query().Get("commit")
 	if cwd == "" {
 		cwd = activeCWD
 	}
@@ -506,7 +508,7 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	} else if diffType == "status" {
 		inst, err = diff.SpawnStatus(cwd, ptyManager)
 	} else {
-		inst, err = diff.SpawnDiff(cwd, ptyManager)
+		inst, err = diff.SpawnDiff(cwd, commit, ptyManager)
 	}
 
 	if err != nil {
@@ -988,6 +990,47 @@ func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"text": text,
 	})
+}
+
+type CommitEntry struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+func handleGetCommits(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	// Run git log to fetch the last 10 commits on active branch
+	cmd := exec.Command("git", "log", "-10", "--format=%h|%s")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]CommitEntry{})
+		return
+	}
+
+	var commits []CommitEntry
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) == 2 {
+			commits = append(commits, CommitEntry{
+				Hash:    parts[0],
+				Subject: parts[1],
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(commits)
 }
 
 func handleConfigExport(w http.ResponseWriter, r *http.Request) {
