@@ -472,24 +472,28 @@ export class TabManager {
         // Right-click on terminal → copy xterm selection.
         // Uses capture phase on termContainer so we fire BEFORE xterm's own
         // contextmenu handler (which calls stopPropagation and blocks bubble-phase listeners).
-        termContainer.addEventListener('contextmenu', async (e) => {
+        termContainer.addEventListener('contextmenu', (e) => {
             const sel = term.getSelection();
             if (!sel) return;
             e.preventDefault();
             e.stopPropagation();
-            try {
-                await navigator.clipboard.writeText(sel);
-            } catch {
-                const ta = Object.assign(document.createElement('textarea'), { value: sel });
-                ta.style.cssText = 'position:fixed;opacity:0';
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                ta.remove();
-            }
+            this.copyTextRobustly(sel);
         }, { capture: true });
 
         term.attachCustomKeyEventHandler((e) => {
+            if (e.type === 'keydown') {
+                const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+                const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') || 
+                               (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
+                if (isCopy) {
+                    const sel = term.getSelection();
+                    if (sel) {
+                        this.copyTextRobustly(sel);
+                        e.preventDefault();
+                        return false;
+                    }
+                }
+            }
             // Support Alt+1..9 tab switching inside xterm
             if (e.altKey && e.key >= '1' && e.key <= '9') {
                 if (e.type === 'keydown') {
@@ -511,6 +515,13 @@ export class TabManager {
                 if (['o', 's', 'p', 'f', 'r', 'g'].includes(key)) e.preventDefault();
             }
             return true;
+        });
+
+        term.onSelectionChange(() => {
+            const sel = term.getSelection();
+            if (sel) {
+                this.copyTextRobustly(sel, true);
+            }
         });
         
         // Opencode scroll fix: intercept in capture phase before xterm.js can consume the event
@@ -1049,6 +1060,40 @@ export class TabManager {
 
     _spamScrollToBottom(tabInfo) {
         this._spamScroll(tabInfo, true);
+    }
+
+    copyTextRobustly(text, silent = false) {
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(() => {
+                if (!silent) {
+                    this.app.showToast("Copied to clipboard", { type: 'info', title: 'Clipboard' });
+                }
+            }).catch(() => this.fallbackCopy(text, silent));
+        } else {
+            this.fallbackCopy(text, silent);
+        }
+    }
+
+    fallbackCopy(text, silent = false) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let success = false;
+        try {
+            success = document.execCommand('copy');
+            if (success && !silent) {
+                this.app.showToast("Copied to clipboard", { type: 'info', title: 'Clipboard' });
+            }
+        } catch (e) {
+            console.error("Fallback copy failed", e);
+        }
+        document.body.removeChild(ta);
+        if (!success && !silent) {
+            this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard' });
+        }
     }
 
     startResize() {
