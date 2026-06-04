@@ -212,7 +212,12 @@
                         <button class="diff-tab-btn" data-tab="status">status</button>
                         <button class="diff-tab-btn active" data-tab="markdown">md</button>
                     </div>
-                    <button id="close-diff-btn" title="Hide Diff Panel" class="close-diff-btn">×</button>
+                    <div class="diff-header-actions" style="display: flex; align-items: center; gap: 8px;">
+                        <button id="refresh-diff-btn" title="Refresh">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                        <button id="close-diff-btn" title="Hide Diff Panel" class="close-diff-btn">×</button>
+                    </div>
                 </div>
 
                 <div class="diff-action-bar hidden" id="diff-action-bar">
@@ -222,9 +227,6 @@
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                             <line x1="12" y1="3" x2="12" y2="21"></line>
                         </svg>
-                    </button>
-                    <button id="refresh-diff-btn" title="Refresh">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                     </button>
                 </div>
 

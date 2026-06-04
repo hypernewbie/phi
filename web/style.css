@@ -1131,12 +1131,12 @@ body {
     border-bottom-color: var(--accent);
 }
 
-.close-diff-btn {
+.diff-header button:not(.diff-tab-btn) {
     background: transparent;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 16px;
+    font-size: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1146,9 +1146,13 @@ body {
     transition: all 0.15s;
 }
 
-.close-diff-btn:hover {
+.diff-header button:not(.diff-tab-btn):hover {
     color: var(--text-primary);
     background-color: var(--bg-border);
+}
+
+.diff-header .close-diff-btn {
+    font-size: 16px;
 }
 
 .diff-action-bar {
