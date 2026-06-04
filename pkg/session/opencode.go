@@ -2,8 +2,10 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -79,23 +81,57 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 	}
 	defer db.Close()
 
-	query := `SELECT role, text FROM message WHERE session_id = ? ORDER BY time_created ASC`
-	rows, err := db.Query(query, sessionID)
+	// 1. Get all messages for the session
+	msgRows, err := db.Query(`SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC`, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer msgRows.Close()
+
+	type msgData struct {
+		Role string `json:"role"`
+	}
+
+	type partData struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
 
 	var messages []Message
-	for rows.Next() {
-		var role, text string
-		if err := rows.Scan(&role, &text); err != nil {
+	for msgRows.Next() {
+		var id, dataStr string
+		if err := msgRows.Scan(&id, &dataStr); err != nil {
 			continue
 		}
+
+		var mInfo msgData
+		if err := json.Unmarshal([]byte(dataStr), &mInfo); err != nil || mInfo.Role == "" {
+			continue
+		}
+
+		// 2. Get all text parts for this message
+		partRows, err := db.Query(`SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC`, id)
+		if err != nil {
+			continue
+		}
+
+		var combinedText strings.Builder
+		for partRows.Next() {
+			var partStr string
+			if err := partRows.Scan(&partStr); err == nil {
+				var pInfo partData
+				if err := json.Unmarshal([]byte(partStr), &pInfo); err == nil && pInfo.Type == "text" {
+					combinedText.WriteString(pInfo.Text)
+				}
+			}
+		}
+		partRows.Close()
+
 		messages = append(messages, Message{
-			Role: role,
-			Text: text,
+			Role: mInfo.Role,
+			Text: combinedText.String(),
 		})
 	}
+
 	return messages, nil
 }
