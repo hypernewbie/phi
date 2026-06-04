@@ -619,4 +619,32 @@ func TestHandleRawDiff(t *testing.T) {
 	}
 }
 
+func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=nonexistent&id=123", nil)
+	w := httptest.NewRecorder()
+	handleGetSessionTranscript(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for unsupported coder, got %d", w.Code)
+	}
+}
+
+func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=pi&id=nonexistent&cwd=/tmp/nonexistent", nil)
+	w := httptest.NewRecorder()
+	handleGetSessionTranscript(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for empty transcript, got %d", w.Code)
+	}
+
+	var msgs []interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &msgs); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("Expected 0 messages, got %d", len(msgs))
+	}
+}
+
 
