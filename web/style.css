@@ -2459,8 +2459,8 @@ body {
 }
 .review-bubble.role-user {
     align-self: flex-end;
-    background-color: rgba(124, 106, 247, 0.15); /* Accent translucent */
-    border: 1px solid rgba(124, 106, 247, 0.3);
+    background-color: var(--accent-glow);
+    border: 1px solid var(--accent-dim);
     border-bottom-right-radius: 2px;
     color: var(--text-primary);
 }
