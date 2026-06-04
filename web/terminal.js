@@ -462,11 +462,11 @@ export class TabManager {
             const lines = Math.max(1, Math.min(Math.round(Math.abs(e.deltaY) / 40), 8));
 
             if (term.buffer.active.type === 'alternate') {
-                // Alternate screen: send SGR mouse wheel sequences to the TUI
-                // Bubbletea parses button 64 as wheel-up, 65 as wheel-down in SGR mode
+                // Alternate screen: send Ctrl+Alt+Y / Ctrl+Alt+E sequences to the TUI
+                // These keys scroll the chat viewport up/down one line
                 e.preventDefault();
                 e.stopPropagation();
-                const seq = isUp ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';
+                const seq = isUp ? '\x1b\x19' : '\x1b\x05';
                 const payload = seq.repeat(lines);
                 if (tabInfo.ws && !tabInfo.isDead) {
                     tabInfo.ws.sendInput(payload);
