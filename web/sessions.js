@@ -865,6 +865,9 @@ export class SessionsManager {
                     });
                 }
                 contentBody.appendChild(chatWrapper);
+                setTimeout(() => {
+                    chatWrapper.scrollTop = chatWrapper.scrollHeight;
+                }, 50);
             } catch (e) {
                 contentBody.innerHTML = `
                     <div class="review-error">
