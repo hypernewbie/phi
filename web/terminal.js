@@ -26,6 +26,7 @@ export class TabManager {
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
+        this.lastInputValue = '';
         
         this.setupEventListeners();
 
@@ -92,6 +93,18 @@ export class TabManager {
                 activeTab.directMode = false;
                 this.updateDirectModeUI(activeTab);
             }
+        });
+
+        // Trigger spam scroll on transition from empty to typed content
+        this.inputTextArea.addEventListener('input', () => {
+            const currentVal = this.inputTextArea.value;
+            if (this.lastInputValue === '' && currentVal !== '') {
+                const activeTab = this.getActiveTab();
+                if (activeTab) {
+                    this._spamScrollToBottom(activeTab);
+                }
+            }
+            this.lastInputValue = currentVal;
         });
 
         // Staged input send on Enter
@@ -716,6 +729,7 @@ export class TabManager {
         
         activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
+        this.lastInputValue = '';
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
@@ -1225,6 +1239,7 @@ export class TabManager {
                 }
                 activeTab.ws.sendInput(payload + '\r');
                 this.inputTextArea.value = '';
+                this.lastInputValue = '';
                 this.inputTextArea.focus({ preventScroll: true });
                 this._spamScrollToBottom(activeTab);
                 dropup.classList.add('hidden');
