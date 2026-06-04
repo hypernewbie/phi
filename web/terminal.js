@@ -273,6 +273,7 @@ export class TabManager {
         tabInfo.lastOutputAt = Date.now();
         if (!tabInfo.isBusy) {
             tabInfo.isBusy = true;
+            tabInfo.busyStartTime = Date.now();
             // If not manually pinned by the user, dynamically pin on the backend while busy.
             if (!tabInfo.pinned) {
                 this.syncBackendPin(tabInfo.paneId, true);
@@ -1422,8 +1423,12 @@ export class TabManager {
                         this.syncBackendPin(tab.paneId, false);
                     }
 
-                    // Only notify if this tab is NOT currently active and focused.
-                    if (!isActiveAndVisible) {
+                    // Calculate total execution duration
+                    const totalDuration = Date.now() - (tab.busyStartTime || Date.now());
+                    const isLongTask = totalDuration > 8000;
+
+                    // Only notify if this tab is NOT currently active and focused, and was a long-running task.
+                    if (!isActiveAndVisible && isLongTask) {
                         let promptDetected = false;
                         if (tab.term && tab.term.buffer && tab.term.buffer.active) {
                             const buffer = tab.term.buffer.active;
