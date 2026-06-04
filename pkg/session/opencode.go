@@ -12,7 +12,8 @@ import (
 
 func ListOpenCodeSessions(cwd string) ([]Session, error) {
 	dbPath := expandHome("~/.local/share/opencode/opencode.db")
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+	fi, err := os.Stat(dbPath)
+	if os.IsNotExist(err) || (err == nil && fi.IsDir()) {
 		return []Session{}, nil
 	}
 
@@ -71,7 +72,8 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 
 func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 	dbPath := expandHome("~/.local/share/opencode/opencode.db")
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+	fi, err := os.Stat(dbPath)
+	if os.IsNotExist(err) || (err == nil && fi.IsDir()) {
 		return []Message{}, nil
 	}
 

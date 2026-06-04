@@ -341,7 +341,10 @@ export class SessionsManager {
         container.innerHTML = '<div class="scanning-sessions">Scanning sessions...</div>';
         try {
             const res = await fetch(`/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`);
-            if (!res.ok) throw new Error("Failed to scan sessions");
+            if (!res.ok) {
+                const errMsg = await res.text();
+                throw new Error(errMsg || "Failed to scan sessions");
+            }
             
             const sessions = await res.json();
             container.innerHTML = '';

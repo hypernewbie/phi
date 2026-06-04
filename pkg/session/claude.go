@@ -15,7 +15,8 @@ type ClaudeSummary struct {
 
 func ListClaudeSessions(cwd string) ([]Session, error) {
 	projectsPath := expandHome("~/.claude/projects")
-	if _, err := os.Stat(projectsPath); os.IsNotExist(err) {
+	fi, err := os.Stat(projectsPath)
+	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil
 	}
 

@@ -200,7 +200,8 @@ func ListAgySessions(cwd string) ([]Session, error) {
 	defer agyMu.Unlock()
 
 	convsDir := expandHome("~/.gemini/antigravity-cli/conversations")
-	if _, err := os.Stat(convsDir); os.IsNotExist(err) {
+	fi, err := os.Stat(convsDir)
+	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil
 	}
 

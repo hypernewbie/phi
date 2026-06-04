@@ -50,7 +50,8 @@ func ListPiSessions(cwd string) ([]Session, error) {
 	sessionsDir := expandHome("~/.pi/agent/sessions")
 	projectPath := filepath.Join(sessionsDir, projectDirName)
 	
-	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+	fi, err := os.Stat(projectPath)
+	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil
 	}
 
@@ -152,7 +153,8 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 	sessionsDir := expandHome("~/.pi/agent/sessions")
 	projectPath := filepath.Join(sessionsDir, projectDirName)
 
-	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+	fi, err := os.Stat(projectPath)
+	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Message{}, nil
 	}
 
