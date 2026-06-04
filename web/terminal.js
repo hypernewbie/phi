@@ -722,8 +722,12 @@ export class TabManager {
         newTab.termContainer.classList.add('active');
         
         // Show/hide staged input & direct mode based on tab settings
-        this.inputBarContainer.classList.remove('hidden');
-        this.updateDirectModeUI(newTab);
+        if (newTab.coder === 'review') {
+            this.inputBarContainer.classList.add('hidden');
+        } else {
+            this.inputBarContainer.classList.remove('hidden');
+            this.updateDirectModeUI(newTab);
+        }
         
         // Scroll tabs bar to active tab
         newTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
