@@ -212,3 +212,51 @@ func TestClaudeSessionRename(t *testing.T) {
 		t.Errorf("Expected title %q, got %q", renameTitle, sessions[0].Title)
 	}
 }
+
+func TestGetPiSessionTranscript(t *testing.T) {
+	tempHome := t.TempDir()
+	homeKey := "USERPROFILE"
+	if os.Getenv(homeKey) == "" {
+		homeKey = "HOME"
+	}
+	origHomeVal := os.Getenv(homeKey)
+	if err := os.Setenv(homeKey, tempHome); err != nil {
+		t.Fatalf("setenv failed: %v", err)
+	}
+	defer os.Setenv(homeKey, origHomeVal)
+
+	// Create project directory path: ~ / .pi / agent / sessions / --C--mock-path--
+	projectDirName := "--C--mock-path--"
+	mockSessionID := "conv_abc123"
+	
+	piProjPath := filepath.Join(tempHome, ".pi", "agent", "sessions", projectDirName)
+	if err := os.MkdirAll(piProjPath, 0755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	
+	jsonlPath := filepath.Join(piProjPath, mockSessionID+".jsonl")
+	mockContent := `{"type":"session_info","name":"Custom Pi Title"}` + "\n" +
+		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello bot"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hello human"}]}}` + "\n"
+
+	if err := os.WriteFile(jsonlPath, []byte(mockContent), 0644); err != nil {
+		t.Fatalf("write mock session file failed: %v", err)
+	}
+
+	messages, err := GetPiSessionTranscript("C:/mock/path", mockSessionID)
+	if err != nil {
+		t.Fatalf("GetPiSessionTranscript failed: %v", err)
+	}
+
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(messages))
+	}
+
+	if messages[0].Role != "user" || messages[0].Text != "hello bot" {
+		t.Errorf("Unexpected user message: %+v", messages[0])
+	}
+
+	if messages[1].Role != "assistant" || messages[1].Text != "hello human" {
+		t.Errorf("Unexpected assistant message: %+v", messages[1])
+	}
+}

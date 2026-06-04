@@ -144,3 +144,67 @@ func extractPiSessionTitle(filePath string) string {
 	}
 	return firstUserMsg
 }
+
+func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
+	normalized := strings.ReplaceAll(strings.Trim(cwd, "/"), ":", "-")
+	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
+	
+	sessionsDir := expandHome("~/.pi/agent/sessions")
+	projectPath := filepath.Join(sessionsDir, projectDirName)
+
+	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+		return []Message{}, nil
+	}
+
+	files, err := os.ReadDir(projectPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var matchedFile string
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			continue
+		}
+		nameNoExt := strings.TrimSuffix(f.Name(), ".jsonl")
+		if nameNoExt == sessionID || strings.HasSuffix(nameNoExt, "_"+sessionID) {
+			matchedFile = filepath.Join(projectPath, f.Name())
+			break
+		}
+	}
+
+	if matchedFile == "" {
+		return []Message{}, nil
+	}
+
+	file, err := os.Open(matchedFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var messages []Message
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.Contains(line, `"type":"message"`) {
+			continue
+		}
+
+		var pm PiMessage
+		if err := json.Unmarshal([]byte(line), &pm); err == nil && pm.Message.Role != "" {
+			var sb strings.Builder
+			for _, content := range pm.Message.Content {
+				if content.Type == "text" {
+					sb.WriteString(content.Text)
+				}
+			}
+			messages = append(messages, Message{
+				Role: pm.Message.Role,
+				Text: sb.String(),
+			})
+		}
+	}
+
+	return messages, nil
+}

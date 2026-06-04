@@ -66,3 +66,36 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 	}
 	return sessions, nil
 }
+
+func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
+	dbPath := expandHome("~/.local/share/opencode/opencode.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return []Message{}, nil
+	}
+
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=query_only=true&_pragma=busy_timeout=5000")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	query := `SELECT role, text FROM message WHERE session_id = ? ORDER BY time_created ASC`
+	rows, err := db.Query(query, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var role, text string
+		if err := rows.Scan(&role, &text); err != nil {
+			continue
+		}
+		messages = append(messages, Message{
+			Role: role,
+			Text: text,
+		})
+	}
+	return messages, nil
+}

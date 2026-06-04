@@ -379,6 +379,11 @@ export class SessionsManager {
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
+                        ${(this.activeCoder === 'opencode' || this.activeCoder === 'pi') ? `
+                        <button class="session-action-btn review-btn" title="Review Transcript">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                        </button>
+                        ` : ''}
                         ${(this.activeCoder === 'agy' || this.activeCoder === 'claude') ? `
                         <button class="session-action-btn rename-btn" title="Rename Session">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
@@ -403,12 +408,28 @@ export class SessionsManager {
                     this._showSessionContextMenu(e, item, sess);
                 });
 
+                if (this.activeCoder === 'opencode' || this.activeCoder === 'pi') {
+                    const reviewBtn = item.querySelector('.review-btn');
+                    if (reviewBtn) {
+                        reviewBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            this.openReviewTab(sess);
+                            const sidebar = document.getElementById('sidebar-panel');
+                            if (sidebar) {
+                                sidebar.classList.remove('drawer-open');
+                            }
+                        });
+                    }
+                }
+
                 if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
                     const renameBtn = item.querySelector('.rename-btn');
-                    renameBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.openInlineRenamer(item, sess.id, sess.title);
-                    });
+                    if (renameBtn) {
+                        renameBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            this.openInlineRenamer(item, sess.id, sess.title);
+                        });
+                    }
                 }
                 
                 container.appendChild(item);
@@ -738,5 +759,71 @@ export class SessionsManager {
                 item.classList.remove('selected');
             }
         });
+    }
+
+    async openReviewTab(sess) {
+        const paneId = 'review-' + sess.id;
+        
+        if (this.app.tabManager.tabs.has(paneId)) {
+            this.app.tabManager.switchTab(paneId);
+            return;
+        }
+
+        this.app.tabManager.createTab(paneId, sess.id, `Review: ${sess.title}`, 'review', this.activeWorkspace, sess.cwd);
+        const activeTab = this.app.tabManager.tabs.get(paneId);
+        if (!activeTab) return;
+        const container = activeTab.termContainer;
+
+        container.innerHTML = `
+            <div class="review-loading">
+                <span class="spinner"></span>
+                <span>Loading session transcript...</span>
+            </div>
+        `;
+
+        try {
+            const res = await fetch(`/api/session-transcript?coder=${sess.coder}&id=${sess.id}&cwd=${encodeURIComponent(sess.cwd || '')}`);
+            if (!res.ok) throw new Error("Failed to load transcript");
+            const messages = await res.json();
+
+            container.innerHTML = '';
+            const chatWrapper = document.createElement('div');
+            chatWrapper.className = 'review-chat-wrapper';
+
+            if (!messages || messages.length === 0) {
+                chatWrapper.innerHTML = '<div class="review-empty">No messages found in this session.</div>';
+            } else {
+                messages.forEach(msg => {
+                    const bubble = document.createElement('div');
+                    bubble.className = `review-bubble role-${msg.role}`;
+                    
+                    const header = document.createElement('div');
+                    header.className = 'review-bubble-header';
+                    header.innerText = msg.role === 'user' ? 'User' : 'Assistant';
+                    bubble.appendChild(header);
+
+                    const content = document.createElement('div');
+                    content.className = 'review-bubble-content';
+                    content.innerHTML = window.marked ? window.marked.parse(msg.text) : msg.text;
+
+                    if (window.hljs) {
+                        content.querySelectorAll('pre code').forEach((block) => {
+                            window.hljs.highlightElement(block);
+                        });
+                    }
+
+                    bubble.appendChild(content);
+                    chatWrapper.appendChild(bubble);
+                });
+            }
+            container.appendChild(chatWrapper);
+        } catch (e) {
+            container.innerHTML = `
+                <div class="review-error">
+                    <h3>Error loading transcript</h3>
+                    <p>${e.message}</p>
+                </div>
+            `;
+        }
     }
 }

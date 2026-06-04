@@ -7,7 +7,8 @@ const CODER_FAVICONS = {
     'claude': 'https://www.google.com/s2/favicons?domain=claude.ai&sz=64',
     'agy': 'https://www.google.com/s2/favicons?domain=antigravity.google&sz=64',
     'pi': 'https://www.google.com/s2/favicons?domain=pi.dev&sz=64',
-    'bash': 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64'
+    'bash': 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64',
+    'review': 'https://www.google.com/s2/favicons?domain=wikipedia.org&sz=64'
 };
 
 export class TabManager {
@@ -368,6 +369,26 @@ export class TabManager {
                 this.switchTab(currentPaneId);
             }
         });
+
+        if (coder === 'review') {
+            termContainer.classList.add('review-panel');
+            const tabInfo = {
+                paneId,
+                sessionId,
+                title,
+                coder,
+                workspace,
+                cwd,
+                tabEl,
+                termContainer,
+                isDead: true,
+                isReview: true,
+                pinned: !!pinned
+            };
+            this.tabs.set(paneId, tabInfo);
+            this.switchTab(paneId);
+            return;
+        }
         
         // Initialize xterm.js instance
         const term = new window.Terminal({
@@ -647,8 +668,10 @@ export class TabManager {
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
-            prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY - 1;
-            prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
+            if (prevTab.term) {
+                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY - 1;
+                prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
+            }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
         }
