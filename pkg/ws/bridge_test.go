@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,5 +77,59 @@ func TestWebSocketCompression(t *testing.T) {
 
 	if string(received) != string(testMsg) {
 		t.Errorf("Echo payload mismatch. Sent length: %d, Received length: %d", len(testMsg), len(received))
+	}
+}
+
+func TestWebSocketPipes_10MB(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := Upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Failed to upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for {
+			mt, message, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			err = conn.WriteMessage(mt, message)
+			if err != nil {
+				t.Errorf("Failed to write: %v", err)
+				break
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	dialer := websocket.Dialer{EnableCompression: true}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer conn.Close()
+
+	const payloadSize = 10 * 1024 * 1024 // 10MB
+	largePayload := make([]byte, payloadSize)
+	for i := range largePayload {
+		largePayload[i] = byte(i % 256)
+	}
+
+	err = conn.WriteMessage(websocket.BinaryMessage, largePayload)
+	if err != nil {
+		t.Fatalf("Failed to write 10MB message: %v", err)
+	}
+
+	_, received, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("Failed to read 10MB message: %v", err)
+	}
+
+	if len(received) != len(largePayload) {
+		t.Errorf("Length mismatch: sent %d, got %d", len(largePayload), len(received))
+	} else if !bytes.Equal(received, largePayload) {
+		t.Error("Payload bytes mismatch")
 	}
 }
