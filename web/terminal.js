@@ -396,6 +396,47 @@ export class TabManager {
         
         // Open in DOM
         term.open(termContainer);
+
+        // Register OSC 52 clipboard handler
+        if (term.parser && term.parser.registerOscHandler) {
+            term.parser.registerOscHandler(52, (data) => {
+                const parts = data.split(';');
+                if (parts.length < 2) return true;
+                const base64Text = parts[1].replace(/[^A-Za-z0-9+/=]/g, '');
+                if (base64Text === '?') return true;
+                try {
+                    const binaryString = atob(base64Text);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const text = new TextDecoder('utf-8').decode(bytes);
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.app.showToast(`Agent copied ${text.length} characters to clipboard`, { type: 'info', title: 'Clipboard Sync' });
+                    }).catch(err => {
+                        this.app.showToast(`Agent copied ${text.length} characters`, {
+                            type: 'info',
+                            title: 'Clipboard Sync',
+                            duration: 15000,
+                            action: {
+                                text: 'Copy to Clipboard',
+                                callback: async () => {
+                                    try {
+                                        await navigator.clipboard.writeText(text);
+                                        this.app.showToast("Copied to clipboard!", { type: 'info', title: 'Clipboard Sync' });
+                                    } catch (e) {
+                                        this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard Sync' });
+                                    }
+                                }
+                            }
+                        });
+                    });
+                } catch (e) {
+                    console.error("OSC 52 decode error:", e);
+                }
+                return true;
+            });
+        }
         
         // Prevent browser viewport jump when xterm focuses its hidden textarea
         const textarea = termContainer.querySelector('textarea.xterm-helper-textarea');

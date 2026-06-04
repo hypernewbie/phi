@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
+	"github.com/hypernewbie/phi/pkg/clipboard"
 )
 
 // crGapDur is the pause inserted after the bytes preceding a \r are written to
@@ -95,9 +96,45 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 		return nil, err
 	}
 
+	// Create session-isolated temporary directory for clipboard shims
+	tempDir, err := os.MkdirTemp("", "phi-shims-")
+	if err != nil {
+		_ = pt.Close()
+		return nil, fmt.Errorf("failed to create temp directory for clipboard shims: %v", err)
+	}
+	clipFile := filepath.Join(tempDir, "clipboard.txt")
+	clipboard.SetLastClipboardFile(clipFile)
+
+	if err := createShims(tempDir, clipFile); err != nil {
+		_ = os.RemoveAll(tempDir)
+		_ = pt.Close()
+		return nil, fmt.Errorf("failed to create clipboard shims: %v", err)
+	}
+
 	cmd := pt.Command(resolvedPath, args...)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
+
+	// Prepend tempDir to PATH
+	pathKey := "PATH"
+	pathVal := os.Getenv("PATH")
+	for i, env := range cmd.Env {
+		if strings.HasPrefix(strings.ToUpper(env), "PATH=") {
+			parts := strings.SplitN(env, "=", 2)
+			pathKey = parts[0]
+			pathVal = parts[1]
+			cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+			break
+		}
+	}
+	var newPath string
+	if runtime.GOOS == "windows" {
+		newPath = fmt.Sprintf("%s=%s;%s", pathKey, tempDir, pathVal)
+	} else {
+		newPath = fmt.Sprintf("%s=%s:%s", pathKey, tempDir, pathVal)
+	}
+	cmd.Env = append(cmd.Env, newPath)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PHI_CLIPBOARD_FILE=%s", clipFile))
 
 	// On Windows, strip any stray UNIX-like SHELL environment variable to prevent
 	// cross-platform tools (like Pi Coder) from trying to run commands via a broken/WSL bash.
@@ -140,6 +177,7 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 		_ = cmd.Wait()
 		p.closePTY()
 		close(p.Closed)
+		_ = os.RemoveAll(tempDir)
 	}()
 
 	return p, nil
@@ -200,5 +238,123 @@ func (p *Pty) Kill() error {
 		_ = p.cmd.Process.Kill()
 	}
 	p.closePTY()
+	return nil
+}
+
+func createShims(tempDir string, clipboardFile string) error {
+	pbcopyContent := fmt.Sprintf(`#!/bin/sh
+cat > %q
+`, clipboardFile)
+
+	pbpasteContent := fmt.Sprintf(`#!/bin/sh
+if [ -f %q ]; then
+	cat %q
+fi
+`, clipboardFile, clipboardFile)
+
+	wlcopyContent := pbcopyContent
+	wlpasteContent := pbpasteContent
+
+	xclipContent := fmt.Sprintf(`#!/bin/sh
+is_paste=0
+for arg in "$@"; do
+	if [ "$arg" = "-o" ] || [ "$arg" = "-out" ]; then
+		is_paste=1
+	fi
+done
+if [ "$is_paste" -eq 1 ]; then
+	if [ -f %q ]; then
+		cat %q
+	fi
+else
+	cat > %q
+fi
+`, clipboardFile, clipboardFile, clipboardFile)
+
+	xselContent := fmt.Sprintf(`#!/bin/sh
+is_paste=0
+for arg in "$@"; do
+	if [ "$arg" = "-o" ] || [ "$arg" = "--output" ]; then
+		is_paste=1
+	fi
+done
+if [ "$is_paste" -eq 1 ]; then
+	if [ -f %q ]; then
+		cat %q
+	fi
+else
+	cat > %q
+fi
+`, clipboardFile, clipboardFile, clipboardFile)
+
+	shims := map[string]string{
+		"pbcopy":   pbcopyContent,
+		"pbpaste":  pbpasteContent,
+		"wl-copy":  wlcopyContent,
+		"wl-paste": wlpasteContent,
+		"xclip":    xclipContent,
+		"xsel":     xselContent,
+	}
+
+	for name, content := range shims {
+		path := filepath.Join(tempDir, name)
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			return err
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		pbcopyBat := fmt.Sprintf(`@echo off
+powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
+`, clipboardFile)
+		pbpasteBat := fmt.Sprintf(`@echo off
+if exist "%s" (
+	type "%s"
+)
+`, clipboardFile, clipboardFile)
+
+		xclipBat := fmt.Sprintf(`@echo off
+set is_paste=0
+for %%a in (%%*) do (
+	if "%%a"=="-o" set is_paste=1
+	if "%%a"=="-out" set is_paste=1
+)
+if "%%is_paste%%"=="1" (
+	if exist "%s" type "%s"
+) else (
+	powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
+)
+`, clipboardFile, clipboardFile, clipboardFile)
+
+		xselBat := fmt.Sprintf(`@echo off
+set is_paste=0
+for %%a in (%%*) do (
+	if "%%a"=="-o" set is_paste=1
+	if "%%a"=="--output" set is_paste=1
+)
+if "%%is_paste%%"=="1" (
+	if exist "%s" type "%s"
+) else (
+	powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
+)
+`, clipboardFile, clipboardFile, clipboardFile)
+
+		batShims := map[string]string{
+			"pbcopy.bat":   pbcopyBat,
+			"pbpaste.bat":  pbpasteBat,
+			"wl-copy.bat":  pbcopyBat,
+			"wl-paste.bat": pbpasteBat,
+			"xclip.bat":    xclipBat,
+			"xsel.bat":     xselBat,
+		}
+
+		for name, content := range batShims {
+			path := filepath.Join(tempDir, name)
+			if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }

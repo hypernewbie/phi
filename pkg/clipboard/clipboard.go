@@ -3,15 +3,41 @@ package clipboard
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	LastClipboardFile string
+	ClipboardMutex    sync.RWMutex
+)
+
+func SetLastClipboardFile(path string) {
+	ClipboardMutex.Lock()
+	defer ClipboardMutex.Unlock()
+	LastClipboardFile = path
+}
+
+func GetLastClipboardFile() string {
+	ClipboardMutex.RLock()
+	defer ClipboardMutex.RUnlock()
+	return LastClipboardFile
+}
 
 // Read retrieves the plain text content currently stored in the host system's clipboard.
 // It detects the operating system and runs the appropriate native command to fetch it.
 func Read() (string, error) {
+	// First check session-isolated clipboard shim file
+	if shimPath := GetLastClipboardFile(); shimPath != "" {
+		if data, err := os.ReadFile(shimPath); err == nil {
+			return string(data), nil
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
