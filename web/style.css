@@ -2341,3 +2341,51 @@ body {
     text-decoration: none !important;
 }
 
+/* Header Config Pill Styling */
+.header-config-pill {
+    display: flex;
+    align-items: center;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    padding: 2px 6px;
+    gap: 4px;
+    height: 28px;
+    user-select: none;
+}
+
+.header-config-pill .pill-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-right: 4px;
+    letter-spacing: 0.5px;
+}
+
+.header-config-pill .pill-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    transition: all 0.15s;
+    padding: 0;
+}
+
+.header-config-pill .pill-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-border);
+}
+
+.header-config-pill .pill-btn .icon {
+    width: 12px;
+    height: 12px;
+}
+
+
