@@ -1085,7 +1085,16 @@ export class TabManager {
                 btn.className = 'preset-btn';
                 btn.innerText = p.name;
                 btn.addEventListener('click', () => {
-                    this.sendRawInput(p.value);
+                    const activeTab = this.getActiveTab();
+                    if (activeTab && activeTab.coder === 'opencode' && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                        const cmd = p.value.slice(0, -1);
+                        this.sendRawInput(cmd);
+                        setTimeout(() => {
+                            this.sendRawInput('\r');
+                        }, 350);
+                    } else {
+                        this.sendRawInput(p.value);
+                    }
                 });
                 this.presetsContainer.appendChild(btn);
             });
@@ -1162,8 +1171,8 @@ export class TabManager {
                         this.sendRawInput(model);
                         setTimeout(() => {
                             this.sendRawInput('\r');
-                        }, 200);
-                    }, 200);
+                        }, 350);
+                    }, 350);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
                 }
