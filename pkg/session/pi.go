@@ -201,9 +201,13 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 					sb.WriteString(content.Text)
 				}
 			}
+			txt := strings.TrimSpace(sb.String())
+			if txt == "" {
+				continue
+			}
 			messages = append(messages, Message{
 				Role: pm.Message.Role,
-				Text: sb.String(),
+				Text: txt,
 			})
 		}
 	}
