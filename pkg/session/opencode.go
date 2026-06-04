@@ -129,9 +129,14 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 		}
 		partRows.Close()
 
+		txt := strings.TrimSpace(combinedText.String())
+		if txt == "" {
+			continue
+		}
+
 		messages = append(messages, Message{
 			Role: mInfo.Role,
-			Text: combinedText.String(),
+			Text: txt,
 		})
 	}
 
