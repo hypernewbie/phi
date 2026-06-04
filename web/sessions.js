@@ -185,6 +185,7 @@ export class SessionsManager {
     }
 
     switchCoder(coderId) {
+        if (coderId === 'review') return;
         if (this.activeCoder === coderId) return;
         this.activeCoder = coderId;
         
