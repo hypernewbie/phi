@@ -450,20 +450,33 @@ export class TabManager {
             return true;
         });
         
-        // Alternate screen wheel scrolling
+        // Opencode scroll fix: intercept in capture phase before xterm.js can consume the event
+        // Scoped strictly to opencode tabs – all other coders pass through untouched
         termContainer.addEventListener('wheel', (e) => {
-            // Only apply this hack to the 'opencode' agent to avoid breaking other terminal apps
-            if (tabInfo.coder === 'opencode' && term.buffer.active.type === 'alternate') {
+            if (tabInfo.coder !== 'opencode') return;
+
+            const isUp = e.deltaY < 0;
+
+            // Scale scroll amount from the wheel delta for natural-feeling speed
+            // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
+            const lines = Math.max(1, Math.min(Math.round(Math.abs(e.deltaY) / 40), 8));
+
+            if (term.buffer.active.type === 'alternate') {
+                // Alternate screen: simulate arrow keys to scroll the TUI application
                 e.preventDefault();
-                const isUp = e.deltaY < 0;
+                e.stopPropagation();
                 const seq = isUp ? '\x1b[A' : '\x1b[B';
-                const payload = seq.repeat(3); // 3 lines per scroll tick
-                
+                const payload = seq.repeat(lines);
                 if (tabInfo.ws && !tabInfo.isDead) {
                     tabInfo.ws.sendInput(payload);
                 }
+            } else {
+                // Normal screen: scroll the xterm viewport directly
+                e.preventDefault();
+                e.stopPropagation();
+                term.scrollLines(isUp ? -lines : lines);
             }
-        }, { passive: false });
+        }, { capture: true, passive: false });
         
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
