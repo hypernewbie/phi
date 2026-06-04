@@ -344,6 +344,34 @@ class App {
         body.appendChild(titleEl);
         body.appendChild(msgEl);
 
+        let dismissTimer;
+        const dismiss = () => {
+            if (dismissTimer) clearTimeout(dismissTimer);
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 200);
+        };
+
+        if (opts.action) {
+            const actionBtn = document.createElement('button');
+            actionBtn.className = 'toast-action-btn';
+            actionBtn.textContent = opts.action.text;
+            actionBtn.style.marginTop = '6px';
+            actionBtn.style.padding = '3px 8px';
+            actionBtn.style.backgroundColor = 'var(--accent, #7c6af7)';
+            actionBtn.style.color = '#ffffff';
+            actionBtn.style.border = 'none';
+            actionBtn.style.borderRadius = '4px';
+            actionBtn.style.cursor = 'pointer';
+            actionBtn.style.fontSize = '12px';
+            actionBtn.style.fontWeight = 'bold';
+            actionBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                opts.action.callback();
+                dismiss();
+            });
+            body.appendChild(actionBtn);
+        }
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'toast-close';
         closeBtn.innerHTML = '×';
@@ -357,12 +385,6 @@ class App {
         // Animate in on next frame
         requestAnimationFrame(() => toast.classList.add('show'));
 
-        let dismissTimer;
-        const dismiss = () => {
-            if (dismissTimer) clearTimeout(dismissTimer);
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 200);
-        };
         closeBtn.addEventListener('click', dismiss);
         if (duration > 0) {
             dismissTimer = setTimeout(dismiss, duration);
