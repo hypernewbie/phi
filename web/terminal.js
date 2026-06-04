@@ -267,6 +267,18 @@ export class TabManager {
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
+        if (tabInfo.loaderEl && !tabInfo.hasStarted) {
+            tabInfo.hasStarted = true;
+            const loader = tabInfo.loaderEl;
+            loader.style.opacity = '0';
+            setTimeout(() => {
+                if (loader.parentNode) {
+                    loader.remove();
+                }
+            }, 300);
+            tabInfo.loaderEl = null;
+        }
+
         tabInfo.writeBuffer += data;
 
         // Track PTY activity on output.
@@ -351,6 +363,17 @@ export class TabManager {
         termContainer.className = 'term-container';
         termContainer.id = `term-${paneId}`;
         
+        let loaderEl = null;
+        if (coder !== 'review') {
+            loaderEl = document.createElement('div');
+            loaderEl.className = 'tab-loader';
+            loaderEl.innerHTML = `
+                <div class="spinner-ring"></div>
+                <div class="loader-text">Starting ${title}...</div>
+            `;
+            termContainer.appendChild(loaderEl);
+        }
+
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
         
@@ -604,7 +627,9 @@ export class TabManager {
             isBusy: false,
             isAttention: false,
             writeBuffer: '',
-            writePending: false
+            writePending: false,
+            loaderEl: loaderEl,
+            hasStarted: false
         };
 
         if (pinned) {
