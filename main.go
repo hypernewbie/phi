@@ -230,6 +230,7 @@ func main() {
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
+	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)
@@ -1027,6 +1028,33 @@ func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"text": text,
 	})
+}
+
+func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
+	coder := r.URL.Query().Get("coder")
+	id := r.URL.Query().Get("id")
+	cwd := r.URL.Query().Get("cwd")
+
+	var messages []session.Message
+	var err error
+
+	switch coder {
+	case "opencode":
+		messages, err = session.GetOpenCodeSessionTranscript(id)
+	case "pi":
+		messages, err = session.GetPiSessionTranscript(cwd, id)
+	default:
+		http.Error(w, "Unsupported coder type", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to fetch session transcript: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(messages)
 }
 
 type CommitEntry struct {

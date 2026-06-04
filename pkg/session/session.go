@@ -13,6 +13,11 @@ type Session struct {
 	TimeUpdated time.Time `json:"time_updated"`
 }
 
+type Message struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 func expandHome(path string) string {
 	if len(path) > 0 && path[0] == '~' {
 		home, err := os.UserHomeDir()
