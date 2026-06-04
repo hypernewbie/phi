@@ -169,18 +169,15 @@ export class DiffController {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
             this.actionBar?.classList.add('hidden');
-            this.commitSelect?.classList.add('hidden');
-            this.richDiffBtn?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
-            this.actionBar?.classList.remove('hidden');
             if (this.activeTab === 'diff') {
+                this.actionBar?.classList.remove('hidden');
                 this.commitSelect?.classList.remove('hidden');
                 this.richDiffBtn?.classList.remove('hidden');
             } else {
-                this.commitSelect?.classList.add('hidden');
-                this.richDiffBtn?.classList.add('hidden');
+                this.actionBar?.classList.add('hidden');
             }
         }
     }
