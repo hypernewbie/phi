@@ -803,7 +803,32 @@ export class SessionsManager {
                     
                     const header = document.createElement('div');
                     header.className = 'review-bubble-header';
-                    header.innerText = msg.role === 'user' ? 'User' : 'Assistant';
+                    
+                    const roleSpan = document.createElement('span');
+                    roleSpan.innerText = msg.role === 'user' ? 'User' : 'Assistant';
+                    header.appendChild(roleSpan);
+                    
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-bubble-btn';
+                    copyBtn.title = 'Copy message markdown';
+                    copyBtn.innerHTML = `
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        <span>Copy</span>
+                    `;
+                    copyBtn.addEventListener('click', () => {
+                        this.app.tabManager.copyTextRobustly(msg.text, true);
+                        const btnText = copyBtn.querySelector('span');
+                        btnText.innerText = 'Copied!';
+                        copyBtn.classList.add('copied');
+                        setTimeout(() => {
+                            btnText.innerText = 'Copy';
+                            copyBtn.classList.remove('copied');
+                        }, 2000);
+                    });
+                    header.appendChild(copyBtn);
                     bubble.appendChild(header);
 
                     const content = document.createElement('div');
