@@ -15,16 +15,17 @@ var (
 )
 
 type PTYInstance struct {
-	ID           string        `json:"id"`
-	Pty          *Pty          `json:"-"`
-	Cwd          string        `json:"cwd"`
-	Coder        string        `json:"coder"`
-	SessionID    string        `json:"session_id"`
-	DetachTimer  *time.Timer   `json:"-"`
-	mu           sync.Mutex
-	ActiveWS     bool
-	Pinned       bool          `json:"pinned"`
-	LastOutputAt time.Time     `json:"-"`
+	ID            string        `json:"id"`
+	Pty           *Pty          `json:"-"`
+	Cwd           string        `json:"cwd"`
+	Coder         string        `json:"coder"`
+	SessionID     string        `json:"session_id"`
+	DetachTimer   *time.Timer   `json:"-"`
+	mu            sync.Mutex
+	ActiveWS      bool
+	ActiveWSCount int
+	Pinned        bool          `json:"pinned"`
+	LastOutputAt  time.Time     `json:"-"`
 }
 
 func (inst *PTYInstance) UpdateActivity() {
@@ -101,6 +102,7 @@ func (m *Manager) RegisterWS(id string) bool {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
+	inst.ActiveWSCount++
 	inst.ActiveWS = true
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
@@ -122,7 +124,15 @@ func (m *Manager) UnregisterWS(id string) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	inst.ActiveWS = false
+	if inst.ActiveWSCount > 0 {
+		inst.ActiveWSCount--
+	}
+	inst.ActiveWS = inst.ActiveWSCount > 0
+
+	if inst.ActiveWS {
+		return
+	}
+
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
 		inst.DetachTimer = nil
