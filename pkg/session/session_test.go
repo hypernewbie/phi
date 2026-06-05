@@ -237,7 +237,9 @@ func TestGetPiSessionTranscript(t *testing.T) {
 	jsonlPath := filepath.Join(piProjPath, mockSessionID+".jsonl")
 	mockContent := `{"type":"session_info","name":"Custom Pi Title"}` + "\n" +
 		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello bot"}]}}` + "\n" +
-		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hello human"}]}}` + "\n"
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hello human"}]}}` + "\n" +
+		`{"type":"msg","message":{"role":"user","content":[{"type":"text","text":"another user message"}]}}` + "\n" +
+		`{"type":"msg","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_xyz"}]}}` + "\n"
 
 	if err := os.WriteFile(jsonlPath, []byte(mockContent), 0644); err != nil {
 		t.Fatalf("write mock session file failed: %v", err)
@@ -248,8 +250,9 @@ func TestGetPiSessionTranscript(t *testing.T) {
 		t.Fatalf("GetPiSessionTranscript failed: %v", err)
 	}
 
-	if len(messages) != 2 {
-		t.Fatalf("Expected 2 messages, got %d", len(messages))
+	// We expect 3 messages because the tool use line has no text content and is filtered out.
+	if len(messages) != 3 {
+		t.Fatalf("Expected 3 messages, got %d", len(messages))
 	}
 
 	if messages[0].Role != "user" || messages[0].Text != "hello bot" {
@@ -258,5 +261,9 @@ func TestGetPiSessionTranscript(t *testing.T) {
 
 	if messages[1].Role != "assistant" || messages[1].Text != "hello human" {
 		t.Errorf("Unexpected assistant message: %+v", messages[1])
+	}
+
+	if messages[2].Role != "user" || messages[2].Text != "another user message" {
+		t.Errorf("Unexpected third message: %+v", messages[2])
 	}
 }
