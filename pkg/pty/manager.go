@@ -198,21 +198,46 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 	id := inst.ID
 	inst.DetachTimer = time.AfterFunc(GracePeriod, func() {
+		m.mu.Lock()
 		inst.mu.Lock()
+		defer func() {
+			inst.mu.Unlock()
+			m.mu.Unlock()
+		}()
+
+		// Verify that the PTY instance is still registered and active in the manager.
+		// If it has already been killed or removed, we do not need to do anything.
+		if _, exists := m.instances[id]; !exists {
+			return
+		}
+
+		// If a client is actively connected via WebSocket, or the session has been pinned,
+		// we must not terminate the PTY or reschedule the grace period timer.
+		if inst.ActiveWS || inst.Pinned {
+			inst.DetachTimer = nil
+			return
+		}
+
 		timeSinceLastOut := time.Since(inst.LastOutputAt)
-		inst.mu.Unlock()
 
 		// If the terminal has been active recently (e.g. output in the last 2 minutes),
 		// reschedule the grace period rather than killing it.
 		if timeSinceLastOut < RecentActivityThreshold {
 			log.Printf("[pty] grace period expired for %s, but terminal has been active recently (%v ago). Rescheduling grace period.", id, timeSinceLastOut)
-			inst.mu.Lock()
 			m.startGracePeriodTimer(inst)
-			inst.mu.Unlock()
 			return
 		}
 
 		log.Printf("[pty] grace period expired for %s with no recent activity. Terminating PTY.", id)
-		m.Kill(id)
+		delete(m.instances, id)
+		if inst.DetachTimer != nil {
+			inst.DetachTimer.Stop()
+			inst.DetachTimer = nil
+		}
+
+		// Asynchronously kill the PTY to avoid blocking the locks.
+		go func() {
+			_ = inst.Pty.Kill()
+		}()
 	})
 }
