@@ -189,7 +189,8 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.Contains(line, `"type":"message"`) {
+		// Recognise both message and msg types for the Pi session transcripts.
+		if !strings.Contains(line, `"type":"message"`) && !strings.Contains(line, `"type":"msg"`) {
 			continue
 		}
 

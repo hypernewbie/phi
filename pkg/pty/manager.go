@@ -104,6 +104,7 @@ func (m *Manager) RegisterWS(id string) bool {
 
 	inst.ActiveWSCount++
 	inst.ActiveWS = true
+	log.Printf("[pty] RegisterWS %s: ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
 		inst.DetachTimer = nil
@@ -128,6 +129,7 @@ func (m *Manager) UnregisterWS(id string) {
 		inst.ActiveWSCount--
 	}
 	inst.ActiveWS = inst.ActiveWSCount > 0
+	log.Printf("[pty] UnregisterWS %s: ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 
 	if inst.ActiveWS {
 		return
@@ -191,6 +193,7 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 	defer inst.mu.Unlock()
 
 	inst.Pinned = pinned
+	log.Printf("[pty] SetPinned %s: pinned=%v ActiveWS=%v ActiveWSCount=%d HasTimer=%v", id, pinned, inst.ActiveWS, inst.ActiveWSCount, inst.DetachTimer != nil)
 	if !pinned && !inst.ActiveWS {
 		if inst.DetachTimer != nil {
 			inst.DetachTimer.Stop()

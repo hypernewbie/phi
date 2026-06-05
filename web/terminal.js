@@ -215,6 +215,17 @@ export class TabManager {
                 }
             });
         }
+
+        const reconnectAllBtn = document.getElementById('reconnect-all-tabs-btn');
+        if (reconnectAllBtn) {
+            reconnectAllBtn.addEventListener('click', () => {
+                for (const tabInfo of this.tabs.values()) {
+                    if (tabInfo.isDead) {
+                        this.reconnectTab(tabInfo);
+                    }
+                }
+            });
+        }
         
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
@@ -937,7 +948,17 @@ export class TabManager {
                 tabInfo.tabEl.classList.remove('dead');
                 if (overlay) overlay.remove();
                 tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
-                setTimeout(() => this.sendResizeToBackend(tabInfo), 100);
+                setTimeout(() => {
+                    try {
+                        if (tabInfo === this.getActiveTab()) {
+                            tabInfo.fitAddon.fit();
+                        }
+                        tabInfo.term.refresh(0, tabInfo.term.rows - 1);
+                    } catch (e) {
+                        console.error("[term] Fit/refresh error on reconnect:", e);
+                    }
+                    this.sendResizeToBackend(tabInfo);
+                }, 100);
             }
         );
         tabInfo.ws = newWs;
