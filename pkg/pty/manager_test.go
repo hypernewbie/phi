@@ -231,3 +231,61 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 		t.Error("Expected PTY instance to be killed after grace period expired with no activity")
 	}
 }
+
+func TestGracePeriodActiveWSAndPinned(t *testing.T) {
+	origGracePeriod := GracePeriod
+	origThreshold := RecentActivityThreshold
+
+	GracePeriod = 100 * time.Millisecond
+	RecentActivityThreshold = 50 * time.Millisecond
+
+	defer func() {
+		GracePeriod = origGracePeriod
+		RecentActivityThreshold = origThreshold
+	}()
+
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	// Scenario 1: ActiveWS is true when timer expires -> should not kill and should clear timer.
+	inst1, err := manager.Spawn("", shell, args, "shell", "test-session-1")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst1.ID)
+	}()
+
+	manager.UnregisterWS(inst1.ID) // starts timer
+	if !manager.RegisterWS(inst1.ID) {
+		t.Fatal("Failed to register WS")
+	}
+
+	time.Sleep(150 * time.Millisecond) // wait for timer to expire
+
+	// Check it is still alive.
+	if _, found := manager.Get(inst1.ID); !found {
+		t.Error("PTY instance was killed despite ActiveWS being true")
+	}
+
+	// Scenario 2: Pinned is true when timer expires -> should not kill and should clear timer.
+	inst2, err := manager.Spawn("", shell, args, "shell", "test-session-2")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst2.ID)
+	}()
+
+	manager.UnregisterWS(inst2.ID) // starts timer
+	if err := manager.SetPinned(inst2.ID, true); err != nil {
+		t.Fatalf("Failed to pin: %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond) // wait for timer to expire
+
+	// Check it is still alive.
+	if _, found := manager.Get(inst2.ID); !found {
+		t.Error("PTY instance was killed despite being pinned")
+	}
+}
