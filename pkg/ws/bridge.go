@@ -4,10 +4,16 @@ import (
 	"encoding/binary"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	writeWait = 10 * time.Second
+	pongWait  = 60 * time.Second
 )
 
 var Upgrader = websocket.Upgrader{
@@ -21,6 +27,7 @@ var Upgrader = websocket.Upgrader{
 
 func (c *Client) WritePump() {
 	for msg := range c.Send {
+		_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
 		err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
 		if err != nil {
 			break
@@ -36,11 +43,13 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 		_ = c.Ws.Close()
 	}()
 
+	_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
 	for {
 		mt, message, err := c.Ws.ReadMessage()
 		if err != nil {
 			break
 		}
+		_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
 		if mt != websocket.BinaryMessage || len(message) == 0 {
 			continue
 		}
