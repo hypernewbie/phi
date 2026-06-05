@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,10 @@ type PiSessionInfo struct {
 }
 
 type PiMessageContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Thinking string `json:"thinking"`
+	Name     string `json:"name"`
 }
 
 type PiMessageInner struct {
@@ -43,8 +46,9 @@ func ListPiSessions(cwd string) ([]Session, error) {
 
 	// 1. Encode CWD to double-dash project name.
 	// Normalize to forward slashes first, then replace both ":" and "/" with "-"
-	// so Windows paths like "C:/code/phi" → "--C--code-phi--" match what Pi stores.
-	normalized := strings.ReplaceAll(strings.Trim(cwd, "/"), ":", "-")
+	// so Windows paths like "C:\code\phi" → "--C--code-phi--" match what Pi stores.
+	normalizedCwd := filepath.ToSlash(cwd)
+	normalized := strings.ReplaceAll(strings.Trim(normalizedCwd, "/"), ":", "-")
 	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
 	
 	sessionsDir := expandHome("~/.pi/agent/sessions")
@@ -147,7 +151,8 @@ func extractPiSessionTitle(filePath string) string {
 }
 
 func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
-	normalized := strings.ReplaceAll(strings.Trim(cwd, "/"), ":", "-")
+	normalizedCwd := filepath.ToSlash(cwd)
+	normalized := strings.ReplaceAll(strings.Trim(normalizedCwd, "/"), ":", "-")
 	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
 	
 	sessionsDir := expandHome("~/.pi/agent/sessions")
@@ -203,7 +208,28 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 			var sb strings.Builder
 			for _, content := range pm.Message.Content {
 				if content.Type == "text" {
+					if sb.Len() > 0 {
+						sb.WriteString("\n\n")
+					}
 					sb.WriteString(content.Text)
+				} else if content.Type == "thinking" && content.Thinking != "" {
+					if sb.Len() > 0 {
+						sb.WriteString("\n\n")
+					}
+					lines := strings.Split(content.Thinking, "\n")
+					sb.WriteString("> **Thinking:**\n")
+					for _, l := range lines {
+						sb.WriteString("> " + l + "\n")
+					}
+				} else if content.Type == "toolCall" || content.Type == "tool_use" {
+					if sb.Len() > 0 {
+						sb.WriteString("\n\n")
+					}
+					if content.Name != "" {
+						sb.WriteString(fmt.Sprintf("*(Used tool: %s)*", content.Name))
+					} else {
+						sb.WriteString("*(Used tool)*")
+					}
 				}
 			}
 			txt := strings.TrimSpace(sb.String())
