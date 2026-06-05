@@ -587,6 +587,34 @@ body {
     height: 100%;
 }
 
+.reconnect-all-tabs-btn {
+    background-color: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+}
+
+.reconnect-all-tabs-btn:hover {
+    background-color: rgba(124, 106, 247, 0.1);
+    color: var(--accent-bright);
+    border-color: rgba(124, 106, 247, 0.2);
+}
+
+.reconnect-all-tabs-btn .icon {
+    width: 14px;
+    height: 14px;
+}
+
 .close-all-tabs-btn {
     background-color: transparent;
     border: 1px solid transparent;
