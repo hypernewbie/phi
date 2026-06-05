@@ -96,8 +96,11 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 		select {
 		case client.Send <- msg:
 		default:
-			// Backpressure: drop newest (discard incoming message) if client channel buffer is
-			// full to prevent middle-stream corruption of stateful ANSI escape sequences.
+			// Buffer overflow! Close connection to trigger a clean reconnect rather than streaming corrupted state.
+			log.Printf("[ws] Client send buffer overflow, closing connection to prevent terminal state corruption")
+			if client.Ws != nil {
+				_ = client.Ws.Close()
+			}
 		}
 	}
 }
