@@ -88,7 +88,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 
 	client := &Client{
 		Ws:   conn,
-		Send: make(chan []byte, 256),
+		Send: make(chan []byte, 16384),
 	}
 
 	manager.RegisterWS(inst.ID)
