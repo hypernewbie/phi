@@ -12,6 +12,7 @@ export class PTYWebSocket {
         this.url = `${protocol}//${window.location.host}/ws/pane/${paneId}`;
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
+        this.decoder = new TextDecoder('utf-8');
         
         this.ws.onopen = () => {
             console.log(`[ws] Connected for pane: ${paneId}`);
@@ -31,8 +32,7 @@ export class PTYWebSocket {
             
             switch (msgType) {
                 case 0x01: // PTY Output Stdout
-                    const decoder = new TextDecoder('utf-8');
-                    const text = decoder.decode(payload);
+                    const text = this.decoder.decode(payload, { stream: true });
                     this.onData(text);
                     break;
                 case 0x02: // Control JSON Message
