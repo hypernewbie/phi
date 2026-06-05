@@ -289,3 +289,50 @@ func TestGracePeriodActiveWSAndPinned(t *testing.T) {
 		t.Error("PTY instance was killed despite being pinned")
 	}
 }
+
+func TestMultipleConcurrentWebSockets(t *testing.T) {
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst.ID)
+	}()
+
+	// Register first WS connection.
+	if !manager.RegisterWS(inst.ID) {
+		t.Fatal("Failed to register first WS")
+	}
+	if !inst.ActiveWS || inst.ActiveWSCount != 1 {
+		t.Errorf("Expected ActiveWS=true, ActiveWSCount=1, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
+	}
+
+	// Register second WS connection.
+	if !manager.RegisterWS(inst.ID) {
+		t.Fatal("Failed to register second WS")
+	}
+	if !inst.ActiveWS || inst.ActiveWSCount != 2 {
+		t.Errorf("Expected ActiveWS=true, ActiveWSCount=2, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
+	}
+
+	// Unregister first connection. ActiveWS should remain true, ActiveWSCount should be 1, and no timer should be started.
+	manager.UnregisterWS(inst.ID)
+	if !inst.ActiveWS || inst.ActiveWSCount != 1 {
+		t.Errorf("Expected ActiveWS=true, ActiveWSCount=1, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
+	}
+	if inst.DetachTimer != nil {
+		t.Error("Expected DetachTimer to be nil since one WebSocket connection remains active")
+	}
+
+	// Unregister second connection. ActiveWS should now be false, ActiveWSCount should be 0, and a timer should be started.
+	manager.UnregisterWS(inst.ID)
+	if inst.ActiveWS || inst.ActiveWSCount != 0 {
+		t.Errorf("Expected ActiveWS=false, ActiveWSCount=0, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
+	}
+	if inst.DetachTimer == nil {
+		t.Error("Expected DetachTimer to be active after all WebSockets have disconnected")
+	}
+}
