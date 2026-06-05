@@ -250,9 +250,9 @@ func TestGetPiSessionTranscript(t *testing.T) {
 		t.Fatalf("GetPiSessionTranscript failed: %v", err)
 	}
 
-	// We expect 3 messages because the tool use line has no text content and is filtered out.
-	if len(messages) != 3 {
-		t.Fatalf("Expected 3 messages, got %d", len(messages))
+	// We expect 4 messages because tool use lines are now included.
+	if len(messages) != 4 {
+		t.Fatalf("Expected 4 messages, got %d", len(messages))
 	}
 
 	if messages[0].Role != "user" || messages[0].Text != "hello bot" {
@@ -265,5 +265,9 @@ func TestGetPiSessionTranscript(t *testing.T) {
 
 	if messages[2].Role != "user" || messages[2].Text != "another user message" {
 		t.Errorf("Unexpected third message: %+v", messages[2])
+	}
+
+	if messages[3].Role != "assistant" || messages[3].Text != "*(Used tool)*" {
+		t.Errorf("Unexpected fourth message: %+v", messages[3])
 	}
 }

@@ -2595,7 +2595,6 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    height: 100%;
 }
 .review-header-bar {
     display: flex;
