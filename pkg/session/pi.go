@@ -194,7 +194,11 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 		}
 
 		var pm PiMessage
-		if err := json.Unmarshal([]byte(line), &pm); err == nil && pm.Message.Role != "" {
+		if err := json.Unmarshal([]byte(line), &pm); err == nil {
+			role := pm.Message.Role
+			if role != "user" && role != "assistant" {
+				continue
+			}
 			var sb strings.Builder
 			for _, content := range pm.Message.Content {
 				if content.Type == "text" {
