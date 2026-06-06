@@ -824,7 +824,15 @@ export class SessionsManager {
                         header.className = 'review-bubble-header';
                         
                         const roleSpan = document.createElement('span');
-                        roleSpan.innerText = msg.role === 'user' ? 'User' : 'Assistant';
+                        if (msg.role === 'user') {
+                            roleSpan.innerText = 'User';
+                        } else if (msg.role === 'assistant') {
+                            roleSpan.innerText = 'Assistant';
+                        } else if (msg.role === 'toolResult') {
+                            roleSpan.innerText = 'Tool Output';
+                        } else {
+                            roleSpan.innerText = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+                        }
                         header.appendChild(roleSpan);
                         
                         const copyBtn = document.createElement('button');
