@@ -2508,6 +2508,13 @@ body {
     border-bottom-left-radius: 2px;
     color: var(--text-primary);
 }
+.review-bubble.role-toolResult {
+    align-self: flex-start;
+    background-color: rgba(30, 41, 59, 0.4);
+    border: 1px dashed var(--bg-border);
+    border-bottom-left-radius: 2px;
+    color: var(--text-primary);
+}
 .review-bubble-header {
     display: flex;
     justify-content: space-between;

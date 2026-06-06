@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -267,7 +268,130 @@ func TestGetPiSessionTranscript(t *testing.T) {
 		t.Errorf("Unexpected third message: %+v", messages[2])
 	}
 
-	if messages[3].Role != "assistant" || messages[3].Text != "*(Used tool)*" {
+	if messages[3].Role != "assistant" || messages[3].Text != "*(Used tool: tool)*" {
 		t.Errorf("Unexpected fourth message: %+v", messages[3])
+	}
+}
+
+func TestGetPiSessionTranscript_WithTools(t *testing.T) {
+	tempHome := t.TempDir()
+	homeKey := "USERPROFILE"
+	if os.Getenv(homeKey) == "" {
+		homeKey = "HOME"
+	}
+	origHomeVal := os.Getenv(homeKey)
+	if err := os.Setenv(homeKey, tempHome); err != nil {
+		t.Fatalf("setenv failed: %v", err)
+	}
+	defer os.Setenv(homeKey, origHomeVal)
+
+	projectDirName := "--C--mock-path--"
+	mockSessionID := "conv_tools_123"
+
+	piProjPath := filepath.Join(tempHome, ".pi", "agent", "sessions", projectDirName)
+	if err := os.MkdirAll(piProjPath, 0755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	jsonlPath := filepath.Join(piProjPath, mockSessionID+".jsonl")
+	mockContent := `{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"let's run a tool"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"ls -la"}}]}}` + "\n" +
+		`{"type":"message","message":{"role":"toolResult","toolName":"bash","toolCallId":"call_1","content":[{"type":"text","text":"file1.txt\nfile2.txt"}]}}` + "\n"
+
+	if err := os.WriteFile(jsonlPath, []byte(mockContent), 0644); err != nil {
+		t.Fatalf("write mock session file failed: %v", err)
+	}
+
+	messages, err := GetPiSessionTranscript("C:/mock/path", mockSessionID)
+	if err != nil {
+		t.Fatalf("GetPiSessionTranscript failed: %v", err)
+	}
+
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(messages))
+	}
+
+	// First message: assistant with thinking and tool use (including bash command)
+	m0 := messages[0]
+	if m0.Role != "assistant" {
+		t.Errorf("Expected role assistant, got %s", m0.Role)
+	}
+	if !strings.Contains(m0.Text, "> **Thinking:**\n> let's run a tool") {
+		t.Errorf("Missing thinking block: %s", m0.Text)
+	}
+	if !strings.Contains(m0.Text, "*(Used tool: bash)*") {
+		t.Errorf("Missing tool use marker: %s", m0.Text)
+	}
+	if !strings.Contains(m0.Text, "```bash\nls -la\n```") {
+		t.Errorf("Missing tool arguments block: %s", m0.Text)
+	}
+
+	// Second message: toolResult with output
+	m1 := messages[1]
+	if m1.Role != "toolResult" {
+		t.Errorf("Expected role toolResult, got %s", m1.Role)
+	}
+	if !strings.Contains(m1.Text, "> **Tool Output (bash):**") {
+		t.Errorf("Missing tool output header: %s", m1.Text)
+	}
+	if !strings.Contains(m1.Text, "file1.txt\nfile2.txt") {
+		t.Errorf("Missing tool output text: %s", m1.Text)
+	}
+}
+
+func TestGetPiSessionTranscript_RealFile(t *testing.T) {
+	absPath := `C:\Users\HyperNewbie\.gemini\antigravity-cli\brain\8ab8f921-fca3-432a-a927-aad940cc4bc1\scratch\019e976c-8167-7e8f-80a4-6c823e9cab84.jsonl`
+	_, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
+		t.Skip("Scratch file not found, skipping real file test")
+	}
+
+	tempHome := t.TempDir()
+	homeKey := "USERPROFILE"
+	if os.Getenv(homeKey) == "" {
+		homeKey = "HOME"
+	}
+	origHomeVal := os.Getenv(homeKey)
+	if err := os.Setenv(homeKey, tempHome); err != nil {
+		t.Fatalf("setenv failed: %v", err)
+	}
+	defer os.Setenv(homeKey, origHomeVal)
+
+	projectDirName := "--home-hypernewbie-code-ae3--"
+	mockSessionID := "019e976c-8167-7e8f-80a4-6c823e9cab84"
+
+	piProjPath := filepath.Join(tempHome, ".pi", "agent", "sessions", projectDirName)
+	if err := os.MkdirAll(piProjPath, 0755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+
+	destPath := filepath.Join(piProjPath, "2026-06-05T10-55-31-175Z_"+mockSessionID+".jsonl")
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("Failed to read scratch file: %v", err)
+	}
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+
+	messages, err := GetPiSessionTranscript("/home/hypernewbie/code/ae3", mockSessionID)
+	if err != nil {
+		t.Fatalf("GetPiSessionTranscript failed: %v", err)
+	}
+
+	if len(messages) == 0 {
+		t.Fatalf("Expected messages to be parsed, got 0")
+	}
+	t.Logf("Parsed %d messages from real file", len(messages))
+
+	hasToolResult := false
+	for _, m := range messages {
+		if m.Role == "toolResult" {
+			hasToolResult = true
+			break
+		}
+	}
+	if !hasToolResult {
+		t.Errorf("Expected toolResult messages in parsed transcript, but none found")
 	}
 }
