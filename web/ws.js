@@ -16,7 +16,6 @@ export class PTYWebSocket {
         
         this.ws.onopen = () => {
             console.log(`[ws] Connected for pane: ${paneId}`);
-            this.pingInterval = setInterval(() => this.sendPing(), 15000);
             if (this.onOpen) this.onOpen();
         };
 
