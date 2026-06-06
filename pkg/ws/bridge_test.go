@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hypernewbie/phi/pkg/pty"
 
 	"github.com/gorilla/websocket"
 )
@@ -131,5 +134,68 @@ func TestWebSocketPipes_10MB(t *testing.T) {
 		t.Errorf("Length mismatch: sent %d, got %d", len(largePayload), len(received))
 	} else if !bytes.Equal(received, largePayload) {
 		t.Error("Payload bytes mismatch")
+	}
+}
+
+func TestWebSocketKeepalive(t *testing.T) {
+	origPongWait := pongWait
+	origPingPeriod := pingPeriod
+	defer func() {
+		pongWait = origPongWait
+		pingPeriod = origPingPeriod
+	}()
+
+	pongWait = 200 * time.Millisecond
+	pingPeriod = 100 * time.Millisecond
+
+	hub := NewHub()
+	manager := pty.NewManager()
+	inst := &pty.PTYInstance{
+		ID: "test-pane",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := Upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Server failed to upgrade connection: %v", err)
+			return
+		}
+
+		client := &Client{
+			Ws:   conn,
+			Send: make(chan []byte, 65536),
+		}
+
+		hub.Register(inst.ID, client)
+
+		go client.WritePump()
+		client.ReadPump(inst, manager, hub)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Client failed to dial server: %v", err)
+	}
+	defer conn.Close()
+
+	errChan := make(chan error, 1)
+	go func() {
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("Connection closed prematurely: %v", err)
+	case <-time.After(500 * time.Millisecond):
+		// Keepalive succeeded!
 	}
 }

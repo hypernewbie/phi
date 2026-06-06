@@ -11,9 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	writeWait = 10 * time.Second
-	pongWait  = 60 * time.Second
+var (
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
+	pingPeriod = 50 * time.Second
 )
 
 var Upgrader = websocket.Upgrader{
@@ -26,14 +27,30 @@ var Upgrader = websocket.Upgrader{
 }
 
 func (c *Client) WritePump() {
-	for msg := range c.Send {
-		_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
-		err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
-		if err != nil {
-			break
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		_ = c.Ws.Close()
+	}()
+
+	for {
+		select {
+		case msg, ok := <-c.Send:
+			if !ok {
+				return
+			}
+			_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
+			err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
+			if err != nil {
+				return
+			}
+		case <-ticker.C:
+			_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
-	_ = c.Ws.Close()
 }
 
 func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
@@ -44,6 +61,10 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 	}()
 
 	_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
+	c.Ws.SetPongHandler(func(string) error {
+		_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 	for {
 		mt, message, err := c.Ws.ReadMessage()
 		if err != nil {
