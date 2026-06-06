@@ -22,15 +22,18 @@ type PiSessionInfo struct {
 }
 
 type PiMessageContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Thinking string `json:"thinking"`
-	Name     string `json:"name"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 type PiMessageInner struct {
-	Role    string             `json:"role"`
-	Content []PiMessageContent `json:"content"`
+	Role       string             `json:"role"`
+	Content    []PiMessageContent `json:"content"`
+	ToolName   string             `json:"toolName"`
+	ToolCallID string             `json:"toolCallId"`
 }
 
 type PiMessage struct {
@@ -202,16 +205,26 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 		var pm PiMessage
 		if err := json.Unmarshal([]byte(line), &pm); err == nil {
 			role := pm.Message.Role
-			if role != "user" && role != "assistant" {
+			if role != "user" && role != "assistant" && role != "toolResult" {
 				continue
 			}
 			var sb strings.Builder
+			hasHeader := false
+			if role == "toolResult" {
+				toolName := pm.Message.ToolName
+				if toolName == "" {
+					toolName = "tool"
+				}
+				sb.WriteString(fmt.Sprintf("> **Tool Output (%s):**\n\n", toolName))
+				hasHeader = true
+			}
 			for _, content := range pm.Message.Content {
 				if content.Type == "text" {
-					if sb.Len() > 0 {
+					if sb.Len() > 0 && !hasHeader {
 						sb.WriteString("\n\n")
 					}
 					sb.WriteString(content.Text)
+					hasHeader = false
 				} else if content.Type == "thinking" && content.Thinking != "" {
 					if sb.Len() > 0 {
 						sb.WriteString("\n\n")
@@ -225,10 +238,26 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 					if sb.Len() > 0 {
 						sb.WriteString("\n\n")
 					}
-					if content.Name != "" {
-						sb.WriteString(fmt.Sprintf("*(Used tool: %s)*", content.Name))
-					} else {
-						sb.WriteString("*(Used tool)*")
+					toolName := content.Name
+					if toolName == "" {
+						toolName = "tool"
+					}
+					sb.WriteString(fmt.Sprintf("*(Used tool: %s)*", toolName))
+					if len(content.Arguments) > 0 {
+						var argsMap map[string]interface{}
+						if err := json.Unmarshal(content.Arguments, &argsMap); err == nil {
+							if cmd, ok := argsMap["command"].(string); ok {
+								sb.WriteString(fmt.Sprintf("\n```bash\n%s\n```", cmd))
+							} else if code, ok := argsMap["content"].(string); ok {
+								sb.WriteString(fmt.Sprintf("\n```\n%s\n```", code))
+							} else {
+								if pretty, err := json.MarshalIndent(argsMap, "", "  "); err == nil {
+									sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(pretty)))
+								}
+							}
+						} else {
+							sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(content.Arguments)))
+						}
 					}
 				}
 			}
