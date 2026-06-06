@@ -233,3 +233,76 @@ func TestListOpenCodeSessions_DBQuery(t *testing.T) {
 		t.Error("Did not find both expected database sessions in results")
 	}
 }
+
+func TestGetOpenCodeSessionTranscript_DBQuery(t *testing.T) {
+	mockHome := setupMockHome(t)
+
+	dbDir := filepath.Join(mockHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		t.Fatalf("Failed to create mock opencode database folder: %v", err)
+	}
+
+	dbPath := filepath.Join(dbDir, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open temporary sqlite db: %v", err)
+	}
+	defer db.Close()
+
+	// Create tables matching opencode structure.
+	_, err = db.Exec(`
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			data TEXT,
+			session_id TEXT,
+			time_created TEXT
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			message_id TEXT,
+			data TEXT,
+			time_created TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to initialise database tables: %v", err)
+	}
+
+	// Insert mock message and parts
+	_, err = db.Exec(`
+		INSERT INTO message (id, data, session_id, time_created)
+		VALUES ('msg1', '{"role":"user"}', 'sess-123', '2026-06-01T12:00:00Z');
+
+		INSERT INTO message (id, data, session_id, time_created)
+		VALUES ('msg2', '{"role":"assistant"}', 'sess-123', '2026-06-01T12:01:00Z');
+
+		INSERT INTO part (id, message_id, data, time_created)
+		VALUES ('part1', 'msg1', '{"type":"text","text":"hello from user"}', '2026-06-01T12:00:01Z');
+
+		INSERT INTO part (id, message_id, data, time_created)
+		VALUES ('part2', 'msg2', '{"type":"text","text":"hello from assistant"}', '2026-06-01T12:01:01Z');
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert mock messages/parts: %v", err)
+	}
+
+	db.Close()
+
+	messages, err := GetOpenCodeSessionTranscript("sess-123")
+	if err != nil {
+		t.Fatalf("GetOpenCodeSessionTranscript failed: %v", err)
+	}
+
+	if len(messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(messages))
+	}
+
+	if messages[0].Role != "user" || messages[0].Text != "hello from user" {
+		t.Errorf("Unexpected first message: %+v", messages[0])
+	}
+
+	if messages[1].Role != "assistant" || messages[1].Text != "hello from assistant" {
+		t.Errorf("Unexpected second message: %+v", messages[1])
+	}
+}
+
