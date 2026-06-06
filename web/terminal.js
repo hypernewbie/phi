@@ -1326,11 +1326,14 @@ export class TabManager {
             btn.innerText = model;
             btn.addEventListener('click', () => {
                 if (backend === 'opencode') {
-                    this.sendRawInput('/models\r');
+                    this.sendRawInput('/models');
                     setTimeout(() => {
-                        this.sendRawInput(model);
+                        this.sendRawInput('\r');
                         setTimeout(() => {
-                            this.sendRawInput('\r');
+                            this.sendRawInput(model);
+                            setTimeout(() => {
+                                this.sendRawInput('\r');
+                            }, 350);
                         }, 350);
                     }, 350);
                 } else {
