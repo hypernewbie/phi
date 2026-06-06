@@ -695,7 +695,16 @@ body {
     color: var(--text-primary);
     background-color: var(--bg-base);
     border-color: var(--bg-border);
+    border-top: 2px solid var(--accent);
+    padding-top: 7px;
     font-weight: 500;
+    position: relative;
+    z-index: 1;
+    margin-bottom: -1px;
+}
+
+.tab.active:hover {
+    background-color: var(--bg-base);
 }
 
 .tab.has-attention {
