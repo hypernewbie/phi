@@ -106,6 +106,7 @@ export class TabManager {
                 }
             }
             this.lastInputValue = currentVal;
+            this.adjustInputHeight();
         });
 
         // Staged input send on Enter
@@ -131,7 +132,8 @@ export class TabManager {
                     'PageUp': '\u001b[5~',
                     'PageDown': '\u001b[6~',
                     'Enter': '\r',
-                    'Escape': '\x1b'
+                    'Escape': '\x1b',
+                    'Backspace': '\x7f'
                 };
                 
                 let sendChar = null;
@@ -541,6 +543,7 @@ export class TabManager {
                 this.inputTextArea.focus({ preventScroll: true });
                 const len = this.inputTextArea.value.length;
                 this.inputTextArea.setSelectionRange(len, len);
+                this.adjustInputHeight();
                 return false;
             }
             // Prevent browser default for standard CLI shortcuts in direct mode
@@ -860,6 +863,7 @@ export class TabManager {
         activeTab.ws.sendInput(payload + '\r');
         this.inputTextArea.value = '';
         this.lastInputValue = '';
+        this.adjustInputHeight();
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
@@ -1080,6 +1084,12 @@ export class TabManager {
                 this.switchTab(targetPaneId);
             }
         }
+    }
+
+    adjustInputHeight() {
+        if (!this.inputTextArea) return;
+        this.inputTextArea.style.height = 'auto';
+        this.inputTextArea.style.height = this.inputTextArea.scrollHeight + 'px';
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
@@ -1426,6 +1436,7 @@ export class TabManager {
                 activeTab.ws.sendInput(payload + '\r');
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
+                this.adjustInputHeight();
                 this.inputTextArea.focus({ preventScroll: true });
                 this._spamScrollToBottom(activeTab);
                 dropup.classList.add('hidden');
