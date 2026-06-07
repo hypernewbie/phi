@@ -3,6 +3,7 @@ package session
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,10 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 	}
 	defer db.Close()
 
+	return getOpenCodeSessionTranscriptFromDB(db, sessionID)
+}
+
+func getOpenCodeSessionTranscriptFromDB(db *sql.DB, sessionID string) ([]Message, error) {
 	// 1. Get all messages for the session
 	msgRows, err := db.Query(`SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC`, sessionID)
 	if err != nil {
@@ -92,6 +97,13 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 
 	type msgData struct {
 		Role string `json:"role"`
+	}
+
+	// Support for nested message structure
+	type nestedMsgData struct {
+		Message struct {
+			Role string `json:"role"`
+		} `json:"message"`
 	}
 
 	type partData struct {
@@ -107,7 +119,16 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 		}
 
 		var mInfo msgData
-		if err := json.Unmarshal([]byte(dataStr), &mInfo); err != nil || mInfo.Role == "" {
+		var nestedMInfo nestedMsgData
+		var role string
+
+		if err := json.Unmarshal([]byte(dataStr), &mInfo); err == nil && mInfo.Role != "" {
+			role = mInfo.Role
+		} else if err := json.Unmarshal([]byte(dataStr), &nestedMInfo); err == nil && nestedMInfo.Message.Role != "" {
+			role = nestedMInfo.Message.Role
+		}
+
+		if role == "" {
 			continue
 		}
 
@@ -135,7 +156,7 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 		}
 
 		messages = append(messages, Message{
-			Role: mInfo.Role,
+			Role: role,
 			Text: txt,
 		})
 	}
