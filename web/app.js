@@ -130,7 +130,39 @@ class App {
             });
         }
 
-        // 8. Setup clipboard sync listener
+        // 8. Setup header action listeners
+        const btopBtn = document.getElementById('header-btop-btn');
+        if (btopBtn) {
+            btopBtn.addEventListener('click', async () => {
+                try {
+                    const res = await fetch('/api/terminals', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            coder: 'bash',
+                            cwd: this.sessionsManager.activeCWD || this.sessionsManager.activeWorkspace,
+                            session_id: ''
+                        })
+                    });
+                    if (!res.ok) throw new Error("Failed to spawn btop session");
+                    const data = await res.json();
+                    
+                    this.tabManager.createTab(data.pane_id, data.session_id, `btop`, 'bash', this.sessionsManager.activeWorkspace, this.sessionsManager.activeCWD);
+                    
+                    const checkWs = setInterval(() => {
+                        const tab = this.tabManager.tabs.get(data.pane_id);
+                        if (tab && tab.ws && tab.ws.ws && tab.ws.ws.readyState === WebSocket.OPEN) {
+                            clearInterval(checkWs);
+                            tab.ws.sendInput('btop\r');
+                        }
+                    }, 50);
+                    setTimeout(() => clearInterval(checkWs), 2000);
+                } catch (e) {
+                    this.showToast(e.message, { type: 'error' });
+                }
+            });
+        }
+
         const clipboardBtn = document.getElementById('header-clipboard-btn');
         if (clipboardBtn) {
             clipboardBtn.addEventListener('click', async () => {
