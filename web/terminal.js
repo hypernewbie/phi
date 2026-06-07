@@ -663,6 +663,18 @@ export class TabManager {
                 tabInfo.isDead = true;
                 tabEl.classList.add('dead');
                 this._showReconnectOverlay(tabInfo);
+            },
+            () => {
+                try {
+                    if (tabInfo === this.getActiveTab()) {
+                        this.fitActiveTerminal();
+                    } else {
+                        tabInfo.fitAddon.fit();
+                    }
+                    this.sendResizeToBackend(tabInfo);
+                } catch (e) {
+                    console.error("[term] Fit/resize error on initial socket open:", e);
+                }
             }
         );
         
