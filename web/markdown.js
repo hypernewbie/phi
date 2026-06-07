@@ -8,6 +8,8 @@ export class MarkdownManager {
         this.modalTitle = document.getElementById('md-modal-title');
         this.modalBody = document.getElementById('md-modal-body');
         this.modalClose = document.getElementById('md-modal-close');
+        this.modalCopyBtn = document.getElementById('md-modal-copy-btn');
+        this.currentRawContent = '';
 
         this._configureMarked();
         this._setupEventListeners();
@@ -26,6 +28,15 @@ export class MarkdownManager {
         this.modal.addEventListener('click', (e) => {
             if (e.target === this.modal) this.closeModal();
         });
+        if (this.modalCopyBtn) {
+            this.modalCopyBtn.addEventListener('click', () => {
+                if (this.currentRawContent) {
+                    this._copyToClipboard(this.currentRawContent, 'Copied markdown content to clipboard');
+                } else {
+                    this.app.showToast('No content to copy', { type: 'error' });
+                }
+            });
+        }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && !this.modal.classList.contains('hidden')) {
                 this.closeModal();
@@ -163,11 +174,13 @@ export class MarkdownManager {
         this.modalTitle.innerText = f.name;
         this.modalBody.innerHTML = '<div class="md-rendering">Rendering...</div>';
         this.modal.classList.remove('hidden');
+        this.currentRawContent = '';
 
         try {
             const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`);
             if (!res.ok) throw new Error(await res.text());
             const raw = await res.text();
+            this.currentRawContent = raw;
             const html = window.marked ? window.marked.parse(raw) : `<pre>${this._escape(raw)}</pre>`;
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
 
@@ -185,6 +198,7 @@ export class MarkdownManager {
     closeModal() {
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
+        this.currentRawContent = '';
     }
 
     async _promptAddDir() {
@@ -236,6 +250,24 @@ export class MarkdownManager {
             const newPos = start + padBefore.length + relPath.length;
             textarea.setSelectionRange(newPos, newPos);
             textarea.focus();
+        }
+    }
+
+    async _copyToClipboard(text, msg) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const ta = Object.assign(document.createElement('textarea'), { value: text });
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
+        } catch (err) {
+            this.app.showToast('Failed to copy content', { type: 'error' });
         }
     }
 }
