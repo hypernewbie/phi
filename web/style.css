@@ -872,7 +872,7 @@ body {
     height: 38px;
     min-height: 38px;
     max-height: 160px;
-    resize: vertical;
+    resize: none;
     outline: none;
     transition: border-color 0.15s;
 }
