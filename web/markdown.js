@@ -250,6 +250,10 @@ export class MarkdownManager {
             const newPos = start + padBefore.length + relPath.length;
             textarea.setSelectionRange(newPos, newPos);
             textarea.focus();
+            
+            if (this.app.tabManager) {
+                this.app.tabManager.adjustInputHeight();
+            }
         }
     }
 
