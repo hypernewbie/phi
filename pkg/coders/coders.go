@@ -88,6 +88,7 @@ var Registry = map[string]Coder{
 		SessionSource: "pi_files",
 		Presets: []Preset{
 			{Name: "/quit", Value: "/quit\r"},
+			{Name: "/resume", Value: "/resume\r"},
 			{Name: "/model", Value: "/model\r"},
 			{Name: "/compact", Value: "/compact\r"},
 			{Name: "/copy", Value: "/copy\r"},
