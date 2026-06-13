@@ -1268,7 +1268,7 @@ export class TabManager {
                 btn.innerText = p.name;
                 btn.addEventListener('click', () => {
                     const activeTab = this.getActiveTab();
-                    if (activeTab && activeTab.coder === 'opencode' && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                    if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                         const cmd = p.value.slice(0, -1);
                         this.sendRawInput(cmd);
                         setTimeout(() => {
@@ -1357,6 +1357,11 @@ export class TabManager {
                                 this.sendRawInput('\r');
                             }, 350);
                         }, 350);
+                    }, 350);
+                } else if (backend === 'pi') {
+                    this.sendRawInput(`/model ${model}`);
+                    setTimeout(() => {
+                        this.sendRawInput('\r');
                     }, 350);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
