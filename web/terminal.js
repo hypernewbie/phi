@@ -1270,7 +1270,10 @@ export class TabManager {
                     const activeTab = this.getActiveTab();
                     if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                         const cmd = p.value.slice(0, -1);
-                        this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~\r');
+                        this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
+                        setTimeout(() => {
+                            this.sendRawInput('\r');
+                        }, 200);
                     } else {
                         this.sendRawInput(p.value);
                     }
@@ -1356,7 +1359,10 @@ export class TabManager {
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    this.sendRawInput(`\x1b[200~/model ${model}\x1b[201~\r`);
+                    this.sendRawInput(`\x1b[200~/model ${model}\x1b[201~`);
+                    setTimeout(() => {
+                        this.sendRawInput('\r');
+                    }, 200);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
                 }
