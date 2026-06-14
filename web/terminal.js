@@ -562,7 +562,9 @@ export class TabManager {
         });
         
         // Opencode scroll fix: intercept in capture phase before xterm.js can consume the event
-        // Scoped strictly to opencode tabs – all other coders pass through untouched
+        // Scoped strictly to opencode tabs – all other coders pass through untouched.
+        // We always send Ctrl+Alt+Y / Ctrl+Alt+E to the TUI regardless of alternate buffer detection,
+        // as OpenCode is a full-screen TUI application and doesn't use standard terminal scrollback.
         termContainer.addEventListener('wheel', (e) => {
             if (tabInfo.coder !== 'opencode') return;
 
@@ -572,21 +574,12 @@ export class TabManager {
             // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
             const lines = Math.max(1, Math.min(Math.round(Math.abs(e.deltaY) / 40), 8));
 
-            if (term.buffer.active.type === 'alternate') {
-                // Alternate screen: send Ctrl+Alt+Y / Ctrl+Alt+E sequences to the TUI
-                // These keys scroll the chat viewport up/down one line
-                e.preventDefault();
-                e.stopPropagation();
-                const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-                const payload = seq.repeat(lines);
-                if (tabInfo.ws && !tabInfo.isDead) {
-                    tabInfo.ws.sendInput(payload);
-                }
-            } else {
-                // Normal screen: scroll the xterm viewport directly
-                e.preventDefault();
-                e.stopPropagation();
-                term.scrollLines(isUp ? -lines : lines);
+            e.preventDefault();
+            e.stopPropagation();
+            const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+            const payload = seq.repeat(lines);
+            if (tabInfo.ws && !tabInfo.isDead) {
+                tabInfo.ws.sendInput(payload);
             }
         }, { capture: true, passive: false });
         
