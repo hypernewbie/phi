@@ -192,7 +192,10 @@ export class DiffController {
             
             const currentSelected = this.commitSelect.value || 'unstaged';
             
-            this.commitSelect.innerHTML = '<option value="unstaged">Unstaged Changes</option>';
+            this.commitSelect.innerHTML = `
+                <option value="unstaged">Unstaged Changes</option>
+                <option value="staged">Staged Changes</option>
+            `;
             
             if (Array.isArray(commits)) {
                 commits.forEach(commit => {

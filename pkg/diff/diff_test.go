@@ -137,3 +137,23 @@ func TestSpawnDiff_WithCommit(t *testing.T) {
 		t.Errorf("Expected cwd to be %q, got %q", dir, inst.Cwd)
 	}
 }
+
+func TestSpawnDiff_Staged(t *testing.T) {
+	dir := initialiseGitRepo(t)
+	manager := pty.NewManager()
+
+	inst, err := SpawnDiff(dir, "staged", manager)
+	if err != nil {
+		t.Fatalf("SpawnDiff with staged failed: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst.ID)
+	}()
+
+	if inst.Coder != "diff" {
+		t.Errorf("Expected coder to be 'diff', got %q", inst.Coder)
+	}
+	if inst.Cwd != dir {
+		t.Errorf("Expected cwd to be %q, got %q", dir, inst.Cwd)
+	}
+}

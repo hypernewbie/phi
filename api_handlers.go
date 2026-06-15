@@ -324,7 +324,9 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var cmd *exec.Cmd
-	if commit == "" || commit == "unstaged" {
+	if commit == "staged" {
+		cmd = exec.Command("git", "diff", "--cached", "-w", "--no-color", "-U"+contextLines)
+	} else if commit == "" || commit == "unstaged" {
 		cmd = exec.Command("git", "diff", "-w", "--no-color", "-U"+contextLines)
 	} else {
 		cmd = exec.Command("git", "show", "-w", "--no-color", "-U"+contextLines, commit)
