@@ -6,7 +6,9 @@ import (
 
 func SpawnDiff(dir string, commit string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	var args []string
-	if commit == "" || commit == "unstaged" {
+	if commit == "staged" {
+		args = []string{"diff", "--cached", "--color=always", "-w"}
+	} else if commit == "" || commit == "unstaged" {
 		args = []string{"diff", "--color=always", "-w"}
 	} else {
 		args = []string{"show", "--color=always", "-w", commit}
