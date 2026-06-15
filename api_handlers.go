@@ -889,11 +889,9 @@ func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		ThemeColor    string          `json:"theme_color"`
 		ModelPresets  ModelPresetsMap `json:"model_presets"`
 		QuickCommands []QuickCommand  `json:"quick_commands"`
 	}{
-		ThemeColor:    cfg.ThemeColor,
 		ModelPresets:  cfg.ModelPresets,
 		QuickCommands: cfg.QuickCommands,
 	}
@@ -965,7 +963,6 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var importedData struct {
-		ThemeColor    string          `json:"theme_color"`
 		ModelPresets  ModelPresetsMap `json:"model_presets"`
 		QuickCommands []QuickCommand  `json:"quick_commands"`
 	}
@@ -976,9 +973,6 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := loadConfig()
-	if importedData.ThemeColor != "" {
-		cfg.ThemeColor = importedData.ThemeColor
-	}
 	if importedData.ModelPresets != nil {
 		cfg.ModelPresets = importedData.ModelPresets
 	}
