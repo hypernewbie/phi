@@ -27,6 +27,7 @@ var (
 
 func main() {
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
+	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
 	flag.Parse()
 
 	// The directory Phi is launched from becomes the default workspace.
@@ -91,7 +92,7 @@ func main() {
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)
 
-	addr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
+	addr := fmt.Sprintf("%s:%d", *ipFlag, *portFlag)
 	log.Printf("[main] Server running on http://%s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
