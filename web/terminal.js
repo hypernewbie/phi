@@ -48,9 +48,47 @@ export class TabManager {
         });
 
         // Initialise the 1-second background visual idle and prompt detection loop.
+        // Also poll CPU stats independently so a stats fetch failure cannot
+        // break the idle/notification path (CPU is decorative, never load-bearing).
         setInterval(() => {
             this.pollTerminalIdleAndNotifications();
         }, 1000);
+        setInterval(() => {
+            this.pollSystemCPU();
+        }, 2000);
+    }
+
+    /**
+     * Fetch current system CPU% from /api/system/cpu and update the phi
+     * logo's CPU state class (.cpu-idle / .cpu-moderate / .cpu-high).
+     *
+     * Independent of the terminal idle poll — a fetch failure here
+     * must NOT break anything else.
+     */
+    async pollSystemCPU() {
+        try {
+            const res = await fetch('/api/system/cpu');
+            if (!res.ok) return;
+            const data = await res.json();
+            const cpu = typeof data.cpu === 'number' ? data.cpu : 0;
+            this.applyCPUIndicator(cpu);
+        } catch (e) {
+            // Silent: decorative feature, never break anything.
+        }
+    }
+
+    applyCPUIndicator(cpuPercent) {
+        const logo = document.querySelector('.brand .logo');
+        if (!logo) return;
+        // Thresholds: idle < 30, moderate 30–70, high > 70
+        let level = 'cpu-idle';
+        if (cpuPercent > 70) level = 'cpu-high';
+        else if (cpuPercent > 30) level = 'cpu-moderate';
+        // Don't churn the DOM if the level hasn't changed
+        if (logo.dataset.cpuLevel === level) return;
+        logo.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high');
+        logo.classList.add(level);
+        logo.dataset.cpuLevel = level;
     }
     
     saveTabsState() {
