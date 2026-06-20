@@ -39,7 +39,7 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 
 		decodedPath := decodeClaudePath(d.Name())
 		// Filter by requested CWD
-		if cwd != "" && decodedPath != cwd {
+		if cwd != "" && NormalisePath(decodedPath) != NormalisePath(cwd) {
 			continue
 		}
 

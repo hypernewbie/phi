@@ -2,6 +2,8 @@ package session
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -58,4 +60,11 @@ func parseRawTime(val interface{}) time.Time {
 		}
 	}
 	return time.Now()
+}
+
+// NormalisePath cleans and standardises a workspace path for OS-agnostic comparisons.
+func NormalisePath(p string) string {
+	p = filepath.ToSlash(filepath.Clean(p))
+	p = strings.TrimSuffix(p, "/")
+	return strings.ToLower(p)
 }

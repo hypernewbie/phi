@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -51,9 +50,7 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 			sessionCwd = worktree
 		}
 
-		// Normalize separators before comparing — git returns forward slashes on
-		// Windows but OpenCode stores backslashes in the DB.
-		if cwd != "" && filepath.ToSlash(sessionCwd) != filepath.ToSlash(cwd) {
+		if cwd != "" && NormalisePath(sessionCwd) != NormalisePath(cwd) {
 			continue
 		}
 

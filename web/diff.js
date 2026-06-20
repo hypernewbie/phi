@@ -165,13 +165,21 @@ export class DiffController {
     _setPanel(mode) {
         const termEl = document.getElementById('diff-term-container');
         const mdEl = document.getElementById('markdown-file-list');
+        const cmdEl = document.getElementById('cmd-panel');
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
+            cmdEl?.classList.add('hidden');
+            this.actionBar?.classList.add('hidden');
+        } else if (mode === 'cmd') {
+            termEl.classList.add('hidden');
+            mdEl.classList.add('hidden');
+            cmdEl?.classList.remove('hidden');
             this.actionBar?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
+            cmdEl?.classList.add('hidden');
             if (this.activeTab === 'diff') {
                 this.actionBar?.classList.remove('hidden');
                 this.commitSelect?.classList.remove('hidden');
@@ -216,12 +224,289 @@ export class DiffController {
         }
     }
 
+    renderCmdPanel() {
+        const cmdEl = document.getElementById('cmd-panel');
+        if (!cmdEl) return;
+        cmdEl.innerHTML = '';
+
+        // 1. Create toolbar
+        const toolbar = document.createElement('div');
+        toolbar.className = 'cmd-toolbar';
+
+        const addBtn = document.createElement('button');
+        addBtn.innerHTML = `
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Add Command
+        `;
+        addBtn.addEventListener('click', () => this.addCommand());
+        toolbar.appendChild(addBtn);
+
+        const copyAllBtn = document.createElement('button');
+        copyAllBtn.innerHTML = `
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Copy All
+        `;
+        copyAllBtn.addEventListener('click', () => this.copyAllCommands());
+        toolbar.appendChild(copyAllBtn);
+
+        const pasteListBtn = document.createElement('button');
+        pasteListBtn.innerHTML = `
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            Paste Config
+        `;
+        pasteListBtn.addEventListener('click', () => this.pasteCommands());
+        toolbar.appendChild(pasteListBtn);
+
+        cmdEl.appendChild(toolbar);
+
+        // 2. Create list
+        const listContainer = document.createElement('div');
+        listContainer.className = 'cmd-list';
+
+        const quickCmds = this.app.quickCommands || [];
+        if (quickCmds.length === 0) {
+            const emptyHint = document.createElement('div');
+            emptyHint.style.color = 'var(--text-muted)';
+            emptyHint.style.fontSize = '12px';
+            emptyHint.style.padding = '12px 4px';
+            emptyHint.innerText = 'No quick commands configured.';
+            listContainer.appendChild(emptyHint);
+        } else {
+            quickCmds.forEach(cmd => {
+                const item = document.createElement('div');
+                item.className = 'cmd-item';
+
+                const left = document.createElement('div');
+                left.className = 'cmd-item-left';
+
+                const runBtn = document.createElement('button');
+                runBtn.className = 'cmd-run-btn';
+                runBtn.innerText = cmd.name;
+                runBtn.title = `Click to run: ${cmd.command}`;
+                runBtn.addEventListener('click', () => this.runCommand(cmd));
+                left.appendChild(runBtn);
+
+                const val = document.createElement('div');
+                val.className = 'cmd-val';
+                val.innerText = cmd.command;
+                val.title = cmd.command;
+                left.appendChild(val);
+
+                item.appendChild(left);
+
+                // Actions
+                const actions = document.createElement('div');
+                actions.className = 'cmd-item-actions';
+
+                // Copy single
+                const copySingleBtn = document.createElement('button');
+                copySingleBtn.className = 'cmd-action-btn';
+                copySingleBtn.title = 'Copy single JSON';
+                copySingleBtn.innerHTML = `
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                `;
+                copySingleBtn.addEventListener('click', () => this.copySingleCommand(cmd));
+                actions.appendChild(copySingleBtn);
+
+                // Edit
+                const editBtn = document.createElement('button');
+                editBtn.className = 'cmd-action-btn';
+                editBtn.title = 'Edit';
+                editBtn.innerHTML = `
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polygon points="16 3 21 8 8 21 3 21 3 16 16 3"></polygon></svg>
+                `;
+                editBtn.addEventListener('click', () => this.editCommand(cmd));
+                actions.appendChild(editBtn);
+
+                // Delete
+                const delBtn = document.createElement('button');
+                delBtn.className = 'cmd-action-btn del';
+                delBtn.title = 'Delete';
+                delBtn.innerHTML = `
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                `;
+                delBtn.addEventListener('click', () => this.deleteCommand(cmd));
+                actions.appendChild(delBtn);
+
+                item.appendChild(actions);
+                listContainer.appendChild(item);
+            });
+        }
+
+        cmdEl.appendChild(listContainer);
+    }
+
+    async addCommand() {
+        const name = prompt("Command label (e.g. tests):");
+        if (!name || !name.trim()) return;
+        const command = prompt(`Command to send for "${name.trim()}" (e.g. npm test):`);
+        if (!command || !command.trim()) return;
+
+        try {
+            const res = await fetch('/api/config/quick-commands', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim(), command: command.trim() })
+            });
+            if (!res.ok) throw new Error(await res.text() || "Failed to add command");
+            
+            await this.app.sessionsManager.loadConfig();
+            this.renderCmdPanel();
+        } catch (e) {
+            console.error("Add command failed:", e);
+            alert("Add command failed: " + e.message);
+        }
+    }
+
+    async editCommand(cmd) {
+        const name = prompt(`Edit label for "${cmd.name}":`, cmd.name);
+        if (!name || !name.trim()) return;
+        const command = prompt(`Edit command for "${name.trim()}":`, cmd.command);
+        if (!command || !command.trim()) return;
+
+        try {
+            if (name.trim() !== cmd.name) {
+                const delRes = await fetch('/api/config/quick-commands', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: cmd.name })
+                });
+                if (!delRes.ok) throw new Error("Failed to clear old command");
+            }
+
+            const res = await fetch('/api/config/quick-commands', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim(), command: command.trim() })
+            });
+            if (!res.ok) throw new Error(await res.text() || "Failed to save command");
+
+            await this.app.sessionsManager.loadConfig();
+            this.renderCmdPanel();
+        } catch (e) {
+            console.error("Edit command failed:", e);
+            alert("Edit command failed: " + e.message);
+        }
+    }
+
+    async deleteCommand(cmd) {
+        if (!confirm(`Delete quick command "${cmd.name}"?`)) return;
+
+        try {
+            const res = await fetch('/api/config/quick-commands', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: cmd.name })
+            });
+            if (!res.ok) throw new Error(await res.text() || "Failed to delete command");
+
+            await this.app.sessionsManager.loadConfig();
+            this.renderCmdPanel();
+        } catch (e) {
+            console.error("Delete command failed:", e);
+            alert("Delete command failed: " + e.message);
+        }
+    }
+
+    copyAllCommands() {
+        const quickCmds = this.app.quickCommands || [];
+        const jsonStr = JSON.stringify(quickCmds, null, 2);
+        this.app.tabManager.copyTextRobustly(jsonStr);
+    }
+
+    copySingleCommand(cmd) {
+        const jsonStr = JSON.stringify(cmd, null, 2);
+        this.app.tabManager.copyTextRobustly(jsonStr);
+    }
+
+    runCommand(cmd) {
+        const activeTab = this.app.tabManager.getActiveTab();
+        if (!activeTab || activeTab.isDead) {
+            this.app.showToast("No active terminal session to run command", { type: 'error', title: 'Execute' });
+            return;
+        }
+        const prefix = this.app.tabManager.inputTextArea.value.trim();
+        const combined = prefix && cmd.command.includes('{}')
+            ? cmd.command.replace('{}', prefix)
+            : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+        let payload = combined;
+        if (combined.length > 16 || combined.includes('\n')) {
+            payload = '\x1b[200~' + combined + '\x1b[201~';
+        }
+        activeTab.ws.sendInput(payload + '\r');
+        this.app.tabManager.inputTextArea.value = '';
+        this.app.tabManager.lastInputValue = '';
+        this.app.tabManager.adjustInputHeight();
+        this.app.tabManager.inputTextArea.focus({ preventScroll: true });
+        this.app.tabManager._spamScrollToBottom(activeTab);
+    }
+
+    async pasteCommands() {
+        let text = "";
+        if (navigator.clipboard && navigator.clipboard.readText) {
+            try {
+                text = await navigator.clipboard.readText();
+            } catch (e) {
+                console.warn("[cmd] Browser blocked clipboard read, falling back to prompt", e);
+                text = prompt("Paste your commands JSON string here:");
+            }
+        } else {
+            text = prompt("Paste your commands JSON string here:");
+        }
+
+        if (!text || !text.trim()) return;
+
+        try {
+            const data = JSON.parse(text.trim());
+            
+            if (Array.isArray(data)) {
+                const confirmOverwite = confirm(`Do you want to overwrite all your quick commands with these ${data.length} commands?`);
+                if (!confirmOverwite) return;
+                
+                const res = await fetch('/api/config/quick-commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!res.ok) {
+                    throw new Error(await res.text() || "Failed to overwrite quick commands");
+                }
+                this.app.showToast("Successfully imported all commands", { type: 'success', title: 'Import' });
+            } else if (data && typeof data === 'object' && data.name && data.command) {
+                const res = await fetch('/api/config/quick-commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!res.ok) {
+                    throw new Error(await res.text() || "Failed to import command");
+                }
+                this.app.showToast(`Imported command "${data.name}"`, { type: 'success', title: 'Import' });
+            } else {
+                throw new Error("Invalid format. Expected JSON array or object with 'name' and 'command'.");
+            }
+
+            await this.app.sessionsManager.loadConfig();
+            this.renderCmdPanel();
+
+        } catch (e) {
+            console.error("Paste failed:", e);
+            alert("Paste failed: " + e.message);
+        }
+    }
+
     async refreshDiff(skipLoadCommits = false) {
         if (!this.isPanelOpen || !this.term) return;
 
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
             this.app.markdownManager.refreshFiles();
+            return;
+        }
+
+        if (this.activeTab === 'cmd') {
+            this._setPanel('cmd');
+            this.renderCmdPanel();
             return;
         }
 
