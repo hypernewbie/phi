@@ -136,9 +136,18 @@ type SpawnRequest struct {
 	Cwd       string   `json:"cwd"`
 	SessionID string   `json:"session_id"`
 	ExtraArgs []string `json:"extra_args"`
+	Title     string   `json:"title"`
+	Workspace string   `json:"workspace"`
 }
 
 func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		instances := ptyManager.ListActive()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(instances)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -239,6 +248,8 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	inst.Title = req.Title
+	inst.Workspace = req.Workspace
 
 	if req.Coder == "agy" && req.SessionID != "" {
 		_ = session.SaveAgySessionCwd(req.SessionID, spawnDir)

@@ -50,37 +50,28 @@ export class TabManager {
     }
     
     saveTabsState() {
-        const tabsData = [];
-        for (const tab of this.tabs.values()) {
-            tabsData.push({
-                paneId: tab.paneId,
-                sessionId: tab.sessionId,
-                title: tab.title,
-                coder: tab.coder,
-                workspace: tab.workspace,
-                cwd: tab.cwd,
-                pinned: !!tab.pinned
-            });
-        }
-        localStorage.setItem('phi_tabs', JSON.stringify(tabsData));
         localStorage.setItem('phi_active_pane', this.activePaneId || '');
     }
 
-    restoreTabsState() {
-        let tabsData;
+    async restoreTabsState() {
+        localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
         try {
-            tabsData = JSON.parse(localStorage.getItem('phi_tabs') || '[]');
-        } catch (e) {
-            return;
-        }
-        if (!tabsData.length) return;
+            const res = await fetch('/api/terminals');
+            if (!res.ok) throw new Error("Failed to load server terminal list");
+            const instances = await res.json();
+            if (!instances || !instances.length) return;
 
-        const savedActive = localStorage.getItem('phi_active_pane') || '';
-        for (const t of tabsData) {
-            this.createTab(t.paneId, t.sessionId, t.title, t.coder, t.workspace, t.cwd, t.pinned);
-        }
-        if (savedActive && this.tabs.has(savedActive)) {
-            this.switchTab(savedActive);
+            const savedActive = localStorage.getItem('phi_active_pane') || '';
+            for (const t of instances) {
+                this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned);
+            }
+            if (savedActive && this.tabs.has(savedActive)) {
+                this.switchTab(savedActive);
+            } else if (instances.length > 0) {
+                this.switchTab(instances[0].id);
+            }
+        } catch (e) {
+            console.error("Failed to restore tabs from server-side state:", e);
         }
     }
 
@@ -93,6 +84,14 @@ export class TabManager {
             if (activeTab && activeTab.directMode) {
                 activeTab.directMode = false;
                 this.updateDirectModeUI(activeTab);
+            }
+        });
+
+        this.inputTextArea.addEventListener('blur', () => {
+            if (window.innerWidth <= 768) {
+                setTimeout(() => {
+                    window.scrollTo(0, 0);
+                }, 80);
             }
         });
 
@@ -438,11 +437,13 @@ export class TabManager {
             return;
         }
         
+        const isMobile = window.innerWidth <= 768;
+        
         // Initialize xterm.js instance
         const term = new window.Terminal({
             cursorBlink: true,
             cursorStyle: 'bar',
-            fontSize: 14,
+            fontSize: isMobile ? 10 : 14,
             fontFamily: 'JetBrains Mono, monospace',
             theme: {
                 background: '#08080a',
@@ -1002,7 +1003,9 @@ export class TabManager {
             body: JSON.stringify({
                 coder: tabInfo.coder,
                 cwd: tabInfo.cwd,
-                session_id: tabInfo.sessionId || ''
+                session_id: tabInfo.sessionId || '',
+                title: tabInfo.title || '',
+                workspace: tabInfo.workspace || ''
             })
         })
         .then(res => {
@@ -1199,6 +1202,12 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
         
         try {
+            const isMobile = window.innerWidth <= 768;
+            const size = isMobile ? 10 : 14;
+            if (activeTab.term.options.fontSize !== size) {
+                activeTab.term.options.fontSize = size;
+            }
+
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
             const isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
