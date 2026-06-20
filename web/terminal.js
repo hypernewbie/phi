@@ -979,6 +979,7 @@ export class TabManager {
                         console.error("[term] Fit/refresh error on reconnect:", e);
                     }
                     this.sendResizeToBackend(tabInfo);
+                    this._spamScrollToBottom(tabInfo);
                 }, 100);
             }
         );
@@ -1061,6 +1062,7 @@ export class TabManager {
                     setTimeout(() => {
                         this.fitActiveTerminal();
                         this.sendResizeToBackend(tabInfo);
+                        this._spamScrollToBottom(tabInfo);
                     }, 100);
                 }
             );
