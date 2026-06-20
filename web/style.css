@@ -10,7 +10,10 @@
     --accent-glow:  rgba(124, 106, 247, 0.15);
     --accent-dim:   #5b4ec2;
     --accent-bright:#9a8dfa;
-    --accent-edge:  rgba(124, 106, 247, 0.35);
+    --accent-edge:  color-mix(in srgb, var(--accent) 35%, transparent);
+    --accent-soft:  color-mix(in srgb, var(--accent) 22%, transparent);
+    --accent-wash:  color-mix(in srgb, var(--accent) 10%, transparent);
+    --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
     
     --text-primary: #e4e3e9;   /* High readability text */
     --text-muted:   #78768a;   /* Subtle labels */
@@ -31,7 +34,7 @@
 }
 
 ::selection {
-    background: rgba(124, 106, 247, 0.35);
+    background: var(--accent-edge);
     color: #ffffff;
 }
 
@@ -58,7 +61,7 @@ html, body {
 .app-header {
     background-color: var(--bg-panel);
     border-bottom: 1px solid var(--bg-border);
-    box-shadow: inset 0 -1px 0 rgba(124, 106, 247, 0.08);
+    box-shadow: inset 0 -1px 0 var(--accent-trace);
     height: 48px;
     display: flex;
     align-items: center;
@@ -251,7 +254,7 @@ html, body {
     background-color: var(--accent-glow);
     border-color: var(--accent);
     color: var(--accent-bright);
-    box-shadow: inset 0 0 0 1px rgba(124, 106, 247, 0.08), 0 0 16px var(--accent-glow);
+    box-shadow: inset 0 0 0 1px var(--accent-trace), 0 0 16px var(--accent-glow);
 }
 
 .header-btn.success {
@@ -442,7 +445,7 @@ html, body {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, var(--bg-border), rgba(124, 106, 247, 0.22));
+    background: linear-gradient(180deg, var(--bg-border), var(--accent-soft));
     border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -475,7 +478,7 @@ html, body {
 .session-item.active {
     background-color: var(--accent-glow);
     border-color: var(--accent);
-    box-shadow: inset 2px 0 0 var(--accent), 0 0 18px rgba(124, 106, 247, 0.08);
+    box-shadow: inset 2px 0 0 var(--accent), 0 0 18px var(--accent-trace);
 }
 
 .session-meta-top {
@@ -666,7 +669,7 @@ html, body {
 .terminal-tabs-bar {
     background-color: var(--bg-panel);
     border-bottom: 1px solid var(--bg-border);
-    box-shadow: inset 0 -1px 0 rgba(124, 106, 247, 0.06);
+    box-shadow: inset 0 -1px 0 var(--accent-trace);
     height: 42px;
     display: flex;
     align-items: center;
@@ -704,9 +707,9 @@ html, body {
 }
 
 .reconnect-all-tabs-btn:hover {
-    background-color: rgba(124, 106, 247, 0.1);
+    background-color: var(--accent-wash);
     color: var(--accent-bright);
-    border-color: rgba(124, 106, 247, 0.2);
+    border-color: var(--accent-soft);
     box-shadow: 0 0 12px var(--accent-glow);
 }
 
@@ -762,9 +765,9 @@ html, body {
 }
 
 .refresh-console-btn:hover {
-    background-color: rgba(124, 106, 247, 0.1);
+    background-color: var(--accent-wash);
     color: var(--accent-bright);
-    border-color: rgba(124, 106, 247, 0.2);
+    border-color: var(--accent-soft);
     box-shadow: 0 0 12px var(--accent-glow);
 }
 
@@ -832,7 +835,7 @@ html, body {
     position: relative;
     z-index: 1;
     margin-bottom: -1px;
-    box-shadow: 0 -8px 24px rgba(124, 106, 247, 0.08), inset 0 1px 0 var(--accent-edge);
+    box-shadow: 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
 }
 
 .tab.active:hover {
@@ -846,7 +849,7 @@ html, body {
 
 @keyframes tab-pulse {
     0% { opacity: 0.8; }
-    50% { opacity: 1; text-shadow: 0 0 8px rgba(124, 106, 247, 0.6); }
+    50% { opacity: 1; text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); }
     100% { opacity: 0.8; }
 }
 
@@ -966,7 +969,7 @@ html, body {
 }
 
 .term-container.active .xterm {
-    box-shadow: inset 0 0 0 1px rgba(124, 106, 247, 0.04);
+    box-shadow: inset 0 0 0 1px var(--accent-trace);
 }
 
 /* xterm layout hacks for absolute zero-slop rendering */
@@ -1000,7 +1003,7 @@ html, body {
 
 .input-bar-container:focus-within {
     border-top-color: var(--accent-edge);
-    box-shadow: 0 -10px 24px rgba(124, 106, 247, 0.06);
+    box-shadow: 0 -10px 24px var(--accent-trace);
 }
 
 .input-bar-container textarea {
@@ -1061,7 +1064,7 @@ html, body {
     color: var(--accent-bright);
     background-color: var(--accent-glow);
     border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px rgba(124, 106, 247, 0.1), 0 0 16px var(--accent-glow);
+    box-shadow: inset 0 0 0 1px var(--accent-wash), 0 0 16px var(--accent-glow);
 }
 
 .cancel-btn-icon {
@@ -1135,7 +1138,7 @@ html, body {
 }
 
 .preset-btn.recent-cmd-btn {
-    border-color: rgba(124, 106, 247, 0.2);
+    border-color: var(--accent-soft);
     color: var(--text-muted);
 }
 
@@ -1193,7 +1196,7 @@ html, body {
 }
 
 .dropup-row:hover {
-    background-color: rgba(124, 106, 247, 0.06);
+    background-color: var(--accent-trace);
 }
 
 .dropup-model-btn {
@@ -1254,7 +1257,7 @@ html, body {
 }
 
 .dropup-add-btn:hover {
-    background-color: rgba(124, 106, 247, 0.1);
+    background-color: var(--accent-wash);
     color: var(--text-primary);
 }
 
@@ -1264,7 +1267,7 @@ html, body {
 }
 
 .preset-btn.model-trigger-btn:hover {
-    background-color: rgba(124, 106, 247, 0.15);
+    background-color: var(--accent-glow);
     color: var(--text-primary);
 }
 
@@ -1442,7 +1445,7 @@ html, body {
     border-radius: 8px;
     width: 480px;
     max-width: 90vw;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 24px rgba(124, 106, 247, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 24px var(--accent-trace);
     display: flex;
     flex-direction: column;
     overflow: visible;
@@ -1834,11 +1837,11 @@ html, body {
     
     .preset-btn:hover {
         border-color: var(--accent);
-        background-color: rgba(124, 106, 247, 0.05);
+        background-color: var(--accent-trace);
     }
     
     .preset-btn.mobile-nav-btn {
-        background-color: rgba(124, 106, 247, 0.1) !important;
+        background-color: var(--accent-wash) !important;
         border-color: var(--accent) !important;
         color: var(--accent-bright) !important;
         font-size: 12px !important;
@@ -3106,7 +3109,7 @@ html, body {
 
 .cmd-item:hover {
     border-color: var(--accent-dim);
-    box-shadow: 0 0 16px rgba(124, 106, 247, 0.06);
+    box-shadow: 0 0 16px var(--accent-trace);
 }
 
 .cmd-item-left {
@@ -3236,7 +3239,7 @@ html, body {
     background-color: var(--accent-glow);
     color: var(--accent);
     font-weight: 500;
-    box-shadow: inset 2px 0 0 var(--accent), 0 0 14px rgba(124, 106, 247, 0.08);
+    box-shadow: inset 2px 0 0 var(--accent), 0 0 14px var(--accent-trace);
 }
 
 .hostname-dropdown-title {
