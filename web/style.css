@@ -74,61 +74,62 @@ html, body {
     text-shadow: 0 0 10px var(--accent-glow);
 }
 
-/* ── CPU-state classes on the phi logo ────────────────────────────────────────
-   Subtle text-shadow pulse only — no halo, no scale, no transform. Earlier
-   attempts at a richer halo + scale animation (commits 20e63c5 / e56c6c8)
-   caused visual issues: the halo's negative z-index escaped into adjacent
-   elements and the scale animation pushed the glyph into the adjacent
-   'phi' brand-name text in the same .brand flex row.
+/* ── CPU-state classes on the phi brand ────────────────────────────────────────
+   The whole phi brand (Φ symbol + 'phi' text) reacts to CPU load by
+   shifting toward the current theme accent (var(--accent)). No red —
+   the user wants the highlight color to track whatever accent theme
+   is selected (purple by default, but amber/yellow/blue/etc. when
+   the user picks a different theme).
 
-   Idle:    static accent color.
-   Moderate: gentle brightness pulse on the accent glow.
-   High:    red color, stronger red glow, faster pulse. */
+   Idle:    symbol in accent, 'phi' text in white-ish (var(--text-primary)).
+   Moderate: gentle accent glow pulse on the symbol; text unchanged.
+   High:    symbol shifts to accent-bright with a strong pulsing glow;
+            'phi' text shifts from white to accent and pulses the same
+            glow in sync — a clear 'something's hot' visual signal. */
 .brand .logo.cpu-moderate {
     animation: phi-cpu-pulse 2.5s ease-in-out infinite;
 }
 
 .brand .logo.cpu-high {
-    color: var(--red);
+    color: var(--accent-bright);
     text-shadow:
-        0 0 8px rgba(239, 68, 68, 0.5),
-        0 0 16px rgba(239, 68, 68, 0.4);
+        0 0 10px var(--accent-glow),
+        0 0 22px var(--accent-glow);
     animation: phi-cpu-pulse-strong 1.6s ease-in-out infinite;
 }
 
 @keyframes phi-cpu-pulse {
-    0%, 100% { opacity: 0.9; }
-    50%      { opacity: 1.0; text-shadow: 0 0 16px var(--accent-glow); }
+    0%, 100% { opacity: 0.92; }
+    50%      { opacity: 1.0;  text-shadow: 0 0 18px var(--accent-glow); }
 }
 
 @keyframes phi-cpu-pulse-strong {
-    0%, 100% { opacity: 0.85; text-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
-    50%      { opacity: 1.0;  text-shadow: 0 0 14px rgba(239, 68, 68, 0.7); }
+    0%, 100% { opacity: 0.9; text-shadow: 0 0 10px var(--accent-glow); }
+    50%      { opacity: 1.0; text-shadow: 0 0 26px var(--accent-glow); }
 }
 
-/* Brand-name ("phi" text) reacts to CPU the same way as the Φ logo:
-   white in idle, accent-tinted pulse on moderate, red color + red glow
-   on high. The "phi" word stays clearly visible across all states. */
+/* 'phi' text word: same dynamic, applied to the brand-name span so the
+   whole phi identity moves together. White → accent on high CPU. */
 .brand .brand-name.cpu-moderate {
     animation: brand-cpu-pulse 2.5s ease-in-out infinite;
 }
 
 .brand .brand-name.cpu-high {
-    color: var(--red);
+    color: var(--accent);
     text-shadow:
-        0 0 6px rgba(239, 68, 68, 0.55),
-        0 0 12px rgba(239, 68, 68, 0.4);
+        0 0 6px var(--accent-glow),
+        0 0 14px var(--accent-glow);
     animation: brand-cpu-pulse-strong 1.6s ease-in-out infinite;
 }
 
 @keyframes brand-cpu-pulse {
     0%, 100% { text-shadow: 0 0 4px rgba(228, 227, 233, 0.08); }
-    50%      { text-shadow: 0 0 12px rgba(228, 227, 233, 0.18); }
+    50%      { text-shadow: 0 0 10px rgba(228, 227, 233, 0.16); }
 }
 
 @keyframes brand-cpu-pulse-strong {
-    0%, 100% { text-shadow: 0 0 6px rgba(239, 68, 68, 0.45); }
-    50%      { text-shadow: 0 0 14px rgba(239, 68, 68, 0.8); }
+    0%, 100% { text-shadow: 0 0 6px var(--accent-glow); }
+    50%      { text-shadow: 0 0 16px var(--accent-glow); }
 }
 
 /* Respect prefers-reduced-motion: drop the animation, keep the color step. */
