@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -19,6 +20,7 @@ var webFS embed.FS
 var (
 	ptyManager *pty.Manager
 	wsHub      *ws.Hub
+	cpuSampler = system.NewSampler()
 	activeCWD  string
 	webRoot    fs.FS
 )
@@ -89,6 +91,7 @@ func main() {
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
+	http.HandleFunc("/api/system/cpu", handleSystemCPU)
 	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id

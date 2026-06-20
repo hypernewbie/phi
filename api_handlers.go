@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -15,9 +16,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
+	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/diff"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
@@ -944,6 +947,31 @@ func handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 
 	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleSystemCPU returns the current system-wide CPU percent (0.0–100.0)
+// for the ambient CPU indicator in the UI header. Polled by the
+// frontend at 1s; cheap enough to handle synchronously without caching.
+// On sampling failure, returns 0.0 with HTTP 200 (the UI treats 0 as
+// 'no data, leave indicator idle').
+func handleSystemCPU(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	stats, err := cpuSampler.Sample(ctx)
+	if err != nil {
+		// Don't 500 — the CPU indicator is decorative. Return a zero
+		// sample so the UI clears any active state.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(system.Stats{
+			CPUPercent: 0,
+			Timestamp:  time.Now(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
