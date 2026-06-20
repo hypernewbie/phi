@@ -85,6 +85,11 @@ export class TabManager {
                 activeTab.directMode = false;
                 this.updateDirectModeUI(activeTab);
             }
+            if (window.innerWidth <= 768) {
+                setTimeout(() => {
+                    window.scrollTo(0, 0);
+                }, 50);
+            }
         });
 
         this.inputTextArea.addEventListener('blur', () => {
