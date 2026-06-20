@@ -74,6 +74,43 @@ html, body {
     text-shadow: 0 0 10px var(--accent-glow);
 }
 
+/* ── CPU-state classes on the phi logo ────────────────────────────────────────
+   Idle:    no animation, current accent color. Default static state.
+   Moderate: gentle brightness pulse on the accent — ambient awareness.
+   High:    alert color (--red), more pronounced pulse for visibility.
+
+   Pulse rate is constant; only amplitude and color change with load.
+   Variable speed is the classic anxiety-inducing anti-pattern for
+   an always-visible chrome element. */
+.brand .logo.cpu-moderate {
+    animation: phi-cpu-pulse 2.5s ease-in-out infinite;
+}
+
+.brand .logo.cpu-high {
+    color: var(--red);
+    text-shadow: 0 0 14px rgba(239, 68, 68, 0.6);
+    animation: phi-cpu-pulse-strong 1.6s ease-in-out infinite;
+}
+
+@keyframes phi-cpu-pulse {
+    0%, 100% { opacity: 0.85; }
+    50%      { opacity: 1.0; text-shadow: 0 0 18px var(--accent-glow); }
+}
+
+@keyframes phi-cpu-pulse-strong {
+    0%, 100% { opacity: 0.75; text-shadow: 0 0 12px rgba(239, 68, 68, 0.5); }
+    50%      { opacity: 1.0;  text-shadow: 0 0 22px rgba(239, 68, 68, 0.85); }
+}
+
+/* Respect prefers-reduced-motion: drop the animation, keep the color step.
+   Mandatory for an always-on animated element. */
+@media (prefers-reduced-motion: reduce) {
+    .brand .logo.cpu-moderate,
+    .brand .logo.cpu-high {
+        animation: none !important;
+    }
+}
+
 .brand .brand-name {
     font-size: 16px;
     font-weight: 500;

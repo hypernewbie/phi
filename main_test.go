@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -325,6 +326,37 @@ func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
 	}
 	if src, _ := body["source"].(string); src != "system" {
 		t.Errorf("source: want %q (no ptyManager so falls back to system), got %q", "system", src)
+	}
+}
+
+// ─── System stats ───────────────────────────────────────────────────────────────
+
+func TestHandleSystemCPU_ReturnsValidShape(t *testing.T) {
+	// Warm up the sampler first so we get a real (non-zero-initial) value.
+	_, _ = cpuSampler.Sample(context.Background())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system/cpu", nil)
+	w := httptest.NewRecorder()
+	handleSystemCPU(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, field := range []string{"cpu", "timestamp"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("response missing field %q", field)
+		}
+	}
+	cpu, ok := body["cpu"].(float64)
+	if !ok {
+		t.Fatalf("cpu should be a number, got %T", body["cpu"])
+	}
+	if cpu < 0 || cpu > 100 {
+		t.Errorf("cpu out of range [0, 100]: %v", cpu)
 	}
 }
 
