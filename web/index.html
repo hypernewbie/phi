@@ -144,7 +144,7 @@
                 </div>
 
                 <div class="sidebar-version">
-                    v0.3.4
+                    v0.3.5
                 </div>
             </aside>
 
@@ -170,6 +170,13 @@
                             <line x1="15" y1="9" x2="9" y2="15"></line>
                         </svg>
                         <span>Close All</span>
+                    </button>
+                    <button id="refresh-console-btn" class="refresh-console-btn" title="Refresh Console (refit layout, scroll to bottom)">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="1 4 1 10 7 10"></polyline>
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                        </svg>
+                        <span>Refresh</span>
                     </button>
                 </div>
 
@@ -224,6 +231,7 @@
                         <button class="diff-tab-btn" data-tab="log">log</button>
                         <button class="diff-tab-btn" data-tab="status">status</button>
                         <button class="diff-tab-btn active" data-tab="markdown">md</button>
+                        <button class="diff-tab-btn" data-tab="cmd">cmd</button>
                     </div>
                     <div class="diff-header-actions" style="display: flex; align-items: center; gap: 8px;">
                         <button id="refresh-diff-btn" title="Refresh">
@@ -246,6 +254,7 @@
                 <div class="diff-content">
                     <div id="diff-term-container" class="diff-term-container"></div>
                     <div id="markdown-file-list" class="markdown-file-list hidden"></div>
+                    <div id="cmd-panel" class="cmd-panel hidden"></div>
                 </div>
             </aside>
         </div>

@@ -14,7 +14,7 @@ import (
 
 var (
 	agyBackslashRun = regexp.MustCompile(`\\+`)
-	agyDrivePathRe  = regexp.MustCompile(`[A-Za-z]:/[^"]*`)
+	agyCwdPathRe    = regexp.MustCompile(`(?:[A-Za-z]:)?/[^"]*`)
 )
 
 // extractAgyCwdFromBrain recovers the workspace directory for a conversation
@@ -22,7 +22,7 @@ var (
 // the authoritative source — history.jsonl / last_conversations.json only cover
 // a handful of conversations. The path is double-escaped in the log
 // (e.g. "Cwd":"\"C:\\\\code\\\\github\\\\vrhi\""), so collapse backslash runs to
-// a single forward slash and pull out the drive-letter path. Returns "" if the
+// a single forward slash and pull out the path. Returns "" if the
 // transcript is absent or has no Cwd.
 func extractAgyCwdFromBrain(uuid string) string {
 	p := expandHome("~/.gemini/antigravity-cli/brain/" + uuid + "/.system_generated/logs/transcript.jsonl")
@@ -41,7 +41,7 @@ func extractAgyCwdFromBrain(uuid string) string {
 			continue
 		}
 		seg := agyBackslashRun.ReplaceAllString(line[idx:], "/")
-		if m := agyDrivePathRe.FindString(seg); m != "" {
+		if m := agyCwdPathRe.FindString(seg); m != "" {
 			return strings.TrimRight(filepath.ToSlash(m), "/")
 		}
 	}
@@ -222,11 +222,18 @@ func ListAgySessions(cwd string) ([]Session, error) {
 	activeUUIDs := make(map[string]bool)
 
 	for _, f := range files {
-		if f.IsDir() || !strings.HasSuffix(f.Name(), ".pb") {
+		if f.IsDir() {
+			continue
+		}
+		var uuid string
+		if strings.HasSuffix(f.Name(), ".pb") {
+			uuid = strings.TrimSuffix(f.Name(), ".pb")
+		} else if strings.HasSuffix(f.Name(), ".db") {
+			uuid = strings.TrimSuffix(f.Name(), ".db")
+		} else {
 			continue
 		}
 
-		uuid := strings.TrimSuffix(f.Name(), ".pb")
 		activeUUIDs[uuid] = true
 
 		info, err := f.Info()
@@ -265,7 +272,7 @@ func ListAgySessions(cwd string) ([]Session, error) {
 				continue
 			}
 		} else if cwd != "" {
-			if meta.Cwd == "" || filepath.ToSlash(meta.Cwd) != filepath.ToSlash(cwd) {
+			if meta.Cwd == "" || NormalisePath(meta.Cwd) != NormalisePath(cwd) {
 				continue
 			}
 		}

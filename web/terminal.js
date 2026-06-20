@@ -228,6 +228,17 @@ export class TabManager {
                 }
             });
         }
+
+        const refreshConsoleBtn = document.getElementById('refresh-console-btn');
+        if (refreshConsoleBtn) {
+            refreshConsoleBtn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (!activeTab || !activeTab.term) return;
+                activeTab.term.refresh(0, activeTab.term.rows - 1);
+                this.fitActiveTerminal();
+                this._spamScrollToBottom(activeTab);
+            });
+        }
         
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
