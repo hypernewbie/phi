@@ -2,6 +2,20 @@
 
 import { PTYWebSocket } from './ws.js';
 
+// Normalize a CWD path for equality comparison between the active
+// project context and a terminal tab's stored CWD. Handles:
+//   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
+//   - mixed separator styles (e.g. 'C:\\foo' vs 'C:/foo')
+//
+// Does NOT case-fold (path equality is OS-dependent: case-sensitive
+// on Linux/macOS, case-insensitive on Windows). For phi this is fine
+// because both sides are produced from the same os.Getwd / platform
+// path-handling code.
+function normalizeCwd(p) {
+    if (!p) return '';
+    return String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 export class DiffController {
     constructor(app) {
         this.app = app;
@@ -467,18 +481,31 @@ export class DiffController {
 
         // Decide which tab to send the command to.
         //
-        // - If the active tab is already a shell (bash / pwsh), always use it.
-        // - Else, if useExistingTerminalTab is on, scan for the first alive
-        //   shell tab anywhere and reuse it (and switch focus to it so the
-        //   user sees the output).
-        // - Else, fall through to spawning a brand new shell tab.
+        // Scoping rules (important — see bug fixed in commit after 439b3e5):
+        //  - Active tab is a shell (bash/pwsh) AND alive → always use it.
+        //    The user explicitly focused this tab; trust that.
+        //  - Else, if useExistingTerminalTab is on, scan for an alive shell
+        //    tab whose CWD matches the CURRENT project's activeCWD. Only an
+        //    exact CWD match is reused — never a tab from a different project
+        //    or worktree. If no matching tab exists, fall through to spawning
+        //    a new shell tab in the current CWD (current behavior).
+        //  - Else, spawn new.
+        //
+        // activeCWD is set by sessionsManager based on the active workspace
+        // and active worktree selection, so it correctly scopes by both
+        // project AND worktree boundaries in one check.
         let targetTab = activeTab;
+        const activeCWD = this.app.sessionsManager.activeCWD || '';
         if ((!targetTab || targetTab.isDead || (targetTab.coder !== 'bash' && targetTab.coder !== 'pwsh'))
-            && this.app.useExistingTerminalTab) {
-            const shellTabs = Array.from(this.app.tabManager.tabs.values())
-                .filter(t => !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh'));
-            if (shellTabs.length > 0) {
-                targetTab = shellTabs[0];
+            && this.app.useExistingTerminalTab
+            && activeCWD) {
+            const wantedCWD = normalizeCwd(activeCWD);
+            const matchingShell = Array.from(this.app.tabManager.tabs.values()).find(t =>
+                !t.isDead
+                && (t.coder === 'bash' || t.coder === 'pwsh')
+                && normalizeCwd(t.cwd || '') === wantedCWD);
+            if (matchingShell) {
+                targetTab = matchingShell;
                 this.app.tabManager.switchTab(targetTab.paneId);
             }
         }
@@ -488,12 +515,16 @@ export class DiffController {
             if (combined.length > 16 || combined.includes('\n')) {
                 payload = '\x1b[200~' + combined + '\x1b[201~';
             }
-            activeTab.ws.sendInput(payload + '\r');
+            // Bug fix: previously this used activeTab.ws which meant the
+            // command went to whichever tab was focused BEFORE the reuse
+            // switch. Must use targetTab so the command lands in the tab
+            // we just routed to.
+            targetTab.ws.sendInput(payload + '\r');
             this.app.tabManager.inputTextArea.value = '';
             this.app.tabManager.lastInputValue = '';
             this.app.tabManager.adjustInputHeight();
             this.app.tabManager.inputTextArea.focus({ preventScroll: true });
-            this.app.tabManager._spamScrollToBottom(activeTab);
+            this.app.tabManager._spamScrollToBottom(targetTab);
         } else {
             // Otherwise, launch a brand new terminal tab running the command!
             try {
