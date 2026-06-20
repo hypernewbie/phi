@@ -70,9 +70,8 @@ export class TabManager {
             const res = await fetch('/api/system/cpu');
             if (!res.ok) return;
             const data = await res.json();
-            const aggregateCPU = typeof data.cpu === 'number' ? data.cpu : 0;
-            const peakCPU = typeof data.cpu_peak === 'number' ? data.cpu_peak : aggregateCPU;
-            this.applyCPUIndicator(Math.max(aggregateCPU, peakCPU));
+            const cpu = typeof data.cpu === 'number' ? data.cpu : 0;
+            this.applyCPUIndicator(cpu);
         } catch (e) {
             // Silent: decorative feature, never break anything.
         }

@@ -346,7 +346,7 @@ func TestHandleSystemCPU_ReturnsValidShape(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, field := range []string{"cpu", "cpu_peak", "timestamp"} {
+	for _, field := range []string{"cpu", "timestamp"} {
 		if _, ok := body[field]; !ok {
 			t.Errorf("response missing field %q", field)
 		}
@@ -905,3 +905,5 @@ func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
 		t.Errorf("Expected 0 messages, got %d", len(msgs))
 	}
 }
+
+
