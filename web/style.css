@@ -67,96 +67,77 @@ html, body {
 }
 
 .brand .logo {
-    position: relative;
-    z-index: 0; /* Establish stacking context so ::before z-index: -1 is contained. */
-    display: inline-block;
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 22px;
     font-weight: 600;
-    text-shadow:
-        0 0 8px var(--accent-glow),
-        0 0 14px var(--accent-glow);
-    transform-origin: center;
-    will-change: transform, opacity;
-}
-
-/* Outer glow halo — small enough to NOT bleed into adjacent text in
-   the .brand flex row (logo and 'phi' are siblings separated by 8px). */
-.brand .logo::before {
-    content: '';
-    position: absolute;
-    inset: -6px;
-    background: radial-gradient(circle, currentColor 0%, transparent 70%);
-    opacity: 0.14;
-    filter: blur(5px);
-    z-index: -1;
-    border-radius: 50%;
-    pointer-events: none;
-    transition: opacity 0.4s ease;
+    text-shadow: 0 0 10px var(--accent-glow);
 }
 
 /* ── CPU-state classes on the phi logo ────────────────────────────────────────
-   Idle:    no animation, current accent color. Default static state.
-   Moderate: gentle breath — tiny scale + halo pulse on the accent.
-   High:    red color, brighter halo, faster pulse.
+   Subtle text-shadow pulse only — no halo, no scale, no transform. Earlier
+   attempts at a richer halo + scale animation (commits 20e63c5 / e56c6c8)
+   caused visual issues: the halo's negative z-index escaped into adjacent
+   elements and the scale animation pushed the glyph into the adjacent
+   'phi' brand-name text in the same .brand flex row.
 
-   Scale kept small (≤1.03) so the Φ glyph doesn't bleed into the
-   adjacent 'phi' brand-name text. Halo inset stays within the 8px
-   flex gap to avoid the same visual bleed. */
+   Idle:    static accent color.
+   Moderate: gentle brightness pulse on the accent glow.
+   High:    red color, stronger red glow, faster pulse. */
 .brand .logo.cpu-moderate {
     animation: phi-cpu-pulse 2.5s ease-in-out infinite;
-}
-
-.brand .logo.cpu-moderate::before {
-    animation: phi-halo-pulse 2.5s ease-in-out infinite;
 }
 
 .brand .logo.cpu-high {
     color: var(--red);
     text-shadow:
-        0 0 10px rgba(239, 68, 68, 0.6),
-        0 0 18px rgba(239, 68, 68, 0.4);
+        0 0 8px rgba(239, 68, 68, 0.5),
+        0 0 16px rgba(239, 68, 68, 0.4);
     animation: phi-cpu-pulse-strong 1.6s ease-in-out infinite;
 }
 
-.brand .logo.cpu-high::before {
-    opacity: 0.35;
-    animation: phi-halo-pulse-strong 1.6s ease-in-out infinite;
-}
-
 @keyframes phi-cpu-pulse {
-    0%, 100% { opacity: 0.9;  transform: scale(1); }
-    50%      { opacity: 1.0;  transform: scale(1.02); }
+    0%, 100% { opacity: 0.9; }
+    50%      { opacity: 1.0; text-shadow: 0 0 16px var(--accent-glow); }
 }
 
 @keyframes phi-cpu-pulse-strong {
-    0%, 100% { opacity: 0.85; transform: scale(1); }
-    50%      { opacity: 1.0;  transform: scale(1.03); }
+    0%, 100% { opacity: 0.85; text-shadow: 0 0 8px rgba(239, 68, 68, 0.4); }
+    50%      { opacity: 1.0;  text-shadow: 0 0 14px rgba(239, 68, 68, 0.7); }
 }
 
-@keyframes phi-halo-pulse {
-    0%, 100% { opacity: 0.12; }
-    50%      { opacity: 0.26; }
+/* Brand-name ("phi" text) reacts to CPU the same way as the Φ logo:
+   white in idle, accent-tinted pulse on moderate, red color + red glow
+   on high. The "phi" word stays clearly visible across all states. */
+.brand .brand-name.cpu-moderate {
+    animation: brand-cpu-pulse 2.5s ease-in-out infinite;
 }
 
-@keyframes phi-halo-pulse-strong {
-    0%, 100% { opacity: 0.30; }
-    50%      { opacity: 0.48; }
+.brand .brand-name.cpu-high {
+    color: var(--red);
+    text-shadow:
+        0 0 6px rgba(239, 68, 68, 0.55),
+        0 0 12px rgba(239, 68, 68, 0.4);
+    animation: brand-cpu-pulse-strong 1.6s ease-in-out infinite;
 }
 
-/* Respect prefers-reduced-motion: drop the animation, keep the color step.
-   Mandatory for an always-on animated element. */
+@keyframes brand-cpu-pulse {
+    0%, 100% { text-shadow: 0 0 4px rgba(228, 227, 233, 0.08); }
+    50%      { text-shadow: 0 0 12px rgba(228, 227, 233, 0.18); }
+}
+
+@keyframes brand-cpu-pulse-strong {
+    0%, 100% { text-shadow: 0 0 6px rgba(239, 68, 68, 0.45); }
+    50%      { text-shadow: 0 0 14px rgba(239, 68, 68, 0.8); }
+}
+
+/* Respect prefers-reduced-motion: drop the animation, keep the color step. */
 @media (prefers-reduced-motion: reduce) {
     .brand .logo.cpu-moderate,
     .brand .logo.cpu-high,
-    .brand .logo::before,
-    .brand .logo.cpu-moderate::before,
-    .brand .logo.cpu-high::before {
+    .brand .brand-name.cpu-moderate,
+    .brand .brand-name.cpu-high {
         animation: none !important;
-    }
-    .brand .logo.cpu-high::before {
-        opacity: 0.3;
     }
 }
 
@@ -165,9 +146,6 @@ html, body {
     font-weight: 500;
     letter-spacing: 0.5px;
     color: var(--text-primary);
-    text-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
-    position: relative;
-    z-index: 1;
 }
 
 .brand .hostname-display {
