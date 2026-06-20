@@ -67,17 +67,39 @@ html, body {
 }
 
 .brand .logo {
+    position: relative;
+    display: inline-block;
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 22px;
     font-weight: 600;
-    text-shadow: 0 0 10px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 14px var(--accent-glow);
+    transform-origin: center;
+    will-change: transform, opacity;
+}
+
+/* Outer glow halo — a pseudo-element with a radial gradient that
+   inherits currentColor so it automatically matches the logo's color
+   state (accent when idle/moderate, red when high). */
+.brand .logo::before {
+    content: '';
+    position: absolute;
+    inset: -12px;
+    background: radial-gradient(circle, currentColor 0%, transparent 65%);
+    opacity: 0.18;
+    filter: blur(8px);
+    z-index: -1;
+    border-radius: 50%;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
 }
 
 /* ── CPU-state classes on the phi logo ────────────────────────────────────────
    Idle:    no animation, current accent color. Default static state.
-   Moderate: gentle brightness pulse on the accent — ambient awareness.
-   High:    alert color (--red), more pronounced pulse for visibility.
+   Moderate: gentle breath — slight scale + halo pulse on the accent.
+   High:    red color, intense halo glow, faster and more visible pulse.
 
    Pulse rate is constant; only amplitude and color change with load.
    Variable speed is the classic anxiety-inducing anti-pattern for
@@ -86,28 +108,55 @@ html, body {
     animation: phi-cpu-pulse 2.5s ease-in-out infinite;
 }
 
+.brand .logo.cpu-moderate::before {
+    animation: phi-halo-pulse 2.5s ease-in-out infinite;
+}
+
 .brand .logo.cpu-high {
     color: var(--red);
-    text-shadow: 0 0 14px rgba(239, 68, 68, 0.6);
+    text-shadow:
+        0 0 10px rgba(239, 68, 68, 0.6),
+        0 0 20px rgba(239, 68, 68, 0.4);
     animation: phi-cpu-pulse-strong 1.6s ease-in-out infinite;
 }
 
+.brand .logo.cpu-high::before {
+    opacity: 0.45;
+    animation: phi-halo-pulse-strong 1.6s ease-in-out infinite;
+}
+
 @keyframes phi-cpu-pulse {
-    0%, 100% { opacity: 0.85; }
-    50%      { opacity: 1.0; text-shadow: 0 0 18px var(--accent-glow); }
+    0%, 100% { opacity: 0.88; transform: scale(1); }
+    50%      { opacity: 1.0;  transform: scale(1.04); }
 }
 
 @keyframes phi-cpu-pulse-strong {
-    0%, 100% { opacity: 0.75; text-shadow: 0 0 12px rgba(239, 68, 68, 0.5); }
-    50%      { opacity: 1.0;  text-shadow: 0 0 22px rgba(239, 68, 68, 0.85); }
+    0%, 100% { opacity: 0.8;  transform: scale(1); }
+    50%      { opacity: 1.0;  transform: scale(1.07); }
+}
+
+@keyframes phi-halo-pulse {
+    0%, 100% { opacity: 0.16; }
+    50%      { opacity: 0.35; }
+}
+
+@keyframes phi-halo-pulse-strong {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 0.65; }
 }
 
 /* Respect prefers-reduced-motion: drop the animation, keep the color step.
    Mandatory for an always-on animated element. */
 @media (prefers-reduced-motion: reduce) {
     .brand .logo.cpu-moderate,
-    .brand .logo.cpu-high {
+    .brand .logo.cpu-high,
+    .brand .logo::before,
+    .brand .logo.cpu-moderate::before,
+    .brand .logo.cpu-high::before {
         animation: none !important;
+    }
+    .brand .logo.cpu-high::before {
+        opacity: 0.4;
     }
 }
 
