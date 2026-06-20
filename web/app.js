@@ -95,7 +95,7 @@ class App {
         await this.fetchCoderPresets();
         
         // 2. Restore previously open terminal tabs (reconnects live PTY sessions)
-        this.tabManager.restoreTabsState();
+        await this.tabManager.restoreTabsState();
 
         // 3. Load workspace selector and configurations
         await this.sessionsManager.loadConfig();
@@ -141,7 +141,9 @@ class App {
                         body: JSON.stringify({
                             coder: 'bash',
                             cwd: this.sessionsManager.activeCWD || this.sessionsManager.activeWorkspace,
-                            session_id: ''
+                            session_id: '',
+                            title: 'btop',
+                            workspace: this.sessionsManager.activeWorkspace || ''
                         })
                     });
                     if (!res.ok) throw new Error("Failed to spawn btop session");
@@ -183,8 +185,82 @@ class App {
                 await this.importConfig();
             });
         }
+
+        // 9. Setup Mobile Visual Viewport & Keyboard Resizer
+        if (window.visualViewport) {
+            const appEl = document.getElementById('app');
+            const updateLayoutHeight = () => {
+                const isMobile = window.innerWidth <= 768;
+                if (isMobile) {
+                    appEl.style.height = `${window.visualViewport.height}px`;
+                    this.tabManager?.fitActiveTerminal();
+                    this.diffController?.fitTerminal();
+                } else {
+                    appEl.style.height = '';
+                }
+            };
+            window.visualViewport.addEventListener('resize', updateLayoutHeight);
+            window.visualViewport.addEventListener('scroll', updateLayoutHeight);
+        }
+
+        // Lock document scroll position on mobile to prevent virtual keyboard scroll shifts
+        window.addEventListener('scroll', () => {
+            if (window.innerWidth <= 768) {
+                if (window.scrollY !== 0 || window.scrollX !== 0) {
+                    window.scrollTo(0, 0);
+                }
+            }
+        });
+
+        // 10. Swipe Gestures for Drawers on Mobile
+        this.setupMobileGestures();
         
         console.log("[app] Phi initialized successfully");
+    }
+
+    setupMobileGestures() {
+        let touchStartX = 0;
+        let touchStartY = 0;
+        const sidebar = document.getElementById('sidebar-panel');
+        const diffPanel = document.getElementById('diff-panel');
+        const threshold = 60; // minimum distance in px to register a swipe
+        
+        document.addEventListener('touchstart', (e) => {
+            if (window.innerWidth > 768) return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        document.addEventListener('touchend', (e) => {
+            if (window.innerWidth > 768) return;
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            
+            const diffX = touchEndX - touchStartX;
+            const diffY = touchEndY - touchStartY;
+            
+            if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > threshold) {
+                if (diffX > 0) {
+                    // Swipe Right
+                    if (touchStartX < 40) {
+                        // Swipe from left edge -> Open Sidebar Drawer
+                        sidebar?.classList.add('drawer-open');
+                    } else if (diffPanel && !diffPanel.classList.contains('hidden')) {
+                        // Swipe right inside panel -> Close Diff Drawer
+                        this.diffController?.togglePanel(false);
+                    }
+                } else {
+                    // Swipe Left
+                    if (window.innerWidth - touchStartX < 40) {
+                        // Swipe from right edge -> Open Diff Drawer
+                        this.diffController?.togglePanel(true);
+                    } else if (sidebar?.classList.contains('drawer-open')) {
+                        // Swipe left inside sidebar -> Close Sidebar Drawer
+                        sidebar.classList.remove('drawer-open');
+                    }
+                }
+            }
+        }, { passive: true });
     }
     
     async fetchCoderPresets() {

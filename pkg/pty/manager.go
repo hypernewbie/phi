@@ -26,6 +26,8 @@ type PTYInstance struct {
 	ActiveWSCount int
 	Pinned        bool          `json:"pinned"`
 	LastOutputAt  time.Time     `json:"-"`
+	Title         string        `json:"title"`
+	Workspace     string        `json:"workspace"`
 }
 
 func (inst *PTYInstance) UpdateActivity() {

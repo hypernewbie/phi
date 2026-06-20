@@ -87,10 +87,11 @@ export class DiffController {
     }
     
     initTerminal() {
+        const isMobile = window.innerWidth <= 768;
         this.term = new window.Terminal({
             cursorBlink: false,
             cursorStyle: 'underline',
-            fontSize: 12,
+            fontSize: isMobile ? 10 : 12,
             fontFamily: 'JetBrains Mono, monospace',
             theme: {
                 background: '#08080a',
@@ -153,6 +154,11 @@ export class DiffController {
     fitTerminal() {
         if (!this.term || !this.isPanelOpen) return;
         try {
+            const isMobile = window.innerWidth <= 768;
+            const size = isMobile ? 10 : 12;
+            if (this.term.options.fontSize !== size) {
+                this.term.options.fontSize = size;
+            }
             this.fitAddon.fit();
             if (this.currentWs && this.term.cols && this.term.rows) {
                 this.currentWs.sendResize(this.term.cols, this.term.rows);

@@ -482,13 +482,22 @@ export class SessionsManager {
     
     async spawnNewSession() {
         try {
+            let coderName = 'Shell';
+            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
+            else if (this.activeCoder === 'claude') coderName = 'Claude';
+            else if (this.activeCoder === 'pi') coderName = 'Pi';
+            else if (this.activeCoder === 'agy') coderName = 'Agy';
+            const title = `+ ${coderName}`;
+
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     coder: this.activeCoder,
                     cwd: this.activeCWD,
-                    session_id: ''
+                    session_id: '',
+                    title: title,
+                    workspace: this.activeWorkspace
                 })
             });
             if (!res.ok) {
@@ -497,13 +506,7 @@ export class SessionsManager {
             }
 
             const data = await res.json();
-            let coderName = 'Shell';
-            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
-            else if (this.activeCoder === 'claude') coderName = 'Claude';
-            else if (this.activeCoder === 'pi') coderName = 'Pi';
-            else if (this.activeCoder === 'agy') coderName = 'Agy';
-            
-            this.app.tabManager.createTab(data.pane_id, data.session_id, `+ ${coderName}`, this.activeCoder, this.activeWorkspace, this.activeCWD);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
             
             this.loadSessions();
         } catch (e) {
@@ -520,7 +523,9 @@ export class SessionsManager {
                     coder: this.activeCoder,
                     cwd: this.activeCWD,
                     session_id: sessionId,
-                    extra_args: extraArgs
+                    extra_args: extraArgs,
+                    title: title,
+                    workspace: this.activeWorkspace
                 })
             });
             if (!res.ok) {
