@@ -185,6 +185,97 @@ func TestHandleConfig_Fields(t *testing.T) {
 			t.Errorf("response missing field %q", field)
 		}
 	}
+	// use_existing_terminal_tab is always present in response (even when
+	// false — the field's zero value is the documented default).
+	if _, ok := body["use_existing_terminal_tab"]; !ok {
+		t.Errorf("response missing field %q", "use_existing_terminal_tab")
+	}
+}
+
+func TestUseExistingTerminalTab_DefaultIsFalse(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+	if cfg.UseExistingTerminalTab {
+		t.Errorf("UseExistingTerminalTab default: want false, got true")
+	}
+}
+
+func TestUseExistingTerminalTab_StaysFalseOnLegacyConfig(t *testing.T) {
+	// Simulate a config file from a previous version that does NOT contain
+	// the use_existing_terminal_tab field. Backwards compatibility requires
+	// the field to default to false after load.
+	configPath := withTempConfig(t)
+	legacy := `{
+		"workspaces": ["/tmp/legacy"],
+		"theme_color": "amber",
+		"quick_commands": [],
+		"terminal_commands": [],
+		"markdown_dirs": []
+	}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	cfg := loadConfig()
+	if cfg.UseExistingTerminalTab {
+		t.Errorf("legacy config: UseExistingTerminalTab should default to false, got true")
+	}
+}
+
+func TestHandleUseExistingTerminalTab_Toggle(t *testing.T) {
+	withTempConfig(t)
+
+	// Initial GET: field is false
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	handleConfig(w, req)
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode initial: %v", err)
+	}
+	if enabled, _ := body["use_existing_terminal_tab"].(bool); enabled {
+		t.Errorf("initial use_existing_terminal_tab: want false, got true")
+	}
+
+	// POST: enable
+	body1 := strings.NewReader(`{"enabled":true}`)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/config/use-existing-terminal-tab", body1)
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handleUseExistingTerminalTab(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("POST status: want 200, got %d — %s", w1.Code, w1.Body.String())
+	}
+
+	// Verify persisted to disk
+	cfg := loadConfig()
+	if !cfg.UseExistingTerminalTab {
+		t.Errorf("after POST enabled=true, config still false")
+	}
+
+	// POST: disable
+	body2 := strings.NewReader(`{"enabled":false}`)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/config/use-existing-terminal-tab", body2)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handleUseExistingTerminalTab(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("POST disable status: want 200, got %d", w2.Code)
+	}
+	cfg = loadConfig()
+	if cfg.UseExistingTerminalTab {
+		t.Errorf("after POST enabled=false, config still true")
+	}
+}
+
+func TestHandleUseExistingTerminalTab_RejectsWrongMethod(t *testing.T) {
+	withTempConfig(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/config/use-existing-terminal-tab", nil)
+	w := httptest.NewRecorder()
+	handleUseExistingTerminalTab(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET status: want 405, got %d", w.Code)
+	}
 }
 
 // ─── Quick commands CRUD ──────────────────────────────────────────────────────

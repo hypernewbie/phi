@@ -265,6 +265,39 @@ export class DiffController {
 
         cmdEl.appendChild(toolbar);
 
+        // 1b. Reuse-existing-terminal-tab toggle (sits in its own row so
+        // it doesn't get squeezed off-screen on narrow widths).
+        const reuseRow = document.createElement('label');
+        reuseRow.className = 'cmd-reuse-row';
+        reuseRow.title = 'When on, terminal commands route to the first alive shell tab instead of always spawning a new one.';
+        const reuseCheckbox = document.createElement('input');
+        reuseCheckbox.type = 'checkbox';
+        reuseCheckbox.id = 'use-existing-terminal-tab-toggle';
+        reuseCheckbox.checked = !!this.app.useExistingTerminalTab;
+        reuseCheckbox.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            try {
+                await fetch('/api/config/use-existing-terminal-tab', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                this.app.useExistingTerminalTab = enabled;
+                this.app.showToast(
+                    enabled ? 'Will reuse existing terminal tab' : 'Will always open new terminal tab',
+                    { type: 'info', title: 'Terminal routing' }
+                );
+            } catch (err) {
+                this.app.showToast('Failed to save preference', { type: 'error', title: 'Terminal routing' });
+                e.target.checked = !enabled;
+            }
+        });
+        const reuseText = document.createElement('span');
+        reuseText.innerText = 'Reuse existing terminal tab';
+        reuseRow.appendChild(reuseCheckbox);
+        reuseRow.appendChild(reuseText);
+        cmdEl.appendChild(reuseRow);
+
         // 2. Create list
         const listContainer = document.createElement('div');
         listContainer.className = 'cmd-list';
@@ -432,8 +465,25 @@ export class DiffController {
             ? cmd.command.replace('{}', prefix)
             : prefix ? `${prefix} ${cmd.command}` : cmd.command;
 
-        // If the active tab is an interactive shell terminal, send it directly to it
-        if (activeTab && !activeTab.isDead && (activeTab.coder === 'bash' || activeTab.coder === 'pwsh')) {
+        // Decide which tab to send the command to.
+        //
+        // - If the active tab is already a shell (bash / pwsh), always use it.
+        // - Else, if useExistingTerminalTab is on, scan for the first alive
+        //   shell tab anywhere and reuse it (and switch focus to it so the
+        //   user sees the output).
+        // - Else, fall through to spawning a brand new shell tab.
+        let targetTab = activeTab;
+        if ((!targetTab || targetTab.isDead || (targetTab.coder !== 'bash' && targetTab.coder !== 'pwsh'))
+            && this.app.useExistingTerminalTab) {
+            const shellTabs = Array.from(this.app.tabManager.tabs.values())
+                .filter(t => !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh'));
+            if (shellTabs.length > 0) {
+                targetTab = shellTabs[0];
+                this.app.tabManager.switchTab(targetTab.paneId);
+            }
+        }
+
+        if (targetTab && !targetTab.isDead && (targetTab.coder === 'bash' || targetTab.coder === 'pwsh')) {
             let payload = combined;
             if (combined.length > 16 || combined.includes('\n')) {
                 payload = '\x1b[200~' + combined + '\x1b[201~';

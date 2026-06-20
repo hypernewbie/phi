@@ -40,6 +40,13 @@ type Config struct {
 	QuickCommands     []QuickCommand    `json:"quick_commands"`
 	TerminalCommands  []QuickCommand    `json:"terminal_commands"`
 	MarkdownDirs      []string          `json:"markdown_dirs"`
+
+	// UseExistingTerminalTab, when true, makes the command panel route
+	// terminal commands to the first alive bash/pwsh tab instead of
+	// spawning a new one. Defaults to false (preserves prior behavior
+	// of "spawn new tab unless a shell tab is currently focused").
+	// Backwards compatible: missing in old config files means false.
+	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
 }
 
 func expandHome(path string) string {
