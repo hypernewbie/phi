@@ -1641,6 +1641,19 @@ body {
         border-color: var(--accent);
         background-color: rgba(124, 106, 247, 0.05);
     }
+    
+    .preset-btn.mobile-nav-btn {
+        background-color: rgba(124, 106, 247, 0.1) !important;
+        border-color: var(--accent) !important;
+        color: var(--accent-bright) !important;
+        font-size: 12px !important;
+        width: 32px !important;
+        height: 30px !important;
+        padding: 0 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
 
     /* Header layout shrink for mobile */
     .app-header {
