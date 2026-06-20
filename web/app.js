@@ -546,16 +546,29 @@ class App {
         const btn = document.getElementById('header-clipboard-btn');
         try {
             if (btn) btn.classList.add('loading');
-            const res = await fetch('/api/clipboard');
+            // Pass the active pane ID so the server can read from THAT PTY's
+            // session-isolated clipboard shim rather than the global shim
+            // (which gets overwritten every time a new PTY is created and
+            // produces "synced but blank newline" over remote/headless
+            // sessions). Fall back to no ?pane= if there's no active tab.
+            let url = '/api/clipboard';
+            const activeTab = this.tabManager && this.tabManager.getActiveTab();
+            if (activeTab && activeTab.paneId) {
+                url += '?pane=' + encodeURIComponent(activeTab.paneId);
+            }
+            const res = await fetch(url);
             if (!res.ok) throw new Error("Failed to fetch remote clipboard");
             const data = await res.json();
-            if (data.text !== undefined) {
+            const text = (data && typeof data.text === 'string') ? data.text : '';
+            const empty = data && data.empty === true;
+
+            if (!empty && text.length > 0) {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(data.text);
+                    await navigator.clipboard.writeText(text);
                 } else {
                     // Fallback to classic execCommand method for insecure contexts (e.g. remoting via local HTTP IP address)
                     const textArea = document.createElement("textarea");
-                    textArea.value = data.text;
+                    textArea.value = text;
                     textArea.style.position = "fixed";
                     textArea.style.top = "0";
                     textArea.style.left = "0";
@@ -570,9 +583,8 @@ class App {
                         document.body.removeChild(textArea);
                     }
                 }
-                console.log("[clipboard] Successfully synced remote clipboard content:", data.text);
-                
-                // Provide visual feedback with a brief success state
+                console.log("[clipboard] Synced from", data.source || "?", "len=", text.length);
+
                 if (btn) {
                     btn.classList.add('success');
                     const span = btn.querySelector('span');
@@ -580,6 +592,28 @@ class App {
                     span.innerText = "Synced!";
                     setTimeout(() => {
                         btn.classList.remove('success');
+                        span.innerText = origText;
+                    }, 1500);
+                }
+            } else {
+                // Honest empty path. Don't claim success, don't write empty
+                // string to the local clipboard (which was the bug — a
+                // successful write of "" showed "Synced!" but cleared the
+                // user's local clipboard).
+                console.log("[clipboard] nothing to sync (source=", data.source || "?", ")");
+                this.showToast(
+                    data.source === 'shim'
+                        ? 'Active session clipboard is empty'
+                        : 'Remote clipboard is empty',
+                    { type: 'info', title: 'Clipboard' }
+                );
+                if (btn) {
+                    btn.classList.add('error');
+                    const span = btn.querySelector('span');
+                    const origText = span.innerText;
+                    span.innerText = "Empty";
+                    setTimeout(() => {
+                        btn.classList.remove('error');
                         span.innerText = origText;
                     }, 1500);
                 }
