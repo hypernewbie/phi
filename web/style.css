@@ -1544,6 +1544,11 @@ html, body {
         display: none !important;
     }
 
+    /* Hide brand text phi on mobile to save space for the project path selector */
+    .brand .brand-name {
+        display: none !important;
+    }
+
     /* Sidebar as a Slide-out Drawer */
     .sidebar-panel {
         position: fixed;
@@ -1799,6 +1804,9 @@ html, body {
     }
     .logo {
         font-size: 16px;
+    }
+    .brand-name {
+        display: none !important;
     }
 
     /* Terminal session tabs layout on mobile */
