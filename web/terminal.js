@@ -892,6 +892,14 @@ export class TabManager {
         setTimeout(() => {
             this.fitActiveTerminal();
         }, 50);
+
+        // Scroll the newly activated tab to the bottom so the user lands on
+        // the freshest output, matching Claude Code / VS Code terminal UX.
+        // _spamScrollToBottom is safe to call when the terminal is hidden —
+        // xterm queues the scroll until the canvas is next painted.
+        if (newTab.term && !newTab.isDead) {
+            this._spamScrollToBottom(newTab);
+        }
     }
     
     togglePinTab(paneId) {
