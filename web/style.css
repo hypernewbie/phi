@@ -144,7 +144,7 @@ html, body {
 
 .brand .brand-name {
     font-size: 16px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.5px;
     color: var(--text-primary);
 }
@@ -1544,11 +1544,6 @@ html, body {
         display: none !important;
     }
 
-    /* Hide brand text phi to save a lot of space for the project path selector */
-    .brand .brand-name {
-        display: none !important;
-    }
-
     /* Sidebar as a Slide-out Drawer */
     .sidebar-panel {
         position: fixed;
@@ -1805,10 +1800,7 @@ html, body {
     .logo {
         font-size: 16px;
     }
-    .brand-name {
-        display: none !important;
-    }
-    
+
     /* Terminal session tabs layout on mobile */
     .tabs-container {
         overflow-x: auto;
