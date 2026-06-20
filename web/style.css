@@ -3059,6 +3059,14 @@ html, body {
     background-color: var(--bg-elevated);
 }
 
+.hostname-dropdown-favicon {
+    width: 14px;
+    height: 14px;
+    margin-right: 8px;
+    flex-shrink: 0;
+    border-radius: 2px;
+}
+
 .hostname-dropdown-item.active {
     background-color: var(--accent-glow);
     color: var(--accent);
