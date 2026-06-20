@@ -278,6 +278,56 @@ func TestHandleUseExistingTerminalTab_RejectsWrongMethod(t *testing.T) {
 	}
 }
 
+// ─── Clipboard handler ─────────────────────────────────────────────────────────────
+
+func TestHandleGetClipboard_NoPTYManager(t *testing.T) {
+	// Without a ?pane= query parameter, the handler should not panic even
+	// when ptyManager is nil (which is the case in unit tests that don't
+	// initialize it). The response should have empty=true and source=system.
+	withTempConfig(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/clipboard", nil)
+	w := httptest.NewRecorder()
+	handleGetClipboard(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d — %s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, field := range []string{"text", "empty", "source"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("response missing field %q", field)
+		}
+	}
+	// Without an active pane query, source should default to "system"
+	if src, _ := body["source"].(string); src != "system" {
+		t.Errorf("source: want %q, got %q", "system", src)
+	}
+}
+
+func TestHandleGetClipboard_PaneWithoutManager(t *testing.T) {
+	// If ?pane= is provided but no PTY manager exists (test environment),
+	// the handler must still respond 200 with empty=true and source=system.
+	// It must not panic or 500.
+	withTempConfig(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/clipboard?pane=ghost-pane-id", nil)
+	w := httptest.NewRecorder()
+	handleGetClipboard(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if src, _ := body["source"].(string); src != "system" {
+		t.Errorf("source: want %q (no ptyManager so falls back to system), got %q", "system", src)
+	}
+}
+
 // ─── Quick commands CRUD ──────────────────────────────────────────────────────
 
 func TestHandleQuickCommands_AddAndDelete(t *testing.T) {
