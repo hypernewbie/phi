@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -469,42 +470,70 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name    string `json:"name"`
-		Command string `json:"command"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Name == "" {
-		http.Error(w, "Missing name", http.StatusBadRequest)
 		return
 	}
 
 	cfg := loadConfig()
 
 	if r.Method == http.MethodPost {
-		if req.Command == "" {
+		// Try parsing as slice/array first for bulk overwrite
+		var listReq []QuickCommand
+		if err := json.Unmarshal(bodyBytes, &listReq); err == nil {
+			cfg.QuickCommands = listReq
+			saveConfig(cfg)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Try parsing as a single quick command
+		var singleReq struct {
+			Name    string `json:"name"`
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(bodyBytes, &singleReq); err != nil {
+			http.Error(w, "Invalid payload format. Expected single command or list of commands.", http.StatusBadRequest)
+			return
+		}
+		if singleReq.Name == "" {
+			http.Error(w, "Missing name", http.StatusBadRequest)
+			return
+		}
+		if singleReq.Command == "" {
 			http.Error(w, "Missing command", http.StatusBadRequest)
 			return
 		}
+
 		found := false
 		for i, qc := range cfg.QuickCommands {
-			if qc.Name == req.Name {
-				cfg.QuickCommands[i].Command = req.Command
+			if qc.Name == singleReq.Name {
+				cfg.QuickCommands[i].Command = singleReq.Command
 				found = true
 				break
 			}
 		}
 		if !found {
-			cfg.QuickCommands = append(cfg.QuickCommands, QuickCommand{Name: req.Name, Command: req.Command})
+			cfg.QuickCommands = append(cfg.QuickCommands, QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
 		}
 		saveConfig(cfg)
 	} else if r.Method == http.MethodDelete {
+		var singleReq struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(bodyBytes, &singleReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if singleReq.Name == "" {
+			http.Error(w, "Missing name", http.StatusBadRequest)
+			return
+		}
+
 		newCmds := []QuickCommand{}
 		for _, qc := range cfg.QuickCommands {
-			if qc.Name != req.Name {
+			if qc.Name != singleReq.Name {
 				newCmds = append(newCmds, qc)
 			}
 		}

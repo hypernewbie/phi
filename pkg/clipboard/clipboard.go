@@ -68,7 +68,8 @@ func Read() (string, error) {
 	cmd.Stdout = &out
 	err := cmd.Run()
 	if err != nil {
-		return "", err
+		// Headless servers lack display/session contexts; fallback gracefully.
+		return "", nil
 	}
 
 	res := out.String()
