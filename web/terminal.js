@@ -599,6 +599,39 @@ export class TabManager {
                 tabInfo.ws.sendInput(payload);
             }
         }, { capture: true, passive: false });
+
+        // Touch scrolling for OpenCode alt screen (TUI) on mobile viewports
+        let termTouchStartY = 0;
+        termContainer.addEventListener('touchstart', (e) => {
+            if (tabInfo.coder !== 'opencode') return;
+            if (e.touches.length === 1) {
+                termTouchStartY = e.touches[0].clientY;
+            }
+        }, { passive: true });
+
+        termContainer.addEventListener('touchmove', (e) => {
+            if (tabInfo.coder !== 'opencode') return;
+            if (e.touches.length === 1 && termTouchStartY !== null) {
+                const currentY = e.touches[0].clientY;
+                const diffY = currentY - termTouchStartY;
+                
+                if (Math.abs(diffY) >= 16) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    const lines = Math.floor(Math.abs(diffY) / 16);
+                    const isUp = diffY > 0; // swipe down -> scroll up
+                    
+                    const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+                    const payload = seq.repeat(lines);
+                    
+                    if (tabInfo.ws && !tabInfo.isDead) {
+                        tabInfo.ws.sendInput(payload);
+                    }
+                    termTouchStartY = currentY;
+                }
+            }
+        }, { capture: true, passive: false });
         
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
@@ -1337,6 +1370,30 @@ export class TabManager {
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden')) {
             this.renderQuickCmdsDropup();
+        }
+
+        // 5. Render mobile virtual navigation keys (arrows) to compensate for touch keyboard limits
+        if (window.innerWidth <= 768) {
+            const divider = document.createElement('div');
+            divider.className = 'presets-divider';
+            this.presetsContainer.appendChild(divider);
+
+            const mobileNavs = [
+                { name: '▲', value: '\u001b[A' },
+                { name: '▼', value: '\u001b[B' },
+                { name: '◀', value: '\u001b[D' },
+                { name: '▶', value: '\u001b[C' }
+            ];
+
+            mobileNavs.forEach(nav => {
+                const btn = document.createElement('button');
+                btn.className = 'preset-btn mobile-nav-btn';
+                btn.innerText = nav.name;
+                btn.addEventListener('click', () => {
+                    this.sendRawInput(nav.value);
+                });
+                this.presetsContainer.appendChild(btn);
+            });
         }
     }
     
