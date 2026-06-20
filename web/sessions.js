@@ -43,9 +43,13 @@ export class SessionsManager {
             this.spawnNewSession();
         });
         
-        // Workspace Toggle
+        // Workspace Toggle and Formatter
+        this.workspaceSelect.addEventListener('mousedown', () => this.expandWorkspaceSelect());
+        this.workspaceSelect.addEventListener('focus', () => this.expandWorkspaceSelect());
+        this.workspaceSelect.addEventListener('blur', () => this.shrinkWorkspaceSelect());
         this.workspaceSelect.addEventListener('change', () => {
             this.activeWorkspace = this.workspaceSelect.value;
+            this.shrinkWorkspaceSelect();
             this.loadWorktrees();
             // Refresh diff on current active worktree (which is updated inside loadWorktrees)
             setTimeout(() => {
@@ -98,6 +102,28 @@ export class SessionsManager {
         });
     }
     
+    getLastFolderName(path) {
+        if (!path) return '';
+        const parts = path.split(/[/\\]/);
+        return parts[parts.length - 1] || path;
+    }
+
+    expandWorkspaceSelect() {
+        Array.from(this.workspaceSelect.options).forEach(opt => {
+            opt.innerText = opt.value;
+        });
+    }
+
+    shrinkWorkspaceSelect() {
+        Array.from(this.workspaceSelect.options).forEach(opt => {
+            if (opt.value === this.workspaceSelect.value) {
+                opt.innerText = this.getLastFolderName(opt.value);
+            } else {
+                opt.innerText = opt.value;
+            }
+        });
+    }
+
     async loadConfig() {
         try {
             const res = await fetch('/api/config');
@@ -118,15 +144,17 @@ export class SessionsManager {
                 this.activeWorkspace = data.active_cwd || data.workspaces[0] || '';
             }
             this.workspaceSelect.value = this.activeWorkspace;
+            this.shrinkWorkspaceSelect();
             
             if (data.theme_color) {
                 this.app.accentColorSelect.value = data.theme_color;
                 this.app.applyAccentTheme(data.theme_color);
             }
 
-            // Save the model presets list and quick commands, then redraw current tab presets.
+            // Save the model presets list, quick commands, and terminal commands, then redraw current tab presets.
             this.app.modelPresets = data.model_presets || {};
             this.app.quickCommands = data.quick_commands || [];
+            this.app.terminalCommands = data.terminal_commands || [];
             this.app.markdownDirs = data.markdown_dirs || [];
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {

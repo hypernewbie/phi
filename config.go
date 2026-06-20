@@ -38,6 +38,7 @@ type Config struct {
 	ActiveWorktrees   map[string]string `json:"active_worktrees"`
 	ModelPresets      ModelPresetsMap   `json:"model_presets"`
 	QuickCommands     []QuickCommand    `json:"quick_commands"`
+	TerminalCommands  []QuickCommand    `json:"terminal_commands"`
 	MarkdownDirs      []string          `json:"markdown_dirs"`
 }
 
@@ -87,6 +88,14 @@ func loadConfig() Config {
 			{Name: "status", Command: "git status"},
 			{Name: "diff", Command: "git diff"},
 			{Name: "commit", Command: `git commit -m "{}"`},
+		}
+	}
+	if cfg.TerminalCommands == nil {
+		cfg.TerminalCommands = []QuickCommand{
+			{Name: "vim", Command: "vim"},
+			{Name: "nvim", Command: "nvim"},
+			{Name: "git push", Command: "git push"},
+			{Name: "git pull --rebase", Command: "git pull --rebase"},
 		}
 	}
 	if cfg.MarkdownDirs == nil {

@@ -366,13 +366,14 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"workspaces":     cfg.Workspaces,
-		"active_cwd":     activeCWD,
-		"theme_color":    cfg.ThemeColor,
-		"hostname":       hName,
-		"model_presets":  cfg.ModelPresets,
-		"quick_commands": cfg.QuickCommands,
-		"markdown_dirs":  cfg.MarkdownDirs,
+		"workspaces":        cfg.Workspaces,
+		"active_cwd":        activeCWD,
+		"theme_color":       cfg.ThemeColor,
+		"hostname":          hName,
+		"model_presets":     cfg.ModelPresets,
+		"quick_commands":    cfg.QuickCommands,
+		"terminal_commands": cfg.TerminalCommands,
+		"markdown_dirs":     cfg.MarkdownDirs,
 	})
 }
 
@@ -549,6 +550,86 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		cfg.QuickCommands = newCmds
+		saveConfig(cfg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+
+	if r.Method == http.MethodPost {
+		// Try parsing as slice/array first for bulk overwrite
+		var listReq []QuickCommand
+		if err := json.Unmarshal(bodyBytes, &listReq); err == nil {
+			cfg.TerminalCommands = listReq
+			saveConfig(cfg)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Try parsing as a single quick command
+		var singleReq struct {
+			Name    string `json:"name"`
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(bodyBytes, &singleReq); err != nil {
+			http.Error(w, "Invalid payload format. Expected single command or list of commands.", http.StatusBadRequest)
+			return
+		}
+		if singleReq.Name == "" {
+			http.Error(w, "Missing name", http.StatusBadRequest)
+			return
+		}
+		if singleReq.Command == "" {
+			http.Error(w, "Missing command", http.StatusBadRequest)
+			return
+		}
+
+		found := false
+		for i, tc := range cfg.TerminalCommands {
+			if tc.Name == singleReq.Name {
+				cfg.TerminalCommands[i].Command = singleReq.Command
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.TerminalCommands = append(cfg.TerminalCommands, QuickCommand{Name: singleReq.Name, Command: singleReq.Command})
+		}
+		saveConfig(cfg)
+	} else if r.Method == http.MethodDelete {
+		var singleReq struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(bodyBytes, &singleReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if singleReq.Name == "" {
+			http.Error(w, "Missing name", http.StatusBadRequest)
+			return
+		}
+
+		newCmds := []QuickCommand{}
+		for _, tc := range cfg.TerminalCommands {
+			if tc.Name != singleReq.Name {
+				newCmds = append(newCmds, tc)
+			}
+		}
+		cfg.TerminalCommands = newCmds
 		saveConfig(cfg)
 	}
 
@@ -931,11 +1012,13 @@ func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		ModelPresets  ModelPresetsMap `json:"model_presets"`
-		QuickCommands []QuickCommand  `json:"quick_commands"`
+		ModelPresets     ModelPresetsMap `json:"model_presets"`
+		QuickCommands    []QuickCommand  `json:"quick_commands"`
+		TerminalCommands []QuickCommand  `json:"terminal_commands"`
 	}{
-		ModelPresets:  cfg.ModelPresets,
-		QuickCommands: cfg.QuickCommands,
+		ModelPresets:     cfg.ModelPresets,
+		QuickCommands:    cfg.QuickCommands,
+		TerminalCommands: cfg.TerminalCommands,
 	}
 
 	jsonData, err := json.Marshal(exportData)
@@ -1005,8 +1088,9 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var importedData struct {
-		ModelPresets  ModelPresetsMap `json:"model_presets"`
-		QuickCommands []QuickCommand  `json:"quick_commands"`
+		ModelPresets     ModelPresetsMap `json:"model_presets"`
+		QuickCommands    []QuickCommand  `json:"quick_commands"`
+		TerminalCommands []QuickCommand  `json:"terminal_commands"`
 	}
 
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
@@ -1020,6 +1104,9 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(importedData.QuickCommands) > 0 {
 		cfg.QuickCommands = importedData.QuickCommands
+	}
+	if len(importedData.TerminalCommands) > 0 {
+		cfg.TerminalCommands = importedData.TerminalCommands
 	}
 
 	saveConfig(cfg)
