@@ -1588,11 +1588,17 @@ export class TabManager {
             // Click target to switch tab
             const selectBtn = document.createElement('button');
             selectBtn.className = 'hostname-dropdown-select-btn';
-            
+
+            // Coder favicon (icon-only — the coder prefix text was redundant
+            // since the favicon already identifies the coder)
+            const faviconImg = document.createElement('img');
+            faviconImg.className = 'hostname-dropdown-favicon';
+            faviconImg.src = CODER_FAVICONS[tabInfo.coder] || CODER_FAVICONS.bash;
+            faviconImg.alt = tabInfo.coder;
+
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
-            const coderName = this.app.codersPresetRegistry[tabInfo.coder]?.name || tabInfo.coder;
-            titleSpan.innerText = `${coderName}: ${tabInfo.title || 'Session'}`;
+            titleSpan.innerText = tabInfo.title || 'Session';
 
             const metaSpan = document.createElement('span');
             metaSpan.className = 'hostname-dropdown-meta';
@@ -1604,6 +1610,7 @@ export class TabManager {
                 metaSpan.style.color = 'var(--green)';
             }
 
+            selectBtn.appendChild(faviconImg);
             selectBtn.appendChild(titleSpan);
             selectBtn.appendChild(metaSpan);
             selectBtn.addEventListener('click', () => {
