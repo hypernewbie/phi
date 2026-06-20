@@ -156,6 +156,7 @@ export class SessionsManager {
             this.app.quickCommands = data.quick_commands || [];
             this.app.terminalCommands = data.terminal_commands || [];
             this.app.markdownDirs = data.markdown_dirs || [];
+            this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);
