@@ -79,6 +79,7 @@ export class TabManager {
 
     applyCPUIndicator(cpuPercent) {
         const logo = document.querySelector('.brand .logo');
+        const brandName = document.querySelector('.brand .brand-name');
         if (!logo) return;
         // Thresholds: idle < 30, moderate 30–70, high > 70
         let level = 'cpu-idle';
@@ -86,9 +87,12 @@ export class TabManager {
         else if (cpuPercent > 30) level = 'cpu-moderate';
         // Don't churn the DOM if the level hasn't changed
         if (logo.dataset.cpuLevel === level) return;
-        logo.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high');
-        logo.classList.add(level);
-        logo.dataset.cpuLevel = level;
+        for (const el of [logo, brandName]) {
+            if (!el) continue;
+            el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high');
+            el.classList.add(level);
+            el.dataset.cpuLevel = level;
+        }
     }
     
     saveTabsState() {
