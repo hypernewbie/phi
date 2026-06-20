@@ -1584,6 +1584,8 @@ body {
         font-size: 12px;
         height: 36px;
         min-height: 36px;
+        max-height: 80px !important;
+        overflow-y: auto !important;
         padding: 6px 10px;
     }
     
