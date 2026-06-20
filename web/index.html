@@ -34,7 +34,10 @@
                 </button>
                 <span class="logo">Φ</span>
                 <span class="brand-name">phi</span>
-                <span id="hostname-display" class="hostname-display"></span>
+                <div class="hostname-wrapper" style="position: relative; display: inline-block;">
+                    <span id="hostname-display" class="hostname-display"></span>
+                    <div id="hostname-tabs-dropdown" class="hostname-tabs-dropdown hidden"></div>
+                </div>
             </div>
             
             <div class="workspace-area">
@@ -45,6 +48,27 @@
             </div>
 
             <div class="header-actions">
+                <!-- Mobile only merged terminal buttons -->
+                <button id="mobile-reconnect-all-tabs-btn" class="header-btn mobile-only" title="Reconnect all sessions">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                </button>
+                <button id="mobile-close-all-tabs-btn" class="header-btn mobile-only" title="Close all sessions">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                    </svg>
+                </button>
+                <button id="mobile-refresh-console-btn" class="header-btn mobile-only" title="Refresh Console">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                </button>
+                
                 <div class="theme-area">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path></svg>
                     <select id="accent-color-select" title="Change Highlight Theme Color">
@@ -144,7 +168,7 @@
                 </div>
 
                 <div class="sidebar-version">
-                    v0.3.5
+                    v0.4.0
                 </div>
             </aside>
 
@@ -217,6 +241,8 @@
                     <div id="model-presets-dropup" class="model-presets-dropup hidden"></div>
                     <!-- Floating Drop-up for Quick Commands -->
                     <div id="quick-commands-dropup" class="model-presets-dropup hidden"></div>
+                    <!-- Floating Drop-up for Mobile Slash Commands -->
+                    <div id="slash-presets-dropup" class="model-presets-dropup hidden"></div>
                 </div>
             </main>
 

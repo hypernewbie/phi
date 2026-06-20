@@ -67,6 +67,21 @@ func TestLoadConfig_DefaultQuickCommands(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DefaultTerminalCommands(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+
+	names := map[string]bool{}
+	for _, tc := range cfg.TerminalCommands {
+		names[tc.Name] = true
+	}
+	for _, want := range []string{"vim", "nvim", "git push", "git pull --rebase"} {
+		if !names[want] {
+			t.Errorf("TerminalCommands missing default %q", want)
+		}
+	}
+}
+
 func TestLoadConfig_DefaultMarkdownDirs(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
@@ -242,6 +257,77 @@ func TestHandleQuickCommands_UpdateExisting(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected exactly 1 entry named 'upd', got %d", count)
+	}
+}
+
+func TestHandleTerminalCommands_AddAndDelete(t *testing.T) {
+	withTempConfig(t)
+
+	// POST — add
+	body := strings.NewReader(`{"name":"mytermtest","command":"vim file.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handleTerminalCommands(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status: want 200, got %d — %s", w.Code, w.Body.String())
+	}
+
+	cfg := loadConfig()
+	found := false
+	for _, tc := range cfg.TerminalCommands {
+		if tc.Name == "mytermtest" && tc.Command == "vim file.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("terminal command not saved; commands: %v", cfg.TerminalCommands)
+	}
+
+	// DELETE — remove
+	body = strings.NewReader(`{"name":"mytermtest"}`)
+	req = httptest.NewRequest(http.MethodDelete, "/api/config/terminal-commands", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handleTerminalCommands(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status: want 200, got %d", w.Code)
+	}
+
+	cfg = loadConfig()
+	for _, tc := range cfg.TerminalCommands {
+		if tc.Name == "mytermtest" {
+			t.Error("terminal command still present after DELETE")
+		}
+	}
+}
+
+func TestHandleTerminalCommands_UpdateExisting(t *testing.T) {
+	withTempConfig(t)
+
+	post := func(name, command string) {
+		body := strings.NewReader(`{"name":"` + name + `","command":"` + command + `"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
+		req.Header.Set("Content-Type", "application/json")
+		handleTerminalCommands(httptest.NewRecorder(), req)
+	}
+
+	post("updterm", "original")
+	post("updterm", "updated") // same name → should update
+
+	cfg := loadConfig()
+	count := 0
+	for _, tc := range cfg.TerminalCommands {
+		if tc.Name == "updterm" {
+			count++
+			if tc.Command != "updated" {
+				t.Errorf("terminal command not updated: got %q", tc.Command)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 entry named 'updterm', got %d", count)
 	}
 }
 

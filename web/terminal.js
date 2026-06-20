@@ -29,6 +29,10 @@ export class TabManager {
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
         
+        if (window.innerWidth <= 768 && this.inputTextArea) {
+            this.inputTextArea.placeholder = "Type a prompt...";
+        }
+
         this.setupEventListeners();
 
         // Prompt for OS-level notification permissions on page load if not configured.
@@ -86,8 +90,10 @@ export class TabManager {
                 this.updateDirectModeUI(activeTab);
             }
             if (window.innerWidth <= 768) {
+                this.app.updateLayoutPosition?.(true);
                 setTimeout(() => {
                     window.scrollTo(0, 0);
+                    this.app.updateLayoutPosition?.(true);
                 }, 50);
             }
         });
@@ -96,7 +102,8 @@ export class TabManager {
             if (window.innerWidth <= 768) {
                 setTimeout(() => {
                     window.scrollTo(0, 0);
-                }, 80);
+                    this.app.updateLayoutPosition?.(true);
+                }, 150);
             }
         });
 
@@ -209,40 +216,43 @@ export class TabManager {
         }
 
         const closeAllBtn = document.getElementById('close-all-tabs-btn');
-        if (closeAllBtn) {
-            closeAllBtn.addEventListener('click', () => {
-                if (this.tabs.size === 0) return;
-                if (confirm(`Are you sure you want to close all ${this.tabs.size} active sessions?`)) {
-                    const keys = Array.from(this.tabs.keys());
-                    keys.forEach(paneId => {
-                        this.closeTab(paneId);
-                    });
-                    this.app.sessionsManager.loadSessions();
-                }
-            });
-        }
+        const mobileCloseAllBtn = document.getElementById('mobile-close-all-tabs-btn');
+        const handleCloseAll = () => {
+            if (this.tabs.size === 0) return;
+            if (confirm(`Are you sure you want to close all ${this.tabs.size} active sessions?`)) {
+                const keys = Array.from(this.tabs.keys());
+                keys.forEach(paneId => {
+                    this.closeTab(paneId);
+                });
+                this.app.sessionsManager.loadSessions();
+            }
+        };
+        closeAllBtn?.addEventListener('click', handleCloseAll);
+        mobileCloseAllBtn?.addEventListener('click', handleCloseAll);
 
         const reconnectAllBtn = document.getElementById('reconnect-all-tabs-btn');
-        if (reconnectAllBtn) {
-            reconnectAllBtn.addEventListener('click', () => {
-                for (const tabInfo of this.tabs.values()) {
-                    if (tabInfo.isDead) {
-                        this.reconnectTab(tabInfo);
-                    }
+        const mobileReconnectAllBtn = document.getElementById('mobile-reconnect-all-tabs-btn');
+        const handleReconnectAll = () => {
+            for (const tabInfo of this.tabs.values()) {
+                if (tabInfo.isDead) {
+                    this.reconnectTab(tabInfo);
                 }
-            });
-        }
+            }
+        };
+        reconnectAllBtn?.addEventListener('click', handleReconnectAll);
+        mobileReconnectAllBtn?.addEventListener('click', handleReconnectAll);
 
         const refreshConsoleBtn = document.getElementById('refresh-console-btn');
-        if (refreshConsoleBtn) {
-            refreshConsoleBtn.addEventListener('click', () => {
-                const activeTab = this.getActiveTab();
-                if (!activeTab || !activeTab.term) return;
-                activeTab.term.refresh(0, activeTab.term.rows - 1);
-                this.fitActiveTerminal();
-                this._spamScrollToBottom(activeTab);
-            });
-        }
+        const mobileRefreshConsoleBtn = document.getElementById('mobile-refresh-console-btn');
+        const handleRefreshConsole = () => {
+            const activeTab = this.getActiveTab();
+            if (!activeTab || !activeTab.term) return;
+            activeTab.term.refresh(0, activeTab.term.rows - 1);
+            this.fitActiveTerminal();
+            this._spamScrollToBottom(activeTab);
+        };
+        refreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
+        mobileRefreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
         
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
@@ -270,12 +280,50 @@ export class TabManager {
             }, 100);
         });
 
-        // Close model presets dropup on clicking outside
+        const hostEl = document.getElementById('hostname-display');
+        if (hostEl) {
+            hostEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const dropdown = document.getElementById('hostname-tabs-dropdown');
+                if (dropdown) {
+                    const isHidden = dropdown.classList.contains('hidden');
+                    if (isHidden) {
+                        this.renderHostnameTabsDropdown();
+                        dropdown.classList.remove('hidden');
+                    } else {
+                        dropdown.classList.add('hidden');
+                    }
+                }
+            });
+        }
+
+        // Close dropups and dropdowns on clicking outside
         document.addEventListener('click', (e) => {
-            const dropup = document.getElementById('model-presets-dropup');
-            if (dropup && !dropup.classList.contains('hidden')) {
+            const modelDropup = document.getElementById('model-presets-dropup');
+            if (modelDropup && !modelDropup.classList.contains('hidden')) {
                 if (!e.target.closest('#model-presets-dropup') && !e.target.closest('.model-trigger-btn')) {
-                    dropup.classList.add('hidden');
+                    modelDropup.classList.add('hidden');
+                }
+            }
+            
+            const qcDropup = document.getElementById('quick-commands-dropup');
+            if (qcDropup && !qcDropup.classList.contains('hidden')) {
+                if (!e.target.closest('#quick-commands-dropup') && !e.target.closest('.model-trigger-btn')) {
+                    qcDropup.classList.add('hidden');
+                }
+            }
+            
+            const slashDropup = document.getElementById('slash-presets-dropup');
+            if (slashDropup && !slashDropup.classList.contains('hidden')) {
+                if (!e.target.closest('#slash-presets-dropup') && !e.target.closest('.slash-trigger-btn')) {
+                    slashDropup.classList.add('hidden');
+                }
+            }
+            
+            const hostDropdown = document.getElementById('hostname-tabs-dropdown');
+            if (hostDropdown && !hostDropdown.classList.contains('hidden')) {
+                if (!e.target.closest('#hostname-display') && !e.target.closest('#hostname-tabs-dropdown')) {
+                    hostDropdown.classList.add('hidden');
                 }
             }
         });
@@ -366,7 +414,7 @@ export class TabManager {
         this.fitActiveTerminal();
     }
     
-    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false) {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false, initialCmd = '') {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId);
@@ -715,6 +763,19 @@ export class TabManager {
                         tabInfo.fitAddon.fit();
                     }
                     this.sendResizeToBackend(tabInfo);
+
+                    if (initialCmd) {
+                        // Deliver startup command after terminal settles
+                        setTimeout(() => {
+                            if (!tabInfo.isDead) {
+                                if (initialCmd.length > 16 || initialCmd.includes('\n')) {
+                                    tabInfo.ws.sendInput('\x1b[200~' + initialCmd + '\x1b[201~\r');
+                                } else {
+                                    tabInfo.ws.sendInput(initialCmd + '\r');
+                                }
+                            }
+                        }, 500);
+                    }
                 } catch (e) {
                     console.error("[term] Fit/resize error on initial socket open:", e);
                 }
@@ -937,7 +998,14 @@ export class TabManager {
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         activeTab.ws.sendInput(bytes);
-        this.focusActiveTerminal();
+        
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile && !activeTab.directMode && this.inputTextArea) {
+            this.inputTextArea.focus({ preventScroll: true });
+        } else {
+            this.focusActiveTerminal();
+        }
+        
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
@@ -1148,7 +1216,15 @@ export class TabManager {
     adjustInputHeight() {
         if (!this.inputTextArea) return;
         this.inputTextArea.style.height = 'auto';
-        this.inputTextArea.style.height = this.inputTextArea.scrollHeight + 'px';
+        let newHeight = this.inputTextArea.scrollHeight;
+        // If empty, prevent the placeholder wrap from making the textarea fat
+        if (this.inputTextArea.value.trim() === '') {
+            newHeight = window.innerWidth <= 768 ? 36 : 40;
+            if (window.innerWidth <= 768) {
+                this.inputTextArea.placeholder = "Type a prompt...";
+            }
+        }
+        this.inputTextArea.style.height = newHeight + 'px';
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
@@ -1313,26 +1389,58 @@ export class TabManager {
         
         this.presetsContainer.classList.remove('hidden');
         
-        // 1. Render Static Coder Presets
+        const isMobile = window.innerWidth <= 768;
+
+        // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
-            coderPresetInfo.presets.forEach(p => {
-                const btn = document.createElement('button');
-                btn.className = 'preset-btn';
-                btn.innerText = p.name;
-                btn.addEventListener('click', () => {
-                    const activeTab = this.getActiveTab();
-                    if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
-                        const cmd = p.value.slice(0, -1);
-                        this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
-                        setTimeout(() => {
-                            this.sendRawInput('\r');
-                        }, 200);
-                    } else {
+            if (isMobile) {
+                // Separate slash commands from utility shortcuts
+                const slashPresets = coderPresetInfo.presets.filter(p => p.value.startsWith('/'));
+                const utilityPresets = coderPresetInfo.presets.filter(p => !p.value.startsWith('/'));
+
+                // Render single Slash trigger button if slash commands exist
+                if (slashPresets.length > 0) {
+                    const slashBtn = document.createElement('button');
+                    slashBtn.className = 'preset-btn slash-trigger-btn';
+                    slashBtn.innerText = '/ ▾';
+                    slashBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this._toggleDropup('slash-presets-dropup', slashBtn, () => this.renderSlashDropup(slashPresets));
+                    });
+                    this.presetsContainer.appendChild(slashBtn);
+                }
+
+                // Render other horizontal utility presets (like ctrl+c, esc, y)
+                utilityPresets.forEach(p => {
+                    const btn = document.createElement('button');
+                    btn.className = 'preset-btn';
+                    btn.innerText = p.name;
+                    btn.addEventListener('click', () => {
                         this.sendRawInput(p.value);
-                    }
+                    });
+                    this.presetsContainer.appendChild(btn);
                 });
-                this.presetsContainer.appendChild(btn);
-            });
+            } else {
+                // Desktop: Render everything horizontally as before
+                coderPresetInfo.presets.forEach(p => {
+                    const btn = document.createElement('button');
+                    btn.className = 'preset-btn';
+                    btn.innerText = p.name;
+                    btn.addEventListener('click', () => {
+                        const activeTab = this.getActiveTab();
+                        if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                            const cmd = p.value.slice(0, -1);
+                            this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
+                            setTimeout(() => {
+                                this.sendRawInput('\r');
+                            }, 200);
+                        } else {
+                            this.sendRawInput(p.value);
+                        }
+                    });
+                    this.presetsContainer.appendChild(btn);
+                });
+            }
         }
         
         // 2. Render Divider if static presets exist
@@ -1371,9 +1479,14 @@ export class TabManager {
         if (qcDropup && !qcDropup.classList.contains('hidden')) {
             this.renderQuickCmdsDropup();
         }
+        const slashDropup = document.getElementById('slash-presets-dropup');
+        if (slashDropup && !slashDropup.classList.contains('hidden')) {
+            const slashPresets = coderPresetInfo ? coderPresetInfo.presets.filter(p => p.value.startsWith('/')) : [];
+            this.renderSlashDropup(slashPresets);
+        }
 
         // 5. Render mobile virtual navigation keys (arrows) to compensate for touch keyboard limits
-        if (window.innerWidth <= 768) {
+        if (isMobile) {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
@@ -1394,6 +1507,141 @@ export class TabManager {
                 });
                 this.presetsContainer.appendChild(btn);
             });
+        }
+    }
+
+    renderSlashDropup(slashPresets) {
+        const dropup = document.getElementById('slash-presets-dropup');
+        if (!dropup) return;
+        dropup.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.innerText = 'Slash Commands';
+        dropup.appendChild(header);
+
+        if (slashPresets.length === 0) {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+            row.style.color = 'var(--text-muted)';
+            row.style.padding = '8px 12px';
+            row.style.fontSize = '12px';
+            row.innerText = 'No commands';
+            dropup.appendChild(row);
+            return;
+        }
+
+        slashPresets.forEach(p => {
+            const row = document.createElement('div');
+            row.className = 'dropup-row';
+
+            const btn = document.createElement('button');
+            btn.className = 'dropup-model-btn';
+            btn.innerText = p.name;
+            btn.addEventListener('click', () => {
+                const activeTab = this.getActiveTab();
+                if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                    const cmd = p.value.slice(0, -1);
+                    this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
+                    setTimeout(() => {
+                        this.sendRawInput('\r');
+                    }, 200);
+                } else {
+                    this.sendRawInput(p.value);
+                }
+                dropup.classList.add('hidden');
+            });
+            row.appendChild(btn);
+            dropup.appendChild(row);
+        });
+    }
+
+    renderHostnameTabsDropdown() {
+        const dropdown = document.getElementById('hostname-tabs-dropdown');
+        if (!dropdown) return;
+        dropdown.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.style.borderBottom = '1px solid var(--bg-border)';
+        header.style.padding = '6px 12px';
+        header.style.color = 'var(--accent)';
+        header.innerText = 'Active Sessions';
+        dropdown.appendChild(header);
+
+        if (this.tabs.size === 0) {
+            const emptyItem = document.createElement('div');
+            emptyItem.className = 'hostname-dropdown-item';
+            emptyItem.style.color = 'var(--text-muted)';
+            emptyItem.innerText = 'No active tabs';
+            dropdown.appendChild(emptyItem);
+            return;
+        }
+
+        for (const [paneId, tabInfo] of this.tabs.entries()) {
+            const row = document.createElement('div');
+            row.className = 'hostname-dropdown-row';
+            if (paneId === this.activePaneId) {
+                row.classList.add('active');
+            }
+
+            // Click target to switch tab
+            const selectBtn = document.createElement('button');
+            selectBtn.className = 'hostname-dropdown-select-btn';
+            
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'hostname-dropdown-title';
+            const coderName = this.app.codersPresetRegistry[tabInfo.coder]?.name || tabInfo.coder;
+            titleSpan.innerText = `${coderName}: ${tabInfo.title || 'Session'}`;
+
+            const metaSpan = document.createElement('span');
+            metaSpan.className = 'hostname-dropdown-meta';
+            if (tabInfo.isDead) {
+                metaSpan.innerText = 'disconnected';
+                metaSpan.style.color = 'var(--red)';
+            } else {
+                metaSpan.innerText = 'active';
+                metaSpan.style.color = 'var(--green)';
+            }
+
+            selectBtn.appendChild(titleSpan);
+            selectBtn.appendChild(metaSpan);
+            selectBtn.addEventListener('click', () => {
+                this.switchTab(paneId);
+                dropdown.classList.add('hidden');
+            });
+            row.appendChild(selectBtn);
+
+            // Pin button
+            const pinBtn = document.createElement('button');
+            pinBtn.className = 'hostname-dropdown-pin-btn';
+            if (tabInfo.pinned) {
+                pinBtn.classList.add('pinned');
+            }
+            pinBtn.innerHTML = '📌';
+            pinBtn.title = 'Pin session (Keep alive overnight)';
+            pinBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.togglePinTab(paneId);
+                this.renderHostnameTabsDropdown(); // refresh dropdown layout
+            });
+            row.appendChild(pinBtn);
+
+            // Close button
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'hostname-dropdown-close-btn';
+            closeBtn.innerHTML = '×';
+            closeBtn.title = 'Close session';
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`Close session: ${tabInfo.title || 'Session'}?`)) {
+                    this.closeTab(paneId);
+                    this.renderHostnameTabsDropdown(); // refresh dropdown layout
+                }
+            });
+            row.appendChild(closeBtn);
+
+            dropdown.appendChild(row);
         }
     }
     

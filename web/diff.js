@@ -269,16 +269,16 @@ export class DiffController {
         const listContainer = document.createElement('div');
         listContainer.className = 'cmd-list';
 
-        const quickCmds = this.app.quickCommands || [];
-        if (quickCmds.length === 0) {
+        const terminalCmds = this.app.terminalCommands || [];
+        if (terminalCmds.length === 0) {
             const emptyHint = document.createElement('div');
             emptyHint.style.color = 'var(--text-muted)';
             emptyHint.style.fontSize = '12px';
             emptyHint.style.padding = '12px 4px';
-            emptyHint.innerText = 'No quick commands configured.';
+            emptyHint.innerText = 'No terminal commands configured.';
             listContainer.appendChild(emptyHint);
         } else {
-            quickCmds.forEach(cmd => {
+            terminalCmds.forEach(cmd => {
                 const item = document.createElement('div');
                 item.className = 'cmd-item';
 
@@ -349,7 +349,7 @@ export class DiffController {
         if (!command || !command.trim()) return;
 
         try {
-            const res = await fetch('/api/config/quick-commands', {
+            const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: name.trim(), command: command.trim() })
@@ -372,7 +372,7 @@ export class DiffController {
 
         try {
             if (name.trim() !== cmd.name) {
-                const delRes = await fetch('/api/config/quick-commands', {
+                const delRes = await fetch('/api/config/terminal-commands', {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: cmd.name })
@@ -380,7 +380,7 @@ export class DiffController {
                 if (!delRes.ok) throw new Error("Failed to clear old command");
             }
 
-            const res = await fetch('/api/config/quick-commands', {
+            const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: name.trim(), command: command.trim() })
@@ -396,10 +396,10 @@ export class DiffController {
     }
 
     async deleteCommand(cmd) {
-        if (!confirm(`Delete quick command "${cmd.name}"?`)) return;
+        if (!confirm(`Delete terminal command "${cmd.name}"?`)) return;
 
         try {
-            const res = await fetch('/api/config/quick-commands', {
+            const res = await fetch('/api/config/terminal-commands', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: cmd.name })
@@ -415,8 +415,8 @@ export class DiffController {
     }
 
     copyAllCommands() {
-        const quickCmds = this.app.quickCommands || [];
-        const jsonStr = JSON.stringify(quickCmds, null, 2);
+        const terminalCmds = this.app.terminalCommands || [];
+        const jsonStr = JSON.stringify(terminalCmds, null, 2);
         this.app.tabManager.copyTextRobustly(jsonStr);
     }
 
@@ -425,26 +425,59 @@ export class DiffController {
         this.app.tabManager.copyTextRobustly(jsonStr);
     }
 
-    runCommand(cmd) {
+    async runCommand(cmd) {
         const activeTab = this.app.tabManager.getActiveTab();
-        if (!activeTab || activeTab.isDead) {
-            this.app.showToast("No active terminal session to run command", { type: 'error', title: 'Execute' });
-            return;
-        }
         const prefix = this.app.tabManager.inputTextArea.value.trim();
         const combined = prefix && cmd.command.includes('{}')
             ? cmd.command.replace('{}', prefix)
             : prefix ? `${prefix} ${cmd.command}` : cmd.command;
-        let payload = combined;
-        if (combined.length > 16 || combined.includes('\n')) {
-            payload = '\x1b[200~' + combined + '\x1b[201~';
+
+        // If the active tab is an interactive shell terminal, send it directly to it
+        if (activeTab && !activeTab.isDead && (activeTab.coder === 'bash' || activeTab.coder === 'pwsh')) {
+            let payload = combined;
+            if (combined.length > 16 || combined.includes('\n')) {
+                payload = '\x1b[200~' + combined + '\x1b[201~';
+            }
+            activeTab.ws.sendInput(payload + '\r');
+            this.app.tabManager.inputTextArea.value = '';
+            this.app.tabManager.lastInputValue = '';
+            this.app.tabManager.adjustInputHeight();
+            this.app.tabManager.inputTextArea.focus({ preventScroll: true });
+            this.app.tabManager._spamScrollToBottom(activeTab);
+        } else {
+            // Otherwise, launch a brand new terminal tab running the command!
+            try {
+                const title = `+ Shell`;
+                const cwd = this.app.sessionsManager.activeCWD || '';
+                const workspace = this.app.sessionsManager.activeWorkspace || '';
+                
+                const res = await fetch('/api/terminals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        coder: 'bash',
+                        cwd: cwd,
+                        session_id: '',
+                        title: title,
+                        workspace: workspace
+                    })
+                });
+                
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => 'unknown error');
+                    throw new Error(errText.trim() || 'Failed to spawn shell terminal');
+                }
+
+                const data = await res.json();
+                this.app.tabManager.createTab(data.pane_id, data.session_id, title, 'bash', workspace, cwd, false, combined);
+                
+                if (this.app.sessionsManager) {
+                    this.app.sessionsManager.loadSessions();
+                }
+            } catch (e) {
+                this.app.showToast(e.message, { type: 'error', title: 'Launch Shell' });
+            }
         }
-        activeTab.ws.sendInput(payload + '\r');
-        this.app.tabManager.inputTextArea.value = '';
-        this.app.tabManager.lastInputValue = '';
-        this.app.tabManager.adjustInputHeight();
-        this.app.tabManager.inputTextArea.focus({ preventScroll: true });
-        this.app.tabManager._spamScrollToBottom(activeTab);
     }
 
     async pasteCommands() {
@@ -466,20 +499,20 @@ export class DiffController {
             const data = JSON.parse(text.trim());
             
             if (Array.isArray(data)) {
-                const confirmOverwite = confirm(`Do you want to overwrite all your quick commands with these ${data.length} commands?`);
+                const confirmOverwite = confirm(`Do you want to overwrite all your terminal commands with these ${data.length} commands?`);
                 if (!confirmOverwite) return;
                 
-                const res = await fetch('/api/config/quick-commands', {
+                const res = await fetch('/api/config/terminal-commands', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
                 if (!res.ok) {
-                    throw new Error(await res.text() || "Failed to overwrite quick commands");
+                    throw new Error(await res.text() || "Failed to overwrite terminal commands");
                 }
                 this.app.showToast("Successfully imported all commands", { type: 'success', title: 'Import' });
             } else if (data && typeof data === 'object' && data.name && data.command) {
-                const res = await fetch('/api/config/quick-commands', {
+                const res = await fetch('/api/config/terminal-commands', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)

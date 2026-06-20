@@ -187,30 +187,70 @@ class App {
         }
 
         // 9. Setup Mobile Visual Viewport & Keyboard Resizer
+        // ==========================================
+        // ARCHITECTURAL WARNING TO FUTURE ENGINEERS & LLMs:
+        // Do NOT try to solve the iOS WebKit virtual keyboard layout overlay issue using:
+        //   - Viewport meta tag `interactive-widget=resizes-content` (completely ignored by iOS Safari).
+        //   - `100vh`, `100dvh`, or `100%` height (WebKit layout viewport doesn't resize when the keyboard shows).
+        //   - Window `resize` events or `window.innerHeight` (does not trigger/update for virtual keyboard on iOS).
+        //   - Shifting the container using `position: absolute` and tracking `visualViewport.offsetTop` (causes horrible layout jumping, latency, and black bar glitches).
+        //   - Native document scrolling (WebKit will forcibly scroll the page body to center the focused input, breaking fixed UI layouts).
+        //
+        // THE ONLY CORRECT WAY (Tested & Proven):
+        //   1. Lock html & body on mobile to `position: fixed; overscroll-behavior: none; overflow: hidden;` in CSS.
+        //   2. Bind to `window.visualViewport`'s `resize` and `scroll` events.
+        //   3. Track `visualViewport.height` and assign it to a CSS custom property (e.g., `--vv-height`) on the root element.
+        //   4. Set the main container height to `var(--vv-height)` and pin it with `position: fixed; top: 0; bottom: auto;`.
+        //   5. Aggressively intercept scroll events and force `window.scrollTo(0, 0)` to counteract iOS's native scroll-on-focus behaviour.
+        // ==========================================
         if (window.visualViewport) {
             const appEl = document.getElementById('app');
-            const updateLayoutHeight = () => {
+            this.updateLayoutPosition = (shouldFit = false) => {
                 const isMobile = window.innerWidth <= 768;
-                if (isMobile) {
-                    appEl.style.height = `${window.visualViewport.height}px`;
-                    this.tabManager?.fitActiveTerminal();
-                    this.diffController?.fitTerminal();
+                if (isMobile && window.visualViewport) {
+                    const viewport = window.visualViewport;
+                    
+                    // Update the CSS variable for the actual visual viewport height.
+                    // This perfectly accounts for the space above the iOS keyboard.
+                    document.documentElement.style.setProperty('--vv-height', `${viewport.height}px`);
+
+                    // Reset layout scroll so our fixed container stays exactly pinned.
+                    if (window.scrollY > 0 || window.scrollX > 0) {
+                        window.scrollTo(0, 0);
+                    }
+
+                    if (shouldFit) {
+                        this.tabManager?.fitActiveTerminal();
+                        this.diffController?.fitTerminal();
+                    }
                 } else {
-                    appEl.style.height = '';
+                    document.documentElement.style.removeProperty('--vv-height');
                 }
             };
-            window.visualViewport.addEventListener('resize', updateLayoutHeight);
-            window.visualViewport.addEventListener('scroll', updateLayoutHeight);
-        }
-
-        // Lock document scroll position on mobile to prevent virtual keyboard scroll shifts
-        window.addEventListener('scroll', () => {
-            if (window.innerWidth <= 768) {
-                if (window.scrollY !== 0 || window.scrollX !== 0) {
+            
+            // Aggressively prevent iOS from permanently scrolling the layout viewport away from 0,0
+            window.addEventListener('scroll', () => {
+                if (window.innerWidth <= 768 && (window.scrollY > 0 || window.scrollX > 0)) {
                     window.scrollTo(0, 0);
                 }
+            }, { passive: true });
+            window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true));
+            window.visualViewport.addEventListener('scroll', () => this.updateLayoutPosition(false));
+            
+            // Run initially to position correctly
+            this.updateLayoutPosition(true);
+        }
+
+        // Prevent pinch-to-zoom gestures on mobile viewports
+        document.addEventListener('touchstart', (e) => {
+            if (e.touches.length > 1) {
+                e.preventDefault();
             }
-        });
+        }, { passive: false });
+        
+        document.addEventListener('gesturestart', (e) => {
+            e.preventDefault();
+        }, { passive: false });
 
         // 10. Swipe Gestures for Drawers on Mobile
         this.setupMobileGestures();
@@ -378,13 +418,13 @@ class App {
     }
 
     updateFavicon(accent, accentDim) {
-        let link = document.querySelector("link[rel~='icon']");
-        if (!link) {
-            link = document.createElement('link');
-            link.rel = 'icon';
-            link.type = 'image/svg+xml';
-            document.getElementsByTagName('head')[0].appendChild(link);
-        }
+        // Remove all existing icon links to force Safari to clear its cache hook for the node
+        const links = document.querySelectorAll("link[rel~='icon']");
+        links.forEach(l => l.remove());
+        
+        const link = document.createElement('link');
+        link.rel = 'icon';
+        link.type = 'image/svg+xml';
         
         const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
@@ -400,6 +440,7 @@ class App {
         `.trim();
         
         link.href = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+        document.getElementsByTagName('head')[0].appendChild(link);
     }
 
     async saveTheme(colorKey) {
