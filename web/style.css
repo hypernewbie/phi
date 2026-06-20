@@ -1602,15 +1602,167 @@ body {
         height: 36px;
     }
     
-    /* Preset buttons container styling for mobile */
+    /* Preset buttons container styling for mobile - swipeable capsule pills */
     .presets-container {
-        padding: 6px;
-        gap: 4px;
+        display: flex !important;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        gap: 6px;
+        padding: 6px 12px;
+        background-color: var(--bg-panel);
+        border-top: 1px solid var(--bg-border);
+        scrollbar-width: none; /* Hide Firefox scrollbar */
+    }
+    
+    .presets-container::-webkit-scrollbar {
+        display: none; /* Hide Chrome/Safari scrollbar */
     }
     
     .preset-btn {
-        padding: 3px 6px;
-        font-size: 10px;
+        flex-shrink: 0;
+        height: 30px;
+        padding: 0 12px;
+        font-size: 11px;
+        font-weight: 500;
+        border-radius: 100px;
+        border: 1px solid var(--bg-border);
+        background-color: var(--bg-elevated);
+        color: var(--text-primary);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        margin: 0 !important;
+    }
+    
+    .preset-btn:hover {
+        border-color: var(--accent);
+        background-color: rgba(124, 106, 247, 0.05);
+    }
+
+    /* Header layout shrink for mobile */
+    .app-header {
+        height: 40px !important;
+        padding: 0 6px;
+    }
+    .brand {
+        gap: 4px;
+    }
+    .logo {
+        font-size: 16px;
+    }
+    .brand-name {
+        display: none !important;
+    }
+    
+    /* Terminal session tabs layout on mobile */
+    .tabs-container {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        gap: 6px;
+        scrollbar-width: none;
+        padding: 0 4px;
+        height: 100%;
+        align-items: flex-end;
+    }
+    .tabs-container::-webkit-scrollbar {
+        display: none;
+    }
+    .tab {
+        min-width: 110px !important;
+        max-width: 140px !important;
+        height: 36px !important;
+        padding: 6px 10px !important;
+        border-radius: 6px 6px 0 0 !important;
+        font-size: 11px !important;
+    }
+    .tab.active {
+        padding-top: 5px !important;
+    }
+    
+    /* Reconnect/Close All square icon-only buttons */
+    .reconnect-all-tabs-btn,
+    .close-all-tabs-btn,
+    .refresh-console-btn {
+        width: 32px !important;
+        height: 32px !important;
+        border-radius: 6px !important;
+        border: 1px solid var(--bg-border) !important;
+        background-color: var(--bg-elevated) !important;
+        padding: 0 !important;
+        margin: 0 2px 4px 2px !important;
+        justify-content: center !important;
+        align-items: center !important;
+        display: inline-flex !important;
+    }
+    .reconnect-all-tabs-btn span,
+    .close-all-tabs-btn span,
+    .refresh-console-btn span {
+        display: none !important;
+    }
+    .reconnect-all-tabs-btn .icon,
+    .close-all-tabs-btn .icon,
+    .refresh-console-btn .icon {
+        width: 16px !important;
+        height: 16px !important;
+        margin: 0 !important;
+    }
+
+    /* Bottom sheet modals on mobile */
+    .modal-overlay {
+        align-items: flex-end !important;
+    }
+    .modal-content {
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 16px 16px 0 0 !important;
+        box-shadow: 0 -8px 24px rgba(0,0,0,0.4) !important;
+        border-bottom: none !important;
+        animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        max-height: 80vh !important;
+        overflow-y: auto !important;
+    }
+    @keyframes slide-up {
+        from { transform: translateY(100%); }
+        to { transform: translateY(0); }
+    }
+    .modal-header {
+        padding: 12px 16px !important;
+        position: relative;
+    }
+    .modal-header::before {
+        content: "";
+        position: absolute;
+        top: 6px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background-color: var(--bg-border);
+    }
+    .modal-close-btn {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--bg-elevated);
+        border-radius: 50%;
+        font-size: 14px;
+    }
+    
+    /* Touch friendly input actions */
+    .input-actions .btn,
+    .direct-mode-btn {
+        height: 40px !important;
+        min-width: 40px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    .input-actions .btn {
+        padding: 0 14px !important;
     }
 }
 
