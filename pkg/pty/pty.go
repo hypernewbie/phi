@@ -34,6 +34,20 @@ type Pty struct {
 	pt        gopty.Pty
 	Closed    chan struct{}
 	closeOnce sync.Once
+
+	// clipFile is the path of this session's clipboard shim file
+	// (e.g. /tmp/phi-shims-XXXX/clipboard.txt). Used by the API handler
+	// to read clipboard content scoped to a specific PTY, rather than
+	// relying on a single package-global shim path that gets overwritten
+	// every time a new PTY is created. Empty for PTYs created before
+	// this field existed.
+	clipFile string
+}
+
+// ClipboardFile returns the path of this PTY's clipboard shim file, or
+// empty string if no shim was set up.
+func (p *Pty) ClipboardFile() string {
+	return p.clipFile
 }
 
 func (p *Pty) closePTY() {
@@ -168,9 +182,10 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	}
 
 	p := &Pty{
-		cmd:    cmd,
-		pt:     pt,
-		Closed: make(chan struct{}),
+		cmd:      cmd,
+		pt:       pt,
+		Closed:   make(chan struct{}),
+		clipFile: clipFile,
 	}
 
 	go func() {

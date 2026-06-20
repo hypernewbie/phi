@@ -947,16 +947,45 @@ func handleWorktreeStateUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetClipboard(w http.ResponseWriter, r *http.Request) {
-	text, err := clipboard.Read()
+	// Resolve the clipboard source. When the frontend passes a ?pane=<id>
+	// query parameter, we read from that specific PTY's session-isolated
+	// shim file rather than the package-global shim path (which gets
+	// overwritten on every new PTY and is ambiguous when multiple
+	// sessions exist). When no pane is provided, fall back to legacy
+	// behavior (system clipboard, or package-global shim if set).
+	var shimPath string
+	if pane := r.URL.Query().Get("pane"); pane != "" {
+		if ptyManager != nil {
+			if inst, ok := ptyManager.Get(pane); ok && inst != nil && inst.Pty != nil {
+				shimPath = inst.Pty.ClipboardFile()
+			}
+		}
+	}
+
+	text, err := clipboard.Read(shimPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to read remote clipboard: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"text": text,
+	// Include "empty" and "source" so the JS layer can distinguish a real
+	// copy from a fallback-to-empty (the bug that caused "Synced!" to
+	// appear on blank clipboard writes over remote/headless sessions).
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"text":   text,
+		"empty":  strings.TrimSpace(text) == "",
+		"source": clipboardSource(shimPath),
 	})
+}
+
+// clipboardSource reports where the clipboard content was read from,
+// for diagnostic / toast purposes in the frontend.
+func clipboardSource(shimPath string) string {
+	if shimPath != "" {
+		return "shim"
+	}
+	return "system"
 }
 
 func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
