@@ -29,13 +29,15 @@
     padding: 0;
 }
 
-body {
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
     background-color: var(--bg-base);
     color: var(--text-primary);
     font-family: var(--font-ui);
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
 }
 
 /* APP ROOT CONTAINER */
@@ -195,7 +197,7 @@ body {
     font-size: 13px;
     outline: none;
     cursor: pointer;
-    min-width: 180px;
+    min-width: 60px;
     max-width: 320px;
     appearance: none;
     -webkit-appearance: none;
@@ -1419,9 +1421,25 @@ body {
 
 /* MOBILE RESPONSIVE DRAWERS */
 @media (max-width: 768px) {
-    /* Use dynamic viewport height to perfectly adapt to mobile address/navigation bars and prevent cutoffs */
+    html, body {
+        position: fixed;
+        overscroll-behavior: none;
+    }
+
+    /* Prevent iOS WebKit auto-zoom on input focus */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+
+    /* Use dynamic viewport height to perfectly adapt to mobile address/navigation bars and prevent cutoffs.
+       var(--vv-height) is injected by JS window.visualViewport to perfectly match the area above the iOS keyboard. */
     .app-container {
-        height: 100dvh !important;
+        height: var(--vv-height, 100dvh) !important;
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: auto !important; /* Managed purely by height */
     }
 
     /* Hide resize handles on mobile */
@@ -1483,23 +1501,28 @@ body {
         display: flex !important;
     }
     
-    /* Workspace Area responsiveness - now wider and fully readable! */
+    /* Workspace Area responsiveness - compact display showing only last folder name */
     .workspace-area {
-        flex: 1;
-        max-width: 240px;
-        min-width: 140px;
+        flex: 0 1 auto;
+        max-width: 140px;
+        min-width: 60px;
         margin: 0 4px;
         padding: 4px 6px;
     }
     .workspace-area select {
         width: 100%;
-        min-width: 100px;
-        max-width: 220px;
+        min-width: 40px;
+        max-width: 120px;
         font-size: 12px;
         padding-right: 14px;
     }
     .workspace-area button {
         font-size: 13px;
+    }
+    
+    /* Hide config backup/restore pill on mobile to save critical screen space */
+    .header-config-pill {
+        display: none !important;
     }
     
     /* Show hostname on mobile next to brand logo */
@@ -1517,6 +1540,18 @@ body {
     
     .header-actions {
         gap: 6px;
+        overflow-x: auto;
+        white-space: nowrap;
+        scrollbar-width: none; /* Firefox */
+        -webkit-overflow-scrolling: touch;
+        flex: 1;
+        justify-content: flex-end;
+    }
+    .header-actions::-webkit-scrollbar {
+        display: none; /* Chrome/Safari */
+    }
+    .header-actions > * {
+        flex-shrink: 0;
     }
     
     /* Convert theme area to a premium, compact circular icon dropdown button on mobile */
@@ -1581,7 +1616,7 @@ body {
     }
     
     .input-bar-container textarea {
-        font-size: 12px;
+        font-size: 16px;
         height: 36px;
         min-height: 36px;
         max-height: 80px !important;
@@ -2949,6 +2984,200 @@ body {
 .cmd-action-btn.del:hover {
     color: var(--red);
     background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* GLOBAL MOBILE HELPER CLASS */
+.mobile-only {
+    display: none !important;
+}
+
+/* HOSTNAME TABS DROPDOWN CLASS */
+.hostname-tabs-dropdown {
+    position: absolute;
+    top: 36px;
+    left: 0;
+    z-index: 1100;
+    width: 240px;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: slideDown 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hostname-tabs-dropdown.hidden {
+    display: none !important;
+}
+
+.hostname-dropdown-item {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background-color 0.15s;
+    width: 100%;
+}
+
+.hostname-dropdown-item:hover {
+    background-color: var(--bg-elevated);
+}
+
+.hostname-dropdown-item.active {
+    background-color: var(--accent-glow);
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.hostname-dropdown-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    margin-right: 8px;
+}
+
+.hostname-dropdown-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.brand .hostname-display {
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.brand .hostname-display:hover {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+/* MOBILE RESPONSIVE OVERRIDES */
+@media (max-width: 768px) {
+    .mobile-only {
+        display: inline-flex !important;
+    }
+    
+    .terminal-tabs-bar {
+        display: none !important; /* Hide tabs bar completely on mobile */
+    }
+    
+    /* Make the presets bar thinner and fonts smaller on mobile to save vertical terminal space */
+    .presets-container {
+        padding: 4px 8px !important;
+        gap: 4px !important;
+    }
+    
+    .preset-btn {
+        font-size: 10px !important;
+        padding: 0 8px !important;
+        height: 24px !important;
+        line-height: 22px !important;
+        border-radius: 4px !important;
+    }
+    
+    .preset-btn.mobile-nav-btn {
+        width: 28px !important;
+        height: 24px !important;
+        font-size: 11px !important;
+    }
+}
+
+/* HOSTNAME DROPDOWN ROW & BUTTONS */
+.hostname-dropdown-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: var(--bg-panel);
+    transition: background-color 0.15s;
+}
+
+.hostname-dropdown-row:hover {
+    background-color: var(--bg-elevated);
+}
+
+.hostname-dropdown-row.active {
+    background-color: var(--accent-glow);
+}
+
+.hostname-dropdown-select-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 8px 10px;
+    text-align: left;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.hostname-dropdown-row.active .hostname-dropdown-select-btn {
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.hostname-dropdown-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    width: 100%;
+}
+
+.hostname-dropdown-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.hostname-dropdown-pin-btn,
+.hostname-dropdown-close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.15s, opacity 0.15s;
+    flex-shrink: 0;
+}
+
+.hostname-dropdown-pin-btn {
+    opacity: 0.4;
+}
+
+.hostname-dropdown-pin-btn.pinned {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+.hostname-dropdown-pin-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    opacity: 1;
+}
+
+.hostname-dropdown-close-btn {
+    color: var(--text-muted);
+    font-size: 16px;
+}
+
+.hostname-dropdown-close-btn:hover {
+    color: var(--red);
+    background-color: rgba(239, 68, 68, 0.15);
 }
 
 
