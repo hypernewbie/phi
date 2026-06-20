@@ -1218,6 +1218,24 @@ export class TabManager {
             if (targetPaneId !== undefined) {
                 this.switchTab(targetPaneId);
             }
+            return;
+        }
+
+        // Ctrl+Shift+Enter: recall previous shell command AND execute it.
+        // Sends ANSI up-arrow (\x1b[A) then carriage return (\r) to the PTY
+        // with a small delay so the shell's readline has time to expand
+        // history before the enter arrives.
+        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === 'Enter') {
+            const activeTab = this.getActiveTab();
+            if (activeTab && !activeTab.isDead) {
+                e.preventDefault();
+                activeTab.ws.sendInput('\x1b[A');
+                setTimeout(() => {
+                    if (!activeTab.isDead) {
+                        activeTab.ws.sendInput('\r');
+                    }
+                }, 30);
+            }
         }
     }
 
