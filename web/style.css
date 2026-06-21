@@ -2041,6 +2041,20 @@ html, body {
     white-space: nowrap;
 }
 
+.worktree-dirty-indicator {
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--accent);
+    font-size: 12px;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+    text-shadow: 0 0 6px var(--accent-glow);
+}
+
+.worktree-header:hover .worktree-dirty-indicator {
+    opacity: 1;
+}
+
 .worktree-sessions-container {
     display: none;
     flex-direction: column;
