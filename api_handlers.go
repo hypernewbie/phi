@@ -52,6 +52,27 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/mark") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+		id = strings.TrimSuffix(id, "/mark")
+
+		var req struct {
+			Marked bool `json:"marked"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		err := ptyManager.SetMarked(id, req.Marked)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
 		err := ptyManager.Kill(id)
