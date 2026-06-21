@@ -820,6 +820,11 @@ html, body {
     min-width: 0;
 }
 
+.tab-title.marked {
+    color: var(--accent-bright);
+    text-shadow: 0 0 8px var(--accent-glow), 0 0 12px var(--accent-glow);
+}
+
 .tab:hover {
     color: var(--text-primary);
     background-color: var(--bg-elevated);
@@ -3271,6 +3276,32 @@ html, body {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 160px;
+}
+
+.hostname-dropdown-marker-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: all 0.15s ease;
+}
+
+.hostname-dropdown-marker-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--accent);
+}
+
+.hostname-dropdown-marker-btn.marked {
+    color: var(--accent-bright);
+    text-shadow: 0 0 6px var(--accent-glow);
+}
+
+.hostname-dropdown-title.marked {
+    color: var(--accent-bright);
+    text-shadow: 0 0 8px var(--accent-glow), 0 0 12px var(--accent-glow);
 }
 
 .brand .hostname-display {

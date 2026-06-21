@@ -109,7 +109,7 @@ export class TabManager {
 
             const savedActive = localStorage.getItem('phi_active_pane') || '';
             for (const t of instances) {
-                this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned);
+                this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned, !!t.marked);
             }
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
@@ -456,7 +456,7 @@ export class TabManager {
         this.fitActiveTerminal();
     }
     
-    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false, initialCmd = '') {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false, marked = false, initialCmd = '') {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId);
@@ -473,7 +473,7 @@ export class TabManager {
         tabEl.innerHTML = `
             <button class="tab-pin" title="Pin session (Keep alive overnight)">📌</button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
-            <span class="tab-title">${title}</span>
+            <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
             <button class="tab-close">×</button>
         `;
         
@@ -525,7 +525,8 @@ export class TabManager {
                 termContainer,
                 isDead: true,
                 isReview: true,
-                pinned: !!pinned
+                pinned: !!pinned,
+                marked: !!marked
             };
             this.tabs.set(paneId, tabInfo);
             this.switchTab(paneId);
@@ -770,6 +771,7 @@ export class TabManager {
             isDead: false,
             isAtBottom: true,
             pinned: !!pinned,
+            marked: !!marked,
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
@@ -967,6 +969,14 @@ export class TabManager {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinned: pinned })
         }).catch(err => console.error('[term] Failed to sync pin on backend:', err));
+    }
+    
+    syncBackendMark(paneId, marked) {
+        fetch(`/api/terminals/${paneId}/mark`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ marked: marked })
+        }).catch(err => console.error('[term] Failed to sync mark on backend:', err));
     }
     
     closeTab(paneId) {
@@ -1666,6 +1676,9 @@ export class TabManager {
 
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
+            if (tabInfo.marked) {
+                titleSpan.classList.add('marked');
+            }
             titleSpan.innerText = tabInfo.title || 'Session';
 
             const metaSpan = document.createElement('span');
@@ -1683,6 +1696,22 @@ export class TabManager {
                 dropdown.classList.add('hidden');
             });
             row.appendChild(selectBtn);
+
+            // Marker button (toggles glow on session name)
+            const markerBtn = document.createElement('button');
+            markerBtn.className = 'hostname-dropdown-marker-btn';
+            if (tabInfo.marked) {
+                markerBtn.classList.add('marked');
+            }
+            markerBtn.innerHTML = '◆';
+            markerBtn.title = 'Mark session (highlights in list)';
+            markerBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                tabInfo.marked = !tabInfo.marked;
+                this.syncBackendMark(paneId, tabInfo.marked);
+                this.renderHostnameTabsDropdown(); // refresh to show updated state
+            });
+            row.appendChild(markerBtn);
 
             // Pin button
             const pinBtn = document.createElement('button');
