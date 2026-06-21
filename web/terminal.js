@@ -1670,13 +1670,10 @@ export class TabManager {
 
             const metaSpan = document.createElement('span');
             metaSpan.className = 'hostname-dropdown-meta';
-            if (tabInfo.isDead) {
-                metaSpan.innerText = 'disconnected';
-                metaSpan.style.color = 'var(--red)';
-            } else {
-                metaSpan.innerText = 'active';
-                metaSpan.style.color = 'var(--green)';
-            }
+            // Show project/worktree path instead of redundant status
+            metaSpan.innerText = this.getProjectWorktreeLabel(tabInfo.cwd);
+            metaSpan.style.color = 'var(--text-muted)';
+            metaSpan.style.fontSize = '10px';
 
             selectBtn.appendChild(faviconImg);
             selectBtn.appendChild(titleSpan);
@@ -1719,7 +1716,20 @@ export class TabManager {
             dropdown.appendChild(row);
         }
     }
-    
+
+    getProjectWorktreeLabel(cwd) {
+        if (!cwd) return '—';
+        // Normalize slashes and split
+        const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
+        if (parts.length === 0) return '—';
+        
+        // Try to find .git to identify project root
+        // For now, just show last 2 path segments as project/worktree
+        if (parts.length >= 2) {
+            return parts[parts.length - 2] + '/' + parts[parts.length - 1];
+        }
+        return parts[parts.length - 1] || '—';
+    }
     renderModelDropup() {
         const dropup = document.getElementById('model-presets-dropup');
         if (!dropup) return;
