@@ -318,6 +318,7 @@ export class SessionsManager {
                         </svg>
                         <span class="worktree-name" title="${wt.path}">${baseName}</span>
                         ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
+                        ${wt.hasUnstagedChanges ? `<span class="worktree-dirty-indicator">★</span>` : ''}
                     </div>
                     <div class="worktree-sessions-container">
                         <div class="scanning-sessions">Scanning sessions...</div>
