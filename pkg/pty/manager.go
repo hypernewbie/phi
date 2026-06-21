@@ -25,6 +25,7 @@ type PTYInstance struct {
 	ActiveWS      bool
 	ActiveWSCount int
 	Pinned        bool          `json:"pinned"`
+	Marked        bool          `json:"marked"`
 	LastOutputAt  time.Time     `json:"-"`
 	Title         string        `json:"title"`
 	Workspace     string        `json:"workspace"`
@@ -207,6 +208,23 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 		inst.DetachTimer = nil
 		log.Printf("[pty] Session %s pinned. Stopped active detach timer.", id)
 	}
+	return nil
+}
+
+func (m *Manager) SetMarked(id string, marked bool) error {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("terminal instance %s not found", id)
+	}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	inst.Marked = marked
+	log.Printf("[pty] SetMarked %s: marked=%v", id, marked)
 	return nil
 }
 
