@@ -23,6 +23,7 @@ export class SessionsManager {
         this.wsModalCancelBtn = document.getElementById('ws-modal-cancel-btn');
         this.wsModalAddBtn = document.getElementById('ws-modal-add-btn');
         this.selectedSuggestionIndex = -1;
+        this.worktreeDirtyRequestId = 0;
         
         this.setupEventListeners();
     }
@@ -318,7 +319,7 @@ export class SessionsManager {
                         </svg>
                         <span class="worktree-name" title="${wt.path}">${baseName}</span>
                         ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
-                        ${wt.hasUnstagedChanges ? `<span class="worktree-dirty-indicator">★</span>` : ''}
+                        <span class="worktree-dirty-indicator hidden" title="Unstaged changes" aria-hidden="true">★</span>
                     </div>
                     <div class="worktree-sessions-container">
                         <div class="scanning-sessions">Scanning sessions...</div>
@@ -362,9 +363,40 @@ export class SessionsManager {
             });
 
             appendNoWorkspaceSection();
+            this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
 
         } catch (e) {
             this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${e.message}</div>`;
+        }
+    }
+
+    async loadWorktreeDirtyStates(workspace, requestId) {
+        try {
+            const res = await fetch(`/api/git/worktree-dirty?cwd=${encodeURIComponent(workspace)}`);
+            if (!res.ok) throw new Error('Failed to load worktree dirty state');
+
+            const dirtyStates = await res.json();
+            if (requestId !== this.worktreeDirtyRequestId || workspace !== this.activeWorkspace) {
+                return;
+            }
+
+            this.sessionList.querySelectorAll('.worktree-section').forEach(section => {
+                const path = section.getAttribute('data-worktree-path');
+                if (!path || path === '--no-workspace--') return;
+
+                const indicator = section.querySelector('.worktree-dirty-indicator');
+                if (!indicator) return;
+
+                if (dirtyStates[path]) {
+                    indicator.classList.remove('hidden');
+                } else {
+                    indicator.classList.add('hidden');
+                }
+            });
+        } catch (e) {
+            if (requestId === this.worktreeDirtyRequestId) {
+                console.error('[worktrees] Failed to load dirty state:', e);
+            }
         }
     }
 

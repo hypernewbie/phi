@@ -1022,6 +1022,28 @@ func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(wts)
 }
 
+func handleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+
+	wts, err := session.ListGitWorktrees(cwd)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	paths := make([]string, 0, len(wts))
+	for _, wt := range wts {
+		paths = append(paths, wt.Path)
+	}
+
+	states := session.WorktreeDirtyStates(paths)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(states)
+}
+
 type WorktreeStateRequest struct {
 	Workspace      string          `json:"workspace"`
 	ActiveWorktree string          `json:"active_worktree"`
