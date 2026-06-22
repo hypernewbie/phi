@@ -746,7 +746,7 @@ export class DiffController {
         const outputFormat = isMobile ? 'line-by-line' : this.currentLayout;
 
         const diffHtml = window.Diff2Html.html(rawDiffText, {
-            drawFileList: true,
+            drawFileList: !isMobile,
             matching: 'lines',
             outputFormat,
             colorScheme: 'dark'
