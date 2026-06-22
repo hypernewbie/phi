@@ -1446,7 +1446,12 @@ export class TabManager {
         if (wasHidden) {
             const btnRect = triggerBtn.getBoundingClientRect();
             const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
-            dropup.style.left = `${btnRect.left - containerRect.left}px`;
+            let left = btnRect.left - containerRect.left;
+            if (window.innerWidth <= 768) {
+                const maxWidth = Math.min(280, window.innerWidth - 24);
+                left = Math.max(12, Math.min(left, containerRect.width - maxWidth - 12));
+            }
+            dropup.style.left = `${left}px`;
             dropup.classList.remove('hidden');
             renderFn();
         }
