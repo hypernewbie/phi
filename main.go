@@ -84,6 +84,7 @@ func main() {
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
+	http.HandleFunc("/api/git/worktree-dirty", handleGetWorktreeDirtyStates)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
 	http.HandleFunc("/api/config/quick-commands", handleQuickCommands)
 	http.HandleFunc("/api/config/terminal-commands", handleTerminalCommands)
