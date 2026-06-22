@@ -649,6 +649,32 @@ export class DiffController {
         const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
 
         try {
+            if (this.activeTab === 'diff') {
+                const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`);
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => 'unknown error');
+                    throw new Error(errText.trim() || 'Diff fetch error');
+                }
+                const text = await res.text();
+                this.term.clear();
+                this.term.write(text && text.trim() ? text : '\x1b[90mNo changes detected.\x1b[0m\r\n');
+                this.fitTerminal();
+                return;
+            }
+
+            if (this.activeTab === 'status') {
+                const res = await fetch(`/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`);
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => 'unknown error');
+                    throw new Error(errText.trim() || 'Status fetch error');
+                }
+                const text = await res.text();
+                this.term.clear();
+                this.term.write(text && text.trim() ? text : '\x1b[90mClean working tree.\x1b[0m\r\n');
+                this.fitTerminal();
+                return;
+            }
+
             const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`);
             if (!res.ok) {
                 const errText = await res.text().catch(() => 'unknown error');
