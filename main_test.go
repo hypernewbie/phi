@@ -901,6 +901,52 @@ func TestHandleRawDiff(t *testing.T) {
 	}
 }
 
+func TestHandleGetWorktreeDirtyStates(t *testing.T) {
+	tempDir := t.TempDir()
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	runGit("init")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+
+	filePath := filepath.Join(tempDir, "dirty.txt")
+	if err := os.WriteFile(filePath, []byte("hi\n"), 0644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/worktree-dirty?cwd="+tempDir, nil)
+	w := httptest.NewRecorder()
+	handleGetWorktreeDirtyStates(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var body map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	foundDirty := false
+	for _, dirty := range body {
+		if dirty {
+			foundDirty = true
+			break
+		}
+	}
+	if !foundDirty {
+		t.Fatalf("expected at least one dirty worktree, got %v", body)
+	}
+}
+
 func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=nonexistent&id=123", nil)
 	w := httptest.NewRecorder()

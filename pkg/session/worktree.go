@@ -4,9 +4,17 @@ import (
 	"bytes"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
-// hasUnstagedChanges runs "git status --porcelain" in dir and returns true if there are unstaged changes.
+type GitWorktree struct {
+	Path               string `json:"path"`
+	Branch             string `json:"branch"`
+	Active             bool   `json:"active"`
+	Expanded           bool   `json:"expanded"`
+	HasUnstagedChanges bool   `json:"hasUnstagedChanges"`
+}
+
 func hasUnstagedChanges(dir string) bool {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = dir
@@ -19,12 +27,25 @@ func hasUnstagedChanges(dir string) bool {
 	return strings.TrimSpace(out.String()) != ""
 }
 
-type GitWorktree struct {
-	Path                string `json:"path"`
-	Branch              string `json:"branch"`
-	Active              bool   `json:"active"`
-	Expanded            bool   `json:"expanded"`
-	HasUnstagedChanges  bool   `json:"hasUnstagedChanges"`
+func WorktreeDirtyStates(paths []string) map[string]bool {
+	states := make(map[string]bool, len(paths))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, p := range paths {
+		path := p
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dirty := hasUnstagedChanges(path)
+			mu.Lock()
+			states[path] = dirty
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	return states
 }
 
 // ListGitWorktrees runs "git worktree list" in dir. If it fails or is not a git repo,
@@ -65,11 +86,6 @@ func ListGitWorktrees(dir string) ([]GitWorktree, error) {
 			Path:   path,
 			Branch: branch,
 		})
-	}
-
-	// Check for unstaged changes in each worktree
-	for i := range worktrees {
-		worktrees[i].HasUnstagedChanges = hasUnstagedChanges(worktrees[i].Path)
 	}
 
 	if len(worktrees) == 0 {
