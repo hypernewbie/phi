@@ -893,8 +893,11 @@ func TestHandleRawDiff(t *testing.T) {
 	}
 
 	bodyUntracked := wUntracked.Body.String()
-	if !strings.Contains(bodyUntracked, "new_untracked.txt") || !strings.Contains(bodyUntracked, "+brand new") {
-		t.Errorf("Untracked file missing from diff output: %s", bodyUntracked)
+	if !strings.Contains(bodyUntracked, "diff --git a/new_untracked.txt b/new_untracked.txt") ||
+		!strings.Contains(bodyUntracked, "new file mode 100644") ||
+		!strings.Contains(bodyUntracked, "@@ -0,0 +1,2 @@") ||
+		!strings.Contains(bodyUntracked, "+brand new") {
+		t.Errorf("Untracked file missing pretty patch structure: %s", bodyUntracked)
 	}
 }
 

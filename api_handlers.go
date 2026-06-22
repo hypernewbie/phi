@@ -345,6 +345,53 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []byte {
+	trimmed := strings.TrimRight(string(content), "\n")
+	lines := []string{}
+	if trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	lineCount := len(lines)
+
+	header := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[1m" + s + "\x1b[0m"
+	}
+	oldFile := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[31m" + s + "\x1b[0m"
+	}
+	newFile := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[32m" + s + "\x1b[0m"
+	}
+	plusLine := func(s string) string {
+		if !ansi {
+			return s
+		}
+		return "\x1b[32m" + s + "\x1b[0m"
+	}
+
+	out = append(out, []byte(header(fmt.Sprintf("diff --git a/%s b/%s\n", fname, fname)))...)
+	out = append(out, []byte("new file mode 100644\n")...)
+	out = append(out, []byte(oldFile("--- /dev/null\n"))...)
+	out = append(out, []byte(newFile(fmt.Sprintf("+++ b/%s\n", fname)))...)
+	out = append(out, []byte(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))...)
+	for _, line := range lines {
+		out = append(out, []byte(plusLine("+"+line+"\n"))...)
+	}
+	if len(lines) == 0 {
+		out = append(out, []byte("\n")...)
+	}
+	return out
+}
+
 func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	commit := r.URL.Query().Get("commit")
@@ -393,25 +440,14 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			fname := strings.TrimPrefix(line, "?? ")
-			diffCmd := exec.Command("git", "diff", colorFlag, "-U"+contextLines, "--no-index", os.DevNull, fname)
-			diffCmd.Dir = cwd
-			diffOut, _ := diffCmd.CombinedOutput()
-			if len(diffOut) > 0 {
-				out = append(out, diffOut...)
-				if len(out) > 0 && out[len(out)-1] != '\n' {
-					out = append(out, '\n')
-				}
-				continue
-			}
-
 			content, readErr := os.ReadFile(filepath.Join(cwd, fname))
 			if readErr != nil {
 				continue
 			}
-			out = append(out, []byte(fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n", fname, fname, fname))...)
-			for _, l := range strings.Split(string(content), "\n") {
-				out = append(out, []byte("+"+l+"\n")...)
+			if len(out) > 0 && out[len(out)-1] != '\n' {
+				out = append(out, '\n')
 			}
+			out = appendUntrackedDiff(out, fname, content, ansi)
 		}
 	}
 
