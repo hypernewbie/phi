@@ -1927,10 +1927,12 @@ html, body {
     }
 
     /* Bottom sheet modals on mobile */
-    .modal-overlay {
+    .modal-overlay,
+    .md-modal-overlay {
         align-items: flex-end !important;
     }
-    .modal-content {
+    .modal-content,
+    .md-modal-content {
         width: 100% !important;
         max-width: 100% !important;
         border-radius: 16px 16px 0 0 !important;
@@ -1940,15 +1942,25 @@ html, body {
         max-height: 80vh !important;
         overflow-y: auto !important;
     }
+
+    .md-modal-content.wide-modal {
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: calc(var(--vv-height, 100dvh) - 40px) !important;
+        height: calc(var(--vv-height, 100dvh) - 40px) !important;
+        border-radius: 16px 16px 0 0 !important;
+    }
     @keyframes slide-up {
         from { transform: translateY(100%); }
         to { transform: translateY(0); }
     }
-    .modal-header {
+    .modal-header,
+    .md-modal-header {
         padding: 12px 16px !important;
         position: relative;
     }
-    .modal-header::before {
+    .modal-header::before,
+    .md-modal-header::before {
         content: "";
         position: absolute;
         top: 6px;
@@ -1959,7 +1971,8 @@ html, body {
         border-radius: 2px;
         background-color: var(--bg-border);
     }
-    .modal-close-btn {
+    .modal-close-btn,
+    .md-modal-close {
         width: 32px;
         height: 32px;
         display: flex;
@@ -1968,6 +1981,48 @@ html, body {
         background-color: var(--bg-elevated);
         border-radius: 50%;
         font-size: 14px;
+        flex-shrink: 0;
+    }
+
+    .md-modal-body.diff-modal-body {
+        padding: 0 !important;
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .diff-modal-header-actions {
+        display: flex !important;
+        flex-wrap: wrap;
+        gap: 8px !important;
+        margin-right: 8px !important;
+    }
+
+    .diff-modal-header-actions .header-btn {
+        height: 30px !important;
+        padding: 0 10px !important;
+        font-size: 11px !important;
+    }
+
+    .md-modal-content.wide-modal .md-modal-title {
+        max-width: 38vw;
+    }
+
+    .diff-modal-body .d2h-file-wrapper {
+        border-left: none !important;
+        border-right: none !important;
+        border-radius: 0 !important;
+        margin-bottom: 12px !important;
+    }
+
+    .diff-modal-body .d2h-file-header {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+
+    .diff-modal-body .d2h-diff-table {
+        min-width: 640px;
     }
     
     /* Touch friendly input actions */
@@ -2692,6 +2747,18 @@ html, body {
 .d2h-wrapper {
     background-color: var(--bg-panel);
     color: var(--text-primary);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.d2h-file-diff,
+.d2h-diff-table {
+    min-width: 0;
+}
+
+.diff-modal-body .d2h-wrapper,
+.diff-modal-body .d2h-file-wrapper {
+    max-width: 100%;
 }
 
 .d2h-file-header {

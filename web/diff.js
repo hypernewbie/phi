@@ -728,6 +728,7 @@ export class DiffController {
     }
 
     toggleRichDiffLayout() {
+        if (window.innerWidth <= 768) return;
         this.currentLayout = this.currentLayout === 'line-by-line' ? 'side-by-side' : 'line-by-line';
         if (this.layoutToggleBtn) {
             this.layoutToggleBtn.innerText = this.currentLayout === 'line-by-line' ? 'Side-by-Side' : 'Unified';
@@ -741,14 +742,24 @@ export class DiffController {
             return;
         }
 
+        const isMobile = window.innerWidth <= 768;
+        const outputFormat = isMobile ? 'line-by-line' : this.currentLayout;
+
         const diffHtml = window.Diff2Html.html(rawDiffText, {
             drawFileList: true,
             matching: 'lines',
-            outputFormat: this.currentLayout,
+            outputFormat,
             colorScheme: 'dark'
         });
 
         this.diffModalBody.innerHTML = diffHtml;
+
+        if (this.layoutToggleBtn) {
+            this.layoutToggleBtn.disabled = isMobile;
+            this.layoutToggleBtn.title = isMobile ? 'Side-by-side is disabled on mobile' : '';
+            this.layoutToggleBtn.style.opacity = isMobile ? '0.5' : '1';
+            this.layoutToggleBtn.style.cursor = isMobile ? 'not-allowed' : '';
+        }
     }
 
     async loadRichDiff() {
