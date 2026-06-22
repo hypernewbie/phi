@@ -876,6 +876,26 @@ func TestHandleRawDiff(t *testing.T) {
 	if !strings.Contains(body30, "line 1") {
 		t.Errorf("Diff body should contain line 1 under context=30, got: %s", body30)
 	}
+
+	// Untracked files should also appear in the unstaged diff output.
+	newFilePath := filepath.Join(tempDir, "new_untracked.txt")
+	err = os.WriteFile(newFilePath, []byte("brand new\nfile\n"), 0644)
+	if err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+
+	reqUntracked := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&context=3", nil)
+	wUntracked := httptest.NewRecorder()
+	handleRawDiff(wUntracked, reqUntracked)
+
+	if wUntracked.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for untracked diff, got %d", wUntracked.Code)
+	}
+
+	bodyUntracked := wUntracked.Body.String()
+	if !strings.Contains(bodyUntracked, "new_untracked.txt") || !strings.Contains(bodyUntracked, "+brand new") {
+		t.Errorf("Untracked file missing from diff output: %s", bodyUntracked)
+	}
 }
 
 func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {

@@ -74,6 +74,7 @@ func main() {
 	http.HandleFunc("/api/session-meta", handleSessionMeta)
 	http.HandleFunc("/api/diff", handleGetDiff)
 	http.HandleFunc("/api/git/raw-diff", handleRawDiff)
+	http.HandleFunc("/api/git/raw-status", handleRawStatus)
 	http.HandleFunc("/api/git/commits", handleGetCommits)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/export", handleConfigExport)
