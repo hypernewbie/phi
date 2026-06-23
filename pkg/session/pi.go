@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+func newPiScanner(file *os.File) *bufio.Scanner {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	return scanner
+}
+
 type PiSessionHeader struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
@@ -117,31 +123,29 @@ func extractPiSessionTitle(filePath string) string {
 	customName := ""
 	firstUserMsg := ""
 
-	scanner := bufio.NewScanner(file)
+	scanner := newPiScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
-		// 1. Check custom named session_info
-		if strings.Contains(line, `"type":"session_info"`) {
-			var psi PiSessionInfo
-			if err := json.Unmarshal([]byte(line), &psi); err == nil && psi.Name != "" {
-				customName = psi.Name
-				break // Found custom name, best possible title
-			}
+
+		var psi PiSessionInfo
+		if err := json.Unmarshal([]byte(line), &psi); err == nil && psi.Type == "session_info" && psi.Name != "" {
+			customName = psi.Name
+			break // Found custom name, best possible title
 		}
 
-		// 2. Extract first user prompt as fallback
-		if firstUserMsg == "" && strings.Contains(line, `"role":"user"`) {
-			var pm PiMessage
-			if err := json.Unmarshal([]byte(line), &pm); err == nil && len(pm.Message.Content) > 0 {
-				for _, c := range pm.Message.Content {
-					if c.Type == "text" && c.Text != "" {
-						firstUserMsg = c.Text
-						if len(firstUserMsg) > 36 {
-							firstUserMsg = firstUserMsg[:36] + "..."
-						}
-						break
+		if firstUserMsg != "" {
+			continue
+		}
+
+		var pm PiMessage
+		if err := json.Unmarshal([]byte(line), &pm); err == nil && (pm.Type == "message" || pm.Type == "msg") && len(pm.Message.Content) > 0 && pm.Message.Role == "user" {
+			for _, c := range pm.Message.Content {
+				if c.Type == "text" && c.Text != "" {
+					firstUserMsg = c.Text
+					if len(firstUserMsg) > 36 {
+						firstUserMsg = firstUserMsg[:36] + "..."
 					}
+					break
 				}
 			}
 		}
@@ -194,82 +198,87 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 	defer file.Close()
 
 	var messages []Message
-	scanner := bufio.NewScanner(file)
+	scanner := newPiScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Recognise both message and msg types for the Pi session transcripts.
-		if !strings.Contains(line, `"type":"message"`) && !strings.Contains(line, `"type":"msg"`) {
+
+		var pm PiMessage
+		if err := json.Unmarshal([]byte(line), &pm); err != nil {
+			continue
+		}
+		if pm.Type != "message" && pm.Type != "msg" {
 			continue
 		}
 
-		var pm PiMessage
-		if err := json.Unmarshal([]byte(line), &pm); err == nil {
-			role := pm.Message.Role
-			if role != "user" && role != "assistant" && role != "toolResult" {
-				continue
+		role := pm.Message.Role
+		if role != "user" && role != "assistant" && role != "toolResult" {
+			continue
+		}
+		var sb strings.Builder
+		hasHeader := false
+		if role == "toolResult" {
+			toolName := pm.Message.ToolName
+			if toolName == "" {
+				toolName = "tool"
 			}
-			var sb strings.Builder
-			hasHeader := false
-			if role == "toolResult" {
-				toolName := pm.Message.ToolName
+			sb.WriteString(fmt.Sprintf("> **Tool Output (%s):**\n\n", toolName))
+			hasHeader = true
+		}
+		for _, content := range pm.Message.Content {
+			if content.Type == "text" {
+				if sb.Len() > 0 && !hasHeader {
+					sb.WriteString("\n\n")
+				}
+				sb.WriteString(content.Text)
+				hasHeader = false
+			} else if content.Type == "thinking" && content.Thinking != "" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				lines := strings.Split(content.Thinking, "\n")
+				sb.WriteString("> **Thinking:**\n")
+				for _, l := range lines {
+					sb.WriteString("> " + l + "\n")
+				}
+			} else if content.Type == "toolCall" || content.Type == "tool_use" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n\n")
+				}
+				toolName := content.Name
 				if toolName == "" {
 					toolName = "tool"
 				}
-				sb.WriteString(fmt.Sprintf("> **Tool Output (%s):**\n\n", toolName))
-				hasHeader = true
-			}
-			for _, content := range pm.Message.Content {
-				if content.Type == "text" {
-					if sb.Len() > 0 && !hasHeader {
-						sb.WriteString("\n\n")
-					}
-					sb.WriteString(content.Text)
-					hasHeader = false
-				} else if content.Type == "thinking" && content.Thinking != "" {
-					if sb.Len() > 0 {
-						sb.WriteString("\n\n")
-					}
-					lines := strings.Split(content.Thinking, "\n")
-					sb.WriteString("> **Thinking:**\n")
-					for _, l := range lines {
-						sb.WriteString("> " + l + "\n")
-					}
-				} else if content.Type == "toolCall" || content.Type == "tool_use" {
-					if sb.Len() > 0 {
-						sb.WriteString("\n\n")
-					}
-					toolName := content.Name
-					if toolName == "" {
-						toolName = "tool"
-					}
-					sb.WriteString(fmt.Sprintf("*(Used tool: %s)*", toolName))
-					if len(content.Arguments) > 0 {
-						var argsMap map[string]interface{}
-						if err := json.Unmarshal(content.Arguments, &argsMap); err == nil {
-							if cmd, ok := argsMap["command"].(string); ok {
-								sb.WriteString(fmt.Sprintf("\n```bash\n%s\n```", cmd))
-							} else if code, ok := argsMap["content"].(string); ok {
-								sb.WriteString(fmt.Sprintf("\n```\n%s\n```", code))
-							} else {
-								if pretty, err := json.MarshalIndent(argsMap, "", "  "); err == nil {
-									sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(pretty)))
-								}
-							}
+				sb.WriteString(fmt.Sprintf("*(Used tool: %s)*", toolName))
+				if len(content.Arguments) > 0 {
+					var argsMap map[string]interface{}
+					if err := json.Unmarshal(content.Arguments, &argsMap); err == nil {
+						if cmd, ok := argsMap["command"].(string); ok {
+							sb.WriteString(fmt.Sprintf("\n```bash\n%s\n```", cmd))
+						} else if code, ok := argsMap["content"].(string); ok {
+							sb.WriteString(fmt.Sprintf("\n```\n%s\n```", code))
 						} else {
-							sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(content.Arguments)))
+							if pretty, err := json.MarshalIndent(argsMap, "", "  "); err == nil {
+								sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(pretty)))
+							}
 						}
+					} else {
+						sb.WriteString(fmt.Sprintf("\n```json\n%s\n```", string(content.Arguments)))
 					}
 				}
 			}
-			txt := strings.TrimSpace(sb.String())
-			if txt == "" {
-				continue
-			}
-			messages = append(messages, Message{
-				Role: pm.Message.Role,
-				Text: txt,
-			})
 		}
+		txt := strings.TrimSpace(sb.String())
+		if txt == "" {
+			continue
+		}
+		messages = append(messages, Message{
+			Role: pm.Message.Role,
+			Text: txt,
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 
 	return messages, nil
