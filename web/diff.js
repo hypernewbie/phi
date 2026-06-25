@@ -181,6 +181,14 @@ export class DiffController {
             console.error("[diff] Fit error:", e);
         }
     }
+
+    _writeStaticTerminalOutput(text, emptyText) {
+        this.fitTerminal();
+        this.term.reset();
+        this.term.clear();
+        const normalized = (text || '').replace(/\r?\n/g, '\r\n');
+        this.term.write(normalized && normalized.trim() ? normalized : emptyText);
+    }
     
     _setPanel(mode) {
         const termEl = document.getElementById('diff-term-container');
@@ -656,9 +664,7 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Diff fetch error');
                 }
                 const text = await res.text();
-                this.term.clear();
-                this.term.write(text && text.trim() ? text : '\x1b[90mNo changes detected.\x1b[0m\r\n');
-                this.fitTerminal();
+                this._writeStaticTerminalOutput(text, '\x1b[90mNo changes detected.\x1b[0m\r\n');
                 return;
             }
 
@@ -669,9 +675,7 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Status fetch error');
                 }
                 const text = await res.text();
-                this.term.clear();
-                this.term.write(text && text.trim() ? text : '\x1b[90mClean working tree.\x1b[0m\r\n');
-                this.fitTerminal();
+                this._writeStaticTerminalOutput(text, '\x1b[90mClean working tree.\x1b[0m\r\n');
                 return;
             }
 
@@ -753,12 +757,13 @@ export class DiffController {
         });
 
         this.diffModalBody.innerHTML = diffHtml;
+        this.diffModalBody.classList.toggle('mobile-rich-diff', isMobile);
 
         if (this.layoutToggleBtn) {
             this.layoutToggleBtn.disabled = isMobile;
             this.layoutToggleBtn.title = isMobile ? 'Side-by-side is disabled on mobile' : '';
             this.layoutToggleBtn.style.opacity = isMobile ? '0.5' : '1';
-            this.layoutToggleBtn.style.cursor = isMobile ? 'not-allowed' : '';
+            this.layoutToggleBtn.style.cursor = isMobile ? 'not-allowed' : 'pointer';
         }
     }
 
