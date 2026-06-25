@@ -2357,6 +2357,12 @@ html, body {
     font-style: italic;
 }
 
+.md-file-row {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+
 .md-file-item {
     display: flex;
     align-items: center;
@@ -2372,6 +2378,7 @@ html, body {
     cursor: pointer;
     text-align: left;
     transition: background 0.1s;
+    min-width: 0;
 }
 
 .md-file-item:hover {
@@ -2379,8 +2386,62 @@ html, body {
     color: var(--accent-bright);
 }
 
+.md-file-action-btn {
+    flex: 0 0 28px;
+    width: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background 0.1s, color 0.1s;
+}
+
+.md-file-action-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-bright);
+}
+
 .md-file-icon { font-size: 11px; opacity: 0.7; }
 .md-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.md-context-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 200px;
+    background: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: slideDown 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.md-context-action {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.md-context-action:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-bright);
+}
+
+.md-context-action.delete:hover {
+    background: rgba(239, 68, 68, 0.10);
+    color: var(--red);
+}
 
 .md-manage-row {
     margin-top: 8px;
