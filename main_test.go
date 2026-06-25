@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -678,6 +679,97 @@ func TestHandleMarkdownFile_RejectsPathOutsideAllowedDirs(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for path outside allowed dirs, got %d", w.Code)
+	}
+}
+
+func TestHandleMarkdownPasteAndDelete(t *testing.T) {
+	withTempConfig(t)
+	cwd := t.TempDir()
+	docsDir := filepath.Join(cwd, "docs")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+
+	cfg := loadConfig()
+	cfg.MarkdownDirs = []string{"docs"}
+	saveConfig(cfg)
+
+	pasteBody := `{"cwd":` + strconv.Quote(cwd) + `,"dir":"docs","name":"notes","content":"# hi\nthere\n"}`
+	pasteReq := httptest.NewRequest(http.MethodPost, "/api/markdown/paste", strings.NewReader(pasteBody))
+	pasteReq.Header.Set("Content-Type", "application/json")
+	pasteW := httptest.NewRecorder()
+	handleMarkdownPaste(pasteW, pasteReq)
+	if pasteW.Code != http.StatusOK {
+		t.Fatalf("paste status: %d body=%s", pasteW.Code, pasteW.Body.String())
+	}
+
+	target := filepath.Join(docsDir, "notes.md")
+	if data, err := os.ReadFile(target); err != nil || string(data) != "# hi\nthere\n" {
+		t.Fatalf("paste file mismatch: err=%v data=%q", err, string(data))
+	}
+
+	deleteBody := `{"cwd":` + strconv.Quote(cwd) + `,"path":` + strconv.Quote(target) + `}`
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/markdown/delete", strings.NewReader(deleteBody))
+	deleteReq.Header.Set("Content-Type", "application/json")
+	deleteW := httptest.NewRecorder()
+	handleMarkdownDelete(deleteW, deleteReq)
+	if deleteW.Code != http.StatusOK {
+		t.Fatalf("delete status: %d body=%s", deleteW.Code, deleteW.Body.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected file deleted, stat err=%v", err)
+	}
+}
+
+func TestHandleMarkdownCopyAllWorktrees(t *testing.T) {
+	withTempConfig(t)
+	cwd := t.TempDir()
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	runGit(cwd, "init")
+	runGit(cwd, "config", "user.name", "Test User")
+	runGit(cwd, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(cwd, "seed.txt"), []byte("seed\n"), 0644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	runGit(cwd, "add", "seed.txt")
+	runGit(cwd, "commit", "-m", "seed")
+
+	otherWt := filepath.Join(t.TempDir(), "wt-other")
+	runGit(cwd, "worktree", "add", otherWt, "-b", "wt-other")
+
+	cfg := loadConfig()
+	cfg.MarkdownDirs = []string{"docs"}
+	saveConfig(cfg)
+
+	sourceDir := filepath.Join(cwd, "docs")
+	if err := os.MkdirAll(sourceDir, 0755); err != nil {
+		t.Fatalf("mkdir source docs: %v", err)
+	}
+	sourcePath := filepath.Join(sourceDir, "shared.md")
+	if err := os.WriteFile(sourcePath, []byte("# shared\n"), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	copyBody := `{"cwd":` + strconv.Quote(cwd) + `,"dir":"docs","path":` + strconv.Quote(sourcePath) + `}`
+	copyReq := httptest.NewRequest(http.MethodPost, "/api/markdown/copy-all-worktrees", strings.NewReader(copyBody))
+	copyReq.Header.Set("Content-Type", "application/json")
+	copyW := httptest.NewRecorder()
+	handleMarkdownCopyAllWorktrees(copyW, copyReq)
+	if copyW.Code != http.StatusOK {
+		t.Fatalf("copy-all status: %d body=%s", copyW.Code, copyW.Body.String())
+	}
+
+	targetPath := filepath.Join(otherWt, "docs", "shared.md")
+	if data, err := os.ReadFile(targetPath); err != nil || string(data) != "# shared\n" {
+		t.Fatalf("copied worktree file mismatch: err=%v data=%q", err, string(data))
 	}
 }
 
