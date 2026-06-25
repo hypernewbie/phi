@@ -2450,11 +2450,33 @@ html, body {
     text-align: left;
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.md-context-icon {
+    width: 16px;
+    flex: 0 0 16px;
+    text-align: center;
+    opacity: 0.9;
+}
+
+.md-context-label {
+    flex: 1;
 }
 
 .md-context-action:hover {
     background: var(--bg-elevated);
     color: var(--accent-bright);
+}
+
+.md-context-action.delete {
+    color: var(--red);
+}
+
+.md-context-action.delete .md-context-icon {
+    opacity: 1;
 }
 
 .md-context-action.delete:hover {
