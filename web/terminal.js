@@ -874,7 +874,13 @@ export class TabManager {
     }
     
     switchTab(paneId) {
-        if (this.activePaneId === paneId) return;
+        if (this.activePaneId === paneId) {
+            const activeTab = this.getActiveTab();
+            if (activeTab) {
+                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true });
+            }
+            return;
+        }
         
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
@@ -932,18 +938,7 @@ export class TabManager {
             }
         }
         
-        // Trigger resize calculation
-        setTimeout(() => {
-            this.fitActiveTerminal();
-        }, 50);
-
-        // Scroll the newly activated tab to the bottom so the user lands on
-        // the freshest output, matching Claude Code / VS Code terminal UX.
-        // _spamScrollToBottom is safe to call when the terminal is hidden —
-        // xterm queues the scroll until the canvas is next painted.
-        if (newTab.term && !newTab.isDead) {
-            this._spamScrollToBottom(newTab);
-        }
+        this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true });
     }
     
     togglePinTab(paneId) {
@@ -1101,13 +1096,16 @@ export class TabManager {
         tabInfo.termContainer.appendChild(overlay);
     }
 
-    reconnectTab(tabInfo) {
+    reconnectTab(tabInfo, { auto = false } = {}) {
+        if (tabInfo.reconnectInFlight) return;
+        tabInfo.reconnectInFlight = true;
+
         const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const btnEl = overlay?.querySelector('.reconnect-btn');
         const restartBtn = overlay?.querySelector('.restart-btn');
 
-        if (msgEl) msgEl.innerText = 'connecting…';
+        if (msgEl) msgEl.innerText = auto ? 'reconnecting…' : 'connecting…';
         if (btnEl) btnEl.disabled = true;
         if (restartBtn) restartBtn.disabled = true;
 
@@ -1119,6 +1117,7 @@ export class TabManager {
             (data) => { this.writeToTerminal(tabInfo, data); },
             null,
             () => {
+                tabInfo.reconnectInFlight = false;
                 if (!opened) {
                     if (msgEl) msgEl.innerText = 'session expired';
                     if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
@@ -1131,6 +1130,7 @@ export class TabManager {
             },
             () => {
                 opened = true;
+                tabInfo.reconnectInFlight = false;
                 tabInfo.isDead = false;
                 tabInfo.tabEl.classList.remove('dead');
                 if (overlay) overlay.remove();
@@ -1138,14 +1138,12 @@ export class TabManager {
                 setTimeout(() => {
                     try {
                         if (tabInfo === this.getActiveTab()) {
-                            tabInfo.fitAddon.fit();
+                            tabInfo.term.refresh(0, tabInfo.term.rows - 1);
                         }
-                        tabInfo.term.refresh(0, tabInfo.term.rows - 1);
                     } catch (e) {
                         console.error("[term] Fit/refresh error on reconnect:", e);
                     }
-                    this.sendResizeToBackend(tabInfo);
-                    this._spamScrollToBottom(tabInfo);
+                    this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
                 }, 100);
             }
         );
@@ -1226,9 +1224,7 @@ export class TabManager {
                     
                     // Trigger terminal fit & backend resize to synchronise viewport
                     setTimeout(() => {
-                        this.fitActiveTerminal();
-                        this.sendResizeToBackend(tabInfo);
-                        this._spamScrollToBottom(tabInfo);
+                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
                     }, 100);
                 }
             );
@@ -1427,6 +1423,24 @@ export class TabManager {
             this.sendResizeToBackend(activeTab);
         } catch (e) {
             console.error("[term] Fit error:", e);
+        }
+    }
+
+    activateTabViewport(tabInfo, { scrollToBottom = true, autoReconnect = true } = {}) {
+        if (!tabInfo) return;
+
+        setTimeout(() => {
+            if (tabInfo === this.getActiveTab()) {
+                this.fitActiveTerminal();
+            }
+        }, 50);
+
+        if (scrollToBottom && tabInfo.term && !tabInfo.isDead) {
+            this._spamScrollToBottom(tabInfo);
+        }
+
+        if (autoReconnect && tabInfo.isDead && tabInfo.coder !== 'review' && !tabInfo.reconnectInFlight) {
+            this.reconnectTab(tabInfo, { auto: true });
         }
     }
     
