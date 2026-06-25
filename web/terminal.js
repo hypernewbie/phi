@@ -277,8 +277,12 @@ export class TabManager {
         const handleReconnectAll = () => {
             for (const tabInfo of this.tabs.values()) {
                 if (tabInfo.isDead) {
-                    this.reconnectTab(tabInfo);
+                    this.reconnectTab(tabInfo, { auto: false });
                 }
+            }
+            const activeTab = this.getActiveTab();
+            if (activeTab) {
+                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: false });
             }
         };
         reconnectAllBtn?.addEventListener('click', handleReconnectAll);
@@ -290,8 +294,7 @@ export class TabManager {
             const activeTab = this.getActiveTab();
             if (!activeTab || !activeTab.term) return;
             activeTab.term.refresh(0, activeTab.term.rows - 1);
-            this.fitActiveTerminal();
-            this._spamScrollToBottom(activeTab);
+            this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true });
         };
         refreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
         mobileRefreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
@@ -802,11 +805,11 @@ export class TabManager {
             () => {
                 try {
                     if (tabInfo === this.getActiveTab()) {
-                        this.fitActiveTerminal();
+                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
                     } else {
                         tabInfo.fitAddon.fit();
+                        this.sendResizeToBackend(tabInfo);
                     }
-                    this.sendResizeToBackend(tabInfo);
 
                     if (initialCmd) {
                         // Deliver startup command after terminal settles
@@ -868,8 +871,9 @@ export class TabManager {
         
         // Initial fit delay to let rendering engine draw
         setTimeout(() => {
-            this.fitActiveTerminal();
-            this.sendResizeToBackend(tabInfo);
+            if (tabInfo === this.getActiveTab()) {
+                this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: true });
+            }
         }, 100);
     }
     
