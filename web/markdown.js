@@ -10,6 +10,8 @@ export class MarkdownManager {
         this.modalClose = document.getElementById('md-modal-close');
         this.modalCopyBtn = document.getElementById('md-modal-copy-btn');
         this.currentRawContent = '';
+        this.markdownClipboard = null;
+        this.contextMenuEl = this._createContextMenu();
 
         this._configureMarked();
         this._setupEventListeners();
@@ -38,8 +40,16 @@ export class MarkdownManager {
             });
         }
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !this.modal.classList.contains('hidden')) {
-                this.closeModal();
+            if (e.key === 'Escape') {
+                if (!this.modal.classList.contains('hidden')) {
+                    this.closeModal();
+                }
+                this._hideContextMenu();
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (this.contextMenuEl && !e.target.closest('.md-context-menu') && !e.target.closest('.md-file-action-btn')) {
+                this._hideContextMenu();
             }
         });
     }
@@ -117,6 +127,9 @@ export class MarkdownManager {
                     group.appendChild(emptyHint);
                 } else {
                     dirFiles.forEach(f => {
+                        const row = document.createElement('div');
+                        row.className = 'md-file-row';
+
                         const item = document.createElement('button');
                         item.className = 'md-file-item';
                         item.innerHTML = `<span class="md-file-icon">📄</span><span class="md-file-name">${f.name}</span>`;
@@ -131,26 +144,24 @@ export class MarkdownManager {
                             }
                         });
 
-                        item.addEventListener('contextmenu', async (e) => {
+                        item.addEventListener('contextmenu', (e) => {
                             e.preventDefault();
-                            try {
-                                if (navigator.clipboard && navigator.clipboard.writeText) {
-                                    await navigator.clipboard.writeText(f.name);
-                                } else {
-                                    const ta = Object.assign(document.createElement('textarea'), { value: f.name });
-                                    ta.style.cssText = 'position:fixed;opacity:0';
-                                    document.body.appendChild(ta);
-                                    ta.select();
-                                    document.execCommand('copy');
-                                    ta.remove();
-                                }
-                                this.app.showToast(`Copied "${f.name}" to clipboard`, { type: 'info', title: 'Clipboard' });
-                            } catch (err) {
-                                this.app.showToast('Failed to copy filename', { type: 'error' });
-                            }
+                            this._showContextMenu(f, actionBtn);
                         });
 
-                        group.appendChild(item);
+                        const actionBtn = document.createElement('button');
+                        actionBtn.className = 'md-file-action-btn';
+                        actionBtn.innerHTML = '⋯';
+                        actionBtn.title = `Actions for ${f.name}`;
+                        actionBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            this._showContextMenu(f, actionBtn);
+                        });
+
+                        row.appendChild(item);
+                        row.appendChild(actionBtn);
+                        group.appendChild(row);
                     });
                 }
 
@@ -214,6 +225,131 @@ export class MarkdownManager {
             this.refreshFiles();
         } catch (e) {
             console.error("Failed to add markdown dir:", e);
+        }
+    }
+
+    _createContextMenu() {
+        const menu = document.createElement('div');
+        menu.className = 'md-context-menu hidden';
+        document.body.appendChild(menu);
+        return menu;
+    }
+
+    _showContextMenu(file, anchorEl) {
+        if (!this.contextMenuEl) return;
+        this.contextMenuEl.innerHTML = '';
+
+        const actions = [
+            { label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
+            { label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
+            { label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
+            { label: 'Delete…', className: 'delete', handler: () => this._deleteMarkdownFile(file) },
+        ];
+
+        actions.forEach(action => {
+            const btn = document.createElement('button');
+            btn.className = `md-context-action ${action.className}`;
+            btn.textContent = action.label;
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                this._hideContextMenu();
+                await action.handler();
+            });
+            this.contextMenuEl.appendChild(btn);
+        });
+
+        const rect = anchorEl.getBoundingClientRect();
+        this.contextMenuEl.classList.remove('hidden');
+        const menuRect = this.contextMenuEl.getBoundingClientRect();
+        const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+        const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8));
+        this.contextMenuEl.style.left = `${left}px`;
+        this.contextMenuEl.style.top = `${top}px`;
+    }
+
+    _hideContextMenu() {
+        if (!this.contextMenuEl) return;
+        this.contextMenuEl.classList.add('hidden');
+    }
+
+    async _copyMarkdownFile(file) {
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(file.path)}&cwd=${encodeURIComponent(cwd)}`);
+            if (!res.ok) throw new Error(await res.text());
+            const content = await res.text();
+            this.markdownClipboard = { name: file.name, dir: file.dir, content };
+            this.app.showToast(`Copied "${file.name}"`, { type: 'info', title: 'Markdown Clipboard' });
+        } catch (e) {
+            this.app.showToast(`Failed to copy file: ${e.message}`, { type: 'error', title: 'Markdown Clipboard' });
+        }
+    }
+
+    async _copyMarkdownFileToAllWorktrees(file) {
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/copy-all-worktrees', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, dir: file.dir, path: file.path })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const result = await res.json();
+            this.app.showToast(`Copied "${file.name}" to ${result.copied} worktree(s)`, { type: 'info', title: 'Markdown' });
+        } catch (e) {
+            this.app.showToast(`Failed to copy to worktrees: ${e.message}`, { type: 'error', title: 'Markdown' });
+        }
+    }
+
+    async _pasteMarkdownFile(file) {
+        if (!this.markdownClipboard) {
+            this.app.showToast('Nothing copied yet', { type: 'error', title: 'Markdown Clipboard' });
+            return;
+        }
+        const suggested = this.markdownClipboard.name;
+        let name = prompt('Paste as filename:', suggested);
+        if (!name || !name.trim()) return;
+        name = name.trim();
+
+        const doPaste = async (overwrite = false) => {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/paste', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, dir: file.dir, name, content: this.markdownClipboard.content, overwrite })
+            });
+            if (res.status === 409 && !overwrite) {
+                if (confirm(`"${name}" already exists. Overwrite it?`)) {
+                    return doPaste(true);
+                }
+                return;
+            }
+            if (!res.ok) throw new Error(await res.text());
+            this.app.showToast(`Pasted as "${name}"`, { type: 'info', title: 'Markdown Clipboard' });
+            await this.refreshFiles();
+        };
+
+        try {
+            await doPaste(false);
+        } catch (e) {
+            this.app.showToast(`Failed to paste file: ${e.message}`, { type: 'error', title: 'Markdown Clipboard' });
+        }
+    }
+
+    async _deleteMarkdownFile(file) {
+        if (!confirm(`Delete markdown file "${file.name}"?`)) return;
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/delete', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, path: file.path })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            this.app.showToast(`Deleted "${file.name}"`, { type: 'info', title: 'Markdown' });
+            await this.refreshFiles();
+        } catch (e) {
+            this.app.showToast(`Failed to delete file: ${e.message}`, { type: 'error', title: 'Markdown' });
         }
     }
 
