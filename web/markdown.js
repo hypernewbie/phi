@@ -240,16 +240,16 @@ export class MarkdownManager {
         this.contextMenuEl.innerHTML = '';
 
         const actions = [
-            { label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
-            { label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
-            { label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
-            { label: 'Delete…', className: 'delete', handler: () => this._deleteMarkdownFile(file) },
+            { icon: '⧉', label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
+            { icon: '⇉', label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
+            { icon: '⇩', label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
+            { icon: '🗑', label: 'Delete…', className: 'delete', handler: () => this._deleteMarkdownFile(file) },
         ];
 
         actions.forEach(action => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
-            btn.textContent = action.label;
+            btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 this._hideContextMenu();
