@@ -4050,12 +4050,12 @@ html, body {
     font-weight: bold;
 }
 
-/* Done Column Card Styling */
-.kanban-column[data-bucket-id="258"] .kanban-card {
+/* Done Card Styling (based on task.done, not hardcoded bucket ID) */
+.kanban-card--done {
     opacity: 0.55;
 }
 
-.kanban-column[data-bucket-id="258"] .kanban-card-title {
+.kanban-card--done .kanban-card-title {
     text-decoration: line-through;
 }
 
