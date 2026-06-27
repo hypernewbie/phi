@@ -4175,7 +4175,7 @@ html, body {
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(480px, 100vw);
+    width: min(640px, 100vw);
     background: var(--bg-panel);
     border-left: 1px solid var(--bg-border);
     z-index: 501;
