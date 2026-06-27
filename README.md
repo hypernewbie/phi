@@ -16,6 +16,7 @@ Phi gives you a single web UI to run, monitor, and switch between multiple AI co
 - **Git worktree aware** — browse and switch between git worktrees per workspace.
 - **Quick-action presets** — one-tap buttons for common agent commands (`/exit`, `/model`, `/compact`, `ctrl+c`, `y↵`, `esc`, …), plus a staged input bar for composing longer prompts.
 - **Multiple workspaces & themes** — register several project directories and pick a UI accent color.
+- **Vikunja Kanban Board** — a drag-and-drop Kanban dashboard (using SortableJS) embedded as a custom tab type, synced directly to your local Vikunja REST API via a backend HTTP proxy.
 
 ## Architecture
 
