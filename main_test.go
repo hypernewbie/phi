@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1066,5 +1068,54 @@ func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
 		t.Errorf("Expected 0 messages, got %d", len(msgs))
 	}
 }
+
+func TestHandleProxy_Success(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("Expected method POST, got %s", r.Method)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("Expected Authorization bearer token, got %s", r.Header.Get("Authorization"))
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		if string(bodyBytes) != `{"foo":"bar"}` {
+			t.Errorf("Expected body '{\"foo\":\"bar\"}', got '%s'", string(bodyBytes))
+		}
+		w.Header().Set("X-Mock-Header", "hello")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"success":true}`))
+	}))
+	defer mockServer.Close()
+
+	reqBody := strings.NewReader(`{"foo":"bar"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/proxy?url="+url.QueryEscape(mockServer.URL), reqBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	handleProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if w.Header().Get("X-Mock-Header") != "hello" {
+		t.Errorf("Expected header X-Mock-Header to be 'hello', got %s", w.Header().Get("X-Mock-Header"))
+	}
+	bodyStr := w.Body.String()
+	if bodyStr != `{"success":true}` {
+		t.Errorf("Expected body '{\"success\":true}', got '%s'", bodyStr)
+	}
+}
+
+func TestHandleProxy_MissingUrl(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/proxy", nil)
+	w := httptest.NewRecorder()
+	handleProxy(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for missing url, got %d", w.Code)
+	}
+}
+
 
 

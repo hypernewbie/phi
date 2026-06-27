@@ -159,6 +159,7 @@ export class KanbanManager {
             
             // Rebuild taskCache
             this.taskCache = {};
+            this.buckets = bucketsWithTasks || [];
             if (bucketsWithTasks) {
                 bucketsWithTasks.forEach(bucket => {
                     if (bucket.tasks) {
@@ -390,6 +391,15 @@ export class KanbanManager {
                     
                     if (oldBucketId === newBucketId) return;
                     
+                    // Optimistically update card done styling
+                    const targetBucket = (this.buckets || []).find(b => b.id == newBucketId);
+                    const isDoneBucket = targetBucket && (targetBucket.is_done === true || targetBucket.title.toLowerCase() === 'done');
+                    if (isDoneBucket) {
+                        evt.item.classList.add('kanban-card--done');
+                    } else {
+                        evt.item.classList.remove('kanban-card--done');
+                    }
+
                     this.updateColumnCounts(container);
                     
                     try {
@@ -401,6 +411,16 @@ export class KanbanManager {
                         
                         // Revert drag
                         evt.from.appendChild(evt.item);
+                        
+                        // Revert done styling
+                        const originalBucket = (this.buckets || []).find(b => b.id == oldBucketId);
+                        const isOriginalDone = originalBucket && (originalBucket.is_done === true || originalBucket.title.toLowerCase() === 'done');
+                        if (isOriginalDone) {
+                            evt.item.classList.add('kanban-card--done');
+                        } else {
+                            evt.item.classList.remove('kanban-card--done');
+                        }
+
                         this.updateColumnCounts(container);
                     }
                 }
@@ -639,9 +659,13 @@ export class KanbanManager {
         const existing = this.taskCache[taskId];
         if (!existing) throw new Error(`Task ${taskId} not in cache`);
 
+        const targetBucket = (this.buckets || []).find(b => b.id == newBucketId);
+        const isDoneBucket = targetBucket && (targetBucket.is_done === true || targetBucket.title.toLowerCase() === 'done');
+
         const payload = {
             ...existing,
             bucket_id: parseInt(newBucketId),
+            done: isDoneBucket ? true : false,
             labels: (existing.labels || []).map(l => ({ id: l.id })),
             assignees: (existing.assignees || []).map(a => ({ id: a.id }))
         };
