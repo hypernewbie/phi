@@ -1,6 +1,9 @@
 export class KanbanManager {
     constructor(app) {
         this.app = app;
+        this.activeDetailPanel = null;
+        this.activeOverlay = null;
+        this.escListener = null;
     }
 
     async openBoard() {
@@ -381,7 +384,229 @@ export class KanbanManager {
                     }
                 }
             });
+
+            // Register card click to open details
+            list.addEventListener('click', (evt) => {
+                const card = evt.target.closest('.kanban-card');
+                if (!card) return;
+                if (card.classList.contains('kanban-card-dragging')) return;
+                
+                this.openTaskDetail(card.dataset.taskId, card, container);
+            });
         });
+    }
+
+    async openTaskDetail(taskId, cardEl, container) {
+        this.closeDetailPanel();
+
+        // 1. Render overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'kanban-detail-overlay';
+        overlay.addEventListener('click', () => this.closeDetailPanel());
+        document.body.appendChild(overlay);
+        this.activeOverlay = overlay;
+
+        // 2. Render panel with loading state
+        const panel = document.createElement('div');
+        panel.className = 'kanban-detail-panel';
+        panel.innerHTML = `
+            <div class="kdp-header">
+                <span class="kdp-identifier">Loading...</span>
+                <button class="kdp-close-btn">✕</button>
+            </div>
+            <div class="kdp-spinner-container">
+                <div class="spinner-ring"></div>
+                <div class="loader-text">Fetching task details...</div>
+            </div>
+        `;
+        
+        panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
+        document.body.appendChild(panel);
+        this.activeDetailPanel = panel;
+
+        // Escape key to close
+        this.escListener = (e) => {
+            if (e.key === 'Escape') {
+                this.closeDetailPanel();
+            }
+        };
+        document.addEventListener('keydown', this.escListener);
+
+        try {
+            const task = await this.apiGet(`/tasks/${taskId}`);
+            this.renderDetailPanelContent(panel, task, cardEl, container);
+        } catch (err) {
+            console.error('Failed to load task details:', err);
+            panel.innerHTML = `
+                <div class="kdp-header">
+                    <span class="kdp-identifier">Error</span>
+                    <button class="kdp-close-btn">✕</button>
+                </div>
+                <div class="kdp-body">
+                    <div class="kanban-error-wrapper">
+                        <h3>Failed to load task</h3>
+                        <p>${this.escapeHtml(err.message)}</p>
+                    </div>
+                </div>
+            `;
+            panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
+        }
+    }
+
+    renderDetailPanelContent(panel, task, cardEl, container) {
+        const idLabel = task.identifier || `#${task.index || task.id}`;
+        let formattedDate = '';
+        if (task.due_date && !task.due_date.startsWith('0001-01-01')) {
+            formattedDate = task.due_date.substring(0, 10);
+        }
+
+        let labelsHtml = '';
+        if (task.labels && task.labels.length > 0) {
+            labelsHtml = task.labels.map(lbl => {
+                const style = lbl.hex_color ? `style="background-color: #${lbl.hex_color}25; color: #${lbl.hex_color}; border: 1px solid #${lbl.hex_color}40;"` : '';
+                return `<span class="kanban-label-pill" ${style}>${this.escapeHtml(lbl.title)}</span>`;
+            }).join('');
+        } else {
+            labelsHtml = '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
+        }
+
+        const createdDate = task.created ? new Date(task.created).toLocaleString() : 'N/A';
+        const updatedDate = task.updated ? new Date(task.updated).toLocaleString() : 'N/A';
+
+        panel.innerHTML = `
+            <div class="kdp-header">
+                <span class="kdp-identifier">${this.escapeHtml(idLabel)}</span>
+                <button class="kdp-close-btn">✕</button>
+            </div>
+            <div class="kdp-body">
+                <div class="kdp-field">
+                    <label for="kdp-title">Title</label>
+                    <input id="kdp-title" type="text" value="${this.escapeHtml(task.title)}">
+                </div>
+                
+                <div class="kdp-field-row">
+                    <div class="kdp-field">
+                        <label for="kdp-priority">Priority</label>
+                        <select id="kdp-priority">
+                            <option value="0" ${task.priority === 0 ? 'selected' : ''}>None</option>
+                            <option value="1" ${task.priority === 1 ? 'selected' : ''}>Low</option>
+                            <option value="2" ${task.priority === 2 ? 'selected' : ''}>Medium</option>
+                            <option value="3" ${task.priority === 3 ? 'selected' : ''}>High</option>
+                            <option value="4" ${task.priority === 4 ? 'selected' : ''}>Urgent</option>
+                            <option value="5" ${task.priority === 5 ? 'selected' : ''}>DOOM</option>
+                        </select>
+                    </div>
+                    <div class="kdp-field">
+                        <label for="kdp-due-date">Due Date</label>
+                        <input id="kdp-due-date" type="date" value="${formattedDate}">
+                    </div>
+                </div>
+
+                <div class="kdp-field">
+                    <label class="kdp-checkbox-label">
+                        <input id="kdp-done" type="checkbox" ${task.done ? 'checked' : ''}>
+                        <span>Mark as Done</span>
+                    </label>
+                </div>
+
+                <div class="kdp-field">
+                    <label>Labels</label>
+                    <div class="kdp-labels-display">
+                        ${labelsHtml}
+                    </div>
+                </div>
+
+                <div class="kdp-field">
+                    <label for="kdp-description">Description</label>
+                    <textarea id="kdp-description" placeholder="No description provided">${this.escapeHtml(task.description || '')}</textarea>
+                </div>
+
+                <div class="kdp-meta">
+                    <div>Created: ${createdDate}</div>
+                    <div>Updated: ${updatedDate}</div>
+                </div>
+            </div>
+            <div class="kdp-footer">
+                <button class="btn btn-primary kdp-cancel-btn">Cancel</button>
+                <button class="btn btn-accent kdp-save-btn">Save</button>
+            </div>
+        `;
+
+        // Wire events
+        panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
+        panel.querySelector('.kdp-cancel-btn').addEventListener('click', () => this.closeDetailPanel());
+        
+        panel.querySelector('.kdp-save-btn').addEventListener('click', async () => {
+            const saveBtn = panel.querySelector('.kdp-save-btn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+            
+            try {
+                const newTitle = panel.querySelector('#kdp-title').value.trim();
+                const newPriority = parseInt(panel.querySelector('#kdp-priority').value);
+                const newDueDateVal = panel.querySelector('#kdp-due-date').value;
+                const newDone = panel.querySelector('#kdp-done').checked;
+                const newDescription = panel.querySelector('#kdp-description').value;
+
+                let newDueDate = null;
+                if (newDueDateVal) {
+                    newDueDate = new Date(newDueDateVal).toISOString();
+                }
+
+                await this.saveTaskDetail(task, {
+                    title: newTitle,
+                    priority: newPriority,
+                    due_date: newDueDate,
+                    done: newDone,
+                    description: newDescription
+                }, cardEl, container);
+
+                this.closeDetailPanel();
+            } catch (err) {
+                console.error('Failed to save task detail:', err);
+                this.app.showToast(`Failed to save task: ${err.message}`, { type: 'error' });
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save';
+            }
+        });
+    }
+
+    async saveTaskDetail(task, formData, cardEl, container) {
+        const payload = {};
+        if (formData.title !== task.title) payload.title = formData.title;
+        if (formData.priority !== task.priority) payload.priority = formData.priority;
+        if (formData.description !== task.description) payload.description = formData.description;
+        if (formData.done !== task.done) payload.done = formData.done;
+        
+        const taskDueStr = (task.due_date && !task.due_date.startsWith('0001-01-01')) ? new Date(task.due_date).toISOString().substring(0, 10) : '';
+        const formDueStr = formData.due_date ? formData.due_date.substring(0, 10) : '';
+        if (formDueStr !== taskDueStr) {
+            payload.due_date = formData.due_date || null;
+        }
+
+        if (Object.keys(payload).length === 0) {
+            return;
+        }
+
+        await this.apiPost(`/tasks/${task.id}`, payload);
+        this.app.showToast('Task updated successfully.', { type: 'success' });
+        
+        await this.loadAndRenderBoard(container);
+    }
+
+    closeDetailPanel() {
+        if (this.activeDetailPanel) {
+            this.activeDetailPanel.remove();
+            this.activeDetailPanel = null;
+        }
+        if (this.activeOverlay) {
+            this.activeOverlay.remove();
+            this.activeOverlay = null;
+        }
+        if (this.escListener) {
+            document.removeEventListener('keydown', this.escListener);
+            this.escListener = null;
+        }
     }
 
     updateColumnCounts(container) {
