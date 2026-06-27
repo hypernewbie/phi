@@ -558,7 +558,7 @@ export class DiffController {
                 }
 
                 const data = await res.json();
-                this.app.tabManager.createTab(data.pane_id, data.session_id, title, 'bash', workspace, cwd, false, combined);
+                this.app.tabManager.createTab(data.pane_id, data.session_id, title, 'bash', workspace, cwd, false, false, combined);
                 
                 if (this.app.sessionsManager) {
                     this.app.sessionsManager.loadSessions();

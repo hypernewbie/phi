@@ -485,7 +485,7 @@ export class TabManager {
         termContainer.id = `term-${paneId}`;
         
         let loaderEl = null;
-        if (coder !== 'review') {
+        if (coder !== 'review' && coder !== 'kanban') {
             loaderEl = document.createElement('div');
             loaderEl.className = 'tab-loader';
             loaderEl.innerHTML = `
@@ -515,8 +515,12 @@ export class TabManager {
             }
         });
 
-        if (coder === 'review') {
-            termContainer.classList.add('review-panel');
+        if (coder === 'review' || coder === 'kanban') {
+            if (coder === 'review') {
+                termContainer.classList.add('review-panel');
+            } else if (coder === 'kanban') {
+                termContainer.classList.add('kanban-panel');
+            }
             const tabInfo = {
                 paneId,
                 sessionId,
@@ -527,7 +531,8 @@ export class TabManager {
                 tabEl,
                 termContainer,
                 isDead: true,
-                isReview: true,
+                isReview: coder === 'review',
+                isKanban: coder === 'kanban',
                 pinned: !!pinned,
                 marked: !!marked
             };
@@ -821,7 +826,7 @@ export class TabManager {
                                     tabInfo.ws.sendInput(initialCmd + '\r');
                                 }
                             }
-                        }, 500);
+                        }, 1000);
                     }
                 } catch (e) {
                     console.error("[term] Fit/resize error on initial socket open:", e);
@@ -906,7 +911,7 @@ export class TabManager {
         newTab.termContainer.classList.add('active');
         
         // Show/hide staged input & direct mode based on tab settings
-        if (newTab.coder === 'review') {
+        if (newTab.coder === 'review' || newTab.coder === 'kanban') {
             this.inputBarContainer.classList.add('hidden');
         } else {
             this.inputBarContainer.classList.remove('hidden');
@@ -1443,7 +1448,7 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
         }
 
-        if (autoReconnect && tabInfo.isDead && tabInfo.coder !== 'review' && !tabInfo.reconnectInFlight) {
+        if (autoReconnect && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
             this.reconnectTab(tabInfo, { auto: true });
         }
     }
