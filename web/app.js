@@ -2,6 +2,7 @@ import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
+import { KanbanManager } from './kanban.js';
 
 const ACCENT_COLORS = {
     purple: {
@@ -88,6 +89,7 @@ class App {
         this.sessionsManager = new SessionsManager(this);
         this.diffController = new DiffController(this);
         this.markdownManager = new MarkdownManager(this);
+        this.kanbanManager = new KanbanManager(this);
     }
     
     async init() {
@@ -183,6 +185,13 @@ class App {
         if (importBtn) {
             importBtn.addEventListener('click', async () => {
                 await this.importConfig();
+            });
+        }
+
+        const kanbanBtn = document.getElementById('header-kanban-btn');
+        if (kanbanBtn) {
+            kanbanBtn.addEventListener('click', () => {
+                this.kanbanManager.openBoard();
             });
         }
 

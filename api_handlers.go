@@ -1518,3 +1518,46 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
+
+func handleProxy(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("url")
+	if target == "" {
+		http.Error(w, "Missing url parameter", http.StatusBadRequest)
+		return
+	}
+
+	req, err := http.NewRequest(r.Method, target, r.Body)
+	if err != nil {
+		http.Error(w, "Failed to create proxy request: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers from incoming request to the proxy request
+	for k, vv := range r.Header {
+		for _, v := range vv {
+			req.Header.Add(k, v)
+		}
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Proxy request failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy headers from proxy response to client response
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy response body to client response
+	io.Copy(w, resp.Body)
+}
+

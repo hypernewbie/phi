@@ -98,6 +98,7 @@ func main() {
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
 	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)
+	http.HandleFunc("/api/proxy", handleProxy)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)
