@@ -4,6 +4,8 @@ export class KanbanManager {
         this.activeDetailPanel = null;
         this.activeOverlay = null;
         this.escListener = null;
+        this.taskCache = {};
+        this._dragActive = false;
     }
 
     async openBoard() {
@@ -123,7 +125,7 @@ export class KanbanManager {
         
         try {
             // Fetch projects
-            const projects = await this.apiGet('/projects');
+            const projects = await this.apiGet('/projects?per_page=500');
             if (!projects || projects.length === 0) {
                 container.innerHTML = `
                     <div class="kanban-empty-wrapper">
@@ -144,7 +146,7 @@ export class KanbanManager {
             }
             
             // Fetch views for project
-            const views = await this.apiGet(`/projects/${selectedProjectId}/views`);
+            const views = await this.apiGet(`/projects/${selectedProjectId}/views?per_page=500`);
             const kanbanView = views ? views.find(v => v.view_kind === 'kanban') : null;
             
             if (!kanbanView) {
@@ -153,8 +155,20 @@ export class KanbanManager {
             }
             
             // Fetch buckets and tasks
-            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks`);
+            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500`);
             
+            // Rebuild taskCache
+            this.taskCache = {};
+            if (bucketsWithTasks) {
+                bucketsWithTasks.forEach(bucket => {
+                    if (bucket.tasks) {
+                        bucket.tasks.forEach(task => {
+                            this.taskCache[task.id] = task;
+                        });
+                    }
+                });
+            }
+
             this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
         } catch (err) {
             console.error('Kanban Load Error:', err);
@@ -323,7 +337,7 @@ export class KanbanManager {
         const idLabel = task.identifier || `#${task.index || task.id}`;
         
         return `
-            <div class="kanban-card" data-task-id="${task.id}">
+            <div class="kanban-card ${task.done ? 'kanban-card--done' : ''}" data-task-id="${task.id}">
                 <div class="kanban-card-title">${this.escapeHtml(task.title)}</div>
                 ${labelsHtml}
                 <div class="kanban-card-meta">
@@ -362,7 +376,14 @@ export class KanbanManager {
                 animation: 150,
                 ghostClass: 'kanban-card-ghost',
                 dragClass: 'kanban-card-dragging',
+                onStart: () => {
+                    this._dragActive = true;
+                },
                 onEnd: async (evt) => {
+                    setTimeout(() => {
+                        this._dragActive = false;
+                    }, 100);
+
                     const taskId = evt.item.dataset.taskId;
                     const oldBucketId = evt.from.dataset.bucketId;
                     const newBucketId = evt.to.dataset.bucketId;
@@ -387,9 +408,9 @@ export class KanbanManager {
 
             // Register card click to open details
             list.addEventListener('click', (evt) => {
+                if (this._dragActive) return;
                 const card = evt.target.closest('.kanban-card');
                 if (!card) return;
-                if (card.classList.contains('kanban-card-dragging')) return;
                 
                 this.openTaskDetail(card.dataset.taskId, card, container);
             });
@@ -572,24 +593,22 @@ export class KanbanManager {
     }
 
     async saveTaskDetail(task, formData, cardEl, container) {
-        const payload = {};
-        if (formData.title !== task.title) payload.title = formData.title;
-        if (formData.priority !== task.priority) payload.priority = formData.priority;
-        if (formData.description !== task.description) payload.description = formData.description;
-        if (formData.done !== task.done) payload.done = formData.done;
-        
-        const taskDueStr = (task.due_date && !task.due_date.startsWith('0001-01-01')) ? new Date(task.due_date).toISOString().substring(0, 10) : '';
-        const formDueStr = formData.due_date ? formData.due_date.substring(0, 10) : '';
-        if (formDueStr !== taskDueStr) {
-            payload.due_date = formData.due_date || null;
-        }
-
-        if (Object.keys(payload).length === 0) {
-            return;
-        }
+        const payload = {
+            ...task,
+            title: formData.title,
+            priority: formData.priority,
+            description: formData.description,
+            done: formData.done,
+            due_date: formData.due_date || '0001-01-01T00:00:00Z',
+            labels: (task.labels || []).map(l => ({ id: l.id })),
+            assignees: (task.assignees || []).map(a => ({ id: a.id }))
+        };
 
         await this.apiPost(`/tasks/${task.id}`, payload);
         this.app.showToast('Task updated successfully.', { type: 'success' });
+        
+        // Update taskCache
+        this.taskCache[task.id] = payload;
         
         await this.loadAndRenderBoard(container);
     }
@@ -617,9 +636,20 @@ export class KanbanManager {
     }
 
     async moveTask(taskId, newBucketId) {
-        await this.apiPost(`/tasks/${taskId}`, {
-            bucket_id: parseInt(newBucketId)
-        });
+        const existing = this.taskCache[taskId];
+        if (!existing) throw new Error(`Task ${taskId} not in cache`);
+
+        const payload = {
+            ...existing,
+            bucket_id: parseInt(newBucketId),
+            labels: (existing.labels || []).map(l => ({ id: l.id })),
+            assignees: (existing.assignees || []).map(a => ({ id: a.id }))
+        };
+
+        await this.apiPost(`/tasks/${taskId}`, payload);
+        
+        // Update taskCache
+        this.taskCache[taskId] = payload;
     }
 
     async apiGet(path) {
