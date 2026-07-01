@@ -44,7 +44,24 @@ phi/
 
 See [`PLAN.md`](PLAN.md) for the full design notes and locked decisions.
 
-## Quickstart
+## Installation & Quickstart
+
+### Method 1: Using NPM (Easiest, Cross-Platform)
+
+Phi is distributed as the `@hypernewbie/phi-code` package on NPM. The installer automatically downloads the correct precompiled binary for your operating system (macOS, Linux, or Windows) and architecture (arm64 or amd64).
+
+```bash
+# Install globally
+npm install -g @hypernewbie/phi-code
+
+# Launch in your project directory
+cd ~/code/my-project
+phi
+```
+
+### Method 2: Using Go Install
+
+If you have Go 1.26+ installed:
 
 ```bash
 go install github.com/hypernewbie/phi@latest
@@ -52,7 +69,7 @@ cd ~/code/my-project
 phi
 ```
 
-Then open <http://localhost:7070>. The web UI is embedded in the binary, so it works from any directory.
+After launching, open <http://localhost:7070> in your browser. The web UI is fully embedded, so you can run it from any directory.
 
 ## Getting started
 
