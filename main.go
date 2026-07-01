@@ -79,6 +79,8 @@ func main() {
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)
+	http.HandleFunc("/api/config/export-models", handleConfigExportModels)
+	http.HandleFunc("/api/config/import-models", handleConfigImportModels)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", handleModelPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
