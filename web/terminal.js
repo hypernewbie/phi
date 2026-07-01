@@ -701,32 +701,38 @@ export class TabManager {
 
         // Touch scrolling for OpenCode alt screen (TUI) on mobile viewports
         let termTouchStartY = 0;
+        let termTouchRemainder = 0;
         termContainer.addEventListener('touchstart', (e) => {
             if (tabInfo.coder !== 'opencode') return;
             if (e.touches.length === 1) {
                 termTouchStartY = e.touches[0].clientY;
+                termTouchRemainder = 0;
             }
-        }, { passive: true });
+        }, { capture: true, passive: false });
 
         termContainer.addEventListener('touchmove', (e) => {
             if (tabInfo.coder !== 'opencode') return;
             if (e.touches.length === 1 && termTouchStartY !== null) {
                 const currentY = e.touches[0].clientY;
-                const diffY = currentY - termTouchStartY;
+                const rawDelta = currentY - termTouchStartY;
+                const totalDelta = rawDelta + termTouchRemainder;
+                const cellHeight = 16;
                 
-                if (Math.abs(diffY) >= 16) {
+                const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
+                if (lines > 0) {
                     e.preventDefault();
                     e.stopPropagation();
                     
-                    const lines = Math.floor(Math.abs(diffY) / 16);
-                    const isUp = diffY > 0; // swipe down -> scroll up
-                    
+                    const isUp = totalDelta > 0; // swipe down -> scroll up
                     const seq = isUp ? '\x1b\x19' : '\x1b\x05';
                     const payload = seq.repeat(lines);
                     
                     if (tabInfo.ws && !tabInfo.isDead) {
                         tabInfo.ws.sendInput(payload);
                     }
+                    
+                    const consumed = lines * cellHeight * (totalDelta > 0 ? 1 : -1);
+                    termTouchRemainder = totalDelta - consumed;
                     termTouchStartY = currentY;
                 }
             }
@@ -1884,6 +1890,9 @@ export class TabManager {
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
+
+        // 4. Config Copy/Paste Footer
+        this._appendConfigFooter(dropup);
     }
 
     renderQuickCmdsDropup() {
@@ -1974,6 +1983,41 @@ export class TabManager {
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
+
+        // Config Copy/Paste Footer
+        this._appendConfigFooter(dropup);
+    }
+
+    _appendConfigFooter(dropup) {
+        const footer = document.createElement('div');
+        footer.className = 'dropup-config-footer';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'dropup-config-btn';
+        copyBtn.title = 'Copy models + cmds config to clipboard';
+        copyBtn.innerHTML = '↑ Copy config';
+        copyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.app.exportModelsConfig(copyBtn);
+        });
+
+        const pasteBtn = document.createElement('button');
+        pasteBtn.className = 'dropup-config-btn';
+        pasteBtn.title = 'Paste models + cmds config from clipboard';
+        pasteBtn.innerHTML = '↓ Paste config';
+        pasteBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await this.app.importModelsConfig(pasteBtn);
+            document.querySelectorAll('.model-presets-dropup').forEach(d => d.classList.add('hidden'));
+            const activeTab = this.getActiveTab();
+            if (activeTab) {
+                this.renderPresets(activeTab.coder);
+            }
+        });
+
+        footer.appendChild(copyBtn);
+        footer.appendChild(pasteBtn);
+        dropup.appendChild(footer);
     }
 
     applyThemeToAllActiveTerminals(color) {

@@ -1117,5 +1117,120 @@ func TestHandleProxy_MissingUrl(t *testing.T) {
 	}
 }
 
+func TestEncodeDecodeConfigData(t *testing.T) {
+	type DummyData struct {
+		Name string `json:"name"`
+		Val  int    `json:"val"`
+	}
+
+	orig := DummyData{Name: "testing-dry", Val: 42}
+	prefix := "TESTPREFIX"
+
+	encoded, err := encodeConfigData(prefix, orig)
+	if err != nil {
+		t.Fatalf("encodeConfigData failed: %v", err)
+	}
+
+	if !strings.HasPrefix(encoded, prefix+":") {
+		t.Errorf("expected prefix %s in encoded string, got %s", prefix, encoded)
+	}
+
+	decodedBytes, err := decodeConfigData(encoded, prefix)
+	if err != nil {
+		t.Fatalf("decodeConfigData failed: %v", err)
+	}
+
+	var decoded DummyData
+	if err := json.Unmarshal(decodedBytes, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if decoded.Name != orig.Name || decoded.Val != orig.Val {
+		t.Errorf("decoded data mismatch: got %+v, want %+v", decoded, orig)
+	}
+
+	// Test invalid prefix
+	_, err = decodeConfigData(encoded, "WRONGPREFIX")
+	if err == nil {
+		t.Error("expected error decoding with wrong prefix, got nil")
+	}
+
+	// Test malformed payload
+	_, err = decodeConfigData("TESTPREFIX:hash", prefix)
+	if err == nil {
+		t.Error("expected error for malformed payload, got nil")
+	}
+
+	// Test corrupted payload/hash mismatch
+	parts := strings.Split(encoded, ":")
+	parts[2] = "YWJj" // base64 for "abc", will mismatch hash
+	corrupted := strings.Join(parts, ":")
+	_, err = decodeConfigData(corrupted, prefix)
+	if err == nil {
+		t.Error("expected error for corrupted payload (hash mismatch), got nil")
+	}
+}
+
+func TestConfigExportImportModelsHandlers(t *testing.T) {
+	withTempConfig(t)
+
+	// Set initial config
+	cfg := loadConfig()
+	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"original-model"}}
+	cfg.QuickCommands = []QuickCommand{{Name: "test", Command: "echo 1"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
+	saveConfig(cfg)
+
+	// Call export
+	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-models", nil)
+	wExport := httptest.NewRecorder()
+	handleConfigExportModels(wExport, reqExport)
+
+	if wExport.Code != http.StatusOK {
+		t.Fatalf("export handler failed, code %d", wExport.Code)
+	}
+
+	var exportRes struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(wExport.Body).Decode(&exportRes); err != nil {
+		t.Fatalf("failed to decode export body: %v", err)
+	}
+
+	if !strings.HasPrefix(exportRes.Config, "PHIMODELS:") {
+		t.Errorf("expected config to start with PHIMODELS:, got %q", exportRes.Config)
+	}
+
+	// Update configuration so we can verify import overwrites it
+	cfg = loadConfig()
+	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"overwritten-model"}}
+	cfg.QuickCommands = []QuickCommand{{Name: "test2", Command: "echo 2"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "term-different", Command: "sh"}}
+	saveConfig(cfg)
+
+	// Call import with the exported config
+	importReqBody, _ := json.Marshal(map[string]string{"config": exportRes.Config})
+	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-models", strings.NewReader(string(importReqBody)))
+	wImport := httptest.NewRecorder()
+	handleConfigImportModels(wImport, reqImport)
+
+	if wImport.Code != http.StatusOK {
+		t.Fatalf("import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
+	}
+
+	// Reload config and assert models + quick commands are restored, but terminal commands are UNCHANGED (still have term-different)
+	loaded := loadConfig()
+	if loaded.ModelPresets["pi"][0] != "original-model" {
+		t.Errorf("model presets not restored, got %+v", loaded.ModelPresets)
+	}
+	if loaded.QuickCommands[0].Name != "test" {
+		t.Errorf("quick commands not restored, got %+v", loaded.QuickCommands)
+	}
+	if loaded.TerminalCommands[0].Name != "term-different" {
+		t.Errorf("terminal commands should NOT have been restored/overwritten, got %+v", loaded.TerminalCommands)
+	}
+}
+
+
 
 
