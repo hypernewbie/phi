@@ -1410,6 +1410,40 @@ func handleGetCommits(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(commits)
 }
 
+// encodeConfigData serializes, base64-encodes, hashes, and formats with a prefix.
+func encodeConfigData(prefix string, data interface{}) (string, error) {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	b64Payload := base64.StdEncoding.EncodeToString(jsonData)
+	const salt = "phi_super_secret_salt_2026"
+	hasher := sha256.New()
+	hasher.Write([]byte(b64Payload + salt))
+	hashHex := hex.EncodeToString(hasher.Sum(nil))
+	return fmt.Sprintf("%s:%s:%s", prefix, hashHex, b64Payload), nil
+}
+
+// decodeConfigData validates prefix, hash, and decodes the base64 payload.
+func decodeConfigData(raw string, expectedPrefix string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, expectedPrefix+":") {
+		return nil, fmt.Errorf("invalid configuration format (missing or incorrect sentinel)")
+	}
+	parts := strings.Split(raw, ":")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("malformed configuration string")
+	}
+	hashHex, b64Payload := parts[1], parts[2]
+	const salt = "phi_super_secret_salt_2026"
+	hasher := sha256.New()
+	hasher.Write([]byte(b64Payload + salt))
+	if hashHex != hex.EncodeToString(hasher.Sum(nil)) {
+		return nil, fmt.Errorf("configuration signature verification failed (corrupted or altered data)")
+	}
+	return base64.StdEncoding.DecodeString(b64Payload)
+}
+
 func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1427,20 +1461,11 @@ func handleConfigExport(w http.ResponseWriter, r *http.Request) {
 		TerminalCommands: cfg.TerminalCommands,
 	}
 
-	jsonData, err := json.Marshal(exportData)
+	formatted, err := encodeConfigData("PHICONFIG", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	b64Payload := base64.StdEncoding.EncodeToString(jsonData)
-	
-	const salt = "phi_super_secret_salt_2026"
-	hasher := sha256.New()
-	hasher.Write([]byte(b64Payload + salt))
-	hashHex := hex.EncodeToString(hasher.Sum(nil))
-
-	formatted := fmt.Sprintf("PHICONFIG:%s:%s", hashHex, b64Payload)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -1462,34 +1487,9 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := strings.TrimSpace(req.Config)
-	if !strings.HasPrefix(raw, "PHICONFIG:") {
-		http.Error(w, "Invalid configuration format (missing sentinel)", http.StatusBadRequest)
-		return
-	}
-
-	parts := strings.Split(raw, ":")
-	if len(parts) != 3 {
-		http.Error(w, "Malformed configuration string", http.StatusBadRequest)
-		return
-	}
-
-	hashHex := parts[1]
-	b64Payload := parts[2]
-
-	const salt = "phi_super_secret_salt_2026"
-	hasher := sha256.New()
-	hasher.Write([]byte(b64Payload + salt))
-	expectedHash := hex.EncodeToString(hasher.Sum(nil))
-
-	if hashHex != expectedHash {
-		http.Error(w, "Configuration signature verification failed (corrupted or altered data)", http.StatusBadRequest)
-		return
-	}
-
-	jsonData, err := base64.StdEncoding.DecodeString(b64Payload)
+	jsonData, err := decodeConfigData(req.Config, "PHICONFIG")
 	if err != nil {
-		http.Error(w, "Failed to decode configuration payload", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -1513,6 +1513,75 @@ func handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(importedData.TerminalCommands) > 0 {
 		cfg.TerminalCommands = importedData.TerminalCommands
+	}
+
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleConfigExportModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := loadConfig()
+	exportData := struct {
+		ModelPresets  ModelPresetsMap `json:"model_presets"`
+		QuickCommands []QuickCommand  `json:"quick_commands"`
+	}{
+		ModelPresets:  cfg.ModelPresets,
+		QuickCommands: cfg.QuickCommands,
+	}
+
+	formatted, err := encodeConfigData("PHIMODELS", exportData)
+	if err != nil {
+		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"config": formatted,
+	})
+}
+
+func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonData, err := decodeConfigData(req.Config, "PHIMODELS")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var importedData struct {
+		ModelPresets  ModelPresetsMap `json:"model_presets"`
+		QuickCommands []QuickCommand  `json:"quick_commands"`
+	}
+
+	if err := json.Unmarshal(jsonData, &importedData); err != nil {
+		http.Error(w, "Failed to parse configuration JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	if importedData.ModelPresets != nil {
+		cfg.ModelPresets = importedData.ModelPresets
+	}
+	if len(importedData.QuickCommands) > 0 {
+		cfg.QuickCommands = importedData.QuickCommands
 	}
 
 	saveConfig(cfg)

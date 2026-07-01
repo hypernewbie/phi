@@ -644,11 +644,10 @@ class App {
         }
     }
 
-    async exportConfig() {
-        const btn = document.getElementById('header-export-btn');
+    async _doExportConfig(url, btnElement) {
         try {
-            if (btn) btn.classList.add('loading');
-            const res = await fetch('/api/config/export');
+            if (btnElement) btnElement.classList.add('loading');
+            const res = await fetch(url);
             if (!res.ok) throw new Error("Failed to export config");
             const data = await res.json();
             
@@ -673,38 +672,53 @@ class App {
                     }
                 }
                 
-                if (btn) {
-                    btn.classList.add('success');
-                    const span = btn.querySelector('span');
-                    const origText = span.innerText;
-                    span.innerText = "Copied!";
+                if (btnElement) {
+                    btnElement.classList.add('success');
+                    const span = btnElement.querySelector('span') || btnElement;
+                    const origText = span.innerText || span.textContent;
+                    if (span.innerText !== undefined) {
+                        span.innerText = "Copied!";
+                    } else {
+                        span.textContent = "Copied!";
+                    }
                     setTimeout(() => {
-                        btn.classList.remove('success');
-                        span.innerText = origText;
+                        btnElement.classList.remove('success');
+                        if (span.innerText !== undefined) {
+                            span.innerText = origText;
+                        } else {
+                            span.textContent = origText;
+                        }
                     }, 1500);
                 }
             }
         } catch (e) {
             console.error("[config] Export error:", e);
-            if (btn) {
-                btn.classList.add('error');
-                const span = btn.querySelector('span');
-                const origText = span.innerText;
-                span.innerText = "Failed!";
+            if (btnElement) {
+                btnElement.classList.add('error');
+                const span = btnElement.querySelector('span') || btnElement;
+                const origText = span.innerText || span.textContent;
+                if (span.innerText !== undefined) {
+                    span.innerText = "Failed!";
+                } else {
+                    span.textContent = "Failed!";
+                }
                 setTimeout(() => {
-                    btn.classList.remove('error');
-                    span.innerText = origText;
+                    btnElement.classList.remove('error');
+                    if (span.innerText !== undefined) {
+                        span.innerText = origText;
+                    } else {
+                        span.textContent = origText;
+                    }
                 }, 1500);
             }
         } finally {
-            if (btn) btn.classList.remove('loading');
+            if (btnElement) btnElement.classList.remove('loading');
         }
     }
 
-    async importConfig() {
-        const btn = document.getElementById('header-import-btn');
+    async _doImportConfig(url, btnElement, prefix, onCompleted) {
         try {
-            if (btn) btn.classList.add('loading');
+            if (btnElement) btnElement.classList.add('loading');
             
             let configText = "";
             if (navigator.clipboard && navigator.clipboard.readText) {
@@ -712,23 +726,23 @@ class App {
                     configText = await navigator.clipboard.readText();
                 } catch (e) {
                     console.warn("[config] Browser blocked clipboard read, falling back to prompt", e);
-                    configText = prompt("Paste your config string here (starts with PHICONFIG:):");
+                    configText = prompt(`Paste your config string here (starts with ${prefix}:):`);
                 }
             } else {
-                configText = prompt("Paste your config string here (starts with PHICONFIG:):");
+                configText = prompt(`Paste your config string here (starts with ${prefix}:):`);
             }
             
             if (!configText) {
-                if (btn) btn.classList.remove('loading');
+                if (btnElement) btnElement.classList.remove('loading');
                 return; // User cancelled or pasted empty string
             }
             
             configText = configText.trim();
-            if (!configText.startsWith("PHICONFIG:")) {
-                throw new Error("Invalid format. Config must start with PHICONFIG:");
+            if (!configText.startsWith(`${prefix}:`)) {
+                throw new Error(`Invalid format. Config must start with ${prefix}:`);
             }
             
-            const res = await fetch('/api/config/import', {
+            const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ config: configText })
@@ -739,33 +753,75 @@ class App {
                 throw new Error(text || "Failed to import config");
             }
             
-            if (btn) {
-                btn.classList.add('success');
-                const span = btn.querySelector('span');
-                const origText = span.innerText;
-                span.innerText = "Imported!";
+            if (btnElement) {
+                btnElement.classList.add('success');
+                const span = btnElement.querySelector('span') || btnElement;
+                const origText = span.innerText || span.textContent;
+                if (span.innerText !== undefined) {
+                    span.innerText = "Imported!";
+                } else {
+                    span.textContent = "Imported!";
+                }
                 setTimeout(() => {
-                    btn.classList.remove('success');
-                    span.innerText = origText;
-                    location.reload(); // Reload to apply import changes
+                    btnElement.classList.remove('success');
+                    if (span.innerText !== undefined) {
+                        span.innerText = origText;
+                    } else {
+                        span.textContent = origText;
+                    }
+                    if (onCompleted) {
+                        onCompleted();
+                    }
                 }, 1500);
+            } else {
+                if (onCompleted) {
+                    onCompleted();
+                }
             }
         } catch (e) {
             console.error("[config] Import error:", e);
-            if (btn) {
-                btn.classList.add('error');
-                const span = btn.querySelector('span');
-                const origText = span.innerText;
-                span.innerText = "Failed!";
+            if (btnElement) {
+                btnElement.classList.add('error');
+                const span = btnElement.querySelector('span') || btnElement;
+                const origText = span.innerText || span.textContent;
+                if (span.innerText !== undefined) {
+                    span.innerText = "Failed!";
+                } else {
+                    span.textContent = "Failed!";
+                }
                 alert("Import failed: " + e.message);
                 setTimeout(() => {
-                    btn.classList.remove('error');
-                    span.innerText = origText;
+                    btnElement.classList.remove('error');
+                    if (span.innerText !== undefined) {
+                        span.innerText = origText;
+                    } else {
+                        span.textContent = origText;
+                    }
                 }, 1500);
             }
         } finally {
-            if (btn) btn.classList.remove('loading');
+            if (btnElement) btnElement.classList.remove('loading');
         }
+    }
+
+    async exportConfig() {
+        await this._doExportConfig('/api/config/export', document.getElementById('header-export-btn'));
+    }
+
+    async importConfig() {
+        await this._doImportConfig('/api/config/import', document.getElementById('header-import-btn'), "PHICONFIG", () => {
+            location.reload(); // Reload to apply import changes
+        });
+    }
+
+    async exportModelsConfig(btnElement) {
+        await this._doExportConfig('/api/config/export-models', btnElement);
+    }
+
+    async importModelsConfig(btnElement) {
+        await this._doImportConfig('/api/config/import-models', btnElement, "PHIMODELS", async () => {
+            await this.sessionsManager.loadConfig();
+        });
     }
 }
 
