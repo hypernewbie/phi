@@ -2029,6 +2029,7 @@ html, body {
         border-right: none !important;
         border-radius: 0 !important;
         margin-bottom: 12px !important;
+        overflow: visible !important;
     }
 
     .diff-modal-body .d2h-file-header {
@@ -2045,12 +2046,16 @@ html, body {
         line-height: 1.35 !important;
     }
 
+    .diff-modal-body .d2h-file-diff {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
     .diff-modal-body .d2h-diff-table {
-        min-width: 0 !important;
-        width: 100% !important;
-        font-size: 11px !important;
-        line-height: 1.25 !important;
-        table-layout: fixed;
+        width: auto !important;
+        min-width: 100% !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
     }
 
     .diff-modal-body .d2h-code-line,
@@ -2059,40 +2064,15 @@ html, body {
     .diff-modal-body .d2h-code-linenumber,
     .diff-modal-body .d2h-code-side-linenumber,
     .diff-modal-body .d2h-code-line-prefix {
-        font-size: 10px !important;
-        line-height: 1.25 !important;
-    }
-
-    .diff-modal-body.mobile-rich-diff .d2h-code-line,
-    .diff-modal-body.mobile-rich-diff .d2h-code-side-line {
-        padding: 0 4px 0 3.8em !important;
-        width: 100% !important;
-        display: block !important;
-        box-sizing: border-box;
-        white-space: normal !important;
-    }
-
-    .diff-modal-body.mobile-rich-diff .d2h-code-line-ctn {
-        display: block !important;
-        width: 100% !important;
-        white-space: pre-wrap !important;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-    }
-
-    .diff-modal-body.mobile-rich-diff .d2h-code-line-prefix {
-        white-space: pre !important;
-    }
-
-    .diff-modal-body.mobile-rich-diff .d2h-code-linenumber,
-    .diff-modal-body.mobile-rich-diff .d2h-code-side-linenumber {
-        min-width: 3.2em !important;
-        width: 3.2em !important;
-        padding: 0 0.3em !important;
-        font-size: 9px !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
     }
 
     .diff-modal-body .d2h-file-list-wrapper {
+        display: none !important;
+    }
+
+    #diff-layout-toggle-btn {
         display: none !important;
     }
 
