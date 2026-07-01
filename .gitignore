@@ -6,4 +6,5 @@
 sessions.json
 config.json
 temp/
-
+coverage/
+*.out
