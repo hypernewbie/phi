@@ -757,14 +757,6 @@ export class DiffController {
         });
 
         this.diffModalBody.innerHTML = diffHtml;
-        this.diffModalBody.classList.toggle('mobile-rich-diff', isMobile);
-
-        if (this.layoutToggleBtn) {
-            this.layoutToggleBtn.disabled = isMobile;
-            this.layoutToggleBtn.title = isMobile ? 'Side-by-side is disabled on mobile' : '';
-            this.layoutToggleBtn.style.opacity = isMobile ? '0.5' : '1';
-            this.layoutToggleBtn.style.cursor = isMobile ? 'not-allowed' : 'pointer';
-        }
     }
 
     async loadRichDiff() {
