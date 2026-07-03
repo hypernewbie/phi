@@ -242,24 +242,18 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	// On Windows, wrap all coder executions in PowerShell/pwsh to resolve npm/script path wrappers cleanly
 	if req.Coder != "bash" && req.Coder != "pwsh" && runtime.GOOS == "windows" {
 		shellCmd := getPreferredPowerShell()
-		
-		var fullCmd string
-		if len(args) > 0 {
-			var escaped []string
-			for _, a := range args {
-				if strings.Contains(a, " ") {
-					escaped = append(escaped, fmt.Sprintf(`"%s"`, a))
-				} else {
-					escaped = append(escaped, a)
-				}
-			}
-			fullCmd = fmt.Sprintf("%s %s", command, strings.Join(escaped, " "))
-		} else {
-			fullCmd = command
+
+		// Use PowerShell's call operator (&) with individually single-quoted arguments.
+		// Single quotes in PowerShell are literal (no variable expansion or backtick escaping).
+		// Any embedded single quotes are escaped by doubling them (' -> '').
+		var parts []string
+		parts = append(parts, fmt.Sprintf("& '%s'", strings.ReplaceAll(command, "'", "''")))
+		for _, a := range args {
+			parts = append(parts, fmt.Sprintf("'%s'", strings.ReplaceAll(a, "'", "''")))
 		}
-		
+
 		command = shellCmd
-		args = []string{"-NoLogo", "-Command", fullCmd}
+		args = []string{"-NoLogo", "-Command", strings.Join(parts, " ")}
 	}
 
 	spawnDir := req.Cwd
