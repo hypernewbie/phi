@@ -319,9 +319,11 @@ fi
 	}
 
 	if runtime.GOOS == "windows" {
+		safePSClipFile := strings.ReplaceAll(clipboardFile, "'", "''")
+
 		pbcopyBat := fmt.Sprintf(`@echo off
 powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
-`, clipboardFile)
+`, safePSClipFile)
 		pbpasteBat := fmt.Sprintf(`@echo off
 if exist "%s" (
 	type "%s"
@@ -339,7 +341,7 @@ if "%%is_paste%%"=="1" (
 ) else (
 	powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
 )
-`, clipboardFile, clipboardFile, clipboardFile)
+`, clipboardFile, clipboardFile, safePSClipFile)
 
 		xselBat := fmt.Sprintf(`@echo off
 set is_paste=0
@@ -352,7 +354,7 @@ if "%%is_paste%%"=="1" (
 ) else (
 	powershell -NoProfile -Command "[Console]::In.ReadToEnd() | Out-File -FilePath '%s' -Encoding utf8"
 )
-`, clipboardFile, clipboardFile, clipboardFile)
+`, clipboardFile, clipboardFile, safePSClipFile)
 
 		batShims := map[string]string{
 			"pbcopy.bat":   pbcopyBat,

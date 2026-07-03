@@ -283,7 +283,10 @@ html, body {
     outline: none;
     cursor: pointer;
     min-width: 60px;
-    max-width: 320px;
+    max-width: 280px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
@@ -292,6 +295,7 @@ html, body {
     background-repeat: no-repeat;
     background-position: right center;
     background-size: 12px;
+    transition: width 0.15s ease;
 }
 
 .workspace-area select option {
