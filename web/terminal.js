@@ -937,6 +937,7 @@ export class TabManager {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
             this.app.sessionsManager.activeCWD = newTab.cwd;
+            this.app.sessionsManager.updateWorkspaceSelectWidth();
             this.app.sessionsManager.loadWorktrees().then(() => {
                 this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
                 this.app.diffController.refreshDiff();

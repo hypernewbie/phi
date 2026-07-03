@@ -48,10 +48,10 @@ func WorktreeDirtyStates(paths []string) map[string]bool {
 	return states
 }
 
-// ListGitWorktrees runs "git worktree list" in dir. If it fails or is not a git repo,
+// ListGitWorktrees runs "git worktree list --porcelain" in dir. If it fails or is not a git repo,
 // it returns a single GitWorktree entry representing the dir itself.
 func ListGitWorktrees(dir string) ([]GitWorktree, error) {
-	cmd := exec.Command("git", "worktree", "list")
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -62,30 +62,33 @@ func ListGitWorktrees(dir string) ([]GitWorktree, error) {
 	}
 
 	var worktrees []GitWorktree
-	lines := strings.Split(out.String(), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+	var current GitWorktree
+
+	for _, line := range strings.Split(out.String(), "\n") {
+		line = strings.TrimRight(line, "\r")
+
 		if line == "" {
+			if current.Path != "" {
+				worktrees = append(worktrees, current)
+				current = GitWorktree{}
+			}
 			continue
 		}
-		// Example: /home/hypernewbie/code/phi  50527dd [main]
-		// Or: /path/to/worktree  (bare)
-		fields := strings.Fields(line)
-		if len(fields) < 1 {
-			continue
-		}
-		path := fields[0]
-		branch := ""
-		for _, f := range fields[1:] {
-			if strings.HasPrefix(f, "[") && strings.HasSuffix(f, "]") {
-				branch = f[1 : len(f)-1]
-				break
+
+		if strings.HasPrefix(line, "worktree ") {
+			current.Path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") {
+			ref := strings.TrimPrefix(line, "branch ")
+			if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+				current.Branch = ref[idx+1:]
+			} else {
+				current.Branch = ref
 			}
 		}
-		worktrees = append(worktrees, GitWorktree{
-			Path:   path,
-			Branch: branch,
-		})
+	}
+
+	if current.Path != "" {
+		worktrees = append(worktrees, current)
 	}
 
 	if len(worktrees) == 0 {

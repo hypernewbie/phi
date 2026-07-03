@@ -44,19 +44,18 @@ export class SessionsManager {
             this.spawnNewSession();
         });
         
-        // Workspace Toggle and Formatter
-        this.workspaceSelect.addEventListener('mousedown', () => this.expandWorkspaceSelect());
-        this.workspaceSelect.addEventListener('focus', () => this.expandWorkspaceSelect());
-        this.workspaceSelect.addEventListener('blur', () => this.shrinkWorkspaceSelect());
+        // Workspace Toggle and Auto-Width Formatter
         this.workspaceSelect.addEventListener('change', () => {
             this.activeWorkspace = this.workspaceSelect.value;
-            this.shrinkWorkspaceSelect();
+            localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+            this.updateWorkspaceSelectWidth();
             this.loadWorktrees();
             // Refresh diff on current active worktree (which is updated inside loadWorktrees)
             setTimeout(() => {
                 this.app.diffController.refreshDiff();
             }, 100);
         });
+        window.addEventListener('resize', () => this.updateWorkspaceSelectWidth());
         
         this.addWorkspaceBtn.addEventListener('click', () => {
             this.openWorkspaceModal();
@@ -109,20 +108,59 @@ export class SessionsManager {
         return parts[parts.length - 1] || path;
     }
 
-    expandWorkspaceSelect() {
-        Array.from(this.workspaceSelect.options).forEach(opt => {
-            opt.innerText = opt.value;
-        });
+    formatWorkspaceLabel(ws, allWorkspaces) {
+        if (!ws) return '';
+        const folderName = this.getLastFolderName(ws);
+        if (!allWorkspaces || !Array.isArray(allWorkspaces)) return folderName;
+        const duplicates = allWorkspaces.filter(w => this.getLastFolderName(w) === folderName);
+        if (duplicates.length > 1) {
+            const parts = ws.split(/[/\\]/);
+            if (parts.length >= 2) {
+                const parent = parts[parts.length - 2];
+                return `${folderName} (${parent})`;
+            }
+        }
+        return folderName;
     }
 
-    shrinkWorkspaceSelect() {
-        Array.from(this.workspaceSelect.options).forEach(opt => {
-            if (opt.value === this.workspaceSelect.value) {
-                opt.innerText = this.getLastFolderName(opt.value);
-            } else {
-                opt.innerText = opt.value;
-            }
-        });
+    updateWorkspaceSelectWidth() {
+        if (!this.workspaceSelect) return;
+        const idx = this.workspaceSelect.selectedIndex;
+        const selectedOpt = idx >= 0 ? this.workspaceSelect.options[idx] : null;
+        const text = selectedOpt ? (selectedOpt.text || selectedOpt.innerText || selectedOpt.value) : '';
+        if (!text) return;
+
+        if (!this._measureSpan) {
+            this._measureSpan = document.createElement('span');
+            this._measureSpan.style.position = 'absolute';
+            this._measureSpan.style.visibility = 'hidden';
+            this._measureSpan.style.height = '0';
+            this._measureSpan.style.overflow = 'hidden';
+            this._measureSpan.style.whiteSpace = 'pre';
+            this._measureSpan.style.top = '-9999px';
+            this._measureSpan.style.left = '-9999px';
+            document.body.appendChild(this._measureSpan);
+        }
+
+        const style = window.getComputedStyle(this.workspaceSelect);
+        this._measureSpan.style.fontFamily = style.fontFamily;
+        this._measureSpan.style.fontSize = style.fontSize;
+        this._measureSpan.style.fontWeight = style.fontWeight;
+        this._measureSpan.style.letterSpacing = style.letterSpacing;
+
+        this._measureSpan.textContent = text;
+        const textWidth = this._measureSpan.getBoundingClientRect().width;
+
+        const isMobile = window.innerWidth <= 768;
+        const padding = isMobile ? 24 : 28;
+        const calculatedWidth = Math.ceil(textWidth + padding);
+
+        const minW = isMobile ? 50 : 60;
+        const maxW = isMobile ? 130 : 280;
+
+        const finalWidth = Math.max(minW, Math.min(maxW, calculatedWidth));
+        this.workspaceSelect.style.width = `${finalWidth}px`;
+        this.workspaceSelect.title = this.activeWorkspace || this.workspaceSelect.value || '';
     }
 
     async loadConfig() {
@@ -134,7 +172,8 @@ export class SessionsManager {
             data.workspaces.forEach(ws => {
                 const opt = document.createElement('option');
                 opt.value = ws;
-                opt.innerText = ws;
+                opt.innerText = this.formatWorkspaceLabel(ws, data.workspaces);
+                opt.title = ws;
                 this.workspaceSelect.appendChild(opt);
             });
             
@@ -145,7 +184,7 @@ export class SessionsManager {
                 this.activeWorkspace = data.active_cwd || data.workspaces[0] || '';
             }
             this.workspaceSelect.value = this.activeWorkspace;
-            this.shrinkWorkspaceSelect();
+            this.updateWorkspaceSelectWidth();
             
             if (data.theme_color) {
                 this.app.accentColorSelect.value = data.theme_color;
@@ -188,6 +227,7 @@ export class SessionsManager {
                 await this.loadConfig();
                 this.workspaceSelect.value = path;
                 this.activeWorkspace = path;
+                this.updateWorkspaceSelectWidth();
                 this.loadWorktrees();
             }
         } catch (e) {
@@ -204,6 +244,7 @@ export class SessionsManager {
             });
             if (res.ok) {
                 await this.loadConfig();
+                this.updateWorkspaceSelectWidth();
             }
         } catch (e) {
             console.error("[config] Failed to remove workspace:", e);

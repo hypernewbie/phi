@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/session"
 )
 
 // withTempConfig points the config system at a fresh temp file for the duration
@@ -1228,6 +1230,96 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 	}
 	if loaded.TerminalCommands[0].Name != "term-different" {
 		t.Errorf("terminal commands should NOT have been restored/overwritten, got %+v", loaded.TerminalCommands)
+	}
+}
+
+func TestWorktreeParsingWithSpaces(t *testing.T) {
+	// Verify porcelain worktree list output with spaces in path is parsed cleanly
+	porcelainOutput := `worktree /home/user/my project path
+HEAD 50527dd
+branch refs/heads/main
+
+worktree /home/user/my project path/worktree 2
+HEAD 999999
+branch refs/heads/feature/space test
+
+`
+	var worktrees []session.GitWorktree
+	var current session.GitWorktree
+
+	for _, line := range strings.Split(porcelainOutput, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			if current.Path != "" {
+				worktrees = append(worktrees, current)
+				current = session.GitWorktree{}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "worktree ") {
+			current.Path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") {
+			ref := strings.TrimPrefix(line, "branch ")
+			if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+				current.Branch = ref[idx+1:]
+			} else {
+				current.Branch = ref
+			}
+		}
+	}
+	if current.Path != "" {
+		worktrees = append(worktrees, current)
+	}
+
+	if len(worktrees) != 2 {
+		t.Fatalf("expected 2 worktrees, got %d", len(worktrees))
+	}
+	if worktrees[0].Path != "/home/user/my project path" || worktrees[0].Branch != "main" {
+		t.Errorf("worktree[0] mismatch: %+v", worktrees[0])
+	}
+	if worktrees[1].Path != "/home/user/my project path/worktree 2" || worktrees[1].Branch != "space test" {
+		t.Errorf("worktree[1] mismatch: %+v", worktrees[1])
+	}
+}
+
+func TestWindowsCoderSpawnQuoting(t *testing.T) {
+	cases := []struct {
+		command string
+		args    []string
+		want    string
+	}{
+		{
+			command: "pi",
+			args:    []string{"--session", "123"},
+			want:    "& 'pi' '--session' '123'",
+		},
+		{
+			command: "C:\\Users\\John Smith\\.local\\bin\\pi.cmd",
+			args:    []string{"--resume", "abc-123"},
+			want:    "& 'C:\\Users\\John Smith\\.local\\bin\\pi.cmd' '--resume' 'abc-123'",
+		},
+		{
+			command: "C:\\path with spaces\\agy.exe",
+			args:    []string{"--conversation", "id with spaces"},
+			want:    "& 'C:\\path with spaces\\agy.exe' '--conversation' 'id with spaces'",
+		},
+		{
+			command: "C:\\it's a path\\pi",
+			args:    []string{"arg'with'quotes"},
+			want:    "& 'C:\\it''s a path\\pi' 'arg''with''quotes'",
+		},
+	}
+
+	for _, tc := range cases {
+		var parts []string
+		parts = append(parts, fmt.Sprintf("& '%s'", strings.ReplaceAll(tc.command, "'", "''")))
+		for _, a := range tc.args {
+			parts = append(parts, fmt.Sprintf("'%s'", strings.ReplaceAll(a, "'", "''")))
+		}
+		got := strings.Join(parts, " ")
+		if got != tc.want {
+			t.Errorf("quoting mismatch for %s:\n got:  %s\n want: %s", tc.command, got, tc.want)
+		}
 	}
 }
 
