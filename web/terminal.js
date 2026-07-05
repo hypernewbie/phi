@@ -1323,6 +1323,9 @@ export class TabManager {
         clearInterval(tabInfo.spamInterval);
         clearTimeout(tabInfo.stopSpamTimeout);
         
+        tabInfo.isSpammingBottom = isAtBottom;
+        tabInfo.spamScrollY = scrollY;
+        
         tabInfo.spamInterval = setInterval(() => {
             if (isAtBottom) {
                 tabInfo.term.scrollToBottom();
@@ -1335,6 +1338,8 @@ export class TabManager {
             clearInterval(tabInfo.spamInterval);
             tabInfo.spamInterval = null;
             tabInfo.stopSpamTimeout = null;
+            tabInfo.isSpammingBottom = undefined;
+            tabInfo.spamScrollY = undefined;
             if (isAtBottom) {
                 tabInfo.term.scrollToBottom();
             } else if (scrollY !== null) {
@@ -1416,13 +1421,23 @@ export class TabManager {
 
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
-            const isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
-            const scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
+            let isAtBottom;
+            let scrollY;
             
             // If we are resizing continuously, cache these stable coordinates on the tab
             if (this.isResizing) {
+                isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
+                scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
                 activeTab.isAtBottom = isAtBottom;
                 activeTab.lastScrollY = scrollY;
+            } else if (activeTab.spamInterval && activeTab.isSpammingBottom !== undefined) {
+                // If a spam scroll is already trying to force the scroll position, respect its intended target 
+                // instead of capturing a mid-flight coordinate.
+                isAtBottom = activeTab.isSpammingBottom;
+                scrollY = activeTab.spamScrollY;
+            } else {
+                isAtBottom = (buffer.viewportY >= buffer.baseY - 1);
+                scrollY = buffer.viewportY;
             }
 
             activeTab.fitAddon.fit();
