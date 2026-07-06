@@ -29,12 +29,20 @@ type PTYInstance struct {
 	LastOutputAt  time.Time     `json:"-"`
 	Title         string        `json:"title"`
 	Workspace     string        `json:"workspace"`
+	IsBusy        bool          `json:"-"`
+	BusyStartTime time.Time     `json:"-"`
+	NotifiedIdle  bool          `json:"-"`
 }
 
 func (inst *PTYInstance) UpdateActivity() {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	inst.LastOutputAt = time.Now()
+	if !inst.IsBusy {
+		inst.IsBusy = true
+		inst.BusyStartTime = time.Now()
+	}
+	inst.NotifiedIdle = false
 }
 
 type Manager struct {
@@ -274,3 +282,50 @@ func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 		}()
 	})
 }
+
+func (m *Manager) StartIdleWatcher(callback func(paneID, title, coder string)) {
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		notifiableCoders := map[string]bool{
+			"pi":       true,
+			"opencode": true,
+			"claude":   true,
+			"agy":      true,
+		}
+
+		for range ticker.C {
+			m.mu.RLock()
+			instances := make([]*PTYInstance, 0, len(m.instances))
+			for _, inst := range m.instances {
+				instances = append(instances, inst)
+			}
+			m.mu.RUnlock()
+
+			now := time.Now()
+			for _, inst := range instances {
+				inst.mu.Lock()
+				coder := inst.Coder
+				title := inst.Title
+				if !notifiableCoders[coder] {
+					inst.mu.Unlock()
+					continue
+				}
+
+				if inst.IsBusy && now.Sub(inst.LastOutputAt) > 3*time.Second {
+					inst.IsBusy = false
+					duration := now.Sub(inst.BusyStartTime)
+					if duration > 8*time.Second && !inst.NotifiedIdle {
+						inst.NotifiedIdle = true
+						paneID := inst.ID
+						inst.mu.Unlock()
+						callback(paneID, title, coder)
+						continue
+					}
+				}
+				inst.mu.Unlock()
+			}
+		}
+	}()
+}
+
