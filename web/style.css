@@ -4527,6 +4527,84 @@ html, body {
     box-shadow: 0 0 8px var(--accent-glow);
 }
 
+/* Kanban Improvements: Search, Add Task, & Subtle Aesthetics */
+
+.kanban-column {
+    background: rgba(20, 20, 24, 0.4) !important;
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--bg-border);
+}
+
+.kanban-card {
+    transition: all 0.2s ease;
+}
+
+.kanban-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px var(--accent-glow);
+    border-color: var(--accent-soft) !important;
+}
+
+.hidden-by-filter {
+    display: none !important;
+}
+
+.kanban-search-input {
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    color: var(--text-primary);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    width: 160px;
+    transition: all 0.2s ease;
+}
+
+.kanban-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+    width: 220px;
+}
+
+.kanban-add-task-wrapper {
+    margin-top: 8px;
+    padding: 4px 8px;
+}
+
+.kanban-add-task-btn {
+    width: 100%;
+    background: transparent;
+    border: 1px dashed var(--bg-border);
+    color: var(--text-muted);
+    padding: 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.kanban-add-task-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-bright);
+    background: var(--accent-wash);
+}
+
+.kanban-quick-add-input {
+    width: 100%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    outline: none;
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+
 
 
 
