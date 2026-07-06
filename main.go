@@ -58,6 +58,17 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
+	ptyManager.StartIdleWatcher(func(paneID, title, coder string) {
+		cfg, err := loadConfig()
+		if err != nil || !cfg.NtfyEnabled || cfg.NtfyTopic == "" {
+			return
+		}
+		msg := fmt.Sprintf("Session \"%s\" (%s) finished", title, coder)
+		req, _ := http.NewRequest("POST", "https://ntfy.sh/"+cfg.NtfyTopic, strings.NewReader(msg))
+		req.Header.Set("Title", "Phi")
+		req.Header.Set("Tags", "white_check_mark")
+		_, _ = http.DefaultClient.Do(req)
+	})
 	wsHub = ws.NewHub()
 
 	// Embedded web assets (served when running an installed binary from any dir)
@@ -77,6 +88,16 @@ func main() {
 	http.HandleFunc("/api/git/raw-status", handleRawStatus)
 	http.HandleFunc("/api/git/commits", handleGetCommits)
 	http.HandleFunc("/api/config", handleConfig)
+	http.HandleFunc("/api/config/ntfy", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handleGetNtfyConfig(w, r)
+		} else if r.Method == http.MethodPost {
+			handlePostNtfyConfig(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	http.HandleFunc("/api/config/ntfy/test", handleTestNtfy)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)
 	http.HandleFunc("/api/config/export-models", handleConfigExportModels)
