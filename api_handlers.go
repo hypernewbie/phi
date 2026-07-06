@@ -1624,3 +1624,83 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+func handleGetNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if cfg.NtfyTopic == "" {
+		b := make([]byte, 8)
+		_, _ = rand.Read(b)
+		cfg.NtfyTopic = "phi-" + hex.EncodeToString(b)
+		_ = saveConfig(cfg)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ntfy_topic":   cfg.NtfyTopic,
+		"ntfy_enabled": cfg.NtfyEnabled,
+	})
+}
+
+func handlePostNtfyConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		NtfyEnabled bool `json:"ntfy_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	cfg.NtfyEnabled = req.NtfyEnabled
+	if err := saveConfig(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleTestNtfy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := loadConfig()
+	if err != nil || cfg.NtfyTopic == "" {
+		http.Error(w, "Ntfy topic not configured", http.StatusBadRequest)
+		return
+	}
+	msg := "Test notification from Phi ✓"
+	req, err := http.NewRequest("POST", "https://ntfy.sh/"+cfg.NtfyTopic, strings.NewReader(msg))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Title", "Phi")
+	req.Header.Set("Tags", "white_check_mark")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		http.Error(w, fmt.Sprintf("ntfy.sh returned status %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+
