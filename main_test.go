@@ -172,6 +172,59 @@ func TestModelPresets_BackwardCompatibilityAndDefaults(t *testing.T) {
 	}
 }
 
+func TestHandleModelPresets_AddEditAndDelete(t *testing.T) {
+	withTempConfig(t)
+
+	body := strings.NewReader(`{"coder":"pi","model":"model-one"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handleModelPresets(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	body = strings.NewReader(`{"coder":"pi","old_model":"model-one","model":"model-two"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handleModelPresets(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("edit POST status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg := loadConfig()
+	if containsString(cfg.ModelPresets["pi"], "model-one") {
+		t.Error("old model preset still present after edit")
+	}
+	if !containsString(cfg.ModelPresets["pi"], "model-two") {
+		t.Errorf("edited model preset not saved, got %v", cfg.ModelPresets["pi"])
+	}
+
+	body = strings.NewReader(`{"coder":"pi","model":"model-two"}`)
+	req = httptest.NewRequest(http.MethodDelete, "/api/config/models", body)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handleModelPresets(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg = loadConfig()
+	if containsString(cfg.ModelPresets["pi"], "model-two") {
+		t.Error("model preset still present after DELETE")
+	}
+}
+
+func containsString(list []string, target string) bool {
+	for _, item := range list {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 // ─── GET /api/config ─────────────────────────────────────────────────────────
 
 func TestHandleConfig_Fields(t *testing.T) {
@@ -437,6 +490,25 @@ func TestHandleQuickCommands_UpdateExisting(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected exactly 1 entry named 'upd', got %d", count)
 	}
+
+	body := strings.NewReader(`{"old_name":"upd","name":"renamed","command":"renamed command"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/quick-commands", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handleQuickCommands(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename POST status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg = loadConfig()
+	for _, qc := range cfg.QuickCommands {
+		if qc.Name == "upd" {
+			t.Error("old quick command name still present after rename")
+		}
+		if qc.Name == "renamed" && qc.Command != "renamed command" {
+			t.Errorf("renamed quick command has wrong command: %q", qc.Command)
+		}
+	}
 }
 
 func TestHandleTerminalCommands_AddAndDelete(t *testing.T) {
@@ -507,6 +579,25 @@ func TestHandleTerminalCommands_UpdateExisting(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected exactly 1 entry named 'updterm', got %d", count)
+	}
+
+	body := strings.NewReader(`{"old_name":"updterm","name":"renamedterm","command":"renamed terminal command"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/terminal-commands", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handleTerminalCommands(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename POST status: want 200, got %d - %s", w.Code, w.Body.String())
+	}
+
+	cfg = loadConfig()
+	for _, tc := range cfg.TerminalCommands {
+		if tc.Name == "updterm" {
+			t.Error("old terminal command name still present after rename")
+		}
+		if tc.Name == "renamedterm" && tc.Command != "renamed terminal command" {
+			t.Errorf("renamed terminal command has wrong command: %q", tc.Command)
+		}
 	}
 }
 
@@ -1221,16 +1312,104 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 		t.Fatalf("import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
 	}
 
-	// Reload config and assert models + quick commands are restored, but terminal commands are UNCHANGED (still have term-different)
+	// Reload config and assert only models are restored. Commands remain unchanged.
 	loaded := loadConfig()
 	if loaded.ModelPresets["pi"][0] != "original-model" {
 		t.Errorf("model presets not restored, got %+v", loaded.ModelPresets)
 	}
-	if loaded.QuickCommands[0].Name != "test" {
-		t.Errorf("quick commands not restored, got %+v", loaded.QuickCommands)
+	if loaded.QuickCommands[0].Name != "test2" {
+		t.Errorf("quick commands should NOT have been restored/overwritten, got %+v", loaded.QuickCommands)
 	}
 	if loaded.TerminalCommands[0].Name != "term-different" {
 		t.Errorf("terminal commands should NOT have been restored/overwritten, got %+v", loaded.TerminalCommands)
+	}
+}
+
+func TestConfigExportImportCmdsHandlers(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := loadConfig()
+	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"original-model"}}
+	cfg.QuickCommands = []QuickCommand{{Name: "quick", Command: "echo quick"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
+	saveConfig(cfg)
+
+	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-cmds", nil)
+	wExport := httptest.NewRecorder()
+	handleConfigExportCmds(wExport, reqExport)
+	if wExport.Code != http.StatusOK {
+		t.Fatalf("cmd export handler failed, code %d", wExport.Code)
+	}
+
+	var exportRes struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(wExport.Body).Decode(&exportRes); err != nil {
+		t.Fatalf("failed to decode cmd export body: %v", err)
+	}
+	if !strings.HasPrefix(exportRes.Config, "PHICMDS:") {
+		t.Errorf("expected config to start with PHICMDS:, got %q", exportRes.Config)
+	}
+
+	cfg = loadConfig()
+	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"overwritten-model"}}
+	cfg.QuickCommands = []QuickCommand{{Name: "quick2", Command: "echo quick2"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "term2", Command: "sh"}}
+	saveConfig(cfg)
+
+	importReqBody, _ := json.Marshal(map[string]string{"config": exportRes.Config})
+	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(importReqBody)))
+	wImport := httptest.NewRecorder()
+	handleConfigImportCmds(wImport, reqImport)
+	if wImport.Code != http.StatusOK {
+		t.Fatalf("cmd import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
+	}
+
+	loaded := loadConfig()
+	if loaded.ModelPresets["pi"][0] != "overwritten-model" {
+		t.Errorf("model presets should NOT have been restored/overwritten, got %+v", loaded.ModelPresets)
+	}
+	if loaded.QuickCommands[0].Name != "quick" {
+		t.Errorf("quick commands not restored, got %+v", loaded.QuickCommands)
+	}
+	if loaded.TerminalCommands[0].Name != "term" {
+		t.Errorf("terminal commands not restored, got %+v", loaded.TerminalCommands)
+	}
+}
+
+func TestConfigImportCmdsCanClearLists(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := loadConfig()
+	cfg.QuickCommands = []QuickCommand{{Name: "quick", Command: "echo quick"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
+	saveConfig(cfg)
+
+	encoded, err := encodeConfigData("PHICMDS", struct {
+		QuickCommands    []QuickCommand `json:"quick_commands"`
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}{
+		QuickCommands:    []QuickCommand{},
+		TerminalCommands: []QuickCommand{},
+	})
+	if err != nil {
+		t.Fatalf("encode PHICMDS failed: %v", err)
+	}
+
+	importReqBody, _ := json.Marshal(map[string]string{"config": encoded})
+	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(importReqBody)))
+	wImport := httptest.NewRecorder()
+	handleConfigImportCmds(wImport, reqImport)
+	if wImport.Code != http.StatusOK {
+		t.Fatalf("cmd import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
+	}
+
+	loaded := loadConfig()
+	if loaded.QuickCommands == nil || len(loaded.QuickCommands) != 0 {
+		t.Errorf("quick commands should have been cleared, got %+v", loaded.QuickCommands)
+	}
+	if loaded.TerminalCommands == nil || len(loaded.TerminalCommands) != 0 {
+		t.Errorf("terminal commands should have been cleared, got %+v", loaded.TerminalCommands)
 	}
 }
 
@@ -1477,8 +1656,3 @@ func TestKanbanVaultAPI(t *testing.T) {
 		t.Errorf("Expected empty KanbanPasswordEnc after DELETE")
 	}
 }
-
-
-
-
-

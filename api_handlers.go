@@ -13,8 +13,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -22,10 +22,10 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
-	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/diff"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
+	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -546,6 +546,7 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 	}
 	model := strings.TrimSpace(req["model"])
 	coder := strings.TrimSpace(req["coder"])
+	oldModel := strings.TrimSpace(req["old_model"])
 	if model == "" {
 		http.Error(w, "Missing model", http.StatusBadRequest)
 		return
@@ -560,17 +561,26 @@ func handleModelPresets(w http.ResponseWriter, r *http.Request) {
 		if cfg.ModelPresets == nil {
 			cfg.ModelPresets = make(ModelPresetsMap)
 		}
-		found := false
-		for _, m := range cfg.ModelPresets[coder] {
-			if m == model {
-				found = true
-				break
+		if oldModel != "" {
+			for i, m := range cfg.ModelPresets[coder] {
+				if m == oldModel {
+					cfg.ModelPresets[coder][i] = model
+					break
+				}
+			}
+		} else {
+			found := false
+			for _, m := range cfg.ModelPresets[coder] {
+				if m == model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				cfg.ModelPresets[coder] = append(cfg.ModelPresets[coder], model)
 			}
 		}
-		if !found {
-			cfg.ModelPresets[coder] = append(cfg.ModelPresets[coder], model)
-			saveConfig(cfg)
-		}
+		saveConfig(cfg)
 	} else if r.Method == http.MethodDelete {
 		if cfg.ModelPresets != nil {
 			newPresets := []string{}
@@ -613,6 +623,7 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 
 		// Try parsing as a single quick command
 		var singleReq struct {
+			OldName string `json:"old_name"`
 			Name    string `json:"name"`
 			Command string `json:"command"`
 		}
@@ -630,9 +641,13 @@ func handleQuickCommands(w http.ResponseWriter, r *http.Request) {
 		}
 
 		found := false
+		targetName := singleReq.OldName
+		if targetName == "" {
+			targetName = singleReq.Name
+		}
 		for i, qc := range cfg.QuickCommands {
-			if qc.Name == singleReq.Name {
-				cfg.QuickCommands[i].Command = singleReq.Command
+			if qc.Name == targetName {
+				cfg.QuickCommands[i] = QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
 				found = true
 				break
 			}
@@ -691,8 +706,9 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Try parsing as a single quick command
+		// Try parsing as a single terminal command
 		var singleReq struct {
+			OldName string `json:"old_name"`
 			Name    string `json:"name"`
 			Command string `json:"command"`
 		}
@@ -710,9 +726,13 @@ func handleTerminalCommands(w http.ResponseWriter, r *http.Request) {
 		}
 
 		found := false
+		targetName := singleReq.OldName
+		if targetName == "" {
+			targetName = singleReq.Name
+		}
 		for i, tc := range cfg.TerminalCommands {
-			if tc.Name == singleReq.Name {
-				cfg.TerminalCommands[i].Command = singleReq.Command
+			if tc.Name == targetName {
+				cfg.TerminalCommands[i] = QuickCommand{Name: singleReq.Name, Command: singleReq.Command}
 				found = true
 				break
 			}
@@ -1523,11 +1543,9 @@ func handleConfigExportModels(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		ModelPresets  ModelPresetsMap `json:"model_presets"`
-		QuickCommands []QuickCommand  `json:"quick_commands"`
+		ModelPresets ModelPresetsMap `json:"model_presets"`
 	}{
-		ModelPresets:  cfg.ModelPresets,
-		QuickCommands: cfg.QuickCommands,
+		ModelPresets: cfg.ModelPresets,
 	}
 
 	formatted, err := encodeConfigData("PHIMODELS", exportData)
@@ -1563,8 +1581,7 @@ func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var importedData struct {
-		ModelPresets  ModelPresetsMap `json:"model_presets"`
-		QuickCommands []QuickCommand  `json:"quick_commands"`
+		ModelPresets ModelPresetsMap `json:"model_presets"`
 	}
 
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
@@ -1576,8 +1593,74 @@ func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 	if importedData.ModelPresets != nil {
 		cfg.ModelPresets = importedData.ModelPresets
 	}
-	if len(importedData.QuickCommands) > 0 {
+
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleConfigExportCmds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := loadConfig()
+	exportData := struct {
+		QuickCommands    []QuickCommand `json:"quick_commands"`
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}{
+		QuickCommands:    cfg.QuickCommands,
+		TerminalCommands: cfg.TerminalCommands,
+	}
+
+	formatted, err := encodeConfigData("PHICMDS", exportData)
+	if err != nil {
+		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"config": formatted,
+	})
+}
+
+func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonData, err := decodeConfigData(req.Config, "PHICMDS")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var importedData struct {
+		QuickCommands    []QuickCommand `json:"quick_commands"`
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}
+
+	if err := json.Unmarshal(jsonData, &importedData); err != nil {
+		http.Error(w, "Failed to parse configuration JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	if importedData.QuickCommands != nil {
 		cfg.QuickCommands = importedData.QuickCommands
+	}
+	if importedData.TerminalCommands != nil {
+		cfg.TerminalCommands = importedData.TerminalCommands
 	}
 
 	saveConfig(cfg)
@@ -1941,6 +2024,3 @@ func handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
-
-
-

@@ -1067,6 +1067,16 @@ class App {
             await this.sessionsManager.loadConfig();
         });
     }
+
+    async exportCmdsConfig(btnElement) {
+        await this._doExportConfig('/api/config/export-cmds', btnElement);
+    }
+
+    async importCmdsConfig(btnElement) {
+        await this._doImportConfig('/api/config/import-cmds', btnElement, "PHICMDS", async () => {
+            await this.sessionsManager.loadConfig();
+        });
+    }
 }
 
 // Start Application on DOM Load
