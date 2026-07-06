@@ -795,6 +795,132 @@ class App {
         return dismiss;
     }
 
+    openConfigEditor({ title, subtitle = '', fields = [], submitLabel = 'Save' }) {
+        return new Promise((resolve) => {
+            const existing = document.querySelector('.config-editor-overlay');
+            if (existing) existing.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay config-editor-overlay hidden';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal-content config-editor-modal';
+
+            const header = document.createElement('div');
+            header.className = 'modal-header config-editor-header';
+
+            const headerText = document.createElement('div');
+            const titleEl = document.createElement('h3');
+            titleEl.textContent = title;
+            headerText.appendChild(titleEl);
+            if (subtitle) {
+                const subtitleEl = document.createElement('p');
+                subtitleEl.className = 'config-editor-subtitle';
+                subtitleEl.textContent = subtitle;
+                headerText.appendChild(subtitleEl);
+            }
+
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'modal-close-btn';
+            closeBtn.type = 'button';
+            closeBtn.textContent = 'x';
+            closeBtn.title = 'Close';
+
+            header.appendChild(headerText);
+            header.appendChild(closeBtn);
+
+            const body = document.createElement('form');
+            body.className = 'modal-body config-editor-body';
+
+            const inputs = new Map();
+            fields.forEach((field) => {
+                const row = document.createElement('label');
+                row.className = 'config-editor-field';
+                row.htmlFor = `config-editor-${field.id}`;
+
+                const label = document.createElement('span');
+                label.textContent = field.label;
+                row.appendChild(label);
+
+                const input = field.multiline ? document.createElement('textarea') : document.createElement('input');
+                input.id = `config-editor-${field.id}`;
+                input.name = field.id;
+                input.value = field.value || '';
+                input.placeholder = field.placeholder || '';
+                input.required = field.required !== false;
+                if (!field.multiline) input.type = field.type || 'text';
+                if (field.monospace !== false) input.classList.add('config-editor-mono');
+                row.appendChild(input);
+
+                inputs.set(field.id, input);
+                body.appendChild(row);
+            });
+
+            const footer = document.createElement('div');
+            footer.className = 'modal-footer config-editor-footer';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'btn btn-primary';
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = 'Cancel';
+
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'btn btn-accent';
+            saveBtn.type = 'submit';
+            saveBtn.textContent = submitLabel;
+
+            footer.appendChild(cancelBtn);
+            footer.appendChild(saveBtn);
+
+            modal.appendChild(header);
+            modal.appendChild(body);
+            modal.appendChild(footer);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let settled = false;
+            const cleanup = (value) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', onKeydown);
+                overlay.classList.add('hidden');
+                overlay.remove();
+                resolve(value);
+            };
+
+            const onKeydown = (e) => {
+                if (e.key === 'Escape') cleanup(null);
+            };
+
+            closeBtn.addEventListener('click', () => cleanup(null));
+            cancelBtn.addEventListener('click', () => cleanup(null));
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) cleanup(null);
+            });
+            body.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const values = {};
+                for (const [id, input] of inputs.entries()) {
+                    const value = input.value.trim();
+                    if (input.required && !value) {
+                        input.focus();
+                        return;
+                    }
+                    values[id] = value;
+                }
+                cleanup(values);
+            });
+            document.addEventListener('keydown', onKeydown);
+
+            requestAnimationFrame(() => {
+                overlay.classList.remove('hidden');
+                const firstInput = body.querySelector('input, textarea');
+                firstInput?.focus({ preventScroll: true });
+                firstInput?.select?.();
+            });
+        });
+    }
+
     async syncRemoteClipboard() {
         const btn = document.getElementById('header-clipboard-btn');
         try {

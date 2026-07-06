@@ -272,17 +272,17 @@ export class DiffController {
         const copyAllBtn = document.createElement('button');
         copyAllBtn.innerHTML = `
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            Copy All
+            <span>Copy Config</span>
         `;
-        copyAllBtn.addEventListener('click', () => this.copyAllCommands());
+        copyAllBtn.addEventListener('click', () => this.copyAllCommands(copyAllBtn));
         toolbar.appendChild(copyAllBtn);
 
         const pasteListBtn = document.createElement('button');
         pasteListBtn.innerHTML = `
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-            Paste Config
+            <span>Paste Config</span>
         `;
-        pasteListBtn.addEventListener('click', () => this.pasteCommands());
+        pasteListBtn.addEventListener('click', () => this.pasteCommands(pasteListBtn));
         toolbar.appendChild(pasteListBtn);
 
         cmdEl.appendChild(toolbar);
@@ -363,9 +363,7 @@ export class DiffController {
                 const copySingleBtn = document.createElement('button');
                 copySingleBtn.className = 'cmd-action-btn';
                 copySingleBtn.title = 'Copy single JSON';
-                copySingleBtn.innerHTML = `
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                `;
+                copySingleBtn.textContent = 'copy';
                 copySingleBtn.addEventListener('click', () => this.copySingleCommand(cmd));
                 actions.appendChild(copySingleBtn);
 
@@ -373,9 +371,7 @@ export class DiffController {
                 const editBtn = document.createElement('button');
                 editBtn.className = 'cmd-action-btn';
                 editBtn.title = 'Edit';
-                editBtn.innerHTML = `
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polygon points="16 3 21 8 8 21 3 21 3 16 16 3"></polygon></svg>
-                `;
+                editBtn.textContent = 'edit';
                 editBtn.addEventListener('click', () => this.editCommand(cmd));
                 actions.appendChild(editBtn);
 
@@ -383,9 +379,7 @@ export class DiffController {
                 const delBtn = document.createElement('button');
                 delBtn.className = 'cmd-action-btn del';
                 delBtn.title = 'Delete';
-                delBtn.innerHTML = `
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                `;
+                delBtn.textContent = 'del';
                 delBtn.addEventListener('click', () => this.deleteCommand(cmd));
                 actions.appendChild(delBtn);
 
@@ -398,55 +392,60 @@ export class DiffController {
     }
 
     async addCommand() {
-        const name = prompt("Command label (e.g. tests):");
-        if (!name || !name.trim()) return;
-        const command = prompt(`Command to send for "${name.trim()}" (e.g. npm test):`);
-        if (!command || !command.trim()) return;
+        const values = await this.app.openConfigEditor({
+            title: 'Add Terminal Command',
+            subtitle: 'Terminal commands run from the cmd panel. Use {} as a placeholder for selected input text.',
+            fields: [
+                { id: 'name', label: 'Label', placeholder: 'tests', monospace: false },
+                { id: 'command', label: 'Command', placeholder: 'npm test', multiline: true }
+            ],
+            submitLabel: 'Add Command'
+        });
+        if (!values) return;
 
         try {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name.trim(), command: command.trim() })
+                body: JSON.stringify({ name: values.name, command: values.command })
             });
             if (!res.ok) throw new Error(await res.text() || "Failed to add command");
             
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
+            this.app.showToast(`Added terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
         } catch (e) {
             console.error("Add command failed:", e);
-            alert("Add command failed: " + e.message);
+            this.app.showToast(e.message, { type: 'error', title: 'Commands' });
         }
     }
 
     async editCommand(cmd) {
-        const name = prompt(`Edit label for "${cmd.name}":`, cmd.name);
-        if (!name || !name.trim()) return;
-        const command = prompt(`Edit command for "${name.trim()}":`, cmd.command);
-        if (!command || !command.trim()) return;
+        const values = await this.app.openConfigEditor({
+            title: 'Edit Terminal Command',
+            subtitle: 'Rename the action or change the command sent to the shell.',
+            fields: [
+                { id: 'name', label: 'Label', value: cmd.name, monospace: false },
+                { id: 'command', label: 'Command', value: cmd.command, multiline: true }
+            ],
+            submitLabel: 'Save Command'
+        });
+        if (!values || (values.name === cmd.name && values.command === cmd.command)) return;
 
         try {
-            if (name.trim() !== cmd.name) {
-                const delRes = await fetch('/api/config/terminal-commands', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: cmd.name })
-                });
-                if (!delRes.ok) throw new Error("Failed to clear old command");
-            }
-
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name.trim(), command: command.trim() })
+                body: JSON.stringify({ old_name: cmd.name, name: values.name, command: values.command })
             });
             if (!res.ok) throw new Error(await res.text() || "Failed to save command");
 
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
+            this.app.showToast(`Updated terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
         } catch (e) {
             console.error("Edit command failed:", e);
-            alert("Edit command failed: " + e.message);
+            this.app.showToast(e.message, { type: 'error', title: 'Commands' });
         }
     }
 
@@ -469,10 +468,8 @@ export class DiffController {
         }
     }
 
-    copyAllCommands() {
-        const terminalCmds = this.app.terminalCommands || [];
-        const jsonStr = JSON.stringify(terminalCmds, null, 2);
-        this.app.tabManager.copyTextRobustly(jsonStr);
+    copyAllCommands(btnElement) {
+        this.app.exportCmdsConfig(btnElement);
     }
 
     copySingleCommand(cmd) {
@@ -568,58 +565,9 @@ export class DiffController {
         }
     }
 
-    async pasteCommands() {
-        let text = "";
-        if (navigator.clipboard && navigator.clipboard.readText) {
-            try {
-                text = await navigator.clipboard.readText();
-            } catch (e) {
-                console.warn("[cmd] Browser blocked clipboard read, falling back to prompt", e);
-                text = prompt("Paste your commands JSON string here:");
-            }
-        } else {
-            text = prompt("Paste your commands JSON string here:");
-        }
-
-        if (!text || !text.trim()) return;
-
-        try {
-            const data = JSON.parse(text.trim());
-            
-            if (Array.isArray(data)) {
-                const confirmOverwite = confirm(`Do you want to overwrite all your terminal commands with these ${data.length} commands?`);
-                if (!confirmOverwite) return;
-                
-                const res = await fetch('/api/config/terminal-commands', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                if (!res.ok) {
-                    throw new Error(await res.text() || "Failed to overwrite terminal commands");
-                }
-                this.app.showToast("Successfully imported all commands", { type: 'success', title: 'Import' });
-            } else if (data && typeof data === 'object' && data.name && data.command) {
-                const res = await fetch('/api/config/terminal-commands', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                if (!res.ok) {
-                    throw new Error(await res.text() || "Failed to import command");
-                }
-                this.app.showToast(`Imported command "${data.name}"`, { type: 'success', title: 'Import' });
-            } else {
-                throw new Error("Invalid format. Expected JSON array or object with 'name' and 'command'.");
-            }
-
-            await this.app.sessionsManager.loadConfig();
-            this.renderCmdPanel();
-
-        } catch (e) {
-            console.error("Paste failed:", e);
-            alert("Paste failed: " + e.message);
-        }
+    async pasteCommands(btnElement) {
+        await this.app.importCmdsConfig(btnElement);
+        setTimeout(() => this.renderCmdPanel(), 1600);
     }
 
     async refreshDiff(skipLoadCommits = false) {
