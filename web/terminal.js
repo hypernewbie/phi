@@ -105,7 +105,10 @@ export class TabManager {
             const res = await fetch('/api/terminals');
             if (!res.ok) throw new Error("Failed to load server terminal list");
             const instances = await res.json();
-            if (!instances || !instances.length) return;
+            if (!instances || !instances.length) {
+                this.showEmptyState();
+                return;
+            }
 
             const savedActive = localStorage.getItem('phi_active_pane') || '';
             for (const t of instances) {
@@ -498,9 +501,8 @@ export class TabManager {
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
         
-        // Clean up the initial loader placeholder if it exists on first tab creation
-        const loader = this.terminalsWrapper.querySelector('#initial-loader');
-        if (loader) loader.remove();
+        // Hide empty state landing page on tab creation
+        this.hideEmptyState();
         
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
@@ -1030,8 +1032,21 @@ export class TabManager {
                 this.activePaneId = null;
                 this.inputBarContainer.classList.add('hidden');
                 this.presetsContainer.classList.add('hidden');
+                this.showEmptyState();
             }
+        } else if (this.tabs.size === 0) {
+            this.showEmptyState();
         }
+    }
+
+    showEmptyState() {
+        const el = document.getElementById('empty-state');
+        if (el) el.classList.remove('hidden');
+    }
+
+    hideEmptyState() {
+        const el = document.getElementById('empty-state');
+        if (el) el.classList.add('hidden');
     }
     
     sendStagedInput() {

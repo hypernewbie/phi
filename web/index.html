@@ -231,9 +231,22 @@
                 <!-- ACTIVE TERMINAL CONTAINER -->
                 <div class="terminal-content">
                     <div id="terminals-wrapper" class="terminals-wrapper">
-                        <div class="initial-loader" id="initial-loader">
-                            <div class="spinner-ring"></div>
-                            <div class="loader-text">Loading Phi Session...</div>
+                        <div id="empty-state" class="empty-state hidden">
+                            <div class="empty-state-content">
+                                <div class="empty-logo">Φ</div>
+                                <h2 class="empty-title">Phi</h2>
+                                <p class="empty-subtitle">Terminal Multiplexer for AI Coding Agents</p>
+                                <div class="empty-quick-launch">
+                                    <button class="empty-launch-btn" data-coder="opencode">OpenCode</button>
+                                    <button class="empty-launch-btn" data-coder="claude">Claude</button>
+                                    <button class="empty-launch-btn" data-coder="pi">Pi</button>
+                                    <button class="empty-launch-btn" data-coder="agy">Agy</button>
+                                    <button class="empty-launch-btn" data-coder="bash">Shell</button>
+                                </div>
+                                <div class="empty-meta">
+                                    <span>Workspace: <strong id="empty-workspace-path">...</strong></span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     

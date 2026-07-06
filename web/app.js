@@ -237,6 +237,15 @@ class App {
             });
         }
 
+        document.querySelectorAll('#empty-state .empty-launch-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const coder = btn.dataset.coder;
+                if (coder) {
+                    this.sessionsManager.spawnNewSession(coder);
+                }
+            });
+        });
+
         const ntfyBtn = document.getElementById('header-ntfy-btn');
         const ntfyModal = document.getElementById('ntfy-modal');
         const ntfyClose = document.getElementById('ntfy-modal-close');
