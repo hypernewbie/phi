@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -1629,16 +1630,12 @@ func handleGetNtfyConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg, err := loadConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	cfg := loadConfig()
 	if cfg.NtfyTopic == "" {
 		b := make([]byte, 8)
 		_, _ = rand.Read(b)
 		cfg.NtfyTopic = "phi-" + hex.EncodeToString(b)
-		_ = saveConfig(cfg)
+		saveConfig(cfg)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1659,16 +1656,9 @@ func handlePostNtfyConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg, err := loadConfig()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	cfg := loadConfig()
 	cfg.NtfyEnabled = req.NtfyEnabled
-	if err := saveConfig(cfg); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -1677,8 +1667,8 @@ func handleTestNtfy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	cfg, err := loadConfig()
-	if err != nil || cfg.NtfyTopic == "" {
+	cfg := loadConfig()
+	if cfg.NtfyTopic == "" {
 		http.Error(w, "Ntfy topic not configured", http.StatusBadRequest)
 		return
 	}
@@ -1706,11 +1696,7 @@ func handleTestNtfy(w http.ResponseWriter, r *http.Request) {
 func handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg, err := loadConfig()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		cfg := loadConfig()
 		pw, err := DecryptVault(cfg.KanbanPasswordEnc)
 		if err != nil {
 			http.Error(w, "Failed to decrypt password: "+err.Error(), http.StatusInternalServerError)
@@ -1732,29 +1718,15 @@ func handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		cfg, err := loadConfig()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		cfg := loadConfig()
 		cfg.KanbanPasswordEnc = enc
-		if err := saveConfig(cfg); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		saveConfig(cfg)
 		w.WriteHeader(http.StatusOK)
 
 	case http.MethodDelete:
-		cfg, err := loadConfig()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		cfg := loadConfig()
 		cfg.KanbanPasswordEnc = ""
-		if err := saveConfig(cfg); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		saveConfig(cfg)
 		w.WriteHeader(http.StatusOK)
 
 	default:
