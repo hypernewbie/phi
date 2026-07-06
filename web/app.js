@@ -660,6 +660,8 @@ class App {
         document.documentElement.style.setProperty('--accent-dim', theme.accentDim);
         document.documentElement.style.setProperty('--accent-bright', theme.accentBright);
         
+        localStorage.setItem('phi_theme_color', colorKey);
+
         if (this.tabManager) {
             this.tabManager.applyThemeToAllActiveTerminals(theme.accent);
         }

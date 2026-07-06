@@ -556,14 +556,22 @@ export class TabManager {
                 foreground: '#e4e3e9',
                 cursor: document.documentElement.style.getPropertyValue('--accent') || '#7c6af7',
                 cursorAccent: '#08080a',
-                black: '#08080a',
+                black: '#18181b',
                 red: '#ef4444',
-                green: '#38bdf8',
-                yellow: '#fbbf24',
+                green: '#22c55e',
+                yellow: '#eab308',
                 blue: '#3b82f6',
-                magenta: '#7c6af7',
+                magenta: '#a855f7',
                 cyan: '#06b6d4',
-                white: '#e4e3e9'
+                white: '#fafafa',
+                brightBlack: '#71717a',
+                brightRed: '#f87171',
+                brightGreen: '#4ade80',
+                brightYellow: '#facc15',
+                brightBlue: '#60a5fa',
+                brightMagenta: '#c084fc',
+                brightCyan: '#22d3ee',
+                brightWhite: '#ffffff'
             }
         });
         
