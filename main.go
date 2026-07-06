@@ -67,6 +67,7 @@ func main() {
 		msg := fmt.Sprintf("Session \"%s\" (%s) finished", title, coder)
 		req, _ := http.NewRequest("POST", "https://ntfy.sh/"+cfg.NtfyTopic, strings.NewReader(msg))
 		req.Header.Set("Title", "Phi")
+		req.Header.Set("Priority", "high")
 		req.Header.Set("Tags", "white_check_mark")
 		_, _ = http.DefaultClient.Do(req)
 	})
