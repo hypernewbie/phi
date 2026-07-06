@@ -30,6 +30,11 @@ export class MarkdownManager {
         this.modal.addEventListener('click', (e) => {
             if (e.target === this.modal) this.closeModal();
         });
+        const helpBtn = document.getElementById('phi-help-btn');
+        if (helpBtn) {
+            helpBtn.addEventListener('click', () => this.openHelpModal());
+        }
+
         if (this.modalCopyBtn) {
             this.modalCopyBtn.addEventListener('click', () => {
                 if (this.currentRawContent) {
@@ -210,6 +215,36 @@ export class MarkdownManager {
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
+    }
+
+    openRawMarkdown(title, rawMarkdown) {
+        this.modalTitle.innerText = title;
+        this.currentRawContent = rawMarkdown;
+        const html = window.marked ? window.marked.parse(rawMarkdown) : `<pre>${this._escape(rawMarkdown)}</pre>`;
+        this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
+        if (window.hljs) {
+            this.modalBody.querySelectorAll('pre code').forEach(el => {
+                window.hljs.highlightElement(el);
+            });
+        }
+        this.modal.classList.remove('hidden');
+    }
+
+    async openHelpModal() {
+        this.modalTitle.innerText = 'Phi Documentation';
+        this.modalBody.innerHTML = '<div class="md-rendering">Loading help...</div>';
+        this.currentRawContent = '';
+        this.modal.classList.remove('hidden');
+
+        try {
+            const res = await fetch('help.md', { cache: 'no-store' });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to load help.md');
+            const raw = await res.text();
+            this.openRawMarkdown('Phi Documentation', raw);
+        } catch (e) {
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${e.message}</div>`;
+            this.app.showToast(`Failed to open help: ${e.message}`, { type: 'error', title: 'Help' });
+        }
     }
 
     async _promptAddDir() {
