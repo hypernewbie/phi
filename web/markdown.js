@@ -12,6 +12,8 @@ export class MarkdownManager {
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
+        this.lastRefreshCwd = null;
+        this.refreshRequestId = 0;
 
         this._configureMarked();
         this._setupEventListeners();
@@ -59,15 +61,24 @@ export class MarkdownManager {
         });
     }
 
-    async refreshFiles() {
-        this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
+    async refreshFiles(options = {}) {
         const cwd = this.app.sessionsManager.activeCWD || '';
+        const force = options.force !== false;
+        if (!force && this.lastRefreshCwd === cwd) {
+            return;
+        }
+
+        this.lastRefreshCwd = cwd;
+        const requestId = ++this.refreshRequestId;
+        this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
         try {
             const res = await fetch(`/api/markdown/files?cwd=${encodeURIComponent(cwd)}`);
             if (!res.ok) throw new Error(await res.text());
             const files = await res.json();
+            if (requestId !== this.refreshRequestId) return;
             this._renderFileList(files);
         } catch (e) {
+            if (requestId !== this.refreshRequestId) return;
             this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${e.message}</div>`;
         }
     }
