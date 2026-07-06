@@ -283,7 +283,16 @@ func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 	})
 }
 
-func (m *Manager) StartIdleWatcher(callback func(paneID, title, coder string)) {
+type IdleNotification struct {
+	PaneID    string
+	Title     string
+	Coder     string
+	Workspace string
+	Cwd       string
+	Duration  time.Duration
+}
+
+func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -307,6 +316,8 @@ func (m *Manager) StartIdleWatcher(callback func(paneID, title, coder string)) {
 				inst.mu.Lock()
 				coder := inst.Coder
 				title := inst.Title
+				workspace := inst.Workspace
+				cwd := inst.Cwd
 				if !notifiableCoders[coder] {
 					inst.mu.Unlock()
 					continue
@@ -319,7 +330,14 @@ func (m *Manager) StartIdleWatcher(callback func(paneID, title, coder string)) {
 						inst.NotifiedIdle = true
 						paneID := inst.ID
 						inst.mu.Unlock()
-						callback(paneID, title, coder)
+						callback(IdleNotification{
+							PaneID:    paneID,
+							Title:     title,
+							Coder:     coder,
+							Workspace: workspace,
+							Cwd:       cwd,
+							Duration:  duration,
+						})
 						continue
 					}
 				}

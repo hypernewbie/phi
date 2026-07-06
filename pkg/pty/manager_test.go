@@ -354,8 +354,8 @@ func TestStartIdleWatcher(t *testing.T) {
 	manager.mu.Unlock()
 
 	called := make(chan bool, 1)
-	manager.StartIdleWatcher(func(paneID, title, coder string) {
-		if paneID == "test-idle-id" && title == "Test Pi Session" && coder == "pi" {
+	manager.StartIdleWatcher(func(info IdleNotification) {
+		if info.PaneID == "test-idle-id" && info.Title == "Test Pi Session" && info.Coder == "pi" {
 			called <- true
 		}
 	})
@@ -390,8 +390,8 @@ func TestStartIdleWatcher(t *testing.T) {
 	manager.mu.Unlock()
 
 	bashCalled := false
-	manager.StartIdleWatcher(func(paneID, title, coder string) {
-		if paneID == "test-bash-id" {
+	manager.StartIdleWatcher(func(info IdleNotification) {
+		if info.PaneID == "test-bash-id" {
 			bashCalled = true
 		}
 	})
