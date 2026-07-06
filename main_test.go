@@ -1393,6 +1393,40 @@ func TestWebhookAPI(t *testing.T) {
 	}
 }
 
+func TestSimplepushAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmpDir)
+	defer os.Setenv("USERPROFILE", origHome)
+
+	// GET Simplepush config
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/simplepush", nil)
+	wGet := httptest.NewRecorder()
+	handleGetSimplepushConfig(wGet, reqGet)
+
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("handleGetSimplepushConfig failed: %d", wGet.Code)
+	}
+
+	// POST Simplepush config
+	postBody, _ := json.Marshal(map[string]interface{}{
+		"simplepush_key":     "ABC123",
+		"simplepush_enabled": true,
+	})
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/simplepush", bytes.NewReader(postBody))
+	wPost := httptest.NewRecorder()
+	handlePostSimplepushConfig(wPost, reqPost)
+
+	if wPost.Code != http.StatusOK {
+		t.Fatalf("handlePostSimplepushConfig failed: %d", wPost.Code)
+	}
+
+	cfg := loadConfig()
+	if !cfg.SimplepushEnabled || cfg.SimplepushKey != "ABC123" {
+		t.Errorf("Config mismatch after Simplepush POST: %+v", cfg)
+	}
+}
+
 func TestKanbanVaultAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("USERPROFILE")

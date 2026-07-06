@@ -386,23 +386,36 @@
                 <button id="pushover-modal-close" class="md-modal-close">×</button>
             </div>
             <div class="md-modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
-                <!-- SECTION 1: CUSTOM WEBHOOK / BARK -->
+                <!-- SECTION 1: SIMPLEPUSH (RECOMMENDED ZERO-SIGNUP) -->
                 <div style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-elevated); padding: 14px; border-radius: 6px; border: 1px solid var(--bg-border);">
                     <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <span style="font-weight: 600; font-size: 13px;">Custom Webhook / Bark URL</span>
+                        <span style="font-weight: 600; font-size: 13px;">Simplepush (Recommended)</span>
+                        <input type="checkbox" id="simplepush-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
+                    </div>
+                    <input type="text" id="simplepush-key-input" placeholder="Enter 6-letter Key (from Simplepush app)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
+                    <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+                        <strong>0-Signup Push:</strong> Install <strong>Simplepush</strong> on iOS, grab your 6-character key on startup, & paste it here.
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                        <button id="simplepush-save-btn" class="btn btn-primary" style="font-size: 11px; padding: 4px 10px;">Save Simplepush</button>
+                        <button id="simplepush-test-btn" class="btn btn-accent" style="font-size: 11px; padding: 4px 10px;">Test Simplepush 🚀</button>
+                    </div>
+                </div>
+
+                <!-- SECTION 2: CUSTOM WEBHOOK -->
+                <div style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-elevated); padding: 14px; border-radius: 6px; border: 1px solid var(--bg-border);">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-weight: 600; font-size: 13px;">Custom Webhook URL</span>
                         <input type="checkbox" id="webhook-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
                     </div>
-                    <input type="text" id="webhook-url-input" placeholder="e.g. https://api.day.app/YOUR_KEY/ (Bark iOS, Gotify, etc.)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
-                    <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-                        <strong>0-Signup iOS Push:</strong> Download <strong>Bark</strong> on iOS, copy your URL from the app & paste it above!
-                    </div>
+                    <input type="text" id="webhook-url-input" placeholder="e.g. https://your-server.com/api/notify (POST JSON)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
                     <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
                         <button id="webhook-save-btn" class="btn btn-primary" style="font-size: 11px; padding: 4px 10px;">Save Webhook</button>
                         <button id="webhook-test-btn" class="btn btn-accent" style="font-size: 11px; padding: 4px 10px;">Test Webhook 🚀</button>
                     </div>
                 </div>
 
-                <!-- SECTION 2: PUSHOVER -->
+                <!-- SECTION 3: PUSHOVER -->
                 <div style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-elevated); padding: 14px; border-radius: 6px; border: 1px solid var(--bg-border);">
                     <div style="display: flex; align-items: center; justify-content: space-between;">
                         <span style="font-weight: 600; font-size: 13px;">Pushover API</span>
