@@ -247,72 +247,78 @@ class App {
         });
 
         const ntfyBtn = document.getElementById('header-ntfy-btn');
-        const ntfyModal = document.getElementById('ntfy-modal');
-        const ntfyClose = document.getElementById('ntfy-modal-close');
-        const ntfyToggle = document.getElementById('ntfy-enabled-toggle');
-        const ntfyTopicInput = document.getElementById('ntfy-topic-input');
-        const ntfyCopyBtn = document.getElementById('ntfy-copy-topic-btn');
-        const ntfyTestBtn = document.getElementById('ntfy-test-btn');
+        const pushoverModal = document.getElementById('pushover-modal');
+        const pushoverClose = document.getElementById('pushover-modal-close');
+        const pushoverToggle = document.getElementById('pushover-enabled-toggle');
+        const pushoverUserKeyInput = document.getElementById('pushover-user-key-input');
+        const pushoverAppTokenInput = document.getElementById('pushover-app-token-input');
+        const pushoverSaveBtn = document.getElementById('pushover-save-btn');
+        const pushoverTestBtn = document.getElementById('pushover-test-btn');
 
-        if (ntfyBtn && ntfyModal) {
+        if (ntfyBtn && pushoverModal) {
             ntfyBtn.addEventListener('click', async () => {
                 try {
-                    const res = await fetch('/api/config/ntfy');
+                    const res = await fetch('/api/config/pushover');
                     if (res.ok) {
                         const data = await res.json();
-                        if (ntfyTopicInput) ntfyTopicInput.value = data.ntfy_topic || '';
-                        if (ntfyToggle) ntfyToggle.checked = !!data.ntfy_enabled;
+                        if (pushoverUserKeyInput) pushoverUserKeyInput.value = data.pushover_user_key || '';
+                        if (pushoverAppTokenInput) pushoverAppTokenInput.value = data.pushover_app_token || '';
+                        if (pushoverToggle) pushoverToggle.checked = !!data.pushover_enabled;
                     }
                 } catch (e) {
-                    console.error("Failed to fetch ntfy config:", e);
+                    console.error("Failed to fetch pushover config:", e);
                 }
-                ntfyModal.classList.remove('hidden');
+                pushoverModal.classList.remove('hidden');
             });
 
-            ntfyClose?.addEventListener('click', () => {
-                ntfyModal.classList.add('hidden');
+            pushoverClose?.addEventListener('click', () => {
+                pushoverModal.classList.add('hidden');
             });
 
-            ntfyToggle?.addEventListener('change', async () => {
+            const savePushoverConfig = async () => {
                 try {
-                    await fetch('/api/config/ntfy', {
+                    await fetch('/api/config/pushover', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ntfy_enabled: ntfyToggle.checked })
+                        body: JSON.stringify({
+                            pushover_user_key: pushoverUserKeyInput?.value.trim() || '',
+                            pushover_app_token: pushoverAppTokenInput?.value.trim() || '',
+                            pushover_enabled: !!pushoverToggle?.checked
+                        })
                     });
                 } catch (e) {
-                    console.error("Failed to save ntfy toggle:", e);
+                    console.error("Failed to save pushover config:", e);
                 }
+            };
+
+            pushoverToggle?.addEventListener('change', savePushoverConfig);
+            pushoverSaveBtn?.addEventListener('click', async () => {
+                await savePushoverConfig();
+                const origText = pushoverSaveBtn.textContent;
+                pushoverSaveBtn.textContent = 'Saved ✓';
+                setTimeout(() => { pushoverSaveBtn.textContent = origText; }, 1500);
             });
 
-            ntfyCopyBtn?.addEventListener('click', () => {
-                if (ntfyTopicInput?.value) {
-                    navigator.clipboard.writeText(ntfyTopicInput.value);
-                    const origText = ntfyCopyBtn.textContent;
-                    ntfyCopyBtn.textContent = 'Copied!';
-                    setTimeout(() => { ntfyCopyBtn.textContent = origText; }, 1500);
-                }
-            });
-
-            ntfyTestBtn?.addEventListener('click', async () => {
-                const origText = ntfyTestBtn.textContent;
-                ntfyTestBtn.disabled = true;
-                ntfyTestBtn.textContent = 'Sending...';
+            pushoverTestBtn?.addEventListener('click', async () => {
+                await savePushoverConfig();
+                const origText = pushoverTestBtn.textContent;
+                pushoverTestBtn.disabled = true;
+                pushoverTestBtn.textContent = 'Sending...';
                 try {
-                    const res = await fetch('/api/config/ntfy/test', { method: 'POST' });
+                    const res = await fetch('/api/config/pushover/test', { method: 'POST' });
                     if (!res.ok) {
                         const err = await res.text();
                         alert(`Test notification failed: ${err}`);
                     } else {
-                        ntfyTestBtn.textContent = 'Sent ✓';
-                        setTimeout(() => { ntfyTestBtn.textContent = origText; ntfyTestBtn.disabled = false; }, 2000);
+                        pushoverTestBtn.textContent = 'Sent ✓';
+                        setTimeout(() => { pushoverTestBtn.textContent = origText; pushoverTestBtn.disabled = false; }, 2000);
                         return;
                     }
                 } catch (e) {
                     alert(`Test notification error: ${e.message}`);
                 }
-                ntfyTestBtn.textContent = origText;
-                ntfyTestBtn.disabled = false;
+                pushoverTestBtn.textContent = origText;
+                pushoverTestBtn.disabled = false;
             });
         }
 

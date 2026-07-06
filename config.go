@@ -48,8 +48,9 @@ type Config struct {
 	// Backwards compatible: missing in old config files means false.
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
 
-	NtfyTopic         string `json:"ntfy_topic"`
-	NtfyEnabled       bool   `json:"ntfy_enabled"`
+	PushoverUserKey   string `json:"pushover_user_key"`
+	PushoverAppToken  string `json:"pushover_app_token"`
+	PushoverEnabled   bool   `json:"pushover_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
 }
 

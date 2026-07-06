@@ -102,7 +102,7 @@
                     <span>Get Clipboard</span>
                 </button>
 
-                <button id="header-ntfy-btn" class="header-btn" title="Push Notifications (ntfy.sh)">
+                <button id="header-ntfy-btn" class="header-btn" title="Push Notifications (Pushover)">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                         <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
@@ -378,30 +378,32 @@
         </div>
     </div>
 
-    <!-- Ntfy Notifications Modal -->
-    <div id="ntfy-modal" class="md-modal-overlay hidden">
+    <!-- Pushover Notifications Modal -->
+    <div id="pushover-modal" class="md-modal-overlay hidden">
         <div class="md-modal-content" style="max-width: 440px;">
             <div class="md-modal-header">
-                <span class="md-modal-title">🔔 Mobile Push Notifications</span>
-                <button id="ntfy-modal-close" class="md-modal-close">×</button>
+                <span class="md-modal-title">🔔 Pushover Notifications</span>
+                <button id="pushover-modal-close" class="md-modal-close">×</button>
             </div>
-            <div class="md-modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+            <div class="md-modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; background: var(--bg-elevated); padding: 12px; border-radius: 6px; border: 1px solid var(--bg-border);">
-                    <label for="ntfy-enabled-toggle" style="font-weight: 500; cursor: pointer;">Enable Push Notifications</label>
-                    <input type="checkbox" id="ntfy-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
+                    <label for="pushover-enabled-toggle" style="font-weight: 500; cursor: pointer;">Enable Push Notifications</label>
+                    <input type="checkbox" id="pushover-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 12px; color: var(--text-muted);">ntfy.sh Topic Slug</label>
-                    <div style="display: flex; gap: 8px;">
-                        <input type="text" id="ntfy-topic-input" readonly style="flex: 1; background: var(--bg-elevated); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
-                        <button id="ntfy-copy-topic-btn" class="btn btn-accent" style="padding: 6px 12px; font-size: 12px;">Copy</button>
-                    </div>
+                    <label for="pushover-user-key-input" style="font-size: 12px; color: var(--text-muted);">Pushover User Key</label>
+                    <input type="text" id="pushover-user-key-input" placeholder="e.g. u1234567890abcdef..." style="background: var(--bg-elevated); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="pushover-app-token-input" style="font-size: 12px; color: var(--text-muted);">Application API Token</label>
+                    <input type="text" id="pushover-app-token-input" placeholder="e.g. az1234567890abcdef..." style="background: var(--bg-elevated); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
                 </div>
                 <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; background: var(--bg-base); padding: 10px; border-radius: 6px; border: 1px solid var(--bg-border);">
-                    Install the <strong>ntfy</strong> app on iOS/Android, then subscribe to the topic above to get phone pings when long-running sessions complete.
+                    Pushover sends instant, 100% reliable iOS APNs alerts. Find your keys at <strong>pushover.net</strong>.
                 </div>
-                <div style="display: flex; justify-content: flex-end;">
-                    <button id="ntfy-test-btn" class="btn btn-accent" style="font-size: 12px;">Send Test Ping 🚀</button>
+                <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                    <button id="pushover-save-btn" class="btn btn-primary" style="font-size: 12px;">Save Keys</button>
+                    <button id="pushover-test-btn" class="btn btn-accent" style="font-size: 12px;">Send Test Ping 🚀</button>
                 </div>
             </div>
         </div>
