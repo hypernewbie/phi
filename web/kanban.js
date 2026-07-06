@@ -35,32 +35,88 @@ export class KanbanManager {
         container.className = 'term-container kanban-panel';
         
         const token = sessionStorage.getItem('vikunja_token');
-        if (!token) {
-            this.renderLoginForm(container);
-            // Check if saved password exists in vault
-            try {
-                const res = await fetch('/api/config/kanban-vault');
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.password) {
-                        const pwInput = container.querySelector('#kanban-password-input');
-                        const chkInput = container.querySelector('#kanban-remember-input');
-                        if (pwInput) pwInput.value = data.password;
-                        if (chkInput) chkInput.checked = true;
-                        // Auto-trigger login if URL and Username are also saved
-                        const urlVal = localStorage.getItem('vikunja_url');
-                        const userVal = localStorage.getItem('vikunja_username');
-                        if (urlVal && userVal) {
-                            container.querySelector('#kanban-login-btn')?.click();
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to check kanban vault:", e);
-            }
-        } else {
+        if (token) {
             await this.loadAndRenderBoard(container);
+            return;
         }
+
+        this.renderLoading(container, 'Checking saved Kanban credentials...');
+
+        const savedPw = await this.getSavedVaultPassword();
+
+        const urlVal = (localStorage.getItem('vikunja_url') || 'http://charon:3456').replace(/\/$/, '');
+        const userVal = localStorage.getItem('vikunja_username');
+        let autologinError = null;
+
+        if (savedPw && userVal && urlVal) {
+            this.renderLoading(container, 'Logging in to Vikunja...');
+            try {
+                const loginToken = await this.attemptLogin(urlVal, userVal, savedPw);
+                sessionStorage.setItem('vikunja_token', loginToken);
+                await this.loadAndRenderBoard(container);
+                return;
+            } catch (err) {
+                console.error("Headless autologin failed:", err);
+                autologinError = err;
+            }
+        }
+
+        // If no saved credentials or autologin failed, render login form prefilled
+        this.renderLoginForm(container);
+        if (savedPw) {
+            const pwInput = container.querySelector('#kanban-password-input');
+            const chkInput = container.querySelector('#kanban-remember-input');
+            if (pwInput) pwInput.value = savedPw;
+            if (chkInput) chkInput.checked = true;
+        }
+        if (autologinError) {
+            const errorEl = container.querySelector('#kanban-login-error');
+            if (errorEl) {
+                errorEl.textContent = `Saved login failed: ${autologinError.message}`;
+                errorEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    renderLoading(container, message) {
+        container.innerHTML = `
+            <div class="kanban-loading-wrapper">
+                <div class="spinner-ring"></div>
+                <div class="loader-text">${message}</div>
+            </div>
+        `;
+    }
+
+    async getSavedVaultPassword() {
+        try {
+            const res = await fetch('/api/config/kanban-vault');
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data.password || null;
+        } catch (e) {
+            console.error("Failed to check kanban vault:", e);
+            return null;
+        }
+    }
+
+    async attemptLogin(url, username, password) {
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1/login')}`;
+        const res = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || `Login failed with status ${res.status}`);
+        }
+
+        const data = await res.json();
+        if (!data.token) {
+            throw new Error('No token returned from server');
+        }
+        return data.token;
     }
 
     renderLoginForm(container) {
@@ -113,24 +169,8 @@ export class KanbanManager {
             errorEl.classList.add('hidden');
             
             try {
-                const proxyUrl = `/api/proxy?url=${encodeURIComponent(urlInput + '/api/v1/login')}`;
-                const res = await fetch(proxyUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: usernameInput, password: passwordInput })
-                });
-                
-                if (!res.ok) {
-                    const errText = await res.text();
-                    throw new Error(errText || `Login failed with status ${res.status}`);
-                }
-                
-                const data = await res.json();
-                if (!data.token) {
-                    throw new Error('No token returned from server');
-                }
-                
-                sessionStorage.setItem('vikunja_token', data.token);
+                const token = await this.attemptLogin(urlInput, usernameInput, passwordInput);
+                sessionStorage.setItem('vikunja_token', token);
                 localStorage.setItem('vikunja_url', urlInput);
                 localStorage.setItem('vikunja_username', usernameInput);
                 
