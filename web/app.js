@@ -237,6 +237,76 @@ class App {
             });
         }
 
+        const ntfyBtn = document.getElementById('header-ntfy-btn');
+        const ntfyModal = document.getElementById('ntfy-modal');
+        const ntfyClose = document.getElementById('ntfy-modal-close');
+        const ntfyToggle = document.getElementById('ntfy-enabled-toggle');
+        const ntfyTopicInput = document.getElementById('ntfy-topic-input');
+        const ntfyCopyBtn = document.getElementById('ntfy-copy-topic-btn');
+        const ntfyTestBtn = document.getElementById('ntfy-test-btn');
+
+        if (ntfyBtn && ntfyModal) {
+            ntfyBtn.addEventListener('click', async () => {
+                try {
+                    const res = await fetch('/api/config/ntfy');
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (ntfyTopicInput) ntfyTopicInput.value = data.ntfy_topic || '';
+                        if (ntfyToggle) ntfyToggle.checked = !!data.ntfy_enabled;
+                    }
+                } catch (e) {
+                    console.error("Failed to fetch ntfy config:", e);
+                }
+                ntfyModal.classList.remove('hidden');
+            });
+
+            ntfyClose?.addEventListener('click', () => {
+                ntfyModal.classList.add('hidden');
+            });
+
+            ntfyToggle?.addEventListener('change', async () => {
+                try {
+                    await fetch('/api/config/ntfy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ntfy_enabled: ntfyToggle.checked })
+                    });
+                } catch (e) {
+                    console.error("Failed to save ntfy toggle:", e);
+                }
+            });
+
+            ntfyCopyBtn?.addEventListener('click', () => {
+                if (ntfyTopicInput?.value) {
+                    navigator.clipboard.writeText(ntfyTopicInput.value);
+                    const origText = ntfyCopyBtn.textContent;
+                    ntfyCopyBtn.textContent = 'Copied!';
+                    setTimeout(() => { ntfyCopyBtn.textContent = origText; }, 1500);
+                }
+            });
+
+            ntfyTestBtn?.addEventListener('click', async () => {
+                const origText = ntfyTestBtn.textContent;
+                ntfyTestBtn.disabled = true;
+                ntfyTestBtn.textContent = 'Sending...';
+                try {
+                    const res = await fetch('/api/config/ntfy/test', { method: 'POST' });
+                    if (!res.ok) {
+                        const err = await res.text();
+                        alert(`Test notification failed: ${err}`);
+                    } else {
+                        ntfyTestBtn.textContent = 'Sent ✓';
+                        setTimeout(() => { ntfyTestBtn.textContent = origText; ntfyTestBtn.disabled = false; }, 2000);
+                        return;
+                    }
+                } catch (e) {
+                    alert(`Test notification error: ${e.message}`);
+                }
+                ntfyTestBtn.textContent = origText;
+                ntfyTestBtn.disabled = false;
+            });
+        }
+
         // 9. Setup Mobile Visual Viewport & Keyboard Resizer
         // ==========================================
         // ARCHITECTURAL WARNING TO FUTURE ENGINEERS & LLMs:
