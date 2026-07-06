@@ -1797,7 +1797,28 @@ func handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func sendSimplepushNotification(key, title, message string) error {
+func themeEmoji(color string) string {
+	switch strings.ToLower(color) {
+	case "blue":
+		return "🔵"
+	case "green":
+		return "🟢"
+	case "orange":
+		return "🟠"
+	case "pink", "magenta":
+		return "🌸"
+	case "cyan":
+		return "💎"
+	case "red":
+		return "🔴"
+	case "yellow":
+		return "🟡"
+	default:
+		return "🟣"
+	}
+}
+
+func sendSimplepushNotification(key, title, message, event string) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return fmt.Errorf("Simplepush Key is empty")
@@ -1806,6 +1827,9 @@ func sendSimplepushNotification(key, title, message string) error {
 	formData.Set("key", key)
 	formData.Set("title", title)
 	formData.Set("msg", message)
+	if event != "" {
+		formData.Set("event", event)
+	}
 
 	resp, err := http.PostForm("https://api.simplepush.io/send", formData)
 	if err != nil {
@@ -1862,7 +1886,14 @@ func handleTestSimplepush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Simplepush Key is required", http.StatusBadRequest)
 		return
 	}
-	err := sendSimplepushNotification(cfg.SimplepushKey, "Phi", "Test notification from Phi 🚀")
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "localhost"
+	}
+	emoji := themeEmoji(cfg.ThemeColor)
+	title := fmt.Sprintf("[phi] Test Alert @ %s %s", host, emoji)
+	msg := fmt.Sprintf("🚀 Test notification from Phi!\n🎨 Active Theme: %s %s\n💻 Host: %s", cfg.ThemeColor, emoji, host)
+	err := sendSimplepushNotification(cfg.SimplepushKey, title, msg, "phi_test")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/system"
@@ -58,17 +60,37 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
-	ptyManager.StartIdleWatcher(func(paneID, title, coder string) {
+	ptyManager.StartIdleWatcher(func(info pty.IdleNotification) {
 		cfg := loadConfig()
-		msg := fmt.Sprintf("Session \"%s\" (%s) finished", title, coder)
+		host, _ := os.Hostname()
+		if host == "" {
+			host = "localhost"
+		}
+
+		projName := filepath.Base(info.Workspace)
+		if projName == "." || projName == "" || projName == "/" || projName == "\\" {
+			if info.Cwd != "" {
+				projName = filepath.Base(info.Cwd)
+			} else {
+				projName = "phi"
+			}
+		}
+
+		colorEmoji := themeEmoji(cfg.ThemeColor)
+		durationStr := info.Duration.Truncate(time.Second).String()
+
+		notifTitle := fmt.Sprintf("[%s] %s @ %s %s", info.Coder, projName, host, colorEmoji)
+		notifMsg := fmt.Sprintf("⚡ Task Finished (took %s)\n🤖 Session: %s\n📁 Project: %s\n💻 Host: %s",
+			durationStr, info.Title, projName, host)
+
 		if cfg.PushoverEnabled && cfg.PushoverUserKey != "" && cfg.PushoverAppToken != "" {
-			_ = sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, "Phi", msg)
+			_ = sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, notifTitle, notifMsg)
 		}
 		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
-			_ = sendWebhookNotification(cfg.WebhookURL, "Phi", msg)
+			_ = sendWebhookNotification(cfg.WebhookURL, notifTitle, notifMsg)
 		}
 		if cfg.SimplepushEnabled && cfg.SimplepushKey != "" {
-			_ = sendSimplepushNotification(cfg.SimplepushKey, "Phi", msg)
+			_ = sendSimplepushNotification(cfg.SimplepushKey, notifTitle, notifMsg, "phi_idle")
 		}
 	})
 	wsHub = ws.NewHub()
