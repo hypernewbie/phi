@@ -51,6 +51,8 @@ type Config struct {
 	PushoverUserKey   string `json:"pushover_user_key"`
 	PushoverAppToken  string `json:"pushover_app_token"`
 	PushoverEnabled   bool   `json:"pushover_enabled"`
+	WebhookURL        string `json:"webhook_url"`
+	WebhookEnabled    bool   `json:"webhook_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
 }
 
