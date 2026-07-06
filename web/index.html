@@ -378,32 +378,42 @@
         </div>
     </div>
 
-    <!-- Pushover Notifications Modal -->
+    <!-- Push Notifications Modal -->
     <div id="pushover-modal" class="md-modal-overlay hidden">
-        <div class="md-modal-content" style="max-width: 440px;">
+        <div class="md-modal-content" style="max-width: 480px;">
             <div class="md-modal-header">
-                <span class="md-modal-title">🔔 Pushover Notifications</span>
+                <span class="md-modal-title">🔔 Push Notifications</span>
                 <button id="pushover-modal-close" class="md-modal-close">×</button>
             </div>
             <div class="md-modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--bg-elevated); padding: 12px; border-radius: 6px; border: 1px solid var(--bg-border);">
-                    <label for="pushover-enabled-toggle" style="font-weight: 500; cursor: pointer;">Enable Push Notifications</label>
-                    <input type="checkbox" id="pushover-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
+                <!-- SECTION 1: CUSTOM WEBHOOK / BARK -->
+                <div style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-elevated); padding: 14px; border-radius: 6px; border: 1px solid var(--bg-border);">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-weight: 600; font-size: 13px;">Custom Webhook / Bark URL</span>
+                        <input type="checkbox" id="webhook-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
+                    </div>
+                    <input type="text" id="webhook-url-input" placeholder="e.g. https://api.day.app/YOUR_KEY/ (Bark iOS, Gotify, etc.)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
+                    <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+                        <strong>0-Signup iOS Push:</strong> Download <strong>Bark</strong> on iOS, copy your URL from the app & paste it above!
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                        <button id="webhook-save-btn" class="btn btn-primary" style="font-size: 11px; padding: 4px 10px;">Save Webhook</button>
+                        <button id="webhook-test-btn" class="btn btn-accent" style="font-size: 11px; padding: 4px 10px;">Test Webhook 🚀</button>
+                    </div>
                 </div>
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label for="pushover-user-key-input" style="font-size: 12px; color: var(--text-muted);">Pushover User Key</label>
-                    <input type="text" id="pushover-user-key-input" placeholder="e.g. u1234567890abcdef..." style="background: var(--bg-elevated); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label for="pushover-app-token-input" style="font-size: 12px; color: var(--text-muted);">Application API Token</label>
-                    <input type="text" id="pushover-app-token-input" placeholder="e.g. az1234567890abcdef..." style="background: var(--bg-elevated); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
-                </div>
-                <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; background: var(--bg-base); padding: 10px; border-radius: 6px; border: 1px solid var(--bg-border);">
-                    Pushover sends instant, 100% reliable iOS APNs alerts. Find your keys at <strong>pushover.net</strong>.
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px;">
-                    <button id="pushover-save-btn" class="btn btn-primary" style="font-size: 12px;">Save Keys</button>
-                    <button id="pushover-test-btn" class="btn btn-accent" style="font-size: 12px;">Send Test Ping 🚀</button>
+
+                <!-- SECTION 2: PUSHOVER -->
+                <div style="display: flex; flex-direction: column; gap: 10px; background: var(--bg-elevated); padding: 14px; border-radius: 6px; border: 1px solid var(--bg-border);">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-weight: 600; font-size: 13px;">Pushover API</span>
+                        <input type="checkbox" id="pushover-enabled-toggle" style="width: 18px; height: 18px; cursor: pointer;">
+                    </div>
+                    <input type="text" id="pushover-user-key-input" placeholder="User Key (from pushover.net)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
+                    <input type="text" id="pushover-app-token-input" placeholder="App Token (from pushover.net)" style="background: var(--bg-base); border: 1px solid var(--bg-border); color: var(--text-primary); padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px;">
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                        <button id="pushover-save-btn" class="btn btn-primary" style="font-size: 11px; padding: 4px 10px;">Save Pushover</button>
+                        <button id="pushover-test-btn" class="btn btn-accent" style="font-size: 11px; padding: 4px 10px;">Test Pushover 🚀</button>
+                    </div>
                 </div>
             </div>
         </div>

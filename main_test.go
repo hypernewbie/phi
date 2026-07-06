@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1355,6 +1356,40 @@ func TestPushoverAPI(t *testing.T) {
 	cfg := loadConfig()
 	if !cfg.PushoverEnabled || cfg.PushoverUserKey != "test_user_key" || cfg.PushoverAppToken != "test_app_token" {
 		t.Errorf("Config mismatch after Pushover POST: %+v", cfg)
+	}
+}
+
+func TestWebhookAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmpDir)
+	defer os.Setenv("USERPROFILE", origHome)
+
+	// GET Webhook config
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/webhook", nil)
+	wGet := httptest.NewRecorder()
+	handleGetWebhookConfig(wGet, reqGet)
+
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("handleGetWebhookConfig failed: %d", wGet.Code)
+	}
+
+	// POST Webhook config
+	postBody, _ := json.Marshal(map[string]interface{}{
+		"webhook_url":     "https://api.day.app/test_key/",
+		"webhook_enabled": true,
+	})
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/webhook", bytes.NewReader(postBody))
+	wPost := httptest.NewRecorder()
+	handlePostWebhookConfig(wPost, reqPost)
+
+	if wPost.Code != http.StatusOK {
+		t.Fatalf("handlePostWebhookConfig failed: %d", wPost.Code)
+	}
+
+	cfg := loadConfig()
+	if !cfg.WebhookEnabled || cfg.WebhookURL != "https://api.day.app/test_key/" {
+		t.Errorf("Config mismatch after Webhook POST: %+v", cfg)
 	}
 }
 
