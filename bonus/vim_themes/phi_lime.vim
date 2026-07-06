@@ -16,11 +16,11 @@ hi LineNr           guifg=#78768a
 hi CursorLineNr     guifg=#a3e635 gui=bold
 hi StatusLine       guifg=#e4e3e9  guibg=#1f1f26  gui=none
 hi StatusLineNC     guifg=#78768a  guibg=#0d0d10  gui=none
-hi VertSplit        guifg=#1f1f26  guibg=#14141a  gui=none
-hi WinSeparator     guifg=#1f1f26  guibg=#14141a  gui=none
+hi VertSplit        guifg=#1f1f26  guibg=#14141a gui=none
+hi WinSeparator     guifg=#1f1f26  guibg=#14141a gui=none
 hi Visual                        guibg=#1f1f26
-hi Search           guifg=#14141a  guibg=#a3e635
-hi IncSearch        guifg=#14141a  guibg=#84cc16
+hi Search           guifg=#14141a guibg=#a3e635
+hi IncSearch        guifg=#14141a guibg=#84cc16
 hi Pmenu            guifg=#e4e3e9  guibg=#0d0d10
 hi PmenuSel         guifg=#a3e635 guibg=#1f1f26  gui=bold
 hi PmenuSbar                     guibg=#141418
@@ -68,7 +68,7 @@ hi SpecialComment   guifg=#78768a
 hi Underlined       guifg=#84cc16    gui=underline
 hi Ignore           guifg=#78768a
 hi Error            guifg=#e4e3e9  guibg=#b06060
-hi Todo             guifg=#14141a  guibg=#9e8040  gui=bold
+hi Todo             guifg=#14141a guibg=#9e8040  gui=bold
 
 " Diff Highlighting
 hi DiffAdd          guifg=#34d399 guibg=#0a1f14
