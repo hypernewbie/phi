@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/system"
@@ -59,8 +60,8 @@ func main() {
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
 	ptyManager.StartIdleWatcher(func(paneID, title, coder string) {
-		cfg, err := loadConfig()
-		if err != nil || !cfg.NtfyEnabled || cfg.NtfyTopic == "" {
+		cfg := loadConfig()
+		if !cfg.NtfyEnabled || cfg.NtfyTopic == "" {
 			return
 		}
 		msg := fmt.Sprintf("Session \"%s\" (%s) finished", title, coder)
