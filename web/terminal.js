@@ -784,6 +784,7 @@ export class TabManager {
             directMode: false, // Hybrid focus model by default
             isDead: false,
             isAtBottom: true,
+            isBtop: title === 'btop',
             pinned: !!pinned,
             marked: !!marked,
             lastOutputAt: undefined,
