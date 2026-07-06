@@ -1679,6 +1679,7 @@ func handleTestNtfy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Title", "Phi")
+	req.Header.Set("Priority", "high")
 	req.Header.Set("Tags", "white_check_mark")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
