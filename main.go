@@ -27,8 +27,6 @@ var (
 	webRoot    fs.FS
 )
 
-
-
 func main() {
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
@@ -147,6 +145,8 @@ func main() {
 	http.HandleFunc("/api/config/import", handleConfigImport)
 	http.HandleFunc("/api/config/export-models", handleConfigExportModels)
 	http.HandleFunc("/api/config/import-models", handleConfigImportModels)
+	http.HandleFunc("/api/config/export-cmds", handleConfigExportCmds)
+	http.HandleFunc("/api/config/import-cmds", handleConfigImportCmds)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", handleModelPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
@@ -175,4 +175,3 @@ func main() {
 	log.Printf("[main] Server running on http://%s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
-
