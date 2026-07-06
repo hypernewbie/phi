@@ -161,6 +161,8 @@ export class SessionsManager {
         const finalWidth = Math.max(minW, Math.min(maxW, calculatedWidth));
         this.workspaceSelect.style.width = `${finalWidth}px`;
         this.workspaceSelect.title = this.activeWorkspace || this.workspaceSelect.value || '';
+        const emptyWs = document.getElementById('empty-workspace-path');
+        if (emptyWs) emptyWs.textContent = this.activeWorkspace || this.workspaceSelect.value || 'Default';
     }
 
     async loadConfig() {
