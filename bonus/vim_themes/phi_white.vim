@@ -20,31 +20,31 @@ hi VertSplit        guifg=#1f1f26  guibg=#14141a gui=none
 hi WinSeparator     guifg=#1f1f26  guibg=#14141a gui=none
 hi Visual                        guibg=#1f1f26
 hi Search           guifg=#14141a guibg=#ffffff
-hi IncSearch        guifg=#14141a guibg=#f8fafc
+hi IncSearch        guifg=#14141a guibg=#ffffff
 hi Pmenu            guifg=#e4e3e9  guibg=#0d0d10
 hi PmenuSel         guifg=#ffffff guibg=#1f1f26  gui=bold
 hi PmenuSbar                     guibg=#141418
 hi PmenuThumb                    guibg=#78768a
 hi MatchParen       guifg=#ffffff guibg=#1f1f26  gui=bold
-hi Directory        guifg=#f8fafc
+hi Directory        guifg=#ffffff
 
 " Syntax Highlighting
 hi Comment          guifg=#505060 gui=italic
 hi Constant         guifg=#ffffff
-hi String           guifg=#cbd5e1
-hi Character        guifg=#cbd5e1
+hi String           guifg=#e2e8f0
+hi Character        guifg=#e2e8f0
 hi Number           guifg=#ffffff
 hi Boolean          guifg=#ffffff
 hi Float            guifg=#ffffff
 
 hi Identifier       guifg=#e4e3e9
-hi Function         guifg=#f8fafc
+hi Function         guifg=#ffffff
 
 hi Statement        guifg=#ffffff gui=bold
 hi Conditional      guifg=#ffffff gui=bold
 hi Repeat           guifg=#ffffff gui=bold
 hi Label            guifg=#ffffff
-hi Operator         guifg=#f8fafc
+hi Operator         guifg=#ffffff
 hi Keyword          guifg=#ffffff gui=bold
 hi Exception        guifg=#b06060
 
@@ -60,12 +60,12 @@ hi Structure        guifg=#94a3b8
 hi Typedef          guifg=#94a3b8
 
 hi Special          guifg=#ffffff
-hi SpecialChar      guifg=#cbd5e1
-hi Tag              guifg=#f8fafc
+hi SpecialChar      guifg=#e2e8f0
+hi Tag              guifg=#ffffff
 hi Delimiter        guifg=#909098
 hi SpecialComment   guifg=#78768a
 
-hi Underlined       guifg=#f8fafc    gui=underline
+hi Underlined       guifg=#ffffff    gui=underline
 hi Ignore           guifg=#78768a
 hi Error            guifg=#e4e3e9  guibg=#b06060
 hi Todo             guifg=#14141a guibg=#9e8040  gui=bold

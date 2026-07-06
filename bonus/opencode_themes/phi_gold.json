@@ -1,10 +1,10 @@
 {
   "$schema": "https://opencode.ai/theme.json",
   "defs": {
-    "p": "#eab308",
-    "pBrt": "#fef08a",
-    "pDim": "#a16207",
-    "pPale": "#fef9c3",
+    "p": "#d4af37",
+    "pBrt": "#f3e5ab",
+    "pDim": "#997a15",
+    "pPale": "#fbf5df",
     "bg0": "#08080a",
     "bg1": "#0d0d10",
     "bg2": "#141418",
