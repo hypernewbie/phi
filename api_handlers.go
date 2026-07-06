@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -1692,6 +1693,103 @@ func handleTestPushover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, "Phi", "Test notification from Phi 🚀")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func sendWebhookNotification(webhookURL, title, message string) error {
+	webhookURL = strings.TrimSpace(webhookURL)
+	if webhookURL == "" {
+		return fmt.Errorf("Webhook URL is empty")
+	}
+
+	// Support Bark iOS push (e.g. https://api.day.app/YOUR_KEY/)
+	if strings.Contains(webhookURL, "api.day.app") {
+		barkURL := strings.TrimRight(webhookURL, "/") + "/" + url.PathEscape(title) + "/" + url.PathEscape(message)
+		resp, err := http.Get(barkURL)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			b, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("Bark returned status %d: %s", resp.StatusCode, string(b))
+		}
+		return nil
+	}
+
+	// Generic POST JSON webhook
+	payload := map[string]string{
+		"title":   title,
+		"message": message,
+		"text":    message,
+		"content": message,
+	}
+	b, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Webhook returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func handleGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := loadConfig()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"webhook_url":     cfg.WebhookURL,
+		"webhook_enabled": cfg.WebhookEnabled,
+	})
+}
+
+func handlePostWebhookConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		WebhookURL     string `json:"webhook_url"`
+		WebhookEnabled bool   `json:"webhook_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg := loadConfig()
+	cfg.WebhookURL = req.WebhookURL
+	cfg.WebhookEnabled = req.WebhookEnabled
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleTestWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := loadConfig()
+	if cfg.WebhookURL == "" {
+		http.Error(w, "Webhook URL is required", http.StatusBadRequest)
+		return
+	}
+	err := sendWebhookNotification(cfg.WebhookURL, "Phi", "Test notification from Phi 🚀")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

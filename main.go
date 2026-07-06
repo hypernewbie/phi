@@ -60,11 +60,13 @@ func main() {
 	ptyManager = pty.NewManager()
 	ptyManager.StartIdleWatcher(func(paneID, title, coder string) {
 		cfg := loadConfig()
-		if !cfg.PushoverEnabled || cfg.PushoverUserKey == "" || cfg.PushoverAppToken == "" {
-			return
-		}
 		msg := fmt.Sprintf("Session \"%s\" (%s) finished", title, coder)
-		_ = sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, "Phi", msg)
+		if cfg.PushoverEnabled && cfg.PushoverUserKey != "" && cfg.PushoverAppToken != "" {
+			_ = sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, "Phi", msg)
+		}
+		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
+			_ = sendWebhookNotification(cfg.WebhookURL, "Phi", msg)
+		}
 	})
 	wsHub = ws.NewHub()
 
@@ -95,6 +97,16 @@ func main() {
 		}
 	})
 	http.HandleFunc("/api/config/pushover/test", handleTestPushover)
+	http.HandleFunc("/api/config/webhook", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handleGetWebhookConfig(w, r)
+		} else if r.Method == http.MethodPost {
+			handlePostWebhookConfig(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	http.HandleFunc("/api/config/webhook/test", handleTestWebhook)
 	http.HandleFunc("/api/config/kanban-vault", handleKanbanVault)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)

@@ -255,18 +255,31 @@ class App {
         const pushoverSaveBtn = document.getElementById('pushover-save-btn');
         const pushoverTestBtn = document.getElementById('pushover-test-btn');
 
+        const webhookToggle = document.getElementById('webhook-enabled-toggle');
+        const webhookUrlInput = document.getElementById('webhook-url-input');
+        const webhookSaveBtn = document.getElementById('webhook-save-btn');
+        const webhookTestBtn = document.getElementById('webhook-test-btn');
+
         if (ntfyBtn && pushoverModal) {
             ntfyBtn.addEventListener('click', async () => {
                 try {
-                    const res = await fetch('/api/config/pushover');
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (pushoverUserKeyInput) pushoverUserKeyInput.value = data.pushover_user_key || '';
-                        if (pushoverAppTokenInput) pushoverAppTokenInput.value = data.pushover_app_token || '';
-                        if (pushoverToggle) pushoverToggle.checked = !!data.pushover_enabled;
+                    const [resP, resW] = await Promise.all([
+                        fetch('/api/config/pushover'),
+                        fetch('/api/config/webhook')
+                    ]);
+                    if (resP.ok) {
+                        const dataP = await resP.json();
+                        if (pushoverUserKeyInput) pushoverUserKeyInput.value = dataP.pushover_user_key || '';
+                        if (pushoverAppTokenInput) pushoverAppTokenInput.value = dataP.pushover_app_token || '';
+                        if (pushoverToggle) pushoverToggle.checked = !!dataP.pushover_enabled;
+                    }
+                    if (resW.ok) {
+                        const dataW = await resW.json();
+                        if (webhookUrlInput) webhookUrlInput.value = dataW.webhook_url || '';
+                        if (webhookToggle) webhookToggle.checked = !!dataW.webhook_enabled;
                     }
                 } catch (e) {
-                    console.error("Failed to fetch pushover config:", e);
+                    console.error("Failed to fetch notification config:", e);
                 }
                 pushoverModal.classList.remove('hidden');
             });
@@ -291,12 +304,35 @@ class App {
                 }
             };
 
+            const saveWebhookConfig = async () => {
+                try {
+                    await fetch('/api/config/webhook', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            webhook_url: webhookUrlInput?.value.trim() || '',
+                            webhook_enabled: !!webhookToggle?.checked
+                        })
+                    });
+                } catch (e) {
+                    console.error("Failed to save webhook config:", e);
+                }
+            };
+
             pushoverToggle?.addEventListener('change', savePushoverConfig);
             pushoverSaveBtn?.addEventListener('click', async () => {
                 await savePushoverConfig();
                 const origText = pushoverSaveBtn.textContent;
                 pushoverSaveBtn.textContent = 'Saved ✓';
                 setTimeout(() => { pushoverSaveBtn.textContent = origText; }, 1500);
+            });
+
+            webhookToggle?.addEventListener('change', saveWebhookConfig);
+            webhookSaveBtn?.addEventListener('click', async () => {
+                await saveWebhookConfig();
+                const origText = webhookSaveBtn.textContent;
+                webhookSaveBtn.textContent = 'Saved ✓';
+                setTimeout(() => { webhookSaveBtn.textContent = origText; }, 1500);
             });
 
             pushoverTestBtn?.addEventListener('click', async () => {
@@ -319,6 +355,28 @@ class App {
                 }
                 pushoverTestBtn.textContent = origText;
                 pushoverTestBtn.disabled = false;
+            });
+
+            webhookTestBtn?.addEventListener('click', async () => {
+                await saveWebhookConfig();
+                const origText = webhookTestBtn.textContent;
+                webhookTestBtn.disabled = true;
+                webhookTestBtn.textContent = 'Sending...';
+                try {
+                    const res = await fetch('/api/config/webhook/test', { method: 'POST' });
+                    if (!res.ok) {
+                        const err = await res.text();
+                        alert(`Test webhook failed: ${err}`);
+                    } else {
+                        webhookTestBtn.textContent = 'Sent ✓';
+                        setTimeout(() => { webhookTestBtn.textContent = origText; webhookTestBtn.disabled = false; }, 2000);
+                        return;
+                    }
+                } catch (e) {
+                    alert(`Test webhook error: ${e.message}`);
+                }
+                webhookTestBtn.textContent = origText;
+                webhookTestBtn.disabled = false;
             });
         }
 
