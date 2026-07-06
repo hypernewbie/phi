@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"os/exec"
@@ -1625,70 +1625,75 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func handleGetNtfyConfig(w http.ResponseWriter, r *http.Request) {
+func sendPushoverNotification(userKey, appToken, title, message string) error {
+	formData := url.Values{}
+	formData.Set("user", userKey)
+	formData.Set("token", appToken)
+	formData.Set("title", title)
+	formData.Set("message", message)
+	formData.Set("priority", "1")
+
+	resp, err := http.PostForm("https://api.pushover.net/1/messages.json", formData)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("pushover status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func handleGetPushoverConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	cfg := loadConfig()
-	if cfg.NtfyTopic == "" {
-		b := make([]byte, 8)
-		_, _ = rand.Read(b)
-		cfg.NtfyTopic = "phi-" + hex.EncodeToString(b)
-		saveConfig(cfg)
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ntfy_topic":   cfg.NtfyTopic,
-		"ntfy_enabled": cfg.NtfyEnabled,
+		"pushover_user_key":  cfg.PushoverUserKey,
+		"pushover_app_token": cfg.PushoverAppToken,
+		"pushover_enabled":   cfg.PushoverEnabled,
 	})
 }
 
-func handlePostNtfyConfig(w http.ResponseWriter, r *http.Request) {
+func handlePostPushoverConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		NtfyEnabled bool `json:"ntfy_enabled"`
+		PushoverUserKey  string `json:"pushover_user_key"`
+		PushoverAppToken string `json:"pushover_app_token"`
+		PushoverEnabled  bool   `json:"pushover_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	cfg := loadConfig()
-	cfg.NtfyEnabled = req.NtfyEnabled
+	cfg.PushoverUserKey = req.PushoverUserKey
+	cfg.PushoverAppToken = req.PushoverAppToken
+	cfg.PushoverEnabled = req.PushoverEnabled
 	saveConfig(cfg)
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleTestNtfy(w http.ResponseWriter, r *http.Request) {
+func handleTestPushover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	cfg := loadConfig()
-	if cfg.NtfyTopic == "" {
-		http.Error(w, "Ntfy topic not configured", http.StatusBadRequest)
+	if cfg.PushoverUserKey == "" || cfg.PushoverAppToken == "" {
+		http.Error(w, "Pushover User Key and App Token are required", http.StatusBadRequest)
 		return
 	}
-	msg := "Test notification from Phi ✓"
-	req, err := http.NewRequest("POST", "https://ntfy.sh/"+cfg.NtfyTopic, strings.NewReader(msg))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Title", "Phi")
-	req.Header.Set("Priority", "high")
-	req.Header.Set("Tags", "white_check_mark")
-	resp, err := http.DefaultClient.Do(req)
+	err := sendPushoverNotification(cfg.PushoverUserKey, cfg.PushoverAppToken, "Phi", "Test notification from Phi 🚀")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		http.Error(w, fmt.Sprintf("ntfy.sh returned status %d", resp.StatusCode), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

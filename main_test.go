@@ -1323,46 +1323,38 @@ func TestWindowsCoderSpawnQuoting(t *testing.T) {
 	}
 }
 
-func TestNtfyAPI(t *testing.T) {
+func TestPushoverAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("USERPROFILE")
 	os.Setenv("USERPROFILE", tmpDir)
 	defer os.Setenv("USERPROFILE", origHome)
 
-	// GET Ntfy config - should auto generate topic
-	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/ntfy", nil)
+	// GET Pushover config
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/pushover", nil)
 	wGet := httptest.NewRecorder()
-	handleGetNtfyConfig(wGet, reqGet)
+	handleGetPushoverConfig(wGet, reqGet)
 
 	if wGet.Code != http.StatusOK {
-		t.Fatalf("handleGetNtfyConfig failed: %d", wGet.Code)
+		t.Fatalf("handleGetPushoverConfig failed: %d", wGet.Code)
 	}
 
-	var res struct {
-		NtfyTopic   string `json:"ntfy_topic"`
-		NtfyEnabled bool   `json:"ntfy_enabled"`
-	}
-	json.NewDecoder(wGet.Body).Decode(&res)
-	if !strings.HasPrefix(res.NtfyTopic, "phi-") {
-		t.Errorf("Expected topic prefix phi-, got %q", res.NtfyTopic)
-	}
-	if res.NtfyEnabled {
-		t.Errorf("Expected NtfyEnabled false by default")
-	}
-
-	// POST Ntfy config - toggle enable
-	postBody, _ := json.Marshal(map[string]bool{"ntfy_enabled": true})
-	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/ntfy", strings.NewReader(string(postBody)))
+	// POST Pushover config
+	postBody, _ := json.Marshal(map[string]interface{}{
+		"pushover_user_key":  "test_user_key",
+		"pushover_app_token": "test_app_token",
+		"pushover_enabled":   true,
+	})
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/pushover", strings.NewReader(string(postBody)))
 	wPost := httptest.NewRecorder()
-	handlePostNtfyConfig(wPost, reqPost)
+	handlePostPushoverConfig(wPost, reqPost)
 
 	if wPost.Code != http.StatusOK {
-		t.Fatalf("handlePostNtfyConfig failed: %d", wPost.Code)
+		t.Fatalf("handlePostPushoverConfig failed: %d", wPost.Code)
 	}
 
 	cfg := loadConfig()
-	if !cfg.NtfyEnabled {
-		t.Errorf("Expected config.NtfyEnabled to be true after POST")
+	if !cfg.PushoverEnabled || cfg.PushoverUserKey != "test_user_key" || cfg.PushoverAppToken != "test_app_token" {
+		t.Errorf("Config mismatch after Pushover POST: %+v", cfg)
 	}
 }
 
