@@ -163,10 +163,13 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	}
 
 	hasTerm := false
+	hasDisplay := false
 	for _, env := range cmd.Env {
-		if len(env) > 5 && env[:5] == "TERM=" {
+		if strings.HasPrefix(strings.ToUpper(env), "TERM=") {
 			hasTerm = true
-			break
+		}
+		if strings.HasPrefix(strings.ToUpper(env), "DISPLAY=") || strings.HasPrefix(strings.ToUpper(env), "WAYLAND_DISPLAY=") {
+			hasDisplay = true
 		}
 	}
 	if !hasTerm {
@@ -174,6 +177,13 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 	}
 	// Enable 24-bit true colour support for agents.
 	cmd.Env = append(cmd.Env, "COLORTERM=truecolor")
+
+	// On Linux/BSD, if no display server env var is present, inject dummy DISPLAY and WAYLAND_DISPLAY.
+	// This tricks headless tools (e.g. Python pyperclip used by Aider) into attempting clipboard calls,
+	// which are then successfully intercepted by our PATH shims.
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && !hasDisplay {
+		cmd.Env = append(cmd.Env, "DISPLAY=:99", "WAYLAND_DISPLAY=wayland-99")
+	}
 
 
 	if err := cmd.Start(); err != nil {
