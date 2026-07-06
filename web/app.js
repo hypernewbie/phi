@@ -249,6 +249,12 @@ class App {
         const ntfyBtn = document.getElementById('header-ntfy-btn');
         const pushoverModal = document.getElementById('pushover-modal');
         const pushoverClose = document.getElementById('pushover-modal-close');
+
+        const simplepushToggle = document.getElementById('simplepush-enabled-toggle');
+        const simplepushKeyInput = document.getElementById('simplepush-key-input');
+        const simplepushSaveBtn = document.getElementById('simplepush-save-btn');
+        const simplepushTestBtn = document.getElementById('simplepush-test-btn');
+
         const pushoverToggle = document.getElementById('pushover-enabled-toggle');
         const pushoverUserKeyInput = document.getElementById('pushover-user-key-input');
         const pushoverAppTokenInput = document.getElementById('pushover-app-token-input');
@@ -263,10 +269,16 @@ class App {
         if (ntfyBtn && pushoverModal) {
             ntfyBtn.addEventListener('click', async () => {
                 try {
-                    const [resP, resW] = await Promise.all([
+                    const [resS, resP, resW] = await Promise.all([
+                        fetch('/api/config/simplepush'),
                         fetch('/api/config/pushover'),
                         fetch('/api/config/webhook')
                     ]);
+                    if (resS.ok) {
+                        const dataS = await resS.json();
+                        if (simplepushKeyInput) simplepushKeyInput.value = dataS.simplepush_key || '';
+                        if (simplepushToggle) simplepushToggle.checked = !!dataS.simplepush_enabled;
+                    }
                     if (resP.ok) {
                         const dataP = await resP.json();
                         if (pushoverUserKeyInput) pushoverUserKeyInput.value = dataP.pushover_user_key || '';
@@ -287,6 +299,21 @@ class App {
             pushoverClose?.addEventListener('click', () => {
                 pushoverModal.classList.add('hidden');
             });
+
+            const saveSimplepushConfig = async () => {
+                try {
+                    await fetch('/api/config/simplepush', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            simplepush_key: simplepushKeyInput?.value.trim() || '',
+                            simplepush_enabled: !!simplepushToggle?.checked
+                        })
+                    });
+                } catch (e) {
+                    console.error("Failed to save simplepush config:", e);
+                }
+            };
 
             const savePushoverConfig = async () => {
                 try {
@@ -319,6 +346,14 @@ class App {
                 }
             };
 
+            simplepushToggle?.addEventListener('change', saveSimplepushConfig);
+            simplepushSaveBtn?.addEventListener('click', async () => {
+                await saveSimplepushConfig();
+                const origText = simplepushSaveBtn.textContent;
+                simplepushSaveBtn.textContent = 'Saved ✓';
+                setTimeout(() => { simplepushSaveBtn.textContent = origText; }, 1500);
+            });
+
             pushoverToggle?.addEventListener('change', savePushoverConfig);
             pushoverSaveBtn?.addEventListener('click', async () => {
                 await savePushoverConfig();
@@ -333,6 +368,28 @@ class App {
                 const origText = webhookSaveBtn.textContent;
                 webhookSaveBtn.textContent = 'Saved ✓';
                 setTimeout(() => { webhookSaveBtn.textContent = origText; }, 1500);
+            });
+
+            simplepushTestBtn?.addEventListener('click', async () => {
+                await saveSimplepushConfig();
+                const origText = simplepushTestBtn.textContent;
+                simplepushTestBtn.disabled = true;
+                simplepushTestBtn.textContent = 'Sending...';
+                try {
+                    const res = await fetch('/api/config/simplepush/test', { method: 'POST' });
+                    if (!res.ok) {
+                        const err = await res.text();
+                        alert(`Test Simplepush failed: ${err}`);
+                    } else {
+                        simplepushTestBtn.textContent = 'Sent ✓';
+                        setTimeout(() => { simplepushTestBtn.textContent = origText; simplepushTestBtn.disabled = false; }, 2000);
+                        return;
+                    }
+                } catch (e) {
+                    alert(`Test Simplepush error: ${e.message}`);
+                }
+                simplepushTestBtn.textContent = origText;
+                simplepushTestBtn.disabled = false;
             });
 
             pushoverTestBtn?.addEventListener('click', async () => {

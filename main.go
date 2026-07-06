@@ -67,6 +67,9 @@ func main() {
 		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
 			_ = sendWebhookNotification(cfg.WebhookURL, "Phi", msg)
 		}
+		if cfg.SimplepushEnabled && cfg.SimplepushKey != "" {
+			_ = sendSimplepushNotification(cfg.SimplepushKey, "Phi", msg)
+		}
 	})
 	wsHub = ws.NewHub()
 
@@ -107,6 +110,16 @@ func main() {
 		}
 	})
 	http.HandleFunc("/api/config/webhook/test", handleTestWebhook)
+	http.HandleFunc("/api/config/simplepush", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handleGetSimplepushConfig(w, r)
+		} else if r.Method == http.MethodPost {
+			handlePostSimplepushConfig(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	http.HandleFunc("/api/config/simplepush/test", handleTestSimplepush)
 	http.HandleFunc("/api/config/kanban-vault", handleKanbanVault)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)
