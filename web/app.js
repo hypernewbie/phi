@@ -76,6 +76,30 @@ const ACCENT_COLORS = {
         accentGlow: 'rgba(132, 204, 22, 0.15)',
         accentDim: '#4d7c0f',
         accentBright: '#a3e635'
+    },
+    white: {
+        accent: '#f8fafc',
+        accentGlow: 'rgba(248, 250, 252, 0.15)',
+        accentDim: '#94a3b8',
+        accentBright: '#ffffff'
+    },
+    violet: {
+        accent: '#8b5cf6',
+        accentGlow: 'rgba(139, 92, 246, 0.15)',
+        accentDim: '#6d28d9',
+        accentBright: '#c4b5fd'
+    },
+    emerald: {
+        accent: '#10b981',
+        accentGlow: 'rgba(16, 185, 129, 0.15)',
+        accentDim: '#047857',
+        accentBright: '#6ee7b7'
+    },
+    gold: {
+        accent: '#eab308',
+        accentGlow: 'rgba(234, 179, 8, 0.15)',
+        accentDim: '#a16207',
+        accentBright: '#fef08a'
     }
 };
 
