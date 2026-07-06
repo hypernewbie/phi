@@ -336,3 +336,69 @@ func TestMultipleConcurrentWebSockets(t *testing.T) {
 		t.Error("Expected DetachTimer to be active after all WebSockets have disconnected")
 	}
 }
+
+func TestStartIdleWatcher(t *testing.T) {
+	manager := NewManager()
+
+	inst := &PTYInstance{
+		ID:            "test-idle-id",
+		Coder:         "pi",
+		Title:         "Test Pi Session",
+		IsBusy:        true,
+		BusyStartTime: time.Now().Add(-10 * time.Second),
+		LastOutputAt:  time.Now().Add(-4 * time.Second),
+	}
+
+	manager.mu.Lock()
+	manager.instances[inst.ID] = inst
+	manager.mu.Unlock()
+
+	called := make(chan bool, 1)
+	manager.StartIdleWatcher(func(paneID, title, coder string) {
+		if paneID == "test-idle-id" && title == "Test Pi Session" && coder == "pi" {
+			called <- true
+		}
+	})
+
+	select {
+	case <-called:
+		// Success
+	case <-time.After(3 * time.Second):
+		t.Fatal("StartIdleWatcher callback was not invoked within 3 seconds")
+	}
+
+	inst.mu.Lock()
+	if inst.IsBusy {
+		t.Error("Expected IsBusy to be set to false after idle watcher run")
+	}
+	if !inst.NotifiedIdle {
+		t.Error("Expected NotifiedIdle to be set to true")
+	}
+	inst.mu.Unlock()
+
+	// Test excluded coder (bash)
+	instBash := &PTYInstance{
+		ID:            "test-bash-id",
+		Coder:         "bash",
+		Title:         "Test Shell Session",
+		IsBusy:        true,
+		BusyStartTime: time.Now().Add(-10 * time.Second),
+		LastOutputAt:  time.Now().Add(-4 * time.Second),
+	}
+	manager.mu.Lock()
+	manager.instances[instBash.ID] = instBash
+	manager.mu.Unlock()
+
+	bashCalled := false
+	manager.StartIdleWatcher(func(paneID, title, coder string) {
+		if paneID == "test-bash-id" {
+			bashCalled = true
+		}
+	})
+
+	time.Sleep(2500 * time.Millisecond)
+	if bashCalled {
+		t.Error("IdleWatcher should not trigger for excluded coder 'bash'")
+	}
+}
+
