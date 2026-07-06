@@ -1797,6 +1797,79 @@ func handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func sendSimplepushNotification(key, title, message string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("Simplepush Key is empty")
+	}
+	formData := url.Values{}
+	formData.Set("key", key)
+	formData.Set("title", title)
+	formData.Set("msg", message)
+
+	resp, err := http.PostForm("https://api.simplepush.io/send", formData)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Simplepush status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func handleGetSimplepushConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := loadConfig()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"simplepush_key":     cfg.SimplepushKey,
+		"simplepush_enabled": cfg.SimplepushEnabled,
+	})
+}
+
+func handlePostSimplepushConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		SimplepushKey     string `json:"simplepush_key"`
+		SimplepushEnabled bool   `json:"simplepush_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg := loadConfig()
+	cfg.SimplepushKey = req.SimplepushKey
+	cfg.SimplepushEnabled = req.SimplepushEnabled
+	saveConfig(cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleTestSimplepush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := loadConfig()
+	if cfg.SimplepushKey == "" {
+		http.Error(w, "Simplepush Key is required", http.StatusBadRequest)
+		return
+	}
+	err := sendSimplepushNotification(cfg.SimplepushKey, "Phi", "Test notification from Phi 🚀")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func handleKanbanVault(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

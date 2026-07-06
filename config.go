@@ -53,6 +53,8 @@ type Config struct {
 	PushoverEnabled   bool   `json:"pushover_enabled"`
 	WebhookURL        string `json:"webhook_url"`
 	WebhookEnabled    bool   `json:"webhook_enabled"`
+	SimplepushKey     string `json:"simplepush_key"`
+	SimplepushEnabled bool   `json:"simplepush_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
 }
 
