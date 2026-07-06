@@ -47,6 +47,10 @@ type Config struct {
 	// of "spawn new tab unless a shell tab is currently focused").
 	// Backwards compatible: missing in old config files means false.
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
+
+	NtfyTopic         string `json:"ntfy_topic"`
+	NtfyEnabled       bool   `json:"ntfy_enabled"`
+	KanbanPasswordEnc string `json:"kanban_password_enc"`
 }
 
 func expandHome(path string) string {
