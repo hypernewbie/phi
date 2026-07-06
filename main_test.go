@@ -1323,6 +1323,101 @@ func TestWindowsCoderSpawnQuoting(t *testing.T) {
 	}
 }
 
+func TestNtfyAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmpDir)
+	defer os.Setenv("USERPROFILE", origHome)
+
+	// GET Ntfy config - should auto generate topic
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/ntfy", nil)
+	wGet := httptest.NewRecorder()
+	handleGetNtfyConfig(wGet, reqGet)
+
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("handleGetNtfyConfig failed: %d", wGet.Code)
+	}
+
+	var res struct {
+		NtfyTopic   string `json:"ntfy_topic"`
+		NtfyEnabled bool   `json:"ntfy_enabled"`
+	}
+	json.NewDecoder(wGet.Body).Decode(&res)
+	if !strings.HasPrefix(res.NtfyTopic, "phi-") {
+		t.Errorf("Expected topic prefix phi-, got %q", res.NtfyTopic)
+	}
+	if res.NtfyEnabled {
+		t.Errorf("Expected NtfyEnabled false by default")
+	}
+
+	// POST Ntfy config - toggle enable
+	postBody, _ := json.Marshal(map[string]bool{"ntfy_enabled": true})
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/ntfy", strings.NewReader(string(postBody)))
+	wPost := httptest.NewRecorder()
+	handlePostNtfyConfig(wPost, reqPost)
+
+	if wPost.Code != http.StatusOK {
+		t.Fatalf("handlePostNtfyConfig failed: %d", wPost.Code)
+	}
+
+	cfg := loadConfig()
+	if !cfg.NtfyEnabled {
+		t.Errorf("Expected config.NtfyEnabled to be true after POST")
+	}
+}
+
+func TestKanbanVaultAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmpDir)
+	defer os.Setenv("USERPROFILE", origHome)
+
+	// POST save password
+	postBody, _ := json.Marshal(map[string]string{"password": "my_test_password"})
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/kanban-vault", strings.NewReader(string(postBody)))
+	wPost := httptest.NewRecorder()
+	handleKanbanVault(wPost, reqPost)
+
+	if wPost.Code != http.StatusOK {
+		t.Fatalf("handleKanbanVault POST failed: %d", wPost.Code)
+	}
+
+	// Verify encrypted string in config file
+	cfg := loadConfig()
+	if cfg.KanbanPasswordEnc == "" || cfg.KanbanPasswordEnc == "my_test_password" {
+		t.Errorf("Expected encrypted password in config, got %q", cfg.KanbanPasswordEnc)
+	}
+
+	// GET password
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/kanban-vault", nil)
+	wGet := httptest.NewRecorder()
+	handleKanbanVault(wGet, reqGet)
+
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("handleKanbanVault GET failed: %d", wGet.Code)
+	}
+	var getRes map[string]string
+	json.NewDecoder(wGet.Body).Decode(&getRes)
+	if getRes["password"] != "my_test_password" {
+		t.Errorf("Expected decrypted password 'my_test_password', got %q", getRes["password"])
+	}
+
+	// DELETE password
+	reqDel := httptest.NewRequest(http.MethodDelete, "/api/config/kanban-vault", nil)
+	wDel := httptest.NewRecorder()
+	handleKanbanVault(wDel, reqDel)
+
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("handleKanbanVault DELETE failed: %d", wDel.Code)
+	}
+
+	cfgAfterDel := loadConfig()
+	if cfgAfterDel.KanbanPasswordEnc != "" {
+		t.Errorf("Expected empty KanbanPasswordEnc after DELETE")
+	}
+}
+
+
 
 
 
