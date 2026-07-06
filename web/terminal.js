@@ -1833,6 +1833,117 @@ export class TabManager {
         }
         return parts[parts.length - 1] || '—';
     }
+
+    async addModelPreset(backend) {
+        const values = await this.app.openConfigEditor({
+            title: 'Add Model Preset',
+            subtitle: `Saved under ${backend}. Use the exact model identifier your backend expects.`,
+            fields: [
+                { id: 'model', label: 'Model identifier', placeholder: 'provider/model-name' }
+            ],
+            submitLabel: 'Add Model'
+        });
+        if (!values) return;
+
+        try {
+            const res = await fetch('/api/config/models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: values.model, coder: backend })
+            });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to add model preset');
+            await this.app.sessionsManager.loadConfig();
+            this.renderModelDropup();
+            this.app.showToast(`Added model preset "${values.model}"`, { type: 'info', title: 'Models' });
+        } catch (err) {
+            console.error("Failed to add model preset:", err);
+            this.app.showToast(err.message, { type: 'error', title: 'Models' });
+        }
+    }
+
+    async editModelPreset(backend, model) {
+        const values = await this.app.openConfigEditor({
+            title: 'Edit Model Preset',
+            subtitle: `Update the saved model identifier for ${backend}.`,
+            fields: [
+                { id: 'model', label: 'Model identifier', value: model, placeholder: 'provider/model-name' }
+            ],
+            submitLabel: 'Save Model'
+        });
+        if (!values || values.model === model) return;
+
+        try {
+            const res = await fetch('/api/config/models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_model: model, model: values.model, coder: backend })
+            });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to edit model preset');
+            await this.app.sessionsManager.loadConfig();
+            this.renderModelDropup();
+            this.app.showToast(`Updated model preset "${values.model}"`, { type: 'info', title: 'Models' });
+        } catch (err) {
+            console.error("Failed to edit model preset:", err);
+            this.app.showToast(err.message, { type: 'error', title: 'Models' });
+        }
+    }
+
+    async addQuickCommand() {
+        const values = await this.app.openConfigEditor({
+            title: 'Add Quick Command',
+            subtitle: 'Quick commands run in the active terminal. Use {} as a placeholder for selected input text.',
+            fields: [
+                { id: 'name', label: 'Label', placeholder: 'tests', monospace: false },
+                { id: 'command', label: 'Command', placeholder: 'npm test', multiline: true }
+            ],
+            submitLabel: 'Add Command'
+        });
+        if (!values) return;
+
+        try {
+            const res = await fetch('/api/config/quick-commands', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: values.name, command: values.command })
+            });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to add quick command');
+            await this.app.sessionsManager.loadConfig();
+            this.renderQuickCmdsDropup();
+            this.app.showToast(`Added quick command "${values.name}"`, { type: 'info', title: 'Commands' });
+        } catch (err) {
+            console.error("Failed to add quick command:", err);
+            this.app.showToast(err.message, { type: 'error', title: 'Commands' });
+        }
+    }
+
+    async editQuickCommand(cmd) {
+        const values = await this.app.openConfigEditor({
+            title: 'Edit Quick Command',
+            subtitle: 'Rename the action or change the text sent to the active terminal.',
+            fields: [
+                { id: 'name', label: 'Label', value: cmd.name, monospace: false },
+                { id: 'command', label: 'Command', value: cmd.command, multiline: true }
+            ],
+            submitLabel: 'Save Command'
+        });
+        if (!values || (values.name === cmd.name && values.command === cmd.command)) return;
+
+        try {
+            const res = await fetch('/api/config/quick-commands', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_name: cmd.name, name: values.name, command: values.command })
+            });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to edit quick command');
+            await this.app.sessionsManager.loadConfig();
+            this.renderQuickCmdsDropup();
+            this.app.showToast(`Updated quick command "${values.name}"`, { type: 'info', title: 'Commands' });
+        } catch (err) {
+            console.error("Failed to edit quick command:", err);
+            this.app.showToast(err.message, { type: 'error', title: 'Commands' });
+        }
+    }
+
     renderModelDropup() {
         const dropup = document.getElementById('model-presets-dropup');
         if (!dropup) return;
@@ -1883,9 +1994,22 @@ export class TabManager {
             });
             row.appendChild(btn);
             
+            const actionsContainer = document.createElement('div');
+            actionsContainer.className = 'dropup-row-actions';
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'dropup-action-btn dropup-edit-btn';
+            editBtn.textContent = 'edit';
+            editBtn.title = `Edit model preset ${model}`;
+            editBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await this.editModelPreset(backend, model);
+            });
+            actionsContainer.appendChild(editBtn);
+
             const delBtn = document.createElement('button');
-            delBtn.className = 'dropup-del-btn';
-            delBtn.innerHTML = '×';
+            delBtn.className = 'dropup-action-btn dropup-del-btn';
+            delBtn.textContent = 'del';
             delBtn.title = `Delete model preset ${model}`;
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -1902,7 +2026,8 @@ export class TabManager {
                     }
                 }
             });
-            row.appendChild(delBtn);
+            actionsContainer.appendChild(delBtn);
+            row.appendChild(actionsContainer);
             dropup.appendChild(row);
         });
         
@@ -1914,25 +2039,13 @@ export class TabManager {
         addBtn.className = 'dropup-add-btn';
         addBtn.innerText = '+ Add Model Preset...';
         addBtn.addEventListener('click', async () => {
-            const model = prompt("Enter model name (e.g. deepseek/deepseek-v4-flash):");
-            if (model && model.trim()) {
-                try {
-                    await fetch('/api/config/models', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ model: model.trim(), coder: backend })
-                    });
-                    await this.app.sessionsManager.loadConfig();
-                } catch (err) {
-                    console.error("Failed to add model preset:", err);
-                }
-            }
+            await this.addModelPreset(backend);
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
 
         // 4. Config Copy/Paste Footer
-        this._appendConfigFooter(dropup);
+        this._appendConfigFooter(dropup, 'models');
     }
 
     renderQuickCmdsDropup() {
@@ -1976,9 +2089,22 @@ export class TabManager {
             });
             row.appendChild(btn);
 
+            const actionsContainer = document.createElement('div');
+            actionsContainer.className = 'dropup-row-actions';
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'dropup-action-btn dropup-edit-btn';
+            editBtn.textContent = 'edit';
+            editBtn.title = `Edit quick command "${cmd.name}"`;
+            editBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await this.editQuickCommand(cmd);
+            });
+            actionsContainer.appendChild(editBtn);
+
             const delBtn = document.createElement('button');
-            delBtn.className = 'dropup-del-btn';
-            delBtn.innerHTML = '×';
+            delBtn.className = 'dropup-action-btn dropup-del-btn';
+            delBtn.textContent = 'del';
             delBtn.title = `Delete quick command "${cmd.name}"`;
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -1995,7 +2121,8 @@ export class TabManager {
                     }
                 }
             });
-            row.appendChild(delBtn);
+            actionsContainer.appendChild(delBtn);
+            row.appendChild(actionsContainer);
             dropup.appendChild(row);
         });
 
@@ -2006,48 +2133,43 @@ export class TabManager {
         addBtn.className = 'dropup-add-btn';
         addBtn.innerText = '+ Add Command...';
         addBtn.addEventListener('click', async () => {
-            const name = prompt("Command label (e.g. tests):");
-            if (!name || !name.trim()) return;
-            const command = prompt(`Command to send for "${name.trim()}" (e.g. npm test):`);
-            if (!command || !command.trim()) return;
-            try {
-                await fetch('/api/config/quick-commands', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name.trim(), command: command.trim() })
-                });
-                await this.app.sessionsManager.loadConfig();
-            } catch (err) {
-                console.error("Failed to add quick command:", err);
-            }
+            await this.addQuickCommand();
         });
         addRow.appendChild(addBtn);
         dropup.appendChild(addRow);
 
         // Config Copy/Paste Footer
-        this._appendConfigFooter(dropup);
+        this._appendConfigFooter(dropup, 'cmds');
     }
 
-    _appendConfigFooter(dropup) {
+    _appendConfigFooter(dropup, mode = 'models') {
         const footer = document.createElement('div');
         footer.className = 'dropup-config-footer';
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'dropup-config-btn';
-        copyBtn.title = 'Copy models + cmds config to clipboard';
+        copyBtn.title = mode === 'cmds' ? 'Copy commands config to clipboard' : 'Copy models config to clipboard';
         copyBtn.innerHTML = '↑ Copy config';
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.app.exportModelsConfig(copyBtn);
+            if (mode === 'cmds') {
+                this.app.exportCmdsConfig(copyBtn);
+            } else {
+                this.app.exportModelsConfig(copyBtn);
+            }
         });
 
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'dropup-config-btn';
-        pasteBtn.title = 'Paste models + cmds config from clipboard';
+        pasteBtn.title = mode === 'cmds' ? 'Paste commands config from clipboard' : 'Paste models config from clipboard';
         pasteBtn.innerHTML = '↓ Paste config';
         pasteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            await this.app.importModelsConfig(pasteBtn);
+            if (mode === 'cmds') {
+                await this.app.importCmdsConfig(pasteBtn);
+            } else {
+                await this.app.importModelsConfig(pasteBtn);
+            }
             document.querySelectorAll('.model-presets-dropup').forEach(d => d.classList.add('hidden'));
             const activeTab = this.getActiveTab();
             if (activeTab) {
