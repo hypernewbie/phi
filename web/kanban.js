@@ -264,6 +264,9 @@ export class KanbanManager {
                         <select id="kanban-project-select" class="kanban-select">
                             ${projects.map(p => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${p.title}</option>`).join('')}
                         </select>
+                        <div class="kanban-search-wrapper" style="margin-left: 8px;">
+                            <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter tasks..." />
+                        </div>
                         <button id="kanban-refresh-btn" class="toolbar-btn" title="Refresh Board">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -303,6 +306,87 @@ export class KanbanManager {
             fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(e => console.error("Vault delete error:", e));
             this.initTabContainer(container);
         });
+
+        // Fuzzy Search Filter Listener
+        const searchInput = container.querySelector('#kanban-search-input');
+        if (searchInput) {
+            let debounceTimer = null;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    const query = searchInput.value.trim().toLowerCase();
+                    const cards = container.querySelectorAll('.kanban-card');
+                    cards.forEach(card => {
+                        const taskId = card.dataset.taskId;
+                        const task = this.taskCache[taskId];
+                        if (!query) {
+                            card.classList.remove('hidden-by-filter');
+                            return;
+                        }
+                        let match = false;
+                        if (task) {
+                            if (task.title && task.title.toLowerCase().includes(query)) match = true;
+                            if (task.identifier && task.identifier.toLowerCase().includes(query)) match = true;
+                            if (task.labels && task.labels.some(l => l.title && l.title.toLowerCase().includes(query))) match = true;
+                        }
+                        if (match) {
+                            card.classList.remove('hidden-by-filter');
+                        } else {
+                            card.classList.add('hidden-by-filter');
+                        }
+                    });
+                }, 150);
+            });
+        }
+
+        // Add Task Button Listeners
+        const addWrapperSetup = () => {
+            const addBtns = container.querySelectorAll('.kanban-add-task-btn');
+            addBtns.forEach(btn => {
+                btn.onclick = (e) => {
+                    const wrapper = e.target.closest('.kanban-add-task-wrapper');
+                    const bucketId = wrapper.dataset.bucketId;
+                    wrapper.innerHTML = `
+                        <input type="text" class="kanban-quick-add-input" placeholder="Task title... (Enter to save)" />
+                    `;
+                    const input = wrapper.querySelector('.kanban-quick-add-input');
+                    input.focus();
+                    
+                    const reset = () => {
+                        wrapper.innerHTML = `<button class="kanban-add-task-btn">+ Add Task</button>`;
+                        addWrapperSetup();
+                    };
+
+                    input.addEventListener('keydown', async (ev) => {
+                        if (ev.key === 'Escape') {
+                            reset();
+                        } else if (ev.key === 'Enter') {
+                            const val = input.value.trim();
+                            if (!val) { reset(); return; }
+                            input.disabled = true;
+                            try {
+                                const selectedProjectId = localStorage.getItem('vikunja_selected_project');
+                                await this.apiPost(`/projects/${selectedProjectId}/tasks`, {
+                                    title: val,
+                                    bucket_id: parseInt(bucketId, 10)
+                                });
+                                await this.loadAndRenderBoard(container);
+                            } catch (err) {
+                                alert(`Failed to create task: ${err.message}`);
+                                reset();
+                            }
+                        }
+                    });
+
+                    input.addEventListener('blur', () => {
+                        setTimeout(() => {
+                            if (document.activeElement !== input && !input.value.trim()) reset();
+                        }, 150);
+                    });
+                };
+            });
+        };
+        addWrapperSetup();
         
         // Initialize Sortable if buckets are rendered
         if (kanbanView && bucketsWithTasks && bucketsWithTasks.length > 0) {
@@ -322,6 +406,9 @@ export class KanbanManager {
                 </div>
                 <div class="kanban-cards-list" data-bucket-id="${bucket.id}">
                     ${tasks.map(task => this.renderCard(task)).join('')}
+                </div>
+                <div class="kanban-add-task-wrapper" data-bucket-id="${bucket.id}">
+                    <button class="kanban-add-task-btn">+ Add Task</button>
                 </div>
             </div>
         `;
