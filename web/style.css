@@ -4479,6 +4479,55 @@ html, body {
     border-color: var(--red) !important;
 }
 
+/* ==========================================================================
+   Obsidian Glow Aesthetic Beauty Pass
+   ========================================================================== */
+
+.sidebar-panel,
+.app-header,
+.input-bar-container,
+.md-modal-content {
+    background-color: rgba(13, 13, 16, 0.75) !important;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--accent-trace) !important;
+}
+
+.terminals-wrapper {
+    box-shadow: inset 0 0 35px rgba(0, 0, 0, 0.85);
+}
+
+.tab.active {
+    border-bottom: 2px solid var(--accent) !important;
+    box-shadow: inset 0 -4px 10px -4px var(--accent-glow) !important;
+    text-shadow: 0 0 8px var(--accent-glow);
+}
+
+.btn-accent {
+    box-shadow: 0 0 15px var(--accent-glow);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-accent:hover {
+    box-shadow: 0 0 22px var(--accent-glow), 0 0 6px var(--accent);
+}
+
+#input-textarea:focus {
+    border-color: var(--accent-soft) !important;
+    box-shadow: 0 0 20px var(--accent-glow), inset 0 0 10px var(--accent-trace) !important;
+}
+
+.header-btn:hover {
+    color: var(--accent-bright);
+    filter: drop-shadow(0 0 8px var(--accent-glow));
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-soft);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+
+
 
 
 
