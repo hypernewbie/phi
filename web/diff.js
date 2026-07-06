@@ -502,23 +502,22 @@ export class DiffController {
         // activeCWD is set by sessionsManager based on the active workspace
         // and active worktree selection, so it correctly scopes by both
         // project AND worktree boundaries in one check.
-        let targetTab = activeTab;
+        const isUsableShell = (t) => t && !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh') && t.title !== 'btop' && !t.isBtop;
+
+        let targetTab = isUsableShell(activeTab) ? activeTab : null;
         const activeCWD = this.app.sessionsManager.activeCWD || '';
-        if ((!targetTab || targetTab.isDead || (targetTab.coder !== 'bash' && targetTab.coder !== 'pwsh'))
-            && this.app.useExistingTerminalTab
-            && activeCWD) {
+        
+        if (!targetTab && this.app.useExistingTerminalTab && activeCWD) {
             const wantedCWD = normalizeCwd(activeCWD);
             const matchingShell = Array.from(this.app.tabManager.tabs.values()).find(t =>
-                !t.isDead
-                && (t.coder === 'bash' || t.coder === 'pwsh')
-                && normalizeCwd(t.cwd || '') === wantedCWD);
+                isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
             if (matchingShell) {
                 targetTab = matchingShell;
                 this.app.tabManager.switchTab(targetTab.paneId);
             }
         }
 
-        if (targetTab && !targetTab.isDead && (targetTab.coder === 'bash' || targetTab.coder === 'pwsh')) {
+        if (isUsableShell(targetTab)) {
             let payload = combined;
             if (combined.length > 16 || combined.includes('\n')) {
                 payload = '\x1b[200~' + combined + '\x1b[201~';
