@@ -953,7 +953,7 @@ export class TabManager {
                 this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
-                    this.app.markdownManager.refreshFiles();
+                    this.app.markdownManager.refreshFiles({ force: false });
                 }
             });
         } else if (newTab.cwd && this.app.sessionsManager.activeCWD !== newTab.cwd) {
@@ -961,7 +961,7 @@ export class TabManager {
             this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
             this.app.diffController.refreshDiff();
             if (this.app.markdownManager) {
-                this.app.markdownManager.refreshFiles();
+                this.app.markdownManager.refreshFiles({ force: false });
             }
         }
         
