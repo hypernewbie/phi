@@ -1321,23 +1321,45 @@ html, body {
     color: var(--accent-bright);
 }
 
-.dropup-del-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 15px;
-    padding: 0 12px;
-    cursor: pointer;
-    align-self: stretch;
+.dropup-row-actions {
     display: flex;
     align-items: center;
-    transition: all 0.15s;
-    border-left: 1px solid rgba(255, 255, 255, 0.03);
+    gap: 4px;
+    flex-shrink: 0;
+    padding-right: 6px;
 }
 
-.dropup-del-btn:hover {
-    color: #f43f5e;
+.dropup-action-btn {
+    min-width: 30px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    padding: 0 7px;
+    text-transform: uppercase;
+    transition: all 0.15s ease;
+}
+
+.dropup-action-btn:hover {
+    background: var(--accent-trace);
+    border-color: var(--accent-soft);
+    color: var(--accent-bright);
+}
+
+.dropup-action-btn.dropup-del-btn:hover {
     background-color: rgba(244, 63, 94, 0.1);
+    border-color: rgba(244, 63, 94, 0.35);
+    color: #f43f5e;
 }
 
 .dropup-add-row {
@@ -1666,6 +1688,83 @@ html, body {
 .modal-footer button {
     width: auto;
     padding: 0 16px;
+}
+
+.config-editor-modal {
+    width: min(520px, calc(100vw - 24px));
+}
+
+.config-editor-header {
+    align-items: flex-start;
+}
+
+.config-editor-header h3 {
+    margin: 0;
+}
+
+.config-editor-subtitle {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.config-editor-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.config-editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.config-editor-field span {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.config-editor-field input,
+.config-editor-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 7px;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.45;
+    outline: none;
+    padding: 10px 12px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.config-editor-field textarea {
+    min-height: 110px;
+    resize: vertical;
+}
+
+.config-editor-field .config-editor-mono {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.config-editor-field input:focus,
+.config-editor-field textarea:focus {
+    background: rgba(255, 255, 255, 0.025);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-edge), 0 0 18px var(--accent-glow);
+}
+
+.config-editor-footer {
+    flex-wrap: wrap;
 }
 
 /* UTILITIES */
@@ -2176,7 +2275,9 @@ html, body {
         display: none !important;
     }
 
-    #model-presets-dropup {
+    #model-presets-dropup,
+    #quick-commands-dropup,
+    #slash-presets-dropup {
         width: min(280px, calc(100vw - 24px)) !important;
         max-height: 42vh;
         overflow-y: auto;
@@ -2184,10 +2285,27 @@ html, body {
         -webkit-overflow-scrolling: touch;
     }
 
-    #model-presets-dropup .dropup-header {
+    #model-presets-dropup .dropup-header,
+    #quick-commands-dropup .dropup-header,
+    #slash-presets-dropup .dropup-header {
         position: sticky;
         top: 0;
         z-index: 1;
+    }
+
+    .dropup-action-btn,
+    .cmd-action-btn {
+        min-width: 36px;
+        height: 30px;
+    }
+
+    .cmd-item {
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .cmd-item-actions {
+        padding-top: 1px;
     }
 }
 
@@ -3471,16 +3589,24 @@ html, body {
 .cmd-item-actions {
     display: flex;
     gap: 4px;
+    flex-shrink: 0;
 }
 
 .cmd-action-btn {
-    background: transparent;
-    border: none;
+    min-width: 34px;
+    height: 26px;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid transparent;
     color: var(--text-muted);
-    padding: 4px 6px;
-    border-radius: 4px;
+    padding: 0 7px;
+    border-radius: 5px;
     cursor: pointer;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3488,8 +3614,9 @@ html, body {
 }
 
 .cmd-action-btn:hover {
-    color: var(--text-primary);
-    background-color: var(--bg-elevated);
+    color: var(--accent-bright);
+    background-color: var(--accent-trace);
+    border-color: var(--accent-soft);
 }
 
 .cmd-action-btn.del:hover {
@@ -4658,9 +4785,5 @@ html, body {
     outline: none;
     box-shadow: 0 0 10px var(--accent-glow);
 }
-
-
-
-
 
 
