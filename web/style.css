@@ -44,7 +44,7 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background-color: var(--bg-base);
+    background: radial-gradient(circle at 50% 0%, #16161c 0%, #08080a 70%);
     color: var(--text-primary);
     font-family: var(--font-ui);
 }
@@ -59,7 +59,8 @@ html, body {
 
 /* HEADER / BRAND / WORKSPACE SELECTOR */
 .app-header {
-    background-color: var(--bg-panel);
+    background: rgba(13, 13, 16, 0.65);
+    backdrop-filter: blur(20px) saturate(180%);
     border-bottom: 1px solid var(--bg-border);
     box-shadow: inset 0 -1px 0 var(--accent-trace);
     height: 48px;
@@ -241,13 +242,18 @@ html, body {
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .header-btn:hover {
     background-color: var(--bg-border);
     border-color: var(--accent);
-    box-shadow: 0 0 10px var(--accent-glow);
+    box-shadow: 0 0 12px var(--accent-glow);
+    transform: translateY(-1px) scale(1.02);
+}
+
+.header-btn:active {
+    transform: translateY(1px) scale(0.98);
 }
 
 .header-btn.active {
@@ -609,9 +615,17 @@ html, body {
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     width: 100%;
     height: 36px;
+}
+
+.btn:hover {
+    transform: translateY(-1px) scale(1.01);
+}
+
+.btn:active {
+    transform: translateY(1px) scale(0.98);
 }
 
 .btn-primary {
@@ -2582,23 +2596,24 @@ html, body {
 .md-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.65);
     z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
-    backdrop-filter: blur(2px);
+    backdrop-filter: blur(8px);
 }
 
 .md-modal-content {
-    background: var(--bg-panel);
-    border: 1px solid var(--bg-border);
-    border-radius: 10px;
+    background: rgba(13, 13, 16, 0.75);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
     width: min(1000px, 92vw);
     max-height: 88vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.05);
     overflow: hidden;
 }
 
@@ -4366,6 +4381,46 @@ html, body {
     resize: vertical;
     min-height: 120px;
     line-height: 1.5;
+}
+
+.kanban-desc-html {
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.6;
+    min-height: 120px;
+    max-height: 350px;
+    overflow-y: auto;
+}
+
+.kanban-desc-html p {
+    margin-bottom: 10px;
+}
+
+.kanban-desc-html p:last-child {
+    margin-bottom: 0;
+}
+
+.kanban-desc-html ul, .kanban-desc-html ol {
+    margin-bottom: 10px;
+    padding-left: 20px;
+}
+
+.kanban-desc-html li {
+    margin-bottom: 4px;
+}
+
+.kanban-desc-html code {
+    font-family: var(--font-mono);
+    background: var(--bg-base);
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 11px;
+    border: 1px solid var(--bg-border);
+    color: var(--accent-bright);
 }
 
 .kdp-field-row {

@@ -686,8 +686,12 @@ export class KanbanManager {
                 </div>
 
                 <div class="kdp-field">
-                    <label for="kdp-description">Description</label>
-                    <textarea id="kdp-description" placeholder="No description provided">${this.escapeHtml(task.description || '')}</textarea>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <label for="kdp-description" style="margin-bottom: 0;">Description</label>
+                        <button id="kdp-desc-toggle-btn" class="btn btn-secondary" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--bg-border); background: var(--bg-elevated); color: var(--text-primary); cursor: pointer;">Edit HTML</button>
+                    </div>
+                    <div id="kdp-description-view" class="kanban-desc-html">${task.description || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>'}</div>
+                    <textarea id="kdp-description" class="hidden" placeholder="No description provided" style="font-family: var(--font-mono); font-size: 12px; height: 160px; line-height: 1.5;">${this.escapeHtml(task.description || '')}</textarea>
                 </div>
 
                 <div class="kdp-meta">
@@ -702,6 +706,23 @@ export class KanbanManager {
         `;
 
         // Wire events
+        const toggleBtn = panel.querySelector('#kdp-desc-toggle-btn');
+        const descView = panel.querySelector('#kdp-description-view');
+        const descInput = panel.querySelector('#kdp-description');
+
+        toggleBtn.addEventListener('click', () => {
+            if (descInput.classList.contains('hidden')) {
+                descInput.classList.remove('hidden');
+                descView.classList.add('hidden');
+                toggleBtn.textContent = 'Preview';
+            } else {
+                descInput.classList.add('hidden');
+                descView.classList.remove('hidden');
+                descView.innerHTML = descInput.value || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>';
+                toggleBtn.textContent = 'Edit HTML';
+            }
+        });
+
         panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
         panel.querySelector('.kdp-cancel-btn').addEventListener('click', () => this.closeDetailPanel());
         
