@@ -98,6 +98,7 @@ func main() {
 		}
 	})
 	http.HandleFunc("/api/config/ntfy/test", handleTestNtfy)
+	http.HandleFunc("/api/config/kanban-vault", handleKanbanVault)
 	http.HandleFunc("/api/config/export", handleConfigExport)
 	http.HandleFunc("/api/config/import", handleConfigImport)
 	http.HandleFunc("/api/config/export-models", handleConfigExportModels)

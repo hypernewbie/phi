@@ -37,6 +37,27 @@ export class KanbanManager {
         const token = sessionStorage.getItem('vikunja_token');
         if (!token) {
             this.renderLoginForm(container);
+            // Check if saved password exists in vault
+            try {
+                const res = await fetch('/api/config/kanban-vault');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.password) {
+                        const pwInput = container.querySelector('#kanban-password-input');
+                        const chkInput = container.querySelector('#kanban-remember-input');
+                        if (pwInput) pwInput.value = data.password;
+                        if (chkInput) chkInput.checked = true;
+                        // Auto-trigger login if URL and Username are also saved
+                        const urlVal = localStorage.getItem('vikunja_url');
+                        const userVal = localStorage.getItem('vikunja_username');
+                        if (urlVal && userVal) {
+                            container.querySelector('#kanban-login-btn')?.click();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to check kanban vault:", e);
+            }
         } else {
             await this.loadAndRenderBoard(container);
         }
@@ -60,7 +81,14 @@ export class KanbanManager {
                         <label for="kanban-password-input">Password</label>
                         <input type="password" id="kanban-password-input" placeholder="password">
                     </div>
-                    <button id="kanban-login-btn" class="btn btn-accent">Connect</button>
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: normal; color: var(--text-primary);">
+                            <input type="checkbox" id="kanban-remember-input" style="cursor: pointer;">
+                            Remember Password
+                        </label>
+                        <span style="font-size: 11px; color: var(--text-muted);">⚠️ Saved locally in backend config via binary-stored AES key.</span>
+                    </div>
+                    <button id="kanban-login-btn" class="btn btn-accent" style="margin-top: 12px;">Connect</button>
                     <div id="kanban-login-error" class="login-error-msg hidden"></div>
                 </div>
             </div>
@@ -71,6 +99,7 @@ export class KanbanManager {
             const urlInput = container.querySelector('#kanban-url-input').value.trim().replace(/\/$/, '');
             const usernameInput = container.querySelector('#kanban-username-input').value.trim();
             const passwordInput = container.querySelector('#kanban-password-input').value;
+            const rememberInput = container.querySelector('#kanban-remember-input')?.checked;
             const errorEl = container.querySelector('#kanban-login-error');
             
             if (!urlInput || !usernameInput || !passwordInput) {
@@ -105,6 +134,17 @@ export class KanbanManager {
                 localStorage.setItem('vikunja_url', urlInput);
                 localStorage.setItem('vikunja_username', usernameInput);
                 
+                // Save or clear vault password
+                if (rememberInput) {
+                    fetch('/api/config/kanban-vault', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: passwordInput })
+                    }).catch(e => console.error("Vault save error:", e));
+                } else {
+                    fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(e => console.error("Vault delete error:", e));
+                }
+
                 await this.loadAndRenderBoard(container);
             } catch (err) {
                 errorEl.textContent = `Error: ${err.message}`;
@@ -260,6 +300,7 @@ export class KanbanManager {
         
         container.querySelector('#kanban-disconnect-btn').addEventListener('click', () => {
             sessionStorage.removeItem('vikunja_token');
+            fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(e => console.error("Vault delete error:", e));
             this.initTabContainer(container);
         });
         
