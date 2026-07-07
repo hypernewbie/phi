@@ -62,8 +62,14 @@ export class MarkdownManager {
     }
 
     async refreshFiles(options = {}) {
-        const cwd = this.app.sessionsManager.activeCWD || '';
         const force = options.force !== false;
+        
+        const diffCtrl = this.app.diffController;
+        if (!force && diffCtrl && (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
+            return;
+        }
+
+        const cwd = this.app.sessionsManager.activeCWD || '';
         if (!force && this.lastRefreshCwd === cwd) {
             return;
         }

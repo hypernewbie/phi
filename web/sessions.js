@@ -53,6 +53,9 @@ export class SessionsManager {
             // Refresh diff on current active worktree (which is updated inside loadWorktrees)
             setTimeout(() => {
                 this.app.diffController.refreshDiff();
+                if (this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles({ force: false });
+                }
             }, 100);
         });
         window.addEventListener('resize', () => this.updateWorkspaceSelectWidth());
