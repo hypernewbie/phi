@@ -8,3 +8,4 @@ config.json
 temp/
 coverage/
 *.out
+node_modules/

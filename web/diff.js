@@ -11,7 +11,7 @@ import { PTYWebSocket } from './ws.js';
 // on Linux/macOS, case-insensitive on Windows). For phi this is fine
 // because both sides are produced from the same os.Getwd / platform
 // path-handling code.
-function normalizeCwd(p) {
+export function normalizeCwd(p) {
     if (!p) return '';
     return String(p).replace(/\\/g, '/').replace(/\/+$/, '');
 }
