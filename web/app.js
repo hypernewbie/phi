@@ -5,6 +5,11 @@ import { MarkdownManager } from './markdown.js';
 import { KanbanManager } from './kanban.js';
 import { SyncManager } from './sync.js';
 
+// NOTE: When adding a new theme color, you must update:
+// 1. web/app.js: Add properties in ACCENT_COLORS
+// 2. web/index.html: Add <option> in #accent-color-select
+// 3. main.go: Add entry in printWelcomeBanner colors map
+// 4. bonus/: Add matching theme profiles to bonus/vim_themes/, bonus/pi_themes/, bonus/opencode_themes/, and bonus/btop_themes/
 const ACCENT_COLORS = {
     purple: {
         accent: '#7c6af7',
