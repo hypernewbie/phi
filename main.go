@@ -182,6 +182,11 @@ func main() {
 }
 
 func printWelcomeBanner(cfg Config, ip string, port int) {
+	// NOTE: When adding a new theme color, you must update:
+	// 1. web/app.js: Add properties in ACCENT_COLORS
+	// 2. web/index.html: Add <option> in #accent-color-select
+	// 3. main.go: Add entry in printWelcomeBanner colors map
+	// 4. bonus/: Add matching theme profiles to bonus/vim_themes/, bonus/pi_themes/, bonus/opencode_themes/, and bonus/btop_themes/
 	colors := map[string][]int{
 		"purple": {124, 106, 247},
 		"blue":   {56, 189, 248},
