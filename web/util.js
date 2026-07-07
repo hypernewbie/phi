@@ -12,3 +12,22 @@ export function projectWorktreeLabel(cwd) {
     }
     return parts[parts.length - 1] || '—';
 }
+
+// relativeToCwd converts a file path to one relative to cwd (both with \
+// normalized to /). Pure. NOTE: two long-standing quirks are preserved by
+// design — do NOT "fix" them here without a dedicated test + commit:
+//   1. Case-sensitive prefix match (unlike normalizePath, which lowercases).
+//   2. Naive startsWith: cwd '/foo' also matches path '/foobar' -> 'bar'.
+// Also mirrors the original: a nullish `path` throws (no defensive guard).
+export function relativeToCwd(path, cwd) {
+    const cleanPath = path.replace(/\\/g, '/');
+    const cleanCwd = (cwd || '').replace(/\\/g, '/');
+    let relPath = cleanPath;
+    if (cleanCwd && cleanPath.startsWith(cleanCwd)) {
+        relPath = cleanPath.slice(cleanCwd.length);
+        if (relPath.startsWith('/')) {
+            relPath = relPath.slice(1);
+        }
+    }
+    return relPath;
+}
