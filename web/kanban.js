@@ -728,7 +728,12 @@ export class KanbanManager {
                 <div class="kdp-field">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                         <label for="kdp-description" style="margin-bottom: 0;">Description</label>
-                        <button id="kdp-desc-toggle-btn" class="btn btn-secondary" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--bg-border); background: var(--bg-elevated); color: var(--text-primary); cursor: pointer;">Edit HTML</button>
+                        <button id="kdp-desc-toggle-btn" class="dropup-action-btn" title="Edit description" style="width: 24px; height: 24px; padding: 0;">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;">
+                                <path d="M12 20h9"></path>
+                                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                            </svg>
+                        </button>
                     </div>
                     <div id="kdp-description-view" class="kanban-desc-html">${task.description || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>'}</div>
                     <textarea id="kdp-description" class="hidden" placeholder="No description provided" style="font-family: var(--font-mono); font-size: 12px; height: 160px; line-height: 1.5;">${this.escapeHtml(task.description || '')}</textarea>
@@ -750,16 +755,21 @@ export class KanbanManager {
         const descView = panel.querySelector('#kdp-description-view');
         const descInput = panel.querySelector('#kdp-description');
 
+        const PENCIL_SVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
+        const EYE_SVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+
         toggleBtn.addEventListener('click', () => {
             if (descInput.classList.contains('hidden')) {
                 descInput.classList.remove('hidden');
                 descView.classList.add('hidden');
-                toggleBtn.textContent = 'Preview';
+                toggleBtn.innerHTML = EYE_SVG;
+                toggleBtn.title = 'Preview description';
             } else {
                 descInput.classList.add('hidden');
                 descView.classList.remove('hidden');
                 descView.innerHTML = descInput.value || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>';
-                toggleBtn.textContent = 'Edit HTML';
+                toggleBtn.innerHTML = PENCIL_SVG;
+                toggleBtn.title = 'Edit description';
             }
         });
 
