@@ -30,13 +30,13 @@ export class KanbanManager {
         this.initTabContainer(tab.termContainer);
     }
 
-    async initTabContainer(container) {
+    async initTabContainer(container, isAutoRetry = false) {
         container.innerHTML = '';
         container.className = 'term-container kanban-panel';
         
         const token = sessionStorage.getItem('vikunja_token');
         if (token) {
-            await this.loadAndRenderBoard(container);
+            await this.loadAndRenderBoard(container, isAutoRetry);
             return;
         }
 
@@ -53,7 +53,7 @@ export class KanbanManager {
             try {
                 const loginToken = await this.attemptLogin(urlVal, userVal, savedPw);
                 sessionStorage.setItem('vikunja_token', loginToken);
-                await this.loadAndRenderBoard(container);
+                await this.loadAndRenderBoard(container, isAutoRetry);
                 return;
             } catch (err) {
                 console.error("Headless autologin failed:", err);
@@ -195,7 +195,7 @@ export class KanbanManager {
         });
     }
 
-    async loadAndRenderBoard(container) {
+    async loadAndRenderBoard(container, isAutoRetry = false) {
         container.innerHTML = `
             <div class="kanban-loading-wrapper">
                 <div class="spinner-ring"></div>
@@ -253,6 +253,14 @@ export class KanbanManager {
             this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
         } catch (err) {
             console.error('Kanban Load Error:', err);
+            
+            if (err.message.includes('Session expired') && !isAutoRetry) {
+                console.log("Session expired. Attempting automatic headless reconnect...");
+                sessionStorage.removeItem('vikunja_token');
+                this.initTabContainer(container, true);
+                return;
+            }
+
             container.innerHTML = `
                 <div class="kanban-error-wrapper">
                     <h3>Failed to load board</h3>
@@ -263,7 +271,7 @@ export class KanbanManager {
                     </div>
                 </div>
             `;
-            container.querySelector('#kanban-retry-btn').addEventListener('click', () => this.loadAndRenderBoard(container));
+            container.querySelector('#kanban-retry-btn').addEventListener('click', () => this.loadAndRenderBoard(container, isAutoRetry));
             container.querySelector('#kanban-reconnect-btn').addEventListener('click', () => {
                 sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container);
