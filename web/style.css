@@ -4883,3 +4883,58 @@ html, body {
     outline: none;
     box-shadow: 0 0 10px var(--accent-glow);
 }
+
+/* File Tree Custom Styling */
+.files-tree-container {
+    padding: 12px;
+    height: 100%;
+    overflow-y: auto;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.files-tree-container .tree-leaf {
+    padding-left: 14px;
+}
+
+.files-tree-container .tree-leaf-content {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-muted);
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.files-tree-container .tree-leaf-content:hover {
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+.files-tree-container .tree-leaf-text {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-left: 6px;
+}
+
+/* Custom tree-expando colors */
+.files-tree-container .tree-expando {
+    background: transparent !important;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 14px;
+    text-align: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    transition: color 0.15s, background-color 0.15s;
+}
+
+.files-tree-container .tree-expando:hover {
+    color: var(--accent);
+    background-color: rgba(255, 255, 255, 0.05) !important;
+}
