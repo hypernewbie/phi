@@ -476,6 +476,16 @@ export class TabManager {
         tabEl.className = 'tab';
         if (pinned) tabEl.classList.add('pinned');
         tabEl.setAttribute('data-pane-id', paneId);
+        
+        const projectLabel = this.getProjectWorktreeLabel(cwd);
+        let tooltipText = `Session: ${title} (${coder})`;
+        if (projectLabel && projectLabel !== '—') {
+            tooltipText += `\nProject: ${projectLabel}`;
+        }
+        if (cwd) {
+            tooltipText += `\nPath: ${cwd}`;
+        }
+        tabEl.title = tooltipText;
         tabEl.innerHTML = `
             <button class="tab-pin" title="Pin session (Keep alive overnight)">📌</button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">

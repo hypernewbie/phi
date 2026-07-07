@@ -241,7 +241,8 @@ class App {
             btn.addEventListener('click', () => {
                 const coder = btn.dataset.coder;
                 if (coder) {
-                    this.sessionsManager.spawnNewSession(coder);
+                    this.sessionsManager.switchCoder(coder);
+                    this.sessionsManager.spawnNewSession();
                 }
             });
         });
