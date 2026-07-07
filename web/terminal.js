@@ -2,6 +2,7 @@
 
 import { PTYWebSocket } from './ws.js';
 import { normalizePath } from './sessions.js';
+import { projectWorktreeLabel } from './util.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -1871,17 +1872,7 @@ export class TabManager {
     }
 
     getProjectWorktreeLabel(cwd) {
-        if (!cwd) return '—';
-        // Normalize slashes and split
-        const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
-        if (parts.length === 0) return '—';
-        
-        // Try to find .git to identify project root
-        // For now, just show last 2 path segments as project/worktree
-        if (parts.length >= 2) {
-            return parts[parts.length - 2] + '/' + parts[parts.length - 1];
-        }
-        return parts[parts.length - 1] || '—';
+        return projectWorktreeLabel(cwd);
     }
 
     async addModelPreset(backend) {
