@@ -81,6 +81,9 @@ export class DiffController {
                 btn.classList.add('active');
                 this.activeTab = btn.getAttribute('data-tab');
                 this.refreshDiff(false); // Reload commit list when changing tabs
+                if (this.activeTab === 'markdown' && this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles({ force: false });
+                }
             });
         });
 
