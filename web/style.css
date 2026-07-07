@@ -69,6 +69,8 @@ html, body {
     justify-content: space-between;
     padding: 0 16px;
     flex-shrink: 0;
+    position: relative;
+    z-index: 100;
 }
 
 .brand {
