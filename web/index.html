@@ -42,6 +42,7 @@
     <script src="vendor/marked.min.js"></script>
     <script src="vendor/highlight.min.js"></script>
     <script src="vendor/diff2html.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/js-treeview@latest/dist/treeview.min.css">
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -326,6 +327,7 @@
                         <button class="diff-tab-btn" data-tab="log">log</button>
                         <button class="diff-tab-btn" data-tab="status">status</button>
                         <button class="diff-tab-btn active" data-tab="markdown">md</button>
+                        <button class="diff-tab-btn" data-tab="files">files</button>
                         <button class="diff-tab-btn" data-tab="cmd">cmd</button>
                     </div>
                     <div class="diff-header-actions" style="display: flex; align-items: center; gap: 8px;">
@@ -349,6 +351,7 @@
                 <div class="diff-content">
                     <div id="diff-term-container" class="diff-term-container"></div>
                     <div id="markdown-file-list" class="markdown-file-list hidden"></div>
+                    <div id="files-tree-container" class="files-tree-container hidden"></div>
                     <div id="cmd-panel" class="cmd-panel hidden"></div>
                 </div>
             </aside>
@@ -465,6 +468,7 @@
     </div>
 
     <!-- Main Entry Point -->
+    <script src="https://cdn.jsdelivr.net/npm/js-treeview@latest/dist/treeview.min.js"></script>
     <script src="vendor/Sortable.min.js"></script>
     <script type="module" src="app.js"></script>
 </body>
