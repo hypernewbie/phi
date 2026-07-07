@@ -1540,10 +1540,8 @@ export class TabManager {
             const btnRect = triggerBtn.getBoundingClientRect();
             const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
             let left = btnRect.left - containerRect.left;
-            if (window.innerWidth <= 768) {
-                const maxWidth = Math.min(280, window.innerWidth - 24);
-                left = Math.max(12, Math.min(left, containerRect.width - maxWidth - 12));
-            }
+            const dropupWidth = window.innerWidth <= 768 ? Math.min(280, window.innerWidth - 24) : 320;
+            left = Math.max(12, Math.min(left, containerRect.width - dropupWidth - 12));
             dropup.style.left = `${left}px`;
             dropup.classList.remove('hidden');
             renderFn();
