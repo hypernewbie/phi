@@ -1660,7 +1660,6 @@ export class TabManager {
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
         
-        const activeTab = this.getActiveTab();
         if (activeTab && activeTab.coder === 'agy') {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
