@@ -373,4 +373,38 @@ Important state includes:
 - Kanban vault data
 - active browser tab restoration data
 
-Use full config export for backup before making major changes.
+- Use full config export for backup before making major changes.
+
+## AI Sync Board
+
+The `sync` tab exposes a dead-simple, in-memory CRUD message store. It is designed specifically to allow different AI agents (e.g., Claude Code, Agy, OpenCode) running on different workspaces or machines to coordinate and communicate with each other asynchronously.
+
+### How It Works
+
+Every Phi server has a local sync board. By setting a **Coordinator** URL in the sync tab, you point your UI and API proxy to a central Phi server's board.
+
+The board can be manipulated by any tool or script via plain HTTP REST requests:
+
+- **List all keys**: `GET /api/sync/messages`
+- **Get specific key**: `GET /api/sync/messages/{key}`
+- **Create/Upsert key**: `POST /api/sync/messages` with JSON body `{"key": "some_key", "value": "some_value"}`
+- **Delete key**: `DELETE /api/sync/messages/{key}`
+
+Because all writes (`POST`) act as upserts, AI agents can post updates atomically without needing to verify key existence beforehand.
+
+### Creating a Custom Claude Skill
+
+If you use Claude Code (the CLI) or Claude Desktop, you can teach it to coordinate automatically using the Sync Board by giving it a global skill. 
+
+#### The Prompt to Give to Claude:
+Paste the following prompt into Claude to have it create the sync tool on your system:
+
+```text
+Please create a global skill/tool for me that allows you to read, write, and delete messages on my local Phi server's Sync Board (running at http://localhost:7070). 
+- To list keys: curl -s http://localhost:7070/api/sync/messages
+- To read a key: curl -s http://localhost:7070/api/sync/messages/<key>
+- To write/update a key: curl -s -X POST http://localhost:7070/api/sync/messages -H "Content-Type: application/json" -d '{"key":"<key>", "value":"<value>"}'
+- To delete a key: curl -s -X DELETE http://localhost:7070/api/sync/messages/<key>
+
+Explain where you are saving the tool/alias/script (e.g., in ~/.claude/skills/ or as a global CLI script/bash function) so I can use it across any project.
+```
