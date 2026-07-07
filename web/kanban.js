@@ -1,4 +1,4 @@
-import { escapeHtml as escapeHtmlUtil } from './util.js';
+import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone } from './util.js';
 
 export class KanbanManager {
     constructor(app) {
@@ -468,13 +468,7 @@ export class KanbanManager {
         // Priority styles mapping
         let priorityBadge = '';
         if (task.priority > 0) {
-            const prioClass = `priority-${task.priority}`;
-            let prioLabel = 'P0';
-            if (task.priority === 1) prioLabel = 'Low';
-            else if (task.priority === 2) prioLabel = 'Medium';
-            else if (task.priority === 3) prioLabel = 'High';
-            else if (task.priority === 4) prioLabel = 'Urgent';
-            else if (task.priority === 5) prioLabel = 'DOOM';
+            const { label: prioLabel, className: prioClass } = priorityMeta(task.priority);
             
             priorityBadge = `<span class="kanban-badge ${prioClass}">${prioLabel}</span>`;
         }
@@ -565,7 +559,7 @@ export class KanbanManager {
                     
                     // Optimistically update card done styling
                     const targetBucket = (this.buckets || []).find(b => b.id == newBucketId);
-                    const isDoneBucket = targetBucket && (targetBucket.is_done === true || targetBucket.title.toLowerCase() === 'done');
+                    const isDoneBucket = bucketIsDone(targetBucket);
                     if (isDoneBucket) {
                         evt.item.classList.add('kanban-card--done');
                     } else {
@@ -586,7 +580,7 @@ export class KanbanManager {
                         
                         // Revert done styling
                         const originalBucket = (this.buckets || []).find(b => b.id == oldBucketId);
-                        const isOriginalDone = originalBucket && (originalBucket.is_done === true || originalBucket.title.toLowerCase() === 'done');
+                        const isOriginalDone = bucketIsDone(originalBucket);
                         if (isOriginalDone) {
                             evt.item.classList.add('kanban-card--done');
                         } else {
@@ -863,7 +857,7 @@ export class KanbanManager {
         if (!existing) throw new Error(`Task ${taskId} not in cache`);
 
         const targetBucket = (this.buckets || []).find(b => b.id == newBucketId);
-        const isDoneBucket = targetBucket && (targetBucket.is_done === true || targetBucket.title.toLowerCase() === 'done');
+        const isDoneBucket = bucketIsDone(targetBucket);
 
         const payload = {
             ...existing,
