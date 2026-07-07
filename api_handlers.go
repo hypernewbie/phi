@@ -485,6 +485,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"terminal_commands":         cfg.TerminalCommands,
 		"markdown_dirs":             cfg.MarkdownDirs,
 		"use_existing_terminal_tab": cfg.UseExistingTerminalTab,
+		"sync_coordinator":          cfg.SyncCoordinator,
 	})
 }
 
