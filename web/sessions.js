@@ -172,6 +172,7 @@ export class SessionsManager {
         try {
             const res = await fetch('/api/config');
             const data = await res.json();
+            this.config = data;
             
             this.workspaceSelect.innerHTML = '';
             data.workspaces.forEach(ws => {
