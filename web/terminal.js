@@ -1051,9 +1051,16 @@ export class TabManager {
                 this.inputBarContainer.classList.add('hidden');
                 this.presetsContainer.classList.add('hidden');
                 this.showEmptyState();
+                
+                if (this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles({ force: true });
+                }
             }
         } else if (this.tabs.size === 0) {
             this.showEmptyState();
+            if (this.app.markdownManager) {
+                this.app.markdownManager.refreshFiles({ force: true });
+            }
         }
     }
 
