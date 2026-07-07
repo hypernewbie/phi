@@ -48,11 +48,13 @@ func extractAgyCwdFromBrain(uuid string) string {
 	return ""
 }
 
-type AgyMeta struct {
+type SessionMeta struct {
 	Name   string `json:"name"`
 	SeenAt string `json:"seen_at"`
 	Cwd    string `json:"cwd"`
 }
+
+type AgyMeta = SessionMeta
 
 var agyMu sync.Mutex
 
@@ -60,7 +62,7 @@ func getMetaFilePath() string {
 	return expandHome("~/.phi/sessions.json")
 }
 
-func LoadAgyMetaMap() (map[string]AgyMeta, error) {
+func LoadSessionMetaMap() (map[string]SessionMeta, error) {
 	metaPath := getMetaFilePath()
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
 		return nil, err
@@ -68,30 +70,34 @@ func LoadAgyMetaMap() (map[string]AgyMeta, error) {
 
 	file, err := os.Open(metaPath)
 	if os.IsNotExist(err) {
-		return make(map[string]AgyMeta), nil
+		return make(map[string]SessionMeta), nil
 	} else if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	var m map[string]AgyMeta
+	var m map[string]SessionMeta
 	b, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(b) == 0 {
-		return make(map[string]AgyMeta), nil
+		return make(map[string]SessionMeta), nil
 	}
 
 	if err := json.Unmarshal(b, &m); err != nil {
-		return make(map[string]AgyMeta), nil
+		return make(map[string]SessionMeta), nil
 	}
 
 	return m, nil
 }
 
-func SaveAgyMetaMap(m map[string]AgyMeta) error {
+func LoadAgyMetaMap() (map[string]AgyMeta, error) {
+	return LoadSessionMetaMap()
+}
+
+func SaveSessionMetaMap(m map[string]SessionMeta) error {
 	metaPath := getMetaFilePath()
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
 		return err
@@ -105,11 +111,15 @@ func SaveAgyMetaMap(m map[string]AgyMeta) error {
 	return os.WriteFile(metaPath, b, 0644)
 }
 
-func SaveAgySessionName(id string, name string) error {
+func SaveAgyMetaMap(m map[string]AgyMeta) error {
+	return SaveSessionMetaMap(m)
+}
+
+func SaveSessionName(id string, name string) error {
 	agyMu.Lock()
 	defer agyMu.Unlock()
 
-	m, err := LoadAgyMetaMap()
+	m, err := LoadSessionMetaMap()
 	if err != nil {
 		return err
 	}
@@ -119,14 +129,18 @@ func SaveAgySessionName(id string, name string) error {
 	meta.SeenAt = time.Now().Format(time.RFC3339)
 	m[id] = meta
 
-	return SaveAgyMetaMap(m)
+	return SaveSessionMetaMap(m)
 }
 
-func SaveAgySessionCwd(id string, cwd string) error {
+func SaveAgySessionName(id string, name string) error {
+	return SaveSessionName(id, name)
+}
+
+func SaveSessionCwd(id string, cwd string) error {
 	agyMu.Lock()
 	defer agyMu.Unlock()
 
-	m, err := LoadAgyMetaMap()
+	m, err := LoadSessionMetaMap()
 	if err != nil {
 		return err
 	}
@@ -136,10 +150,14 @@ func SaveAgySessionCwd(id string, cwd string) error {
 	meta.SeenAt = time.Now().Format(time.RFC3339)
 	m[id] = meta
 
-	return SaveAgyMetaMap(m)
+	return SaveSessionMetaMap(m)
 }
 
-func syncAgyCwdMappings(m map[string]AgyMeta) {
+func SaveAgySessionCwd(id string, cwd string) error {
+	return SaveSessionCwd(id, cwd)
+}
+
+func syncSessionCwdMappings(m map[string]SessionMeta) {
 	// 1. Sync from last_conversations.json
 	cachePath := expandHome("~/.gemini/antigravity-cli/cache/last_conversations.json")
 	if b, err := os.ReadFile(cachePath); err == nil {
@@ -156,7 +174,7 @@ func syncAgyCwdMappings(m map[string]AgyMeta) {
 						m[uuid] = meta
 					}
 				} else {
-					m[uuid] = AgyMeta{
+					m[uuid] = SessionMeta{
 						Cwd:    dir,
 						SeenAt: time.Now().Format(time.RFC3339),
 					}
@@ -184,7 +202,7 @@ func syncAgyCwdMappings(m map[string]AgyMeta) {
 							m[entry.ConversationId] = meta
 						}
 					} else {
-						m[entry.ConversationId] = AgyMeta{
+						m[entry.ConversationId] = SessionMeta{
 							Cwd:    ws,
 							SeenAt: time.Now().Format(time.RFC3339),
 						}
@@ -210,13 +228,13 @@ func ListAgySessions(cwd string) ([]Session, error) {
 		return nil, err
 	}
 
-	m, err := LoadAgyMetaMap()
+	m, err := LoadSessionMetaMap()
 	if err != nil {
-		m = make(map[string]AgyMeta)
+		m = make(map[string]SessionMeta)
 	}
 
 	// Sync latest workspace directory mappings
-	syncAgyCwdMappings(m)
+	syncSessionCwdMappings(m)
 
 	sessions := []Session{}
 	activeUUIDs := make(map[string]bool)
@@ -300,16 +318,16 @@ func ListAgySessions(cwd string) ([]Session, error) {
 
 	// Prune orphans from map if it exceeds 50,000 entries
 	if len(m) > 50000 {
-		pruned := make(map[string]AgyMeta)
+		pruned := make(map[string]SessionMeta)
 		for k, v := range m {
 			if activeUUIDs[k] {
 				pruned[k] = v
 			}
 		}
-		_ = SaveAgyMetaMap(pruned)
+		_ = SaveSessionMetaMap(pruned)
 	} else if len(files) > 0 {
 		// Just save any new default names or CWD assignments we generated/mapped
-		_ = SaveAgyMetaMap(m)
+		_ = SaveSessionMetaMap(m)
 	}
 
 	return sessions, nil

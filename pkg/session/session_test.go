@@ -104,9 +104,9 @@ func TestAgySessionCwdAndSync(t *testing.T) {
 		t.Errorf("Expected Cwd %q, got %q", testCwd, meta.Cwd)
 	}
 
-	// 2. Test syncAgyCwdMappings robustness
+	// 2. Test syncSessionCwdMappings robustness
 	// This should run without errors even if cache or history files do not exist or are empty
-	syncAgyCwdMappings(m)
+	syncSessionCwdMappings(m)
 }
 
 func TestListGitWorktrees(t *testing.T) {
