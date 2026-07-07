@@ -51,27 +51,29 @@ export class FilesManager {
 
             this.treeInstance = new TreeView(transformedData, 'files-tree-container');
             
-            this.treeInstance.on('select', (e) => {
-                const target = e.target;
-                if (!target) return;
-                
-                const contentEl = target.closest('.tree-leaf-content');
-                if (!contentEl) return;
-                
-                const itemDataStr = contentEl.getAttribute('data-item');
-                if (!itemDataStr) return;
-                
-                const item = JSON.parse(itemDataStr);
-                if (item.is_dir) {
-                    const leaf = contentEl.closest('.tree-leaf');
-                    if (leaf) {
-                        const expando = leaf.querySelector('.tree-expando');
-                        if (expando) expando.click();
-                    }
+            this.treeInstance.on('select', (node) => {
+                if (!node || node.is_dir) {
                     return;
                 }
+                this.openFileInTerminal(node.id);
+            });
 
-                this.openFileInTerminal(item.id);
+            // Toggle folder expansion on row click
+            this.treeContainer.addEventListener('click', (e) => {
+                const contentEl = e.target.closest('.tree-leaf-content');
+                if (contentEl) {
+                    const itemDataStr = contentEl.getAttribute('data-item');
+                    if (itemDataStr) {
+                        const item = JSON.parse(itemDataStr);
+                        if (item.is_dir) {
+                            const leaf = contentEl.closest('.tree-leaf');
+                            const expandoBtn = leaf ? leaf.querySelector('.tree-expando') : null;
+                            if (expandoBtn && e.target !== expandoBtn) {
+                                expandoBtn.click();
+                            }
+                        }
+                    }
+                }
             });
 
         } catch (err) {
