@@ -208,6 +208,7 @@ export class SessionsManager {
             }
 
             if (data.hostname) {
+                this.app.hostname = data.hostname;
                 const hostEl = document.getElementById('hostname-display');
                 if (hostEl) {
                     hostEl.innerText = ` — ${data.hostname}`;

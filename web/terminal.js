@@ -1066,7 +1066,13 @@ export class TabManager {
 
     showEmptyState() {
         const el = document.getElementById('empty-state');
-        if (el) el.classList.remove('hidden');
+        if (el) {
+            el.classList.remove('hidden');
+            const hostDisplay = document.getElementById('empty-state-hostname');
+            if (hostDisplay) {
+                hostDisplay.innerText = this.app.hostname || 'Localhost';
+            }
+        }
     }
 
     hideEmptyState() {
