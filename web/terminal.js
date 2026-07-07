@@ -487,7 +487,7 @@ export class TabManager {
         }
         tabEl.title = tooltipText;
         tabEl.innerHTML = `
-            <button class="tab-pin" title="Pin session (Keep alive overnight)">📌</button>
+            <button class="tab-pin" title="Pin session (Keep alive overnight)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
             <button class="tab-close">×</button>
@@ -1816,7 +1816,7 @@ export class TabManager {
             if (tabInfo.pinned) {
                 pinBtn.classList.add('pinned');
             }
-            pinBtn.innerHTML = '📌';
+            pinBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>`;
             pinBtn.title = 'Pin session (Keep alive overnight)';
             pinBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -2022,7 +2022,7 @@ export class TabManager {
 
             const editBtn = document.createElement('button');
             editBtn.className = 'dropup-action-btn dropup-edit-btn';
-            editBtn.textContent = 'edit';
+            editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
             editBtn.title = `Edit model preset ${model}`;
             editBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -2032,7 +2032,7 @@ export class TabManager {
 
             const delBtn = document.createElement('button');
             delBtn.className = 'dropup-action-btn dropup-del-btn';
-            delBtn.textContent = 'del';
+            delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
             delBtn.title = `Delete model preset ${model}`;
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();

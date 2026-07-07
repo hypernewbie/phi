@@ -917,16 +917,15 @@ html, body {
 .tab-pin {
     border: none;
     background: transparent;
-    font-size: 11px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 0;
     margin: 0;
-    opacity: 0.25;
-    transition: opacity 0.15s, transform 0.15s;
-    filter: grayscale(1);
+    opacity: 0.35;
+    color: var(--text-muted);
+    transition: opacity 0.15s, transform 0.15s, color 0.15s;
 }
 
 .tab:hover .tab-pin {
@@ -936,12 +935,12 @@ html, body {
 .tab-pin:hover {
     opacity: 1 !important;
     transform: scale(1.15);
-    filter: none;
+    color: var(--accent);
 }
 
 .tab.pinned .tab-pin {
     opacity: 1;
-    filter: none;
+    color: var(--accent);
 }
 
 .tab-close {
@@ -3937,16 +3936,20 @@ html, body {
 
 .hostname-dropdown-pin-btn {
     opacity: 0.4;
+    color: var(--text-muted);
+    transition: background-color 0.15s, opacity 0.15s, color 0.15s;
 }
 
 .hostname-dropdown-pin-btn.pinned {
     opacity: 1;
+    color: var(--accent);
     filter: drop-shadow(0 0 4px var(--accent-glow));
 }
 
 .hostname-dropdown-pin-btn:hover {
     background-color: rgba(255, 255, 255, 0.1);
     opacity: 1;
+    color: var(--accent);
 }
 
 .hostname-dropdown-close-btn {
