@@ -214,6 +214,10 @@ export class SessionsManager {
                     hostEl.innerText = ` — ${data.hostname}`;
                 }
                 document.title = `Φ ${data.hostname}`;
+                const emptyHostEl = document.getElementById('empty-state-hostname');
+                if (emptyHostEl) {
+                    emptyHostEl.innerText = data.hostname;
+                }
             }
             
             await this.loadSessions();
