@@ -1424,7 +1424,7 @@ html, body {
     position: absolute;
     bottom: 40px; /* sits right above presets bar */
     z-index: 1000;
-    width: 260px;
+    width: 320px;
     background-color: var(--bg-panel);
     border: 1px solid var(--bg-border);
     border-radius: 6px;
