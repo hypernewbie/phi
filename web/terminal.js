@@ -81,15 +81,16 @@ export class TabManager {
         const logo = document.querySelector('.brand .logo');
         const brandName = document.querySelector('.brand .brand-name');
         if (!logo) return;
-        // Thresholds: idle < 30, moderate 30–70, high > 70
+        // Thresholds: idle < 30, moderate 30–70, high 70-90, critical > 90
         let level = 'cpu-idle';
-        if (cpuPercent > 70) level = 'cpu-high';
+        if (cpuPercent > 90) level = 'cpu-critical';
+        else if (cpuPercent > 70) level = 'cpu-high';
         else if (cpuPercent > 30) level = 'cpu-moderate';
         // Don't churn the DOM if the level hasn't changed
         if (logo.dataset.cpuLevel === level) return;
         for (const el of [logo, brandName]) {
             if (!el) continue;
-            el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high');
+            el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical');
             el.classList.add(level);
             el.dataset.cpuLevel = level;
         }

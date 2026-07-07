@@ -88,70 +88,151 @@ html, body {
     transition: color 0.2s ease, text-shadow 0.2s ease, opacity 0.2s ease;
 }
 
-/* ── CPU-state classes on the phi brand ────────────────────────────────────────
-   The whole phi brand (Φ symbol + 'phi' text) reacts to CPU load by
-   shifting toward the current theme accent (var(--accent)). No red —
-   the user wants the highlight color to track whatever accent theme
-   is selected (purple by default, but amber/yellow/blue/etc. when
-   the user picks a different theme).
+/* ── CPU-state classes on the phi brand ──────────────────────────────────────── */
+.logo-glow-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 
-   Idle:    symbol in accent, 'phi' text in white-ish (var(--text-primary)).
-   Moderate: gentle accent glow pulse on the symbol; text unchanged.
-   High:    symbol shifts to accent-bright with a strong pulsing glow;
-            'phi' text shifts from white to accent and pulses the same
-            glow in sync — a clear 'something's hot' visual signal. */
+.logo-glow-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 24px;
+    height: 24px;
+    margin-top: -12px;
+    margin-left: -12px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
+
+/* If critical, animate the ring */
+.brand:has(.cpu-critical) .logo-glow-wrapper::after {
+    animation: critical-shockwave 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+}
+
+@keyframes critical-shockwave {
+    0% {
+        transform: scale(0.8);
+        opacity: 0.8;
+        box-shadow: 0 0 0 0 var(--accent-glow);
+    }
+    100% {
+        transform: scale(2.4);
+        opacity: 0;
+        box-shadow: 0 0 10px 4px transparent;
+    }
+}
+
 .brand .logo.cpu-moderate {
-    animation: phi-cpu-pulse 2.5s ease-in-out infinite;
+    animation: logo-obsidian-breath 3.0s ease-in-out infinite;
+}
+
+@keyframes logo-obsidian-breath {
+    0%, 100% {
+        text-shadow: 0 0 6px var(--accent), 0 0 12px var(--accent-glow);
+    }
+    50% {
+        text-shadow: 0 0 10px var(--accent-bright), 0 0 24px var(--accent-glow), 0 0 40px var(--accent-glow);
+    }
+}
+
+.brand .brand-name.cpu-moderate {
+    animation: brand-obsidian-breath 3.0s ease-in-out infinite;
+}
+
+@keyframes brand-obsidian-breath {
+    0%, 100% { opacity: 0.95; }
+    50% { opacity: 1.0; text-shadow: 0 0 8px var(--accent-glow); }
 }
 
 .brand .logo.cpu-high {
     color: var(--accent-bright);
-    text-shadow:
-        0 0 10px var(--accent-glow),
-        0 0 22px var(--accent-glow);
-    animation: phi-cpu-pulse-strong 1.6s ease-in-out infinite;
-}
-
-@keyframes phi-cpu-pulse {
-    0%, 100% { opacity: 0.92; }
-    50%      { opacity: 1.0;  text-shadow: 0 0 18px var(--accent-glow); }
-}
-
-@keyframes phi-cpu-pulse-strong {
-    0%, 100% { opacity: 0.9; text-shadow: 0 0 10px var(--accent-glow); }
-    50%      { opacity: 1.0; text-shadow: 0 0 26px var(--accent-glow); }
-}
-
-/* 'phi' text word: same dynamic, applied to the brand-name span so the
-   whole phi identity moves together. White → accent on high CPU. */
-.brand .brand-name.cpu-moderate {
-    animation: brand-cpu-pulse 2.5s ease-in-out infinite;
+    animation: logo-chromatic 1.2s infinite, logo-shiver-light 0.15s infinite;
 }
 
 .brand .brand-name.cpu-high {
     color: var(--accent);
-    text-shadow:
-        0 0 6px var(--accent-glow),
-        0 0 14px var(--accent-glow);
-    animation: brand-cpu-pulse-strong 1.6s ease-in-out infinite;
+    animation: brand-obsidian-breath 1.2s infinite, logo-shiver-light 0.15s infinite;
 }
 
-@keyframes brand-cpu-pulse {
-    0%, 100% { text-shadow: 0 0 4px rgba(228, 227, 233, 0.08); }
-    50%      { text-shadow: 0 0 10px rgba(228, 227, 233, 0.16); }
+@keyframes logo-chromatic {
+    0%, 100% {
+        text-shadow: 1.5px 0 0 rgba(0, 220, 255, 0.7), -1.5px 0 0 rgba(255, 0, 100, 0.6), 0 0 12px var(--accent-glow);
+    }
+    50% {
+        text-shadow: 2px 0 0 rgba(0, 220, 255, 0.9), -2px 0 0 rgba(255, 0, 100, 0.8), 0 0 24px var(--accent-glow);
+    }
 }
 
-@keyframes brand-cpu-pulse-strong {
-    0%, 100% { text-shadow: 0 0 6px var(--accent-glow); }
-    50%      { text-shadow: 0 0 16px var(--accent-glow); }
+@keyframes logo-shiver-light {
+    0%, 100% { transform: translate(0, 0); }
+    25% { transform: translate(-0.5px, 0.5px); }
+    75% { transform: translate(0.5px, -0.5px); }
+}
+
+.brand .logo.cpu-critical {
+    color: #fff;
+    filter: brightness(1.5) saturate(2.0);
+    animation: logo-nuclear 0.8s infinite alternate, logo-shiver-hard 0.08s infinite;
+}
+
+.brand .brand-name.cpu-critical {
+    color: var(--accent-bright);
+    animation: brand-nuclear 0.8s infinite alternate, logo-shiver-hard 0.08s infinite;
+}
+
+@keyframes logo-nuclear {
+    0% {
+        text-shadow: 
+            0 0 2px #fff,
+            0 0 8px var(--accent-bright),
+            0 0 16px var(--accent),
+            0 0 32px var(--accent-glow),
+            0 0 64px var(--accent-glow);
+    }
+    100% {
+        text-shadow: 
+            0 0 4px #fff,
+            0 0 16px var(--accent-bright),
+            0 0 32px var(--accent),
+            0 0 64px var(--accent-glow),
+            0 0 128px var(--accent-glow);
+    }
+}
+
+@keyframes brand-nuclear {
+    0% {
+        text-shadow: 0 0 6px var(--accent-bright), 0 0 12px var(--accent);
+    }
+    100% {
+        text-shadow: 0 0 12px var(--accent-bright), 0 0 24px var(--accent);
+    }
+}
+
+@keyframes logo-shiver-hard {
+    0% { transform: translate(0, 0); }
+    20% { transform: translate(-1.2px, 0.6px); }
+    40% { transform: translate(1.2px, -0.6px); }
+    60% { transform: translate(-0.8px, -0.8px); }
+    80% { transform: translate(0.8px, 0.8px); }
+    100% { transform: translate(0, 0); }
 }
 
 /* Respect prefers-reduced-motion: drop the animation, keep the color step. */
 @media (prefers-reduced-motion: reduce) {
     .brand .logo.cpu-moderate,
     .brand .logo.cpu-high,
+    .brand .logo.cpu-critical,
     .brand .brand-name.cpu-moderate,
     .brand .brand-name.cpu-high,
+    .brand .brand-name.cpu-critical,
     .modal-overlay:not(.hidden) .modal-content,
     .hostname-tabs-dropdown,
     .tab.has-attention {
@@ -4882,6 +4963,253 @@ html, body {
     font-family: var(--font-ui);
     outline: none;
     box-shadow: 0 0 10px var(--accent-glow);
+}
+
+/* AI Sync Board Panel Styling */
+.sync-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+    box-sizing: border-box;
+    overflow-y: hidden;
+}
+
+.sync-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.sync-coordinator-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-grow: 1;
+}
+
+.sync-coordinator-bar label {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.sync-input {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sync-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.sync-textarea {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    min-height: 80px;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sync-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.sync-btn-primary {
+    background-color: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.15s, transform 0.1s;
+}
+
+.sync-btn-primary:hover {
+    background-color: var(--accent-bright);
+}
+
+.sync-btn-primary:active {
+    transform: scale(0.95);
+}
+
+.sync-btn-secondary {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.sync-btn-secondary:hover {
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+/* Inline Add/Edit Form */
+.sync-form-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.sync-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* Messages List */
+.sync-messages-list {
+    flex-grow: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-right: 4px;
+}
+
+.sync-empty-state, .sync-error-state, .sync-list-loading {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 32px 16px;
+    font-family: var(--font-ui);
+}
+
+.sync-error-state {
+    color: var(--text-danger);
+}
+
+/* Sync Message Card */
+.sync-card {
+    background-color: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: relative;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.sync-card:hover {
+    border-color: var(--accent-dim);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sync-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sync-card-key {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sync-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sync-card-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background-color 0.15s;
+}
+
+.sync-card-btn:hover {
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+.sync-card-btn.sync-del-btn:hover {
+    color: var(--text-danger);
+}
+
+.sync-card-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    word-break: break-all;
+    white-space: pre-wrap;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.sync-card-value:hover {
+    color: var(--text-primary);
+}
+
+.sync-card-value.collapsed {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    max-height: 4.5em; /* Fallback */
+}
+
+.sync-card-footer {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: right;
+    font-family: var(--font-ui);
 }
 
 
