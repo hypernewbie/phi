@@ -45,3 +45,25 @@ export function escapeHtml(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+
+// priorityMeta maps a Vikunja priority to its badge {label, className}. Pure.
+// Priorities 1..5 -> Low/Medium/High/Urgent/DOOM; anything else falls back to
+// the 'P0' label. className always uses the raw priority value (e.g.
+// 'priority-6' for 6), matching the original renderCard behavior.
+export function priorityMeta(priority) {
+    const className = `priority-${priority}`;
+    let label = 'P0';
+    if (priority === 1) label = 'Low';
+    else if (priority === 2) label = 'Medium';
+    else if (priority === 3) label = 'High';
+    else if (priority === 4) label = 'Urgent';
+    else if (priority === 5) label = 'DOOM';
+    return { label, className };
+}
+
+// isDoneBucket reports whether a Vikunja bucket represents "done". Pure and
+// null-safe: returns false for a nullish bucket WITHOUT touching .title (the
+// `bucket &&` short-circuit is load-bearing). Uses strict is_done === true.
+export function isDoneBucket(bucket) {
+    return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
+}
