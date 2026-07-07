@@ -295,12 +295,12 @@ export class SessionsManager {
         if (!cwdPath) return;
         document.querySelectorAll('.worktree-section').forEach(sec => {
             const secPath = sec.getAttribute('data-worktree-path');
-            if (secPath === cwdPath) {
+            if (normalizePath(secPath) === normalizePath(cwdPath)) {
                 sec.classList.add('active');
                 sec.classList.add('expanded');
                 const container = sec.querySelector('.worktree-sessions-container');
                 if (container && (container.innerHTML === '' || container.innerHTML.includes('Scanning sessions...'))) {
-                    this.loadWorktreeSessions(cwdPath, container);
+                    this.loadWorktreeSessions(secPath, container);
                 }
             } else {
                 sec.classList.remove('active');
