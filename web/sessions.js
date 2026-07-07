@@ -1,4 +1,11 @@
-/* Φ phi — Session Explorer & Workspace Controller */
+export function normalizePath(p) {
+    if (!p) return '';
+    let normalized = p.replace(/\\/g, '/');
+    if (normalized.endsWith('/') && normalized.length > 1) {
+        normalized = normalized.slice(0, -1);
+    }
+    return normalized.toLowerCase();
+}
 
 export class SessionsManager {
     constructor(app) {
@@ -266,7 +273,7 @@ export class SessionsManager {
         await this.loadWorktrees();
     }
 
-    switchCoder(coderId) {
+    switchCoder(coderId, skipReload = false) {
         if (coderId === 'review' || coderId === 'kanban') return;
         if (this.activeCoder === coderId) return;
         this.activeCoder = coderId;
@@ -279,7 +286,9 @@ export class SessionsManager {
             }
         });
         
-        this.loadSessions();
+        if (!skipReload) {
+            this.loadSessions();
+        }
     }
 
     highlightActiveWorktree(cwdPath) {
@@ -300,7 +309,7 @@ export class SessionsManager {
         });
     }
 
-    async loadWorktrees() {
+    async loadWorktrees(targetCwd = null) {
         this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
             const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(this.activeWorkspace)}`);
@@ -314,11 +323,18 @@ export class SessionsManager {
                 return;
             }
             
-            const activeWT = worktrees.find(wt => wt.active);
-            if (activeWT) {
-                this.activeCWD = activeWT.path;
+            if (targetCwd) {
+                this.activeCWD = targetCwd;
             } else {
-                this.activeCWD = worktrees[0].path;
+                const hasCwd = worktrees.some(wt => normalizePath(wt.path) === normalizePath(this.activeCWD));
+                if (!hasCwd) {
+                    const activeWT = worktrees.find(wt => wt.active);
+                    if (activeWT) {
+                        this.activeCWD = activeWT.path;
+                    } else {
+                        this.activeCWD = worktrees[0].path;
+                    }
+                }
             }
 
             localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
@@ -354,10 +370,12 @@ export class SessionsManager {
                 const wtSection = document.createElement('div');
                 wtSection.className = 'worktree-section';
                 wtSection.setAttribute('data-worktree-path', wt.path);
-                if (wt.expanded || wt.active) {
+                
+                const isCurrentCWD = normalizePath(wt.path) === normalizePath(this.activeCWD);
+                if (wt.expanded || isCurrentCWD) {
                     wtSection.classList.add('expanded');
                 }
-                if (wt.active) {
+                if (isCurrentCWD) {
                     wtSection.classList.add('active');
                 }
 
@@ -409,7 +427,7 @@ export class SessionsManager {
 
                 this.sessionList.appendChild(wtSection);
 
-                if (wt.expanded || wt.active) {
+                if (wt.expanded || isCurrentCWD) {
                     this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
                 }
             });

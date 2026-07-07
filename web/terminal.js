@@ -1,6 +1,7 @@
 /* Φ phi — Terminal & Tab Manager */
 
 import { PTYWebSocket } from './ws.js';
+import { normalizePath } from './sessions.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -950,30 +951,50 @@ export class TabManager {
         newTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
         this.saveTabsState();
         
-        // Update sidebar select state and active coder tab
-        this.app.sessionsManager.switchCoder(newTab.coder);
-        this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+        // Update sidebar select state and active coder tab, but skip auto-reload since we coordinate it
+        const prevCoder = this.app.sessionsManager.activeCoder;
+        this.app.sessionsManager.switchCoder(newTab.coder, true);
         
-        // Sync project / workspace context from the tab
-        if (newTab.workspace && this.app.sessionsManager.activeWorkspace !== newTab.workspace) {
+        // Sync project / workspace context from the tab using normalized paths
+        const workspaceChanged = newTab.workspace && (normalizePath(this.app.sessionsManager.activeWorkspace) !== normalizePath(newTab.workspace));
+        const coderChanged = prevCoder !== newTab.coder;
+        const cwdChanged = newTab.cwd && (normalizePath(this.app.sessionsManager.activeCWD) !== normalizePath(newTab.cwd));
+
+        if (workspaceChanged) {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.updateWorkspaceSelectWidth();
-            this.app.sessionsManager.loadWorktrees().then(() => {
-                this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+            
+            this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
+                this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
                 }
             });
-        } else if (newTab.cwd && this.app.sessionsManager.activeCWD !== newTab.cwd) {
+        } else if (coderChanged) {
+            // Workspace is the same, but coder changed. We need to rebuild worktrees to load the sessions for the new coder!
+            this.app.sessionsManager.activeCWD = newTab.cwd;
+            this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
+                this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+                this.app.diffController.refreshDiff();
+                if (this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles({ force: false });
+                }
+            });
+        } else if (cwdChanged) {
+            // Workspace and coder are the same, only CWD changed.
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.highlightActiveWorktree(newTab.cwd);
+            this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             this.app.diffController.refreshDiff();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: false });
             }
+        } else {
+            // Workspace, coder, and CWD are all the same, only session might have changed.
+            this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
         }
         
         this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true });
