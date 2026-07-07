@@ -3,6 +3,7 @@ import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { KanbanManager } from './kanban.js';
+import { SyncManager } from './sync.js';
 
 const ACCENT_COLORS = {
     purple: {
@@ -132,6 +133,7 @@ class App {
         this.diffController = new DiffController(this);
         this.markdownManager = new MarkdownManager(this);
         this.kanbanManager = new KanbanManager(this);
+        this.syncManager = new SyncManager(this);
     }
     
     async init() {
