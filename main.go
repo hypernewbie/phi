@@ -159,7 +159,6 @@ func main() {
 	http.HandleFunc("/api/config/markdown-dirs", handleMarkdownDirs)
 	http.HandleFunc("/api/config/use-existing-terminal-tab", handleUseExistingTerminalTab)
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
-	http.HandleFunc("/api/files/tree", handleFilesTree)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/markdown/paste", handleMarkdownPaste)
 	http.HandleFunc("/api/markdown/delete", handleMarkdownDelete)

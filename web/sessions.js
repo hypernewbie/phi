@@ -593,21 +593,20 @@ export class SessionsManager {
         });
     }
     
-    async spawnNewSession(overrideCoder = null, initialCmd = '') {
+    async spawnNewSession() {
         try {
-            const coder = overrideCoder || this.activeCoder;
             let coderName = 'Shell';
-            if (coder === 'opencode') coderName = 'OpenCode';
-            else if (coder === 'claude') coderName = 'Claude';
-            else if (coder === 'pi') coderName = 'Pi';
-            else if (coder === 'agy') coderName = 'Agy';
+            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
+            else if (this.activeCoder === 'claude') coderName = 'Claude';
+            else if (this.activeCoder === 'pi') coderName = 'Pi';
+            else if (this.activeCoder === 'agy') coderName = 'Agy';
             const title = `+ ${coderName}`;
 
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    coder: coder,
+                    coder: this.activeCoder,
                     cwd: this.activeCWD,
                     session_id: '',
                     title: title,
@@ -620,7 +619,7 @@ export class SessionsManager {
             }
 
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coder, this.activeWorkspace, this.activeCWD, false, false, initialCmd);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
             
             this.loadSessions();
         } catch (e) {
