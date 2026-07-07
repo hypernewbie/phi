@@ -59,7 +59,7 @@
                         <line x1="3" y1="18" x2="21" y2="18"></line>
                     </svg>
                 </button>
-                <span class="logo">Φ</span>
+                <span class="logo-glow-wrapper"><span class="logo">Φ</span></span>
                 <span class="brand-name">phi</span>
                 <div class="hostname-wrapper" style="position: relative; display: inline-block;">
                     <span id="hostname-display" class="hostname-display"></span>
@@ -219,7 +219,7 @@
                 </div>
 
                 <div class="sidebar-footer">
-                    <div class="sidebar-version">v0.6.5</div>
+                    <div class="sidebar-version">v0.7.0</div>
                     <button id="phi-help-btn" class="sidebar-help-btn" title="Phi User Guide & Help">?</button>
                 </div>
             </aside>
@@ -326,6 +326,7 @@
                         <button class="diff-tab-btn" data-tab="log">log</button>
                         <button class="diff-tab-btn" data-tab="status">status</button>
                         <button class="diff-tab-btn active" data-tab="markdown">md</button>
+                        <button class="diff-tab-btn" data-tab="sync">sync</button>
                         <button class="diff-tab-btn" data-tab="cmd">cmd</button>
                     </div>
                     <div class="diff-header-actions" style="display: flex; align-items: center; gap: 8px;">
@@ -349,6 +350,7 @@
                 <div class="diff-content">
                     <div id="diff-term-container" class="diff-term-container"></div>
                     <div id="markdown-file-list" class="markdown-file-list hidden"></div>
+                    <div id="sync-panel" class="sync-panel hidden"></div>
                     <div id="cmd-panel" class="cmd-panel hidden"></div>
                 </div>
             </aside>

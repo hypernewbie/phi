@@ -1656,3 +1656,113 @@ func TestKanbanVaultAPI(t *testing.T) {
 		t.Errorf("Expected empty KanbanPasswordEnc after DELETE")
 	}
 }
+
+func TestSyncMessagesCRUD(t *testing.T) {
+	syncMu.Lock()
+	syncStore = make(map[string]*SyncMessage)
+	syncMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/messages", nil)
+	w := httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/sync/messages failed: status %d", w.Code)
+	}
+	var list []SyncMessage
+	if err := json.NewDecoder(w.Body).Decode(&list); err != nil {
+		t.Fatalf("failed to decode list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("expected 0 messages, got %d", len(list))
+	}
+
+	payload, _ := json.Marshal(map[string]string{"key": "alpha", "value": "hello"})
+	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/sync/messages failed: status %d", w.Code)
+	}
+	var created SyncMessage
+	json.NewDecoder(w.Body).Decode(&created)
+	if created.Key != "alpha" || created.Value != "hello" {
+		t.Errorf("unexpected created message: %+v", created)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/sync/messages/alpha failed: status %d", w.Code)
+	}
+	var fetched SyncMessage
+	json.NewDecoder(w.Body).Decode(&fetched)
+	if fetched.Key != "alpha" || fetched.Value != "hello" {
+		t.Errorf("unexpected fetched message: %+v", fetched)
+	}
+
+	payload, _ = json.Marshal(map[string]string{"key": "alpha", "value": "updated"})
+	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(string(payload)))
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/sync/messages upsert failed: status %d", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	json.NewDecoder(w.Body).Decode(&fetched)
+	if fetched.Value != "updated" {
+		t.Errorf("expected value 'updated', got %q", fetched.Value)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/nonexistent", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/alpha", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/sync/messages/alpha failed: status %d", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/alpha", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404 after delete, got %d", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/sync/messages/nonexistent", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404 on delete nonexistent, got %d", w.Code)
+	}
+}
+
+func TestSyncCoordinatorConfig(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+	if cfg.SyncCoordinator != "http://localhost:7070" {
+		t.Errorf("expected default coordinator to be http://localhost:7070, got %q", cfg.SyncCoordinator)
+	}
+
+	body, _ := json.Marshal(map[string]string{"sync_coordinator": "http://coordinator.test"})
+	req := httptest.NewRequest(http.MethodPost, "/api/config/sync-coordinator", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	handleSyncCoordinator(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/config/sync-coordinator failed: status %d", w.Code)
+	}
+
+	cfg = loadConfig()
+	if cfg.SyncCoordinator != "http://coordinator.test" {
+		t.Errorf("expected updated coordinator 'http://coordinator.test', got %q", cfg.SyncCoordinator)
+	}
+}

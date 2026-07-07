@@ -56,6 +56,7 @@ type Config struct {
 	SimplepushKey     string `json:"simplepush_key"`
 	SimplepushEnabled bool   `json:"simplepush_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
+	SyncCoordinator   string `json:"sync_coordinator"`
 }
 
 func expandHome(path string) string {
@@ -116,6 +117,9 @@ func loadConfig() Config {
 	}
 	if cfg.MarkdownDirs == nil {
 		cfg.MarkdownDirs = []string{".", "./temp", "./tmp"}
+	}
+	if cfg.SyncCoordinator == "" {
+		cfg.SyncCoordinator = "http://localhost:7070"
 	}
 	return cfg
 }
