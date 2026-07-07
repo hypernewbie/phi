@@ -1,5 +1,7 @@
 /* Φ phi — Markdown Docs Viewer */
 
+import { relativeToCwd } from './util.js';
+
 export class MarkdownManager {
     constructor(app) {
         this.app = app;
@@ -411,16 +413,7 @@ export class MarkdownManager {
 
     _insertRelativePath(f) {
         const cwd = this.app.sessionsManager.activeCWD || '';
-        const cleanPath = f.path.replace(/\\/g, '/');
-        const cleanCwd = cwd.replace(/\\/g, '/');
-        
-        let relPath = cleanPath;
-        if (cleanCwd && cleanPath.startsWith(cleanCwd)) {
-            relPath = cleanPath.slice(cleanCwd.length);
-            if (relPath.startsWith('/')) {
-                relPath = relPath.slice(1);
-            }
-        }
+        const relPath = relativeToCwd(f.path, cwd);
         
         const textarea = document.getElementById('input-textarea');
         if (textarea) {
