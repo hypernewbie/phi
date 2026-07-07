@@ -9,6 +9,3 @@ temp/
 coverage/
 *.out
 node_modules/
-
-# pi subagent runtime scratch
-.pi-subagents/
