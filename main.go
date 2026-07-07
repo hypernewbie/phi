@@ -204,11 +204,11 @@ func printWelcomeBanner(cfg Config, ip string, port int) {
 	dimEsc := "\x1b[2m"
 
 	fmt.Printf("\n")
-	fmt.Printf("%s    ____  __  _%s\n", colorEsc, resetEsc)
-	fmt.Printf("%s   / __ \\/ /_(_)%s\n", colorEsc, resetEsc)
-	fmt.Printf("%s  / /_/ / __  /%s\n", colorEsc, resetEsc)
-	fmt.Printf("%s / ____/ / / /%s\n", colorEsc, resetEsc)
-	fmt.Printf("%s/_/   /_/ /_(_)%s   %sControl Center for AI Coding%s\n\n", colorEsc, resetEsc, boldEsc, resetEsc)
+	fmt.Printf("%s    ____  __     _%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s   / __ \\/ /_   (_)%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s  / /_/ / /__ \\  /%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s / ____/ / / // /%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s/_/   /_/ /_//_/%s   %sControl Center for AI Coding%s\n\n", colorEsc, resetEsc, boldEsc, resetEsc)
 
 	host, _ := os.Hostname()
 	if host == "" {
