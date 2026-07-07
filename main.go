@@ -192,6 +192,11 @@ func printWelcomeBanner(cfg Config, ip string, port int) {
 		"teal":   {20, 184, 166},
 		"indigo": {99, 102, 241},
 		"orange": {249, 115, 22},
+		"cyan":   {6, 182, 212},
+		"rose":   {244, 63, 94},
+		"lime":   {132, 204, 22},
+		"white":  {255, 255, 255},
+		"gold":   {212, 175, 55},
 	}
 
 	rgb, ok := colors[cfg.ThemeColor]
