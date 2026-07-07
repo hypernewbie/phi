@@ -83,8 +83,6 @@ export class DiffController {
                 this.refreshDiff(false); // Reload commit list when changing tabs
                 if (this.activeTab === 'markdown' && this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
-                } else if (this.activeTab === 'files' && this.app.filesManager) {
-                    this.app.filesManager.refreshFiles({ force: false });
                 }
             });
         });
@@ -199,29 +197,19 @@ export class DiffController {
         const termEl = document.getElementById('diff-term-container');
         const mdEl = document.getElementById('markdown-file-list');
         const cmdEl = document.getElementById('cmd-panel');
-        const filesEl = document.getElementById('files-tree-container');
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
-            filesEl?.classList.add('hidden');
-            cmdEl?.classList.add('hidden');
-            this.actionBar?.classList.add('hidden');
-        } else if (mode === 'files') {
-            termEl.classList.add('hidden');
-            mdEl.classList.add('hidden');
-            filesEl?.classList.remove('hidden');
             cmdEl?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
         } else if (mode === 'cmd') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            filesEl?.classList.add('hidden');
             cmdEl?.classList.remove('hidden');
             this.actionBar?.classList.add('hidden');
         } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
-            filesEl?.classList.add('hidden');
             cmdEl?.classList.add('hidden');
             if (this.activeTab === 'diff') {
                 this.actionBar?.classList.remove('hidden');
@@ -591,12 +579,6 @@ export class DiffController {
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
             this.app.markdownManager.refreshFiles();
-            return;
-        }
-
-        if (this.activeTab === 'files') {
-            this._setPanel('files');
-            this.app.filesManager.refreshFiles();
             return;
         }
 

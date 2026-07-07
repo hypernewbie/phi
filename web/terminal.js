@@ -965,9 +965,6 @@ export class TabManager {
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
                 }
-                if (this.app.filesManager) {
-                    this.app.filesManager.refreshFiles({ force: false });
-                }
             });
         } else if (newTab.cwd && this.app.sessionsManager.activeCWD !== newTab.cwd) {
             this.app.sessionsManager.activeCWD = newTab.cwd;
@@ -975,9 +972,6 @@ export class TabManager {
             this.app.diffController.refreshDiff();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: false });
-            }
-            if (this.app.filesManager) {
-                this.app.filesManager.refreshFiles({ force: false });
             }
         }
         
@@ -1061,17 +1055,11 @@ export class TabManager {
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: true });
                 }
-                if (this.app.filesManager) {
-                    this.app.filesManager.refreshFiles({ force: true });
-                }
             }
         } else if (this.tabs.size === 0) {
             this.showEmptyState();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: true });
-            }
-            if (this.app.filesManager) {
-                this.app.filesManager.refreshFiles({ force: true });
             }
         }
     }
