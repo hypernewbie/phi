@@ -1,3 +1,5 @@
+import { escapeHtml as escapeHtmlUtil } from './util.js';
+
 export class KanbanManager {
     constructor(app) {
         this.app = app;
@@ -531,13 +533,7 @@ export class KanbanManager {
     }
 
     escapeHtml(str) {
-        if (!str) return '';
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+        return escapeHtmlUtil(str);
     }
 
     initSortable(container, buckets) {

@@ -1,5 +1,7 @@
 /* Φ phi — AI Sync Board Manager */
 
+import { escapeHtml as escapeHtmlUtil } from './util.js';
+
 export class SyncManager {
     constructor(app) {
         this.app = app;
@@ -218,12 +220,6 @@ export class SyncManager {
     }
 
     escapeHtml(str) {
-        if (!str) return '';
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+        return escapeHtmlUtil(str);
     }
 }
