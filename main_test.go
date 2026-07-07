@@ -1765,4 +1765,17 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 	if cfg.SyncCoordinator != "http://coordinator.test" {
 		t.Errorf("expected updated coordinator 'http://coordinator.test', got %q", cfg.SyncCoordinator)
 	}
+
+	// Verify GET /api/config returns the sync_coordinator value
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	wGet := httptest.NewRecorder()
+	handleConfig(wGet, reqGet)
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("GET /api/config failed: status %d", wGet.Code)
+	}
+	var resMap map[string]interface{}
+	json.NewDecoder(wGet.Body).Decode(&resMap)
+	if val, ok := resMap["sync_coordinator"].(string); !ok || val != "http://coordinator.test" {
+		t.Errorf("GET /api/config response did not return the updated sync_coordinator, got: %v", resMap)
+	}
 }
