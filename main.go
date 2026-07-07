@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -175,6 +176,58 @@ func main() {
 	http.HandleFunc("/", handleFallback)
 
 	addr := fmt.Sprintf("%s:%d", *ipFlag, *portFlag)
-	log.Printf("[main] Server running on http://%s", addr)
+	printWelcomeBanner(cfg, *ipFlag, *portFlag)
 	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func printWelcomeBanner(cfg Config, ip string, port int) {
+	colors := map[string][]int{
+		"purple": {124, 106, 247},
+		"blue":   {56, 189, 248},
+		"green":  {16, 185, 129},
+		"amber":  {251, 191, 36},
+		"red":    {248, 113, 113},
+		"pink":   {236, 72, 153},
+		"teal":   {20, 184, 166},
+		"indigo": {99, 102, 241},
+		"orange": {249, 115, 22},
+	}
+
+	rgb, ok := colors[cfg.ThemeColor]
+	if !ok {
+		rgb = colors["purple"]
+	}
+
+	colorEsc := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", rgb[0], rgb[1], rgb[2])
+	resetEsc := "\x1b[0m"
+	boldEsc := "\x1b[1m"
+	dimEsc := "\x1b[2m"
+
+	fmt.Printf("\n")
+	fmt.Printf("%s    ____  __  _%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s   / __ \\/ /_(_)%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s  / /_/ / __  /%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s / ____/ / / /%s\n", colorEsc, resetEsc)
+	fmt.Printf("%s/_/   /_/ /_(_)%s   %sControl Center for AI Coding%s\n\n", colorEsc, resetEsc, boldEsc, resetEsc)
+
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "localhost"
+	}
+
+	fmt.Printf("%s── Status Dump ──────────────────────────────────────────%s\n", dimEsc, resetEsc)
+	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, activeCWD)
+	fmt.Printf("  %sWorkspaces:%s   %d active\n", colorEsc, resetEsc, len(cfg.Workspaces))
+	fmt.Printf("  %sHostname:%s     %s\n", colorEsc, resetEsc, strings.ToUpper(host))
+	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.SyncCoordinator)
+	fmt.Printf("  %sBound IP:%s     %s\n", colorEsc, resetEsc, ip)
+	fmt.Printf("  %sPort:%s         %d\n", colorEsc, resetEsc, port)
+	fmt.Printf("  %sTheme:%s        %s\n", colorEsc, resetEsc, cfg.ThemeColor)
+	fmt.Printf("%s────────────────────────────────────────────────────────%s\n\n", dimEsc, resetEsc)
+
+	fmt.Printf("  Server running on: %shttp://%s:%d%s\n", boldEsc, ip, port, resetEsc)
+	if ip == "0.0.0.0" {
+		fmt.Printf("  Or locally:        %shttp://localhost:%d%s\n", boldEsc, port, resetEsc)
+	}
+	fmt.Printf("\n")
 }
