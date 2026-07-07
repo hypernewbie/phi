@@ -1005,8 +1005,14 @@ html, body {
     width: 100%;
     height: 100%;
     color: var(--text-primary);
-    background: var(--bg-base);
+    background: radial-gradient(circle at 50% 50%, var(--bg-elevated) 0%, var(--bg-base) 100%);
     z-index: 10;
+    animation: emptyBgPulse 15s infinite alternate ease-in-out;
+}
+
+@keyframes emptyBgPulse {
+    0% { background-size: 100% 100%; background-position: 50% 50%; }
+    100% { background-size: 120% 120%; background-position: 45% 55%; }
 }
 
 .empty-state.hidden {
@@ -1023,23 +1029,60 @@ html, body {
     padding: 24px;
 }
 
+.empty-state-content > * {
+    animation: emptyFadeSlide 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.empty-state-content > :nth-child(1) { animation-delay: 0.1s; }
+.empty-state-content > :nth-child(2) { animation-delay: 0.2s; }
+.empty-state-content > :nth-child(3) { animation-delay: 0.3s; }
+.empty-state-content > :nth-child(4) { animation-delay: 0.4s; }
+.empty-state-content > :nth-child(5) { animation-delay: 0.5s; }
+.empty-state-content > :nth-child(6) { animation-delay: 0.6s; }
+
+@keyframes emptyFadeSlide {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .empty-logo {
-    font-size: 48px;
+    font-size: 64px;
     font-weight: bold;
     color: var(--accent);
     text-shadow: 0 0 20px var(--accent-glow);
+    animation: logoBreathe 4s infinite ease-in-out;
+    user-select: none;
+    margin-bottom: 8px;
+}
+
+@keyframes logoBreathe {
+    0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px var(--accent-glow)); }
+    50% { transform: scale(1.06); filter: drop-shadow(0 0 25px var(--accent)); }
 }
 
 .empty-title {
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 600;
     margin: 0;
+    letter-spacing: -0.5px;
 }
 
 .empty-subtitle {
     font-size: 13px;
     color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.empty-hostname-badge {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 6px 12px;
+    border-radius: 14px;
     margin-bottom: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
 }
 
 .empty-quick-launch {
@@ -1047,23 +1090,28 @@ html, body {
     flex-wrap: wrap;
     gap: 8px;
     justify-content: center;
+    margin-top: 4px;
 }
 
 .empty-launch-btn {
-    background: var(--bg-elevated);
-    border: 1px solid var(--bg-border);
-    color: var(--text-primary);
-    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+    padding: 8px 18px;
     border-radius: 20px;
     font-size: 13px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .empty-launch-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
     border-color: var(--accent);
-    color: var(--accent-bright);
-    box-shadow: 0 0 12px var(--accent-glow);
+    color: var(--text-primary);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px var(--accent-glow);
 }
 
 .empty-meta {
@@ -1071,6 +1119,10 @@ html, body {
     color: var(--text-muted);
     margin-top: 16px;
     font-family: var(--font-mono);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
 }
 
 .spinner-ring {
