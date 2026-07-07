@@ -29,6 +29,7 @@ var (
 )
 
 func main() {
+	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
 	flag.Parse()
