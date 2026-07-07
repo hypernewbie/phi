@@ -1401,6 +1401,13 @@ html, body {
     background-color: var(--bg-border);
 }
 
+.preset-btn:disabled,
+.preset-btn.disabled {
+    opacity: 0.35;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
 .presets-divider {
     width: 1px;
     height: 18px;
