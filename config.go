@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type QuickCommand struct {
@@ -59,6 +60,8 @@ type Config struct {
 	SyncCoordinator   string `json:"sync_coordinator"`
 }
 
+var configMu sync.RWMutex
+
 func expandHome(path string) string {
 	if len(path) > 0 && path[0] == '~' {
 		home, err := os.UserHomeDir()
@@ -81,6 +84,9 @@ func configFilePath() string {
 }
 
 func loadConfig() Config {
+	configMu.RLock()
+	defer configMu.RUnlock()
+
 	path := configFilePath()
 	var cfg Config
 	b, err := os.ReadFile(path)
@@ -163,6 +169,9 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 }
 
 func saveConfig(cfg Config) {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	path := configFilePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	b, _ := json.MarshalIndent(cfg, "", "  ")
