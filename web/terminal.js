@@ -1638,10 +1638,18 @@ export class TabManager {
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
-        modelsTriggerBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleDropup('model-presets-dropup', modelsTriggerBtn, () => this.renderModelDropup());
-        });
+        
+        const activeTab = this.getActiveTab();
+        if (activeTab && activeTab.coder === 'agy') {
+            modelsTriggerBtn.disabled = true;
+            modelsTriggerBtn.classList.add('disabled');
+            modelsTriggerBtn.title = 'Model selection not supported for Antigravity';
+        } else {
+            modelsTriggerBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleDropup('model-presets-dropup', modelsTriggerBtn, () => this.renderModelDropup());
+            });
+        }
         this.presetsContainer.appendChild(modelsTriggerBtn);
 
         // Auto-refresh dropup content if currently open
