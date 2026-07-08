@@ -605,26 +605,7 @@ export class TabManager {
                         bytes[i] = binaryString.charCodeAt(i);
                     }
                     const text = new TextDecoder('utf-8').decode(bytes);
-                    navigator.clipboard.writeText(text).then(() => {
-                        this.app.showToast(`Agent copied ${text.length} characters to clipboard`, { type: 'info', title: 'Clipboard Sync' });
-                    }).catch(err => {
-                        this.app.showToast(`Agent copied ${text.length} characters`, {
-                            type: 'info',
-                            title: 'Clipboard Sync',
-                            duration: 15000,
-                            action: {
-                                text: 'Copy to Clipboard',
-                                callback: async () => {
-                                    try {
-                                        await navigator.clipboard.writeText(text);
-                                        this.app.showToast("Copied to clipboard!", { type: 'info', title: 'Clipboard Sync' });
-                                    } catch (e) {
-                                        this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard Sync' });
-                                    }
-                                }
-                            }
-                        });
-                    });
+                    this._agentClipboardCopy(text);
                 } catch (e) {
                     console.error("OSC 52 decode error:", e);
                 }
@@ -1469,6 +1450,69 @@ export class TabManager {
         if (!success && !silent) {
             this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard' });
         }
+    }
+
+    // Synchronous execCommand('copy') via a hidden textarea. Returns whether it
+    // succeeded. Works in insecure contexts (plain-HTTP LAN access) where the
+    // async Clipboard API is unavailable, as long as it runs within a user
+    // gesture. Does not show any toast.
+    _execCommandCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        let ok = false;
+        try {
+            ok = document.execCommand('copy');
+        } catch (e) {
+            ok = false;
+        }
+        document.body.removeChild(ta);
+        return ok;
+    }
+
+    // Copy text the agent emitted via OSC 52. phi is commonly served over plain
+    // HTTP on a LAN address, where navigator.clipboard is undefined and calling
+    // writeText throws synchronously — the previous inline handler let that
+    // exception fall into the OSC decode catch, so opencode reported "copied"
+    // while nothing reached the clipboard. Prefer the async Clipboard API when
+    // it truly exists in a secure context, otherwise fall back to execCommand,
+    // and if every automated attempt fails, surface a toast with a manual copy
+    // button that runs inside the click's user-gesture. Returns a promise.
+    _agentClipboardCopy(text) {
+        const okToast = () => this.app.showToast(
+            `Agent copied ${text.length} characters to clipboard`,
+            { type: 'info', title: 'Clipboard Sync' }
+        );
+        const manualToast = () => this.app.showToast(`Agent copied ${text.length} characters`, {
+            type: 'info',
+            title: 'Clipboard Sync',
+            duration: 15000,
+            action: {
+                text: 'Copy to Clipboard',
+                callback: () => {
+                    if (this._execCommandCopy(text)) {
+                        this.app.showToast("Copied to clipboard!", { type: 'info', title: 'Clipboard Sync' });
+                    } else {
+                        this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard Sync' });
+                    }
+                }
+            }
+        });
+
+        if (navigator.clipboard && window.isSecureContext && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text)
+                .then(okToast)
+                .catch(() => { if (this._execCommandCopy(text)) okToast(); else manualToast(); });
+        }
+        // Insecure context (e.g. http://host:port over LAN): no Clipboard API.
+        if (this._execCommandCopy(text)) okToast(); else manualToast();
+        return Promise.resolve();
     }
 
     startResize() {
