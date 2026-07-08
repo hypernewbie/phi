@@ -127,7 +127,7 @@ const ACCENT_COLORS = {
     }
 };
 
-class App {
+export class App {
     constructor() {
         this.codersPresetRegistry = {};
         this.accentColorSelect = document.getElementById('accent-color-select');
@@ -839,6 +839,12 @@ class App {
 
             const body = document.createElement('form');
             body.className = 'modal-body config-editor-body';
+            // Unique id so the submit button (which lives in the footer, OUTSIDE
+            // this form element) can associate with the form via its `form`
+            // attribute. Without this, clicking the type=submit button does
+            // nothing because a submit button outside its form never submits.
+            const formId = 'config-editor-form-' + Math.random().toString(36).slice(2);
+            body.id = formId;
 
             const inputs = new Map();
             fields.forEach((field) => {
@@ -875,6 +881,7 @@ class App {
             const saveBtn = document.createElement('button');
             saveBtn.className = 'btn btn-accent';
             saveBtn.type = 'submit';
+            saveBtn.setAttribute('form', formId);
             saveBtn.textContent = submitLabel;
 
             footer.appendChild(cancelBtn);
