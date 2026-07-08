@@ -16,6 +16,31 @@ export function normalizeCwd(p) {
     return String(p).replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
+// isUsableShell reports whether a tab is an alive bash/pwsh shell (not btop).
+// Pure; returns a falsy value for null/undefined tabs (raw expression, kept
+// as-is because callers only use it in boolean contexts).
+export function isUsableShell(t) {
+    return t && !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh') && t.title !== 'btop' && !t.isBtop;
+}
+
+// findReusableShellTab picks the shell tab a quick-command should be sent to:
+//   1. the active tab, if it is itself a usable shell (user focused it);
+//   2. else, only when useExistingTerminalTab is on and activeCWD is set,
+//      an alive shell whose CWD matches activeCWD (exact, per normalizeCwd);
+//   3. else null (caller spawns a new shell).
+// Pure over a plain iterable of tab-like objects.
+export function findReusableShellTab(tabs, activeTab, { useExistingTerminalTab, activeCWD } = {}) {
+    if (isUsableShell(activeTab)) return activeTab;
+    const cwd = activeCWD || '';
+    if (useExistingTerminalTab && cwd) {
+        const wantedCWD = normalizeCwd(cwd);
+        const match = Array.from(tabs).find(t =>
+            isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
+        if (match) return match;
+    }
+    return null;
+}
+
 export class DiffController {
     constructor(app) {
         this.app = app;
@@ -514,19 +539,12 @@ export class DiffController {
         // activeCWD is set by sessionsManager based on the active workspace
         // and active worktree selection, so it correctly scopes by both
         // project AND worktree boundaries in one check.
-        const isUsableShell = (t) => t && !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh') && t.title !== 'btop' && !t.isBtop;
-
-        let targetTab = isUsableShell(activeTab) ? activeTab : null;
-        const activeCWD = this.app.sessionsManager.activeCWD || '';
-        
-        if (!targetTab && this.app.useExistingTerminalTab && activeCWD) {
-            const wantedCWD = normalizeCwd(activeCWD);
-            const matchingShell = Array.from(this.app.tabManager.tabs.values()).find(t =>
-                isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
-            if (matchingShell) {
-                targetTab = matchingShell;
-                this.app.tabManager.switchTab(targetTab.paneId);
-            }
+        const targetTab = findReusableShellTab(this.app.tabManager.tabs.values(), activeTab, {
+            useExistingTerminalTab: this.app.useExistingTerminalTab,
+            activeCWD: this.app.sessionsManager.activeCWD || '',
+        });
+        if (targetTab && targetTab !== activeTab) {
+            this.app.tabManager.switchTab(targetTab.paneId);
         }
 
         if (isUsableShell(targetTab)) {
