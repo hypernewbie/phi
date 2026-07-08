@@ -2326,8 +2326,9 @@ export class TabManager {
                     const totalDuration = Date.now() - (tab.busyStartTime || Date.now());
                     const isLongTask = totalDuration > 8000;
 
-                    // Only notify if this tab is NOT currently active and focused, and was a long-running task.
-                    if (!isActiveAndVisible && isLongTask) {
+                    // Only notify if this tab is NOT currently active and focused, was a long-running task, and is NOT a shell/terminal tab.
+                    const isShellTab = tab.coder === 'bash' || tab.coder === 'pwsh';
+                    if (!isActiveAndVisible && isLongTask && !isShellTab) {
                         let promptDetected = false;
                         if (tab.term && tab.term.buffer && tab.term.buffer.active) {
                             const buffer = tab.term.buffer.active;
