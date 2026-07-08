@@ -1,3 +1,5 @@
+import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil } from './util.js';
+
 export function normalizePath(p) {
     if (!p) return '';
     let normalized = p.replace(/\\/g, '/');
@@ -113,24 +115,11 @@ export class SessionsManager {
     }
     
     getLastFolderName(path) {
-        if (!path) return '';
-        const parts = path.split(/[/\\]/);
-        return parts[parts.length - 1] || path;
+        return getLastFolderNameUtil(path);
     }
 
     formatWorkspaceLabel(ws, allWorkspaces) {
-        if (!ws) return '';
-        const folderName = this.getLastFolderName(ws);
-        if (!allWorkspaces || !Array.isArray(allWorkspaces)) return folderName;
-        const duplicates = allWorkspaces.filter(w => this.getLastFolderName(w) === folderName);
-        if (duplicates.length > 1) {
-            const parts = ws.split(/[/\\]/);
-            if (parts.length >= 2) {
-                const parent = parts[parts.length - 2];
-                return `${folderName} (${parent})`;
-            }
-        }
-        return folderName;
+        return formatWorkspaceLabelUtil(ws, allWorkspaces);
     }
 
     updateWorkspaceSelectWidth() {
