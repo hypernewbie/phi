@@ -67,3 +67,30 @@ export function priorityMeta(priority) {
 export function isDoneBucket(bucket) {
     return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
 }
+
+// getLastFolderName returns the final path segment (splitting on / and \).
+// Pure. QUIRK preserved: a trailing separator yields an empty last segment,
+// so it falls back to returning the FULL original path.
+export function getLastFolderName(path) {
+    if (!path) return '';
+    const parts = path.split(/[/\\]/);
+    return parts[parts.length - 1] || path;
+}
+
+// formatWorkspaceLabel renders a workspace's display label: normally the last
+// folder name, but disambiguated as "folder (parent)" when another workspace
+// in allWorkspaces shares the same last-folder name. Pure.
+export function formatWorkspaceLabel(ws, allWorkspaces) {
+    if (!ws) return '';
+    const folderName = getLastFolderName(ws);
+    if (!allWorkspaces || !Array.isArray(allWorkspaces)) return folderName;
+    const duplicates = allWorkspaces.filter(w => getLastFolderName(w) === folderName);
+    if (duplicates.length > 1) {
+        const parts = ws.split(/[/\\]/);
+        if (parts.length >= 2) {
+            const parent = parts[parts.length - 2];
+            return `${folderName} (${parent})`;
+        }
+    }
+    return folderName;
+}
