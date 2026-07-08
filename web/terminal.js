@@ -2,7 +2,7 @@
 
 import { PTYWebSocket } from './ws.js';
 import { normalizePath } from './sessions.js';
-import { projectWorktreeLabel } from './util.js';
+import { projectWorktreeLabel, cpuLevel } from './util.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -84,10 +84,7 @@ export class TabManager {
         const brandName = document.querySelector('.brand .brand-name');
         if (!logo) return;
         // Thresholds: idle < 30, moderate 30–70, high 70-90, critical > 90
-        let level = 'cpu-idle';
-        if (cpuPercent > 90) level = 'cpu-critical';
-        else if (cpuPercent > 70) level = 'cpu-high';
-        else if (cpuPercent > 30) level = 'cpu-moderate';
+        const level = cpuLevel(cpuPercent);
         // Don't churn the DOM if the level hasn't changed
         if (logo.dataset.cpuLevel === level) return;
         for (const el of [logo, brandName]) {
