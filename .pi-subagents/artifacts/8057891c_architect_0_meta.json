@@ -1,0 +1,37 @@
+{
+  "runId": "8057891c",
+  "agent": "architect",
+  "task": "Follow-up to our earlier review of incremental Vitest coverage for phi's vanilla-ESM browser code (C:/code/github/phi/web/, no bundler, files embedded in a Go binary via go:embed; tests live in test-js/, default Node env).\n\nSTATUS: Tier A done — extracted 11 pure helpers into web/util.js (normalizePath, normalizeCwd, projectWorktreeLabel, relativeToCwd, escapeHtml, priorityMeta, isDoneBucket, getLastFolderName, formatWorkspaceLabel, cpuLevel, buildProxyUrl), all 100% covered, 70 tests, each an isolated behavior-preserving refactor commit. Also added a `node --check` syntax guard (which surfaced a shipped duplicate-const SyntaxError in terminal.js that I fixed). Overall statements ~3%, branches ~91%. Pure pickings are now thin.\n\nNEXT: Tier B — jsdom-based controller tests. This needs a new dev-dep (jsdom), per-file `// @vitest-environment jsdom`, and mocks for fetch / WebSocket / localStorage. These controllers are large class-based UI managers (SessionsManager ~1029 lines, TabManager ~2360, DiffController ~750) constructed with `new X(app)` where `app` wires many cross-references and the constructors query the DOM.\n\nCandidate targets, my proposed order:\n1. diff.js shell-tab reuse matching (normalizeCwd-based find over a Map of tabs) — lightest, spike to shake out jsdom setup.\n2. sessions.js loadWorktrees active-CWD selection + which .worktree-section gets .active/.expanded — highest value (this is the exact logic behind recent worktree/tab-sync bug fixes d862975/bcb3ee5). Needs mocked fetch returning a worktrees array + a real DOM sessionList container.\n3. terminal.js switchTab workspace/coder/cwd change matrix — heaviest mocking, defer.\n\nKEY RISK I foresee: these methods live on big classes whose constructors do heavy DOM/app wiring, so `new SessionsManager(app)` in jsdom may be painful or require a large fake `app`. I don't want to refactor production constructors just to test. Options I'm weighing: (a) construct via Object.create(SessionsManager.prototype) and call the method with a hand-built `this`; (b) build a minimal fake `app` + document fixture and actually `new` it; (c) extract more logic into pure functions that take plain data (like Tier A) and keep DOM in the method — favor testing pure cores over instantiating controllers.\n\nQuestions:\n1. Is jsdom worth it here, or should I keep leaning on the Tier A \"extract pure core, test that\" strategy for these too (option c) and use jsdom only where DOM interaction is genuinely the thing under test?\n2. For methods where DOM IS the point (loadWorktrees building .worktree-section nodes), which instantiation strategy — (a) Object.create + prototype method call, (b) full fake app + new, or something else — gives the best signal-to-noise without production refactors?\n3. Concrete phase-by-phase roadmap for Tier B (small commits, low blast radius, revertable), including where to stop (diminishing returns).\n4. Any traps with jsdom + Vitest for this codebase (globals, WebSocket absence, localStorage, dynamic import of ./ws.js which constructs a real WebSocket, ESM module side effects)?\n\nGive prioritized, concrete guidance and a roadmap. Don't write code — review and steer.",
+  "exitCode": 0,
+  "usage": {
+    "input": 12,
+    "output": 8219,
+    "cacheRead": 41925,
+    "cacheWrite": 15145,
+    "cost": 0.32115375,
+    "turns": 6
+  },
+  "model": "anthropic/claude-opus-4-8",
+  "attemptedModels": [
+    "anthropic/claude-opus-4-8"
+  ],
+  "modelAttempts": [
+    {
+      "model": "anthropic/claude-opus-4-8",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 12,
+        "output": 8219,
+        "cacheRead": 41925,
+        "cacheWrite": 15145,
+        "cost": 0.32115375,
+        "turns": 6
+      }
+    }
+  ],
+  "durationMs": 129411,
+  "toolCount": 9,
+  "transcriptPath": "C:\\code\\github\\phi\\.pi-subagents\\artifacts\\8057891c_architect_0_transcript.jsonl",
+  "timestamp": 1783471896513
+}
