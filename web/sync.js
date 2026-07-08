@@ -1,6 +1,6 @@
 /* Φ phi — AI Sync Board Manager */
 
-import { escapeHtml as escapeHtmlUtil } from './util.js';
+import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
 
 export class SyncManager {
     constructor(app) {
@@ -108,8 +108,7 @@ export class SyncManager {
 
     async fetchWithProxy(endpoint, options = {}) {
         const coordinator = await this.getCoordinatorUrl();
-        const targetUrl = coordinator.replace(/\/$/, '') + endpoint;
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+        const proxyUrl = buildProxyUrl(coordinator, endpoint);
         
         const res = await fetch(proxyUrl, options);
         if (!res.ok) {
