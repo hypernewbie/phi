@@ -103,3 +103,11 @@ export function cpuLevel(cpuPercent) {
     if (cpuPercent > 30) return 'cpu-moderate';
     return 'cpu-idle';
 }
+
+// buildProxyUrl composes the local /api/proxy URL for a sync-coordinator
+// request: strips one trailing slash off the coordinator base, appends the
+// endpoint, and URL-encodes the result as the ?url= param. Pure.
+export function buildProxyUrl(coordinator, endpoint) {
+    const targetUrl = coordinator.replace(/\/$/, '') + endpoint;
+    return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+}
