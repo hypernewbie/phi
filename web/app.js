@@ -667,7 +667,7 @@ export class App {
         document.documentElement.style.setProperty('--accent-glow', theme.accentGlow);
         document.documentElement.style.setProperty('--accent-dim', theme.accentDim);
         document.documentElement.style.setProperty('--accent-bright', theme.accentBright);
-        
+        document.documentElement.setAttribute('data-theme-color', colorKey);
         localStorage.setItem('phi_theme_color', colorKey);
 
         if (this.tabManager) {
