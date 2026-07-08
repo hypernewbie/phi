@@ -94,3 +94,12 @@ export function formatWorkspaceLabel(ws, allWorkspaces) {
     }
     return folderName;
 }
+
+// cpuLevel maps a CPU utilization percentage to a brand-logo indicator class.
+// Pure. Thresholds: >90 critical, >70 high, >30 moderate, else idle.
+export function cpuLevel(cpuPercent) {
+    if (cpuPercent > 90) return 'cpu-critical';
+    if (cpuPercent > 70) return 'cpu-high';
+    if (cpuPercent > 30) return 'cpu-moderate';
+    return 'cpu-idle';
+}
