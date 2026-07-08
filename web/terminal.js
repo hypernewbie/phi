@@ -1368,6 +1368,24 @@ export class TabManager {
                 }, 30);
             }
         }
+
+        // Ctrl+P: capture it so the browser's print dialog never hijacks the key,
+        // and forward it (\x10) to the active terminal — opencode and other TUIs
+        // use Ctrl+P. Runs at document bubble phase, so if an earlier handler
+        // already dealt with it (e.g. the empty staged-input box calls
+        // preventDefault and sends \x10 itself, or xterm consumed it while the
+        // terminal was focused) we bail via defaultPrevented to avoid double-send.
+        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'p') {
+            if (e.defaultPrevented) return;
+            const activeTab = this.getActiveTab();
+            if (activeTab && !activeTab.isDead && activeTab.ws &&
+                activeTab.coder !== 'review' && activeTab.coder !== 'kanban') {
+                e.preventDefault();
+                activeTab.ws.sendInput('\x10');
+                this._spamScrollToBottom(activeTab);
+            }
+            return;
+        }
     }
 
     adjustInputHeight() {
