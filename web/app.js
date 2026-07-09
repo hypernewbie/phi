@@ -1123,6 +1123,66 @@ export class App {
             }
             
             configText = configText.trim();
+            
+            // Fallback for single quick command / array of commands JSON
+            if (prefix === "PHICMDS" && (configText.startsWith("{") || configText.startsWith("["))) {
+                try {
+                    const data = JSON.parse(configText);
+                    const isValidSingle = data && typeof data === 'object' && !Array.isArray(data) && data.name && data.command;
+                    const isValidArray = Array.isArray(data) && data.every(item => item && typeof item === 'object' && item.name && item.command);
+
+                    if (isValidSingle || isValidArray) {
+                        if (isValidArray) {
+                            const confirmOverwrite = confirm(`Do you want to overwrite all your quick commands with these ${data.length} commands?`);
+                            if (!confirmOverwrite) {
+                                if (btnElement) btnElement.classList.remove('loading');
+                                return;
+                            }
+                        }
+
+                        const res = await fetch('/api/config/quick-commands', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        });
+
+                        if (!res.ok) {
+                            const text = await res.text();
+                            throw new Error(text || "Failed to import quick commands");
+                        }
+
+                        if (btnElement) {
+                            btnElement.classList.add('success');
+                            const span = btnElement.querySelector('span') || btnElement;
+                            const origText = span.innerText || span.textContent;
+                            if (span.innerText !== undefined) {
+                                span.innerText = "Imported!";
+                            } else {
+                                span.textContent = "Imported!";
+                            }
+                            setTimeout(() => {
+                                btnElement.classList.remove('success');
+                                if (span.innerText !== undefined) {
+                                    span.innerText = origText;
+                                } else {
+                                    span.textContent = origText;
+                                }
+                                if (onCompleted) {
+                                    onCompleted();
+                                }
+                            }, 1500);
+                        } else {
+                            if (onCompleted) {
+                                onCompleted();
+                            }
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    console.warn("[config] Attempted to parse commands JSON but failed, falling back to prefix check", e);
+                }
+            }
+            
             if (!configText.startsWith(`${prefix}:`)) {
                 throw new Error(`Invalid format. Config must start with ${prefix}:`);
             }
