@@ -1,4 +1,4 @@
-import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone } from './util.js';
+import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor } from './util.js';
 
 export class KanbanManager {
     constructor(app) {
@@ -312,7 +312,7 @@ export class KanbanManager {
                     <div class="toolbar-left">
                         <span class="toolbar-label">Project:</span>
                         <select id="kanban-project-select" class="kanban-select">
-                            ${projects.map(p => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${p.title}</option>`).join('')}
+                            ${projects.map(p => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${this.escapeHtml(p.title)}</option>`).join('')}
                         </select>
                         <div class="kanban-search-wrapper" style="margin-left: 8px;">
                             <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter tasks..." />
@@ -451,7 +451,7 @@ export class KanbanManager {
         return `
             <div class="kanban-column" data-bucket-id="${bucket.id}">
                 <div class="kanban-column-header">
-                    <span class="column-title">${bucket.title}</span>
+                    <span class="column-title">${this.escapeHtml(bucket.title)}</span>
                     <span class="column-count">${taskCount}</span>
                 </div>
                 <div class="kanban-cards-list" data-bucket-id="${bucket.id}">
@@ -479,8 +479,9 @@ export class KanbanManager {
             labelsHtml = `
                 <div class="kanban-card-labels">
                     ${task.labels.map(lbl => {
-                        const style = lbl.hex_color ? `style="background-color: #${lbl.hex_color}25; color: #${lbl.hex_color}; border: 1px solid #${lbl.hex_color}40;"` : '';
-                        return `<span class="kanban-label-pill" ${style}>${lbl.title}</span>`;
+                        const hex = safeHexColor(lbl.hex_color);
+                        const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                        return `<span class="kanban-label-pill" ${style}>${this.escapeHtml(lbl.title)}</span>`;
                     }).join('')}
                 </div>
             `;
@@ -515,7 +516,7 @@ export class KanbanManager {
                 ${labelsHtml}
                 <div class="kanban-card-meta">
                     <div class="meta-left">
-                        <span class="kanban-task-id">${idLabel}</span>
+                        <span class="kanban-task-id">${this.escapeHtml(idLabel)}</span>
                         ${dueHtml}
                     </div>
                     <div class="meta-right">
@@ -670,7 +671,8 @@ export class KanbanManager {
         let labelsHtml = '';
         if (task.labels && task.labels.length > 0) {
             labelsHtml = task.labels.map(lbl => {
-                const style = lbl.hex_color ? `style="background-color: #${lbl.hex_color}25; color: #${lbl.hex_color}; border: 1px solid #${lbl.hex_color}40;"` : '';
+                const hex = safeHexColor(lbl.hex_color);
+                const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
                 return `<span class="kanban-label-pill" ${style}>${this.escapeHtml(lbl.title)}</span>`;
             }).join('');
         } else {
@@ -733,7 +735,7 @@ export class KanbanManager {
                             </svg>
                         </button>
                     </div>
-                    <div id="kdp-description-view" class="kanban-desc-html">${task.description || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>'}</div>
+                    <div id="kdp-description-view" class="kanban-desc-html">${this.escapeHtml(task.description || '') || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>'}</div>
                     <textarea id="kdp-description" class="hidden" placeholder="No description provided" style="font-family: var(--font-mono); font-size: 12px; height: 160px; line-height: 1.5;">${this.escapeHtml(task.description || '')}</textarea>
                 </div>
 
@@ -765,7 +767,11 @@ export class KanbanManager {
             } else {
                 descInput.classList.add('hidden');
                 descView.classList.remove('hidden');
-                descView.innerHTML = descInput.value || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>';
+                // XSS-safe: escape the textarea value before injecting as HTML.
+                // The view already renders the (escaped) original description; we
+                // re-escape here so user-typed content cannot inject markup and
+                // so escape sequences round-trip consistently.
+                descView.innerHTML = this.escapeHtml(descInput.value) || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>';
                 toggleBtn.innerHTML = PENCIL_SVG;
                 toggleBtn.title = 'Edit description';
             }
@@ -803,6 +809,9 @@ export class KanbanManager {
             } catch (err) {
                 console.error('Failed to save task detail:', err);
                 this.app.showToast(`Failed to save task: ${err.message}`, { type: 'error' });
+            } finally {
+                // FIN-1: re-enable the button even if loadAndRenderBoard throws
+                // after a successful save (the catch-only path left it stuck).
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Save';
             }
@@ -821,7 +830,7 @@ export class KanbanManager {
             assignees: (task.assignees || []).map(a => ({ id: a.id }))
         };
 
-        await this.apiPost(`/tasks/${task.id}`, payload);
+        await this.apiPut(`/tasks/${task.id}`, payload);
         this.app.showToast('Task updated successfully.', { type: 'success' });
         
         // Update taskCache
@@ -867,7 +876,7 @@ export class KanbanManager {
             assignees: (existing.assignees || []).map(a => ({ id: a.id }))
         };
 
-        await this.apiPost(`/tasks/${taskId}`, payload);
+        await this.apiPut(`/tasks/${taskId}`, payload);
         
         // Update taskCache
         this.taskCache[taskId] = payload;
@@ -899,30 +908,57 @@ export class KanbanManager {
         return await res.json();
     }
 
+    async apiGet(path) {
+        return this.apiRequest(path, 'GET');
+    }
+
     async apiPost(path, body) {
+        return this.apiRequest(path, 'POST', body);
+    }
+
+    async apiPut(path, body) {
+        return this.apiRequest(path, 'PUT', body);
+    }
+
+    async apiDelete(path, body) {
+        return this.apiRequest(path, 'DELETE', body);
+    }
+
+    // Make a request to the upstream Vikunja instance via the local
+    // /api/proxy. Handles auth, 401 -> drop token, and extracts a readable
+    // message from Vikunja's JSON error envelope instead of dumping raw
+    // HTML / JSON to the user.
+    async apiRequest(path, method, body) {
         const token = sessionStorage.getItem('vikunja_token');
         const url = localStorage.getItem('vikunja_url');
         const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;
-        
+
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (token && token !== 'null' && token !== 'undefined') {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
         const res = await fetch(proxyUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(body)
+            method,
+            headers,
+            body: body == null ? undefined : JSON.stringify(body)
         });
-        
+
         if (res.status === 401) {
             sessionStorage.removeItem('vikunja_token');
             throw new Error('Session expired. Please reconnect.');
         }
-        
+
         if (!res.ok) {
             const text = await res.text();
-            throw new Error(text || `Request failed with status ${res.status}`);
+            throw new Error(extractVikunjaError(text, res.status));
         }
-        
+
+        // Some Vikunja endpoints return 204 No Content (e.g. some PUTs).
+        const ctype = res.headers.get('content-type') || '';
+        if (res.status === 204 || !ctype.includes('application/json')) return null;
         return await res.json();
     }
 }
