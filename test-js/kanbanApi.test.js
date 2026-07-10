@@ -88,36 +88,46 @@ describe('KanbanManager.apiRequest', () => {
     });
 });
 
-describe('KanbanManager.moveTask (was POST, should be PUT)', () => {
-    it('sends PUT to /tasks/<id> with the new bucket', async () => {
+describe('KanbanManager.moveTask (uses Vikunja dedicated bucket-move endpoint)', () => {
+    it('sends POST /projects/<pid>/views/<vid>/buckets/<bid>/tasks with {task_id}', async () => {
         const c = ctxWithSession();
-        mockFetch(() => ({ ok: true, status: 200, json: null }));
+        c.currentProjectId = 9;
+        c.currentViewId = 5;
+        mockFetch(() => ({ ok: true, json: null }));
         await c.moveTask(42, 1);
         const [callUrl, callOpts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(callUrl.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/tasks/42');
-        expect(callOpts.method).toBe('PUT');
-        const body = JSON.parse(callOpts.body);
-        expect(body.bucket_id).toBe(1);
+        expect(decoded).toBe('http://vik.local/api/v1/projects/9/views/5/buckets/1/tasks');
+        expect(callOpts.method).toBe('POST');
+        expect(JSON.parse(callOpts.body)).toEqual({ task_id: 42 });
     });
 
-    it('sets done:true when the target bucket is the done bucket', async () => {
+    it('updates local cache bucket_id to mirror the move', async () => {
         const c = ctxWithSession();
-        c.buckets = [{ id: 7, title: 'Done', is_done: true }];
+        c.currentProjectId = 9;
+        c.currentViewId = 5;
         mockFetch(() => ({ ok: true, json: null }));
         await c.moveTask(42, 7);
-        expect(JSON.parse(fetch.mock.calls[0][1].body).done).toBe(true);
+        expect(c.taskCache[42].bucket_id).toBe(7);
+    });
+
+    it('throws if project/view not loaded yet (no cached ids)', async () => {
+        const c = ctxWithSession();
+        mockFetch(() => ({ ok: true, json: null }));
+        await expect(c.moveTask(42, 1)).rejects.toThrow(/project or view not loaded/);
     });
 
     it('throws if the task is not in cache', async () => {
         const c = ctxWithSession();
+        c.currentProjectId = 9;
+        c.currentViewId = 5;
         c.taskCache = {};
         await expect(c.moveTask(999, 1)).rejects.toThrow(/not in cache/);
     });
 });
 
-describe('KanbanManager.saveTaskDetail (was POST, should be PUT)', () => {
-    it('sends PUT /tasks/<id> with the updated fields', async () => {
+describe('KanbanManager.saveTaskDetail (UPDATE uses POST)', () => {
+    it('sends POST /tasks/<id> with the updated fields', async () => {
         const c = ctxWithSession();
         const card = document.createElement('div');
         const container = document.createElement('div');
@@ -126,7 +136,7 @@ describe('KanbanManager.saveTaskDetail (was POST, should be PUT)', () => {
         await c.saveTaskDetail({ id: 42 }, { title: 'new', priority: 2, due_date: null, done: false, description: '' }, card, container);
         const [callUrl, callOpts] = fetch.mock.calls[0];
         expect(decodeURIComponent(callUrl.split('url=')[1])).toBe('http://vik.local/api/v1/tasks/42');
-        expect(callOpts.method).toBe('PUT');
+        expect(callOpts.method).toBe('POST');
         expect(JSON.parse(callOpts.body).title).toBe('new');
     });
 });

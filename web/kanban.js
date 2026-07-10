@@ -241,6 +241,12 @@ export class KanbanManager {
             
             // Rebuild taskCache
             this.taskCache = {};
+            // Cache the active view id and project id on the manager so later
+            // bucket-move calls can hit Vikunja's dedicated
+            //   POST /projects/{projectID}/views/{viewID}/buckets/{bucketID}/tasks
+            // endpoint (a plain task update doesn't relocate it).
+            this.currentProjectId = parseInt(selectedProjectId, 10);
+            this.currentViewId = parseInt(kanbanView.id, 10);
             this.buckets = bucketsWithTasks || [];
             if (bucketsWithTasks) {
                 bucketsWithTasks.forEach(bucket => {
@@ -416,8 +422,13 @@ export class KanbanManager {
                             input.disabled = true;
                             try {
                                 const selectedProjectId = localStorage.getItem('vikunja_selected_project');
-                                await this.apiPost(`/projects/${selectedProjectId}/tasks`, {
+                                // Vikunja's create-task endpoint is PUT (not POST) and
+                                // requires project_id in the body alongside title
+                                // and bucket_id. Path is /projects/{id}/tasks.
+                                const pid = parseInt(selectedProjectId, 10);
+                                await this.apiPut(`/projects/${pid}/tasks`, {
                                     title: val,
+                                    project_id: pid,
                                     bucket_id: parseInt(bucketId, 10)
                                 });
                                 await this.loadAndRenderBoard(container);
@@ -830,7 +841,8 @@ export class KanbanManager {
             assignees: (task.assignees || []).map(a => ({ id: a.id }))
         };
 
-        await this.apiPut(`/tasks/${task.id}`, payload);
+        // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
+        await this.apiPost(`/tasks/${task.id}`, payload);
         this.app.showToast('Task updated successfully.', { type: 'success' });
         
         // Update taskCache
@@ -865,21 +877,26 @@ export class KanbanManager {
         const existing = this.taskCache[taskId];
         if (!existing) throw new Error(`Task ${taskId} not in cache`);
 
-        const targetBucket = (this.buckets || []).find(b => b.id == newBucketId);
-        const isDoneBucket = bucketIsDone(targetBucket);
+        // Vikunja exposes a dedicated bucket-relocation endpoint:
+        //   POST /projects/{projectID}/views/{viewID}/buckets/{bucketID}/tasks
+        //   body: { task_id: <id> }
+        // The plain task UPDATE endpoint does NOT change bucket_id reliably,
+        // so we route drags through here. Without project_id and view_id
+        // cached (set by loadAndRenderBoard), there's nothing to call.
+        if (!this.currentProjectId || !this.currentViewId) {
+            throw new Error('Move failed: project or view not loaded yet.');
+        }
 
-        const payload = {
-            ...existing,
-            bucket_id: parseInt(newBucketId),
-            done: isDoneBucket ? true : false,
-            labels: (existing.labels || []).map(l => ({ id: l.id })),
-            assignees: (existing.assignees || []).map(a => ({ id: a.id }))
-        };
+        const targetBucketId = parseInt(newBucketId, 10);
+        await this.apiPost(
+            `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets/${targetBucketId}/tasks`,
+            { task_id: parseInt(taskId, 10) }
+        );
 
-        await this.apiPut(`/tasks/${taskId}`, payload);
-        
-        // Update taskCache
-        this.taskCache[taskId] = payload;
+        // Mirror the move in the local cache so the UI is consistent until
+        // the next refresh; the dedicated endpoint doesn't return the updated
+        // task, so we just adjust the fields we know changed.
+        existing.bucket_id = targetBucketId;
     }
 
     async apiGet(path) {
