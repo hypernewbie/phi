@@ -68,6 +68,48 @@ export function isDoneBucket(bucket) {
     return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
 }
 
+// safeHexColor validates a 3/6-character hex color string from an external
+// source (Vikunja label.hex_color). Returns the cleaned color (no leading #)
+// if it matches /^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/, else an empty string so
+// callers can skip the inline-style attribute entirely. Pure.
+export function safeHexColor(c) {
+    if (typeof c !== 'string') return '';
+    if (!/^([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c)) return '';
+    return c;
+}
+
+// extractVikunjaError turns a Vikunja error response body into a readable
+// one-liner for the user. Vikunja returns shapes like:
+//   { "message": "method not allowed error" }           // single error
+//   { "message": "...", "code": 7 }                     // with code
+//   { "code": 4, "message": "..." }                     // same, reordered
+//   { "messages": { "field": ["msg1", "msg2"] } }       // per-field map
+// Falls back to the raw text (truncated) if none parse. Pure.
+export function extractVikunjaError(text, status) {
+    if (!text) return `Request failed with status ${status}`;
+    let s = text;
+    try {
+        const obj = JSON.parse(text);
+        if (obj && typeof obj === 'object') {
+            if (typeof obj.message === 'string' && obj.message) {
+                s = obj.message;
+            } else if (obj.messages && typeof obj.messages === 'object') {
+                const parts = [];
+                for (const [field, val] of Object.entries(obj.messages)) {
+                    if (Array.isArray(val)) parts.push(`${field}: ${val.join(', ')}`);
+                    else if (typeof val === 'string') parts.push(`${field}: ${val}`);
+                }
+                if (parts.length) s = parts.join('; ');
+            }
+        }
+    } catch (_) {
+        // Not JSON — keep the raw text, but trim obvious HTML pages.
+        s = s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    if (s.length > 240) s = s.slice(0, 240) + '...';
+    return s || `Request failed with status ${status}`;
+}
+
 // getLastFolderName returns the final path segment (splitting on / and \).
 // Pure. QUIRK preserved: a trailing separator yields an empty last segment,
 // so it falls back to returning the FULL original path.
