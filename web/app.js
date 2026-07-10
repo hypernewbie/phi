@@ -15,115 +15,134 @@ const ACCENT_COLORS = {
         accent: '#7c6af7',
         accentGlow: 'rgba(124, 106, 247, 0.15)',
         accentDim: '#5b4ec2',
-        accentBright: '#9a8dfa'
+        accentBright: '#9a8dfa',
+        accentContrast: '#ffffff'
     },
     blue: {
         accent: '#38bdf8',
         accentGlow: 'rgba(56, 189, 248, 0.15)',
         accentDim: '#0284c7',
-        accentBright: '#7dd3fc'
+        accentBright: '#7dd3fc',
+        accentContrast: '#14141a'
     },
     green: {
         accent: '#10b981',
         accentGlow: 'rgba(16, 185, 129, 0.15)',
         accentDim: '#047857',
-        accentBright: '#34d399'
+        accentBright: '#34d399',
+        accentContrast: '#ffffff'
     },
     amber: {
         accent: '#fbbf24',
         accentGlow: 'rgba(251, 191, 36, 0.15)',
         accentDim: '#b45309',
-        accentBright: '#fcd34d'
+        accentBright: '#fcd34d',
+        accentContrast: '#14141a'
     },
     red: {
         accent: '#f87171',
         accentGlow: 'rgba(248, 113, 113, 0.15)',
         accentDim: '#b91c1c',
-        accentBright: '#fca5a5'
+        accentBright: '#fca5a5',
+        accentContrast: '#ffffff'
     },
     pink: {
         accent: '#ec4899',
         accentGlow: 'rgba(236, 72, 153, 0.15)',
         accentDim: '#be185d',
-        accentBright: '#f472b6'
+        accentBright: '#f472b6',
+        accentContrast: '#ffffff'
     },
     teal: {
         accent: '#14b8a6',
         accentGlow: 'rgba(20, 184, 166, 0.15)',
         accentDim: '#0f766e',
-        accentBright: '#5eead4'
+        accentBright: '#5eead4',
+        accentContrast: '#14141a'
     },
     indigo: {
         accent: '#6366f1',
         accentGlow: 'rgba(99, 102, 241, 0.15)',
         accentDim: '#4338ca',
-        accentBright: '#818cf8'
+        accentBright: '#818cf8',
+        accentContrast: '#ffffff'
     },
     orange: {
         accent: '#f97316',
         accentGlow: 'rgba(249, 115, 22, 0.15)',
         accentDim: '#c2410c',
-        accentBright: '#fdba74'
+        accentBright: '#fdba74',
+        accentContrast: '#ffffff'
     },
     cyan: {
         accent: '#06b6d4',
         accentGlow: 'rgba(6, 182, 212, 0.15)',
         accentDim: '#0e7490',
-        accentBright: '#67e8f9'
+        accentBright: '#67e8f9',
+        accentContrast: '#14141a'
     },
     rose: {
         accent: '#f43f5e',
         accentGlow: 'rgba(244, 63, 94, 0.15)',
         accentDim: '#be123c',
-        accentBright: '#fb7185'
+        accentBright: '#fb7185',
+        accentContrast: '#ffffff'
     },
     lime: {
         accent: '#84cc16',
         accentGlow: 'rgba(132, 204, 22, 0.15)',
         accentDim: '#4d7c0f',
-        accentBright: '#a3e635'
+        accentBright: '#a3e635',
+        accentContrast: '#14141a'
     },
     white: {
         accent: '#ffffff',
         accentGlow: 'rgba(255, 255, 255, 0.15)',
         accentDim: '#94a3b8',
-        accentBright: '#ffffff'
+        accentBright: '#ffffff',
+        accentContrast: '#14141a'
     },
     gold: {
         accent: '#d4af37',
         accentGlow: 'rgba(212, 175, 55, 0.15)',
         accentDim: '#997a15',
-        accentBright: '#f3e5ab'
+        accentBright: '#f3e5ab',
+        accentContrast: '#14141a'
     },
     violet: {
         accent: '#a78bfa',
         accentGlow: 'rgba(167, 139, 250, 0.15)',
         accentDim: '#6d28d9',
-        accentBright: '#ddd6fe'
+        accentBright: '#ddd6fe',
+        accentContrast: '#ffffff'
     },
     emerald: {
         accent: '#059669',
         accentGlow: 'rgba(5, 150, 105, 0.15)',
         accentDim: '#065f46',
-        accentBright: '#34d399'
+        accentBright: '#34d399',
+        accentContrast: '#ffffff'
     },
     neon: {
         accent: '#00f0ff',
         accentGlow: 'rgba(0, 240, 255, 0.15)',
         accentDim: '#008b99',
-        accentBright: '#70f8ff'
+        accentBright: '#70f8ff',
+        accentContrast: '#14141a'
     },
     coral: {
         accent: '#e07a5f',
         accentGlow: 'rgba(224, 122, 95, 0.15)',
         accentDim: '#9e4731',
-        accentBright: '#f4a261'
+        accentBright: '#f4a261',
+        accentContrast: '#ffffff'
     },
     fuchsia: {
         accent: '#d946ef',
         accentGlow: 'rgba(217, 70, 239, 0.15)',
         accentDim: '#86198f',
-        accentBright: '#f0abfc'
+        accentBright: '#f0abfc',
+        accentContrast: '#ffffff'
     }
 };
 
@@ -667,6 +686,7 @@ export class App {
         document.documentElement.style.setProperty('--accent-glow', theme.accentGlow);
         document.documentElement.style.setProperty('--accent-dim', theme.accentDim);
         document.documentElement.style.setProperty('--accent-bright', theme.accentBright);
+        document.documentElement.style.setProperty('--accent-contrast', theme.accentContrast || '#ffffff');
         document.documentElement.setAttribute('data-theme-color', colorKey);
         localStorage.setItem('phi_theme_color', colorKey);
 

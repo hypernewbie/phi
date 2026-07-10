@@ -760,11 +760,12 @@ html, body {
 
 .btn-accent {
     background-color: var(--accent);
-    color: #ffffff;
+    color: var(--accent-contrast, #ffffff);
 }
 
 .btn-accent:hover {
     background-color: var(--accent-bright);
+    color: var(--accent-contrast, #ffffff);
     box-shadow: 0 0 16px var(--accent-glow);
 }
 
@@ -3108,17 +3109,20 @@ html, body {
 
 .reconnect-btn {
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-contrast, #ffffff);
     border: none;
     border-radius: 5px;
     padding: 4px 12px;
     font-size: 12px;
     font-family: var(--font-mono);
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 
-.reconnect-btn:hover:not(:disabled) { background: var(--accent-bright); }
+.reconnect-btn:hover:not(:disabled) {
+    background: var(--accent-bright);
+    color: var(--accent-contrast, #ffffff);
+}
 .reconnect-btn:disabled { opacity: 0.5; cursor: default; }
 
 .reconnect-buttons {
@@ -5047,7 +5051,7 @@ html, body {
 
 .sync-btn-primary {
     background-color: var(--accent);
-    color: #fff;
+    color: var(--accent-contrast, #ffffff);
     border: none;
     border-radius: 6px;
     padding: 6px 10px;
@@ -5058,11 +5062,12 @@ html, body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.15s, transform 0.1s;
+    transition: background-color 0.15s, color 0.15s, transform 0.1s;
 }
 
 .sync-btn-primary:hover {
     background-color: var(--accent-bright);
+    color: var(--accent-contrast, #ffffff);
 }
 
 .sync-btn-primary:active {
@@ -5219,17 +5224,6 @@ html, body {
     font-family: var(--font-ui);
 }
 
-/* Special overrides for the white theme (contrast fix for white-on-white buttons) */
-[data-theme-color="white"] .btn-accent,
-[data-theme-color="white"] .reconnect-btn,
-[data-theme-color="white"] .sync-btn-primary {
-    color: #14141a !important;
-}
 
-[data-theme-color="white"] .btn-accent:hover,
-[data-theme-color="white"] .reconnect-btn:hover:not(:disabled),
-[data-theme-color="white"] .sync-btn-primary:hover {
-    color: #14141a !important;
-}
 
 
