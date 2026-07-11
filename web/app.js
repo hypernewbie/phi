@@ -1269,10 +1269,20 @@ export class App {
         });
     }
 
-    async exportCmdsConfig(btnElement) {
-        await this._doExportConfig('/api/config/export-cmds', btnElement);
+    // v0.7.16: cmds split into quick (sent to active PTY) vs terminal
+    // (spawn new shell tabs). They were conflated under /export-cmds and
+    // called "the same thing" because the button text was the same. They
+    // are not the same thing. Two separate endpoints, two separate methods.
+    async exportQuickCommandsConfig(btnElement) {
+        await this._doExportConfig('/api/config/export-quick-commands', btnElement);
     }
 
+    async exportTerminalCommandsConfig(btnElement) {
+        await this._doExportConfig('/api/config/export-terminal-commands', btnElement);
+    }
+
+    // importCmdsConfig still routes to the single /import-cmds endpoint
+    // which now accepts any of PHIQUICKCMDS, PHITERMCMDS, or legacy PHICMDS.
     async importCmdsConfig(btnElement) {
         await this._doImportConfig('/api/config/import-cmds', btnElement, "PHICMDS", async () => {
             await this.sessionsManager.loadConfig();

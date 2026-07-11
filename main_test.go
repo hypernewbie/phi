@@ -1325,91 +1325,220 @@ func TestConfigExportImportModelsHandlers(t *testing.T) {
 	}
 }
 
-func TestConfigExportImportCmdsHandlers(t *testing.T) {
+// Until v0.7.16 the cmd panel and the quick-commands dropup both called
+// `exportCmdsConfig` -> /api/config/export-cmds, which dumped BOTH
+// quick_commands (sent to active PTY) and terminal_commands (spawn new
+// shell tabs) into a single payload. They're different concepts; one
+// user's "cmds" is the other's data. They were conflated, like crack
+// isn't the same as crack - same word, different (legal/illegal) thing.
+//
+// These tests lock in the split: each export endpoint returns ONLY its
+// own list, and the corresponding import is scoped to that same list. The
+// old /api/config/export-cmds endpoint is gone; the import endpoint
+// stays but only accepts data with a known prefix (PHIQUICKCMDS,
+// PHITERMCMDS, or the legacy PHICMDS for paste-back-compat).
+
+func TestConfigExportQuickCommandsOnly(t *testing.T) {
 	withTempConfig(t)
 
 	cfg := loadConfig()
-	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"original-model"}}
-	cfg.QuickCommands = []QuickCommand{{Name: "quick", Command: "echo quick"}}
-	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
+	cfg.QuickCommands = []QuickCommand{
+		{Name: "q1", Command: "echo q1"},
+		{Name: "q2", Command: "echo q2"},
+	}
+	// Terminal cmds are also set; the quick export must NOT include them.
+	cfg.TerminalCommands = []QuickCommand{{Name: "t1", Command: "bash t1"}}
 	saveConfig(cfg)
 
-	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-cmds", nil)
+	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-quick-commands", nil)
 	wExport := httptest.NewRecorder()
-	handleConfigExportCmds(wExport, reqExport)
+	handleConfigExportQuickCommands(wExport, reqExport)
 	if wExport.Code != http.StatusOK {
-		t.Fatalf("cmd export handler failed, code %d", wExport.Code)
+		t.Fatalf("quick export handler failed, code %d, body: %s", wExport.Code, wExport.Body.String())
 	}
 
 	var exportRes struct {
 		Config string `json:"config"`
 	}
 	if err := json.NewDecoder(wExport.Body).Decode(&exportRes); err != nil {
-		t.Fatalf("failed to decode cmd export body: %v", err)
+		t.Fatalf("failed to decode quick export body: %v", err)
 	}
-	if !strings.HasPrefix(exportRes.Config, "PHICMDS:") {
-		t.Errorf("expected config to start with PHICMDS:, got %q", exportRes.Config)
-	}
-
-	cfg = loadConfig()
-	cfg.ModelPresets = ModelPresetsMap{"pi": []string{"overwritten-model"}}
-	cfg.QuickCommands = []QuickCommand{{Name: "quick2", Command: "echo quick2"}}
-	cfg.TerminalCommands = []QuickCommand{{Name: "term2", Command: "sh"}}
-	saveConfig(cfg)
-
-	importReqBody, _ := json.Marshal(map[string]string{"config": exportRes.Config})
-	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(importReqBody)))
-	wImport := httptest.NewRecorder()
-	handleConfigImportCmds(wImport, reqImport)
-	if wImport.Code != http.StatusOK {
-		t.Fatalf("cmd import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
+	if !strings.HasPrefix(exportRes.Config, "PHIQUICKCMDS:") {
+		t.Fatalf("expected config to start with PHIQUICKCMDS:, got %q", exportRes.Config[:min(40, len(exportRes.Config))])
 	}
 
-	loaded := loadConfig()
-	if loaded.ModelPresets["pi"][0] != "overwritten-model" {
-		t.Errorf("model presets should NOT have been restored/overwritten, got %+v", loaded.ModelPresets)
+	// Round-trip decode and confirm ONLY quick_commands was carried.
+	jsonData, err := decodeConfigData(exportRes.Config, "PHIQUICKCMDS")
+	if err != nil {
+		t.Fatalf("decode PHIQUICKCMDS: %v", err)
 	}
-	if loaded.QuickCommands[0].Name != "quick" {
-		t.Errorf("quick commands not restored, got %+v", loaded.QuickCommands)
+	var got struct {
+		QuickCommands    []QuickCommand `json:"quick_commands"`
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
 	}
-	if loaded.TerminalCommands[0].Name != "term" {
-		t.Errorf("terminal commands not restored, got %+v", loaded.TerminalCommands)
+	if err := json.Unmarshal(jsonData, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.QuickCommands) != 2 {
+		t.Errorf("expected 2 quick commands, got %+v", got.QuickCommands)
+	}
+	// The whole point: terminal_commands must be absent or empty, NOT leaked.
+	if len(got.TerminalCommands) != 0 {
+		t.Errorf("quick-only export leaked terminal_commands: %+v", got.TerminalCommands)
 	}
 }
 
-func TestConfigImportCmdsCanClearLists(t *testing.T) {
+func TestConfigExportTerminalCommandsOnly(t *testing.T) {
 	withTempConfig(t)
 
 	cfg := loadConfig()
-	cfg.QuickCommands = []QuickCommand{{Name: "quick", Command: "echo quick"}}
-	cfg.TerminalCommands = []QuickCommand{{Name: "term", Command: "bash"}}
+	// Quick cmds are also set; the terminal export must NOT include them.
+	cfg.QuickCommands = []QuickCommand{{Name: "q1", Command: "echo q1"}}
+	cfg.TerminalCommands = []QuickCommand{
+		{Name: "t1", Command: "bash t1"},
+		{Name: "t2", Command: "bash t2"},
+	}
 	saveConfig(cfg)
 
+	reqExport := httptest.NewRequest(http.MethodGet, "/api/config/export-terminal-commands", nil)
+	wExport := httptest.NewRecorder()
+	handleConfigExportTerminalCommands(wExport, reqExport)
+	if wExport.Code != http.StatusOK {
+		t.Fatalf("terminal export handler failed, code %d, body: %s", wExport.Code, wExport.Body.String())
+	}
+
+	var exportRes struct {
+		Config string `json:"config"`
+	}
+	if err := json.NewDecoder(wExport.Body).Decode(&exportRes); err != nil {
+		t.Fatalf("failed to decode terminal export body: %v", err)
+	}
+	if !strings.HasPrefix(exportRes.Config, "PHITERMCMDS:") {
+		t.Fatalf("expected config to start with PHITERMCMDS:, got %q", exportRes.Config[:min(40, len(exportRes.Config))])
+	}
+
+	jsonData, err := decodeConfigData(exportRes.Config, "PHITERMCMDS")
+	if err != nil {
+		t.Fatalf("decode PHITERMCMDS: %v", err)
+	}
+	var got struct {
+		QuickCommands    []QuickCommand `json:"quick_commands"`
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}
+	if err := json.Unmarshal(jsonData, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.TerminalCommands) != 2 {
+		t.Errorf("expected 2 terminal commands, got %+v", got.TerminalCommands)
+	}
+	// And the OTHER way: quick commands must NOT leak into the terminal export.
+	if len(got.QuickCommands) != 0 {
+		t.Errorf("terminal-only export leaked quick_commands: %+v", got.QuickCommands)
+	}
+}
+
+// Round-trip a quick-only export through the import endpoint and assert
+// terminal_commands is left untouched (not cleared, not overwritten).
+func TestConfigImportCmdsScoping(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := loadConfig()
+	cfg.QuickCommands = []QuickCommand{{Name: "q-old", Command: "echo old"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "t-existing", Command: "bash existing"}}
+	saveConfig(cfg)
+
+	// Build a PHIQUICKCMDS payload and import it.
+	encoded, err := encodeConfigData("PHIQUICKCMDS", struct {
+		QuickCommands []QuickCommand `json:"quick_commands"`
+	}{
+		QuickCommands: []QuickCommand{{Name: "q-new", Command: "echo new"}},
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{"config": encoded})
+	req := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	handleConfigImportCmds(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("import handler failed, code %d, body: %s", w.Code, w.Body.String())
+	}
+
+	loaded := loadConfig()
+	if len(loaded.QuickCommands) != 1 || loaded.QuickCommands[0].Name != "q-new" {
+		t.Errorf("quick commands not updated, got %+v", loaded.QuickCommands)
+	}
+	// Terminal commands must be EXACTLY what it was - quick import must not touch it.
+	if len(loaded.TerminalCommands) != 1 || loaded.TerminalCommands[0].Name != "t-existing" {
+		t.Errorf("quick-only import clobbered terminal_commands: %+v", loaded.TerminalCommands)
+	}
+
+	// Now do the symmetric case: import a PHITERMCMDS payload and assert
+	// quick_commands is left alone.
+	cfg = loadConfig()
+	cfg.QuickCommands = []QuickCommand{{Name: "q-existing", Command: "echo q-existing"}}
+	saveConfig(cfg)
+
+	encoded2, err := encodeConfigData("PHITERMCMDS", struct {
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}{
+		TerminalCommands: []QuickCommand{{Name: "t-new", Command: "bash t-new"}},
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	body2, _ := json.Marshal(map[string]string{"config": encoded2})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body2)))
+	w2 := httptest.NewRecorder()
+	handleConfigImportCmds(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("import handler failed, code %d, body: %s", w2.Code, w2.Body.String())
+	}
+
+	loaded = loadConfig()
+	if len(loaded.TerminalCommands) != 1 || loaded.TerminalCommands[0].Name != "t-new" {
+		t.Errorf("terminal commands not updated, got %+v", loaded.TerminalCommands)
+	}
+	if len(loaded.QuickCommands) != 1 || loaded.QuickCommands[0].Name != "q-existing" {
+		t.Errorf("terminal-only import clobbered quick_commands: %+v", loaded.QuickCommands)
+	}
+}
+
+// Backwards compatibility: the old combined PHICMDS paste format must still
+// work, so users with previously-copied config can still paste it in.
+func TestConfigImportCmdsLegacyPHICMDS(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := loadConfig()
+	cfg.QuickCommands = []QuickCommand{{Name: "q-old", Command: "echo old"}}
+	cfg.TerminalCommands = []QuickCommand{{Name: "t-old", Command: "bash old"}}
+	saveConfig(cfg)
+
+	// Build the legacy combined format and import.
 	encoded, err := encodeConfigData("PHICMDS", struct {
 		QuickCommands    []QuickCommand `json:"quick_commands"`
 		TerminalCommands []QuickCommand `json:"terminal_commands"`
 	}{
-		QuickCommands:    []QuickCommand{},
-		TerminalCommands: []QuickCommand{},
+		QuickCommands:    []QuickCommand{{Name: "q-new", Command: "echo new"}},
+		TerminalCommands: []QuickCommand{{Name: "t-new", Command: "bash new"}},
 	})
 	if err != nil {
-		t.Fatalf("encode PHICMDS failed: %v", err)
+		t.Fatalf("encode: %v", err)
 	}
-
-	importReqBody, _ := json.Marshal(map[string]string{"config": encoded})
-	reqImport := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(importReqBody)))
-	wImport := httptest.NewRecorder()
-	handleConfigImportCmds(wImport, reqImport)
-	if wImport.Code != http.StatusOK {
-		t.Fatalf("cmd import handler failed, code %d, body: %s", wImport.Code, wImport.Body.String())
+	body, _ := json.Marshal(map[string]string{"config": encoded})
+	req := httptest.NewRequest(http.MethodPost, "/api/config/import-cmds", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	handleConfigImportCmds(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("legacy PHICMDS import failed, code %d, body: %s", w.Code, w.Body.String())
 	}
 
 	loaded := loadConfig()
-	if loaded.QuickCommands == nil || len(loaded.QuickCommands) != 0 {
-		t.Errorf("quick commands should have been cleared, got %+v", loaded.QuickCommands)
+	if len(loaded.QuickCommands) != 1 || loaded.QuickCommands[0].Name != "q-new" {
+		t.Errorf("legacy PHICMDS: quick commands not updated, got %+v", loaded.QuickCommands)
 	}
-	if loaded.TerminalCommands == nil || len(loaded.TerminalCommands) != 0 {
-		t.Errorf("terminal commands should have been cleared, got %+v", loaded.TerminalCommands)
+	if len(loaded.TerminalCommands) != 1 || loaded.TerminalCommands[0].Name != "t-new" {
+		t.Errorf("legacy PHICMDS: terminal commands not updated, got %+v", loaded.TerminalCommands)
 	}
 }
 
