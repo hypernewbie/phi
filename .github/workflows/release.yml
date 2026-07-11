@@ -5,12 +5,22 @@ on:
     tags:
       - 'v*'
 
+# OIDC trusted publishing needs id-token: write for the npm-publish job.
+# Long-lived NPM_TOKEN secret is being phased out by npm (2FA-bypass tokens
+# lose publish capability in Jan 2027 per
+# https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/).
+# See .github/dependabot.yml / repo settings: trusted publishing must be
+# enabled for @hypernewbie/phi-code on npmjs.com pointing at this repo +
+# the release.yml workflow file path.
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +45,12 @@ jobs:
   npm-publish:
     needs: goreleaser
     runs-on: ubuntu-latest
+    # actions/setup-node's built-in registry-url auth uses NODE_AUTH_TOKEN
+    # when set, but with `registry-url` + OIDC it picks up the auto-minted
+    # token from the job's id-token permission automatically.
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,6 +65,11 @@ jobs:
         run: |
           cd npm
           npm version ${GITHUB_REF_NAME#v} --no-git-tag-version --allow-same-version
-          npm publish --access=public
+          # --provenance attaches an SLSA build provenance statement signed by
+          # GitHub's OIDC token; required by npm's trusted publishing flow.
+          npm publish --access=public --provenance
         env:
+          # NODE_AUTH_TOKEN intentionally unset: setup-node will use the OIDC
+          # token minted for this job. Override with NODE_AUTH_TOKEN secret only
+          # for emergency rollback if trusted publishing is misconfigured.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
