@@ -357,6 +357,14 @@ export class KanbanManager {
                                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                             </svg>
                         </button>
+                        <button id="kanban-add-column-btn" class="toolbar-btn" title="Add Column">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                                <line x1="12" y1="10" x2="12" y2="14"></line>
+                                <line x1="10" y1="12" x2="14" y2="12"></line>
+                            </svg>
+                            <span>Column</span>
+                        </button>
                     </div>
                     <div class="toolbar-right">
                         <button id="kanban-disconnect-btn" class="toolbar-btn text-danger" title="Disconnect Server">
@@ -383,6 +391,111 @@ export class KanbanManager {
         
         container.querySelector('#kanban-refresh-btn').addEventListener('click', () => {
             this.loadAndRenderBoard(container);
+        });
+
+        // Add Column toolbar button. Prompts for a name; re-loads on success.
+        const addColBtn = container.querySelector('#kanban-add-column-btn');
+        if (addColBtn) {
+            addColBtn.addEventListener('click', async () => {
+                const title = (prompt('New column name:') || '').trim();
+                if (!title) return;
+                try {
+                    await this.createBucket(title, container);
+                } catch (err) {
+                    this.app.showToast(`Failed to add column: ${err.message}`, { type: 'error', title: 'Kanban' });
+                }
+            });
+        }
+
+        // Column rename: click the title to edit inline. Blur or Enter saves,
+        // Escape cancels. Reverts to the original text if the input is empty
+        // or unchanged.
+        container.querySelectorAll('.column-title').forEach(titleEl => {
+            titleEl.addEventListener('click', () => {
+                const id = titleEl.dataset.bucketId;
+                const current = titleEl.textContent;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'column-title-edit';
+                input.value = current;
+                input.style.width = '100%';
+                input.style.font = 'inherit';
+                input.style.color = 'inherit';
+                input.style.background = 'rgba(255,255,255,0.04)';
+                input.style.border = '1px solid var(--accent-soft, #444)';
+                input.style.borderRadius = '3px';
+                input.style.padding = '1px 4px';
+                titleEl.replaceWith(input);
+                input.focus();
+                input.select();
+
+                let finished = false;
+                const finish = async (save) => {
+                    if (finished) return;
+                    finished = true;
+                    const next = save ? input.value.trim() : current;
+                    if (save && next && next !== current) {
+                        try {
+                            await this.updateBucket(id, next, container);
+                        } catch (err) {
+                            this.app.showToast(`Rename failed: ${err.message}`, { type: 'error', title: 'Kanban' });
+                            // Restore the original title without a full reload.
+                            input.replaceWith(titleEl);
+                            titleEl.textContent = current;
+                        }
+                    } else {
+                        // No change or cancel: restore the title span.
+                        input.replaceWith(titleEl);
+                        titleEl.textContent = current;
+                    }
+                };
+                input.addEventListener('blur', () => finish(true));
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+                });
+            });
+        });
+
+        // Column edit + delete icons next to each column header.
+        container.querySelectorAll('.column-edit-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.bucketId;
+                const titleEl = container.querySelector(`.column-title[data-bucket-id="${id}"]`);
+                if (titleEl) titleEl.click();
+            });
+        });
+        container.querySelectorAll('.column-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.bucketId;
+                const titleEl = container.querySelector(`.column-title[data-bucket-id="${id}"]`);
+                const name = titleEl ? titleEl.textContent : `#${id}`;
+                if (!confirm(`Delete column "${name}" and all its tasks? This cannot be undone.`)) return;
+                try {
+                    await this.deleteBucket(id, container);
+                } catch (err) {
+                    this.app.showToast(`Failed to delete column: ${err.message}`, { type: 'error', title: 'Kanban' });
+                }
+            });
+        });
+
+        // Inline card delete (the X button revealed on hover). Confirms, then
+        // calls deleteTask which clears the cache and reloads the board.
+        container.querySelectorAll('.kanban-card-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.taskId;
+                const task = this.taskCache[id];
+                const label = task ? `"${task.title}"` : `#${id}`;
+                if (!confirm(`Delete task ${label}? This cannot be undone.`)) return;
+                try {
+                    await this.deleteTask(id, container);
+                } catch (err) {
+                    this.app.showToast(`Failed to delete task: ${err.message}`, { type: 'error', title: 'Kanban' });
+                }
+            });
         });
         
         container.querySelector('#kanban-disconnect-btn').addEventListener('click', () => {
@@ -486,12 +599,28 @@ export class KanbanManager {
     renderColumn(bucket) {
         const tasks = bucket.tasks || [];
         const taskCount = tasks.length;
-        
+
+        // Inline X on the column header so users can rename/delete the column
+        // without an extra menu. Both buttons are aria-hidden-on-default-styling;
+        // they appear on hover for a clean default look. Clicks stopPropagation
+        // so they don't trigger the "switch to this bucket" behaviour.
         return `
             <div class="kanban-column" data-bucket-id="${bucket.id}">
                 <div class="kanban-column-header">
-                    <span class="column-title">${this.escapeHtml(bucket.title)}</span>
+                    <span class="column-title" data-bucket-id="${bucket.id}" title="Click to rename">${this.escapeHtml(bucket.title)}</span>
                     <span class="column-count">${taskCount}</span>
+                    <button class="column-action-btn column-edit-btn" data-bucket-id="${bucket.id}" title="Rename bucket" aria-label="Rename bucket">
+                        <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 20h9"></path>
+                            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                        </svg>
+                    </button>
+                    <button class="column-action-btn column-delete-btn" data-bucket-id="${bucket.id}" title="Delete bucket" aria-label="Delete bucket">
+                        <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
                 </div>
                 <div class="kanban-cards-list" data-bucket-id="${bucket.id}">
                     ${tasks.map(task => this.renderCard(task)).join('')}
@@ -520,7 +649,7 @@ export class KanbanManager {
                     ${task.labels.map(lbl => {
                         const hex = safeHexColor(lbl.hex_color);
                         const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
-                        return `<span class="kanban-label-pill" ${style}>${this.escapeHtml(lbl.title)}</span>`;
+                        return `<span class="kanban-label-pill" ${style} title="${this.escapeHtml(lbl.title || '')}">${this.escapeHtml(lbl.title)}</span>`;
                     }).join('')}
                 </div>
             `;
@@ -551,6 +680,12 @@ export class KanbanManager {
         
         return `
             <div class="kanban-card ${task.done ? 'kanban-card--done' : ''}" data-task-id="${task.id}">
+                <button class="kanban-card-delete-btn" data-task-id="${task.id}" title="Delete task" aria-label="Delete task">
+                    <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
                 <div class="kanban-card-title">${this.escapeHtml(task.title)}</div>
                 ${labelsHtml}
                 <div class="kanban-card-meta">
@@ -709,11 +844,15 @@ export class KanbanManager {
 
         let labelsHtml = '';
         if (task.labels && task.labels.length > 0) {
-            labelsHtml = task.labels.map(lbl => {
-                const hex = safeHexColor(lbl.hex_color);
-                const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
-                return `<span class="kanban-label-pill" ${style}>${this.escapeHtml(lbl.title)}</span>`;
-            }).join('');
+            labelsHtml = `
+                <div class="kdp-labels-current">
+                    ${task.labels.map(lbl => {
+                        const hex = safeHexColor(lbl.hex_color);
+                        const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                        return `<span class="kanban-label-pill kdp-label-removable" data-label-id="${lbl.id}" ${style}>${this.escapeHtml(lbl.title)}<button class="kdp-label-remove-btn" data-label-id="${lbl.id}" title="Remove label" aria-label="Remove label">×</button></span>`;
+                    }).join('')}
+                </div>
+            `;
         } else {
             labelsHtml = '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
         }
@@ -762,6 +901,12 @@ export class KanbanManager {
                     <div class="kdp-labels-display">
                         ${labelsHtml}
                     </div>
+                    <div class="kdp-labels-add-row">
+                        <select id="kdp-label-picker" class="kdp-label-picker">
+                            <option value="">Add label…</option>
+                        </select>
+                        <button id="kdp-label-add-btn" class="btn btn-primary" disabled>+ Add</button>
+                    </div>
                 </div>
 
                 <div class="kdp-field">
@@ -784,8 +929,11 @@ export class KanbanManager {
                 </div>
             </div>
             <div class="kdp-footer">
-                <button class="btn btn-primary kdp-cancel-btn">Cancel</button>
-                <button class="btn btn-accent kdp-save-btn">Save</button>
+                <button class="btn kdp-delete-btn">Delete</button>
+                <div class="kdp-footer-right">
+                    <button class="btn btn-primary kdp-cancel-btn">Cancel</button>
+                    <button class="btn btn-accent kdp-save-btn">Save</button>
+                </div>
             </div>
         `;
 
@@ -816,9 +964,31 @@ export class KanbanManager {
             }
         });
 
+        // Label picker: populate the dropdown with all labels (minus ones
+        // already on this task), enable Add when a real option is chosen, and
+        // wire remove-X on each existing label pill.
+        this._wireLabelPicker(panel, task, container);
+
         panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
         panel.querySelector('.kdp-cancel-btn').addEventListener('click', () => this.closeDetailPanel());
-        
+
+        // Detail-panel Delete button. Confirms, then deletes the task and closes
+        // the panel. The container ref is captured so the board reloads.
+        const deleteBtn = panel.querySelector('.kdp-delete-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async () => {
+                if (!confirm(`Delete task "${task.title}"? This cannot be undone.`)) return;
+                deleteBtn.disabled = true;
+                try {
+                    await this.deleteTask(task.id, container);
+                    this.closeDetailPanel();
+                } catch (err) {
+                    this.app.showToast(`Failed to delete task: ${err.message}`, { type: 'error', title: 'Kanban' });
+                    deleteBtn.disabled = false;
+                }
+            });
+        }
+
         panel.querySelector('.kdp-save-btn').addEventListener('click', async () => {
             const saveBtn = panel.querySelector('.kdp-save-btn');
             saveBtn.disabled = true;
@@ -899,6 +1069,172 @@ export class KanbanManager {
             const count = col.querySelectorAll('.kanban-card').length;
             col.querySelector('.column-count').textContent = count;
         });
+    }
+
+    // ============================================================
+    // Task CRUD
+    // ============================================================
+
+    // deleteTask removes a task via Vikunja's DELETE /tasks/{id}.
+    async deleteTask(taskId, container) {
+        await this.apiDelete(`/tasks/${taskId}`);
+        delete this.taskCache[taskId];
+        if (container) await this.loadAndRenderBoard(container);
+    }
+
+    // ============================================================
+    // Bucket CRUD (kanban columns)
+    // ============================================================
+
+    // createBucket PUTs a new bucket via /projects/{p}/views/{v}/buckets.
+    async createBucket(title, container) {
+        if (!this.currentProjectId || !this.currentViewId) {
+            throw new Error('Bucket create failed: project or view not loaded yet.');
+        }
+        const t = (title || '').trim();
+        if (!t) throw new Error('Bucket title cannot be empty.');
+        await this.apiPut(
+            `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets`,
+            { title: t }
+        );
+        if (container) await this.loadAndRenderBoard(container);
+    }
+
+    // updateBucket renames a bucket via POST /projects/{p}/views/{v}/buckets/{b}.
+    async updateBucket(bucketId, title, container) {
+        if (!this.currentProjectId || !this.currentViewId) {
+            throw new Error('Bucket update failed: project or view not loaded yet.');
+        }
+        const t = (title || '').trim();
+        if (!t) throw new Error('Bucket title cannot be empty.');
+        await this.apiPost(
+            `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets/${bucketId}`,
+            { title: t }
+        );
+        if (container) await this.loadAndRenderBoard(container);
+    }
+
+    // deleteBucket removes a bucket. Drops cached tasks that belonged to it.
+    async deleteBucket(bucketId, container) {
+        if (!this.currentProjectId || !this.currentViewId) {
+            throw new Error('Bucket delete failed: project or view not loaded yet.');
+        }
+        await this.apiDelete(
+            `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets/${bucketId}`
+        );
+        for (const [id, t] of Object.entries(this.taskCache)) {
+            if (t.bucket_id == bucketId) delete this.taskCache[id];
+        }
+        this.buckets = (this.buckets || []).filter(b => b.id != bucketId);
+        if (container) await this.loadAndRenderBoard(container);
+    }
+
+    // ============================================================
+    // Labels (per-task)
+    // ============================================================
+
+    // fetchAllLabels queries Vikunja for the available labels.
+    async fetchAllLabels() {
+        return await this.apiGet('/labels');
+    }
+
+    // _wireLabelPicker populates the add-label dropdown in the detail panel
+    // (omitting labels already on the task), enables the Add button when a
+    // real option is chosen, and binds remove-X on each existing label pill.
+    // _refreshDetailPanelLabels(panel) is exported as a callback so we can
+    // re-render the pills after add/remove without re-opening the whole panel.
+    async _wireLabelPicker(panel, task, container) {
+        const picker = panel.querySelector('#kdp-label-picker');
+        const addBtn = panel.querySelector('#kdp-label-add-btn');
+        if (!picker || !addBtn) return;
+
+        // Try to populate; if the call fails (offline, no permission), the
+        // picker stays empty but the rest of the panel still works.
+        try {
+            const all = (await this.fetchAllLabels()) || [];
+            const have = new Set((task.labels || []).map(l => l.id));
+            const opts = ['<option value="">Add label…</option>']
+                .concat(all.filter(l => !have.has(l.id))
+                          .map(l => `<option value="${l.id}">${this.escapeHtml(l.title || '(unnamed)')}</option>`));
+            picker.innerHTML = opts.join('');
+        } catch (_) {
+            // Leave the placeholder only; user can still X-off existing labels.
+        }
+
+        picker.addEventListener('change', () => {
+            addBtn.disabled = !picker.value;
+        });
+        addBtn.addEventListener('click', async () => {
+            const id = parseInt(picker.value, 10);
+            if (!id) return;
+            addBtn.disabled = true;
+            try {
+                await this.addLabelToTask(task.id, id);
+                // Re-render the labels section + repopulate the picker.
+                const fresh = this.taskCache[task.id] || task;
+                this._refreshDetailPanelLabels(panel, fresh, container);
+            } catch (err) {
+                this.app.showToast(`Failed to add label: ${err.message}`, { type: 'error', title: 'Kanban' });
+                addBtn.disabled = false;
+            }
+        });
+
+        // Remove buttons on each existing label pill.
+        panel.querySelectorAll('.kdp-label-remove-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = parseInt(btn.dataset.labelId, 10);
+                if (!id) return;
+                btn.disabled = true;
+                try {
+                    await this.removeLabelFromTask(task.id, id);
+                    const fresh = this.taskCache[task.id] || task;
+                    this._refreshDetailPanelLabels(panel, fresh, container);
+                } catch (err) {
+                    this.app.showToast(`Failed to remove label: ${err.message}`, { type: 'error', title: 'Kanban' });
+                    btn.disabled = false;
+                }
+            });
+        });
+    }
+
+    // _refreshDetailPanelLabels re-renders the labels block + re-wires the
+    // picker for the current task. Cheap — only the labels section is rebuilt.
+    async _refreshDetailPanelLabels(panel, task, container) {
+        const containerEl = panel.querySelector('.kdp-labels-display');
+        if (containerEl) {
+            if (task.labels && task.labels.length > 0) {
+                containerEl.innerHTML = `
+                    <div class="kdp-labels-current">
+                        ${task.labels.map(lbl => {
+                            const hex = safeHexColor(lbl.hex_color);
+                            const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                            return `<span class="kanban-label-pill kdp-label-removable" data-label-id="${lbl.id}" ${style}>${this.escapeHtml(lbl.title)}<button class="kdp-label-remove-btn" data-label-id="${lbl.id}" title="Remove label" aria-label="Remove label">×</button></span>`;
+                        }).join('')}
+                    </div>
+                `;
+            } else {
+                containerEl.innerHTML = '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
+            }
+        }
+        await this._wireLabelPicker(panel, task, container);
+    }
+
+    // addLabelToTask puts a label on a task via PUT /tasks/{task}/labels.
+    async addLabelToTask(taskId, labelId) {
+        const updated = await this.apiPut(`/tasks/${taskId}/labels`, { label_id: labelId });
+        if (this.taskCache[taskId]) {
+            this.taskCache[taskId].labels = updated || [];
+        }
+        return updated;
+    }
+
+    // removeLabelFromTask strips a label via DELETE /tasks/{task}/labels/{label}.
+    async removeLabelFromTask(taskId, labelId) {
+        await this.apiDelete(`/tasks/${taskId}/labels/${labelId}`);
+        if (this.taskCache[taskId] && Array.isArray(this.taskCache[taskId].labels)) {
+            this.taskCache[taskId].labels = this.taskCache[taskId].labels.filter(l => l.id != labelId);
+        }
     }
 
     async moveTask(taskId, newBucketId) {

@@ -2,6 +2,22 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.7.15 — 2026-07-10
+
+**Added**
+- **Kanban / Vikunja: full CRUD on tasks and buckets.** The board was missing basics that should have been there from day one — task delete, bucket create/rename/delete, and add/remove labels on a task.
+  - **Delete task:** inline X on each card (hover-revealed, top-right) for quick delete + a dedicated Delete button in the detail panel footer. Both confirm before destructive action.
+  - **Create column:** `+ Column` button in the toolbar. Prompts for a name and creates a new Vikunja bucket.
+  - **Rename column:** click the column title to edit inline; Enter or blur saves, Escape cancels. Pencil icon next to the title does the same.
+  - **Delete column:** trash icon next to the title; confirms, then drops the bucket + its cached tasks.
+  - **Add/remove labels on a task:** the detail panel now has a label picker (dropdown of available Vikunja labels, minus the ones already on the task) with an Add button. Each existing label pill has an X to remove it.
+- 14 jsdom tests in `test-js/kanbanCrud.test.js` covering the new API methods, the cache invalidation rules, the empty-title guard, and the "requires project/view cached" guard.
+
+## v0.7.14 — 2026-07-10
+
+**Added**
+- **Clickable sidebar version text** — the `v0.7.15` text in the sidebar footer is now a button. Click it to open a markdown changelog popup (powered by a new `web/changelog.md` that ships embedded in the Go binary). Same widget as the `?` help button.
+
 ## v0.7.13 — 2026-07-10
 
 **Changed**
@@ -150,6 +166,20 @@ This version was committed but never tagged or published to npm. Included in the
 - ntfy.sh `Priority: high` header for iOS/Android system push alerts.
 - Build: `loadConfig`/`saveConfig` signatures and missing imports.
 
+## v0.6.2 — 2026-07-06
+
+**Fixed**
+- Terminal theme: restored standard ANSI colors (was a custom palette that confused muscle memory; back to the conventional colors expected by every shell tool).
+- Favicon: fixed initial color flash on page load — was rendering with the default theme color before the user's saved theme loaded.
+
+## v0.6.1 — 2026-07-06
+
+**Added**
+- **Rich HTML kanban descriptions** — task descriptions can now contain markdown/HTML, rendered with a glassmorphism styling. Includes a raw-HTML toggle so you can see/edit the source.
+
+**Changed**
+- UI polish: fancy glassmorphism updates across kanban cards and modals for the obsidian aesthetic.
+
 ## v0.6.0 — 2026-07-02
 
 **Added**
@@ -180,4 +210,4 @@ This version was committed but never tagged or published to npm. Included in the
 
 ---
 
-_Missing from the registry: 0.5.7, 0.5.8, 0.5.9, 0.6.1, 0.6.2, 0.6.6 — these were manually bumped in the source tree without a corresponding version-bump commit; never tagged or published to npm._
+_Never made it into git history (no commits found via `git log --all -S 'v0.5.7'` / `'0.5.8'` / `'0.5.9'` / `'0.6.6'`): 0.5.7, 0.5.8, 0.5.9, 0.6.6 — these were apparently local-only version bumps that were overwritten before commit. Not on npm._
