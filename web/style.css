@@ -679,34 +679,41 @@ html, body {
 .sidebar-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     gap: 8px;
     padding: 8px 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.02);
     user-select: none;
 }
 
-.sidebar-version {
-    font-size: 9px;
-    font-family: var(--font-ui);
-    color: var(--text-muted);
-    opacity: 0.4;
-    letter-spacing: 0.02em;
+/* Subtle pill that fuses the version text + ? button into one visual unit.
+   Re-creates the original b0a5bdb 'subtle v0.1.0 version tag' look (10px
+   monospace, opacity 0.5, centered) but with the help button attached. */
+.sidebar-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px 2px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
 }
 
-/* When the version text is a clickable button (changelog popup trigger) */
+/* The version text: subtle, monospace, original v0.1.0 sizing. */
 .sidebar-version-btn {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.5;
     background: transparent;
     border: none;
     padding: 0;
     cursor: pointer;
-    font: inherit;
-    color: inherit;
-    opacity: 0.4;
     transition: opacity 0.15s ease, color 0.15s ease;
+    line-height: 1;
 }
 .sidebar-version-btn:hover {
-    opacity: 0.85;
+    opacity: 0.9;
     color: var(--accent, var(--text-primary));
 }
 .sidebar-version-btn:active {
@@ -714,14 +721,14 @@ html, body {
 }
 
 .sidebar-help-btn {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid var(--bg-border);
-    border-radius: 6px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
@@ -729,6 +736,13 @@ html, body {
     font-weight: 800;
     line-height: 1;
     transition: all 0.15s ease;
+}
+
+/* When the help button is on its own (no pill wrapper), it gets the
+   bordered look so it has some visual weight by itself. */
+.sidebar-footer:not(:has(.sidebar-status)) .sidebar-help-btn {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--bg-border);
 }
 
 .sidebar-help-btn:hover {
