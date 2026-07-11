@@ -15,9 +15,14 @@ export class KanbanManager {
         const sessionId = 'kanban-board';
         const title = 'Kanban';
         const coder = 'kanban';
-        
-        // If tab already exists, just switch to it
-        if (this.app.tabManager.tabs.has(paneId)) {
+
+        const existing = this.app.tabManager.tabs.get(paneId);
+        if (existing) {
+            // BUG-4 fix: if the panel container was wiped (e.g. hot reload that
+            // rebuilt the DOM but kept the tabs map), re-init it before showing.
+            if (existing.termContainer && !existing.termContainer.querySelector('.kanban-toolbar, .kanban-login-form')) {
+                this.initTabContainer(existing.termContainer);
+            }
             this.app.tabManager.switchTab(paneId);
             return;
         }
@@ -25,11 +30,34 @@ export class KanbanManager {
         const activeWorkspace = this.app.sessionsManager.activeWorkspace || '';
         const activeCWD = this.app.sessionsManager.activeCWD || '';
 
+        // BUG-2 fix: mark the tab as open so restoreTabsState reopens it on reload.
+        localStorage.setItem('phi_kanban_open', '1');
+
         this.app.tabManager.createTab(paneId, sessionId, title, coder, activeWorkspace, activeCWD);
         const tab = this.app.tabManager.tabs.get(paneId);
         if (!tab) return;
-        
+
         this.initTabContainer(tab.termContainer);
+    }
+
+    // BUG-3 fix: tear down everything kanban added to the page when the tab closes.
+    // Without this the ESC keydown listener, modal overlays, drag state, and
+    // detail panel can outlive the tab and fire on the wrong pane.
+    cleanup() {
+        if (this.escListener) {
+            document.removeEventListener('keydown', this.escListener);
+            this.escListener = null;
+        }
+        if (this.activeDetailPanel && this.activeDetailPanel.parentNode) {
+            this.activeDetailPanel.parentNode.removeChild(this.activeDetailPanel);
+        }
+        this.activeDetailPanel = null;
+        if (this.activeOverlay && this.activeOverlay.parentNode) {
+            this.activeOverlay.parentNode.removeChild(this.activeOverlay);
+        }
+        this.activeOverlay = null;
+        this._dragActive = false;
+        localStorage.removeItem('phi_kanban_open');
     }
 
     async initTabContainer(container, isAutoRetry = false) {
