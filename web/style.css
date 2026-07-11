@@ -693,6 +693,25 @@ html, body {
     opacity: 0.5;
 }
 
+/* When the version text is a clickable button (changelog popup trigger) */
+.sidebar-version-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    opacity: 0.5;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+.sidebar-version-btn:hover {
+    opacity: 1;
+    color: var(--accent, var(--text-primary));
+}
+.sidebar-version-btn:active {
+    transform: translateY(1px);
+}
+
 .sidebar-help-btn {
     width: 24px;
     height: 24px;

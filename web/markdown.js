@@ -48,6 +48,12 @@ export class MarkdownManager {
                 }
             });
         }
+
+        // Sidebar version text doubles as a changelog trigger.
+        const changelogBtn = document.getElementById('phi-changelog-btn');
+        if (changelogBtn) {
+            changelogBtn.addEventListener('click', () => this.openChangelogModal());
+        }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 if (!this.modal.classList.contains('hidden')) {
@@ -263,6 +269,30 @@ export class MarkdownManager {
         } catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${e.message}</div>`;
             this.app.showToast(`Failed to open help: ${e.message}`, { type: 'error', title: 'Help' });
+        }
+    }
+
+    // Sidebar version text opens this. Uses the same md-modal widget as
+    // help.md so the rendering, copy button, and close/escape behavior are
+    // consistent. The version is appended to the title so users see exactly
+    // which release they're reading the changelog for.
+    async openChangelogModal() {
+        const versionEl = document.getElementById('phi-changelog-btn');
+        const version = (versionEl && versionEl.textContent || '').trim();
+        const title = version ? `Changelog — ${version}` : 'Changelog';
+        this.modalTitle.innerText = title;
+        this.modalBody.innerHTML = '<div class="md-rendering">Loading changelog...</div>';
+        this.currentRawContent = '';
+        this.modal.classList.remove('hidden');
+
+        try {
+            const res = await fetch('changelog.md', { cache: 'no-store' });
+            if (!res.ok) throw new Error(await res.text() || 'Failed to load changelog.md');
+            const raw = await res.text();
+            this.openRawMarkdown(title, raw);
+        } catch (e) {
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load changelog: ${e.message}</div>`;
+            this.app.showToast(`Failed to open changelog: ${e.message}`, { type: 'error', title: 'Changelog' });
         }
     }
 
