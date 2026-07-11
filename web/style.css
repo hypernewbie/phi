@@ -4088,13 +4088,21 @@ html, body {
    VIKUNJA KANBAN BOARD SYSTEM
    ────────────────────────────────────────────────────────────────────────── */
 
+/* The kanban-panel is a .term-container variant. The base .term-container is
+   display:none and .term-container.active is display:block. If we override
+   with display:flex unconditionally, source order makes .kanban-panel win
+   over the base when .active is removed — leaving the kanban visible
+   after switching to a new tab. Match the .review-panel pattern:
+   default hidden, only shown when .active. */
 .kanban-panel {
-    display: flex;
+    background-color: var(--bg-base) !important;
+    display: none;
     flex-direction: column;
     height: 100%;
     width: 100%;
-    overflow: hidden !important;
-    background-color: var(--bg-base);
+}
+.kanban-panel.active {
+    display: flex;
 }
 
 /* Login Screen Styles */
