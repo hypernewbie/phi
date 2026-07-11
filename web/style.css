@@ -5249,3 +5249,142 @@ html, body {
     color: #14141a !important;
 }
 
+
+/* ===========================================================
+   Kanban feature completeness additions (v0.7.15)
+   =========================================================== */
+
+/* Inline card delete button (X top-right, hover-revealed) */
+.kanban-card { position: relative; }
+.kanban-card-delete-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+    z-index: 2;
+}
+.kanban-card:hover .kanban-card-delete-btn { opacity: 0.9; }
+.kanban-card-delete-btn:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+    border-color: #ef4444;
+}
+
+/* Column action buttons (rename / delete) — show on column hover */
+.kanban-column-header { position: relative; }
+.column-action-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.kanban-column-header:hover .column-action-btn { opacity: 0.8; }
+.column-action-btn:hover {
+    opacity: 1;
+    background: var(--accent-trace, rgba(124,106,247,0.15));
+    color: var(--text-primary);
+}
+.column-delete-btn:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+}
+
+/* Column title: clickable to rename + inline-edit input */
+.column-title { cursor: text; flex: 1; min-width: 0; }
+.column-title-edit {
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--accent-soft, #555);
+    border-radius: 3px;
+    padding: 1px 4px;
+}
+
+/* Detail-panel footer: split layout (delete on left, save/cancel on right) */
+.kdp-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+}
+.kdp-footer-right {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+.kdp-delete-btn {
+    background: transparent;
+    border: 1px solid #ef4444;
+    color: #ef4444;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.kdp-delete-btn:hover { background: rgba(239, 68, 68, 0.15); }
+.kdp-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Label picker row in the detail panel */
+.kdp-labels-add-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    align-items: center;
+}
+.kdp-label-picker {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+.kdp-label-picker:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Removable label pill in the detail panel */
+.kdp-label-removable {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-right: 4px !important;
+}
+.kdp-label-remove-btn {
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    font-size: 14px;
+    font-weight: bold;
+}
+.kdp-label-remove-btn:hover { opacity: 1; color: #ef4444; }
