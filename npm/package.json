@@ -1,12 +1,15 @@
 {
   "name": "@hypernewbie/phi-code",
-  "version": "0.7.12",
+  "version": "0.7.13",
   "description": "Terminal multiplexer & control center for AI coding assistants",
   "bin": {
     "phi": "./bin/phi"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"
+  },
+  "allowScripts": {
+    "@hypernewbie/phi-code": true
   },
   "repository": {
     "type": "git",
