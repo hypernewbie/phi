@@ -107,12 +107,18 @@ export class TabManager {
             const instances = await res.json();
             if (!instances || !instances.length) {
                 this.showEmptyState();
-                return;
             }
 
             const savedActive = localStorage.getItem('phi_active_pane') || '';
             for (const t of instances) {
                 this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned, !!t.marked);
+            }
+            // BUG-2 fix: the kanban tab is client-only (no server-side terminal
+            // entry), so restore it here if it was open when the page was
+            // last reloaded. createTab short-circuits if it's already there.
+            if (localStorage.getItem('phi_kanban_open') === '1') {
+                await this.app.kanbanManager.openBoard();
+                return;
             }
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
@@ -933,7 +939,20 @@ export class TabManager {
         // Update sidebar select state and active coder tab, but skip auto-reload since we coordinate it
         const prevCoder = this.app.sessionsManager.activeCoder;
         this.app.sessionsManager.switchCoder(newTab.coder, true);
-        
+
+        // BUG-1 fix: kanban and review are independent views — they were opened
+        // with a snapshot of whatever workspace/cwd was active at the time, but
+        // they don't track the user's actual terminal context. If the user has
+        // since switched to a terminal tab in a different workspace/cwd and
+        // then returns to kanban, blindly applying kanban's stale workspace/cwd
+        // would clobber the sidebar and reload worktrees for the wrong project.
+        // So skip the workspace/cwd sync for non-terminal coders entirely.
+        if (newTab.coder === 'kanban' || newTab.coder === 'review') {
+            this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+            this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true });
+            return;
+        }
+
         // Sync project / workspace context from the tab using normalized paths
         const workspaceChanged = newTab.workspace && (normalizePath(this.app.sessionsManager.activeWorkspace) !== normalizePath(newTab.workspace));
         const coderChanged = prevCoder !== newTab.coder;
@@ -1037,7 +1056,17 @@ export class TabManager {
         } catch (e) {
             console.error("[tab] DOM removal error:", e);
         }
-        
+
+        // BUG-3 fix: notify the per-coder manager so it can tear down listeners
+        // and overlays it added. Without this the kanban ESC listener, modal
+        // overlays, and detail panel outlive the tab and can fire on the wrong pane.
+        if (this.app.kanbanManager && tab.isKanban) {
+            this.app.kanbanManager.cleanup();
+        }
+        if (this.app.reviewManager && tab.isReview) {
+            this.app.reviewManager.cleanup?.();
+        }
+
         this.tabs.delete(paneId);
         
         this.saveTabsState();
