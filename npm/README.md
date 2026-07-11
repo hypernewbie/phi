@@ -1,4 +1,21 @@
-# `@hypernewbie/phi-code` — npm package notes
+## What's in this npm package
+
+This npm package is intentionally tiny — it's a **launcher stub**, not the
+full app:
+
+```
+package/
+  package.json     # allowScripts, version, repo metadata
+  README.md        # this file
+  scripts/install.js   # downloads the platform-native binary from GitHub releases
+  bin/phi          # node shim that spawns the downloaded binary
+```
+
+The real Go binary, the web UI (including `help.md` and `changelog.md`),
+and all assets live in the GitHub release that `install.js` downloads. The
+binary embeds the `web/` directory via `//go:embed all:web` so it serves
+`help.md` and `changelog.md` directly at runtime — no separate hosting
+needed.
 
 ## npm v12 install-time security
 
