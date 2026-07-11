@@ -687,10 +687,11 @@ html, body {
 }
 
 .sidebar-version {
-    font-size: 10px;
-    font-family: var(--font-mono);
+    font-size: 9px;
+    font-family: var(--font-ui);
     color: var(--text-muted);
-    opacity: 0.5;
+    opacity: 0.4;
+    letter-spacing: 0.02em;
 }
 
 /* When the version text is a clickable button (changelog popup trigger) */
@@ -701,11 +702,11 @@ html, body {
     cursor: pointer;
     font: inherit;
     color: inherit;
-    opacity: 0.5;
+    opacity: 0.4;
     transition: opacity 0.15s ease, color 0.15s ease;
 }
 .sidebar-version-btn:hover {
-    opacity: 1;
+    opacity: 0.85;
     color: var(--accent, var(--text-primary));
 }
 .sidebar-version-btn:active {
