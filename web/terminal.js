@@ -2282,7 +2282,8 @@ export class TabManager {
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (mode === 'cmds') {
-                this.app.exportCmdsConfig(copyBtn);
+                // Right-side cmds = quick commands (sent to the active PTY).
+                this.app.exportQuickCommandsConfig(copyBtn);
             } else {
                 this.app.exportModelsConfig(copyBtn);
             }

@@ -147,7 +147,12 @@ func main() {
 	http.HandleFunc("/api/config/import", handleConfigImport)
 	http.HandleFunc("/api/config/export-models", handleConfigExportModels)
 	http.HandleFunc("/api/config/import-models", handleConfigImportModels)
-	http.HandleFunc("/api/config/export-cmds", handleConfigExportCmds)
+	// Cmds export was split in v0.7.16: quick_commands (sent to active PTY)
+	// and terminal_commands (spawn new shell tabs) are now separate concepts
+	// with their own endpoints. The legacy /api/config/export-cmds route is
+	// gone; /api/config/import-cmds stays for paste backwards-compat.
+	http.HandleFunc("/api/config/export-quick-commands", handleConfigExportQuickCommands)
+	http.HandleFunc("/api/config/export-terminal-commands", handleConfigExportTerminalCommands)
 	http.HandleFunc("/api/config/import-cmds", handleConfigImportCmds)
 	http.HandleFunc("/api/config/workspaces", handleWorkspaceToggle)
 	http.HandleFunc("/api/config/models", handleModelPresets)

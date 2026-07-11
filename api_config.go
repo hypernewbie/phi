@@ -529,7 +529,11 @@ func handleConfigImportModels(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleConfigExportCmds(w http.ResponseWriter, r *http.Request) {
+// handleConfigExportQuickCommands exports ONLY the quick_commands list (the
+// dropup that sends commands to the active PTY). Decoupled from terminal
+// commands in v0.7.16 — the two concepts were being conflated under the
+// old /api/config/export-cmds endpoint which dumped both.
+func handleConfigExportQuickCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -537,14 +541,12 @@ func handleConfigExportCmds(w http.ResponseWriter, r *http.Request) {
 
 	cfg := loadConfig()
 	exportData := struct {
-		QuickCommands    []QuickCommand `json:"quick_commands"`
-		TerminalCommands []QuickCommand `json:"terminal_commands"`
+		QuickCommands []QuickCommand `json:"quick_commands"`
 	}{
-		QuickCommands:    cfg.QuickCommands,
-		TerminalCommands: cfg.TerminalCommands,
+		QuickCommands: cfg.QuickCommands,
 	}
 
-	formatted, err := encodeConfigData("PHICMDS", exportData)
+	formatted, err := encodeConfigData("PHIQUICKCMDS", exportData)
 	if err != nil {
 		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -556,6 +558,40 @@ func handleConfigExportCmds(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleConfigExportTerminalCommands exports ONLY the terminal_commands list
+// (the cmd panel — commands that spawn new shell tabs). Decoupled from quick
+// commands in v0.7.16.
+func handleConfigExportTerminalCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := loadConfig()
+	exportData := struct {
+		TerminalCommands []QuickCommand `json:"terminal_commands"`
+	}{
+		TerminalCommands: cfg.TerminalCommands,
+	}
+
+	formatted, err := encodeConfigData("PHITERMCMDS", exportData)
+	if err != nil {
+		http.Error(w, "Failed to serialize export data: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"config": formatted,
+	})
+}
+
+// handleConfigImportCmds accepts pasted config data from any of the three
+// cmd-prefixes: PHIQUICKCMDS, PHITERMCMDS, or the legacy PHICMDS (which
+// contained both). Whichever prefix is used, only the matching field(s)
+// are imported - so a user can paste a quick-commands config into a
+// session that previously only had terminal commands, and vice versa,
+// without overwriting the other. Unknown prefixes return 400.
 func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -570,28 +606,47 @@ func handleConfigImportCmds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonData, err := decodeConfigData(req.Config, "PHICMDS")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	// Pick the prefix; supports the legacy combined "PHICMDS:" as a fallback
+	// for old exports. The new split prefixes are tried first.
+	var jsonData []byte
+	var prefix string
+	for _, p := range []string{"PHIQUICKCMDS", "PHITERMCMDS", "PHICMDS"} {
+		if jd, err := decodeConfigData(req.Config, p); err == nil {
+			jsonData = jd
+			prefix = p
+			break
+		}
+	}
+	if jsonData == nil {
+		http.Error(w, "Config is missing or uses an unknown prefix (expected PHIQUICKCMDS, PHITERMCMDS, or PHICMDS)", http.StatusBadRequest)
 		return
 	}
+	_ = prefix // accepted whichever matched; payload below decides what to write
 
+	// The payload may contain either field, or both (legacy). Only overwrite
+	// the fields actually present in the JSON.
 	var importedData struct {
 		QuickCommands    []QuickCommand `json:"quick_commands"`
 		TerminalCommands []QuickCommand `json:"terminal_commands"`
 	}
-
 	if err := json.Unmarshal(jsonData, &importedData); err != nil {
 		http.Error(w, "Failed to parse configuration JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	cfg := loadConfig()
+	changed := false
 	if importedData.QuickCommands != nil {
 		cfg.QuickCommands = importedData.QuickCommands
+		changed = true
 	}
 	if importedData.TerminalCommands != nil {
 		cfg.TerminalCommands = importedData.TerminalCommands
+		changed = true
+	}
+	if !changed {
+		http.Error(w, "Config contained no recognized command lists", http.StatusBadRequest)
+		return
 	}
 
 	saveConfig(cfg)
