@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -23,11 +24,12 @@ import (
 var webFS embed.FS
 
 var (
-	ptyManager *pty.Manager
-	wsHub      *ws.Hub
-	cpuSampler = system.NewSampler()
-	activeCWD  string
-	webRoot    fs.FS
+	ptyManager  *pty.Manager
+	wsHub       *ws.Hub
+	cpuSampler  = system.NewSampler()
+	activeCWD   string
+	webRoot     fs.FS
+	fleetPoller = fleet.NewPoller()
 
 	Version     = "dev"
 	Commit      = "none"
@@ -198,6 +200,11 @@ func main() {
 	http.HandleFunc("/api/config/sync-coordinator", handleSyncCoordinator)
 
 	http.HandleFunc("/api/version", handleGetVersion)
+	http.HandleFunc("/api/peers/status", handleGetPeersStatus)
+	http.HandleFunc("/api/config/peers", handleConfigPeers)
+
+	// Start fleet poller with current peer config
+	startFleetPoller()
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)

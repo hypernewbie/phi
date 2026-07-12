@@ -62,6 +62,12 @@ type Config struct {
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
 	SyncCoordinator   string `json:"sync_coordinator"`
 	AutoReconnect     string `json:"auto_reconnect"`
+	Peers             []PeerConfig `json:"peers"`
+}
+
+type PeerConfig struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 var configMu sync.RWMutex
@@ -137,6 +143,9 @@ func loadConfig() Config {
 	}
 	if cfg.AutoReconnect == "" {
 		cfg.AutoReconnect = "off"
+	}
+	if cfg.Peers == nil {
+		cfg.Peers = []PeerConfig{}
 	}
 	return cfg
 }
