@@ -71,3 +71,17 @@ func (r *RingBuffer) Snapshot() []byte {
 	copy(res[r.size-r.write:], r.buf[:r.write])
 	return res
 }
+
+// Stats returns (used bytes, capacity) for the ring. When wrapped,
+// used == cap. Used by /api/diag.
+func (r *RingBuffer) Stats() (int, int) {
+	if r == nil {
+		return 0, 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.wrapped {
+		return r.size, r.size
+	}
+	return r.write, r.size
+}

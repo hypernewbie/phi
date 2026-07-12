@@ -253,3 +253,23 @@ func (h *Hub) BroadcastShutdown(reason string) {
 		ph.mu.Unlock()
 	}
 }
+
+// PaneStats returns (client count, ring bytes used, ring capacity) for
+// a given pane. Returns (0,0,0) if the pane is unknown. Used by the
+// /api/diag endpoint.
+func (h *Hub) PaneStats(paneID string) (int, int, int) {
+	h.mu.RLock()
+	ph, exists := h.panes[paneID]
+	h.mu.RUnlock()
+	if !exists {
+		return 0, 0, 0
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	clients := len(ph.clients)
+	var used, cap int
+	if ph.Ring != nil {
+		used, cap = ph.Ring.Stats()
+	}
+	return clients, used, cap
+}
