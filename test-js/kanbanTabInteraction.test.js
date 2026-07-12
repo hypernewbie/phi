@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import { KanbanManager } from '../web/kanban.js';
@@ -75,6 +75,14 @@ function makeApp(fx) {
         vi.clearAllMocks();
         localStorage.clear();
         sessionStorage.clear();
+        // Soft-close uses setTimeout(SOFT_CLOSE_GRACE_MS=5000). Tests that
+        // exercise the finalize path advance the fake clock; tests that
+        // exercise the undo path clear it.
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
 // -- BUG-1 ----------------------------------------------------------------
@@ -167,7 +175,11 @@ describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () =
 
 // -- BUG-3 ----------------------------------------------------------------
 describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
-    it('calls kanbanManager.cleanup() and removes phi_kanban_open', async () => {
+    // Soft-close: with the grace period in place, closeTab() now does the
+    // kanban cleanup only when the tab FINALIZES (after 5s) - not on the
+    // initial soft-close. So this test calls closeTab + advances the
+    // timers past the grace to exercise the finalize path.
+    it('calls kanbanManager.cleanup() and removes phi_kanban_open (after grace)', async () => {
         const fx = fixtures();
         const app = makeApp(fx);
         let cleaned = false;
@@ -197,6 +209,10 @@ describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
         ctx.activePaneId = 'kanban-board';
 
         await ctx.closeTab('kanban-board');
+        // closeTab is now soft-close: cleanup happens when the grace
+        // timer fires (finalizeCloseTab). Advance fake timers past the
+        // 5s grace to drive the finalize path.
+        await vi.advanceTimersByTimeAsync(5000);
         expect(app.kanbanManager.cleanup).toHaveBeenCalled();
         expect(cleaned).toBe(true);
         expect(localStorage.getItem('phi_kanban_open')).toBeNull();

@@ -671,6 +671,7 @@ export class TabManager {
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
             <button class="tab-close">×</button>
+            <button class="tab-reopen" style="display:none" title="Undo close">↻</button>
         `;
         
         const termContainer = document.createElement('div');
@@ -696,6 +697,11 @@ export class TabManager {
         
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
+            if (e.target.closest('.tab-reopen')) {
+                e.stopPropagation();
+                this.undoCloseTab(currentPaneId);
+                return;
+            }
             if (e.target.closest('.tab-close')) {
                 e.stopPropagation();
                 this.closeTab(currentPaneId);
@@ -1223,35 +1229,164 @@ export class TabManager {
         }).catch(err => console.error('[term] Failed to sync mark on backend:', err));
     }
     
+    // Soft-close: when the user clicks × on a tab, the tab doesn't actually
+    // go away for SOFT_CLOSE_GRACE_MS - it stays in the strip faded out
+    // with a ↻ reopen button, and an "Undo" toast is shown. This solves
+    // two real problems:
+    //   1. Accidental close was a hard cliff: PTY killed, WS closed, term
+    //      disposed - no way back. Now the user has SOFT_CLOSE_GRACE_MS
+    //      to click Undo (in the toast) or click the ↻ icon (in the strip)
+    //      to restore the tab.
+    //   2. closeTab used to auto-switch to whatever happened to be last in
+    //      the Map (insertion order), which has no relationship to the
+    //      user's current project. pickNextTab() picks the most-related
+    //      surviving tab instead.
+    // If the user doesn't undo within the grace, finalizeCloseTab()
+    // actually kills the PTY and removes the tab.
+    //
+    // MAX_SOFT_CLOSED_TABS caps how many faded tabs can sit in the strip
+    // at once - past that, the oldest is force-finalized to keep the
+    // strip readable.
+    static SOFT_CLOSE_GRACE_MS = 5000;
+    static MAX_SOFT_CLOSED_TABS = 3;
+
     closeTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
 
-        // Kill the server-side PTY process (fire-and-forget)
+        // If already soft-closing, the user clicked × again - treat it as
+        // "I really mean it" and finalize immediately. They can still
+        // click Undo in the toast within the grace window if it changed
+        // their mind, but normally this just shortens the grace.
+        if (tab.softClosing) {
+            this.finalizeCloseTab(paneId);
+            return;
+        }
+
+        this.softCloseTab(paneId);
+    }
+
+    // Mark tab as soft-closing: strip entry fades, ↻ replaces ×, PTY is
+    // NOT killed yet. After the grace expires, finalizeCloseTab runs.
+    // If this was the active tab, switch to the most-related survivor.
+    softCloseTab(paneId) {
+        const tab = this.tabs.get(paneId);
+        if (!tab || tab.softClosing) return;
+
+        tab.softClosing = true;
+        tab.softCloseStartedAt = Date.now();
+        tab.tabEl.classList.add('soft-closed');
+
+        // Cap: if too many soft-closed tabs in the strip, force-finalize
+        // the oldest. This keeps the strip readable and bounds the grace
+        // memory footprint.
+        const softTabs = Array.from(this.tabs.values()).filter(t => t.softClosing);
+        if (softTabs.length > TabManager.MAX_SOFT_CLOSED_TABS) {
+            softTabs.sort((a, b) => (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0));
+            this.finalizeCloseTab(softTabs[0].paneId);
+            return;
+        }
+
+        // Switch away only if this tab was the active one.
+        if (this.activePaneId === paneId) {
+            const nextId = this.pickNextTab(tab);
+            if (nextId) {
+                this.switchTab(nextId);
+            } else {
+                // No other tabs survive (or all survivors are also
+                // soft-closing). Show empty state immediately.
+                this.activePaneId = null;
+                this.inputBarContainer.classList.add('hidden');
+                this.presetsContainer.classList.add('hidden');
+                this.showEmptyState();
+                if (this.app.markdownManager) {
+                    this.app.markdownManager.refreshFiles({ force: true });
+                }
+            }
+        }
+
+        // Undo toast for ALL soft-closes (active or background). The
+        // toast auto-dismisses after the grace; clicking Undo restores.
+        if (this.app && this.app.showToast) {
+            const toastEl = this.app.showToast(
+                `Closed "${tab.title || tab.coder || 'tab'}"`,
+                {
+                    type: 'info',
+                    title: 'Tab closed',
+                    duration: TabManager.SOFT_CLOSE_GRACE_MS,
+                    action: {
+                        text: 'Undo',
+                        callback: () => this.undoCloseTab(paneId),
+                    },
+                },
+            );
+            // showToast returns the toast element so we can dismiss it
+            // early if the user undoes via the ↻ button (otherwise two
+            // dismissals race) or if the cap forces a finalize.
+            tab.softCloseToast = toastEl;
+        }
+
+        // Schedule finalization.
+        tab.softCloseTimer = setTimeout(() => {
+            this.finalizeCloseTab(paneId);
+        }, TabManager.SOFT_CLOSE_GRACE_MS);
+    }
+
+    // Reverse a soft-close: cancel the timer, restore the strip entry,
+    // switch back to the tab. Works whether the user clicked Undo in the
+    // toast or the ↻ icon in the strip.
+    undoCloseTab(paneId) {
+        const tab = this.tabs.get(paneId);
+        if (!tab || !tab.softClosing) return;
+
+        if (tab.softCloseTimer) {
+            clearTimeout(tab.softCloseTimer);
+            tab.softCloseTimer = null;
+        }
+        if (tab.softCloseToast) {
+            // External dismiss: remove the .show class so CSS animates it
+            // out, then drop from DOM after the 200ms transition.
+            tab.softCloseToast.classList.remove('show');
+            setTimeout(() => tab.softCloseToast?.remove(), 200);
+            tab.softCloseToast = null;
+        }
+
+        tab.softClosing = false;
+        tab.softCloseStartedAt = null;
+        tab.tabEl.classList.remove('soft-closed');
+
+        this.switchTab(paneId, { userInitiated: true });
+    }
+
+    // Actually kill the PTY, close WS, dispose term, drop from Map.
+    // Called by the grace timer, by the cap-forced finalize, or by
+    // closeTab's "user clicked × twice" path.
+    finalizeCloseTab(paneId) {
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+
+        if (tab.softCloseTimer) {
+            clearTimeout(tab.softCloseTimer);
+            tab.softCloseTimer = null;
+        }
+        if (tab.softCloseToast) {
+            tab.softCloseToast.classList.remove('show');
+            setTimeout(() => tab.softCloseToast?.remove(), 200);
+            tab.softCloseToast = null;
+        }
+
+        // Kill the server-side PTY process (fire-and-forget).
         fetch(`/api/terminals/${paneId}`, { method: 'DELETE' }).catch(() => {});
 
-        try {
-            if (tab.ws) tab.ws.close();
-        } catch (e) {
-            console.error("[tab] WS close error:", e);
-        }
-
-        try {
-            if (tab.term) tab.term.dispose();
-        } catch (e) {
-            console.error("[tab] Term dispose error:", e);
-        }
-        
+        try { if (tab.ws) tab.ws.close(); } catch (e) { console.error("[tab] WS close error:", e); }
+        try { if (tab.term) tab.term.dispose(); } catch (e) { console.error("[tab] Term dispose error:", e); }
         try {
             if (tab.tabEl) tab.tabEl.remove();
             if (tab.termContainer) tab.termContainer.remove();
-        } catch (e) {
-            console.error("[tab] DOM removal error:", e);
-        }
+        } catch (e) { console.error("[tab] DOM removal error:", e); }
 
-        // BUG-3 fix: notify the per-coder manager so it can tear down listeners
-        // and overlays it added. Without this the kanban ESC listener, modal
-        // overlays, and detail panel outlive the tab and can fire on the wrong pane.
+        // BUG-3 fix: notify the per-coder manager so it can tear down
+        // listeners and overlays it added.
         if (this.app.kanbanManager && tab.isKanban) {
             this.app.kanbanManager.cleanup();
         }
@@ -1261,30 +1396,50 @@ export class TabManager {
 
         this.tabs.delete(paneId);
         this.updateDisconnectBanner();
-        
         this.saveTabsState();
 
-        // If we closed the active tab, switch to another
-        if (this.activePaneId === paneId) {
-            const remainingKeys = Array.from(this.tabs.keys());
-            if (remainingKeys.length > 0) {
-                this.switchTab(remainingKeys[remainingKeys.length - 1]);
-            } else {
-                this.activePaneId = null;
-                this.inputBarContainer.classList.add('hidden');
-                this.presetsContainer.classList.add('hidden');
-                this.showEmptyState();
-                
-                if (this.app.markdownManager) {
-                    this.app.markdownManager.refreshFiles({ force: true });
-                }
-            }
-        } else if (this.tabs.size === 0) {
+        // If we just emptied the strip, show the empty state. (Should
+        // already be handled by softCloseTab, but defensive - what if
+        // the last soft-close tab was force-finalized by the cap and
+        // the user never undid any of them?)
+        if (this.tabs.size === 0) {
             this.showEmptyState();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: true });
             }
         }
+    }
+
+    // Pick the most-related surviving tab to switch to after closing the
+    // given tab. Returns the paneId of the best candidate, or null if no
+    // candidate survives (or all survivors are themselves soft-closing -
+    // those are excluded so we don't auto-jump back onto a fading tab).
+    //
+    // Priority:
+    //   1. Same workspace + same coder  (most related: same project, same tool)
+    //   2. Same workspace, any coder    (same project)
+    //   3. Same coder, any workspace    (same tool)
+    //   4. Last remaining tab           (fallback; this is the old behavior
+    //                                    that caused the "random project" bug)
+    pickNextTab(closedTab) {
+        const candidates = Array.from(this.tabs.values()).filter(t =>
+            t.paneId !== closedTab.paneId && !t.softClosing
+        );
+        if (candidates.length === 0) return null;
+
+        const closedWs = closedTab.workspace || '';
+        const closedCoder = closedTab.coder || '';
+
+        let next = candidates.find(t => t.workspace === closedWs && t.coder === closedCoder);
+        if (next) return next.paneId;
+
+        next = candidates.find(t => t.workspace === closedWs);
+        if (next) return next.paneId;
+
+        next = candidates.find(t => t.coder === closedCoder);
+        if (next) return next.paneId;
+
+        return candidates[candidates.length - 1].paneId;
     }
 
     showEmptyState() {
