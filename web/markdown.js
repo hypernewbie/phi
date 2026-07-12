@@ -272,6 +272,76 @@ export class MarkdownManager {
         }
     }
 
+    // openDiagModal — Phase 10: server diagnostics panel. Hits /api/diag
+    // and renders a structured table (version, goroutines, mem, PTYs).
+    // Useful for F4 debugging (hub overflow, slow client) and for ops
+    // to verify the server is healthy from the browser. Auto-refreshes
+    // every 2s while open.
+    async openDiagModal() {
+        this.modalTitle.innerText = 'Phi Diagnostics';
+        this.modalBody.innerHTML = '<div class="md-rendering">Loading diagnostics…</div>';
+        this.currentRawContent = '';
+        this.modal.classList.remove('hidden');
+
+        const render = (d) => {
+            if (!d) {
+                this.modalBody.innerHTML = `<div class="md-list-error">No data.</div>`;
+                return;
+            }
+            const rows = [
+                ['Version', d.version || 'dev'],
+                ['Install', d.install_method || '—'],
+                ['Uptime (s)', (d.uptime_seconds || 0).toFixed(0)],
+                ['Goroutines', d.goroutines],
+                ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
+                ['PTYs', d.pty_count],
+            ];
+            const body = rows.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join('');
+            const panes = (d.panes || []).map(p => {
+                const pct = p.ring_capacity > 0 ? Math.round(p.ring_bytes * 100 / p.ring_capacity) : 0;
+                return `<tr>
+                    <td>${escapeHtml(p.title || p.id.slice(0, 8))}</td>
+                    <td>${escapeHtml(p.coder || '—')}</td>
+                    <td>${p.client_count}</td>
+                    <td>${p.ring_bytes}/${p.ring_capacity} (${pct}%)</td>
+                    <td>${p.busy ? 'busy' : 'idle'}</td>
+                </tr>`;
+            }).join('');
+            this.modalBody.innerHTML = `
+                <div class="diag-panel">
+                    <table class="diag-table"><tbody>${body}</tbody></table>
+                    <h4>Panes (${(d.panes || []).length})</h4>
+                    <table class="diag-table diag-table-panes">
+                        <thead><tr><th>Title</th><th>Coder</th><th>Clients</th><th>Ring</th><th>State</th></tr></thead>
+                        <tbody>${panes || '<tr><td colspan=5>(no panes)</td></tr>'}</tbody>
+                    </table>
+                    <p class="diag-foot">Auto-refreshing every 2s. Close to stop.</p>
+                </div>
+            `;
+        };
+
+        const refresh = async () => {
+            try {
+                const res = await fetch('/api/diag');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                render(data);
+            } catch (err) {
+                this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${escapeHtml(err.message)}</div>`;
+            }
+        };
+        await refresh();
+        if (this._diagInterval) clearInterval(this._diagInterval);
+        this._diagInterval = setInterval(() => {
+            if (this.modal.classList.contains('hidden')) {
+                clearInterval(this._diagInterval);
+                this._diagInterval = null;
+                return;
+            }
+            refresh();
+        }, 2000);
+    }
+
     // Sidebar version text opens this. Uses the same md-modal widget as
     // help.md so the rendering, copy button, and close/escape behavior are
     // consistent. The version is appended to the title so users see exactly
