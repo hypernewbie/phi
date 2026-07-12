@@ -1410,10 +1410,42 @@ export class App {
                     const ver = data.version || 'dev';
                     changelogBtn.textContent = (ver === 'dev') ? 'dev' : (ver.startsWith('v') ? ver : `v${ver}`);
                 }
+                // Once we know the install method, kick off the update check
+                // (server-side throttled; this is just the UI hookup).
+                this.checkForUpdate();
             }
         } catch (err) {
             console.error('Failed to load version:', err);
         }
+    }
+
+    // checkForUpdate — Phase 7 T1 (plan §3.5). Polls /api/update/status;
+    // if update_available, adds a subtle dot to the version pill + stashes
+    // the full status on this.updateStatus for the popup. Throttled by
+    // the server (24h ticker + 6h floor) so this is cheap to call.
+    async checkForUpdate() {
+        try {
+            const res = await fetch('/api/update/status');
+            if (!res.ok) return;
+            const data = await res.json();
+            this.updateStatus = data;
+            this.renderUpdateBadge(data);
+        } catch (err) {
+            console.warn('[update] check failed:', err);
+        }
+    }
+
+    renderUpdateBadge(status) {
+        const btn = document.getElementById('phi-changelog-btn');
+        if (!btn || !status) return;
+        // Don't badge "dev" builds — checker skipped those server-side,
+        // but defense in depth.
+        if (!status.update_available || status.current === 'dev') {
+            btn.classList.remove('has-update');
+            return;
+        }
+        btn.classList.add('has-update');
+        btn.title = `Update available: ${status.latest}\n${status.instructions || ''}`;
     }
 }
 

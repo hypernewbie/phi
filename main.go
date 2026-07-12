@@ -17,6 +17,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/system"
+	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -35,6 +36,8 @@ var (
 	Commit      = "none"
 	Date        = "unknown"
 	BuildSource = "source"
+
+	updateChecker *update.Checker
 )
 
 func main() {
@@ -203,8 +206,32 @@ func main() {
 	http.HandleFunc("/api/peers/status", handleGetPeersStatus)
 	http.HandleFunc("/api/config/peers", handleConfigPeers)
 
+	http.HandleFunc("/api/update/status", handleUpdateStatus)
+	http.HandleFunc("/api/update/check", handleUpdateCheck)
+
 	// Start fleet poller with current peer config
 	startFleetPoller()
+
+	// Start update checker. Skip entirely in dev/source builds: the
+	// install method is "dev" so the UI hides the badge anyway, and
+	// running the no-op goroutine is just wasted wakeups. Only when
+	// BuildSource=="release" do we poll GitHub for newer tags.
+	if BuildSource == "release" {
+		updateChecker = update.NewChecker(Version, update.DetectInstallMethod(BuildSource))
+		updateChecker.LoadCache()
+		go func() {
+			// Stagger startup so we don't hammer GitHub on cold boot.
+			time.Sleep(30 * time.Second)
+			if updateChecker.CheckIfStale() && updateChecker.ShouldRunRealCheck() {
+				if result := updateChecker.RunCheck(false); result.Err != nil {
+					log.Printf("[update] Initial check failed: %v", result.Err)
+				} else if result.Latest != "" {
+					log.Printf("[update] Initial check: current=%s latest=%s available=%v",
+						Version, result.Latest, result.Latest != Version)
+				}
+			}
+		}()
+	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)

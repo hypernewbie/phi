@@ -720,6 +720,28 @@ html, body {
     transform: translateY(1px);
 }
 
+/* Phase 7 T1: when an update is available, the version button gets a
+   subtle dot on the right edge (absolute, doesn't disturb layout).
+   Tooltip carries the upgrade instructions; click opens changelog +
+   update status header. */
+.sidebar-version-btn.has-update {
+    position: relative;
+    padding-right: 14px;
+}
+.sidebar-version-btn.has-update::after {
+    content: '';
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-amber, #fbbf24);
+    box-shadow: 0 0 6px var(--color-amber, #fbbf24);
+    animation: fleet-stale-pulse 1.6s ease-in-out infinite;
+}
+
 .sidebar-help-btn {
     width: 22px;
     height: 22px;

@@ -19,6 +19,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
+	"github.com/hypernewbie/phi/pkg/update"
 )
 
 // withTempConfig points the config system at a fresh temp file for the duration
@@ -1996,6 +1997,67 @@ func TestConfigPeersCRUD(t *testing.T) {
 	}
 	if peers[0].Name != "server-a" {
 		t.Errorf("unexpected peer name: %s", peers[0].Name)
+	}
+}
+
+// /api/update/status contract: always returns a Status JSON object with
+// the documented fields. Pin the shape — this is a cross-version API.
+func TestUpdateStatusContract(t *testing.T) {
+	// Override the package-level updateChecker so the handler can run.
+	orig := updateChecker
+	updateChecker = update.NewChecker("v0.7.15", "standalone")
+	defer func() { updateChecker = orig }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/update/status", nil)
+	w := httptest.NewRecorder()
+	handleUpdateStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var status map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&status); err != nil {
+		t.Fatalf("response is not a JSON object: %v", err)
+	}
+	requiredKeys := []string{"current", "latest", "update_available", "install_method", "instructions"}
+	for _, k := range requiredKeys {
+		if _, ok := status[k]; !ok {
+			t.Errorf("missing required field %q in /api/update/status response: %+v", k, status)
+		}
+	}
+	if status["current"] != "v0.7.15" {
+		t.Errorf("expected current=v0.7.15, got %v", status["current"])
+	}
+	if status["install_method"] != "standalone" {
+		t.Errorf("expected install_method=standalone, got %v", status["install_method"])
+	}
+}
+
+func TestUpdateStatusMethodNotAllowed(t *testing.T) {
+	orig := updateChecker
+	updateChecker = update.NewChecker("v0.7.15", "standalone")
+	defer func() { updateChecker = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/update/status", nil)
+	w := httptest.NewRecorder()
+	handleUpdateStatus(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestUpdateStatusWithoutChecker(t *testing.T) {
+	orig := updateChecker
+	updateChecker = nil
+	defer func() { updateChecker = orig }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/update/status", nil)
+	w := httptest.NewRecorder()
+	handleUpdateStatus(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when checker nil, got %d", w.Code)
 	}
 }
 
