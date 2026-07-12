@@ -284,15 +284,7 @@ export class TabManager {
         const reconnectAllBtn = document.getElementById('reconnect-all-tabs-btn');
         const mobileReconnectAllBtn = document.getElementById('mobile-reconnect-all-tabs-btn');
         const handleReconnectAll = () => {
-            for (const tabInfo of this.tabs.values()) {
-                if (tabInfo.isDead) {
-                    this.reconnectTab(tabInfo, { auto: false });
-                }
-            }
-            const activeTab = this.getActiveTab();
-            if (activeTab) {
-                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: false });
-            }
+            this.reconnectAllDead();
         };
         reconnectAllBtn?.addEventListener('click', handleReconnectAll);
         mobileReconnectAllBtn?.addEventListener('click', handleReconnectAll);
@@ -831,6 +823,8 @@ export class TabManager {
                 tabInfo.isDead = true;
                 tabEl.classList.add('dead');
                 this._showReconnectOverlay(tabInfo);
+                this.updateDisconnectBanner();
+                this.maybeAutoReconnect(tabInfo);
             },
             () => {
                 try {
@@ -1077,6 +1071,7 @@ export class TabManager {
         }
 
         this.tabs.delete(paneId);
+        this.updateDisconnectBanner();
         
         this.saveTabsState();
 
@@ -1261,19 +1256,25 @@ export class TabManager {
                         if (msgEl) msgEl.innerText = 'session expired';
                         if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
                         if (restartBtn) restartBtn.disabled = false;
+                        this.updateDisconnectBanner();
+                        this.maybeAutoReconnect(tabInfo);
                     } else {
                         tabInfo.isDead = true;
                         tabInfo.tabEl.classList.add('dead');
                         this._showReconnectOverlay(tabInfo);
+                        this.updateDisconnectBanner();
+                        this.maybeAutoReconnect(tabInfo);
                     }
                 },
                 () => {
                     opened = true;
+                    tabInfo.reconnectAttempts = 0;
                     tabInfo.reconnectInFlight = false;
                     tabInfo.isDead = false;
                     tabInfo.tabEl.classList.remove('dead');
                     if (overlay) overlay.remove();
                     tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
+                    this.updateDisconnectBanner();
                     setTimeout(() => {
                         try {
                             if (tabInfo === this.getActiveTab()) {
@@ -1350,16 +1351,18 @@ export class TabManager {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
                 (msg) => { this.writeToTerminal(tabInfo, msg); },
-                null,
+                (control) => { this.handleControlMessage(tabInfo, control); },
                 () => {
                     if (!opened) {
                         if (msgEl) msgEl.innerText = 'session expired';
                         if (reconnectBtn) reconnectBtn.disabled = false;
                         if (restartBtn) restartBtn.disabled = false;
+                        this.updateDisconnectBanner();
                     } else {
                         tabInfo.isDead = true;
                         tabInfo.tabEl.classList.add('dead');
                         this._showReconnectOverlay(tabInfo);
+                        this.updateDisconnectBanner();
                     }
                 },
                 () => {
@@ -1367,6 +1370,7 @@ export class TabManager {
                     tabInfo.isDead = false;
                     tabInfo.tabEl.classList.remove('dead');
                     if (overlay) overlay.remove();
+                    this.updateDisconnectBanner();
                     
                     // Trigger terminal fit & backend resize to synchronise viewport
                     setTimeout(() => {
@@ -1387,6 +1391,95 @@ export class TabManager {
             if (reconnectBtn) reconnectBtn.disabled = false;
             if (restartBtn) restartBtn.disabled = false;
         });
+    }
+
+    updateDisconnectBanner() {
+        const banner = document.getElementById('disconnect-banner');
+        if (!banner) return;
+
+        const deadTabs = [];
+        for (const tabInfo of this.tabs.values()) {
+            if (tabInfo.isDead && (tabInfo.exitCode === undefined || tabInfo.exitCode === null) && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban') {
+                deadTabs.push(tabInfo);
+            }
+        }
+
+        const currentCount = deadTabs.length;
+        if (currentCount === 0) {
+            banner.classList.add('hidden');
+            this._bannerDismissed = false;
+            this._dismissedCount = 0;
+            return;
+        }
+
+        if (this._bannerDismissed && currentCount <= this._dismissedCount) {
+            banner.classList.add('hidden');
+            return;
+        }
+
+        this._bannerDismissed = false;
+        banner.classList.remove('hidden');
+        banner.innerHTML = `
+            <span>${currentCount} tab${currentCount > 1 ? 's' : ''} disconnected</span>
+            <div style="display: flex; gap: 8px;">
+                <button class="disconnect-banner-btn reconnect-all-banner-btn">Reconnect all</button>
+                <button class="disconnect-banner-btn dismiss-banner-btn" style="background:transparent;border-color:rgba(255,255,255,0.2);">Dismiss</button>
+            </div>
+        `;
+
+        banner.querySelector('.reconnect-all-banner-btn').addEventListener('click', () => {
+            this.reconnectAllDead();
+        });
+        banner.querySelector('.dismiss-banner-btn').addEventListener('click', () => {
+            this._bannerDismissed = true;
+            this._dismissedCount = currentCount;
+            banner.classList.add('hidden');
+        });
+    }
+
+    reconnectAllDead() {
+        for (const tabInfo of this.tabs.values()) {
+            if (tabInfo.isDead && (tabInfo.exitCode === undefined || tabInfo.exitCode === null) && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban') {
+                this.reconnectTab(tabInfo, { auto: false });
+            }
+        }
+        const activeTab = this.getActiveTab();
+        if (activeTab) {
+            this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: false });
+        }
+        this.updateDisconnectBanner();
+    }
+
+    maybeAutoReconnect(tabInfo) {
+        const autoReconnect = this.app.config && this.app.config.auto_reconnect;
+        if (autoReconnect !== 'visible') return false;
+
+        if (document.visibilityState !== 'visible') return false;
+        if (tabInfo.paneId !== this.activePaneId) return false;
+        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return false;
+
+        if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
+        if (tabInfo.reconnectAttempts >= 5) {
+            tabInfo.reconnectAttempts = 0;
+            return false;
+        }
+
+        tabInfo.reconnectAttempts++;
+        const delay = Math.min(30000, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
+        
+        console.log(`[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`);
+        
+        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const msgEl = overlay?.querySelector('.reconnect-msg');
+        if (msgEl) msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/5)...`;
+
+        setTimeout(() => {
+            if (tabInfo.isDead && tabInfo.paneId === this.activePaneId && (tabInfo.exitCode === undefined || tabInfo.exitCode === null)) {
+                this.reconnectTab(tabInfo, { auto: true });
+            }
+        }, delay);
+
+        return true;
     }
 
     toggleFindBar(tabInfo) {
@@ -1751,8 +1844,11 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
         }
 
-        if (autoReconnect && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
-            this.reconnectTab(tabInfo, { auto: true });
+        const configAutoReconnect = this.app.config && this.app.config.auto_reconnect;
+        if (autoReconnect && configAutoReconnect === 'visible' && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
+            if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
+                this.reconnectTab(tabInfo, { auto: true });
+            }
         }
     }
     
