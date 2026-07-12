@@ -2143,3 +2143,37 @@ func TestRestartMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// /api/diag contract: returns a JSON object with the documented fields.
+// Pin the shape — this is what the diag panel reads.
+func TestDiagContract(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/diag", nil)
+	w := httptest.NewRecorder()
+	handleDiag(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var d map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&d); err != nil {
+		t.Fatalf("response is not a JSON object: %v", err)
+	}
+	requiredKeys := []string{"version", "install_method", "uptime_seconds", "goroutines", "mem_alloc_mb", "pty_count", "panes"}
+	for _, k := range requiredKeys {
+		if _, ok := d[k]; !ok {
+			t.Errorf("missing required field %q in /api/diag response: %+v", k, d)
+		}
+	}
+	if _, ok := d["panes"].([]interface{}); !ok {
+		t.Errorf("panes should be an array, got %T", d["panes"])
+	}
+}
+
+func TestDiagMethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/diag", nil)
+	w := httptest.NewRecorder()
+	handleDiag(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 on POST, got %d", w.Code)
+	}
+}
+

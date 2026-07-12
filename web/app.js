@@ -581,6 +581,19 @@ export class App {
         }
     }
     
+    initGlobalShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+Shift+D = diag panel. Matches the existing Ctrl+Shift+F
+            // search and Ctrl+P pattern (terminal.js handles terminal ones).
+            if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+                e.preventDefault();
+                if (this.markdownManager && typeof this.markdownManager.openDiagModal === 'function') {
+                    this.markdownManager.openDiagModal();
+                }
+            }
+        });
+    }
+
     initResizers() {
         const leftHandle = document.getElementById('left-resize-handle');
         const rightHandle = document.getElementById('right-resize-handle');

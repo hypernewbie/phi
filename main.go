@@ -209,6 +209,7 @@ func main() {
 	http.HandleFunc("/api/update/apply", handleUpdateApply)
 	http.HandleFunc("/api/update/progress", handleUpdateProgress)
 	http.HandleFunc("/api/restart", handleRestart)
+	http.HandleFunc("/api/diag", handleDiag)
 
 	// Start fleet poller with current peer config
 	startFleetPoller()
