@@ -104,7 +104,7 @@ func main() {
 			_ = sendSimplepushNotification(cfg.SimplepushKey, notifTitle, notifMsg, "phi_idle")
 		}
 	})
-	wsHub = ws.NewHub()
+	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
 
 	// Embedded web assets (served when running an installed binary from any dir)
 	var subErr error

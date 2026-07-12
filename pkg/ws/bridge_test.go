@@ -148,7 +148,7 @@ func TestWebSocketKeepalive(t *testing.T) {
 	pongWait = 200 * time.Millisecond
 	pingPeriod = 100 * time.Millisecond
 
-	hub := NewHub()
+	hub := NewHub(0)
 	manager := pty.NewManager()
 	inst := &pty.PTYInstance{
 		ID: "test-pane",

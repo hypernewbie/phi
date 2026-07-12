@@ -47,6 +47,29 @@ export class PTYWebSocket {
                 case 0x03: // Pong
                     // Pong received successfully
                     break;
+                case 0x04: // pty-exited
+                    try {
+                        const dec = new TextDecoder('utf-8');
+                        const jsonStr = dec.decode(payload);
+                        const data = JSON.parse(jsonStr);
+                        if (this.onControl) this.onControl({ type: 'pty-exited', ...data });
+                    } catch (e) {
+                        console.error("[ws] Failed to parse pty-exited JSON", e);
+                    }
+                    break;
+                case 0x05: // server-shutdown
+                    try {
+                        const dec = new TextDecoder('utf-8');
+                        const jsonStr = dec.decode(payload);
+                        const data = JSON.parse(jsonStr);
+                        if (this.onControl) this.onControl({ type: 'server-shutdown', ...data });
+                    } catch (e) {
+                        console.error("[ws] Failed to parse server-shutdown JSON", e);
+                    }
+                    break;
+                case 0x06: // replay-complete
+                    if (this.onControl) this.onControl({ type: 'replay-complete' });
+                    break;
             }
         };
         
