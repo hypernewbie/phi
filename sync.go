@@ -3,9 +3,13 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 type SyncMessage struct {
@@ -18,7 +22,83 @@ type SyncMessage struct {
 var (
 	syncMu    sync.RWMutex
 	syncStore = make(map[string]*SyncMessage)
+
+	testSyncPath string
+	saveTimer    *time.Timer
+	saveMu       sync.Mutex
 )
+
+func syncFilePath() string {
+	if testSyncPath != "" {
+		return testSyncPath
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "syncboard.json"
+	}
+	return filepath.Join(home, ".phi", "syncboard.json")
+}
+
+func TriggerSaveSyncStore() {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
+	if saveTimer != nil {
+		saveTimer.Stop()
+	}
+
+	saveTimer = time.AfterFunc(500*time.Millisecond, func() {
+		_ = FlushSyncStore()
+	})
+}
+
+func FlushSyncStore() error {
+	saveMu.Lock()
+	if saveTimer != nil {
+		saveTimer.Stop()
+		saveTimer = nil
+	}
+	saveMu.Unlock()
+
+	syncMu.RLock()
+	list := make([]SyncMessage, 0, len(syncStore))
+	for _, msg := range syncStore {
+		list = append(list, *msg)
+	}
+	syncMu.RUnlock()
+
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := syncFilePath()
+	return system.WriteFileAtomic(path, b, 0644)
+}
+
+func LoadSyncStore() error {
+	path := syncFilePath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var list []SyncMessage
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+
+	syncMu.Lock()
+	defer syncMu.Unlock()
+	for _, msg := range list {
+		m := msg
+		syncStore[msg.Key] = &m
+	}
+	return nil
+}
 
 func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/sync/messages")
@@ -90,6 +170,7 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		msg := *syncStore[req.Key]
 		syncMu.Unlock()
+		TriggerSaveSyncStore()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(msg)
@@ -106,6 +187,9 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			delete(syncStore, key)
 		}
 		syncMu.Unlock()
+		if exists {
+			TriggerSaveSyncStore()
+		}
 
 		if !exists {
 			http.Error(w, "Message not found", http.StatusNotFound)
