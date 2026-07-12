@@ -59,6 +59,7 @@ type Config struct {
 	SimplepushEnabled bool   `json:"simplepush_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
 	SyncCoordinator   string `json:"sync_coordinator"`
+	AutoReconnect     string `json:"auto_reconnect"`
 }
 
 var configMu sync.RWMutex
@@ -131,6 +132,9 @@ func loadConfig() Config {
 	if cfg.ReplayBufferBytes == nil {
 		defaultBytes := 1048576
 		cfg.ReplayBufferBytes = &defaultBytes
+	}
+	if cfg.AutoReconnect == "" {
+		cfg.AutoReconnect = "off"
 	}
 	return cfg
 }
