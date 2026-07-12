@@ -36,8 +36,6 @@ var (
 	Commit      = "none"
 	Date        = "unknown"
 	BuildSource = "source"
-
-	updateChecker *update.Checker
 )
 
 func main() {
@@ -208,6 +206,8 @@ func main() {
 
 	http.HandleFunc("/api/update/status", handleUpdateStatus)
 	http.HandleFunc("/api/update/check", handleUpdateCheck)
+	http.HandleFunc("/api/update/apply", handleUpdateApply)
+	http.HandleFunc("/api/update/progress", handleUpdateProgress)
 
 	// Start fleet poller with current peer config
 	startFleetPoller()
@@ -231,6 +231,19 @@ func main() {
 				}
 			}
 		}()
+
+		// Construct the applier so /api/update/apply + /api/update/progress
+		// work, even though only npm/standalone installs can use them.
+		updateApplier = update.NewApplier(Version, update.DetectInstallMethod(BuildSource))
+
+		// Best-effort cleanup of any stale .old from a previous successful
+		// apply. If the cleanup itself fails (file in use, etc.), log and
+		// continue - the .old won't break anything, just wastes a slot.
+		if removed, err := update.CleanupOldBinary(); err != nil {
+			log.Printf("[update] CleanupOldBinary: %v", err)
+		} else if removed != "" {
+			log.Printf("[update] Removed stale previous binary: %s", removed)
+		}
 	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id

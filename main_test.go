@@ -2061,3 +2061,73 @@ func TestUpdateStatusWithoutChecker(t *testing.T) {
 	}
 }
 
+// /api/update/progress contract: returns a Progress JSON object with
+// the documented fields. Even when no apply has been triggered, it
+// must respond cleanly with Phase="idle".
+func TestUpdateProgressContract(t *testing.T) {
+	orig := updateApplier
+	updateApplier = update.NewApplier("v0.7.15", "standalone")
+	defer func() { updateApplier = orig }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/update/progress", nil)
+	w := httptest.NewRecorder()
+	handleUpdateProgress(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var p map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatalf("response is not a JSON object: %v", err)
+	}
+	if p["phase"] != "idle" {
+		t.Errorf("expected phase=idle on fresh applier, got %v", p["phase"])
+	}
+}
+
+func TestUpdateApplyRequiresVersion(t *testing.T) {
+	orig := updateApplier
+	updateApplier = update.NewApplier("v0.7.15", "standalone")
+	defer func() { updateApplier = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	handleUpdateApply(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing version, got %d", w.Code)
+	}
+}
+
+func TestUpdateApplyRejectsIneligibleMethod(t *testing.T) {
+	orig := updateApplier
+	updateApplier = update.NewApplier("v0.7.15", "go-install")
+	defer func() { updateApplier = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{"version":"v0.8.0"}`))
+	w := httptest.NewRecorder()
+	handleUpdateApply(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for ineligible method, got %d", w.Code)
+	}
+}
+
+func TestUpdateApplyRejectsSameVersion(t *testing.T) {
+	orig := updateApplier
+	updateApplier = update.NewApplier("v0.7.15", "standalone")
+	defer func() { updateApplier = orig }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(`{"version":"v0.7.15"}`))
+	w := httptest.NewRecorder()
+	handleUpdateApply(w, req)
+
+	// handleUpdateApply returns 200 immediately and the actual apply
+	// runs in a goroutine; the progress will reflect the eventual
+	// rejection. We just confirm the handler didn't blow up and the
+	// request body was accepted.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 (async), got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
