@@ -97,6 +97,171 @@ export class TabManager {
     
     saveTabsState() {
         localStorage.setItem('phi_active_pane', this.activePaneId || '');
+        // Tab order is localStorage-only (no backend sync). Drag-reorder
+        // mutates the Map; saving the Map's iteration order here keeps the
+        // ordering across page reloads in the same browser.
+        this.saveTabOrder();
+    }
+
+    // The persisted order is a JSON array of paneIds. Stale entries
+    // (closed tabs, or paneIds that were renamed during a session restart)
+    // are filtered out at restore time - see restoreTabsState.
+    saveTabOrder() {
+        try {
+            localStorage.setItem('phi_tab_order', JSON.stringify(Array.from(this.tabs.keys())));
+        } catch (e) {
+            // localStorage can throw in private-mode / quota-exceeded. Failing
+            // to persist order shouldn't break tab switching - just log.
+            console.warn('phi: failed to save tab order', e);
+        }
+    }
+
+    // ---- Drag-to-reorder (localStorage-only, v0.8.x polish) ----
+
+    applySavedTabOrder() {
+        let saved = [];
+        try {
+            const raw = localStorage.getItem('phi_tab_order');
+            if (raw) saved = JSON.parse(raw);
+        } catch (e) {
+            // Corrupted entry: just ignore and fall back to API order.
+            return;
+        }
+        if (!Array.isArray(saved) || saved.length === 0) return;
+
+        const present = new Set(this.tabs.keys());
+        const filtered = saved.filter(id => present.has(id));
+        // Any tabs not in the saved order get appended at the end in the
+        // order they currently sit (preserves API order for newly-spawned
+        // tabs that the user hasn't touched yet).
+        const missing = Array.from(present).filter(id => !filtered.includes(id));
+        const final = [...filtered, ...missing];
+        if (final.length !== this.tabs.size) return; // safety
+        this.applyTabOrder(final, { persist: false });
+    }
+
+    // Reorders both the tabs Map (which drives `this.tabs.keys()` iteration)
+    // and the DOM (via appendChild, which moves existing nodes). When
+    // `persist` is true, also writes the new order to localStorage.
+    applyTabOrder(order, { persist = true } = {}) {
+        // Rebuild the Map preserving the new order. TabInfo objects keep
+        // their identity (same refs) - we're just rearranging the slots.
+        const newMap = new Map();
+        for (const id of order) {
+            const tab = this.tabs.get(id);
+            if (tab) newMap.set(id, tab);
+        }
+        // Defensive: any tab not in `order` (shouldn't happen) gets appended.
+        for (const [id, tab] of this.tabs) {
+            if (!newMap.has(id)) newMap.set(id, tab);
+        }
+        this.tabs = newMap;
+        // Reorder DOM children - appendChild on an existing node moves it,
+        // doesn't clone it. The terminal-content side (`terminalsWrapper`)
+        // is untouched; only the tab strip is reordered.
+        for (const id of order) {
+            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${id}"]`);
+            if (tabEl) this.tabsContainer.appendChild(tabEl);
+        }
+        if (persist) this.saveTabOrder();
+    }
+
+    // Splice `sourceId` into the order immediately before or after
+    // `targetId`. Returns true if the order actually changed.
+    moveTabTo(sourceId, targetId, before) {
+        if (sourceId === targetId) return false;
+        const order = Array.from(this.tabs.keys());
+        const sourceIdx = order.indexOf(sourceId);
+        const targetIdx = order.indexOf(targetId);
+        if (sourceIdx < 0 || targetIdx < 0) return false;
+
+        order.splice(sourceIdx, 1);
+        // After removing source, if source was BEFORE target originally,
+        // every later index shifted left by 1. Adjust the target's effective
+        // index in the post-removal array before computing the insert slot.
+        const targetIdxPost = targetIdx - (sourceIdx < targetIdx ? 1 : 0);
+        const insertPos = targetIdxPost + (before ? 0 : 1);
+        order.splice(insertPos, 0, sourceId);
+        this.applyTabOrder(order);
+        return true;
+    }
+
+    handleTabDragStart(e, paneId) {
+        // Only honor left-button drags. Touch and right-click shouldn't
+        // initiate a reorder - the latter opens the context menu (if any).
+        if (e.button !== undefined && e.button !== 0) {
+            e.preventDefault();
+            return;
+        }
+        this.dragSourceId = paneId;
+        try {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', paneId);
+        } catch (_) { /* some browsers throw if dataTransfer is accessed oddly */ }
+        // Use rAF so the drag image captures the un-faded tab.
+        requestAnimationFrame(() => {
+            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${paneId}"]`);
+            if (tabEl) tabEl.classList.add('dragging');
+        });
+    }
+
+    handleTabDragEnd(e) {
+        const tabEl = e.currentTarget;
+        if (tabEl) tabEl.classList.remove('dragging');
+        this.clearDropIndicators();
+        this.dragSourceId = null;
+    }
+
+    handleTabDragOver(e, targetPaneId) {
+        if (!this.dragSourceId || this.dragSourceId === targetPaneId) return;
+        // Pinned tabs aren't draggable so the source is never a pinned tab,
+        // but the target might be (dropping next to a pinned tab is fine -
+        // we just compute insert-before/after the pinned tab, and the move
+        // logic naturally lands the non-pinned source after all pinned tabs).
+        const tabEl = e.currentTarget;
+        if (!tabEl || tabEl.classList.contains('pinned')) return;
+        e.preventDefault(); // required so the `drop` event fires
+        try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+
+        const rect = tabEl.getBoundingClientRect();
+        const insertBefore = e.clientX < rect.left + rect.width / 2;
+        this.showDropIndicator(tabEl, insertBefore);
+    }
+
+    handleTabDragLeave(e) {
+        // Only clear when we leave the tab entirely (not when moving between
+        // child elements within it - relatedTarget tells us where we went).
+        const to = e.relatedTarget;
+        if (to && e.currentTarget.contains(to)) return;
+        const tabEl = e.currentTarget;
+        tabEl.classList.remove('drop-before', 'drop-after');
+    }
+
+    handleTabDrop(e, targetPaneId) {
+        e.preventDefault();
+        const tabEl = e.currentTarget;
+        const insertBefore = tabEl.classList.contains('drop-before');
+        this.clearDropIndicators();
+        if (!this.dragSourceId || this.dragSourceId === targetPaneId) {
+            this.dragSourceId = null;
+            return;
+        }
+        this.moveTabTo(this.dragSourceId, targetPaneId, insertBefore);
+        this.dragSourceId = null;
+    }
+
+    showDropIndicator(tabEl, insertBefore) {
+        // Drop indicators are box-shadow classes on the target tab itself
+        // (so we never need to measure absolute positions in the scroll
+        // container). Only one indicator at a time - clear before showing.
+        this.clearDropIndicators();
+        tabEl.classList.add(insertBefore ? 'drop-before' : 'drop-after');
+    }
+
+    clearDropIndicators() {
+        for (const el of this.tabsContainer.querySelectorAll('.drop-before, .drop-after')) {
+            el.classList.remove('drop-before', 'drop-after');
+        }
     }
 
     async restoreTabsState() {
@@ -113,6 +278,11 @@ export class TabManager {
             for (const t of instances) {
                 this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned, !!t.marked);
             }
+            // Apply the user's drag-reorder (if any) from localStorage. Stale
+            // paneIds (closed tabs, or IDs that changed during a session
+            // restart) are dropped; new tabs not in the saved order are
+            // appended at the end in their natural order.
+            this.applySavedTabOrder();
             // BUG-2 fix: the kanban tab is client-only (no server-side terminal
             // entry), so restore it here if it was open when the page was
             // last reloaded. createTab short-circuits if it's already there.
@@ -474,6 +644,17 @@ export class TabManager {
         tabEl.className = 'tab';
         if (pinned) tabEl.classList.add('pinned');
         tabEl.setAttribute('data-pane-id', paneId);
+        // Pinned tabs are locked to the front of the bar - never draggable.
+        // Everything else gets HTML5 drag-reorder (localStorage only, see
+        // moveTabTo / applyTabOrder / saveTabOrder).
+        tabEl.draggable = !pinned;
+        if (!pinned) {
+            tabEl.addEventListener('dragstart', (e) => this.handleTabDragStart(e, paneId));
+            tabEl.addEventListener('dragend', (e) => this.handleTabDragEnd(e));
+        }
+        tabEl.addEventListener('dragover', (e) => this.handleTabDragOver(e, paneId));
+        tabEl.addEventListener('dragleave', (e) => this.handleTabDragLeave(e));
+        tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
         
         const projectLabel = this.getProjectWorktreeLabel(cwd);
         let tooltipText = `Session: ${title} (${coder})`;
