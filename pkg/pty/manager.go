@@ -48,17 +48,21 @@ type PTYInstance struct {
 	LastOutputAt  time.Time     `json:"-"`
 	Title         string        `json:"title"`
 	Workspace     string        `json:"workspace"`
-	IsBusy        bool          `json:"-"`
-	BusyStartTime time.Time     `json:"-"`
-	NotifiedIdle  bool          `json:"-"`
+	IsBusy           bool          `json:"-"`
+	BusyStartTime    time.Time     `json:"-"`
+	NotifiedIdle     bool          `json:"-"`
+	LastActivityUnix int64         `json:"last_activity_unix"`
+	Busy             bool          `json:"busy"`
 }
 
 func (inst *PTYInstance) UpdateActivity() {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	inst.LastOutputAt = time.Now()
+	inst.LastActivityUnix = inst.LastOutputAt.Unix()
 	if !inst.IsBusy {
 		inst.IsBusy = true
+		inst.Busy = true
 		inst.BusyStartTime = time.Now()
 	}
 	inst.NotifiedIdle = false
@@ -398,6 +402,7 @@ func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
 
 				if inst.IsBusy && now.Sub(inst.LastOutputAt) > 3*time.Second {
 					inst.IsBusy = false
+					inst.Busy = false
 					duration := now.Sub(inst.BusyStartTime)
 					if duration > 8*time.Second && !inst.NotifiedIdle {
 						inst.NotifiedIdle = true
