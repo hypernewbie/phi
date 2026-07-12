@@ -426,7 +426,7 @@ export class KanbanManager {
                 input.style.borderRadius = '3px';
                 input.style.padding = '1px 4px';
                 titleEl.replaceWith(input);
-                input.focus();
+                input.focus({ preventScroll: true });
                 input.select();
 
                 let finished = false;
@@ -547,7 +547,7 @@ export class KanbanManager {
                         <input type="text" class="kanban-quick-add-input" placeholder="Task title... (Enter to save)" />
                     `;
                     const input = wrapper.querySelector('.kanban-quick-add-input');
-                    input.focus();
+                    input.focus({ preventScroll: true });
                     
                     const reset = () => {
                         wrapper.innerHTML = `<button class="kanban-add-task-btn">+ Add Task</button>`;
