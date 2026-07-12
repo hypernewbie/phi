@@ -1040,6 +1040,29 @@ html, body {
     background-color: var(--bg-base);
 }
 
+/* Drag-to-reorder: locked to localStorage only (no backend changes). */
+.tab[draggable="true"] {
+    cursor: grab;
+}
+.tab[draggable="true"]:active {
+    cursor: grabbing;
+}
+.tab.dragging {
+    opacity: 0.4;
+}
+/* Drop indicator rendered as an inset box-shadow so it doesn't shift layout. */
+.tab.drop-before {
+    box-shadow: inset 2px 0 0 var(--accent), 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+}
+.tab.drop-after {
+    box-shadow: inset -2px 0 0 var(--accent), 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+}
+.tab.active.drop-before,
+.tab.active.drop-after {
+    /* Active tab already has its own top border + shadow; merge ours in. */
+    border-top-color: var(--accent);
+}
+
 .tab.has-attention {
     animation: tab-pulse 2s infinite ease-in-out;
     color: var(--accent, #7c6af7) !important;
