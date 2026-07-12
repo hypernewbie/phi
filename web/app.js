@@ -1423,8 +1423,16 @@ export class App {
                 this.versionInfo = data;
                 const changelogBtn = document.getElementById('phi-changelog-btn');
                 if (changelogBtn) {
-                    const ver = data.version || 'dev';
-                    changelogBtn.textContent = (ver === 'dev') ? 'dev' : (ver.startsWith('v') ? ver : `v${ver}`);
+                    // Only overwrite the HTML default when the binary reports
+                    // a real version (i.e. a stamped release build). A
+                    // `go run` / `go build` without ldflags reports "dev" -
+                    // in that case we keep whatever the HTML shipped, which
+                    // is the most recent release tag. The button always shows
+                    // something useful instead of flashing "dev".
+                    const ver = data.version;
+                    if (ver && ver !== 'dev') {
+                        changelogBtn.textContent = ver.startsWith('v') ? ver : `v${ver}`;
+                    }
                 }
                 // Once we know the install method, kick off the update check
                 // (server-side throttled; this is just the UI hookup).

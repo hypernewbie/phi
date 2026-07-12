@@ -35,7 +35,11 @@ describe('loadVersion in App', () => {
         expect(app.versionInfo.install_method).toBe('standalone');
     });
 
-    it('displays dev directly without v prefix if version is dev', async () => {
+    it('keeps the HTML default when the binary reports "dev" (un-stamped build)', async () => {
+        // Behavior change (v0.8.2): we no longer overwrite the HTML default
+        // with "dev" - the button should always show a useful version
+        // string. The HTML ships with the most recent release tag, and
+        // /api/version only overrides it when the binary has a real stamp.
         mockFetch(() => ({
             version: 'dev',
             commit: 'none',
@@ -44,12 +48,18 @@ describe('loadVersion in App', () => {
             install_method: 'dev'
         }));
 
+        // Rebuild the fixture fresh (v0.8.1 is the current default).
+        document.body.innerHTML = `
+            <button id="phi-changelog-btn">v0.8.1</button>
+        `;
+
         const app = Object.create(App.prototype);
         app.versionInfo = null;
 
         await app.loadVersion();
 
         const btn = document.getElementById('phi-changelog-btn');
-        expect(btn.textContent).toBe('dev');
+        // HTML default preserved - not overwritten with "dev".
+        expect(btn.textContent).toBe('v0.8.1');
     });
 });
