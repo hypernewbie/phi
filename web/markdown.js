@@ -340,8 +340,24 @@ export class MarkdownManager {
             const applyBtn = document.createElement('button');
             applyBtn.className = 'update-banner-btn';
             applyBtn.textContent = `Apply & restart next time`;
+            applyBtn.title = 'Stage the binary. phi restarts into it next time it restarts (manual: Ctrl+C + relaunch).';
             applyBtn.addEventListener('click', () => this._startUpdateApply(status.latest, applyBtn, banner));
             actions.appendChild(applyBtn);
+
+            // Phase 9 T3: 'Apply & restart now' chains the staged swap
+            // with an immediate server restart. Disabled for npm because
+            // the npm shim owns the child lifecycle; restarting the
+            // server mid-update leaves the shim in a weird state. Plan
+            // §3.5 'npm-shim consideration'.
+            if (status.install_method === 'standalone') {
+                const restartBtn = document.createElement('button');
+                restartBtn.className = 'update-banner-btn update-banner-btn-restart';
+                restartBtn.textContent = 'Apply & restart now';
+                restartBtn.title = 'Stage the binary and immediately restart phi. Browser will reload.';
+                restartBtn.addEventListener('click', () => this._startUpdateApplyAndRestart(status.latest, restartBtn, applyBtn, banner));
+                actions.appendChild(restartBtn);
+            }
+
             banner.appendChild(actions);
         }
 
@@ -412,6 +428,77 @@ export class MarkdownManager {
             case 'error':       return `Error: ${p.error || 'unknown'}`;
             default:            return p.phase;
         }
+    }
+
+    // _startUpdateApplyAndRestart chains Phase 8 apply + Phase 9 restart.
+    // Only available for standalone installs (npm shim owns the child,
+    // see plan §3.5). The WS 0x05 handler in terminal.js arms the page
+    // reload; the staging step must complete BEFORE the restart, so
+    // we poll progress until phase==done before POSTing /api/restart.
+    async _startUpdateApplyAndRestart(version, restartBtn, applyBtn, banner) {
+        restartBtn.disabled = true;
+        applyBtn.disabled = true;
+        restartBtn.textContent = 'Staging…';
+        const progressEl = banner.querySelector('.update-banner-progress');
+        if (progressEl) progressEl.textContent = 'staging…';
+
+        // Trigger the apply and poll.
+        try {
+            const res = await fetch('/api/update/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version })
+            });
+            if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
+        } catch (err) {
+            restartBtn.disabled = false;
+            applyBtn.disabled = false;
+            restartBtn.textContent = 'Apply & restart now';
+            if (progressEl) {
+                progressEl.textContent = `Error: ${err.message}`;
+                progressEl.classList.add('error');
+            }
+            return;
+        }
+
+        const waitForStaged = async () => {
+            const r = await fetch('/api/update/progress');
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const p = await r.json();
+            if (progressEl) {
+                progressEl.textContent = this._formatProgress(p);
+                progressEl.classList.toggle('error', p.phase === 'error');
+            }
+            if (p.phase === 'done') return true;
+            if (p.phase === 'error') throw new Error(p.error || 'staging failed');
+            return false;
+        };
+
+        try {
+            for (;;) {
+                if (await waitForStaged()) break;
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } catch (err) {
+            restartBtn.disabled = false;
+            applyBtn.disabled = false;
+            restartBtn.textContent = 'Apply & restart now';
+            return;
+        }
+
+        // Staged. Now restart. The 0x05 frame will arm the reload poller;
+        // we ALSO trigger the reload as a backup (in case the WS isn't
+        // connected). Best-effort; ignore errors since the page is dying.
+        restartBtn.textContent = 'Restarting…';
+        if (progressEl) progressEl.textContent = 'staged, restarting…';
+        try {
+            await fetch('/api/restart', { method: 'POST' });
+        } catch (_) {
+            // Server is dying; expected.
+        }
+        // Hard reload fallback in case the WS-driven reload doesn't fire
+        // within a couple of seconds (network blip, browser backgrounded).
+        setTimeout(() => window.location.reload(), 2500);
     }
 
     async _promptAddDir() {
