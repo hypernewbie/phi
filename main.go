@@ -8,8 +8,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -73,6 +75,9 @@ func main() {
 	ptyManager = pty.NewManager()
 	if err := ptyManager.LoadState(); err != nil {
 		log.Printf("[pty] Failed to load tabs state: %v", err)
+	}
+	if err := LoadSyncStore(); err != nil {
+		log.Printf("[sync] Failed to load sync store state: %v", err)
 	}
 	ptyManager.StartIdleWatcher(func(info pty.IdleNotification) {
 		cfg := loadConfig()
@@ -196,6 +201,18 @@ func main() {
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)
+
+	// Graceful shutdown listener
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigChan
+		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
+		_ = FlushSyncStore()
+		wsHub.BroadcastShutdown()
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(0)
+	}()
 
 	addr := fmt.Sprintf("%s:%d", *ipFlag, *portFlag)
 	printWelcomeBanner(cfg, *ipFlag, *portFlag)

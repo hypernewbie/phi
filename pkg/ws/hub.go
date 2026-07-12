@@ -252,3 +252,21 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 		}
 	}
 }
+
+func (h *Hub) BroadcastShutdown() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	msg := []byte{0x05}
+
+	for _, ph := range h.panes {
+		ph.mu.Lock()
+		for client := range ph.clients {
+			select {
+			case client.Send <- msg:
+			default:
+			}
+		}
+		ph.mu.Unlock()
+	}
+}

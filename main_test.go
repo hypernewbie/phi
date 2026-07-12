@@ -1808,6 +1808,10 @@ func TestKanbanVaultAPI(t *testing.T) {
 }
 
 func TestSyncMessagesCRUD(t *testing.T) {
+	tmpDir := t.TempDir()
+	testSyncPath = filepath.Join(tmpDir, "syncboard-test.json")
+	defer func() { testSyncPath = "" }()
+
 	syncMu.Lock()
 	syncStore = make(map[string]*SyncMessage)
 	syncMu.Unlock()
