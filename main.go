@@ -26,13 +26,24 @@ var (
 	cpuSampler = system.NewSampler()
 	activeCWD  string
 	webRoot    fs.FS
+
+	Version     = "dev"
+	Commit      = "none"
+	Date        = "unknown"
+	BuildSource = "source"
 )
 
 func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("Phi %s (commit: %s, built: %s, source: %s)\n", Version, Commit, Date, BuildSource)
+		os.Exit(0)
+	}
 
 	// The directory Phi is launched from becomes the default workspace.
 	// Switch between projects from the workspace picker in the UI.
@@ -177,6 +188,8 @@ func main() {
 	http.HandleFunc("/api/sync/messages/", handleSyncMessages)
 	http.HandleFunc("/api/sync/messages", handleSyncMessages)
 	http.HandleFunc("/api/config/sync-coordinator", handleSyncCoordinator)
+
+	http.HandleFunc("/api/version", handleGetVersion)
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)

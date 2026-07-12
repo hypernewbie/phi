@@ -19,6 +19,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/system"
+	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
 
@@ -606,6 +607,17 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Copy response body to client response
 	io.Copy(w, resp.Body)
+}
+
+func handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"version":        Version,
+		"commit":         Commit,
+		"date":           Date,
+		"build_source":   BuildSource,
+		"install_method": update.DetectInstallMethod(BuildSource),
+	})
 }
 
 
