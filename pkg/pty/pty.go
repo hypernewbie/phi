@@ -34,6 +34,7 @@ type Pty struct {
 	pt        gopty.Pty
 	Closed    chan struct{}
 	closeOnce sync.Once
+	exitCode  int
 
 	// clipFile is the path of this session's clipboard shim file
 	// (e.g. /tmp/phi-shims-XXXX/clipboard.txt). Used by the API handler
@@ -42,6 +43,11 @@ type Pty struct {
 	// every time a new PTY is created. Empty for PTYs created before
 	// this field existed.
 	clipFile string
+}
+
+// ExitCode returns the wait status code of the PTY command.
+func (p *Pty) ExitCode() int {
+	return p.exitCode
 }
 
 // ClipboardFile returns the path of this PTY's clipboard shim file, or
@@ -196,10 +202,16 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 		pt:       pt,
 		Closed:   make(chan struct{}),
 		clipFile: clipFile,
+		exitCode: -1,
 	}
 
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+		if waitErr == nil {
+			p.exitCode = 0
+		} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			p.exitCode = exitErr.ExitCode()
+		}
 		p.closePTY()
 		close(p.Closed)
 		_ = os.RemoveAll(tempDir)

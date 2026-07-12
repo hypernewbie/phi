@@ -115,9 +115,15 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 			}
 			if n > 0 {
 				inst.UpdateActivity()
-				hub.Broadcast(inst.ID, 0x01, buf[:n])
+				hub.Ingest(inst.ID, buf[:n])
 			}
 		}
+		// Reap process exit status and broadcast exit event
+		<-inst.Pty.Closed
+		code := inst.Pty.ExitCode()
+		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
+		hub.Broadcast(inst.ID, 0x04, payload)
+		hub.ClosePane(inst.ID)
 	}()
 }
 
@@ -134,7 +140,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	}
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
-	hub.Register(inst.ID, client)
+	hub.AttachWithReplay(inst.ID, client)
 
 	go client.WritePump()
 	client.ReadPump(inst, manager, hub)
