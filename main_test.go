@@ -1933,3 +1933,69 @@ func TestSyncCoordinatorConfig(t *testing.T) {
 		t.Errorf("GET /api/config response did not return the updated sync_coordinator, got: %v", resMap)
 	}
 }
+
+func TestPeersStatusContract(t *testing.T) {
+	// /api/peers/status must always return a JSON array (never null, never 500)
+	req := httptest.NewRequest(http.MethodGet, "/api/peers/status", nil)
+	w := httptest.NewRecorder()
+	handleGetPeersStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var statuses []interface{}
+	if err := json.NewDecoder(w.Body).Decode(&statuses); err != nil {
+		t.Fatalf("response body is not a JSON array: %v", err)
+	}
+}
+
+func TestPeersStatusMethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/status", nil)
+	w := httptest.NewRecorder()
+	handleGetPeersStatus(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestConfigPeersCRUD(t *testing.T) {
+	// Save original config and restore after test
+	origCfg := loadConfig()
+	defer saveConfig(origCfg)
+
+	// POST peers
+	payload, _ := json.Marshal([]PeerConfig{
+		{Name: "server-a", URL: "http://192.168.1.10:7070"},
+		{Name: "server-b", URL: "http://192.168.1.11:7070"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/config/peers", strings.NewReader(string(payload)))
+	w := httptest.NewRecorder()
+	handleConfigPeers(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/config/peers failed: %d", w.Code)
+	}
+
+	// GET peers
+	req = httptest.NewRequest(http.MethodGet, "/api/config/peers", nil)
+	w = httptest.NewRecorder()
+	handleConfigPeers(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/config/peers failed: %d", w.Code)
+	}
+
+	var peers []PeerConfig
+	if err := json.NewDecoder(w.Body).Decode(&peers); err != nil {
+		t.Fatalf("failed to decode peers: %v", err)
+	}
+	if len(peers) != 2 {
+		t.Errorf("expected 2 peers, got %d", len(peers))
+	}
+	if peers[0].Name != "server-a" {
+		t.Errorf("unexpected peer name: %s", peers[0].Name)
+	}
+}
+
