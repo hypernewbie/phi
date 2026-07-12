@@ -3,6 +3,7 @@ import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { KanbanManager } from './kanban.js';
+import { escapeHtml } from './util.js';
 import { SyncManager } from './sync.js';
 
 // NOTE: When adding a new theme color, you must update:
@@ -147,7 +148,7 @@ export class App {
 
         // 1. Fetch coder templates & presets from API
         await this.fetchCoderPresets();
-        
+
         // 2. Restore previously open terminal tabs (reconnects live PTY sessions)
         await this.tabManager.restoreTabsState();
 
@@ -166,6 +167,11 @@ export class App {
             this.applyAccentTheme(color);
             this.saveTheme(color);
         });
+
+        // 6.5 Start fleet poller (plan §3.4). Polls every 15s while the
+        // sidebar is visible. Renders peer rows; hides panel when no
+        // peers configured. Cheap, no-ops when no fleet config.
+        this.startFleetPolling();
 
         // 7. Setup mobile sidebar drawer toggle
         const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
@@ -1288,6 +1294,109 @@ export class App {
         await this._doImportConfig('/api/config/import-cmds', btnElement, "PHICMDS", async () => {
             await this.sessionsManager.loadConfig();
         });
+    }
+
+    // ─── Fleet panel (Phase 6 / plan §3.4) ────────────────────────────
+    // Polls /api/peers/status every 15s while the sidebar is visible.
+    // The poller itself is server-side and runs unconditionally; the
+    // client just renders the cached snapshot and skips HTTP round-trips
+    // when the user isn't looking. This protects sleepy laptops from a
+    // 2 GETs/15s/peer heartbeat (risk R9).
+    startFleetPolling() {
+        if (this._fleetPollTimer) return; // idempotent
+
+        const isSidebarVisible = () => {
+            const sidebar = document.getElementById('sidebar-panel');
+            if (!sidebar) return true;
+            return getComputedStyle(sidebar).display !== 'none';
+        };
+
+        const poll = async () => {
+            if (!isSidebarVisible()) return;
+            try {
+                const res = await fetch('/api/peers/status');
+                if (!res.ok) return;
+                const statuses = await res.json();
+                this.renderFleetPanel(statuses);
+            } catch (err) {
+                console.warn('[fleet] poll failed:', err);
+            }
+        };
+
+        poll(); // immediate first poll
+        this._fleetPollTimer = setInterval(poll, 15000);
+    }
+
+    renderFleetPanel(statuses) {
+        const panel = document.getElementById('fleet-panel');
+        const list = document.getElementById('fleet-peer-list');
+        const badge = document.getElementById('fleet-stale-badge');
+        if (!panel || !list) return;
+
+        if (!Array.isArray(statuses) || statuses.length === 0) {
+            panel.style.display = 'none';
+            return;
+        }
+        panel.style.display = '';
+
+        // Clear via replaceChildren; safe and doesn't fight with browser extensions.
+        list.replaceChildren();
+
+        let anyAttention = false;
+        for (const peer of statuses) {
+            const state = !peer.reachable
+                ? 'unreachable'
+                : peer.stale
+                    ? 'stale'
+                    : 'reachable';
+            if (state !== 'reachable') anyAttention = true;
+
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = `fleet-peer-row ${state}`;
+
+            const dot = document.createElement('span');
+            dot.className = `fleet-peer-dot ${state}`;
+
+            const name = document.createElement('span');
+            name.className = 'fleet-peer-name';
+            name.textContent = peer.name || peer.url || 'peer';
+
+            const meta = document.createElement('span');
+            meta.className = 'fleet-peer-meta';
+            if (peer.reachable) {
+                const busyHtml = peer.busy_count > 0
+                    ? `<span class="fleet-peer-busy">${peer.busy_count}b</span> `
+                    : '';
+                const idle = peer.idle_min < 0 ? '?' : `${peer.idle_min}m`;
+                const ver = peer.version
+                    ? `<span class="fleet-peer-version">${escapeHtml(peer.version)}</span>`
+                    : '';
+                meta.innerHTML = `${peer.tab_count}t ${busyHtml}· ${idle}${ver}`;
+            } else {
+                meta.textContent = 'offline';
+            }
+
+            row.appendChild(dot);
+            row.appendChild(name);
+            row.appendChild(meta);
+
+            if (peer.reachable) {
+                row.title = `${peer.url}\n${peer.tab_count} tabs · ${peer.busy_count} busy\nphi ${peer.version || 'unknown'}\nidle ${peer.idle_min < 0 ? '?' : peer.idle_min + 'm'}`;
+                row.addEventListener('click', () => {
+                    if (peer.url) window.open(peer.url, '_blank', 'noopener');
+                });
+            } else {
+                row.title = `${peer.url}\nunreachable${peer.error ? ': ' + peer.error : ''}`;
+                row.disabled = true;
+            }
+
+            list.appendChild(row);
+        }
+
+        if (badge) {
+            badge.style.display = anyAttention ? '' : 'none';
+        }
     }
 
     async loadVersion() {

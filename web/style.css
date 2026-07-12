@@ -5506,3 +5506,129 @@ html, body {
 .disconnect-banner-btn:hover {
     background: #b91c1c;
 }
+
+/* Fleet panel — peer-presence strip above the version pill.
+   Hidden when no peers configured (Phase 6 / plan §3.4). */
+.fleet-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.fleet-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    opacity: 0.7;
+}
+
+.fleet-panel-title {
+    flex: 1;
+}
+
+.fleet-stale-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--color-amber, #fbbf24);
+    color: #1a1a1a;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: help;
+    animation: fleet-stale-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes fleet-stale-pulse {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1; }
+}
+
+.fleet-peer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.fleet-peer-row {
+    display: grid;
+    grid-template-columns: 10px 1fr auto;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.2;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    width: 100%;
+}
+
+.fleet-peer-row:hover {
+    background: var(--accent-trace, rgba(255, 255, 255, 0.04));
+}
+
+.fleet-peer-row:active {
+    transform: translateY(1px);
+}
+
+.fleet-peer-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-mute, #6b7280);
+    transition: background 0.2s ease;
+}
+.fleet-peer-dot.reachable { background: var(--color-green, #10b981); }
+.fleet-peer-dot.stale     { background: var(--color-amber, #fbbf24); }
+.fleet-peer-dot.unreachable { background: var(--color-red, #f87171); }
+
+.fleet-peer-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fleet-peer-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
+.fleet-peer-row.unreachable .fleet-peer-name,
+.fleet-peer-row.unreachable .fleet-peer-meta {
+    text-decoration: line-through;
+    opacity: 0.5;
+}
+
+.fleet-peer-busy {
+    color: var(--color-amber, #fbbf24);
+    font-weight: 700;
+}
+
+.fleet-peer-version {
+    opacity: 0.5;
+    font-size: 9px;
+    margin-left: 4px;
+}
