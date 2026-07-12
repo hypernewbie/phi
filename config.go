@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 type QuickCommand struct {
@@ -184,5 +186,5 @@ func saveConfig(cfg Config) {
 	path := configFilePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	b, _ := json.MarshalIndent(cfg, "", "  ")
-	_ = os.WriteFile(path, b, 0644)
+	_ = system.WriteFileAtomic(path, b, 0644)
 }
