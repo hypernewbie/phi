@@ -149,8 +149,13 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 
 	go client.WritePump()
 
-	if inst.Pty == nil {
-		payload := []byte(`{"code":-1}`)
+	if inst.IsPtyDead() {
+		// Ghost (nil Pty, code -1) or died-in-place (real exit code available).
+		code := -1
+		if inst.Pty != nil {
+			code = inst.Pty.ExitCode()
+		}
+		payload := []byte(fmt.Sprintf(`{"code":%d}`, code))
 		hub.Broadcast(inst.ID, 0x04, payload)
 		go func() {
 			time.Sleep(100 * time.Millisecond)

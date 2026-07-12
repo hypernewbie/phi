@@ -76,6 +76,27 @@ func (inst *PTYInstance) UpdateActivity() {
 	inst.NotifiedIdle = false
 }
 
+// BusyState returns busy + last-activity under the instance lock (race-free for /api/diag).
+func (inst *PTYInstance) BusyState() (bool, int64) {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.Busy, inst.LastActivityUnix
+}
+
+// IsPtyDead reports whether the process has exited (ghost with nil Pty, or died-in-place).
+// Pty.Closed is closed once by the wait goroutine; non-blocking receive is race-free without inst.mu.
+func (inst *PTYInstance) IsPtyDead() bool {
+	if inst.Pty == nil {
+		return true
+	}
+	select {
+	case <-inst.Pty.Closed:
+		return true
+	default:
+		return false
+	}
+}
+
 type Manager struct {
 	instances map[string]*PTYInstance
 	mu        sync.RWMutex
@@ -237,12 +258,8 @@ func (m *Manager) SaveState() error {
 	m.mu.Lock()
 	list := make([]*PTYInstance, 0, len(m.instances))
 	for _, inst := range m.instances {
-		// Skip dead/nil-Pty records from the on-disk state file: they are
-		// only kept in memory so the UI can show "Session expired" copy
-		// and the restore banner can offer to respawn them. They should
-		// NOT be persisted as live state — the next process boot would
-		// otherwise resurrect dead PTYs as ghosts.
-		if inst.Pty == nil {
+		// Skip dead instances (ghosts + died-in-place) so they don't resurrect on next boot.
+		if inst.IsPtyDead() {
 			continue
 		}
 		list = append(list, inst)

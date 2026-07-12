@@ -21,7 +21,7 @@ jobs:
           cache: true
 
       - name: Run Go Tests
-        run: go test -v ./...
+        run: go test -race -v ./...
 
   test-js:
     name: JS Frontend Tests

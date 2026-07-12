@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 const (
@@ -78,6 +80,11 @@ func NewChecker(currentVersion, installMethod string) *Checker {
 	}
 }
 
+// SetReleaseURLForTesting injects a fake release URL (e.g. httptest.Server) for cross-package tests.
+func (c *Checker) SetReleaseURLForTesting(url string) {
+	c.releaseURLOverride = url
+}
+
 // LoadCache reads the persisted last-known-good check state. Failure to
 // read (no file, corrupt JSON, permission denied) is not fatal — we just
 // start with an empty cache and let the next check populate it.
@@ -125,26 +132,7 @@ func (c *Checker) SaveCache() error {
 	if err != nil {
 		return err
 	}
-
-	dir := filepath.Dir(c.cachePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "phi_update-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, c.cachePath)
+	return system.WriteFileAtomic(c.cachePath, b, 0644)
 }
 
 // CheckLatest performs one fresh HTTP check against GitHub. Returns the
@@ -224,13 +212,14 @@ func (c *Checker) ShouldRunRealCheck() bool {
 func (c *Checker) RunCheck(force bool) CheckResult {
 	c.mu.Lock()
 	currentLatest := c.latest
+	currentCheckedAt := c.checkedAt
 	c.mu.Unlock()
 
 	if !force && !c.ShouldRunRealCheck() {
 		// Inside the min interval — return cached state.
 		return CheckResult{
 			Latest:    currentLatest,
-			CheckedAt: c.checkedAt,
+			CheckedAt: currentCheckedAt,
 		}
 	}
 

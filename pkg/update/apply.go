@@ -65,13 +65,21 @@ type Applier struct {
 // NewApplier constructs an Applier with default HTTP timeout.
 func NewApplier(currentVersion, installMethod string) *Applier {
 	a := &Applier{
-		currentVersion: currentVersion,
+		currentVersion: normalizeVersion(currentVersion),
 		installMethod:  installMethod,
 		httpClient:     &http.Client{Timeout: 5 * time.Minute},
 	}
 	empty := Progress{Phase: PhaseIdle}
 	a.progress.Store(&empty)
 	return a
+}
+
+// normalizeVersion strips a leading "v"/"V" prefix so all comparisons use the bare form.
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+	return v
 }
 
 // Progress returns a snapshot of the current apply state.
@@ -118,6 +126,9 @@ const ChecksumsAsset = "checksums.txt"
 // Returns ApplyResult; on success the running install is untouched
 // until the very last rename (plan R5: fail-closed).
 func (a *Applier) Apply(targetVersion string) ApplyResult {
+	// Normalize: Status.Latest round-trips as a GitHub tag ("v0.8.2").
+	targetVersion = normalizeVersion(targetVersion)
+
 	if !a.inFlight.CompareAndSwap(false, true) {
 		return ApplyResult{
 			Progress: Progress{Phase: PhaseError, Error: "another apply is already in flight"},
@@ -494,4 +505,41 @@ func CleanupOldBinary() (string, error) {
 		return "", err
 	}
 	return old, nil
+}
+
+// CleanupOldBinaryDelay gates how long before .old is removed. A var so tests can shrink it.
+var CleanupOldBinaryDelay = 10 * time.Minute
+
+// ScheduleOldBinaryCleanup sleeps the delay then calls CleanupOldBinary. Run in a goroutine at boot.
+func ScheduleOldBinaryCleanup() (string, error) {
+	if CleanupOldBinaryDelay > 0 {
+		time.Sleep(CleanupOldBinaryDelay)
+	}
+	return CleanupOldBinary()
+}
+
+// Rollback swaps the current binary back for the preserved .old. Fails closed.
+func Rollback() (string, error) {
+	exePath, err := swapTargetHook()
+	if err != nil {
+		return "", fmt.Errorf("could not resolve own path: %w", err)
+	}
+	oldPath := exePath + ".old"
+	if _, err := os.Stat(oldPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no previous binary found at %s: nothing to roll back to", oldPath)
+		}
+		return "", err
+	}
+
+	rejectedPath := exePath + ".rejected"
+	_ = os.Remove(rejectedPath)
+	if err := os.Rename(exePath, rejectedPath); err != nil {
+		return "", fmt.Errorf("rollback: could not move current binary aside: %w", err)
+	}
+	if err := os.Rename(oldPath, exePath); err != nil {
+		_ = os.Rename(rejectedPath, exePath) // best-effort restore
+		return "", fmt.Errorf("rollback: could not restore previous binary: %w", err)
+	}
+	return exePath, nil
 }

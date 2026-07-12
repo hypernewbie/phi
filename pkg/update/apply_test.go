@@ -212,6 +212,57 @@ func TestApplier_Apply_HappyPath(t *testing.T) {
 	_ = os.Remove(oldPath)
 }
 
+// TestApplier_Apply_HappyPath_VPrefixedTarget: v-prefixed target ("v0.9.0") must succeed end-to-end.
+func TestApplier_Apply_HappyPath_VPrefixedTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("swap dance on Windows requires file-handle release; covered by manual / CI Windows leg")
+	}
+
+	binaryName := "phi"
+	body := []byte("#!/bin/sh\necho hello new phi\n")
+	b := &assetBuilder{t: t, binaryName: binaryName, binaryBody: body}
+	archiveBytes := b.archive()
+	hash := sha256Hex(body)
+
+	fg := &fakeGitHub{
+		asset:      archiveBytes,
+		binaryName: binaryName,
+		checksums:  fmt.Sprintf("%s  phi_0.9.0_%s_%s.tar.gz\n", hash, runtime.GOOS, runtime.GOARCH),
+	}
+	srv := httptest.NewServer(fg.handler())
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	oldExe := filepath.Join(tmpDir, binaryName)
+	if err := os.WriteFile(oldExe, []byte("#!/bin/sh\necho old phi\n"), 0755); err != nil {
+		t.Fatalf("write old exe: %v", err)
+	}
+
+	a := NewApplier("0.8.0", "standalone")
+	a.httpClient = &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: rewritingTransport{from: "github.com/hypernewbie", to: strings.TrimPrefix(srv.URL, "http://")},
+	}
+
+	origHook := swapTargetHook
+	swapTargetHook = func() (string, error) { return oldExe, nil }
+	defer func() { swapTargetHook = origHook }()
+
+	res := a.Apply("v0.9.0")
+	if res.Err != nil {
+		t.Fatalf("Apply(v-prefixed): %v (progress: %+v)", res.Err, res.Progress)
+	}
+	if res.Progress.Phase != PhaseDone {
+		t.Errorf("expected PhaseDone, got %s", res.Progress.Phase)
+	}
+	if res.Progress.Version != "0.9.0" {
+		t.Errorf("expected normalized Progress.Version=0.9.0, got %q", res.Progress.Version)
+	}
+
+	oldPath := oldExe + ".old"
+	_ = os.Remove(oldPath)
+}
+
 func TestApplier_Apply_RefusesSameVersion(t *testing.T) {
 	a := NewApplier("0.8.0", "standalone")
 	res := a.Apply("0.8.0")
@@ -220,6 +271,33 @@ func TestApplier_Apply_RefusesSameVersion(t *testing.T) {
 	}
 	if res.Progress.Phase != PhaseError {
 		t.Errorf("expected PhaseError, got %s", res.Progress.Phase)
+	}
+}
+
+// TestApplier_Apply_RefusesSameVersion_VPrefix: v-prefixed reapply ("v0.8.0" vs current "0.8.0") must still be caught.
+func TestApplier_Apply_RefusesSameVersion_VPrefix(t *testing.T) {
+	a := NewApplier("0.8.0", "standalone")
+	res := a.Apply("v0.8.0")
+	if res.Err == nil {
+		t.Error("expected error when v-prefixed targetVersion == currentVersion")
+	}
+	if res.Progress.Phase != PhaseError {
+		t.Errorf("expected PhaseError, got %s", res.Progress.Phase)
+	}
+}
+
+func TestNormalizeVersion(t *testing.T) {
+	cases := map[string]string{
+		"v0.8.2":  "0.8.2",
+		"V0.8.2":  "0.8.2",
+		"0.8.2":   "0.8.2",
+		"  v0.8.2  ": "0.8.2",
+		"":        "",
+	}
+	for in, want := range cases {
+		if got := normalizeVersion(in); got != want {
+			t.Errorf("normalizeVersion(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -359,6 +437,112 @@ func TestApplier_CleanupOldBinary_NoFile(t *testing.T) {
 	}
 	if removed != "" {
 		t.Errorf("expected empty removed path when no .old exists, got %s", removed)
+	}
+}
+
+func TestRollback_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "phi")
+	if err := os.WriteFile(exe, []byte("bad-new\n"), 0755); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
+	old := exe + ".old"
+	if err := os.WriteFile(old, []byte("good-old\n"), 0755); err != nil {
+		t.Fatalf("write old: %v", err)
+	}
+
+	origHook := swapTargetHook
+	swapTargetHook = func() (string, error) { return exe, nil }
+	defer func() { swapTargetHook = origHook }()
+
+	restored, err := Rollback()
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if restored != exe {
+		t.Errorf("expected restored=%s, got %s", exe, restored)
+	}
+
+	body, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatalf("read restored exe: %v", err)
+	}
+	if string(body) != "good-old\n" {
+		t.Errorf("expected exe to contain the old binary's content, got %q", body)
+	}
+
+	rejected := exe + ".rejected"
+	body, err = os.ReadFile(rejected)
+	if err != nil {
+		t.Fatalf("read rejected: %v", err)
+	}
+	if string(body) != "bad-new\n" {
+		t.Errorf("expected .rejected to preserve the bad binary's content, got %q", body)
+	}
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("expected .old to be gone after rollback, stat err: %v", err)
+	}
+}
+
+func TestRollback_NoOldBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "phi")
+	if err := os.WriteFile(exe, []byte("current\n"), 0755); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
+
+	origHook := swapTargetHook
+	swapTargetHook = func() (string, error) { return exe, nil }
+	defer func() { swapTargetHook = origHook }()
+
+	if _, err := Rollback(); err == nil {
+		t.Fatal("expected error when no .old binary exists, got nil")
+	}
+
+	// Original exe must be untouched.
+	body, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatalf("read exe: %v", err)
+	}
+	if string(body) != "current\n" {
+		t.Errorf("expected exe untouched after failed rollback, got %q", body)
+	}
+}
+
+func TestScheduleOldBinaryCleanup_RespectsDelay(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "phi")
+	if err := os.WriteFile(exe, []byte("new\n"), 0755); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
+	old := exe + ".old"
+	if err := os.WriteFile(old, []byte("old\n"), 0755); err != nil {
+		t.Fatalf("write old: %v", err)
+	}
+
+	origHook := swapTargetHook
+	swapTargetHook = func() (string, error) { return exe, nil }
+	defer func() { swapTargetHook = origHook }()
+
+	origDelay := CleanupOldBinaryDelay
+	CleanupOldBinaryDelay = 20 * time.Millisecond
+	defer func() { CleanupOldBinaryDelay = origDelay }()
+
+	start := time.Now()
+	removed, err := ScheduleOldBinaryCleanup()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("ScheduleOldBinaryCleanup: %v", err)
+	}
+	if removed != old {
+		t.Errorf("expected removed=%s, got %s", old, removed)
+	}
+	if elapsed < 20*time.Millisecond {
+		t.Errorf("expected ScheduleOldBinaryCleanup to wait out the delay, only took %s", elapsed)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("expected .old to be gone, stat err: %v", err)
 	}
 }
 

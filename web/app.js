@@ -158,6 +158,9 @@ export class App {
         // 4. Setup panel resize handles
         this.initResizers();
 
+        // 4.5 Wire up global keyboard shortcuts (Ctrl+Shift+D = diag panel).
+        this.initGlobalShortcuts();
+
         // 5. Initialize Diff terminal engine
         this.diffController.initTerminal();
 

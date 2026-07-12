@@ -64,6 +64,30 @@ func (p *PortWaiter) Wait(ctx context.Context) error {
 	return fmt.Errorf("port %s never came back up after %d attempts", p.addr, p.maxAttempts)
 }
 
+// BindWithRetry binds addr, retrying until maxWait. Needed on Windows restart
+// where the old process briefly still holds the socket. No-op fast path on Unix.
+func BindWithRetry(addr string, maxWait time.Duration, interval time.Duration) (net.Listener, error) {
+	if maxWait <= 0 {
+		maxWait = 5 * time.Second
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	deadline := time.Now().Add(maxWait)
+	var lastErr error
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("could not bind %s after %s: %w", addr, maxWait, lastErr)
+		}
+		time.Sleep(interval)
+	}
+}
+
 // ExecSelf replaces the current process image with the same binary,
 // passing the same arguments. Unix-only. Returns only on error.
 func ExecSelf(args []string, env []string) error {

@@ -69,6 +69,61 @@ func TestPortWaiter_ContextCancelWakes(t *testing.T) {
 	}
 }
 
+func TestBindWithRetry_SucceedsImmediatelyWhenFree(t *testing.T) {
+	// Reserve then release an ephemeral port so we have a free addr.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	start := time.Now()
+	got, err := BindWithRetry(addr, 2*time.Second, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("BindWithRetry on free port: %v", err)
+	}
+	defer got.Close()
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("expected near-instant bind on a free port, took %s", elapsed)
+	}
+}
+
+func TestBindWithRetry_RetriesThenSucceeds(t *testing.T) {
+	// Hold the port for a short window in a goroutine, then release it.
+	// BindWithRetry should keep retrying and eventually succeed.
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := held.Addr().String()
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		held.Close()
+	}()
+
+	got, err := BindWithRetry(addr, 3*time.Second, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("BindWithRetry expected eventual success: %v", err)
+	}
+	defer got.Close()
+}
+
+func TestBindWithRetry_TimesOutWhenPortNeverFrees(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer held.Close()
+	addr := held.Addr().String()
+
+	_, err = BindWithRetry(addr, 200*time.Millisecond, 20*time.Millisecond)
+	if err == nil {
+		t.Error("expected timeout error when port never frees")
+	}
+}
+
 func TestExecSelf_RejectsOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only meaningful on Windows")
