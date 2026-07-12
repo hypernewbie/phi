@@ -893,6 +893,27 @@ func TestHandleGetCoders(t *testing.T) {
 	}
 }
 
+func TestHandleGetVersion(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
+	w := httptest.NewRecorder()
+	handleGetVersion(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var res map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("Failed to decode version response: %v", err)
+	}
+
+	for _, field := range []string{"version", "commit", "date", "build_source", "install_method"} {
+		if _, ok := res[field]; !ok {
+			t.Errorf("Expected version response to contain %q", field)
+		}
+	}
+}
+
 func testMainShell() (string, []string) {
 	if runtime.GOOS == "windows" {
 		return "pwsh", []string{"-NoLogo", "-NoProfile", "-NonInteractive"}

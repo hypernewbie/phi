@@ -142,6 +142,9 @@ export class App {
     }
     
     async init() {
+        // 0. Load version details
+        await this.loadVersion();
+
         // 1. Fetch coder templates & presets from API
         await this.fetchCoderPresets();
         
@@ -1281,12 +1284,27 @@ export class App {
         await this._doExportConfig('/api/config/export-terminal-commands', btnElement);
     }
 
-    // importCmdsConfig still routes to the single /import-cmds endpoint
-    // which now accepts any of PHIQUICKCMDS, PHITERMCMDS, or legacy PHICMDS.
     async importCmdsConfig(btnElement) {
         await this._doImportConfig('/api/config/import-cmds', btnElement, "PHICMDS", async () => {
             await this.sessionsManager.loadConfig();
         });
+    }
+
+    async loadVersion() {
+        try {
+            const res = await fetch('/api/version');
+            if (res.ok) {
+                const data = await res.json();
+                this.versionInfo = data;
+                const changelogBtn = document.getElementById('phi-changelog-btn');
+                if (changelogBtn) {
+                    const ver = data.version || 'dev';
+                    changelogBtn.textContent = (ver === 'dev') ? 'dev' : (ver.startsWith('v') ? ver : `v${ver}`);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load version:', err);
+        }
     }
 }
 
