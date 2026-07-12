@@ -5474,3 +5474,35 @@ html, body {
     min-width: 45px;
     text-align: right;
 }
+
+/* Disconnect Banner */
+.disconnect-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: #7f1d1d; /* Deep dark red */
+    color: #fca5a5;
+    font-size: 13px;
+    padding: 6px 16px;
+    font-family: var(--font-mono, monospace);
+    border-bottom: 1px solid #991b1b;
+    z-index: 1000;
+}
+.disconnect-banner.hidden {
+    display: none;
+}
+.disconnect-banner-btn {
+    background: #991b1b;
+    border: 1px solid #b91c1c;
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+    transition: background 0.2s;
+}
+.disconnect-banner-btn:hover {
+    background: #b91c1c;
+}
