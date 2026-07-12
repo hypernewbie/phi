@@ -385,22 +385,33 @@ func TestWSIdempotency(t *testing.T) {
 func TestStartIdleWatcher(t *testing.T) {
 	manager := NewManager()
 
-	inst := &PTYInstance{
-		ID:            "test-idle-id",
-		Coder:         "pi",
-		Title:         "Test Pi Session",
-		IsBusy:        true,
-		BusyStartTime: time.Now().Add(-10 * time.Second),
-		LastOutputAt:  time.Now().Add(-4 * time.Second),
+	// Use a real PTY so the idle watcher treats this as a live session.
+	// (Dead/restored tabs with Pty=nil are skipped — the restore banner
+	// flow handles those separately; see LoadState.)
+	shell, args := getTestShell()
+	inst, err := manager.Spawn("", shell, args, "pi", "test-idle-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY instance: %v", err)
 	}
+	defer func() { _ = manager.Kill(inst.ID) }()
 
-	manager.mu.Lock()
-	manager.instances[inst.ID] = inst
-	manager.mu.Unlock()
+	// Drive the instance into an idle state directly. UpdateActivity sets
+	// Busy=true at time=now; we then rewind BusyStartTime + LastOutputAt
+	// so the idle threshold (>3s) trips on the next watcher tick.
+	inst.UpdateActivity()
+	inst.mu.Lock()
+	inst.Coder = "pi"
+	inst.Title = "Test Pi Session"
+	inst.IsBusy = true
+	inst.Busy = true
+	inst.BusyStartTime = time.Now().Add(-10 * time.Second)
+	inst.LastOutputAt = time.Now().Add(-4 * time.Second)
+	inst.NotifiedIdle = false
+	inst.mu.Unlock()
 
 	called := make(chan bool, 1)
 	manager.StartIdleWatcher(func(info IdleNotification) {
-		if info.PaneID == "test-idle-id" && info.Title == "Test Pi Session" && info.Coder == "pi" {
+		if info.PaneID == inst.ID && info.Title == "Test Pi Session" && info.Coder == "pi" {
 			called <- true
 		}
 	})
@@ -460,7 +471,12 @@ func TestManagerPersistence(t *testing.T) {
 		t.Fatalf("Failed to spawn PTY instance: %v", err)
 	}
 
-	// Verify file was written
+	// Spawn() schedules a debounced save (plan §3.3: 500ms). Force the
+	// flush synchronously so the test doesn't race the timer.
+	if err := manager.FlushSaveState(); err != nil {
+		t.Fatalf("FlushSaveState after Spawn: %v", err)
+	}
+
 	if _, err := os.Stat(testTabsPath); err != nil {
 		t.Errorf("Expected tabs state file to be created: %v", err)
 	}
@@ -485,6 +501,99 @@ func TestManagerPersistence(t *testing.T) {
 	// Kill the instance in first manager to clean up resources
 	if err := manager.Kill(inst.ID); err != nil {
 		t.Errorf("Failed to kill instance: %v", err)
+	}
+}
+
+// TestManagerScheduleSaveDebounce verifies that rapid Spawn/Kill calls
+// coalesce into a single file write via the 500ms debounce (plan §3.3).
+func TestManagerScheduleSaveDebounce(t *testing.T) {
+	tmpDir := t.TempDir()
+	testTabsPath = filepath.Join(tmpDir, "tabs-debounce.json")
+	defer func() { testTabsPath = "" }()
+
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	// Three rapid mutations before the debounce fires.
+	for i := 0; i < 3; i++ {
+		_, err := manager.Spawn("", shell, args, "shell", "debounce-test")
+		if err != nil {
+			t.Fatalf("Spawn %d: %v", i, err)
+		}
+	}
+
+	// File should NOT exist yet (debounce timer hasn't fired).
+	if _, err := os.Stat(testTabsPath); err == nil {
+		t.Error("expected tabs file to NOT exist before debounce flush, but it does")
+	}
+
+	// Flush the debounce.
+	if err := manager.FlushSaveState(); err != nil {
+		t.Fatalf("FlushSaveState: %v", err)
+	}
+
+	// Now the file should exist.
+	if _, err := os.Stat(testTabsPath); err != nil {
+		t.Errorf("expected tabs file after FlushSaveState: %v", err)
+	}
+
+	// Cleanup
+	list := manager.ListActive()
+	for _, inst := range list {
+		_ = manager.Kill(inst.ID)
+	}
+}
+
+// TestManagerLoadStateSkipsPtyNil verifies that tabs.json does NOT
+// persist Pty=nil entries (dead/restored tabs) and that LoadState
+// always resets Busy + LastOutputAt so the idle watcher doesn't fire
+// on tabs that just came back from disk.
+func TestManagerLoadStateSuppressesIdle(t *testing.T) {
+	tmpDir := t.TempDir()
+	testTabsPath = filepath.Join(tmpDir, "tabs-idle.json")
+	defer func() { testTabsPath = "" }()
+
+	// Hand-craft a tabs.json that has Busy=true and LastOutputAt at zero.
+	payload := `[
+		{
+			"id": "ghost-tab",
+			"coder": "pi",
+			"session_id": "ghost",
+			"cwd": "",
+			"title": "ghost",
+			"workspace": "",
+			"pinned": false,
+			"marked": false,
+			"last_activity_unix": 0,
+			"busy": true
+		}
+	]`
+	if err := os.WriteFile(testTabsPath, []byte(payload), 0644); err != nil {
+		t.Fatalf("write tabs: %v", err)
+	}
+
+	manager := NewManager()
+	if err := manager.LoadState(); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+
+	inst, ok := manager.Get("ghost-tab")
+	if !ok {
+		t.Fatal("expected ghost-tab to be in registry after LoadState")
+	}
+	if inst.Pty != nil {
+		t.Error("loaded tab should have Pty=nil (process is dead)")
+	}
+	inst.mu.Lock()
+	busy := inst.Busy
+	isBusy := inst.IsBusy
+	notified := inst.NotifiedIdle
+	inst.mu.Unlock()
+	if busy || isBusy {
+		t.Errorf("loaded tab should not be Busy (was busy=true in JSON), got busy=%v isBusy=%v", busy, isBusy)
+	}
+	if !notified {
+		t.Error("loaded tab should have NotifiedIdle=true so idle watcher skips it on startup")
 	}
 }
 

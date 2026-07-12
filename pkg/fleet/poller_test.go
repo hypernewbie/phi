@@ -245,3 +245,73 @@ func TestPoller_BusyMath(t *testing.T) {
 		t.Errorf("expected 2 busy, got %d", s.BusyCount)
 	}
 }
+
+// TestPoller_VersionAndIdleMin exercises the new fields promised in
+// plan §3.4: the poller pulls /api/version in parallel and computes
+// idle_min from the most recent LastActivityUnix across tabs.
+func TestPoller_VersionAndIdleMin(t *testing.T) {
+	tabs := []PeerTab{
+		{ID: "t1", Busy: true, LastActivityUnix: time.Now().Add(-2 * time.Minute).Unix()},
+		{ID: "t2", Busy: false, LastActivityUnix: time.Now().Add(-30 * time.Second).Unix()},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/terminals", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(tabs)
+	})
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": "0.8.0"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := NewPoller()
+	p.Start([]PeerCfg{{Name: "ver", URL: srv.URL}})
+	time.Sleep(150 * time.Millisecond)
+
+	statuses := p.Status()
+	if len(statuses) == 0 {
+		t.Fatal("no status")
+	}
+	s := statuses[0]
+	if s.Version != "0.8.0" {
+		t.Errorf("expected version 0.8.0, got %q", s.Version)
+	}
+	// Most recent activity was t2 at -30s, so idle_min should be 0 (rounded down).
+	if s.IdleMin < 0 || s.IdleMin > 1 {
+		t.Errorf("expected idle_min ~0, got %d", s.IdleMin)
+	}
+}
+
+// TestPoller_VersionUnknownOldPeer makes sure a peer that lacks
+// /api/version (returns 404) still gets tabs reported with version="".
+func TestPoller_VersionUnknownOldPeer(t *testing.T) {
+	tabs := []PeerTab{{ID: "t1", Coder: "bash"}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/terminals", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(tabs)
+	})
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := NewPoller()
+	p.Start([]PeerCfg{{Name: "oldphi", URL: srv.URL}})
+	time.Sleep(150 * time.Millisecond)
+
+	statuses := p.Status()
+	if len(statuses) == 0 {
+		t.Fatal("no status")
+	}
+	s := statuses[0]
+	if !s.Reachable {
+		t.Errorf("old peer should still be reachable, got err: %s", s.ErrorMsg)
+	}
+	if s.TabCount != 1 {
+		t.Errorf("expected 1 tab, got %d", s.TabCount)
+	}
+	if s.Version != "" {
+		t.Errorf("expected empty version on old peer, got %q", s.Version)
+	}
+}
