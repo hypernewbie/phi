@@ -3,13 +3,16 @@ package ws
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type Client struct {
-	Ws   *websocket.Conn
-	Send chan []byte
+	Ws              *websocket.Conn
+	Send            chan []byte
+	LastDropWarning time.Time
+	FullSince       time.Time
 }
 
 type PaneHub struct {
@@ -95,11 +98,49 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	for client := range ph.clients {
 		select {
 		case client.Send <- msg:
+			client.FullSince = time.Time{}
 		default:
-			// Buffer overflow! Close connection to trigger a clean reconnect rather than streaming corrupted state.
-			log.Printf("[ws] Client send buffer overflow, closing connection to prevent terminal state corruption")
-			if client.Ws != nil {
-				_ = client.Ws.Close()
+			now := time.Now()
+			if client.FullSince.IsZero() {
+				client.FullSince = now
+			} else if now.Sub(client.FullSince) > 30*time.Second {
+				log.Printf("[ws] Client send buffer full for >30s, closing connection")
+				if client.Ws != nil {
+					_ = client.Ws.Close()
+				}
+				continue
+			}
+
+			// Drop oldest queued frame(s) to make room
+			droppedCount := 0
+			for {
+				select {
+				case <-client.Send:
+					droppedCount++
+				default:
+				}
+				select {
+				case client.Send <- msg:
+					break
+				default:
+					if droppedCount > 100 {
+						break
+					}
+					continue
+				}
+				break
+			}
+
+			// Inject warning frame if rate limit allows
+			if now.Sub(client.LastDropWarning) > 5*time.Second {
+				client.LastDropWarning = now
+				warningMsg := make([]byte, 1+48)
+				warningMsg[0] = 0x01
+				copy(warningMsg[1:], []byte("\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"))
+				select {
+				case client.Send <- warningMsg:
+				default:
+				}
 			}
 		}
 	}

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/pty"
+	"fmt"
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -56,7 +58,7 @@ func (c *Client) WritePump() {
 func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
 	defer func() {
 		hub.Unregister(inst.ID, c)
-		manager.UnregisterWS(inst.ID)
+		manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", c))
 		_ = c.Ws.Close()
 	}()
 
@@ -80,12 +82,22 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 
 		switch msgType {
 		case 0x01: // PTY stdin data
-			_, _ = inst.Pty.Write(payload)
+			_, writeErr := inst.Pty.Write(payload)
+			if writeErr != nil {
+				log.Printf("[ws] PTY write error for pane %s: %v", inst.ID, writeErr)
+				errMsg := writeErr.Error()
+				if strings.Contains(strings.ToLower(errMsg), "closed") || strings.Contains(strings.ToLower(errMsg), "eof") {
+					return
+				}
+			}
 		case 0x02: // Resize
 			if len(payload) >= 4 {
 				cols := binary.BigEndian.Uint16(payload[0:2])
 				rows := binary.BigEndian.Uint16(payload[2:4])
-				_ = inst.Pty.Resize(cols, rows)
+				resizeErr := inst.Pty.Resize(cols, rows)
+				if resizeErr != nil {
+					log.Printf("[ws] PTY resize error for pane %s: %v", inst.ID, resizeErr)
+				}
 			}
 		case 0x03: // Ping
 			c.Send <- []byte{0x03} // Pong
@@ -121,7 +133,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 		Send: make(chan []byte, 65536),
 	}
 
-	manager.RegisterWS(inst.ID)
+	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
 	hub.Register(inst.ID, client)
 
 	go client.WritePump()

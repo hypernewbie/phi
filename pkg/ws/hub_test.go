@@ -125,3 +125,32 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 		t.Error("Expected concurrent pane to be deleted after all clients unregistered")
 	}
 }
+
+func TestHub_BroadcastOverflow(t *testing.T) {
+	h := NewHub()
+	paneID := "pane-overflow-test"
+	client := &Client{
+		Send: make(chan []byte, 2),
+	}
+	h.Register(paneID, client)
+
+	// Send 3 messages. The channel capacity is 2, so the 3rd will trigger overflow/dropping oldest.
+	h.Broadcast(paneID, 1, []byte("msg1"))
+	h.Broadcast(paneID, 1, []byte("msg2"))
+	h.Broadcast(paneID, 1, []byte("msg3"))
+
+	// Since msg1 is the oldest, it should have been dropped, and the channel should contain msg2 and msg3.
+	if len(client.Send) != 2 {
+		t.Fatalf("Expected channel length 2, got %d", len(client.Send))
+	}
+
+	first := <-client.Send
+	if !bytes.Contains(first, []byte("msg2")) {
+		t.Errorf("Expected first remaining message to be msg2, got %q", first)
+	}
+
+	second := <-client.Send
+	if !bytes.Contains(second, []byte("msg3")) {
+		t.Errorf("Expected second remaining message to be msg3, got %q", second)
+	}
+}

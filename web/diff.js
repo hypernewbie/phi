@@ -558,7 +558,7 @@ export class DiffController {
             // command went to whichever tab was focused BEFORE the reuse
             // switch. Must use targetTab so the command lands in the tab
             // we just routed to.
-            targetTab.ws.sendInput(payload + '\r');
+            this.app.tabManager.sendInput(targetTab, payload + '\r');
             this.app.tabManager.inputTextArea.value = '';
             this.app.tabManager.lastInputValue = '';
             this.app.tabManager.adjustInputHeight();
