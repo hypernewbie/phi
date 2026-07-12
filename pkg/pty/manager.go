@@ -3,11 +3,29 @@ package pty
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/system"
 )
+
+var testTabsPath string
+
+func tabsFilePath() string {
+	if testTabsPath != "" {
+		return testTabsPath
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "tabs.json"
+	}
+	return filepath.Join(home, ".phi", "tabs.json")
+}
 
 var (
 	GracePeriod             = 30 * time.Minute
@@ -83,13 +101,12 @@ func (m *Manager) Spawn(dir, command string, args []string, coder, sessionID str
 	m.instances[inst.ID] = inst
 	m.mu.Unlock()
 
-	// Clean up from registry if the PTY process dies on its own
+	_ = m.SaveState()
+
+	// Keep the PTYInstance record in registry when it dies so the UI can reconnect/restart it.
 	go func() {
 		<-p.Closed
-		m.mu.Lock()
-		delete(m.instances, inst.ID)
-		m.mu.Unlock()
-		log.Printf("[pty] PTY %s closed and removed from registry", inst.ID)
+		log.Printf("[pty] PTY %s closed (process died naturally)", inst.ID)
 	}()
 
 	return inst, nil
@@ -183,7 +200,14 @@ func (m *Manager) Kill(id string) error {
 	}
 	inst.mu.Unlock()
 
-	return inst.Pty.Kill()
+	var killErr error
+	if inst.Pty != nil {
+		killErr = inst.Pty.Kill()
+	}
+
+	_ = m.SaveState()
+
+	return killErr
 }
 
 func (m *Manager) ListActive() []*PTYInstance {
@@ -195,6 +219,47 @@ func (m *Manager) ListActive() []*PTYInstance {
 		list = append(list, inst)
 	}
 	return list
+}
+
+func (m *Manager) SaveState() error {
+	m.mu.Lock()
+	list := make([]*PTYInstance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		list = append(list, inst)
+	}
+	m.mu.Unlock()
+
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := tabsFilePath()
+	return system.WriteFileAtomic(path, b, 0644)
+}
+
+func (m *Manager) LoadState() error {
+	path := tabsFilePath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var list []*PTYInstance
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, inst := range list {
+		inst.ActiveClients = make(map[string]struct{})
+		m.instances[inst.ID] = inst
+	}
+	return nil
 }
 
 func (m *Manager) SetPinned(id string, pinned bool) error {
@@ -222,6 +287,7 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 		inst.DetachTimer = nil
 		log.Printf("[pty] Session %s pinned. Stopped active detach timer.", id)
 	}
+	_ = m.SaveState()
 	return nil
 }
 
@@ -239,6 +305,7 @@ func (m *Manager) SetMarked(id string, marked bool) error {
 
 	inst.Marked = marked
 	log.Printf("[pty] SetMarked %s: marked=%v", id, marked)
+	_ = m.SaveState()
 	return nil
 }
 
@@ -276,15 +343,15 @@ func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 		}
 
 		log.Printf("[pty] grace period expired for %s with no recent activity. Terminating PTY.", id)
-		delete(m.instances, id)
 		if inst.DetachTimer != nil {
 			inst.DetachTimer.Stop()
 			inst.DetachTimer = nil
 		}
 
-		// Asynchronously kill the PTY to avoid blocking the locks.
 		go func() {
-			_ = inst.Pty.Kill()
+			if inst.Pty != nil {
+				_ = inst.Pty.Kill()
+			}
 		}()
 	})
 }
