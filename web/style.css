@@ -5654,3 +5654,91 @@ html, body {
     font-size: 9px;
     margin-left: 4px;
 }
+
+/* Update banner — sits at the top of the changelog modal when an
+   upgrade is available (Phase 7/8). Amber tint to match the badge
+   dot on the sidebar version pill. */
+.update-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border: 1px solid var(--color-amber, #fbbf24);
+    border-radius: 6px;
+    background: rgba(251, 191, 36, 0.08);
+    color: var(--text-primary);
+}
+
+.update-banner-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.update-banner-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--color-amber, #fbbf24);
+    color: #1a1a1a;
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1;
+}
+
+.update-banner-title {
+    color: var(--text-primary);
+}
+
+.update-banner-body {
+    font-size: 13px;
+    color: var(--text-secondary);
+    opacity: 0.85;
+    font-family: var(--font-mono);
+}
+
+.update-banner-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.update-banner-btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--color-amber, #fbbf24);
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--color-amber, #fbbf24);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.update-banner-btn:hover:not(:disabled) {
+    background: rgba(251, 191, 36, 0.25);
+    transform: translateY(-1px);
+}
+
+.update-banner-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.update-banner-progress {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 4px 0;
+}
+
+.update-banner-progress.error {
+    color: var(--color-red, #f87171);
+}

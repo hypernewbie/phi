@@ -1,6 +1,6 @@
 /* Φ phi — Markdown Docs Viewer */
 
-import { relativeToCwd } from './util.js';
+import { relativeToCwd, escapeHtml } from './util.js';
 
 export class MarkdownManager {
     constructor(app) {
@@ -285,6 +285,19 @@ export class MarkdownManager {
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
 
+        // Build the update banner up front so it can render alongside
+        // the changelog body. We do this synchronously (cheap DOM ops) and
+        // then stream the changelog content in.
+        const updateBanner = this._buildUpdateBanner();
+        if (updateBanner) {
+            this.modalBody.innerHTML = '';
+            this.modalBody.appendChild(updateBanner);
+            const changelogHolder = document.createElement('div');
+            changelogHolder.className = 'md-rendering';
+            changelogHolder.textContent = 'Loading changelog...';
+            this.modalBody.appendChild(changelogHolder);
+        }
+
         try {
             const res = await fetch('changelog.md', { cache: 'no-store' });
             if (!res.ok) throw new Error(await res.text() || 'Failed to load changelog.md');
@@ -293,6 +306,111 @@ export class MarkdownManager {
         } catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load changelog: ${e.message}</div>`;
             this.app.showToast(`Failed to open changelog: ${e.message}`, { type: 'error', title: 'Changelog' });
+        }
+    }
+
+    // _buildUpdateBanner — Phase 7/8 UI affordance. Returns a banner
+    // element when /api/update/status reported an update AND the install
+    // method is eligible for self-update. Otherwise null. For ineligible
+    // methods (go-install/dev) we still show instructions, just without
+    // the Apply button.
+    _buildUpdateBanner() {
+        const status = this.app && this.app.updateStatus;
+        if (!status || !status.update_available || status.current === 'dev') return null;
+
+        const banner = document.createElement('div');
+        banner.className = 'update-banner';
+
+        const head = document.createElement('div');
+        head.className = 'update-banner-head';
+        head.innerHTML = `<span class="update-banner-icon">↑</span>
+            <span class="update-banner-title">Update available: ${escapeHtml(status.latest)}</span>`;
+        banner.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'update-banner-body';
+        body.textContent = status.instructions || '';
+        banner.appendChild(body);
+
+        // Show Apply button only for eligible install methods (npm / standalone).
+        // Server-side enforce too: POST /api/update/apply returns 403 otherwise.
+        if (status.install_method === 'npm' || status.install_method === 'standalone') {
+            const actions = document.createElement('div');
+            actions.className = 'update-banner-actions';
+            const applyBtn = document.createElement('button');
+            applyBtn.className = 'update-banner-btn';
+            applyBtn.textContent = `Apply & restart next time`;
+            applyBtn.addEventListener('click', () => this._startUpdateApply(status.latest, applyBtn, banner));
+            actions.appendChild(applyBtn);
+            banner.appendChild(actions);
+        }
+
+        return banner;
+    }
+
+    async _startUpdateApply(version, btn, banner) {
+        btn.disabled = true;
+        btn.textContent = 'Starting…';
+        const progressEl = document.createElement('div');
+        progressEl.className = 'update-banner-progress';
+        progressEl.textContent = 'starting…';
+        banner.appendChild(progressEl);
+
+        try {
+            const res = await fetch('/api/update/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version })
+            });
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || `HTTP ${res.status}`);
+            }
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = `Apply & restart next time`;
+            progressEl.textContent = `Error: ${err.message}`;
+            progressEl.classList.add('error');
+            return;
+        }
+
+        // Poll progress until terminal phase (done/error).
+        const pollIntervalMs = 500;
+        const poll = async () => {
+            try {
+                const r = await fetch('/api/update/progress');
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const p = await r.json();
+                progressEl.textContent = this._formatProgress(p);
+                progressEl.classList.toggle('error', p.phase === 'error');
+                if (p.phase === 'done' || p.phase === 'error') {
+                    if (p.phase === 'done') {
+                        btn.textContent = `Staged ${version} — restart into it`;
+                        this.app.showToast(`Update staged. Restart phi to apply ${version}.`, { type: 'success' });
+                    } else {
+                        btn.disabled = false;
+                        btn.textContent = `Retry apply`;
+                    }
+                    return;
+                }
+            } catch (err) {
+                progressEl.textContent = `polling: ${err.message}`;
+            }
+            setTimeout(poll, pollIntervalMs);
+        };
+        setTimeout(poll, pollIntervalMs);
+    }
+
+    _formatProgress(p) {
+        if (!p || !p.phase) return '';
+        switch (p.phase) {
+            case 'downloading': return `Downloading… ${p.pct}%`;
+            case 'verifying':   return 'Verifying checksum…';
+            case 'extracting':  return 'Extracting binary…';
+            case 'staging':     return 'Staging swap…';
+            case 'done':        return `Staged. Old binary kept at ${p.old_path || 'phi.old'}.`;
+            case 'error':       return `Error: ${p.error || 'unknown'}`;
+            default:            return p.phase;
         }
     }
 
