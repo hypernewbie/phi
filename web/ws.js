@@ -52,7 +52,6 @@ export class PTYWebSocket {
         
         this.ws.onclose = () => {
             console.log(`[ws] Connection closed for pane: ${paneId}`);
-            if (this.pingInterval) clearInterval(this.pingInterval);
             if (this.onClose) this.onClose();
         };
         
@@ -62,7 +61,7 @@ export class PTYWebSocket {
     }
     
     sendInput(text) {
-        if (this.ws.readyState !== WebSocket.OPEN) return;
+        if (this.ws.readyState !== WebSocket.OPEN) return false;
         const encoder = new TextEncoder();
         const payload = encoder.encode(text);
         
@@ -74,6 +73,7 @@ export class PTYWebSocket {
         uint8.set(payload, 1);
         
         this.ws.send(buffer);
+        return true;
     }
     
     sendResize(cols, rows) {
@@ -87,16 +87,7 @@ export class PTYWebSocket {
         this.ws.send(buffer);
     }
     
-    sendPing() {
-        if (this.ws.readyState !== WebSocket.OPEN) return;
-        const buffer = new ArrayBuffer(1);
-        const view = new DataView(buffer);
-        view.setUint8(0, 0x03); // 0x03: Ping
-        this.ws.send(buffer);
-    }
-    
     close() {
-        if (this.pingInterval) clearInterval(this.pingInterval);
         this.ws.close();
     }
 }

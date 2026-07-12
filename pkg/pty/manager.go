@@ -24,6 +24,7 @@ type PTYInstance struct {
 	mu            sync.Mutex
 	ActiveWS      bool
 	ActiveWSCount int
+	ActiveClients map[string]struct{} `json:"-"`
 	Pinned        bool          `json:"pinned"`
 	Marked        bool          `json:"marked"`
 	LastOutputAt  time.Time     `json:"-"`
@@ -101,7 +102,7 @@ func (m *Manager) Get(id string) (*PTYInstance, bool) {
 	return inst, ok
 }
 
-func (m *Manager) RegisterWS(id string) bool {
+func (m *Manager) RegisterWS(id string, clientID string) bool {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
@@ -113,9 +114,13 @@ func (m *Manager) RegisterWS(id string) bool {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	inst.ActiveWSCount++
+	if inst.ActiveClients == nil {
+		inst.ActiveClients = make(map[string]struct{})
+	}
+	inst.ActiveClients[clientID] = struct{}{}
+	inst.ActiveWSCount = len(inst.ActiveClients)
 	inst.ActiveWS = true
-	log.Printf("[pty] RegisterWS %s: ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
+	log.Printf("[pty] RegisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
 		inst.DetachTimer = nil
@@ -124,7 +129,7 @@ func (m *Manager) RegisterWS(id string) bool {
 	return true
 }
 
-func (m *Manager) UnregisterWS(id string) {
+func (m *Manager) UnregisterWS(id string, clientID string) {
 	m.mu.RLock()
 	inst, ok := m.instances[id]
 	m.mu.RUnlock()
@@ -136,11 +141,12 @@ func (m *Manager) UnregisterWS(id string) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 
-	if inst.ActiveWSCount > 0 {
-		inst.ActiveWSCount--
+	if inst.ActiveClients != nil {
+		delete(inst.ActiveClients, clientID)
 	}
+	inst.ActiveWSCount = len(inst.ActiveClients)
 	inst.ActiveWS = inst.ActiveWSCount > 0
-	log.Printf("[pty] UnregisterWS %s: ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
+	log.Printf("[pty] UnregisterWS %s: ClientID=%s ActiveWSCount=%d ActiveWS=%v Pinned=%v HasTimer=%v", id, clientID, inst.ActiveWSCount, inst.ActiveWS, inst.Pinned, inst.DetachTimer != nil)
 
 	if inst.ActiveWS {
 		return

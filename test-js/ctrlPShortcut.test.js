@@ -15,7 +15,13 @@ function makeEvent(over = {}) {
 const termTab = (over = {}) => ({ isDead: false, coder: 'opencode', ws: { sendInput: vi.fn() }, ...over });
 
 function makeCtx(tab) {
-    return { getActiveTab: vi.fn(() => tab), _spamScrollToBottom: vi.fn() };
+    return { 
+        getActiveTab: vi.fn(() => tab), 
+        _spamScrollToBottom: vi.fn(),
+        sendInput: vi.fn((t, payload) => {
+            if (t && t.ws && !t.isDead) t.ws.sendInput(payload);
+        })
+    };
 }
 
 const run = (ctx, e) => TabManager.prototype.handleGlobalTabShortcuts.call(ctx, e);

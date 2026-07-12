@@ -179,8 +179,8 @@ export class TabManager {
                 if (e.key === 'Tab' && e.shiftKey) {
                     e.preventDefault();
                     const activeTab = this.getActiveTab();
-                    if (activeTab && !activeTab.isDead) {
-                        activeTab.ws.sendInput('\x1b[Z');
+                    if (activeTab) {
+                        this.sendInput(activeTab, '\x1b[Z');
                         this._spamScrollToBottom(activeTab);
                     }
                     return;
@@ -217,8 +217,8 @@ export class TabManager {
                 if (sendChar !== null) {
                     e.preventDefault();
                     const activeTab = this.getActiveTab();
-                    if (activeTab && !activeTab.isDead) {
-                        activeTab.ws.sendInput(sendChar);
+                    if (activeTab) {
+                        this.sendInput(activeTab, sendChar);
                         this._spamScrollToBottom(activeTab); // Keep viewport pinned to the bottom during reaction
                     }
                     return;
@@ -833,12 +833,10 @@ export class TabManager {
                     if (initialCmd) {
                         // Deliver startup command after terminal settles
                         setTimeout(() => {
-                            if (!tabInfo.isDead) {
-                                if (initialCmd.length > 16 || initialCmd.includes('\n')) {
-                                    tabInfo.ws.sendInput('\x1b[200~' + initialCmd + '\x1b[201~\r');
-                                } else {
-                                    tabInfo.ws.sendInput(initialCmd + '\r');
-                                }
+                            if (initialCmd.length > 16 || initialCmd.includes('\n')) {
+                                this.sendInput(tabInfo, '\x1b[200~' + initialCmd + '\x1b[201~\r');
+                            } else {
+                                this.sendInput(tabInfo, initialCmd + '\r');
                             }
                         }, 1000);
                     }
@@ -853,8 +851,8 @@ export class TabManager {
         
         // Direct writing bridge — routes through tabInfo.ws so reconnect can swap the socket
         term.onData((data) => {
-            if (tabInfo.directMode && !tabInfo.isDead) {
-                tabInfo.ws.sendInput(data);
+            if (tabInfo.directMode) {
+                this.sendInput(tabInfo, data);
                 if (data.includes('\r')) this._spamScrollToBottom(tabInfo);
             }
         });
@@ -1110,6 +1108,21 @@ export class TabManager {
         if (el) el.classList.add('hidden');
     }
     
+    sendInput(tabInfo, payload) {
+        if (!tabInfo || !tabInfo.ws || tabInfo.isDead) {
+            this.app.showToast("Tab is disconnected — input not sent", { type: 'error' });
+            if (tabInfo) this._showReconnectOverlay(tabInfo);
+            return false;
+        }
+        const ok = tabInfo.ws.sendInput(payload);
+        if (!ok) {
+            this.app.showToast("Tab is disconnected — input not sent", { type: 'error' });
+            this._showReconnectOverlay(tabInfo);
+            return false;
+        }
+        return true;
+    }
+
     sendStagedInput() {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
@@ -1124,7 +1137,7 @@ export class TabManager {
             payload = '\x1b[200~' + val + '\x1b[201~';
         }
         
-        activeTab.ws.sendInput(payload + '\r');
+        this.sendInput(activeTab, payload + '\r');
         this.inputTextArea.value = '';
         this.lastInputValue = '';
         this.adjustInputHeight();
@@ -1145,7 +1158,7 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
         // bundled with preceding text fails to register as Enter — see pkg/pty.
-        activeTab.ws.sendInput(bytes);
+        this.sendInput(activeTab, bytes);
         
         const isMobile = window.innerWidth <= 768;
         if (isMobile && !activeTab.directMode && this.inputTextArea) {
@@ -1205,42 +1218,50 @@ export class TabManager {
         if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
 
         let opened = false;
-        const newWs = new PTYWebSocket(
-            tabInfo.paneId,
-            (data) => { this.writeToTerminal(tabInfo, data); },
-            null,
-            () => {
-                tabInfo.reconnectInFlight = false;
-                if (!opened) {
-                    if (msgEl) msgEl.innerText = 'session expired';
-                    if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
-                    if (restartBtn) restartBtn.disabled = false;
-                } else {
-                    tabInfo.isDead = true;
-                    tabInfo.tabEl.classList.add('dead');
-                    this._showReconnectOverlay(tabInfo);
-                }
-            },
-            () => {
-                opened = true;
-                tabInfo.reconnectInFlight = false;
-                tabInfo.isDead = false;
-                tabInfo.tabEl.classList.remove('dead');
-                if (overlay) overlay.remove();
-                tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
-                setTimeout(() => {
-                    try {
-                        if (tabInfo === this.getActiveTab()) {
-                            tabInfo.term.refresh(0, tabInfo.term.rows - 1);
-                        }
-                    } catch (e) {
-                        console.error("[term] Fit/refresh error on reconnect:", e);
+        try {
+            const newWs = new PTYWebSocket(
+                tabInfo.paneId,
+                (data) => { this.writeToTerminal(tabInfo, data); },
+                null,
+                () => {
+                    tabInfo.reconnectInFlight = false;
+                    if (!opened) {
+                        if (msgEl) msgEl.innerText = 'session expired';
+                        if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+                        if (restartBtn) restartBtn.disabled = false;
+                    } else {
+                        tabInfo.isDead = true;
+                        tabInfo.tabEl.classList.add('dead');
+                        this._showReconnectOverlay(tabInfo);
                     }
-                    this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
-                }, 100);
-            }
-        );
-        tabInfo.ws = newWs;
+                },
+                () => {
+                    opened = true;
+                    tabInfo.reconnectInFlight = false;
+                    tabInfo.isDead = false;
+                    tabInfo.tabEl.classList.remove('dead');
+                    if (overlay) overlay.remove();
+                    tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
+                    setTimeout(() => {
+                        try {
+                            if (tabInfo === this.getActiveTab()) {
+                                tabInfo.term.refresh(0, tabInfo.term.rows - 1);
+                            }
+                        } catch (e) {
+                            console.error("[term] Fit/refresh error on reconnect:", e);
+                        }
+                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
+                    }, 100);
+                }
+            );
+            tabInfo.ws = newWs;
+        } catch (e) {
+            tabInfo.reconnectInFlight = false;
+            if (msgEl) msgEl.innerText = `failed: ${e.message}`;
+            if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+            if (restartBtn) restartBtn.disabled = false;
+            console.error("[term] PTYWebSocket instantiation threw:", e);
+        }
     }
 
     restartTab(tabInfo) {
@@ -1362,19 +1383,13 @@ export class TabManager {
             return;
         }
 
-        // Ctrl+Shift+Enter: recall previous shell command AND execute it.
-        // Sends ANSI up-arrow (\x1b[A) then carriage return (\r) to the PTY
-        // with a small delay so the shell's readline has time to expand
-        // history before the enter arrives.
         if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === 'Enter') {
             const activeTab = this.getActiveTab();
-            if (activeTab && !activeTab.isDead) {
+            if (activeTab) {
                 e.preventDefault();
-                activeTab.ws.sendInput('\x1b[A');
+                this.sendInput(activeTab, '\x1b[A');
                 setTimeout(() => {
-                    if (!activeTab.isDead) {
-                        activeTab.ws.sendInput('\r');
-                    }
+                    this.sendInput(activeTab, '\r');
                 }, 30);
             }
         }
@@ -1388,10 +1403,9 @@ export class TabManager {
         if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'p') {
             if (e.defaultPrevented) return;
             const activeTab = this.getActiveTab();
-            if (activeTab && !activeTab.isDead && activeTab.ws &&
-                activeTab.coder !== 'review' && activeTab.coder !== 'kanban') {
+            if (activeTab && activeTab.coder !== 'review' && activeTab.coder !== 'kanban') {
                 e.preventDefault();
-                activeTab.ws.sendInput('\x10');
+                this.sendInput(activeTab, '\x10');
                 this._spamScrollToBottom(activeTab);
             }
             return;
@@ -2199,7 +2213,7 @@ export class TabManager {
             btn.title = cmd.command;
             btn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (!activeTab || activeTab.isDead) return;
+                if (!activeTab) return;
                 const prefix = this.inputTextArea.value.trim();
                 const combined = prefix && cmd.command.includes('{}')
                     ? cmd.command.replace('{}', prefix)
@@ -2208,7 +2222,7 @@ export class TabManager {
                 if (combined.length > 16 || combined.includes('\n')) {
                     payload = '\x1b[200~' + combined + '\x1b[201~';
                 }
-                activeTab.ws.sendInput(payload + '\r');
+                this.sendInput(activeTab, payload + '\r');
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
                 this.adjustInputHeight();
