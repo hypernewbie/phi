@@ -71,6 +71,9 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
+	if err := ptyManager.LoadState(); err != nil {
+		log.Printf("[pty] Failed to load tabs state: %v", err)
+	}
 	ptyManager.StartIdleWatcher(func(info pty.IdleNotification) {
 		cfg := loadConfig()
 		host, _ := os.Hostname()

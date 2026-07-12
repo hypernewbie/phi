@@ -82,16 +82,18 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 
 		switch msgType {
 		case 0x01: // PTY stdin data
-			_, writeErr := inst.Pty.Write(payload)
-			if writeErr != nil {
-				log.Printf("[ws] PTY write error for pane %s: %v", inst.ID, writeErr)
-				errMsg := writeErr.Error()
-				if strings.Contains(strings.ToLower(errMsg), "closed") || strings.Contains(strings.ToLower(errMsg), "eof") {
-					return
+			if inst.Pty != nil {
+				_, writeErr := inst.Pty.Write(payload)
+				if writeErr != nil {
+					log.Printf("[ws] PTY write error for pane %s: %v", inst.ID, writeErr)
+					errMsg := writeErr.Error()
+					if strings.Contains(strings.ToLower(errMsg), "closed") || strings.Contains(strings.ToLower(errMsg), "eof") {
+						return
+					}
 				}
 			}
 		case 0x02: // Resize
-			if len(payload) >= 4 {
+			if len(payload) >= 4 && inst.Pty != nil {
 				cols := binary.BigEndian.Uint16(payload[0:2])
 				rows := binary.BigEndian.Uint16(payload[2:4])
 				resizeErr := inst.Pty.Resize(cols, rows)
@@ -106,6 +108,9 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 }
 
 func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
+	if inst.Pty == nil {
+		return
+	}
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -143,5 +148,18 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	hub.AttachWithReplay(inst.ID, client)
 
 	go client.WritePump()
+
+	if inst.Pty == nil {
+		payload := []byte(`{"code":-1}`)
+		hub.Broadcast(inst.ID, 0x04, payload)
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			hub.Unregister(inst.ID, client)
+			manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", client))
+			_ = conn.Close()
+		}()
+		return
+	}
+
 	client.ReadPump(inst, manager, hub)
 }
