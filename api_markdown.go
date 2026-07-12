@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hypernewbie/phi/pkg/session"
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 func handleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +227,7 @@ func handleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "File already exists", http.StatusConflict)
 		return
 	}
-	if err := os.WriteFile(targetPath, []byte(req.Content), 0644); err != nil {
+	if err := system.WriteFileAtomic(targetPath, []byte(req.Content), 0644); err != nil {
 		http.Error(w, "Failed to write file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -321,7 +322,7 @@ func handleMarkdownCopyAllWorktrees(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		targetPath := filepath.Join(targetDir, name)
-		if err := os.WriteFile(targetPath, content, 0644); err != nil {
+		if err := system.WriteFileAtomic(targetPath, content, 0644); err != nil {
 			continue
 		}
 		copied++

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/system"
 )
 
 var (
@@ -108,7 +110,7 @@ func SaveSessionMetaMap(m map[string]SessionMeta) error {
 		return err
 	}
 
-	return os.WriteFile(metaPath, b, 0644)
+	return system.WriteFileAtomic(metaPath, b, 0644)
 }
 
 func SaveAgyMetaMap(m map[string]AgyMeta) error {
