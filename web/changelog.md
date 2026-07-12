@@ -2,6 +2,14 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.8.1 — 2026-07-12
+
+Small polish release on top of v0.8.0.
+
+### Added
+
+- **Drag-to-reorder tabs.** Pick up any tab in the top bar and drag it to a new slot. A 2px accent indicator on the target tab's left or right edge shows where the drop will land. Pinned tabs are locked at the front and not draggable; everything else is freely movable. Order is persisted in `localStorage.phi_tab_order` (a JSON array of paneIds) so it survives page reload in the same browser. Stale paneIds (closed tabs, renamed sessions) are filtered out at restore time; new tabs are appended at the end. No backend changes - this is a per-browser preference, no sync.
+
 ## v0.8.0 — 2026-07-11
 
 The "phi remembers" release. The focus of v0.8 is **durability**: phi was great while you were watching, but the moment you looked away — closed a laptop, lost WiFi, restarted the server — every tab went dead and stayed dead, with no way to recover the output you missed and no way to know *why* a tab died. v0.8 makes death cheap and recovery lossless.
