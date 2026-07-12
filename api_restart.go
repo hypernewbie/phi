@@ -15,13 +15,10 @@ import (
 // Behavior:
 //   1. Broadcast 0x05 {"reason":"restart"} to all connected clients.
 //   2. Flush pending state (tabs + sync board) atomically.
-//   3. On Unix: syscall.Exec replaces the current process image with
-//      the same binary. Same PID, same port (no rebind race).
-//   4. On Windows: spawn detached child, exit. Child retry-binds
-//      the port for up to 5s.
+//   3. Unix: syscall.Exec replaces the process image (same PID, no rebind race).
+//   4. Windows: spawn detached child, exit. Child retry-binds via restart.BindWithRetry.
 //
-// Returns immediately with a JSON acknowledgement. Clients will see
-// the WS close + the 0x05 frame and arm their reload pollers.
+// Returns immediately with JSON ack. Clients see 0x05 and arm reload pollers.
 func handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -48,7 +45,6 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 		pid, err := restart.SpawnDetached(args, os.Environ())
 		if err != nil {
 			log.Printf("[restart] SpawnDetached failed: %v", err)
-			http.Error(w, "spawn failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		log.Printf("[restart] spawned detached child pid=%d, exiting parent", pid)
@@ -57,10 +53,7 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[restart] exec-replacing self: %v", args)
 		if err := restart.ExecSelf(args, os.Environ()); err != nil {
 			log.Printf("[restart] ExecSelf failed: %v", err)
-			http.Error(w, "exec failed: "+err.Error(), http.StatusInternalServerError)
-			return
 		}
-		// unreachable on success
 	}
 }
 

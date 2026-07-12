@@ -82,6 +82,30 @@ Tabs are the active working surface.
 - Phi stores open tab state in browser storage and attempts to restore tabs on reload.
 - Switching tabs updates the active workspace/CWD context for Git and Markdown panels.
 
+### Reconnect And Replay
+
+When a WebSocket drops (WiFi hiccup, browser crash, laptop lid), the tab goes dead but the underlying PTY survives for a 30-minute grace period. Reconnecting replays the server-side ring buffer (1 MiB default) so you see what the agent did while you were gone.
+
+Dead tabs show distinct messages:
+
+- **Connection lost** — WebSocket dropped, PTY is still alive. Reconnect to reattach.
+- **Session expired (PTY gone)** — PTY was killed by the grace timer. Restart to respawn.
+- **Process exited (code N)** — the agent exited on its own. Restart to respawn.
+
+Clicking a dead tab (or using Alt+1–9) always attempts to reconnect it, even with auto-reconnect off. A disconnect banner at the top of the terminal area shows how many tabs are dead and offers a Reconnect all button.
+
+### Auto-Reconnect
+
+Set `auto_reconnect: "visible"` in config to enable automatic reconnection — but only for the active pane, only when the browser tab is visible and focused, with exponential backoff (1s→2s→4s→8s→16s, max 5 attempts). Default is `"off"` because many-browser-window workflows would create reconnect storms.
+
+### Terminal Search
+
+`Ctrl+Shift+F` opens a find bar in the active terminal. Incremental search with next/prev navigation and match highlighting.
+
+### Find In Terminal Output
+
+Terminal scrollback is set to 10000 lines so the replay buffer is not truncated client-side.
+
 ## Input Bar
 
 The bottom input bar is a staged input area.
@@ -303,6 +327,8 @@ Common shortcuts:
 | `Alt+1` to `Alt+8` | Switch to tab 1 through 8 |
 | `Alt+9` | Switch to last tab |
 | `Ctrl+Shift+Enter` | Recall previous shell command and execute it |
+| `Ctrl+Shift+F` | Find in terminal output |
+| `Ctrl+Shift+D` | Open diagnostics panel |
 | `Escape` | Close modals/dropups where supported |
 | Empty input + arrows | Send navigation keys to the active PTY |
 | Empty input + `Ctrl+C` | Send interrupt/control key to the active PTY |
@@ -347,6 +373,60 @@ Notifications not arriving:
 - Check keys/tokens.
 - Confirm the device/app allows notifications.
 
+## Fleet Strip
+
+If you run phi on multiple machines, add peer servers to your config:
+
+```json
+{
+  "peers": [
+    {"name": "zen", "url": "http://zen:7777"},
+    {"name": "hora", "url": "http://hora:7070"}
+  ]
+}
+```
+
+Phi polls each peer's `/api/terminals` and `/api/version` endpoints every 15 seconds (3s timeout, marked stale after 2 consecutive misses). The sidebar footer shows a compact row per peer: name, tab count, busy/idle split, quiet duration, and version. Click a peer row to open its UI in a new browser tab.
+
+This is presence-only — no remote control. The peer side needs zero changes; phi just reads the existing terminal-list API.
+
+## Self-Update
+
+When running a release binary (installed via npm or downloaded from GitHub releases), phi checks for new versions on startup and hourly thereafter. The sidebar version badge indicates when an update is available; click it to open the changelog modal which shows the latest version and install instructions.
+
+- **npm installs**: click Apply to download and stage the new binary. It takes effect on the next restart (run `npm update -g @hypernewbie/phi-code` to converge the npm package metadata afterward).
+- **standalone installs**: Apply stages the binary; "Apply & restart now" chains the swap into a graceful restart.
+- **go-install**: no one-click update — run `go install github.com/hypernewbie/phi@latest`.
+- **dev builds**: update checks are disabled.
+
+The download is verified against goreleaser's `checksums.txt` (SHA-256, fail-closed). The old binary is preserved as `phi.old` for 10 minutes after boot.
+
+### Rollback
+
+If a self-update goes bad:
+
+```bash
+phi --rollback
+```
+
+This swaps the previous binary (`.old`) back into place. The bad binary is preserved as `.rejected`. Then restart phi normally.
+
+Disable update checks in config:
+
+```json
+{"update_check": false}
+```
+
+## Diagnostics
+
+`Ctrl+Shift+D` opens a diagnostics modal showing:
+
+- phi version and install method
+- uptime, goroutine count, memory allocation
+- PTY count and per-pane stats (client count, ring buffer fill, busy state, last activity)
+
+The same data is available via `GET /api/diag`.
+
 ## Security Notes
 
 Phi is a local developer tool.
@@ -356,12 +436,24 @@ Phi is a local developer tool.
 - Run it only on trusted networks, behind a tunnel, or behind your own auth layer.
 - It can spawn shells and coder CLIs on the host machine.
 - Saved Kanban passwords are encrypted in the backend config, but anyone with host-level access to your Phi config and key material should be treated as trusted.
+- The self-update endpoint (`POST /api/update/apply`) can replace the phi binary on disk. On an unauthenticated `0.0.0.0` bind, anyone on the network can trigger an update. This motivates adding an auth token in a future release. For now, run phi on trusted networks only.
+- The diagnostics endpoint (`GET /api/diag`) exposes runtime internals (goroutine count, memory, PTY state) without authentication. Same trusted-network caveat applies.
+- The restart endpoint (`POST /api/restart`) can restart the phi process. Same trusted-network caveat applies.
 
 ## Files And State
 
 Typical state lives under your Phi config directory and browser local/session storage.
 
-Important state includes:
+Phi's config directory is `~/.phi/` (or `%USERPROFILE%\.phi\` on Windows). Important state includes:
+
+- `tabs.json` — live tab tuples (coder, session_id, cwd, title) for post-restart restore. Written atomically (temp + rename), debounced 500ms.
+- `syncboard.json` — AI Sync Board messages. Same atomic-write pattern.
+- `phi_update.json` — update-check cache (last-checked timestamp, latest known version).
+- `config.json` — main config (workspaces, themes, presets, peers, notification settings, Kanban vault). Written atomically.
+- `phi.old` — previous binary after a self-update (retained 10 minutes).
+- `phi.rejected` — bad binary after a rollback (preserved, not auto-deleted).
+
+Browser local storage includes:
 
 - registered workspaces
 - theme color

@@ -259,7 +259,7 @@ export class TabManager {
         if (this.ctrlTBtn) {
             this.ctrlTBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (activeTab && !activeTab.isDead) {
+                if (activeTab) {
                     this.sendRawInput('\x14');
                     this.focusActiveTerminal();
                 }
@@ -463,7 +463,7 @@ export class TabManager {
     createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false, marked = false, initialCmd = '') {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
-            this.switchTab(paneId);
+            this.switchTab(paneId, { userInitiated: true });
             return;
         }
         
@@ -521,7 +521,7 @@ export class TabManager {
                 e.stopPropagation();
                 this.togglePinTab(currentPaneId);
             } else {
-                this.switchTab(currentPaneId);
+                this.switchTab(currentPaneId, { userInitiated: true });
             }
         });
 
@@ -559,6 +559,7 @@ export class TabManager {
             cursorStyle: 'bar',
             fontSize: isMobile ? 10 : 14,
             fontFamily: 'JetBrains Mono, monospace',
+            scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
@@ -899,11 +900,11 @@ export class TabManager {
         }, 100);
     }
     
-    switchTab(paneId) {
+    switchTab(paneId, { userInitiated = false } = {}) {
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
-                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true });
+                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
             }
             return;
         }
@@ -952,7 +953,7 @@ export class TabManager {
         // So skip the workspace/cwd sync for non-terminal coders entirely.
         if (newTab.coder === 'kanban' || newTab.coder === 'review') {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
-            this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true });
+            this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
             return;
         }
 
@@ -998,7 +999,7 @@ export class TabManager {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
         }
         
-        this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true });
+        this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
     }
     
     togglePinTab(paneId) {
@@ -1131,7 +1132,7 @@ export class TabManager {
 
     sendStagedInput() {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead) return;
+        if (!activeTab) return;
         
         const val = this.inputTextArea.value;
         if (!val) return;
@@ -1143,7 +1144,10 @@ export class TabManager {
             payload = '\x1b[200~' + val + '\x1b[201~';
         }
         
-        this.sendInput(activeTab, payload + '\r');
+        // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
+        const sent = this.sendInput(activeTab, payload + '\r');
+        if (!sent) return;
+
         this.inputTextArea.value = '';
         this.lastInputValue = '';
         this.adjustInputHeight();
@@ -1161,10 +1165,11 @@ export class TabManager {
     
     sendRawInput(bytes) {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead) return;
+        if (!activeTab) return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
         // bundled with preceding text fails to register as Enter — see pkg/pty.
-        this.sendInput(activeTab, bytes);
+        const sent = this.sendInput(activeTab, bytes);
+        if (!sent) return;
         
         const isMobile = window.innerWidth <= 768;
         if (isMobile && !activeTab.directMode && this.inputTextArea) {
@@ -1642,7 +1647,7 @@ export class TabManager {
             }
 
             if (targetPaneId !== undefined) {
-                this.switchTab(targetPaneId);
+                this.switchTab(targetPaneId, { userInitiated: true });
             }
             return;
         }
@@ -1893,7 +1898,7 @@ export class TabManager {
         }
     }
 
-    activateTabViewport(tabInfo, { scrollToBottom = true, autoReconnect = true } = {}) {
+    activateTabViewport(tabInfo, { scrollToBottom = true, autoReconnect = true, force = false } = {}) {
         if (!tabInfo) return;
 
         setTimeout(() => {
@@ -1906,8 +1911,9 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
         }
 
+        // force=true bypasses the passive auto_reconnect gate for explicit user actions.
         const configAutoReconnect = this.app.config && this.app.config.auto_reconnect;
-        if (autoReconnect && configAutoReconnect === 'visible' && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
+        if (autoReconnect && (force || configAutoReconnect === 'visible') && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
             if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
                 this.reconnectTab(tabInfo, { auto: true });
             }
@@ -2186,7 +2192,7 @@ export class TabManager {
             selectBtn.appendChild(titleSpan);
             selectBtn.appendChild(metaSpan);
             selectBtn.addEventListener('click', () => {
-                this.switchTab(paneId);
+                this.switchTab(paneId, { userInitiated: true });
                 dropdown.classList.add('hidden');
             });
             row.appendChild(selectBtn);
@@ -2709,7 +2715,7 @@ export class TabManager {
                 });
                 n.onclick = () => {
                     window.focus();
-                    this.switchTab(tab.paneId);
+                    this.switchTab(tab.paneId, { userInitiated: true });
                     n.close();
                 };
             } catch (e) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/pty"
+	"github.com/hypernewbie/phi/pkg/restart"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -43,10 +44,21 @@ func main() {
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
 	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("Phi %s (commit: %s, built: %s, source: %s)\n", Version, Commit, Date, BuildSource)
+		os.Exit(0)
+	}
+
+	if *rollbackFlag {
+		restored, err := update.Rollback()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Rolled back to previous binary: %s\nRestart phi normally to run it.\n", restored)
 		os.Exit(0)
 	}
 
@@ -214,23 +226,19 @@ func main() {
 	// Start fleet poller with current peer config
 	startFleetPoller()
 
-	// Start update checker. Skip entirely in dev/source builds: the
-	// install method is "dev" so the UI hides the badge anyway, and
-	// running the no-op goroutine is just wasted wakeups. Only when
-	// BuildSource=="release" do we poll GitHub for newer tags.
+	// Start update checker (release builds only; dev builds hide the badge anyway).
 	if BuildSource == "release" {
 		updateChecker = update.NewChecker(Version, update.DetectInstallMethod(BuildSource))
 		updateChecker.LoadCache()
 		go func() {
 			// Stagger startup so we don't hammer GitHub on cold boot.
 			time.Sleep(30 * time.Second)
-			if updateChecker.CheckIfStale() && updateChecker.ShouldRunRealCheck() {
-				if result := updateChecker.RunCheck(false); result.Err != nil {
-					log.Printf("[update] Initial check failed: %v", result.Err)
-				} else if result.Latest != "" {
-					log.Printf("[update] Initial check: current=%s latest=%s available=%v",
-						Version, result.Latest, result.Latest != Version)
-				}
+			runGatedUpdateCheck(updateChecker, "Initial check")
+
+		// Re-check hourly; CheckIfStale/ShouldRunRealCheck gate the actual network call.
+		ticker := time.NewTicker(1 * time.Hour)
+			for range ticker.C {
+				runGatedUpdateCheck(updateChecker, "Periodic check")
 			}
 		}()
 
@@ -238,14 +246,14 @@ func main() {
 		// work, even though only npm/standalone installs can use them.
 		updateApplier = update.NewApplier(Version, update.DetectInstallMethod(BuildSource))
 
-		// Best-effort cleanup of any stale .old from a previous successful
-		// apply. If the cleanup itself fails (file in use, etc.), log and
-		// continue - the .old won't break anything, just wastes a slot.
-		if removed, err := update.CleanupOldBinary(); err != nil {
-			log.Printf("[update] CleanupOldBinary: %v", err)
-		} else if removed != "" {
-			log.Printf("[update] Removed stale previous binary: %s", removed)
-		}
+		// Best-effort cleanup of stale .old, delayed so operators can run `phi --rollback`.
+		go func() {
+			if removed, err := update.ScheduleOldBinaryCleanup(); err != nil {
+				log.Printf("[update] CleanupOldBinary: %v", err)
+			} else if removed != "" {
+				log.Printf("[update] Removed stale previous binary: %s", removed)
+			}
+		}()
 	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
@@ -257,9 +265,7 @@ func main() {
 	go func() {
 		sig := <-sigChan
 		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
-		// Phase 4 plan §3.3: flush pending state writes BEFORE broadcasting
-		// shutdown so the next process boot finds a consistent tabs.json /
-		// syncboard on disk. Order matters: state first, then notify.
+		// Flush state before broadcasting shutdown so the next boot finds consistent files.
 		if err := ptyManager.FlushSaveState(); err != nil {
 			log.Printf("[main] FlushSaveState on shutdown: %v", err)
 		}
@@ -273,7 +279,29 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", *ipFlag, *portFlag)
 	printWelcomeBanner(cfg, *ipFlag, *portFlag)
-	log.Fatal(http.ListenAndServe(addr, nil))
+
+	// Bind with retry for Windows restart port handoff; no-op fast path on Unix.
+	ln, err := restart.BindWithRetry(addr, 5*time.Second, 100*time.Millisecond)
+	if err != nil {
+		log.Fatalf("Failed to bind %s: %v", addr, err)
+	}
+	log.Fatal(http.Serve(ln, nil))
+}
+
+// runGatedUpdateCheck runs one check if due (CheckIfStale + ShouldRunRealCheck gate it).
+func runGatedUpdateCheck(checker *update.Checker, label string) {
+	if !checker.CheckIfStale() || !checker.ShouldRunRealCheck() {
+		return
+	}
+	result := checker.RunCheck(false)
+	if result.Err != nil {
+		log.Printf("[update] %s failed: %v", label, result.Err)
+		return
+	}
+	if result.Latest != "" {
+		log.Printf("[update] %s: current=%s latest=%s available=%v",
+			label, Version, result.Latest, result.Latest != Version)
+	}
 }
 
 func printWelcomeBanner(cfg Config, ip string, port int) {

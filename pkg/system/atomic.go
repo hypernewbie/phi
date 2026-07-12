@@ -42,7 +42,7 @@ func WriteFileAtomic(filename string, data []byte, perm os.FileMode) error {
 	// Set permissions before renaming
 	_ = os.Chmod(tmpName, perm)
 
-	// On Windows, os.Rename fails if the destination file already exists.
+	// Windows: os.Rename replaces atomically (MOVEFILE_REPLACE_EXISTING); fallback handles AV-locked files.
 	if runtime.GOOS == "windows" {
 		if err := os.Rename(tmpName, filename); err == nil {
 			return nil

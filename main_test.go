@@ -2061,6 +2061,57 @@ func TestUpdateStatusWithoutChecker(t *testing.T) {
 	}
 }
 
+// runGatedUpdateCheck tests: network call when due, skip when cached status is fresh.
+
+func TestRunGatedUpdateCheck_RunsOnFreshChecker(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Location", "https://github.com/hypernewbie/phi/releases/tag/v9.9.9")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c := update.NewChecker("0.7.15", "standalone")
+	c.SetReleaseURLForTesting(srv.URL)
+
+	// Fresh checker: both gates true, must hit the server once.
+	runGatedUpdateCheck(c, "test")
+
+	if hits != 1 {
+		t.Fatalf("expected exactly 1 network hit on a fresh checker, got %d", hits)
+	}
+	if got := c.Status().Latest; got != "v9.9.9" {
+		t.Errorf("expected latest=v9.9.9 after a due check, got %q", got)
+	}
+}
+
+func TestRunGatedUpdateCheck_SkipsWhenAlreadyFresh(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Location", "https://github.com/hypernewbie/phi/releases/tag/v9.9.9")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c := update.NewChecker("0.7.15", "standalone")
+	c.SetReleaseURLForTesting(srv.URL)
+
+	// Prime the checker, then confirm a second call skips the network.
+	c.RunCheck(false)
+	if hits != 1 {
+		t.Fatalf("priming check should have hit the server once, got %d", hits)
+	}
+
+	// cached status is fresh → must not hit the network.
+	runGatedUpdateCheck(c, "test")
+
+	if hits != 1 {
+		t.Fatalf("expected the second, too-soon call to skip the network (still 1 hit), got %d", hits)
+	}
+}
+
 // /api/update/progress contract: returns a Progress JSON object with
 // the documented fields. Even when no apply has been triggered, it
 // must respond cleanly with Phase="idle".
