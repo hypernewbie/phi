@@ -2131,3 +2131,15 @@ func TestUpdateApplyRejectsSameVersion(t *testing.T) {
 	}
 }
 
+// /api/restart accepts POST only. We don't exercise the actual restart
+// path here - that would tear down the test binary. We just pin the
+// method-not-allowed shape and the early-return-200 acknowledgement.
+func TestRestartMethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/restart", nil)
+	w := httptest.NewRecorder()
+	handleRestart(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 on GET, got %d", w.Code)
+	}
+}
+

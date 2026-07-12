@@ -1235,7 +1235,59 @@ export class TabManager {
             if (localStorage.getItem('phi_replay_divider') === 'true') {
                 tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
+        } else if (control.type === 'server-shutdown') {
+            // Plan §3.1 / Phase 9: server announces restart/update/shutdown
+            // and arms a client-side reload poller. The page reloads when
+            // /api/version reports a different stamped version OR after 10s,
+            // whichever comes first.
+            this.handleServerShutdown(control.reason || 'shutdown');
         }
+    }
+
+    // handleServerShutdown is invoked when the WS control stream receives
+    // a 0x05 frame. Polls /api/version every 1s; reloads the page when the
+    // server is back (different commit or after a generous timeout).
+    handleServerShutdown(reason) {
+        if (this._reloadArmed) return;
+        this._reloadArmed = true;
+
+        // Show a one-time toast so the user knows what's happening.
+        if (this.app && this.app.showToast) {
+            this.app.showToast(
+                `phi is ${reason}… reloading when ready.`,
+                { type: 'info', durationMs: 8000 }
+            );
+        }
+
+        const beforeCommit = (this.app && this.app.versionInfo && this.app.versionInfo.commit) || '';
+        const startedAt = Date.now();
+        const maxWaitMs = 10_000;
+
+        const poll = async () => {
+            // Bail out once we've waited long enough regardless.
+            if (Date.now() - startedAt > maxWaitMs) {
+                window.location.reload();
+                return;
+            }
+            try {
+                const res = await fetch('/api/version', { cache: 'no-store' });
+                if (res.ok) {
+                    const data = await res.json();
+                    // Same commit + same source = same process (still
+                    // tearing down). Different commit or different
+                    // build_source (e.g. release->source for a swap)
+                    // means the new server is up.
+                    if (data && data.commit && data.commit !== beforeCommit) {
+                        window.location.reload();
+                        return;
+                    }
+                }
+            } catch (_) {
+                // network blip while server is bouncing; keep polling
+            }
+            setTimeout(poll, 1000);
+        };
+        setTimeout(poll, 1000);
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {
