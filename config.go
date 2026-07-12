@@ -48,6 +48,7 @@ type Config struct {
 	// of "spawn new tab unless a shell tab is currently focused").
 	// Backwards compatible: missing in old config files means false.
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
+	ReplayBufferBytes      *int `json:"replay_buffer_bytes"`
 
 	PushoverUserKey   string `json:"pushover_user_key"`
 	PushoverAppToken  string `json:"pushover_app_token"`
@@ -126,6 +127,10 @@ func loadConfig() Config {
 	}
 	if cfg.SyncCoordinator == "" {
 		cfg.SyncCoordinator = "http://localhost:7070"
+	}
+	if cfg.ReplayBufferBytes == nil {
+		defaultBytes := 1048576
+		cfg.ReplayBufferBytes = &defaultBytes
 	}
 	return cfg
 }

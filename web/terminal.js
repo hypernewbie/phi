@@ -593,6 +593,9 @@ export class TabManager {
         
         const fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
+
+        const searchAddon = new window.SearchAddon.SearchAddon();
+        term.loadAddon(searchAddon);
         
         // Open in DOM
         term.open(termContainer);
@@ -652,6 +655,13 @@ export class TabManager {
                         return false;
                     }
                 }
+            }
+            // Support Ctrl+Shift+F inside xterm
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
+                if (e.type === 'keydown') {
+                    this.handleGlobalTabShortcuts(e);
+                }
+                return false;
             }
             // Support Alt+1..9 tab switching inside xterm
             if (e.altKey && e.key >= '1' && e.key <= '9') {
@@ -786,6 +796,7 @@ export class TabManager {
             cwd: activeCWD,
             term,
             fitAddon,
+            searchAddon,
             tabEl,
             termContainer,
             directMode: false, // Hybrid focus model by default
@@ -814,7 +825,7 @@ export class TabManager {
         ws = new PTYWebSocket(
             paneId,
             (data) => { this.writeToTerminal(tabInfo, data); },
-            (control) => { console.log("[ws] Received control:", control); },
+            (control) => { this.handleControlMessage(tabInfo, control); },
             () => {
                 term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
                 tabInfo.isDead = true;
@@ -1183,18 +1194,24 @@ export class TabManager {
 
         const overlay = document.createElement('div');
         overlay.className = 'reconnect-overlay';
+
+        const hasExited = tabInfo.exitCode !== undefined && tabInfo.exitCode !== null;
+        const msg = hasExited ? `process exited (code ${tabInfo.exitCode})` : 'session ended';
+
         overlay.innerHTML = `
             <div class="reconnect-box">
-                <span class="reconnect-msg">session ended</span>
+                <span class="reconnect-msg">${msg}</span>
                 <div class="reconnect-buttons">
-                    <button class="reconnect-btn">⟳ Reconnect</button>
+                    ${hasExited ? '' : '<button class="reconnect-btn">⟳ Reconnect</button>'}
                     <button class="restart-btn">⚡ Restart</button>
                 </div>
             </div>`;
 
-        overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
-            this.reconnectTab(tabInfo);
-        });
+        if (!hasExited) {
+            overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
+                this.reconnectTab(tabInfo);
+            });
+        }
         overlay.querySelector('.restart-btn').addEventListener('click', () => {
             this.restartTab(tabInfo);
         });
@@ -1202,9 +1219,24 @@ export class TabManager {
         tabInfo.termContainer.appendChild(overlay);
     }
 
+    handleControlMessage(tabInfo, control) {
+        if (!control) return;
+        if (control.type === 'pty-exited') {
+            tabInfo.exitCode = control.code;
+            tabInfo.isDead = true;
+            tabInfo.tabEl.classList.add('dead');
+            this._showReconnectOverlay(tabInfo);
+        } else if (control.type === 'replay-complete') {
+            if (localStorage.getItem('phi_replay_divider') === 'true') {
+                tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
+            }
+        }
+    }
+
     reconnectTab(tabInfo, { auto = false } = {}) {
         if (tabInfo.reconnectInFlight) return;
         tabInfo.reconnectInFlight = true;
+        tabInfo.exitCode = null;
 
         const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
@@ -1222,7 +1254,7 @@ export class TabManager {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
                 (data) => { this.writeToTerminal(tabInfo, data); },
-                null,
+                (control) => { this.handleControlMessage(tabInfo, control); },
                 () => {
                     tabInfo.reconnectInFlight = false;
                     if (!opened) {
@@ -1357,7 +1389,84 @@ export class TabManager {
         });
     }
 
+    toggleFindBar(tabInfo) {
+        const existing = tabInfo.termContainer.querySelector('.find-bar');
+        if (existing) {
+            existing.remove();
+            if (tabInfo.searchAddon) {
+                tabInfo.searchAddon.clearDecorations();
+            }
+            tabInfo.term.focus();
+            return;
+        }
+
+        const bar = document.createElement('div');
+        bar.className = 'find-bar';
+        bar.innerHTML = `
+            <input type="text" class="find-input" placeholder="Find in terminal..." />
+            <button class="find-btn find-prev">▲</button>
+            <button class="find-btn find-next">▼</button>
+            <button class="find-btn find-close">✕</button>
+        `;
+
+        const input = bar.querySelector('.find-input');
+        const prevBtn = bar.querySelector('.find-prev');
+        const nextBtn = bar.querySelector('.find-next');
+        const closeBtn = bar.querySelector('.find-close');
+
+        const doSearch = (direction) => {
+            const val = input.value;
+            if (!val) {
+                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
+                return;
+            }
+            if (tabInfo.searchAddon) {
+                if (direction === 'prev') {
+                    tabInfo.searchAddon.findPrevious(val, { decorations: { matchBackground: 'rgba(255,255,0,0.3)', activeMatchBackground: 'rgba(255,165,0,0.5)' } });
+                } else {
+                    tabInfo.searchAddon.findNext(val, { decorations: { matchBackground: 'rgba(255,255,0,0.3)', activeMatchBackground: 'rgba(255,165,0,0.5)' } });
+                }
+            }
+        };
+
+        input.addEventListener('input', () => {
+            doSearch('next');
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                doSearch(e.shiftKey ? 'prev' : 'next');
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                bar.remove();
+                if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
+                tabInfo.term.focus();
+            }
+        });
+
+        prevBtn.addEventListener('click', () => doSearch('prev'));
+        nextBtn.addEventListener('click', () => doSearch('next'));
+        closeBtn.addEventListener('click', () => {
+            bar.remove();
+            if (tabInfo.searchAddon) tabInfo.searchAddon.clearDecorations();
+            tabInfo.term.focus();
+        });
+
+        tabInfo.termContainer.appendChild(bar);
+        input.focus();
+    }
+
     handleGlobalTabShortcuts(e) {
+        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'f') {
+            const activeTab = this.getActiveTab();
+            if (activeTab && activeTab.term) {
+                e.preventDefault();
+                this.toggleFindBar(activeTab);
+            }
+            return;
+        }
+
         if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
             const num = parseInt(e.key, 10);
             const paneIds = Array.from(this.tabs.keys());

@@ -5423,3 +5423,54 @@ html, body {
     font-weight: bold;
 }
 .kdp-label-remove-btn:hover { opacity: 1; color: #ef4444; }
+
+/* Find Bar overlay */
+.find-bar {
+    position: absolute;
+    top: 10px;
+    right: 30px;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(30, 30, 35, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+}
+.find-input {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: #ffffff;
+    padding: 4px 8px;
+    font-size: 13px;
+    outline: none;
+    width: 160px;
+    transition: border-color 0.2s;
+}
+.find-input:focus {
+    border-color: var(--accent, #a855f7);
+}
+.find-btn {
+    background: transparent;
+    border: none;
+    color: #a1a1aa;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s;
+}
+.find-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+}
+.find-results-count {
+    color: #71717a;
+    font-size: 11px;
+    min-width: 45px;
+    text-align: right;
+}

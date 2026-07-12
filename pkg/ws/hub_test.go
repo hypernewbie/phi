@@ -8,7 +8,7 @@ import (
 )
 
 func TestHub_RegisterAndUnregister(t *testing.T) {
-	h := NewHub()
+	h := NewHub(0)
 
 	client1 := &Client{
 		Send: make(chan []byte, 10),
@@ -43,20 +43,31 @@ func TestHub_RegisterAndUnregister(t *testing.T) {
 		t.Errorf("Expected 1 client registered, got %d", clientCount)
 	}
 
-	// Unregister second client, which should clean up the pane
+	// Unregister second client, the pane should persist (zero clients but retains history)
 	h.Unregister(paneID, client2)
 
 	h.mu.RLock()
 	_, exists := h.panes[paneID]
 	h.mu.RUnlock()
 
-	if exists {
-		t.Error("Expected pane to be cleaned up after last client unregistered")
+	if !exists {
+		t.Error("Expected pane to persist after last client unregistered (ring buffer retention)")
+	}
+
+	// Now explicitly close the pane
+	h.ClosePane(paneID)
+
+	h.mu.RLock()
+	_, existsAfterClose := h.panes[paneID]
+	h.mu.RUnlock()
+
+	if existsAfterClose {
+		t.Error("Expected pane to be cleaned up after ClosePane")
 	}
 }
 
 func TestHub_Broadcast(t *testing.T) {
-	h := NewHub()
+	h := NewHub(0)
 
 	client := &Client{
 		Send: make(chan []byte, 10),
@@ -85,7 +96,7 @@ func TestHub_Broadcast(t *testing.T) {
 }
 
 func TestHub_ConcurrentAccess(t *testing.T) {
-	h := NewHub()
+	h := NewHub(0)
 	paneID := "concurrent-pane"
 
 	var wg sync.WaitGroup
@@ -117,17 +128,19 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
+	h.ClosePane(paneID)
+
 	h.mu.RLock()
 	_, exists := h.panes[paneID]
 	h.mu.RUnlock()
 
 	if exists {
-		t.Error("Expected concurrent pane to be deleted after all clients unregistered")
+		t.Error("Expected concurrent pane to be deleted after ClosePane")
 	}
 }
 
 func TestHub_BroadcastOverflow(t *testing.T) {
-	h := NewHub()
+	h := NewHub(1024)
 	paneID := "pane-overflow-test"
 	client := &Client{
 		Send: make(chan []byte, 2),
