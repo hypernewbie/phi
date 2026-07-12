@@ -215,8 +215,16 @@ func main() {
 	go func() {
 		sig := <-sigChan
 		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
-		_ = FlushSyncStore()
-		wsHub.BroadcastShutdown()
+		// Phase 4 plan §3.3: flush pending state writes BEFORE broadcasting
+		// shutdown so the next process boot finds a consistent tabs.json /
+		// syncboard on disk. Order matters: state first, then notify.
+		if err := ptyManager.FlushSaveState(); err != nil {
+			log.Printf("[main] FlushSaveState on shutdown: %v", err)
+		}
+		if err := FlushSyncStore(); err != nil {
+			log.Printf("[main] FlushSyncStore on shutdown: %v", err)
+		}
+		wsHub.BroadcastShutdown("shutdown")
 		time.Sleep(200 * time.Millisecond)
 		os.Exit(0)
 	}()
