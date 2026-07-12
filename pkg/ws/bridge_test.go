@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -198,4 +199,78 @@ func TestWebSocketKeepalive(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		// Keepalive succeeded!
 	}
+}
+
+// TestHandleWS_DiedInPlaceReportsRealExitCode: died-in-place PTY must send 0x04 with the real exit code, not -1.
+func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
+	shell, args := getTestShellForBridge()
+
+	manager := pty.NewManager()
+	inst, err := manager.Spawn("", shell, args, "shell", "died-in-place")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	if _, err := inst.Pty.Write([]byte("exit\r\n")); err != nil {
+		t.Fatalf("write exit command: %v", err)
+	}
+	select {
+	case <-inst.Pty.Closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for shell to exit")
+	}
+
+	hub := NewHub(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		HandleWS(w, r, inst, manager, hub)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	// AttachWithReplay always sends a 0x06 replay-complete frame first
+	// (even against an empty/never-ingested ring), followed by the 0x04
+	// pty-exited frame once the dead-Pty branch runs. Skip past 0x06.
+	var message []byte
+	for i := 0; i < 5; i++ {
+		mt, msg, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("expected a 0x04 pty-exited frame, got read error: %v", readErr)
+		}
+		if mt != websocket.BinaryMessage || len(msg) < 1 {
+			t.Fatalf("unexpected message: type=%d len=%d", mt, len(msg))
+		}
+		if msg[0] == 0x06 {
+			continue
+		}
+		message = msg
+		break
+	}
+	if message == nil {
+		t.Fatal("never received a non-0x06 frame")
+	}
+	if message[0] != 0x04 {
+		t.Fatalf("expected frame type 0x04 (pty-exited), got 0x%02x", message[0])
+	}
+	payload := string(message[1:])
+	if strings.Contains(payload, `"code":-1`) {
+		t.Errorf("died-in-place PTY should report its real exit code, not the ghost sentinel -1; got payload %q", payload)
+	}
+	if !strings.Contains(payload, `"code":0`) {
+		t.Errorf("expected exit code 0 (clean 'exit' command), got payload %q", payload)
+	}
+}
+
+func getTestShellForBridge() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "pwsh", []string{"-NoLogo", "-NoProfile", "-NonInteractive"}
+	}
+	return "bash", []string{"--norc", "--noprofile"}
 }

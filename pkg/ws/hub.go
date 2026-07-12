@@ -159,6 +159,7 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 		}
 		select {
 		case client.Send <- msg:
+			client.FullSince = time.Time{}
 			if dropped > 0 {
 				log.Printf("[ws] Dropped %d stale frames for slow client, kept connection alive", dropped)
 			}
@@ -173,9 +174,10 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 
 	if now.Sub(client.LastDropWarning) > 5*time.Second {
 		client.LastDropWarning = now
-		warningMsg := make([]byte, 1+48)
+		warningStr := "\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"
+		warningMsg := make([]byte, 1+len(warningStr))
 		warningMsg[0] = 0x01
-		copy(warningMsg[1:], []byte("\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"))
+		copy(warningMsg[1:], warningStr)
 		select {
 		case client.Send <- warningMsg:
 		default:

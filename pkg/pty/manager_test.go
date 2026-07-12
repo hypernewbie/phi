@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -594,6 +595,84 @@ func TestManagerLoadStateSuppressesIdle(t *testing.T) {
 	}
 	if !notified {
 		t.Error("loaded tab should have NotifiedIdle=true so idle watcher skips it on startup")
+	}
+}
+
+// TestIsPtyDead_GhostAndLive: nil-Pty ghost → true, live shell → false.
+func TestIsPtyDead_GhostAndLive(t *testing.T) {
+	ghost := &PTYInstance{ID: "ghost", Pty: nil}
+	if !ghost.IsPtyDead() {
+		t.Error("expected IsPtyDead() == true for a nil-Pty ghost instance")
+	}
+
+	manager := NewManager()
+	shell, args := getTestShell()
+	inst, err := manager.Spawn("", shell, args, "shell", "isptydead-live")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() { _ = manager.Kill(inst.ID) }()
+
+	if inst.IsPtyDead() {
+		t.Error("expected IsPtyDead() == false immediately after spawning a live shell")
+	}
+}
+
+// TestIsPtyDead_DiedInPlace: naturally-exited process (not Kill'd) must be detected + excluded from SaveState.
+func TestIsPtyDead_DiedInPlace(t *testing.T) {
+	tmpDir := t.TempDir()
+	testTabsPath = filepath.Join(tmpDir, "tabs-died-in-place.json")
+	defer func() { testTabsPath = "" }()
+
+	manager := NewManager()
+	shell, args := getTestShell()
+	inst, err := manager.Spawn("", shell, args, "shell", "died-in-place-session")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	if inst.IsPtyDead() {
+		t.Fatal("freshly spawned shell should not report dead yet")
+	}
+
+	// Exit naturally (not via Kill, so the record stays in the registry).
+	if _, err := inst.Pty.Write([]byte("exit\r\n")); err != nil {
+		t.Fatalf("failed to write exit command: %v", err)
+	}
+
+	select {
+	case <-inst.Pty.Closed:
+		// process exited naturally, as expected
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for shell to exit after 'exit' command")
+	}
+
+	if !inst.IsPtyDead() {
+		t.Error("expected IsPtyDead() == true after the process exited naturally")
+	}
+
+	// Instance must still be in the registry (Spawn doesn't remove on natural death).
+	if _, found := manager.Get(inst.ID); !found {
+		t.Fatal("expected died-in-place instance to remain in the registry")
+	}
+
+	// SaveState must now skip this instance even though inst.Pty != nil.
+	if err := manager.FlushSaveState(); err != nil {
+		t.Fatalf("FlushSaveState: %v", err)
+	}
+
+	b, err := os.ReadFile(testTabsPath)
+	if err != nil {
+		t.Fatalf("reading tabs file: %v", err)
+	}
+	var persisted []map[string]interface{}
+	if err := json.Unmarshal(b, &persisted); err != nil {
+		t.Fatalf("unmarshal persisted tabs: %v", err)
+	}
+	for _, p := range persisted {
+		if p["id"] == inst.ID {
+			t.Errorf("died-in-place instance %s should NOT be persisted to tabs.json, found: %v", inst.ID, p)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/update"
@@ -64,12 +65,13 @@ func handleDiag(w http.ResponseWriter, r *http.Request) {
 		insts := ptyManager.ListActive()
 		resp.PTYs = len(insts)
 		for _, inst := range insts {
+			busy, lastActivity := inst.BusyState()
 			pd := PaneDiag{
 				ID:           inst.ID,
 				Coder:        inst.Coder,
 				Title:        inst.Title,
-				Busy:         inst.Busy,
-				LastActivity: inst.LastActivityUnix,
+				Busy:         busy,
+				LastActivity: lastActivity,
 			}
 			if wsHub != nil {
 				pd.ClientCount, pd.RingBytes, pd.RingCapacity = wsHub.PaneStats(inst.ID)
@@ -84,11 +86,14 @@ func handleDiag(w http.ResponseWriter, r *http.Request) {
 
 // installMethodCached is the install method as of the last successful
 // detection. Avoids re-running the path/sum check on every /api/diag hit.
-var cachedInstallMethod = ""
+var (
+	cachedInstallMethod string
+	installMethodOnce   sync.Once
+)
 
 func installMethodCached() string {
-	if cachedInstallMethod == "" {
+	installMethodOnce.Do(func() {
 		cachedInstallMethod = update.DetectInstallMethod(BuildSource)
-	}
+	})
 	return cachedInstallMethod
 }
