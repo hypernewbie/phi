@@ -825,7 +825,9 @@ export class App {
             dismissTimer = setTimeout(dismiss, duration);
         }
 
-        return dismiss;
+        // Return the toast element so callers can dismiss it externally
+        // (e.g. soft-close undo race). Internal code uses `dismiss()`.
+        return toast;
     }
 
     openConfigEditor({ title, subtitle = '', fields = [], submitLabel = 'Save' }) {

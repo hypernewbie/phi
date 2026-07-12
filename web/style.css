@@ -1063,6 +1063,46 @@ html, body {
     border-top-color: var(--accent);
 }
 
+/* Soft-close: tab is in the grace period. Strip entry fades, the × is
+   swapped for a ↻ reopen button, and the title gets a strike-through so
+   it's visually obvious the tab is "going away" but hasn't gone yet.
+   The user has SOFT_CLOSE_GRACE_MS to click ↻ (in the strip) or Undo
+   (in the toast) to restore it. */
+.tab.soft-closed {
+    opacity: 0.45;
+}
+.tab.soft-closed .tab-title {
+    text-decoration: line-through;
+    text-decoration-color: var(--text-muted);
+}
+.tab.soft-closed .tab-pin,
+.tab.soft-closed .tab-favicon {
+    /* Pin stays visible but muted - pinning a soft-closed tab is a no-op
+       anyway since it'll finalize; the icon is dimmed for visual calm. */
+    opacity: 0.6;
+}
+.tab-reopen {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin-left: 2px;
+    color: var(--accent, #7c6af7);
+    font-size: 13px;
+    line-height: 1;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.tab-reopen:hover {
+    background-color: var(--bg-border);
+    color: var(--text-primary);
+}
+
 .tab.has-attention {
     animation: tab-pulse 2s infinite ease-in-out;
     color: var(--accent, #7c6af7) !important;
