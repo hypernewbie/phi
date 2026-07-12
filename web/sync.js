@@ -60,7 +60,7 @@ export class SyncManager {
             this.formKey.value = '';
             this.formValue.value = '';
             this.formKey.disabled = false;
-            this.formKey.focus();
+            this.formKey.focus({ preventScroll: true });
         });
 
         this.formCancel.addEventListener('click', () => {
@@ -176,7 +176,7 @@ export class SyncManager {
                 this.formKey.value = msg.key;
                 this.formKey.disabled = true;
                 this.formValue.value = msg.value;
-                this.formValue.focus();
+                this.formValue.focus({ preventScroll: true });
             });
 
             card.querySelector('.sync-del-btn').addEventListener('click', async (e) => {

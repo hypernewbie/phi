@@ -735,7 +735,7 @@ export class MarkdownManager {
             
             const newPos = start + padBefore.length + relPath.length;
             textarea.setSelectionRange(newPos, newPos);
-            textarea.focus();
+            textarea.focus({ preventScroll: true });
             
             if (this.app.tabManager) {
                 this.app.tabManager.adjustInputHeight();

@@ -311,20 +311,21 @@ export class TabManager {
                 this.updateDirectModeUI(activeTab);
             }
             if (window.innerWidth <= 768) {
+                // updateLayoutPosition already forces window.scrollTo(0,0) on
+                // mobile to counteract iOS WebKit's focus-scroll behaviour.
+                // Run it twice (now + 50ms) so we cover the keyboard-show
+                // animation; the second pass is a defensive re-fit in case
+                // the keyboard appeared with a delay.
                 this.app.updateLayoutPosition?.(true);
-                setTimeout(() => {
-                    window.scrollTo(0, 0);
-                    this.app.updateLayoutPosition?.(true);
-                }, 50);
+                setTimeout(() => this.app.updateLayoutPosition?.(true), 50);
             }
         });
 
         this.inputTextArea.addEventListener('blur', () => {
             if (window.innerWidth <= 768) {
-                setTimeout(() => {
-                    window.scrollTo(0, 0);
-                    this.app.updateLayoutPosition?.(true);
-                }, 150);
+                // Same defensive re-fit on blur - keyboard is hiding, layout
+                // needs to snap back to full height.
+                setTimeout(() => this.app.updateLayoutPosition?.(true), 150);
             }
         });
 
@@ -1085,7 +1086,13 @@ export class TabManager {
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
-                this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
+                // Already on this tab - the user just clicked the active tab to
+                // refocus. Don't scroll the terminal to bottom (loses their
+                // scrollback position), but still run fit + reconnect so the
+                // tab gets a chance to revive itself on explicit click.
+                // Use scrollToBottom:false so a user mid-scrollback reading
+                // old output doesn't get yanked to the bottom line.
+                this.activateTabViewport(activeTab, { scrollToBottom: false, autoReconnect: true, force: userInitiated });
             }
             return;
         }
@@ -1795,7 +1802,7 @@ export class TabManager {
         });
 
         tabInfo.termContainer.appendChild(bar);
-        input.focus();
+        input.focus({ preventScroll: true });
     }
 
     handleGlobalTabShortcuts(e) {
@@ -1957,7 +1964,7 @@ export class TabManager {
         ta.style.left = '0';
         ta.style.opacity = '0';
         document.body.appendChild(ta);
-        ta.focus();
+        ta.focus({ preventScroll: true });
         ta.select();
         let ok = false;
         try {
