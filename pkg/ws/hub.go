@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -124,6 +125,64 @@ func (h *Hub) ClosePane(paneID string) {
 	log.Printf("[ws] Closed pane %s and deleted its ring buffer", paneID)
 }
 
+// deliverOrDrop pushes msg to client's Send channel. If the channel is
+// full, it drops the oldest queued frame(s) to make room (bounded to
+// 100), injects a one-shot 5s-rate-limited "[phi: output dropped]" warning,
+// and keeps the connection alive. Only after 30s of sustained fullness
+// does it close the connection as a last resort. The PaneHub mu must be
+// held when calling this (caller-side invariant: see Ingest/Broadcast).
+func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
+	select {
+	case client.Send <- msg:
+		client.FullSince = time.Time{}
+		return
+	default:
+	}
+
+	now := time.Now()
+	if client.FullSince.IsZero() {
+		client.FullSince = now
+	} else if now.Sub(client.FullSince) > 30*time.Second {
+		log.Printf("[ws] Client send buffer full for >30s, closing connection")
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+		return
+	}
+
+	dropped := 0
+	for dropped < 100 {
+		select {
+		case <-client.Send:
+			dropped++
+		default:
+		}
+		select {
+		case client.Send <- msg:
+			if dropped > 0 {
+				log.Printf("[ws] Dropped %d stale frames for slow client, kept connection alive", dropped)
+			}
+			return
+		default:
+			dropped++
+		}
+	}
+
+	// Could not reclaim space in 100 drops: log and move on, will retry next tick.
+	log.Printf("[ws] Client send buffer still full after 100 drops, deferring frame")
+
+	if now.Sub(client.LastDropWarning) > 5*time.Second {
+		client.LastDropWarning = now
+		warningMsg := make([]byte, 1+48)
+		warningMsg[0] = 0x01
+		copy(warningMsg[1:], []byte("\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"))
+		select {
+		case client.Send <- warningMsg:
+		default:
+		}
+	}
+}
+
 func (h *Hub) Ingest(paneID string, payload []byte) {
 	ph := h.GetOrCreatePaneHub(paneID)
 	ph.mu.Lock()
@@ -140,51 +199,7 @@ func (h *Hub) Ingest(paneID string, payload []byte) {
 	copy(msg[1:], payload)
 
 	for client := range ph.clients {
-		select {
-		case client.Send <- msg:
-			client.FullSince = time.Time{}
-		default:
-			now := time.Now()
-			if client.FullSince.IsZero() {
-				client.FullSince = now
-			} else if now.Sub(client.FullSince) > 30*time.Second {
-				log.Printf("[ws] Client send buffer full for >30s, closing connection")
-				if client.Ws != nil {
-					_ = client.Ws.Close()
-				}
-				continue
-			}
-
-			droppedCount := 0
-			for {
-				select {
-				case <-client.Send:
-					droppedCount++
-				default:
-				}
-				select {
-				case client.Send <- msg:
-					break
-				default:
-					if droppedCount > 100 {
-						break
-					}
-					continue
-				}
-				break
-			}
-
-			if now.Sub(client.LastDropWarning) > 5*time.Second {
-				client.LastDropWarning = now
-				warningMsg := make([]byte, 1+48)
-				warningMsg[0] = 0x01
-				copy(warningMsg[1:], []byte("\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"))
-				select {
-				case client.Send <- warningMsg:
-				default:
-				}
-			}
-		}
+		h.deliverOrDrop(client, msg)
 	}
 }
 
@@ -205,59 +220,27 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	defer ph.mu.Unlock()
 
 	for client := range ph.clients {
-		select {
-		case client.Send <- msg:
-			client.FullSince = time.Time{}
-		default:
-			now := time.Now()
-			if client.FullSince.IsZero() {
-				client.FullSince = now
-			} else if now.Sub(client.FullSince) > 30*time.Second {
-				log.Printf("[ws] Client send buffer full for >30s, closing connection")
-				if client.Ws != nil {
-					_ = client.Ws.Close()
-				}
-				continue
-			}
-
-			droppedCount := 0
-			for {
-				select {
-				case <-client.Send:
-					droppedCount++
-				default:
-				}
-				select {
-				case client.Send <- msg:
-					break
-				default:
-					if droppedCount > 100 {
-						break
-					}
-					continue
-				}
-				break
-			}
-
-			if now.Sub(client.LastDropWarning) > 5*time.Second {
-				client.LastDropWarning = now
-				warningMsg := make([]byte, 1+48)
-				warningMsg[0] = 0x01
-				copy(warningMsg[1:], []byte("\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"))
-				select {
-				case client.Send <- warningMsg:
-				default:
-				}
-			}
-		}
+		h.deliverOrDrop(client, msg)
 	}
 }
 
-func (h *Hub) BroadcastShutdown() {
+// BroadcastShutdown announces server shutdown to every connected client.
+// The payload is the JSON envelope {"reason":"restart"|"update"|"shutdown"}
+// per WS protocol v2 §3.1, so the UI can render a distinct state and arm
+// the post-restart auto-reload poller. Best-effort: if a client's send
+// channel is full the message is dropped silently rather than blocking
+// the shutdown path.
+func (h *Hub) BroadcastShutdown(reason string) {
+	if reason == "" {
+		reason = "shutdown"
+	}
+	payload := []byte(fmt.Sprintf(`{"reason":%q}`, reason))
+	msg := make([]byte, 1+len(payload))
+	msg[0] = 0x05
+	copy(msg[1:], payload)
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-
-	msg := []byte{0x05}
 
 	for _, ph := range h.panes {
 		ph.mu.Lock()

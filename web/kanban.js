@@ -1264,32 +1264,6 @@ export class KanbanManager {
     }
 
     async apiGet(path) {
-        const token = sessionStorage.getItem('vikunja_token');
-        const url = localStorage.getItem('vikunja_url');
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;
-        
-        const res = await fetch(proxyUrl, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (res.status === 401) {
-            sessionStorage.removeItem('vikunja_token');
-            throw new Error('Session expired. Please reconnect.');
-        }
-        
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || `Request failed with status ${res.status}`);
-        }
-        
-        return await res.json();
-    }
-
-    async apiGet(path) {
         return this.apiRequest(path, 'GET');
     }
 

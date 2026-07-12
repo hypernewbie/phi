@@ -27,6 +27,14 @@ func tabsFilePath() string {
 	return filepath.Join(home, ".phi", "tabs.json")
 }
 
+// saveTimer debounces phi_tabs.json writes (plan §3.3: "debounced 500ms").
+// Spawn/Kill/Rename/Pin/Mark all call ScheduleSaveState; the actual file
+// write coalesces into one atomic rename within 500ms of the last mutation.
+var (
+	saveTimer *time.Timer
+	saveMu    sync.Mutex
+)
+
 var (
 	GracePeriod             = 30 * time.Minute
 	RecentActivityThreshold = 2 * time.Minute
@@ -105,7 +113,7 @@ func (m *Manager) Spawn(dir, command string, args []string, coder, sessionID str
 	m.instances[inst.ID] = inst
 	m.mu.Unlock()
 
-	_ = m.SaveState()
+	_ = m.scheduleSave()
 
 	// Keep the PTYInstance record in registry when it dies so the UI can reconnect/restart it.
 	go func() {
@@ -209,7 +217,7 @@ func (m *Manager) Kill(id string) error {
 		killErr = inst.Pty.Kill()
 	}
 
-	_ = m.SaveState()
+	_ = m.scheduleSave()
 
 	return killErr
 }
@@ -229,6 +237,14 @@ func (m *Manager) SaveState() error {
 	m.mu.Lock()
 	list := make([]*PTYInstance, 0, len(m.instances))
 	for _, inst := range m.instances {
+		// Skip dead/nil-Pty records from the on-disk state file: they are
+		// only kept in memory so the UI can show "Session expired" copy
+		// and the restore banner can offer to respawn them. They should
+		// NOT be persisted as live state — the next process boot would
+		// otherwise resurrect dead PTYs as ghosts.
+		if inst.Pty == nil {
+			continue
+		}
 		list = append(list, inst)
 	}
 	m.mu.Unlock()
@@ -240,6 +256,34 @@ func (m *Manager) SaveState() error {
 
 	path := tabsFilePath()
 	return system.WriteFileAtomic(path, b, 0644)
+}
+
+// scheduleSave coalesces SaveState calls onto a 500ms debounce (plan §3.3).
+// Use this from hot paths (Spawn/Kill/Pin/Mark) instead of SaveState directly.
+func (m *Manager) scheduleSave() error {
+	saveMu.Lock()
+	if saveTimer != nil {
+		saveTimer.Stop()
+	}
+	saveTimer = time.AfterFunc(500*time.Millisecond, func() {
+		if err := m.SaveState(); err != nil {
+			log.Printf("[pty] Failed to save tabs state: %v", err)
+		}
+	})
+	saveMu.Unlock()
+	return nil
+}
+
+// FlushSaveState forces any pending debounced save to write immediately.
+// Called on graceful shutdown to ensure state lands on disk before exit.
+func (m *Manager) FlushSaveState() error {
+	saveMu.Lock()
+	if saveTimer != nil {
+		saveTimer.Stop()
+		saveTimer = nil
+	}
+	saveMu.Unlock()
+	return m.SaveState()
 }
 
 func (m *Manager) LoadState() error {
@@ -261,6 +305,19 @@ func (m *Manager) LoadState() error {
 	defer m.mu.Unlock()
 	for _, inst := range list {
 		inst.ActiveClients = make(map[string]struct{})
+		// CRITICAL: tabs.json is the persisted snapshot of LIVE PTYs. On
+		// restart the in-memory map will be empty, so any tab restored
+		// from disk here has no Pty pointer — but its Busy/IsBusy flags
+		// were JSON-roundtripped. Without resetting them, the idle
+		// watcher would fire "task finished" notifications for tabs
+		// that never started. Mark them dead-but-known and stop the
+		// grace timer from immediately killing them.
+		inst.Pty = nil
+		inst.IsBusy = false
+		inst.Busy = false
+		inst.NotifiedIdle = true // suppress the post-restart idle toast
+		inst.LastOutputAt = time.Now()
+		inst.DetachTimer = nil
 		m.instances[inst.ID] = inst
 	}
 	return nil
@@ -291,7 +348,7 @@ func (m *Manager) SetPinned(id string, pinned bool) error {
 		inst.DetachTimer = nil
 		log.Printf("[pty] Session %s pinned. Stopped active detach timer.", id)
 	}
-	_ = m.SaveState()
+	_ = m.scheduleSave()
 	return nil
 }
 
@@ -309,7 +366,7 @@ func (m *Manager) SetMarked(id string, marked bool) error {
 
 	inst.Marked = marked
 	log.Printf("[pty] SetMarked %s: marked=%v", id, marked)
-	_ = m.SaveState()
+	_ = m.scheduleSave()
 	return nil
 }
 
@@ -326,6 +383,15 @@ func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 		// Verify that the PTY instance is still registered and active in the manager.
 		// If it has already been killed or removed, we do not need to do anything.
 		if _, exists := m.instances[id]; !exists {
+			return
+		}
+
+		// Restored tabs (Pty nil) are managed by the restore banner, not
+		// the grace timer. If we leave them here they get killed over and
+		// over (no-op since Pty is nil) but more importantly the user
+		// loses the session-expired affordance for the restore flow.
+		if inst.Pty == nil {
+			inst.DetachTimer = nil
 			return
 		}
 
@@ -396,6 +462,17 @@ func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
 				workspace := inst.Workspace
 				cwd := inst.Cwd
 				if !notifiableCoders[coder] {
+					inst.mu.Unlock()
+					continue
+				}
+
+				// Dead/restored tabs (Pty nil) are kept in the registry so
+				// the UI can show "Session expired" copy and offer restore.
+				// They are not real running sessions and must not trigger
+				// the idle-finished notification.
+				if inst.Pty == nil {
+					inst.IsBusy = false
+					inst.Busy = false
 					inst.mu.Unlock()
 					continue
 				}
