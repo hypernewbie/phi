@@ -1,6 +1,8 @@
 package pty
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -223,10 +225,17 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 	// Wait without calling UpdateActivity to let the rescheduled timer expire and terminate the PTY.
 	time.Sleep(200 * time.Millisecond)
 
-	// The instance should now be terminated due to inactivity.
-	_, foundAfterIdle := manager.Get(inst.ID)
-	if foundAfterIdle {
-		t.Error("Expected PTY instance to be killed after grace period expired with no activity")
+	// The instance should still be in the manager registry, but the PTY process should be terminated.
+	instAfterIdle, foundAfterIdle := manager.Get(inst.ID)
+	if !foundAfterIdle {
+		t.Error("Expected PTY instance record to persist in registry")
+	} else if instAfterIdle.Pty != nil {
+		select {
+		case <-instAfterIdle.Pty.Closed:
+			// Terminated
+		default:
+			t.Error("Expected PTY process to be terminated after grace period expired")
+		}
 	}
 }
 
@@ -435,6 +444,47 @@ func TestStartIdleWatcher(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	if bashCalled {
 		t.Error("IdleWatcher should not trigger for excluded coder 'bash'")
+	}
+}
+
+func TestManagerPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	testTabsPath = filepath.Join(tmpDir, "tabs-test.json")
+	defer func() { testTabsPath = "" }()
+
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	inst, err := manager.Spawn("", shell, args, "shell", "persist-test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY instance: %v", err)
+	}
+
+	// Verify file was written
+	if _, err := os.Stat(testTabsPath); err != nil {
+		t.Errorf("Expected tabs state file to be created: %v", err)
+	}
+
+	// Create a new manager and load state
+	manager2 := NewManager()
+	if err := manager2.LoadState(); err != nil {
+		t.Fatalf("Failed to load state: %v", err)
+	}
+
+	inst2, found := manager2.Get(inst.ID)
+	if !found {
+		t.Fatal("Failed to retrieve restored PTY instance")
+	}
+	if inst2.SessionID != "persist-test-session" {
+		t.Errorf("Expected restored session ID 'persist-test-session', got %q", inst2.SessionID)
+	}
+	if inst2.Pty != nil {
+		t.Error("Restored PTY instance should have Pty = nil (dead process)")
+	}
+
+	// Kill the instance in first manager to clean up resources
+	if err := manager.Kill(inst.ID); err != nil {
+		t.Errorf("Failed to kill instance: %v", err)
 	}
 }
 

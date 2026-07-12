@@ -1190,19 +1190,29 @@ export class TabManager {
         const overlay = document.createElement('div');
         overlay.className = 'reconnect-overlay';
 
-        const hasExited = tabInfo.exitCode !== undefined && tabInfo.exitCode !== null;
-        const msg = hasExited ? `process exited (code ${tabInfo.exitCode})` : 'session ended';
+        let msg = 'Connection lost';
+        let showReconnect = true;
+
+        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) {
+            if (tabInfo.exitCode === -1) {
+                msg = 'Session expired (PTY gone)';
+                showReconnect = false;
+            } else {
+                msg = `process exited (code ${tabInfo.exitCode})`;
+                showReconnect = false;
+            }
+        }
 
         overlay.innerHTML = `
             <div class="reconnect-box">
                 <span class="reconnect-msg">${msg}</span>
                 <div class="reconnect-buttons">
-                    ${hasExited ? '' : '<button class="reconnect-btn">⟳ Reconnect</button>'}
+                    ${showReconnect ? '<button class="reconnect-btn">⟳ Reconnect</button>' : ''}
                     <button class="restart-btn">⚡ Restart</button>
                 </div>
             </div>`;
 
-        if (!hasExited) {
+        if (showReconnect) {
             overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
                 this.reconnectTab(tabInfo);
             });
@@ -1253,7 +1263,7 @@ export class TabManager {
                 () => {
                     tabInfo.reconnectInFlight = false;
                     if (!opened) {
-                        if (msgEl) msgEl.innerText = 'session expired';
+                        if (msgEl) msgEl.innerText = 'Session expired (PTY gone)';
                         if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
                         if (restartBtn) restartBtn.disabled = false;
                         this.updateDisconnectBanner();
@@ -1354,7 +1364,7 @@ export class TabManager {
                 (control) => { this.handleControlMessage(tabInfo, control); },
                 () => {
                     if (!opened) {
-                        if (msgEl) msgEl.innerText = 'session expired';
+                        if (msgEl) msgEl.innerText = 'Session expired (PTY gone)';
                         if (reconnectBtn) reconnectBtn.disabled = false;
                         if (restartBtn) restartBtn.disabled = false;
                         this.updateDisconnectBanner();

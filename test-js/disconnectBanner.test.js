@@ -103,4 +103,26 @@ describe('Disconnect Banner UX', () => {
         expect(banner.classList.contains('hidden')).toBe(false);
         expect(banner.innerHTML).toContain('2 tabs disconnected');
     });
+
+    it('reconnect overlay displays Session expired (PTY gone) when exitCode is -1', () => {
+        const tab = makeTab({ isDead: true, exitCode: -1 });
+        tabManager._showReconnectOverlay(tab);
+
+        const overlay = tab.termContainer.querySelector('.reconnect-overlay');
+        expect(overlay).not.toBeNull();
+        expect(overlay.querySelector('.reconnect-msg').textContent).toBe('Session expired (PTY gone)');
+        expect(overlay.querySelector('.reconnect-btn')).toBeNull(); // No reconnect button
+        expect(overlay.querySelector('.restart-btn')).not.toBeNull(); // Restart button present
+    });
+
+    it('reconnect overlay displays Connection lost when exitCode is null/undefined', () => {
+        const tab = makeTab({ isDead: true });
+        tabManager._showReconnectOverlay(tab);
+
+        const overlay = tab.termContainer.querySelector('.reconnect-overlay');
+        expect(overlay).not.toBeNull();
+        expect(overlay.querySelector('.reconnect-msg').textContent).toBe('Connection lost');
+        expect(overlay.querySelector('.reconnect-btn')).not.toBeNull(); // Reconnect button present
+        expect(overlay.querySelector('.restart-btn')).not.toBeNull();
+    });
 });
