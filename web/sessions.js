@@ -749,7 +749,7 @@ export class SessionsManager {
         row.appendChild(input);
         row.appendChild(hint);
         item.insertAdjacentElement('afterend', row);
-        input.focus();
+        input.focus({ preventScroll: true });
 
         const submit = () => {
             const argsStr = input.value.trim();
@@ -778,7 +778,7 @@ export class SessionsManager {
         input.value = currentTitle;
         
         titleEl.replaceWith(input);
-        input.focus();
+        input.focus({ preventScroll: true });
         input.select();
         
         const saveRename = async () => {
@@ -823,7 +823,7 @@ export class SessionsManager {
         this.wsModalSuggestions.classList.add('hidden');
         this.selectedSuggestionIndex = -1;
         this.wsModal.classList.remove('hidden');
-        setTimeout(() => this.wsModalInput.focus(), 50);
+        setTimeout(() => this.wsModalInput.focus({ preventScroll: true }), 50);
     }
 
     closeWorkspaceModal() {
@@ -870,7 +870,7 @@ export class SessionsManager {
                     this.wsModalInput.value = sugg;
                     this.wsModalSuggestions.classList.add('hidden');
                     this.selectedSuggestionIndex = -1;
-                    this.wsModalInput.focus();
+                    this.wsModalInput.focus({ preventScroll: true });
                 });
                 
                 this.wsModalSuggestions.appendChild(div);
