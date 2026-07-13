@@ -230,6 +230,7 @@
                     </div>
                     <div class="sidebar-status">
                         <button id="phi-changelog-btn" class="sidebar-version-btn" title="Show changelog">v0.8.1</button>
+                        <button id="phi-restart-btn" class="sidebar-help-btn" title="Restart phi (reloads current binary)">↻</button>
                         <button id="phi-help-btn" class="sidebar-help-btn" title="Phi User Guide & Help">?</button>
                     </div>
                 </div>
@@ -341,6 +342,9 @@
                         <button class="diff-tab-btn" data-tab="cmd">cmd</button>
                     </div>
                     <div class="diff-header-actions" style="display: flex; align-items: center; gap: 8px;">
+                        <button id="copy-diff-btn" title="Copy diff output (selection if any, else whole buffer)">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
                         <button id="refresh-diff-btn" title="Refresh">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
@@ -473,6 +477,24 @@
                         <button id="pushover-test-btn" class="btn btn-accent" style="font-size: 11px; padding: 4px 10px;">Test Pushover 🚀</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restart phi confirm modal -->
+    <div id="restart-modal" class="md-modal-overlay hidden">
+        <div class="md-modal-content" style="max-width: 420px;">
+            <div class="md-modal-header">
+                <span class="md-modal-title">↻ Restart phi?</span>
+                <button id="restart-modal-close" class="md-modal-close">×</button>
+            </div>
+            <div class="md-modal-body" style="padding: 16px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.5;">
+                <p style="margin: 0;">This will reload phi into a fresh process. Any in-progress terminal output will be preserved; running commands keep running in the new process (Unix: same PID via <code>exec</code>; Windows: child re-binds).</p>
+                <p style="margin: 0; color: var(--text-muted); font-size: 12px;">Use this after you've manually updated phi (e.g. <code>go install .</code>, <code>npm i -g phi-code</code>, or replacing the standalone binary) to pick up the new version.</p>
+            </div>
+            <div class="md-modal-footer">
+                <button id="restart-modal-cancel" class="btn btn-primary">Cancel</button>
+                <button id="restart-modal-confirm" class="btn btn-accent">Restart</button>
             </div>
         </div>
     </div>

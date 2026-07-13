@@ -54,6 +54,7 @@ export class DiffController {
         this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn');
         this.closeDiffBtn = document.getElementById('close-diff-btn');
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
+        this.copyDiffBtn = document.getElementById('copy-diff-btn');
         this.diffTermContainer = document.getElementById('diff-term-container');
         this.commitSelect = document.getElementById('diff-commit-select');
         this.actionBar = document.getElementById('diff-action-bar');
@@ -76,6 +77,22 @@ export class DiffController {
         this.headerDiffToggleBtn.addEventListener('click', () => {
             this.togglePanel(!this.isPanelOpen);
         });
+
+        // Copy button: copies the current xterm selection if there is one,
+        // otherwise dumps the whole buffer (trimmed) so the user doesn't
+        // have to drag-select to grab a small diff.
+        if (this.copyDiffBtn) {
+            this.copyDiffBtn.addEventListener('click', () => {
+                if (this.term) {
+                    const sel = this.term.getSelection();
+                    if (sel) {
+                        this.app.tabManager.copyTextRobustly(sel);
+                    } else {
+                        this.copyDiffBuffer();
+                    }
+                }
+            });
+        }
         
         // Rich diff modal triggering
         if (this.richDiffBtn) {
@@ -155,18 +172,94 @@ export class DiffController {
         
         this.fitAddon = new window.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
-        
+
         this.term.open(this.diffTermContainer);
-        
+
         // Graceful WebGL load
         try {
             const webgl = new window.WebglAddon.WebglAddon();
             this.term.loadAddon(webgl);
         } catch (e) {}
-        
+
+        // Copy plumbing for the diff/status/log pane. The main terminal
+        // wires these (terminal.js:817-878) so users can drag-select +
+        // Cmd-C / Ctrl-Shift-C / right-click to copy. The diff xterm
+        // was missing all of them, so even though xterm keeps an internal
+        // selection model, Cmd-C fell through to the browser, saw a canvas
+        // (WebGL renders to <canvas>), and copied nothing - hence the
+        // user-visible "git output is an image" bug.
+        //
+        // We reuse this.app.tabManager.copyTextRobustly (handles clipboard
+        // permission + execCommand fallback for insecure contexts).
+        this._wireCopyHandlers(this.term, this.diffTermContainer);
+
         // Load initial state from local storage
         const openState = localStorage.getItem('phi_diff_panel_open');
         this.togglePanel(openState !== 'false');
+    }
+
+    // Port of terminal.js:817-878 copy wiring, scoped to whichever xterm
+    // is passed in. Three entry points for selection copying:
+    //   1. onSelectionChange -> silent auto-copy (matches main terminal)
+    //   2. Cmd-C / Ctrl-Shift-C keydown -> copy via clipboard (skip if no selection)
+    //   3. Right-click contextmenu -> copy via clipboard (skip if no selection)
+    // Plus a public copyAll() helper for the Copy button that dumps the
+    // whole buffer when there's no active selection.
+    _wireCopyHandlers(term, termContainer) {
+        const copy = (text, silent) => {
+            if (!text) return;
+            this.app.tabManager.copyTextRobustly(text, silent);
+        };
+
+        term.onSelectionChange(() => {
+            const sel = term.getSelection();
+            if (sel) copy(sel, true); // silent: matches main-terminal behavior
+        });
+
+        termContainer.addEventListener('contextmenu', (e) => {
+            const sel = term.getSelection();
+            if (!sel) return;
+            e.preventDefault();
+            e.stopPropagation();
+            copy(sel);
+        }, { capture: true });
+
+        term.attachCustomKeyEventHandler((e) => {
+            if (e.type === 'keydown') {
+                const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+                const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
+                               (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
+                if (isCopy) {
+                    const sel = term.getSelection();
+                    if (sel) {
+                        copy(sel);
+                        e.preventDefault();
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+    }
+
+    // Dump the whole xterm buffer as plain text, trimming trailing empty
+    // lines (xterm pads the buffer with whitespace rows). Used by the
+    // "Copy" toolbar button when the user wants everything without
+    // bothering to drag-select.
+    copyDiffBuffer() {
+        if (!this.term) return;
+        const lines = [];
+        const buffer = this.term.buffer.active;
+        for (let i = 0; i < buffer.length; i++) {
+            const line = buffer.getLine(i);
+            if (!line) continue;
+            lines.push(line.translateToString(true));
+        }
+        // Trim trailing empty/whitespace-only lines so pasted output
+        // doesn't have a wall of blank padding at the end.
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+        const text = lines.join('\n');
+        this.app.tabManager.copyTextRobustly(text);
     }
     
     togglePanel(isOpen) {

@@ -54,6 +54,35 @@ export class MarkdownManager {
         if (changelogBtn) {
             changelogBtn.addEventListener('click', () => this.openChangelogModal());
         }
+
+        // Manual restart button (sidebar footer ↻). Always available for
+        // every install method - just calls /api/restart. The user is
+        // expected to have updated phi themselves beforehand (git pull &&
+        // go install ., npm i -g phi-code, replacing the standalone
+        // binary, etc.). We deliberately do NOT auto-detect a new binary
+        // on disk: the user knows what they did better than we do.
+        this.restartModal = document.getElementById('restart-modal');
+        this.restartModalClose = document.getElementById('restart-modal-close');
+        this.restartModalCancel = document.getElementById('restart-modal-cancel');
+        this.restartModalConfirm = document.getElementById('restart-modal-confirm');
+        const restartBtn = document.getElementById('phi-restart-btn');
+        if (restartBtn) {
+            restartBtn.addEventListener('click', () => this._openRestartModal());
+        }
+        if (this.restartModalClose) {
+            this.restartModalClose.addEventListener('click', () => this._closeRestartModal());
+        }
+        if (this.restartModalCancel) {
+            this.restartModalCancel.addEventListener('click', () => this._closeRestartModal());
+        }
+        if (this.restartModal) {
+            this.restartModal.addEventListener('click', (e) => {
+                if (e.target === this.restartModal) this._closeRestartModal();
+            });
+        }
+        if (this.restartModalConfirm) {
+            this.restartModalConfirm.addEventListener('click', () => this._doRestart());
+        }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 if (!this.modal.classList.contains('hidden')) {
@@ -240,6 +269,38 @@ export class MarkdownManager {
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
+    }
+
+    _openRestartModal() {
+        if (this.restartModal) this.restartModal.classList.remove('hidden');
+    }
+
+    _closeRestartModal() {
+        if (this.restartModal) this.restartModal.classList.add('hidden');
+    }
+
+    async _doRestart() {
+        if (this.restartModalConfirm) {
+            this.restartModalConfirm.disabled = true;
+            this.restartModalConfirm.textContent = 'Restarting…';
+        }
+        if (this.restartModalCancel) this.restartModalCancel.disabled = true;
+        try {
+            const res = await fetch('/api/restart', { method: 'POST' });
+            if (!res.ok) {
+                const errText = await res.text().catch(() => 'unknown error');
+                throw new Error(errText || `HTTP ${res.status}`);
+            }
+            // The 0x05 frame from /api/restart will fire handleServerShutdown
+            // which shows its own toast and reloads the page. Nothing to do here.
+        } catch (err) {
+            this.app.showToast(`Restart failed: ${err.message}`, { type: 'error' });
+            if (this.restartModalConfirm) {
+                this.restartModalConfirm.disabled = false;
+                this.restartModalConfirm.textContent = 'Restart';
+            }
+            if (this.restartModalCancel) this.restartModalCancel.disabled = false;
+        }
     }
 
     openRawMarkdown(title, rawMarkdown) {
