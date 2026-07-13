@@ -9,3 +9,6 @@ temp/
 coverage/
 *.out
 node_modules/
+
+# pi-subagents scratch/artifacts
+.pi-subagents/
