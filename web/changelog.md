@@ -2,6 +2,28 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.8.2 — 2026-07-12
+
+Small followup on top of v0.8.1 — one tab-management upgrade plus a handful of UX fixes.
+
+### Added
+
+- **Tab soft-close with 5s grace + smart next-tab picker.** Closing a tab now fades it out (`line-through` + 0.45 opacity, × swaps to ↻) and schedules a 5-second finalize. Hit Undo in the toast (or click the ↻) and the tab comes back — PTY was never killed. If you really mean it, click × twice. The "which tab opens next" picker now prefers the same workspace + same coder, then same workspace, then same coder, then the most-recent other tab — so closing a tab in `/projects/foo` no longer jumps to a tab in `/scratch/bar` from four hours ago. Capped at 3 soft-closed tabs at a time so the strip stays readable.
+
+- **Manual "Restart phi" button.** A `↻` icon in the sidebar footer (next to the version pill + help button). Opens a confirm modal explaining what restart does and when to use it (`git pull && go install .`, `npm i -g phi-code`, or replace the standalone binary — whatever your install method is), then POSTs `/api/restart`. The existing WebSocket `0x05` frame handler does the reload dance. Works for every install method. Deliberately no auto-detection of new binaries on disk: the user knows what they did better than we do.
+
+- **Copy button in the diff toolbar.** A 📋 icon next to Refresh + Close. Copies the current xterm selection if there is one, otherwise dumps the entire buffer (with xterm's trailing whitespace-only padding stripped) to the clipboard. Pairs with the new copy plumbing so drag-select / Cmd-C / Ctrl-Shift-C / right-click on git diff/status/log output now works the same as in the main terminal.
+
+### Fixed
+
+- **Git diff / status / log output now copies correctly.** Previously rendered as an "image" — drag-select highlighted the text but Cmd-C produced nothing. Root cause: the diff xterm had none of the copy handlers the main terminal has (`onSelectionChange` auto-copy, Cmd-C, Ctrl-Shift-C, right-click). Ported those handlers from the main terminal; the renderer itself (canvas/WebGL) wasn't the problem. (You can drag-select, Cmd-C, right-click — or just hit the new Copy button.)
+
+- **Clicking the already-active tab stopped snapping the terminal to the bottom.** Previously, clicking on the tab you were already on rerouted the WS reset path and glued the viewport to the row of your last keystroke even if you'd scrolled up to read scrollback. Now clicking the active tab is a no-op.
+
+- **Vendor truncated xterm addons replaced.** Some of the addons shipped in `web/vendor/xterm/` had been truncated mid-file (Firefox and Safari users saw `Could not open session` at launch). Replaced with intact copies; no expected behavior change on a working install.
+
+- **Sidebar version pill no longer flashes `dev` for stamped builds.** When `/api/version` returns the ldflags-stamped version it wins. When it returns `dev` (un-stamped `go run` / dev build), the HTML ships with the latest release tag (`v0.8.2`) and is preserved as-is, so the sidebar never displays a useless `dev` string.
+
 ## v0.8.1 — 2026-07-12
 
 Small polish release on top of v0.8.0.
