@@ -7,11 +7,18 @@ import { TabManager } from '../web/terminal.js';
 //   closeTab(paneId)   -> softCloseTab (grace period)
 //   undoCloseTab       -> restore
 //   finalizeCloseTab   -> actually kill the PTY
-//   pickNextTab        -> smart next-tab selection (workspace + coder)
 //
 // The grace timer is 5s (TabManager.SOFT_CLOSE_GRACE_MS). These tests
 // use vi.useFakeTimers so we can advance the clock without waiting in
 // real time. The MAX_SOFT_CLOSED_TABS cap = 3.
+//
+// pickNextTab was removed: soft-close never auto-switches the active
+// tab. The active tab stays in place with a spinner overlay during the
+// grace; only finalize (after grace expires) commits to "tab is gone,"
+// and at that point if it's the last tab we show the empty state. This
+// is the fix for the user-reported "closing a tab jumps me to a random
+// unrelated project" bug, plus the related "big white XX tab" visual
+// complaint (line-through on title + still-visible × read as XX).
 
 setupDomHarness();
 
@@ -202,85 +209,15 @@ describe('undoCloseTab - reverse a soft-close', () => {
     });
 });
 
-// ---- pickNextTab - the bug fix --------------------------------------
+// ---- pickNextTab removed (no auto-switch on close) -----------------
 
-describe('pickNextTab - smart next-tab selection', () => {
-    it('prefers same workspace + same coder over everything else', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsB', coder: 'opencode' },
-                { paneId: 'c', workspace: '/wsA', coder: 'opencode' }, // best match
-                { paneId: 'd', workspace: '/wsA', coder: 'shell' },
-            ],
-        });
-        const closed = tm.tabs.get('a');
-        expect(tm.pickNextTab(closed)).toBe('c');
-    });
-
-    it('falls back to same workspace, any coder', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsB', coder: 'opencode' },
-                { paneId: 'c', workspace: '/wsA', coder: 'shell' }, // only same workspace
-            ],
-        });
-        expect(tm.pickNextTab(tm.tabs.get('a'))).toBe('c');
-    });
-
-    it('falls back to same coder, any workspace', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsB', coder: 'opencode' }, // same coder
-                { paneId: 'c', workspace: '/wsC', coder: 'shell' },
-            ],
-        });
-        expect(tm.pickNextTab(tm.tabs.get('a'))).toBe('b');
-    });
-
-    it('falls back to last remaining tab when nothing matches (this was the bug)', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsZ', coder: 'shell' },  // unrelated
-            ],
-        });
-        expect(tm.pickNextTab(tm.tabs.get('a'))).toBe('b');
-    });
-
-    it('returns null when no other tabs survive', () => {
-        const tm = makeTm({ withTabs: ['a'] });
-        expect(tm.pickNextTab(tm.tabs.get('a'))).toBeNull();
-    });
-
-    it('excludes other soft-closing tabs so we never auto-jump onto a fading tab', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsA', coder: 'opencode' }, // best match BUT soft-closing
-                { paneId: 'c', workspace: '/wsZ', coder: 'shell' },
-            ],
-        });
-        // Mark b as already soft-closing (user is in the middle of closing it).
-        tm.tabs.get('b').softClosing = true;
-        expect(tm.pickNextTab(tm.tabs.get('a'))).toBe('c');
-    });
-
-    // The whole point: this is the exact user-reported symptom.
-    it('REGRESSION: closing a tab in wsA does NOT jump to an unrelated wsZ tab when a same-workspace tab exists', () => {
-        const tm = makeTm({
-            withTabs: [
-                { paneId: 'project-shell-1', workspace: '/my-project', coder: 'shell' },
-                { paneId: 'old-wsZ-tab', workspace: '/wsZ', coder: 'shell' }, // unrelated
-                { paneId: 'project-shell-2', workspace: '/my-project', coder: 'shell' }, // same project
-            ],
-        });
-        // User closes project-shell-1 while looking at /my-project. The
-        // bug would jump to old-wsZ-tab (last in Map). The fix jumps to
-        // project-shell-2 (same workspace).
-        expect(tm.pickNextTab(tm.tabs.get('project-shell-1'))).toBe('project-shell-2');
+describe('pickNextTab - removed', () => {
+    it('pickNextTab no longer exists on TabManager.prototype', () => {
+        // The picker was removed in favor of "stay on the closing tab
+        // with a spinner overlay". The priority chain was a band-aid
+        // for the wrong problem (auto-switching is the problem, not
+        // which tab to switch to).
+        expect(typeof TabManager.prototype.pickNextTab).toBe('undefined');
     });
 });
 
@@ -327,28 +264,33 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
     });
 });
 
-// ---- softCloseTab - auto-switch behavior ----------------------------
+// ---- softCloseTab - stay-on-closing-tab behavior --------------------
 
-describe('softCloseTab - auto-switch on active-tab close', () => {
-    it('switches to the most-related tab when the active tab is soft-closed', () => {
+describe('softCloseTab - active-tab close keeps the user where they are', () => {
+    it('does NOT switch tabs when the active tab is soft-closed', () => {
         const tm = makeTm({
             withTabs: [
                 { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsA', coder: 'opencode' },
+                { paneId: 'b', workspace: '/wsZ', coder: 'shell' },
             ],
             activePaneId: 'a',
         });
         const switchSpy = vi.spyOn(tm, 'switchTab');
         tm.softCloseTab('a');
-        expect(switchSpy).toHaveBeenCalledWith('b');
+        // No surprise jump to an unrelated project.
+        expect(switchSpy).not.toHaveBeenCalled();
+        expect(tm.activePaneId).toBe('a');
     });
 
-    it('shows the empty state when closing the last tab', () => {
+    it('does NOT show the empty state immediately when closing the only tab', () => {
+        // The previous behavior surfaced the empty state right away on the
+        // last-tab close. New behavior: keep the user on the fading tab
+        // with the spinner overlay, and only commit to "empty" when the
+        // grace expires (finalizeCloseTab).
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
-        // No tab to switch to - activePaneId cleared, empty state shown.
-        expect(tm.activePaneId).toBeNull();
-        expect(tm.showEmptyState).toHaveBeenCalled();
+        expect(tm.showEmptyState).not.toHaveBeenCalled();
+        expect(tm.activePaneId).toBe('a');
     });
 
     it('does NOT auto-switch when closing a background (non-active) tab', () => {
@@ -362,7 +304,100 @@ describe('softCloseTab - auto-switch on active-tab close', () => {
         const switchSpy = vi.spyOn(tm, 'switchTab');
         tm.softCloseTab('b'); // closing the background tab
         expect(switchSpy).not.toHaveBeenCalled();
-        expect(tm.activePaneId).toBe('a'); // still on a
+        expect(tm.activePaneId).toBe('a');
+    });
+
+    it('active-tab close mounts a content overlay over the terminal', () => {
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a' }],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('a');
+        const tab = tm.tabs.get('a');
+        expect(tab.softCloseOverlay).toBeTruthy();
+        // Overlay is appended to the tab's termContainer.
+        expect(tab.termContainer.contains(tab.softCloseOverlay)).toBe(true);
+        expect(tab.softCloseOverlay.classList.contains('tab-soft-close-overlay')).toBe(true);
+        // Overlay shows a countdown + an undo hint.
+        const text = tab.softCloseOverlay.textContent;
+        expect(text).toMatch(/Closing in/);
+        expect(text).toMatch(/undo/i);
+    });
+
+    it('background-tab close does NOT mount a content overlay', () => {
+        // Background tabs close invisibly — only the strip pill and the
+        // toast should appear, no content overlay (the user isn't on
+        // that tab).
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+        const tab = tm.tabs.get('b');
+        expect(tab.softCloseOverlay).toBeFalsy();
+    });
+
+    it('adds a countdown pill to the strip entry', () => {
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+        const tab = tm.tabs.get('b');
+        expect(tab.softClosePill).toBeTruthy();
+        expect(tab.tabEl.contains(tab.softClosePill)).toBe(true);
+        expect(tab.softClosePill.classList.contains('tab-soft-close-pill')).toBe(true);
+        // Initial value counts down from the full grace period.
+        expect(tab.softClosePill.textContent).toMatch(/^\d+s$/);
+    });
+
+    it('pill countdown ticks down as the clock advances', () => {
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+        const tab = tm.tabs.get('b');
+        const initial = tab.softClosePill.textContent;
+        vi.advanceTimersByTime(2500); // 2.5s in
+        const later = tab.softClosePill.textContent;
+        // Pill should now show a smaller number.
+        const initialSec = parseInt(initial, 10);
+        const laterSec = parseInt(later, 10);
+        expect(laterSec).toBeLessThan(initialSec);
+    });
+
+    it('drops the line-through on the title (no more "X\'d out" visual)', () => {
+        // Regression for the "big white XX tab" report: the previous
+        // styling put a strikethrough on the title, which literally read
+        // as a line through the word plus the still-visible × = an XX
+        // shape. The CSS for .tab.soft-closed .tab-title must NOT use
+        // text-decoration: line-through anymore.
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        const tab = tm.tabs.get('a');
+        // We can't actually test computed CSS here (jsdom doesn't run
+        // our stylesheet), but we can verify the production CSS rule no
+        // longer carries line-through by reading the file.
+        const fs = require('fs');
+        const css = fs.readFileSync('web/style.css', 'utf8');
+        // Strip comments so a "/* ... strikethrough ... */" in the comment
+        // doesn't trigger a false positive on the literal string.
+        const cssStripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+        const ruleMatch = cssStripped.match(/\.tab\.soft-closed\s+\.tab-title\s*\{[^}]*\}/);
+        expect(ruleMatch).toBeTruthy();
+        expect(ruleMatch[0]).not.toMatch(/line-through/);
+    });
+
+    it('CSS toggle hides .tab-close and reveals .tab-reopen on soft-closed tabs', () => {
+        // The previous code had inline style="display:none" on .tab-reopen
+        // with no JS or CSS to undo it. Now CSS controls visibility based
+        // on the .soft-closed class.
+        const fs = require('fs');
+        const css = fs.readFileSync('web/style.css', 'utf8');
+        expect(css).toMatch(/\.tab \.tab-reopen\s*\{\s*display:\s*none/);
+        expect(css).toMatch(/\.tab\.soft-closed \.tab-close\s*\{\s*display:\s*none/);
+        expect(css).toMatch(/\.tab\.soft-closed \.tab-reopen\s*\{\s*display:\s*flex/);
     });
 });
 
