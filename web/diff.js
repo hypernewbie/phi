@@ -106,6 +106,14 @@ export class DiffController {
                 if (e.target === this.diffModal) this.closeRichDiffModal();
             });
         }
+        // Escape closes the rich-diff modal — matches the pattern in
+        // markdown.js (md-modal) and app.js (ws-modal). Document-level
+        // listener so we don't need to manage focus to capture Escape.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.diffModal && !this.diffModal.classList.contains('hidden')) {
+                this.closeRichDiffModal();
+            }
+        });
         if (this.contextToggleBtn) {
             this.contextToggleBtn.addEventListener('click', () => this.toggleRichDiffContext());
         }

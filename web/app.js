@@ -340,6 +340,13 @@ export class App {
             pushoverClose?.addEventListener('click', () => {
                 pushoverModal.classList.add('hidden');
             });
+            // Escape closes the pushover modal — matches the pattern in
+            // markdown.js (md-modal), app.js (ws-modal), diff.js (diff-modal).
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && !pushoverModal.classList.contains('hidden')) {
+                    pushoverModal.classList.add('hidden');
+                }
+            });
 
             const saveSimplepushConfig = async () => {
                 try {

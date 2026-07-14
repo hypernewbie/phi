@@ -87,6 +87,8 @@ export class MarkdownManager {
             if (e.key === 'Escape') {
                 if (!this.modal.classList.contains('hidden')) {
                     this.closeModal();
+                } else if (this.restartModal && !this.restartModal.classList.contains('hidden')) {
+                    this._closeRestartModal();
                 }
                 this._hideContextMenu();
             }
