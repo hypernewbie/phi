@@ -634,6 +634,16 @@ html, body {
     text-shadow: 0 0 6px var(--accent-glow);
 }
 
+/* Eye of Horus — drawn when a session is alive but idle (tab exists,
+   not dead, but not currently generating output). The system is
+   watching it for completion, hence the eye. Muted accent at half
+   the djed's glow so it reads as "quiet" vs "stable." */
+.session-dot.idle {
+    color: var(--accent-dim);
+    text-shadow: 0 0 4px var(--accent-trace);
+    opacity: 0.85;
+}
+
 .session-time {
     font-size: 11px;
     color: var(--text-muted);
