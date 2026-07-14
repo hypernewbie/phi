@@ -458,6 +458,11 @@ export class TabManager {
     setupEventListeners() {
         document.addEventListener('keydown', (e) => this.handleGlobalTabShortcuts(e));
 
+        // Hover preview card (glassmorphism, big hieroglyph). Shows on
+        // mouseover of a tab so users can identify the worktree at a
+        // glance without reading the path. Hides on mouseout or scroll.
+        this._initHieroPreview();
+
         // Container-level drag-and-drop wiring: edge auto-scroll + drop-into-
         // whitespace. Per-tab drag handlers already handle dragover/drop on
         // tabs themselves; this covers the gaps.
@@ -894,9 +899,14 @@ export class TabManager {
         // Hide empty state landing page on tab creation
         this.hideEmptyState();
 
-        // Refresh overflow chip + sidebar legend (cheap, idempotent).
-        this.updateTabOverflow();
-        this.updateWorktreeLegend();
+        // NOTE: overflow chip + sidebar legend refresh is intentionally
+        // NOT done here. createTab() still has 300+ lines to go (PTY
+        // spawn, WS attach, xterm.js fit, etc.) before this.tabs.set()
+        // runs at line ~1247. Calling these here would render against
+        // a tabs Map that's one tab behind, so the newest tab would be
+        // missing from the legend and overflow count until the next
+        // event happened to trigger a refresh. Both are called below
+        // immediately after the tabs.set instead.
         
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
@@ -1245,7 +1255,15 @@ export class TabManager {
         
         tabInfo.ws = ws;
         this.tabs.set(paneId, tabInfo);
-        
+
+        // Refresh overflow chip + sidebar legend NOW that the tab is
+        // registered in this.tabs. Previously these were called much
+        // earlier in createTab (line ~899) which left the legend and
+        // overflow chip one tab behind until something else triggered
+        // a re-render. Now they always reflect the full tab set.
+        this.updateTabOverflow();
+        this.updateWorktreeLegend();
+
         // Direct writing bridge — routes through tabInfo.ws so reconnect can swap the socket
         term.onData((data) => {
             if (tabInfo.directMode) {
@@ -1839,6 +1857,99 @@ export class TabManager {
             entry.appendChild(label);
             entry.appendChild(count);
             legend.appendChild(entry);
+        }
+    }
+
+    // ----- Hover preview card -------------------------------------------------
+    //
+    // A single shared element (#tab-hiero-preview, appended to <body>) shows
+    // the hieroglyph large with the worktree label and full path when the
+    // user mouses over a tab. Lets users identify which worktree a tab
+    // belongs to without reading the path - especially useful after
+    // we moved the pool from 12 generic glyphs to 96 distinct Egyptian
+    // hieroglyphs, where each glyph is much more memorable.
+    _initHieroPreview() {
+        if (this._hieroPreview) return;
+        const el = document.createElement('div');
+        el.className = 'tab-hiero-preview';
+        el.id = 'tab-hiero-preview';
+        el.setAttribute('aria-hidden', 'true');
+        el.innerHTML = `
+            <div class="tab-hiero-preview-glyph"></div>
+            <div class="tab-hiero-preview-label"></div>
+            <div class="tab-hiero-preview-path"></div>
+            <div class="tab-hiero-preview-count"></div>
+        `;
+        document.body.appendChild(el);
+        this._hieroPreview = el;
+        this._hieroPreviewGlyph = el.querySelector('.tab-hiero-preview-glyph');
+        this._hieroPreviewLabel = el.querySelector('.tab-hiero-preview-label');
+        this._hieroPreviewPath = el.querySelector('.tab-hiero-preview-path');
+        this._hieroPreviewCount = el.querySelector('.tab-hiero-preview-count');
+
+        // Event delegation on the tabs container - one listener, works for
+        // every tab and any tab created later (event bubbles up).
+        if (this.tabsContainer) {
+            this.tabsContainer.addEventListener('mouseover', (e) => {
+                const tabEl = e.target.closest('.tab');
+                if (tabEl) this._showHieroPreview(tabEl);
+            });
+            this.tabsContainer.addEventListener('mouseout', (e) => {
+                const tabEl = e.target.closest('.tab');
+                if (tabEl) this._hideHieroPreview();
+            });
+        }
+        // Hide on scroll/resize so the preview never lags behind a moved tab.
+        // Cheap idempotent hide; cheap idempotent show on next mouseover.
+        window.addEventListener('scroll', () => this._hideHieroPreview(), true);
+        window.addEventListener('resize', () => this._hideHieroPreview());
+    }
+
+    _showHieroPreview(tabEl) {
+        const p = this._hieroPreview;
+        if (!p) return;
+        const paneId = tabEl.dataset.paneId;
+        const tab = this.tabs.get(paneId);
+        // Even if we don't have a tab record yet (mid-createTab), we can
+        // still show what we know from the DOM data attributes.
+        const glyph = tabEl.dataset.worktreeGlyph || '◆';
+        const label = (tab && this.getProjectWorktreeLabel(tab.cwd)) || '—';
+        const path = (tab && tab.cwd) || tabEl.title || '';
+
+        // Count tabs sharing this hieroglyph - lets users see "you have
+        // 3 tabs in this worktree" at a glance from the preview.
+        let count = 0;
+        for (const t of this.tabs.values()) {
+            if (t.tabEl && t.tabEl.dataset.worktreeGlyph === glyph) count++;
+        }
+
+        this._hieroPreviewGlyph.textContent = glyph;
+        this._hieroPreviewLabel.textContent = label;
+        this._hieroPreviewPath.textContent = path;
+        this._hieroPreviewCount.textContent = count > 1
+            ? `${count} tabs in this worktree`
+            : (count === 1 ? '1 tab in this worktree' : '');
+
+        // Position below the tab. Fixed positioning uses viewport coords,
+        // so we don't need to account for scroll.
+        const rect = tabEl.getBoundingClientRect();
+        p.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect.left))}px`;
+        p.style.top = `${rect.bottom + 8}px`;
+        p.style.minWidth = `${Math.max(180, rect.width)}px`;
+
+        // Re-trigger the shimmer keyframe by clearing and re-setting
+        // animation - forces a reflow so the animation restarts each
+        // hover instead of only playing on first show.
+        this._hieroPreviewGlyph.style.animation = 'none';
+        void this._hieroPreviewGlyph.offsetWidth;
+        this._hieroPreviewGlyph.style.animation = '';
+
+        p.classList.add('visible');
+    }
+
+    _hideHieroPreview() {
+        if (this._hieroPreview) {
+            this._hieroPreview.classList.remove('visible');
         }
     }
 
