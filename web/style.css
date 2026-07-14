@@ -3458,29 +3458,52 @@ html, body {
     user-select: none;
     transition: text-shadow 0.2s ease;
 }
+.worktree-glyph-cell {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+}
 .worktree-section.active .worktree-section-glyph {
     text-shadow: 0 0 8px var(--accent-glow),
                  0 0 18px var(--accent-glow);
 }
 
-/* Cartouche (oval ring + bottom bar) wraps the worktree glyph when
-   the worktree has any live/open tab. Egyptian cartouches framed
-   royal names — reusing the motif marks the worktree as live/inscribed.
-   Static; no draw-on animation, just a thin pill around the glyph. */
+/* Live-tab indicator for a worktree. Previous versions tried a
+   cartouche pill around the glyph (border + 999px radius) but
+   hieroglyphs render wider than 16-22px at 13px font and the
+   pill clipped the right edge of the character, making it
+   unreadable.
+
+   Drop the pill entirely. Three signals replace it:
+     1. Stronger glyph glow (already-existing token, just intensified)
+     2. A 2px-wide accent bar to the LEFT of the glyph (::before
+        pseudo-element) so the glyph itself stays full-size and
+        readable
+     3. The worktree-header gets a subtle inset accent line on the
+        left edge via box-shadow inset, distinct from the .active
+        state which uses an outer glow. */
 .worktree-section.has-live-tab .worktree-section-glyph {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 14px;
-    padding: 0 2px;
-    border: 1px solid var(--accent-soft);
-    border-bottom-width: 2px;
-    border-radius: 999px;
-    box-shadow:
-        inset 0 0 0 1px var(--accent-trace),
-        0 0 6px var(--accent-glow);
-    background: linear-gradient(to bottom, transparent 70%, var(--accent-trace) 70%, var(--accent-trace) 85%, transparent 85%);
+    text-shadow: 0 0 10px var(--accent-glow),
+                 0 0 22px var(--accent-glow);
+}
+.worktree-section.has-live-tab .worktree-glyph-cell::before {
+    /* 2px-wide accent bar on the left of the glyph cell. Sized and
+       positioned to read as a marker, not a UI button. */
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 12px;
+    margin-right: 4px;
+    border-radius: 1px;
+    background: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow);
+    vertical-align: middle;
+}
+.worktree-section.has-live-tab .worktree-header {
+    /* Distinct from the .active state (which uses outer glow). The
+       live-tab state uses a thin inset accent line on the left,
+       so the two indicators don't visually merge. */
+    box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .worktree-branch {
