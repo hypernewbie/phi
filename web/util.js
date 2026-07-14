@@ -1,7 +1,7 @@
 /* Φ phi — pure, framework-free helpers (unit-tested in test-js/) */
 
 // projectWorktreeLabel renders a short "project/worktree" label from a cwd.
-// Pure: no DOM, no `this`. Handles mixed \\ and / separators, drops empty
+// Pure: no DOM, no `this`. Handles mixed \ and / separators, drops empty
 // segments, and falls back to the em-dash sentinel for empty input.
 export function projectWorktreeLabel(cwd) {
     if (!cwd) return '—';
@@ -11,6 +11,41 @@ export function projectWorktreeLabel(cwd) {
         return parts[parts.length - 2] + '/' + parts[parts.length - 1];
     }
     return parts[parts.length - 1] || '—';
+}
+
+// WORKTREE_GLYPHS is the pool of monochrome glyphs worktreeGlyph() picks
+// from. Deliberately avoids ● ◯ ★ etc. (too generic / already used by
+// the marker system) — these are weirder symbols that read distinctly
+// at 11px. Indexed by hash(cwd) % pool length so the same worktree
+// always gets the same glyph. Users build a mental map after seeing a
+// few of them.
+export const WORKTREE_GLYPHS = [
+    '◆', // black diamond
+    '◇', // outline diamond
+    '▣', // square with dot
+    '❖', // diamond with X
+    '⏣', // benzene
+    '⏢', // rounded square
+    '❘', // vertical bar
+    '⌧', // square with X
+    '▖', // dotted square (top-left fill)
+    '⏧', // square with question
+    '⬡', // outline hexagon
+    '⬢', // filled hexagon
+];
+
+// worktreeGlyph returns one of WORKTREE_GLYPHS deterministically from
+// cwd. FNV-1a 32-bit hash, mod pool length. Pure, no DOM. Same cwd
+// always returns the same glyph; different cwds usually return
+// different glyphs (12-deep pool + good distribution).
+export function worktreeGlyph(cwd) {
+    if (!cwd) return '◆'; // fallback that's already themable
+    let h = 2166136261;
+    for (let i = 0; i < cwd.length; i++) {
+        h ^= cwd.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return WORKTREE_GLYPHS[h % WORKTREE_GLYPHS.length];
 }
 
 // relativeToCwd converts a file path to one relative to cwd (both with \
