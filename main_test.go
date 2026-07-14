@@ -1655,10 +1655,7 @@ func TestWindowsCoderSpawnQuoting(t *testing.T) {
 }
 
 func TestPushoverAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("USERPROFILE")
-	os.Setenv("USERPROFILE", tmpDir)
-	defer os.Setenv("USERPROFILE", origHome)
+	withTempConfig(t)
 
 	// GET Pushover config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/pushover", nil)
@@ -1690,10 +1687,7 @@ func TestPushoverAPI(t *testing.T) {
 }
 
 func TestWebhookAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("USERPROFILE")
-	os.Setenv("USERPROFILE", tmpDir)
-	defer os.Setenv("USERPROFILE", origHome)
+	withTempConfig(t)
 
 	// GET Webhook config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/webhook", nil)
@@ -1724,10 +1718,7 @@ func TestWebhookAPI(t *testing.T) {
 }
 
 func TestSimplepushAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("USERPROFILE")
-	os.Setenv("USERPROFILE", tmpDir)
-	defer os.Setenv("USERPROFILE", origHome)
+	withTempConfig(t)
 
 	// GET Simplepush config
 	reqGet := httptest.NewRequest(http.MethodGet, "/api/config/simplepush", nil)
@@ -1758,10 +1749,7 @@ func TestSimplepushAPI(t *testing.T) {
 }
 
 func TestKanbanVaultAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("USERPROFILE")
-	os.Setenv("USERPROFILE", tmpDir)
-	defer os.Setenv("USERPROFILE", origHome)
+	withTempConfig(t)
 
 	// POST save password
 	postBody, _ := json.Marshal(map[string]string{"password": "my_test_password"})
@@ -1962,9 +1950,9 @@ func TestPeersStatusMethodNotAllowed(t *testing.T) {
 }
 
 func TestConfigPeersCRUD(t *testing.T) {
-	// Save original config and restore after test
-	origCfg := loadConfig()
-	defer saveConfig(origCfg)
+	// Use a temp config file so we don't touch the user's live
+	// ~/.phi/config.json. See config.go:testConfigPath.
+	withTempConfig(t)
 
 	// POST peers
 	payload, _ := json.Marshal([]PeerConfig{
