@@ -27,6 +27,16 @@
     --font-mono:    'JetBrains Mono', "Courier New", Courier, monospace;
 }
 
+html, body {
+    /* touch-action: manipulation disables double-tap-to-zoom (which
+       iOS Safari performs on tap-and-hold-tap even with
+       user-scalable=no ignored) while preserving pinch-zoom in both
+       directions. Combined with the cleaned-up viewport meta
+       (no more maximum-scale/user-scalable locks), users can now
+       pinch-zoom out if they accidentally zoomed in. */
+    touch-action: manipulation;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
