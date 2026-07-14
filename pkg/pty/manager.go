@@ -97,6 +97,16 @@ func (inst *PTYInstance) IsPtyDead() bool {
 	}
 }
 
+// HasDetachTimer returns whether a grace-period detach timer is
+// currently armed on this instance. Thread-safe accessor for tests
+// and external observers — the raw DetachTimer field is written by
+// the timer callback goroutine without a public barrier.
+func (inst *PTYInstance) HasDetachTimer() bool {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.DetachTimer != nil
+}
+
 type Manager struct {
 	instances map[string]*PTYInstance
 	mu        sync.RWMutex
