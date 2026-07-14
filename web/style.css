@@ -1104,60 +1104,6 @@ html, body {
     font-size: 13px;
 }
 
-/* Sidebar worktree legend: one chip per distinct worktree, with the
-   glyph + label + tab count. Lets you learn the glyph-to-worktree
-   mapping without a legend modal. */
-.worktree-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 8px;
-    padding: 8px 12px 10px;
-    border-top: 1px solid var(--bg-border);
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    letter-spacing: 0.02em;
-    /* Hidden when zero tabs - it's not useful noise. */
-}
-.worktree-legend:empty {
-    display: none;
-}
-.worktree-legend-entry {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 9px;
-    border-radius: 9px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--bg-border);
-    white-space: nowrap;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: border-color 0.15s, box-shadow 0.15s;
-}
-.worktree-legend-entry:hover {
-    border-color: var(--accent-soft);
-    box-shadow: 0 0 6px var(--accent-glow);
-}
-.worktree-legend-entry-icon {
-    color: var(--accent-bright);
-    text-shadow: 0 0 5px var(--accent-glow),
-                 0 0 10px var(--accent-glow);
-    font-size: 12px;
-}
-.worktree-legend-entry-label {
-    color: var(--text-primary);
-    opacity: 0.9;
-}
-.worktree-legend-entry-count {
-    color: var(--text-muted);
-    font-size: 10px;
-    padding: 1px 4px;
-    border-radius: 6px;
-    background: var(--bg-base);
-}
-
 .reconnect-all-tabs-btn:hover {
     background-color: var(--accent-wash);
     color: var(--accent-bright);
@@ -4570,6 +4516,25 @@ html, body {
     margin-right: 8px;
     flex-shrink: 0;
     border-radius: 2px;
+}
+
+/* Worktree hieroglyph — sits between the coder favicon and the session
+   title in the hostname dropdown. Matches the .tab-worktree-icon styling
+   so a row reads as "coder · worktree · session" at a glance. */
+.hostname-dropdown-glyph {
+    flex: 0 0 auto;
+    margin-right: 8px;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--accent-bright);
+    text-shadow: 0 0 6px var(--accent-glow),
+                 0 0 12px var(--accent-glow);
+    user-select: none;
+    font-family: var(--font-mono);
+}
+.hostname-dropdown-row.active .hostname-dropdown-glyph {
+    text-shadow: 0 0 8px var(--accent-glow),
+                 0 0 18px var(--accent-glow);
 }
 
 .hostname-dropdown-item.active {

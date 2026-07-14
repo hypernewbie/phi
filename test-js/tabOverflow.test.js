@@ -143,37 +143,6 @@ describe('updateTabOverflow', () => {
     });
 });
 
-// ---- Sidebar worktree legend ----------------------------------------
-
-describe('updateWorktreeLegend', () => {
-    it('renders one entry per distinct worktree glyph with a count', () => {
-        const tm = makeTabManager({ withTabs: ['A:a', 'A:b', 'B:c', 'C:d'], width: 800 });
-        tm.updateWorktreeLegend();
-        const entries = document.querySelectorAll('.worktree-legend-entry');
-        expect(entries.length).toBe(3); // A, B, C
-        // Find the A entry (◆) which should show count 2.
-        const aEntry = Array.from(entries).find(e =>
-            e.querySelector('.worktree-legend-entry-icon').textContent === '◆'
-        );
-        expect(aEntry).toBeTruthy();
-        expect(aEntry.querySelector('.worktree-legend-entry-count').textContent).toBe('2');
-        // B entry should show 1.
-        const bEntry = Array.from(entries).find(e =>
-            e.querySelector('.worktree-legend-entry-icon').textContent === '◇'
-        );
-        expect(bEntry.querySelector('.worktree-legend-entry-count').textContent).toBe('1');
-    });
-
-    it('clears the legend when all tabs close', () => {
-        const tm = makeTabManager({ withTabs: ['A:a'], width: 800 });
-        tm.updateWorktreeLegend();
-        expect(document.querySelectorAll('.worktree-legend-entry').length).toBe(1);
-        tm.tabs.delete('A:a');
-        tm.updateWorktreeLegend();
-        expect(document.querySelectorAll('.worktree-legend-entry').length).toBe(0);
-    });
-});
-
 // ---- Overflow dropdown: grouping + click-to-switch ------------------
 
 describe('_buildOverflowDropdown', () => {
@@ -447,46 +416,30 @@ describe('container drop on whitespace', () => {
     });
 });
 
-// ---- Regression: updateTabOverflow + updateWorktreeLegend must run
-// AFTER this.tabs.set(paneId, tabInfo), not before. v0.8.4 had both
-// calls in createTab() ~300 lines before tabs.set, which made the
-// legend + overflow chip always one tab behind until some unrelated
-// event triggered a re-render.
+// ---- Regression: updateTabOverflow must run AFTER this.tabs.set
+// in createTab(), not before. v0.8.4 had this call ~300 lines before
+// tabs.set which made the overflow chip always one tab behind until
+// some unrelated event triggered a re-render. (The worktree-legend
+// sibling check was removed when the legend itself was removed.)
 
-describe('legend + overflow refresh timing in createTab', () => {
-    it('updateTabOverflow/updateWorktreeLegend appear AFTER tabs.set, not before', () => {
-        // Static source check. Locks in the order: tabs.set must come
-        // first, otherwise the legend iterates an empty Map for the
-        // just-created tab and renders an inaccurate count.
+describe('overflow refresh timing in createTab', () => {
+    it('updateTabOverflow appears AFTER tabs.set, not before', () => {
         const fs = require('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
 
         const tabsSetIdx = src.indexOf('this.tabs.set(paneId, tabInfo)');
         expect(tabsSetIdx).toBeGreaterThan(0);
 
-        // Find each call site within createTab (not the close flow or
-        // the re-attach flow). Use the first occurrence after line 1.
-        const legendCallIdx = src.indexOf('this.updateWorktreeLegend()', tabsSetIdx);
-        expect(legendCallIdx).toBeGreaterThan(tabsSetIdx);
-
         const overflowCallIdx = src.indexOf('this.updateTabOverflow()', tabsSetIdx);
         expect(overflowCallIdx).toBeGreaterThan(tabsSetIdx);
     });
 
-    it('createTab does NOT call updateWorktreeLegend or updateTabOverflow before tabs.set', () => {
-        // Same check, but properly scoped to the createTab function
-        // body. The naive slice-to-first-tabs.set would catch unrelated
-        // calls in other methods (e.g. _setupContainerDragHandlers).
+    it('createTab does NOT call updateTabOverflow before tabs.set', () => {
         const fs = require('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
 
-        // Find the createTab function body. It starts at the signature
-        // and ends at the matching closing brace - since TabManager is
-        // a class, we can match the signature line then walk braces.
         const sigIdx = src.indexOf('createTab(paneId, sessionId, title, coder,');
         expect(sigIdx).toBeGreaterThan(0);
-        // Walk forward to the opening `{`, then track brace depth to find
-        // the matching close.
         const openIdx = src.indexOf('{', sigIdx);
         let depth = 0;
         let endIdx = -1;
@@ -500,14 +453,10 @@ describe('legend + overflow refresh timing in createTab', () => {
         expect(endIdx).toBeGreaterThan(openIdx);
         const body = src.slice(openIdx, endIdx);
 
-        // Within the createTab body, find the FIRST tabs.set call. Any
-        // updateWorktreeLegend/updateTabOverflow call that appears
-        // BEFORE it in the same body is the regression.
         const tabsSetIdx = body.indexOf('this.tabs.set(paneId, tabInfo)');
         expect(tabsSetIdx).toBeGreaterThan(0);
         const beforeSet = body.slice(0, tabsSetIdx);
 
-        expect(beforeSet.includes('this.updateWorktreeLegend()')).toBe(false);
         expect(beforeSet.includes('this.updateTabOverflow()')).toBe(false);
     });
 });

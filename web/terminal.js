@@ -1256,13 +1256,12 @@ export class TabManager {
         tabInfo.ws = ws;
         this.tabs.set(paneId, tabInfo);
 
-        // Refresh overflow chip + sidebar legend NOW that the tab is
-        // registered in this.tabs. Previously these were called much
-        // earlier in createTab (line ~899) which left the legend and
-        // overflow chip one tab behind until something else triggered
-        // a re-render. Now they always reflect the full tab set.
+        // Refresh overflow chip NOW that the tab is registered in
+        // this.tabs. Previously this was called much earlier in
+        // createTab (line ~899) which left the overflow chip one tab
+        // behind until something else triggered a re-render. Now it
+        // always reflects the full tab set.
         this.updateTabOverflow();
-        this.updateWorktreeLegend();
 
         // Direct writing bridge — routes through tabInfo.ws so reconnect can swap the socket
         term.onData((data) => {
@@ -1766,9 +1765,8 @@ export class TabManager {
         this.updateDisconnectBanner();
         this.saveTabsState();
 
-        // Refresh overflow chip + sidebar legend to reflect the removal.
+        // Refresh overflow chip to reflect the removal.
         this.updateTabOverflow();
-        this.updateWorktreeLegend();
 
         // If we just finalized the last tab, show the empty state now
         // (no overlay was up because grace expired without undo).
@@ -1857,44 +1855,6 @@ export class TabManager {
         const label = btn.querySelector('.tab-overflow-btn-label');
         if (label) label.textContent = `+${hiddenCount} more`;
         btn.setAttribute('aria-expanded', btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false');
-    }
-
-    updateWorktreeLegend() {
-        const legend = document.getElementById('worktree-legend');
-        if (!legend) return;
-        // Group tabs by their worktree glyph (computed at createTab time
-        // and stored on the tab DOM via data-worktree-glyph). One entry
-        // per distinct glyph -> one entry per distinct cwd.
-        const groups = new Map(); // glyph -> { label, count, paneIds[] }
-        const labelFor = (paneId) => {
-            const t = this.tabs.get(paneId);
-            if (!t) return '';
-            return this.getProjectWorktreeLabel(t.cwd);
-        };
-        for (const [paneId, tab] of this.tabs.entries()) {
-            const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
-            if (!groups.has(glyph)) groups.set(glyph, { count: 0, label: labelFor(paneId) });
-            groups.get(glyph).count += 1;
-        }
-        legend.innerHTML = '';
-        for (const [glyph, info] of groups.entries()) {
-            const entry = document.createElement('span');
-            entry.className = 'worktree-legend-entry';
-            entry.title = `${info.label || 'unknown worktree'} · ${info.count} tab${info.count === 1 ? '' : 's'}`;
-            const icon = document.createElement('span');
-            icon.className = 'worktree-legend-entry-icon';
-            icon.textContent = glyph;
-            const label = document.createElement('span');
-            label.className = 'worktree-legend-entry-label';
-            label.textContent = info.label || '—';
-            const count = document.createElement('span');
-            count.className = 'worktree-legend-entry-count';
-            count.textContent = String(info.count);
-            entry.appendChild(icon);
-            entry.appendChild(label);
-            entry.appendChild(count);
-            legend.appendChild(entry);
-        }
     }
 
     // ----- Hover preview card -------------------------------------------------
@@ -3238,6 +3198,13 @@ export class TabManager {
             faviconImg.src = CODER_FAVICONS[tabInfo.coder] || CODER_FAVICONS.bash;
             faviconImg.alt = tabInfo.coder;
 
+            // Worktree hieroglyph — same glyph shown on the tab itself.
+            // Ties the dropdown row to its worktree group at a glance.
+            const glyphSpan = document.createElement('span');
+            glyphSpan.className = 'hostname-dropdown-glyph';
+            glyphSpan.setAttribute('aria-hidden', 'true');
+            glyphSpan.textContent = (tabInfo.tabEl && tabInfo.tabEl.dataset.worktreeGlyph) || '◆';
+
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
             if (tabInfo.marked) {
@@ -3253,6 +3220,7 @@ export class TabManager {
             metaSpan.style.fontSize = '10px';
 
             selectBtn.appendChild(faviconImg);
+            selectBtn.appendChild(glyphSpan);
             selectBtn.appendChild(titleSpan);
             selectBtn.appendChild(metaSpan);
             selectBtn.addEventListener('click', () => {
