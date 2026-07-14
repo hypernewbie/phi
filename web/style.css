@@ -1704,18 +1704,22 @@ html, body {
 }
 
 @media (max-width: 768px) {
-    /* Mobile: keep the wall feel but tone it down. Smaller glyphs,
-       lower opacity, lighter torchlight so the empty state stays
-       readable on a phone screen. Hide the noisy staggered fade-in
-       so it just appears with the page. */
+    /* Mobile: drop the decoration entirely. On a phone the two flex
+       registers of hieroglyphs read as a chaotic gradient block -
+       scaled or not, they fight the content for attention. The
+       radials below the flex background also stack with .empty-state's
+       own radial and produce the "gradient square covering 3/4 of
+       the page" effect that was reported on 2026-07-14. */
     .empty-state-decoration {
-        opacity: 0.6;
-        transform: scale(0.7);
-        transform-origin: top center;
+        display: none;
     }
-    .empty-state-decoration .hiero {
-        opacity: 0.04;
+
+    /* Simplify the empty-state bg too: drop the pulse animation and
+       use a flat radial. The pulse was also contributing to the
+       chaotic mobile look. */
+    .empty-state {
         animation: none;
+        background: radial-gradient(circle at 50% 35%, var(--bg-elevated) 0%, var(--bg-base) 70%);
     }
 }
 
