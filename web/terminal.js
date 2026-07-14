@@ -3004,6 +3004,21 @@ export class TabManager {
             this._spamScrollToBottom(tabInfo);
         }
 
+        // Mobile external-keyboard focus: when a tab becomes active on a
+        // phone with an external keyboard attached, the user's typing
+        // intent is unambiguous — they want to type into the staged
+        // input bar. Without this, focus stays on the previous tab's
+        // xterm and the user has to tap the input bar before their hw
+        // keyboard routes anywhere. Desktop keeps the original path
+        // (focus on xterm) so terminal-internal tools still capture
+        // keys normally. Direct mode still wins — if the tab is in
+        // direct mode, the xterm is where the user is typing.
+        if (window.innerWidth <= 768 && !tabInfo.directMode && !tabInfo.isDead
+            && this.inputTextArea && !this.inputBarContainer?.classList.contains('hidden')
+            && !document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) {
+            setTimeout(() => this.inputTextArea.focus({ preventScroll: true }), 80);
+        }
+
         // force=true bypasses the passive auto_reconnect gate for explicit user actions.
         const configAutoReconnect = this.app.config && this.app.config.auto_reconnect;
         if (autoReconnect && (force || configAutoReconnect === 'visible') && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
