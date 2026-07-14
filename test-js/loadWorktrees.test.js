@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { SessionsManager } from '../web/sessions.js';
+import { worktreeGlyph } from '../web/util.js';
 
 // B2: exercises the REAL SessionsManager.loadWorktrees against a real jsdom
 // DOM, with a hand-built `this` (never `new` the controller) so we only
@@ -158,5 +159,40 @@ describe('loadWorktrees — collaborators + side effects', () => {
         const calledPaths = ctx.loadWorktreeSessions.mock.calls.map((c) => c[0]);
         expect(calledPaths).toContain('/b');
         expect(calledPaths).not.toContain('/a');
+    });
+});
+
+describe('loadWorktrees — worktree glyph matches tab glyph', () => {
+    // The user pointed out they can't visually match tabs to worktree
+    // sections in the left panel. The fix: render the same worktree-
+    // glyph (worktreeGlyph(cwd)) in the section header next to the
+    // folder name, so a section header ◆ visually pairs with a tab ◆.
+
+    it('renders the section-glyph span with the same hash-derived glyph as the tab', async () => {
+        const ctx = makeCtx();
+        await run(ctx, null, [{ path: '/Users/dev/code/phi/feature-x' }]);
+        const glyphEl = ctx.sessionList.querySelector('.worktree-section .worktree-section-glyph');
+        expect(glyphEl).toBeTruthy();
+        expect(glyphEl.textContent).toBe(worktreeGlyph('/Users/dev/code/phi/feature-x'));
+    });
+
+    it('different worktree paths get different glyphs in the section header', async () => {
+        const ctx = makeCtx();
+        await run(ctx, null, [
+            { path: '/Users/dev/code/phi/feature-x' },
+            { path: '/Users/dev/code/otherrepo/main' },
+        ]);
+        const glyphEls = ctx.sessionList.querySelectorAll('.worktree-section .worktree-section-glyph');
+        expect(glyphEls.length).toBe(2);
+        // Sanity: at least one pair of distinct glyphs (pool size 12,
+        // two worktrees should never collide without a contrived case).
+        expect(glyphEls[0].textContent).not.toBe(glyphEls[1].textContent);
+    });
+
+    it('aria-hides the glyph so screen readers skip it (text label follows)', async () => {
+        const ctx = makeCtx();
+        await run(ctx, null, [{ path: '/some/path/here' }]);
+        const glyphEl = ctx.sessionList.querySelector('.worktree-section .worktree-section-glyph');
+        expect(glyphEl.getAttribute('aria-hidden')).toBe('true');
     });
 });
