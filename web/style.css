@@ -936,6 +936,89 @@ html, body {
     display: none !important;
 }
 
+/* Hover preview card. Glassmorphism: translucent dark bg with backdrop
+   blur, soft accent glow, big hieroglyph up top so users can identify
+   the worktree without reading the path. Mounted to <body> (not inside
+   the tabs container, which has overflow:hidden) and positioned via
+   fixed coordinates relative to the viewport. */
+.tab-hiero-preview {
+    position: fixed;
+    top: 0;
+    left: 0;
+    background: rgba(20, 20, 25, 0.78);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 12px;
+    padding: 16px 20px 14px;
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.55),
+        0 0 0 1px var(--accent-trace),
+        0 0 28px var(--accent-glow);
+    color: var(--text-primary);
+    min-width: 180px;
+    max-width: 320px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+    transition: opacity 0.14s ease, transform 0.14s ease;
+    z-index: 10000;
+    font-family: var(--font-ui, system-ui, sans-serif);
+    font-size: 12px;
+}
+.tab-hiero-preview.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+.tab-hiero-preview-glyph {
+    font-size: 72px;
+    line-height: 1;
+    text-align: center;
+    color: var(--accent-bright);
+    text-shadow:
+        0 0 18px var(--accent-glow),
+        0 0 36px var(--accent-glow);
+    margin-bottom: 10px;
+    animation: hiero-shimmer 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes hiero-shimmer {
+    0%   { transform: scale(0.78); filter: blur(6px); opacity: 0.4; }
+    60%  { transform: scale(1.08); filter: blur(0); opacity: 1; }
+    100% { transform: scale(1); filter: blur(0); opacity: 1; }
+}
+.tab-hiero-preview-label {
+    font-weight: 600;
+    text-align: center;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+.tab-hiero-preview-path {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, "Cascadia Code", Menlo, monospace);
+    text-align: center;
+    word-break: break-all;
+    line-height: 1.4;
+    max-height: 4.2em;
+    overflow: hidden;
+}
+.tab-hiero-preview-count {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+/* Mobile: tabs bar hidden at <=768px so the preview would never
+   fire, but be explicit anyway. */
+@media (max-width: 768px) {
+    .tab-hiero-preview { display: none !important; }
+}
+
 /* Dropdown anchored to the +N chip. Mirrors the hostname dropdown
    pattern so users get the same interaction model in both locations:
    icon + worktree glyph + title + meta + marker + pin + close. */
