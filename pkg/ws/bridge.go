@@ -62,9 +62,15 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 		_ = c.Ws.Close()
 	}()
 
-	_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
+	// Capture pongWait into a local for the pong handler. The handler
+	// runs on its own goroutine spawned by gorilla/websocket and can
+	// outlive this function, so reading the package var directly
+	// races with tests that restore it after defer. Snapshot once.
+	pongTimeout := pongWait
+
+	_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
 	c.Ws.SetPongHandler(func(string) error {
-		_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
+		_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
 	for {
@@ -72,7 +78,7 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 		if err != nil {
 			break
 		}
-		_ = c.Ws.SetReadDeadline(time.Now().Add(pongWait))
+		_ = c.Ws.SetReadDeadline(time.Now().Add(pongTimeout))
 		if mt != websocket.BinaryMessage || len(message) == 0 {
 			continue
 		}
