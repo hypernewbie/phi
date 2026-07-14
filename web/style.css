@@ -5652,6 +5652,9 @@ html, body {
 [data-theme-color="white"] .sync-btn-primary:hover {
     color: #14141a !important;
 }
+[data-theme-color="white"] .toast-action-btn {
+    color: #14141a !important;
+}
 
 
 /* ===========================================================
