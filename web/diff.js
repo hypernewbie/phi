@@ -207,8 +207,8 @@ export class DiffController {
         // defaulting to closed on phones avoids it eating half the
         // viewport on first launch.)
         const openState = localStorage.getItem('phi_diff_panel_open');
-        const isMobile = window.innerWidth <= 768;
-        const shouldOpen = isMobile ? openState === 'true' : openState !== 'false';
+        const isMobileForInit = window.innerWidth <= 768;
+        const shouldOpen = isMobileForInit ? openState === 'true' : openState !== 'false';
         this.togglePanel(shouldOpen);
     }
 
