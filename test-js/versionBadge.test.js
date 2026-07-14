@@ -48,9 +48,9 @@ describe('loadVersion in App', () => {
             install_method: 'dev'
         }));
 
-        // Rebuild the fixture fresh (v0.8.3 is the current default).
+        // Rebuild the fixture fresh (v0.8.4 is the current default).
         document.body.innerHTML = `
-            <button id="phi-changelog-btn">v0.8.3</button>
+            <button id="phi-changelog-btn">v0.8.4</button>
         `;
 
         const app = Object.create(App.prototype);
@@ -60,6 +60,6 @@ describe('loadVersion in App', () => {
 
         const btn = document.getElementById('phi-changelog-btn');
         // HTML default preserved - not overwritten with "dev".
-        expect(btn.textContent).toBe('v0.8.3');
+        expect(btn.textContent).toBe('v0.8.4');
     });
 });

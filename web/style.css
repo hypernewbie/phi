@@ -899,6 +899,130 @@ html, body {
     flex-shrink: 0;
 }
 
+/* +N more chip: appears at the right edge of the tab strip when the
+   tabs overflow horizontally. Stays pinned (it's a flex sibling of
+   #tabs-container, not inside the scroller). Click opens a dropdown
+   grouping ALL open tabs by worktree glyph, with click-to-switch +
+   marked/pinned/close affordances matching the hostname dropdown. */
+.tab-overflow-btn {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--accent-soft);
+    color: var(--accent-bright);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+    text-shadow: 0 0 6px var(--accent-glow);
+    box-shadow: 0 0 12px var(--accent-trace);
+}
+.tab-overflow-btn:hover {
+    background-color: var(--accent-wash);
+    border-color: var(--accent);
+    box-shadow: 0 0 16px var(--accent-glow);
+}
+.tab-overflow-btn .icon {
+    width: 12px;
+    height: 12px;
+}
+.tab-overflow-btn.hidden {
+    display: none !important;
+}
+
+/* Dropdown anchored to the +N chip. Mirrors the hostname dropdown
+   pattern so users get the same interaction model in both locations:
+   icon + worktree glyph + title + meta + marker + pin + close. */
+.tab-overflow-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 12px;
+    z-index: 1200;
+    width: min(360px, calc(100vw - 32px));
+    max-height: 60vh;
+    overflow-y: auto;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    padding: 6px 0;
+    animation: slideDown 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tab-overflow-dropdown.hidden {
+    display: none !important;
+}
+.tab-overflow-dropdown-group {
+    padding: 6px 12px 2px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid var(--bg-border);
+    margin-bottom: 4px;
+}
+.tab-overflow-dropdown-group-icon {
+    color: var(--accent-bright);
+    text-shadow: 0 0 6px var(--accent-glow);
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+/* Sidebar worktree legend: one chip per distinct worktree, with the
+   glyph + label + tab count. Lets you learn the glyph-to-worktree
+   mapping without a legend modal. */
+.worktree-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 6px 10px 8px;
+    border-top: 1px solid var(--bg-border);
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    /* Hidden when zero tabs - it's not useful noise. */
+}
+.worktree-legend:empty {
+    display: none;
+}
+.worktree-legend-entry {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.worktree-legend-entry-icon {
+    color: var(--accent-bright);
+    text-shadow: 0 0 5px var(--accent-glow);
+    font-size: 11px;
+}
+.worktree-legend-entry-label {
+    color: var(--text-primary);
+    opacity: 0.85;
+}
+.worktree-legend-entry-count {
+    color: var(--text-muted);
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 6px;
+    background: var(--bg-base);
+}
+
 .reconnect-all-tabs-btn:hover {
     background-color: var(--accent-wash);
     color: var(--accent-bright);
@@ -1011,6 +1135,26 @@ html, body {
     white-space: nowrap;
     flex: 1;
     min-width: 0;
+}
+
+/* Worktree glyph sits between the coder favicon and the title. Each
+   worktree (cwd) hashes to a unique monochrome symbol so the user can
+   group tabs at a glance without reading text. Color = accent bright
+   with a glow so it pops slightly without screaming. */
+.tab-worktree-icon {
+    flex: 0 0 auto;
+    width: 13px;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--accent-bright);
+    text-shadow: 0 0 5px var(--accent-glow),
+                 0 0 10px var(--accent-glow);
+    user-select: none;
+    font-family: var(--font-mono);
+    /* Tab is flex; flex: 0 0 auto so ellipsis truncation on title still
+       works correctly when the worktree glyph squeezes the available
+       width. */
 }
 
 .tab-title.marked {

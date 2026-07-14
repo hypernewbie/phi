@@ -228,8 +228,9 @@
                         </div>
                         <div id="fleet-peer-list" class="fleet-peer-list"></div>
                     </div>
+                    <div id="worktree-legend" class="worktree-legend" aria-label="Open worktrees"></div>
                     <div class="sidebar-status">
-                        <button id="phi-changelog-btn" class="sidebar-version-btn" title="Show changelog">v0.8.3</button>
+                        <button id="phi-changelog-btn" class="sidebar-version-btn" title="Show changelog">v0.8.4</button>
                         <button id="phi-restart-btn" class="sidebar-help-btn" title="Restart phi (reloads current binary)">↻</button>
                         <button id="phi-help-btn" class="sidebar-help-btn" title="Phi User Guide & Help">?</button>
                     </div>
@@ -242,8 +243,13 @@
             <!-- MIDDLE PANEL: TABS & TERMINAL -->
             <main class="terminal-panel">
                 <!-- TABS HEADER -->
-                <div class="terminal-tabs-bar">
+                <div class="terminal-tabs-bar" style="position: relative;">
                     <div id="tabs-container" class="tabs-container"></div>
+                    <button id="tab-overflow-btn" class="tab-overflow-btn hidden" title="Show all open tabs (grouped by worktree)" aria-haspopup="true" aria-expanded="false">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                        <span class="tab-overflow-btn-label"></span>
+                    </button>
+                    <div id="tab-overflow-dropdown" class="tab-overflow-dropdown hidden" role="menu"></div>
                     <button id="reconnect-all-tabs-btn" class="reconnect-all-tabs-btn" title="Reconnect all disconnected sessions">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="23 4 23 10 17 10"></polyline>
