@@ -1435,10 +1435,20 @@ export class TabManager {
 
     // Actually kill the PTY, close WS, dispose term, drop from Map.
     // Called by the grace timer, by the cap-forced finalize, or by
-    // closeTab's "user clicked × twice" path.
+    // closeTab's "user clicked × twice" path. Idempotent: a single
+    // setTimeout + cap-forced-finalize-from-the-newest-close + a
+    // double-× click can all race for the same pane; this is
+    // guarded so DELETE fires exactly once per tab.
     finalizeCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
+        // Re-entry guard: if finalization is already in progress (from
+        // another entry point), don't fire a second DELETE or run the
+        // cleanup twice. We use this flag instead of relying on
+        // tabs.delete() as the gate, because the delete happens *after*
+        // the fetch — the second caller would otherwise race the first.
+        if (tab.finalizing) return;
+        tab.finalizing = true;
 
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
@@ -1452,8 +1462,31 @@ export class TabManager {
         this._stopSoftCloseCountdown(tab);
         this._removeSoftCloseOverlay(tab);
 
-        // Kill the server-side PTY process (fire-and-forget).
-        fetch(`/api/terminals/${paneId}`, { method: 'DELETE' }).catch(() => {});
+        // Kill the server-side PTY process. We previously swallowed
+        // failures with .catch(() => {}) — that hid the actual user
+        // bug ("process never gets closed"). Now we surface non-2xx and
+        // network errors as a toast so the user knows the PTY may still
+        // be alive on the server (e.g. a race with another tab close,
+        // network blip, or 5xx). The 30-min detach grace timer is the
+        // server-side backstop either way.
+        fetch(`/api/terminals/${paneId}`, { method: 'DELETE' })
+            .then((res) => {
+                if (!res.ok && res.status !== 404) {
+                    // 404 is fine — it just means another caller already
+                    // killed the instance. Anything else (5xx, network,
+                    // CORS) is worth telling the user about.
+                    throw new Error(`DELETE returned ${res.status}`);
+                }
+            })
+            .catch((err) => {
+                console.error('[tab] failed to kill PTY for', paneId, err);
+                if (this.app && this.app.showToast) {
+                    this.app.showToast(
+                        `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
+                        { type: 'error', duration: 8000 }
+                    );
+                }
+            });
 
         try { if (tab.ws) tab.ws.close(); } catch (e) { console.error("[tab] WS close error:", e); }
         try { if (tab.term) tab.term.dispose(); } catch (e) { console.error("[tab] Term dispose error:", e); }
