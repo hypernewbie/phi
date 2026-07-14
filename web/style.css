@@ -6072,15 +6072,6 @@ html, body {
     color: #14141a !important;
 }
 
-/* Bronze patina theme — oxidized copper/bronze statuary palette.
-   Pushes the bg slightly green-grey to read as patinated surface. */
-[data-theme-color="bronze"] {
-    --bg-base:    #0e1413;
-    --bg-panel:   #131a18;
-    --bg-elevated: #1a221f;
-    --bg-border:  rgba(122, 156, 142, 0.10);
-}
-
 
 /* ===========================================================
    Kanban feature completeness additions (v0.7.15)
