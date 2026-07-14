@@ -123,7 +123,7 @@ func TestPinningBypass(t *testing.T) {
 		t.Error("Expected ActiveWS to be false")
 	}
 
-	if inst.DetachTimer != nil {
+	if inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to remain nil for a pinned session")
 	}
 }
@@ -148,7 +148,7 @@ func TestDynamicPinToggle(t *testing.T) {
 	// Unregister WS on an unpinned, active session. It should initialise the detach timer.
 	manager.UnregisterWS(inst.ID, "c1")
 
-	if inst.DetachTimer == nil {
+	if !inst.HasDetachTimer() {
 		t.Fatal("Expected DetachTimer to be created when unpinned session disconnects")
 	}
 
@@ -158,7 +158,7 @@ func TestDynamicPinToggle(t *testing.T) {
 		t.Fatalf("SetPinned to true failed: %v", err)
 	}
 
-	if inst.DetachTimer != nil {
+	if inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to be stopped and cleared after pinning")
 	}
 
@@ -168,7 +168,7 @@ func TestDynamicPinToggle(t *testing.T) {
 		t.Fatalf("SetPinned to false failed: %v", err)
 	}
 
-	if inst.DetachTimer == nil {
+	if !inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to be re-created after unpinning disconnected session")
 	}
 }
@@ -201,7 +201,7 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 	// Disconnect WS to trigger the grace period timer.
 	manager.UnregisterWS(inst.ID, "c1")
 
-	if inst.DetachTimer == nil {
+	if !inst.HasDetachTimer() {
 		t.Fatal("Expected DetachTimer to be active after unregistering WS")
 	}
 
@@ -219,7 +219,7 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 		t.Error("PTY instance was prematurely killed despite active output")
 	}
 
-	if inst.DetachTimer == nil {
+	if !inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to be rescheduled and non-nil")
 	}
 
@@ -331,7 +331,7 @@ func TestMultipleConcurrentWebSockets(t *testing.T) {
 	if !inst.ActiveWS || inst.ActiveWSCount != 1 {
 		t.Errorf("Expected ActiveWS=true, ActiveWSCount=1, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
 	}
-	if inst.DetachTimer != nil {
+	if inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to be nil since one WebSocket connection remains active")
 	}
 
@@ -340,7 +340,7 @@ func TestMultipleConcurrentWebSockets(t *testing.T) {
 	if inst.ActiveWS || inst.ActiveWSCount != 0 {
 		t.Errorf("Expected ActiveWS=false, ActiveWSCount=0, got ActiveWS=%v, ActiveWSCount=%d", inst.ActiveWS, inst.ActiveWSCount)
 	}
-	if inst.DetachTimer == nil {
+	if !inst.HasDetachTimer() {
 		t.Error("Expected DetachTimer to be active after all WebSockets have disconnected")
 	}
 }
