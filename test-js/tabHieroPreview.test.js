@@ -216,3 +216,166 @@ describe('hover preview integration with multiple workspaces', () => {
         }
     });
 });
+
+// ---- Sidebar worktree-header hover preview ------------------------------
+//
+// Hovering a worktree section header in the left panel shows a compact
+// variant of the preview card - smaller glyph, anchored to the right of
+// the sidebar, with a count of how many tabs would land in that worktree
+// (matching cwd). Same shared DOM element, toggled via the
+// .tab-hiero-preview-medium size class.
+
+function mountSidebarDom() {
+    const sessionList = document.createElement('div');
+    sessionList.id = 'session-list';
+    document.body.appendChild(sessionList);
+    return sessionList;
+}
+
+function attachWorktreeSection(sessionList, { path, glyph, name, branch }) {
+    const section = document.createElement('div');
+    section.className = 'worktree-section';
+    section.setAttribute('data-worktree-path', path);
+    const header = document.createElement('div');
+    header.className = 'worktree-header';
+    const glyphSpan = document.createElement('span');
+    glyphSpan.className = 'worktree-section-glyph';
+    glyphSpan.textContent = glyph;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'worktree-name';
+    nameSpan.textContent = name;
+    header.appendChild(glyphSpan);
+    header.appendChild(nameSpan);
+    if (branch) {
+        const branchSpan = document.createElement('span');
+        branchSpan.className = 'worktree-branch';
+        branchSpan.textContent = `[${branch}]`;
+        header.appendChild(branchSpan);
+    }
+    section.appendChild(header);
+    sessionList.appendChild(section);
+    return { section, header };
+}
+
+describe('_showWorktreeHieroPreview', () => {
+    it('wires mouseover/mouseout on #session-list after _initHieroPreview', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        // Sanity check: preview should not be visible initially.
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.classList.contains('visible')).toBe(false);
+    });
+
+    it('shows preview on worktree-header mouseover with medium size', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓂀', name: 'phi', branch: 'main',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.classList.contains('visible')).toBe(true);
+        // Medium variant flag set so CSS shrinks the glyph + padding.
+        expect(p.classList.contains('tab-hiero-preview-medium')).toBe(true);
+        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe('𓂀');
+        expect(p.querySelector('.tab-hiero-preview-label').textContent).toBe('phi');
+        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe('/code/phi');
+    });
+
+    it('positions to the right of the worktree header (sidebar anchor)', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓀀', name: 'phi',
+        });
+        // Worktree header sits at left:0, right:240 in the sidebar.
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        Object.defineProperty(window, 'innerWidth', { value: 1400, configurable: true });
+
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const p = document.getElementById('tab-hiero-preview');
+        // Anchor 'right': left = rect.right + 8 = 248.
+        expect(p.style.left).toBe('248px');
+        expect(p.style.top).toBe('50px');
+    });
+
+    it('hides on worktree-header mouseout', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓀀', name: 'phi',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        expect(document.getElementById('tab-hiero-preview').classList.contains('visible')).toBe(true);
+        header.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+        expect(document.getElementById('tab-hiero-preview').classList.contains('visible')).toBe(false);
+    });
+
+    it('shows how many open tabs would land in this worktree', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        // Two open tabs share cwd /code/phi.
+        attachTab(tm, { paneId: 'p1', glyph: '𓂀', cwd: '/code/phi' });
+        attachTab(tm, { paneId: 'p2', glyph: '𓂀', cwd: '/code/phi' });
+        attachTab(tm, { paneId: 'p3', glyph: '𓆎', cwd: '/code/other' });
+
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓂀', name: 'phi',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const count = document.getElementById('tab-hiero-preview')
+            .querySelector('.tab-hiero-preview-count').textContent;
+        expect(count).toBe('2 tabs open in this worktree');
+    });
+
+    it('reports zero open tabs when none share the worktree cwd', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        attachTab(tm, { paneId: 'p1', glyph: '𓆎', cwd: '/somewhere/else' });
+
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓂀', name: 'phi',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const count = document.getElementById('tab-hiero-preview')
+            .querySelector('.tab-hiero-preview-count').textContent;
+        expect(count).toBe('no tabs open in this worktree');
+    });
+
+    it('toggles back to large variant when switching from worktree to tab hover', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓂀', name: 'phi',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓂀', cwd: '/code/phi' });
+        tabEl.getBoundingClientRect = () => ({ left: 50, right: 150, top: 0, bottom: 38, width: 100, height: 38 });
+
+        const p = document.getElementById('tab-hiero-preview');
+
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        expect(p.classList.contains('tab-hiero-preview-medium')).toBe(true);
+
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        expect(p.classList.contains('tab-hiero-preview-medium')).toBe(false);
+    });
+});
