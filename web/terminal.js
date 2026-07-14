@@ -1284,6 +1284,24 @@ export class TabManager {
                 this._showReconnectOverlay(tabInfo);
                 this.updateDisconnectBanner();
                 this.maybeAutoReconnect(tabInfo);
+                // Toast so the user notices the drop even when they're
+                // focused on a different tab (or the closing-tab overlay
+                // was already up). The on-terminal reconnect overlay
+                // stays for the local UX; this toast covers the peripheral
+                // case where the user wouldn't see it otherwise.
+                if (this.app && this.app.showToast) {
+                    this.app.showToast(
+                        `Connection lost on "${tabInfo.title || tabInfo.coder || 'tab'}"`,
+                        {
+                            type: 'error',
+                            title: 'Terminal disconnected',
+                            duration: 8000,
+                            action: tabInfo.exitCode === undefined || tabInfo.exitCode === null
+                                ? { text: 'Reconnect', callback: () => this.reconnectTab(tabInfo) }
+                                : null,
+                        },
+                    );
+                }
             },
             () => {
                 try {
