@@ -2921,6 +2921,29 @@ html, body {
     flex: 1;
 }
 
+/* Worktree glyph in the section header: matches the one on the tab
+   strip so the user can visually correlate a tab's icon with the
+   worktree it belongs to without reading text. Same accent-bright
+   + glow as .tab-worktree-icon. */
+.worktree-section-glyph {
+    flex: 0 0 auto;
+    width: 14px;
+    margin-right: 2px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1;
+    color: var(--accent-bright);
+    text-shadow: 0 0 5px var(--accent-glow),
+                 0 0 10px var(--accent-glow);
+    user-select: none;
+}
+.worktree-section.active .worktree-section-glyph {
+    color: var(--accent-bright);
+    text-shadow: 0 0 8px var(--accent-glow),
+                 0 0 16px var(--accent);
+}
+
 .worktree-branch {
     font-size: 11px;
     font-family: var(--font-mono);

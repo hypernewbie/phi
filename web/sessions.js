@@ -1,4 +1,4 @@
-import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil } from './util.js';
+import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph } from './util.js';
 
 export function normalizePath(p) {
     if (!p) return '';
@@ -370,12 +370,18 @@ export class SessionsManager {
 
                 const parts = wt.path.split(/[/\\]/);
                 const baseName = parts[parts.length - 1] || wt.path;
+                // Same glyph as the tab uses for this path - lets the
+                // user visually match tabs in the strip to their
+                // worktree section in the left panel without reading
+                // anything.
+                const wtGlyph = worktreeGlyph(wt.path);
 
                 wtSection.innerHTML = `
                     <div class="worktree-header">
                         <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="9 18 15 12 9 6"></polyline>
                         </svg>
+                        <span class="worktree-section-glyph" aria-hidden="true" title="${wt.path}">${wtGlyph}</span>
                         <span class="worktree-name" title="${wt.path}">${baseName}</span>
                         ${wt.branch ? `<span class="worktree-branch">[${wt.branch}]</span>` : ''}
                         <span class="worktree-dirty-indicator hidden" title="Unstaged changes" aria-hidden="true">★</span>
