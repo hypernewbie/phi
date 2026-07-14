@@ -193,9 +193,15 @@ export class DiffController {
         // permission + execCommand fallback for insecure contexts).
         this._wireCopyHandlers(this.term, this.diffTermContainer);
 
-        // Load initial state from local storage
+        // Load initial state from local storage. Desktop defaults to
+        // open; mobile defaults to closed unless the user has
+        // previously opened it. (Diff panel is a desktop-first tool —
+        // defaulting to closed on phones avoids it eating half the
+        // viewport on first launch.)
         const openState = localStorage.getItem('phi_diff_panel_open');
-        this.togglePanel(openState !== 'false');
+        const isMobile = window.innerWidth <= 768;
+        const shouldOpen = isMobile ? openState === 'true' : openState !== 'false';
+        this.togglePanel(shouldOpen);
     }
 
     // Port of terminal.js:817-878 copy wiring, scoped to whichever xterm
@@ -265,9 +271,12 @@ export class DiffController {
     togglePanel(isOpen) {
         this.isPanelOpen = isOpen;
         localStorage.setItem('phi_diff_panel_open', isOpen);
-        
+
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
+            // mobile-open is the mobile-only opt-in that slides the
+            // diff drawer in. Desktop ignores this class entirely.
+            this.diffPanel.classList.add('mobile-open');
             this.headerDiffToggleBtn.classList.add('active');
             setTimeout(() => {
                 this.fitTerminal();
@@ -275,6 +284,7 @@ export class DiffController {
             }, 50);
         } else {
             this.diffPanel.classList.add('hidden');
+            this.diffPanel.classList.remove('mobile-open');
             this.headerDiffToggleBtn.classList.remove('active');
             if (this.currentWs) {
                 this.currentWs.close();
