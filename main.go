@@ -326,7 +326,6 @@ func printWelcomeBanner(cfg Config, ip string, port int) {
 		"white":  {255, 255, 255},
 		"gold":   {212, 175, 55},
 		"bronze": {122, 156, 142},
-		"nile":   {201, 166, 72},
 	}
 
 	rgb, ok := colors[cfg.ThemeColor]

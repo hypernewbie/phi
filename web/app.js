@@ -133,14 +133,6 @@ const ACCENT_COLORS = {
         accentGlow: 'rgba(122, 156, 142, 0.18)',
         accentDim: '#4a6b5d',
         accentBright: '#b6d4c5'
-    },
-    // Nile blue + gold — the Ptolemaic royal palette. Lapis lazuli base
-    // pulled toward warm gold for the accent. The actual tomb palette.
-    nile: {
-        accent: '#c9a648',
-        accentGlow: 'rgba(201, 166, 72, 0.20)',
-        accentDim: '#8a6d20',
-        accentBright: '#f0d97a'
     }
 };
 
