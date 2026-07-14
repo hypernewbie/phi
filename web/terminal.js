@@ -1564,24 +1564,51 @@ export class TabManager {
     // Removed on undo or finalize.
     _showSoftCloseOverlay(tab) {
         if (!tab.termContainer) return;
+        // Pull the worktree hieroglyph from the tab so the countdown
+        // carries the same visual identity as the tab itself - a tiny
+        // Egyptian wall detail that ties the close-back state to the
+        // worktree it's closing in.
+        const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
         const overlay = document.createElement('div');
         overlay.className = 'tab-soft-close-overlay';
         overlay.innerHTML = `
+            <div class="tab-soft-close-backdrop" aria-hidden="true">${glyph}</div>
             <div class="tab-soft-close-ring" aria-hidden="true">
                 <svg viewBox="0 0 56 56">
                     <circle class="tab-soft-close-ring-bg" cx="28" cy="28" r="24"/>
                     <circle class="tab-soft-close-ring-fg" cx="28" cy="28" r="24"
                             pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/>
                 </svg>
-                <div class="tab-soft-close-ring-spinner"></div>
+                <div class="tab-soft-close-ring-center">${glyph}</div>
             </div>
             <div class="tab-soft-close-text">
-                Closing in <span class="tab-soft-close-secs">5</span>s
+                Closing in <span class="tab-soft-close-secs">5</span>s<span class="tab-soft-close-ellipsis"><span class="d1">.</span><span class="d2">.</span><span class="d3">.</span></span>
             </div>
             <div class="tab-soft-close-hint">Click ↻ in the tab strip to undo</div>
         `;
         tab.termContainer.appendChild(overlay);
         tab.softCloseOverlay = overlay;
+        // Tick the count text + ellipsis pulse while the overlay is up.
+        // Reusing _startSoftCloseCountdown's tick() would be ideal but
+        // it owns its own interval; the overlay updates the count via a
+        // dedicated loop that stops when the overlay is removed.
+        this._tickSoftCloseOverlay(tab);
+    }
+
+    _tickSoftCloseOverlay(tab) {
+        if (!tab.softCloseOverlay) return;
+        const startedAt = tab.softCloseStartedAt || Date.now();
+        const duration = TabManager.SOFT_CLOSE_GRACE_MS;
+        const tick = () => {
+            if (!tab.softCloseOverlay) return; // overlay gone -> stop
+            const elapsed = Date.now() - startedAt;
+            const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
+            const secsEl = tab.softCloseOverlay.querySelector('.tab-soft-close-secs');
+            if (secsEl) secsEl.textContent = String(remaining);
+            if (remaining <= 0) return;
+        };
+        tick();
+        tab.softCloseOverlayTimer = setInterval(tick, 250);
     }
 
     // Tick a tiny countdown pill on the tab strip entry itself, so users
@@ -1590,14 +1617,20 @@ export class TabManager {
     _startSoftCloseCountdown(tab) {
         const startedAt = tab.softCloseStartedAt || Date.now();
         const duration = TabManager.SOFT_CLOSE_GRACE_MS;
+        const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
         const pill = document.createElement('span');
         pill.className = 'tab-soft-close-pill';
+        pill.innerHTML = `
+            <span class="tab-soft-close-pill-glyph">${glyph}</span>
+            <span class="tab-soft-close-pill-text">5s</span>
+        `;
         tab.tabEl.appendChild(pill);
         tab.softClosePill = pill;
+        const textEl = pill.querySelector('.tab-soft-close-pill-text');
         const tick = () => {
             const elapsed = Date.now() - startedAt;
             const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
-            pill.textContent = `${remaining}s`;
+            if (textEl) textEl.textContent = `${remaining}s`;
             if (remaining <= 0) {
                 if (tab.softClosePillTimer) clearInterval(tab.softClosePillTimer);
                 tab.softClosePillTimer = null;
@@ -1620,6 +1653,10 @@ export class TabManager {
     }
 
     _removeSoftCloseOverlay(tab) {
+        if (tab.softCloseOverlayTimer) {
+            clearInterval(tab.softCloseOverlayTimer);
+            tab.softCloseOverlayTimer = null;
+        }
         if (tab.softCloseOverlay) {
             tab.softCloseOverlay.remove();
             tab.softCloseOverlay = null;
@@ -1899,12 +1936,27 @@ export class TabManager {
                 if (tabEl) this._hideHieroPreview();
             });
         }
+        // Sidebar worktree headers also drive the preview: hovering a
+        // worktree section in the left panel shows a medium-sized glyph
+        // so users can verify the right worktree before clicking.
+        const sessionList = document.getElementById('session-list');
+        if (sessionList) {
+            sessionList.addEventListener('mouseover', (e) => {
+                const headerEl = e.target.closest('.worktree-header');
+                if (headerEl) this._showWorktreeHieroPreview(headerEl);
+            });
+            sessionList.addEventListener('mouseout', (e) => {
+                const headerEl = e.target.closest('.worktree-header');
+                if (headerEl) this._hideHieroPreview();
+            });
+        }
         // Hide on scroll/resize so the preview never lags behind a moved tab.
         // Cheap idempotent hide; cheap idempotent show on next mouseover.
         window.addEventListener('scroll', () => this._hideHieroPreview(), true);
         window.addEventListener('resize', () => this._hideHieroPreview());
     }
 
+    // Show the preview for a tab. Anchor: below the tab (default large size).
     _showHieroPreview(tabEl) {
         const p = this._hieroPreview;
         if (!p) return;
@@ -1923,19 +1975,80 @@ export class TabManager {
             if (t.tabEl && t.tabEl.dataset.worktreeGlyph === glyph) count++;
         }
 
-        this._hieroPreviewGlyph.textContent = glyph;
-        this._hieroPreviewLabel.textContent = label;
-        this._hieroPreviewPath.textContent = path;
-        this._hieroPreviewCount.textContent = count > 1
-            ? `${count} tabs in this worktree`
-            : (count === 1 ? '1 tab in this worktree' : '');
+        this._populateHieroPreview({
+            glyph, label, path, sourceEl: tabEl, anchor: 'below', size: 'large',
+            countText: count > 1
+                ? `${count} tabs in this worktree`
+                : (count === 1 ? '1 tab in this worktree' : ''),
+        });
+    }
 
-        // Position below the tab. Fixed positioning uses viewport coords,
-        // so we don't need to account for scroll.
-        const rect = tabEl.getBoundingClientRect();
-        p.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect.left))}px`;
-        p.style.top = `${rect.bottom + 8}px`;
-        p.style.minWidth = `${Math.max(180, rect.width)}px`;
+    // Show the preview for a sidebar worktree header. Anchor: right of the
+    // header (medium size so it doesn't compete with the tab preview for
+    // visual weight).
+    _showWorktreeHieroPreview(headerEl) {
+        const p = this._hieroPreview;
+        if (!p) return;
+        const section = headerEl.closest('.worktree-section');
+        const path = section ? section.getAttribute('data-worktree-path') : '';
+        const glyphEl = headerEl.querySelector('.worktree-section-glyph');
+        const glyph = glyphEl ? glyphEl.textContent : '◆';
+        const nameEl = headerEl.querySelector('.worktree-name');
+        const label = nameEl ? nameEl.textContent : (path ? path.split(/[/\\]/).pop() : '—');
+
+        // How many tabs would land in this worktree if opened here? Lets
+        // the user gauge whether the worktree already has a session
+        // before clicking. Cheap: just count open tabs whose cwd matches.
+        let count = 0;
+        if (path) {
+            for (const t of this.tabs.values()) {
+                if (t.cwd === path) count++;
+            }
+        }
+        this._populateHieroPreview({
+            glyph, label, path, sourceEl: headerEl, anchor: 'right', size: 'medium',
+            countText: count > 0
+                ? `${count} tab${count === 1 ? '' : 's'} open in this worktree`
+                : 'no tabs open in this worktree',
+        });
+    }
+
+    // Common populate + show path. Sets the card text + position based
+    // on anchor (below|right) and size (large|medium).
+    _populateHieroPreview({ glyph, label, path, sourceEl, anchor, size, countText }) {
+        const p = this._hieroPreview;
+        if (!p) return;
+
+        // Toggle the size modifier. Only one size at a time so the
+        // transition between sources is clean (e.g., user hovers a
+        // tab then a worktree header).
+        p.classList.toggle('tab-hiero-preview-medium', size === 'medium');
+
+        this._hieroPreviewGlyph.textContent = glyph;
+        this._hieroPreviewLabel.textContent = label || '—';
+        this._hieroPreviewPath.textContent = path || '';
+        this._hieroPreviewCount.textContent = countText || '';
+
+        // Position. Fixed positioning uses viewport coords, so we don't
+        // need to account for scroll. Both anchors clamp so the card
+        // never leaves the viewport.
+        const rect = sourceEl.getBoundingClientRect();
+        if (anchor === 'right') {
+            const left = rect.right + 8;
+            const maxLeft = window.innerWidth - 260;
+            p.style.left = `${Math.min(maxLeft, left)}px`;
+            p.style.top = `${Math.max(8, rect.top)}px`;
+            // Worktree side: card is medium so its width is mostly
+            // content-driven; CSS caps at 260px.
+            p.style.minWidth = '';
+        } else {
+            // below
+            p.style.left = `${Math.max(8, Math.min(window.innerWidth - 200, rect.left))}px`;
+            p.style.top = `${rect.bottom + 8}px`;
+            // Tabs vary in width; widen the card a bit so the long
+            // paths don't wrap awkwardly. CSS caps at 320px.
+            p.style.minWidth = `${Math.max(180, rect.width)}px`;
+        }
 
         // Re-trigger the shimmer keyframe by clearing and re-setting
         // animation - forces a reflow so the animation restarts each

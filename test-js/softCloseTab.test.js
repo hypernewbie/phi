@@ -347,8 +347,14 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         expect(tab.softClosePill).toBeTruthy();
         expect(tab.tabEl.contains(tab.softClosePill)).toBe(true);
         expect(tab.softClosePill.classList.contains('tab-soft-close-pill')).toBe(true);
-        // Initial value counts down from the full grace period.
-        expect(tab.softClosePill.textContent).toMatch(/^\d+s$/);
+        // v0.8.5: pill now shows glyph + text. Glyph = the tab's
+        // worktree hieroglyph (or fallback '◆'), text = the countdown
+        // seconds. Both live in dedicated spans.
+        const text = tab.softClosePill.querySelector('.tab-soft-close-pill-text');
+        const glyph = tab.softClosePill.querySelector('.tab-soft-close-pill-glyph');
+        expect(text).toBeTruthy();
+        expect(glyph).toBeTruthy();
+        expect(text.textContent).toMatch(/^\d+s$/);
     });
 
     it('pill countdown ticks down as the clock advances', () => {
@@ -358,10 +364,10 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         });
         tm.softCloseTab('b');
         const tab = tm.tabs.get('b');
-        const initial = tab.softClosePill.textContent;
+        const text = () => tab.softClosePill.querySelector('.tab-soft-close-pill-text').textContent;
+        const initial = text();
         vi.advanceTimersByTime(2500); // 2.5s in
-        const later = tab.softClosePill.textContent;
-        // Pill should now show a smaller number.
+        const later = text();
         const initialSec = parseInt(initial, 10);
         const laterSec = parseInt(later, 10);
         expect(laterSec).toBeLessThan(initialSec);

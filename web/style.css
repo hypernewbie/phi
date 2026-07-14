@@ -970,6 +970,31 @@ html, body {
     opacity: 1;
     transform: translateY(0) scale(1);
 }
+/* Medium size used by sidebar worktree-header hover. Smaller glyph,
+   tighter padding - still glassmorphism with the same accent glow
+   so it reads as the same component, just compact. */
+.tab-hiero-preview.tab-hiero-preview-medium {
+    padding: 12px 16px 10px;
+    border-radius: 10px;
+    max-width: 260px;
+}
+.tab-hiero-preview.tab-hiero-preview-medium .tab-hiero-preview-glyph {
+    font-size: 56px;
+    margin-bottom: 8px;
+}
+.tab-hiero-preview.tab-hiero-preview-medium .tab-hiero-preview-label {
+    font-size: 12px;
+    margin-bottom: 3px;
+}
+.tab-hiero-preview.tab-hiero-preview-medium .tab-hiero-preview-path {
+    font-size: 9.5px;
+    max-height: 3em;
+}
+.tab-hiero-preview.tab-hiero-preview-medium .tab-hiero-preview-count {
+    margin-top: 6px;
+    padding-top: 6px;
+    font-size: 9px;
+}
 .tab-hiero-preview-glyph {
     font-size: 72px;
     line-height: 1;
@@ -1346,18 +1371,42 @@ html, body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 3px;
     font-family: var(--font-mono);
     font-size: 10px;
     line-height: 1;
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    border: 1px solid var(--bg-border);
+    color: var(--accent-bright);
+    background: linear-gradient(180deg,
+        rgba(124, 106, 247, 0.12),
+        rgba(124, 106, 247, 0.06));
+    border: 1px solid var(--accent-soft);
     border-radius: 8px;
-    padding: 2px 6px;
+    padding: 2px 7px;
     margin-left: 2px;
     flex: 0 0 auto;
-    min-width: 24px;
+    min-width: 32px;
     text-align: center;
+    text-shadow: 0 0 4px var(--accent-glow);
+    box-shadow: 0 0 8px var(--accent-trace);
+    /* Reuses the tab's worktree hieroglyph so the pill visually ties to
+       the specific worktree that's closing. The glyph itself drains
+       (opacity 0.7 -> 0.15 + slight scale) over the 5s grace period -
+       same animation timing as the overlay's ring drain, so the two
+       stay visually synchronised. */
+}
+.tab-soft-close-pill-glyph {
+    font-size: 11px;
+    line-height: 1;
+    animation: tab-soft-close-pill-drain 5s linear forwards;
+    color: var(--accent-bright);
+}
+.tab-soft-close-pill-text {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+@keyframes tab-soft-close-pill-drain {
+    from { opacity: 0.85; transform: scale(1); }
+    to   { opacity: 0.15; transform: scale(0.7); }
 }
 
 /* Content-area overlay when the active tab is soft-closing: stays on
@@ -1379,6 +1428,25 @@ html, body {
     color: var(--text-primary);
     font-family: var(--font-ui);
     animation: tab-soft-close-fade-in 120ms ease-out;
+    overflow: hidden;
+}
+/* Giant faint hieroglyph backdrop behind the countdown - same glyph
+   as the tab's worktree label, scaled up so it reads as a 'carved
+   stone' backdrop rather than a UI element. Very low opacity so it
+   doesn't compete with the countdown text. */
+.tab-soft-close-backdrop {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 360px;
+    line-height: 1;
+    color: var(--accent-bright);
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 0;
+    user-select: none;
+    text-shadow: 0 0 80px var(--accent-glow);
 }
 @keyframes tab-soft-close-fade-in {
     from { opacity: 0; }
@@ -1412,7 +1480,11 @@ html, body {
     to   { stroke-dashoffset: 100; }
 }
 /* Continuous spinner overlaid in the center of the drain ring, so
-   the ring visually communicates both progress (drain) and activity. */
+   the ring visually communicates both progress (drain) and activity.
+   Replaced in v0.8.5 with a static hieroglyph at the ring center -
+   the worktree glyph, accent-bright with a soft glow. Ties the
+   countdown to the same visual identity as the tab + sidebar +
+   hover preview. */
 .tab-soft-close-ring-spinner {
     position: absolute;
     inset: 14px;
@@ -1424,16 +1496,53 @@ html, body {
 @keyframes tab-soft-close-spin {
     to { transform: rotate(360deg); }
 }
+/* Hieroglyph at the center of the drain ring (replaces spinner). */
+.tab-soft-close-ring-center {
+    position: absolute;
+    inset: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--accent-bright);
+    text-shadow: 0 0 10px var(--accent-glow), 0 0 18px var(--accent-glow);
+    z-index: 1;
+}
 
 .tab-soft-close-text {
     font-size: 13px;
     color: var(--text-primary);
     letter-spacing: 0.01em;
+    z-index: 1;
 }
 .tab-soft-close-text .tab-soft-close-secs {
     font-family: var(--font-mono);
     color: var(--accent-bright);
     font-weight: 600;
+}
+/* Trailing ellipsis: three dots that pulse '.', '..', '...' in a
+   wave via staggered opacity keyframes. Pure CSS, no JS. The three
+   individual dots are real <span>s so opacity actually transitions. */
+.tab-soft-close-ellipsis {
+    display: inline-block;
+    color: var(--accent-bright);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    margin-left: 1px;
+}
+.tab-soft-close-ellipsis .d1,
+.tab-soft-close-ellipsis .d2,
+.tab-soft-close-ellipsis .d3 {
+    opacity: 0.25;
+    animation: tab-soft-close-ellipsis 1.5s ease-in-out infinite;
+}
+.tab-soft-close-ellipsis .d2 { animation-delay: 0.2s; }
+.tab-soft-close-ellipsis .d3 { animation-delay: 0.4s; }
+@keyframes tab-soft-close-ellipsis {
+    0%, 100% { opacity: 0.25; }
+    40%      { opacity: 1; }
+    80%      { opacity: 0.25; }
 }
 .tab-soft-close-hint {
     font-size: 11px;
@@ -1574,6 +1683,88 @@ html, body {
 
 .empty-state.hidden {
     display: none !important;
+}
+
+/* Egyptian wall decoration layer - scattered hieroglyphs behind the
+   empty-state content. Faint warm-grey glyphs from the same pool used
+   for worktree labels (visual consistency), with a slow torchlight
+   gradient from upper-left and a soft vignette at the edges. Hides
+   cleanly on mobile (same breakpoint that hides the tab bar). */
+.empty-state-decoration {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+    /* Torchlight from upper-left + a fainter warm wash from lower-right.
+       Opacities are deliberately tiny - the lighting is meant to be
+       felt as mood, not seen as a hard light source. The vignette adds
+       depth so the hieroglyphs fade into the edges naturally. */
+    background:
+        radial-gradient(ellipse 900px 700px at 12% 18%, rgba(255, 188, 110, 0.07), transparent 55%),
+        radial-gradient(ellipse 700px 500px at 88% 82%, rgba(200, 150, 80, 0.04), transparent 60%),
+        radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
+    animation: torchflicker 6s infinite ease-in-out;
+}
+@keyframes torchflicker {
+    0%, 100% { opacity: 1; }
+    35%      { opacity: 0.94; }
+    50%      { opacity: 1; }
+    65%      { opacity: 0.97; }
+    /* Tiny breathing on the warm wash, no jank - opacity only, never
+       layout. */
+}
+.empty-state-decoration .hiero {
+    position: absolute;
+    color: rgba(210, 188, 152, 0.06);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1;
+    user-select: none;
+    pointer-events: none;
+    /* Slight carved-into-stone glow: faint warm halo behind the
+       glyph. Matches the lighting from upper-left so glyphs near the
+       'torch' read slightly warmer. */
+    text-shadow: 0 0 12px rgba(180, 140, 80, 0.05);
+    animation: hierofade 2.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes hierofade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* Each hiero gets its own position, size, and rotation. Hand-placed
+   for irregular wall-decay feel. Sizes span 28-110px so the eye reads
+   'stone with carving at varied scale' rather than 'wallpaper'. */
+.empty-state-decoration .h1  { top: 6%;  left: 11%; font-size: 96px; transform: rotate(-6deg);  animation-delay: 0.10s; }
+.empty-state-decoration .h2  { top: 11%; left: 48%; font-size: 64px; transform: rotate(4deg);   animation-delay: 0.20s; }
+.empty-state-decoration .h3  { top: 4%;  right: 14%; font-size: 88px; transform: rotate(-3deg); animation-delay: 0.15s; }
+.empty-state-decoration .h4  { top: 22%; right: 5%;  font-size: 36px; transform: rotate(8deg);   animation-delay: 0.45s; }
+.empty-state-decoration .h5  { top: 38%; left: 5%;  font-size: 80px; transform: rotate(-10deg); animation-delay: 0.30s; }
+.empty-state-decoration .h6  { top: 35%; left: 26%; font-size: 28px; transform: rotate(6deg);   animation-delay: 0.55s; }
+.empty-state-decoration .h7  { top: 28%; right: 30%; font-size: 56px; transform: rotate(-7deg); animation-delay: 0.40s; }
+.empty-state-decoration .h8  { top: 50%; right: 9%; font-size: 60px; transform: rotate(5deg);   animation-delay: 0.50s; }
+.empty-state-decoration .h9  { top: 65%; left: 12%; font-size: 104px; transform: rotate(-4deg); animation-delay: 0.35s; }
+.empty-state-decoration .h10 { top: 68%; left: 36%; font-size: 40px; transform: rotate(9deg);   animation-delay: 0.60s; }
+.empty-state-decoration .h11 { top: 78%; right: 12%; font-size: 84px; transform: rotate(-8deg); animation-delay: 0.45s; }
+.empty-state-decoration .h12 { top: 88%; left: 5%;  font-size: 44px; transform: rotate(3deg);   animation-delay: 0.65s; }
+.empty-state-decoration .h13 { top: 92%; left: 50%; font-size: 64px; transform: rotate(-5deg); animation-delay: 0.55s; }
+.empty-state-decoration .h14 { top: 14%; left: 70%; font-size: 36px; transform: rotate(7deg);   animation-delay: 0.50s; }
+.empty-state-decoration .h15 { top: 60%; right: 35%; font-size: 32px; transform: rotate(-9deg); animation-delay: 0.70s; }
+
+@media (max-width: 768px) {
+    /* Mobile: keep the wall feel but tone it down. Smaller glyphs,
+       lower opacity, lighter torchlight so the empty state stays
+       readable on a phone screen. Hide the noisy staggered fade-in
+       so it just appears with the page. */
+    .empty-state-decoration {
+        opacity: 0.6;
+        transform: scale(0.7);
+        transform-origin: top center;
+    }
+    .empty-state-decoration .hiero {
+        opacity: 0.04;
+        animation: none;
+    }
 }
 
 .empty-state-content {
