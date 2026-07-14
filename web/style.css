@@ -625,6 +625,15 @@ html, body {
     text-shadow: 0 0 6px var(--green-glow);
 }
 
+/* Djed pillar — drawn when a session has been running long enough
+   to count as "stable" (idle > 2 min, but still has a live tab).
+   Switches the color from the running-ankh green to the accent so
+   the indicator visually shifts state. */
+.session-dot.stable {
+    color: var(--accent);
+    text-shadow: 0 0 6px var(--accent-glow);
+}
+
 .session-time {
     font-size: 11px;
     color: var(--text-muted);
@@ -877,6 +886,31 @@ html, body {
     flex: 1;
     background-color: var(--bg-base);
     overflow: hidden;
+    position: relative;
+}
+
+/* Greek key (meander) border along the top of the terminal panel.
+   Static 6px-tall SVG strip; the motif repeats across the panel width.
+   Subtle: accent at 20% opacity. Sets the Hellenic geometric frame
+   without motion or weight. */
+.terminal-panel::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    pointer-events: none;
+    z-index: 5;
+    opacity: 0.2;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6'><path d='M0 0 H6 V3 H3 V0 M0 0 V3 H3 V0 M9 0 V6 H15 V0 H12 V3 H9 M18 0 V6 H24 V0' fill='none' stroke='currentColor' stroke-width='0.7'/></svg>");
+    background-repeat: repeat-x;
+    color: var(--accent);
+}
+@media (max-width: 768px) {
+    .terminal-panel::before {
+        display: none;
+    }
 }
 
 .terminal-tabs-bar {
@@ -1944,6 +1978,70 @@ html, body {
     width: auto;
     padding: 0 16px;
     white-space: nowrap;
+}
+
+/* Pi-coding-agent keyboard shortcut chip. Only visible when the
+   active coder is pi. Shows the Ctrl+Shift+X keybinding visually
+   so the user can discover/learn it. Clicking the chip sends the
+   staged input the same way the Send button does. */
+.kbd-shortcut-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px 0 8px;
+    height: 38px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent-trace);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+.kbd-shortcut-btn:hover {
+    color: var(--accent-bright);
+    border-color: var(--accent-soft);
+    background: var(--accent-wash);
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+.kbd-shortcut-btn:active {
+    transform: translateY(1px);
+}
+.kbd-shortcut-btn .kbd-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--bg-border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.04em;
+}
+.kbd-shortcut-btn .kbd-plus {
+    color: var(--text-dim);
+    font-size: 10px;
+    margin: 0 1px;
+}
+.kbd-shortcut-btn .kbd-label {
+    margin-left: 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+.kbd-shortcut-btn:hover .kbd-label {
+    color: var(--accent-bright);
+}
+.kbd-shortcut-btn.hidden {
+    display: none;
 }
 
 .direct-mode-btn {
@@ -3194,6 +3292,26 @@ html, body {
 .worktree-section.active .worktree-section-glyph {
     text-shadow: 0 0 8px var(--accent-glow),
                  0 0 18px var(--accent-glow);
+}
+
+/* Cartouche (oval ring + bottom bar) wraps the worktree glyph when
+   the worktree has any live/open tab. Egyptian cartouches framed
+   royal names — reusing the motif marks the worktree as live/inscribed.
+   Static; no draw-on animation, just a thin pill around the glyph. */
+.worktree-section.has-live-tab .worktree-section-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 14px;
+    padding: 0 2px;
+    border: 1px solid var(--accent-soft);
+    border-bottom-width: 2px;
+    border-radius: 999px;
+    box-shadow:
+        inset 0 0 0 1px var(--accent-trace),
+        0 0 6px var(--accent-glow);
+    background: linear-gradient(to bottom, transparent 70%, var(--accent-trace) 70%, var(--accent-trace) 85%, transparent 85%);
 }
 
 .worktree-branch {
@@ -5542,6 +5660,40 @@ html, body {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--accent-trace) !important;
+    position: relative;
+}
+
+/* Marble vein overlay on the glass panels. Static SVG of Carrara-style
+   veins at 4% opacity, sits behind the blur layer so it never reads
+   as "on top of" content. Material, not illustration. */
+.sidebar-panel::after,
+.app-header::after,
+.input-bar-container::after,
+.md-modal-content::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.04;
+    z-index: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='120' viewBox='0 0 160 120'><g fill='none' stroke='%23dcd6c4' stroke-width='0.5' opacity='0.85'><path d='M0 12 C 30 8, 60 18, 90 14 S 140 22, 160 18'/><path d='M0 42 C 25 38, 55 48, 85 44 S 135 52, 160 48'/><path d='M0 72 C 20 68, 50 78, 80 74 S 130 82, 160 78'/><path d='M0 102 C 30 98, 60 108, 90 104 S 140 112, 160 108'/><path d='M22 0 C 18 30, 28 60, 22 90 S 18 110, 22 120'/><path d='M82 0 C 78 30, 88 60, 82 90 S 78 110, 82 120'/><path d='M138 0 C 134 30, 144 60, 138 90 S 134 110, 138 120'/></g></svg>");
+    background-repeat: repeat;
+}
+/* Keep interactive content above the marble overlay. */
+.sidebar-panel > *,
+.app-header > *,
+.input-bar-container > *,
+.md-modal-content > * {
+    position: relative;
+    z-index: 1;
+}
+@media (max-width: 768px) {
+    .sidebar-panel::after,
+    .app-header::after,
+    .input-bar-container::after,
+    .md-modal-content::after {
+        opacity: 0.025;
+    }
 }
 
 .terminals-wrapper {
@@ -5918,6 +6070,24 @@ html, body {
 }
 [data-theme-color="white"] .toast-action-btn {
     color: #14141a !important;
+}
+
+/* Bronze patina theme — oxidized copper/bronze statuary palette.
+   Pushes the bg slightly green-grey to read as patinated surface. */
+[data-theme-color="bronze"] {
+    --bg-base:    #0e1413;
+    --bg-panel:   #131a18;
+    --bg-elevated: #1a221f;
+    --bg-border:  rgba(122, 156, 142, 0.10);
+}
+
+/* Nile blue + gold — the Ptolemaic royal palette. Lapis lazuli base
+   pulled toward warm gold accent. Reads as Cleopatra-era tomb. */
+[data-theme-color="nile"] {
+    --bg-base:    #070b1a;
+    --bg-panel:   #0c1126;
+    --bg-elevated: #131a35;
+    --bg-border:  rgba(201, 166, 72, 0.12);
 }
 
 

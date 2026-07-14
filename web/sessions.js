@@ -278,6 +278,21 @@ export class SessionsManager {
         if (!skipReload) {
             this.loadSessions();
         }
+
+        // Show / hide the Ctrl+Shift+X shortcut chip on the input bar
+        // depending on which coder is active. The chip is purely a
+        // discoverability affordance for the pi coding agent.
+        const chip = document.getElementById('pi-shortcut-send-btn');
+        const sendBtn = document.getElementById('send-input-btn');
+        if (chip && sendBtn) {
+            if (coderId === 'pi') {
+                chip.classList.remove('hidden');
+                sendBtn.classList.add('hidden');
+            } else {
+                chip.classList.add('hidden');
+                sendBtn.classList.remove('hidden');
+            }
+        }
     }
 
     highlightActiveWorktree(cwdPath) {
@@ -375,6 +390,24 @@ export class SessionsManager {
                 // worktree section in the left panel without reading
                 // anything.
                 const wtGlyph = worktreeGlyph(wt.path);
+
+                // Cartouche (oval ring + bar) wraps the glyph when the
+                // worktree has any live/open tab. Egyptian cartouches
+                // historically framed royal names; reusing the motif
+                // here marks the worktree as "live / inscribed."
+                let hasLiveTab = false;
+                if (this.app && this.app.tabManager && this.app.tabManager.tabs) {
+                    const wtPathNorm = normalizePath(wt.path);
+                    for (const t of this.app.tabManager.tabs.values()) {
+                        if (t.cwd && normalizePath(t.cwd) === wtPathNorm) {
+                            hasLiveTab = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasLiveTab) {
+                    wtSection.classList.add('has-live-tab');
+                }
 
                 wtSection.innerHTML = `
                     <div class="worktree-header">
@@ -502,11 +535,23 @@ export class SessionsManager {
                         break;
                     }
                 }
-                
+
+                // Djed pillar for "stable" — a session that has been
+                // alive long enough that it's not churning. Ankh for
+                // the active/recently-running state. The djed glyph
+                // means "stability" in the Egyptian corpus so the
+                // semantic lands directly on the indicator.
+                let statusGlyph = '';
+                if (isRunning) {
+                    const ageMs = Date.now() - new Date(sess.time_updated).getTime();
+                    const isStable = ageMs > 2 * 60 * 1000;
+                    statusGlyph = isStable ? '𓊽' : '☥';
+                }
+
                 item.innerHTML = `
                     <div class="session-meta-top">
                         <span class="session-title">${sess.title}</span>
-                        ${isRunning ? '<span class="session-dot">☥</span>' : ''}
+                        ${statusGlyph ? `<span class="session-dot ${isRunning && statusGlyph === '𓊽' ? 'stable' : ''}">${statusGlyph}</span>` : ''}
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
