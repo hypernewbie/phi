@@ -147,7 +147,10 @@ func TestApplier_Apply_HappyPath(t *testing.T) {
 	body := []byte("#!/bin/sh\necho hello new phi\n")
 	b := &assetBuilder{t: t, binaryName: binaryName, binaryBody: body}
 	archiveBytes := b.archive()
-	hash := sha256Hex(body)
+	// Apply verifies the SHA256 of the archive file the server
+	// serves, NOT the inner binary. Goreleaser publishes checksums
+	// of the archive, so hash the bytes the fake server returns.
+	hash := sha256Hex(archiveBytes)
 
 	fg := &fakeGitHub{
 		asset:      archiveBytes,
@@ -222,7 +225,10 @@ func TestApplier_Apply_HappyPath_VPrefixedTarget(t *testing.T) {
 	body := []byte("#!/bin/sh\necho hello new phi\n")
 	b := &assetBuilder{t: t, binaryName: binaryName, binaryBody: body}
 	archiveBytes := b.archive()
-	hash := sha256Hex(body)
+	// Apply verifies the SHA256 of the archive file the server
+	// serves, NOT the inner binary. Goreleaser publishes checksums
+	// of the archive, so hash the bytes the fake server returns.
+	hash := sha256Hex(archiveBytes)
 
 	fg := &fakeGitHub{
 		asset:      archiveBytes,
