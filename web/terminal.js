@@ -24,6 +24,7 @@ export class TabManager {
         this.inputBarContainer = document.getElementById('input-bar-container');
         this.inputTextArea = document.getElementById('input-textarea');
         this.sendInputBtn = document.getElementById('send-input-btn');
+        this.piShortcutSendBtn = document.getElementById('pi-shortcut-send-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
@@ -574,6 +575,28 @@ export class TabManager {
         
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
+        });
+
+        // Pi-coder shortcut chip: visible only when the active coder
+        // is pi. Clicking the chip OR pressing Ctrl+Shift+X anywhere
+        // sends the staged input. The chip is purely a discoverability
+        // affordance; the keybinding works without it being on screen.
+        if (this.piShortcutSendBtn) {
+            this.piShortcutSendBtn.addEventListener('click', () => {
+                this.sendStagedInput();
+            });
+        }
+
+        // Global Ctrl+Shift+X -> send staged input. Fires regardless of
+        // which element is focused (textarea, terminal, anywhere). The
+        // chip only displays for pi, but the keybinding itself is
+        // universally available since it's a quality-of-life shortcut.
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey &&
+                (e.key === 'X' || e.key === 'x')) {
+                e.preventDefault();
+                this.sendStagedInput();
+            }
         });
 
         if (this.cancelInputBtn) {
