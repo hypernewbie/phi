@@ -596,6 +596,40 @@ export class TabManager {
                 (e.key === 'X' || e.key === 'x')) {
                 e.preventDefault();
                 this.sendStagedInput();
+                return;
+            }
+            // Mobile arrow-key capture fallback. On mobile the WebKit
+            // soft keyboard sometimes yanks focus off the input bar
+            // mid-type, so the per-textarea arrow handler at terminal.js:512
+            // never fires. Capture arrow / Enter / Escape / PageUp /
+            // PageDown at the document level whenever the staged input
+            // is empty AND a tab is active. Desktop keeps the original
+            // textarea-bound path; document-level capture would steal
+            // arrow keys from terminal-internal tools (fzf, less, etc.)
+            // on a real keyboard.
+            if (window.innerWidth > 768) return;
+            if (!this.inputTextArea || this.inputTextArea.value !== '') return;
+            if (this.inputBarContainer?.classList.contains('hidden')) return;
+            const activeTab = this.getActiveTab();
+            if (!activeTab || activeTab.isDead) return;
+            // Skip if a modal is open - let the modal handler have the key.
+            if (document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) return;
+
+            const mobileKeys = {
+                'ArrowUp':    '\u001b[A',
+                'ArrowDown':  '\u001b[B',
+                'ArrowLeft':  '\u001b[D',
+                'ArrowRight': '\u001b[C',
+                'PageUp':     '\u001b[5~',
+                'PageDown':   '\u001b[6~',
+                'Enter':      '\r',
+                'Escape':     '\u001b',
+            };
+            const sendChar = mobileKeys[e.key];
+            if (sendChar !== undefined && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                this.sendInput(activeTab, sendChar);
+                this._spamScrollToBottom(activeTab);
             }
         });
 
