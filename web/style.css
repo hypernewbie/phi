@@ -3281,7 +3281,31 @@ html, body {
     flex-direction: column;
     margin-bottom: 8px;
     border-radius: 6px;
-    overflow: hidden;
+    /* overflow:visible so the meander divider ::before on the next
+       section can sit in the gap. Children have their own border-radius
+       so the lack of clipping is invisible. */
+    overflow: visible;
+    position: relative;
+}
+
+/* Greek key meander divider between sidebar worktree sections.
+   Same SVG as .terminal-panel::before, sized smaller (4px tall) and
+   dimmer (10% opacity). Geometric punctuation instead of bare space
+   between groups. Sits in the margin-bottom gap of the previous
+   section. */
+.worktree-section + .worktree-section::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 14px;
+    right: 14px;
+    height: 4px;
+    pointer-events: none;
+    opacity: 0.10;
+    color: var(--accent);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6'><path d='M0 0 H6 V3 H3 V0 M0 0 V3 H3 V0 M9 0 V6 H15 V0 H12 V3 H9 M18 0 V6 H24 V0' fill='none' stroke='currentColor' stroke-width='0.7'/></svg>");
+    background-repeat: repeat-x;
+    background-size: 24px 4px;
 }
 
 .worktree-header {
