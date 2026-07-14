@@ -529,29 +529,43 @@ export class SessionsManager {
                 });
                 
                 let isRunning = false;
+                let isIdleAlive = false;
                 for (const t of this.app.tabManager.tabs.values()) {
                     if (t.sessionId === sess.id && t.coder === this.activeCoder && !t.isDead) {
-                        isRunning = true;
+                        if (t.isBusy) {
+                            isRunning = true;
+                        } else {
+                            // Tab exists and is alive, but the watcher
+                            // is just monitoring it (not generating
+                            // output). Eye of Horus = "being watched."
+                            isIdleAlive = true;
+                        }
                         break;
                     }
                 }
 
-                // Djed pillar for "stable" — a session that has been
-                // alive long enough that it's not churning. Ankh for
-                // the active/recently-running state. The djed glyph
-                // means "stability" in the Egyptian corpus so the
-                // semantic lands directly on the indicator.
+                // Three glyph states for a live session row:
+                //   ☥  ankh     — actively running, recent (< 2 min)
+                //   𓊽  djed    — running, stable (> 2 min)
+                //   𓂀  eye     — alive but idle, watcher is monitoring
+                //                   (no current output, tab still open)
+                // No glyph when there's no live tab at all.
                 let statusGlyph = '';
+                let statusClass = '';
                 if (isRunning) {
                     const ageMs = Date.now() - new Date(sess.time_updated).getTime();
                     const isStable = ageMs > 2 * 60 * 1000;
                     statusGlyph = isStable ? '𓊽' : '☥';
+                    if (isStable) statusClass = 'stable';
+                } else if (isIdleAlive) {
+                    statusGlyph = '𓂀';
+                    statusClass = 'idle';
                 }
 
                 item.innerHTML = `
                     <div class="session-meta-top">
                         <span class="session-title">${sess.title}</span>
-                        ${statusGlyph ? `<span class="session-dot ${isRunning && statusGlyph === '𓊽' ? 'stable' : ''}">${statusGlyph}</span>` : ''}
+                        ${statusGlyph ? `<span class="session-dot ${statusClass}">${statusGlyph}</span>` : ''}
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
