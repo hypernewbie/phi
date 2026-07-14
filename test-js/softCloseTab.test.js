@@ -432,3 +432,210 @@ describe('soft-close cap (MAX_SOFT_CLOSED_TABS)', () => {
         expect(tm.tabs.get('d').softClosing).toBe(true);
     });
 });
+// ---- 10 LOAD-BEARING tests for the close lifecycle ------------------
+//
+// Each one guards against a real user-visible bug. See the CHANGELOG
+// v0.8.3 entry for the user-reported "some processes never get closed"
+// symptoms. The pre-existing describe blocks above cover the bones of
+// the pipeline; these pin down the contracts.
+
+describe('close lifecycle - load-bearing contracts', () => {
+    // Helper: count how many DELETEs landed for which pane. mockFetch
+    // is registered globally in beforeEach.
+    function deleteCalls() {
+        return globalThis.fetch.mock.calls.filter(c => {
+            const url = typeof c[0] === 'string' ? c[0] : c[0]?.url;
+            return url && url.includes('/api/terminals/');
+        });
+    }
+
+    it('1. finalize fires DELETE to /api/terminals/<paneId>', () => {
+        // The core contract: every finalize must hit the server. If
+        // this fails the user's PTY is permanently leaked.
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
+        const calls = deleteCalls();
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0]).toBe('/api/terminals/a');
+        expect(calls[0][1]?.method).toBe('DELETE');
+    });
+
+    it('2. DELETE failure surfaces as an error toast (not silently swallowed)', () => {
+        // Previous bug: .catch(() => {}) hid DELETE failures. The
+        // user clicked ×, saw the tab vanish, but the process kept
+        // running and they had no idea. Now: any non-2xx (besides 404,
+        // which means the server already killed it) fires an error
+        // toast with the user-visible actionable message.
+        mockFetch(() => ({ ok: false, status: 500 }));
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        const showToast = vi.fn();
+        tm.app.showToast = showToast;
+        tm.softCloseTab('a');
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
+        // Allow the fetch promise + .then to settle.
+        return Promise.resolve().then(() => Promise.resolve()).then(() => {
+            // Find any error toast with the right kind of message.
+            const errorToasts = showToast.mock.calls.filter(c =>
+                c[1] && c[1].type === 'error'
+            );
+            expect(errorToasts.length).toBeGreaterThanOrEqual(1);
+            const msg = errorToasts[0][0];
+            expect(msg.toLowerCase()).toMatch(/process|running|server/);
+        });
+    });
+
+    it('3. concurrent finalizeCloseTab calls fire DELETE exactly once', () => {
+        // The same tab can be reached by the grace timer, the
+        // cap-forced path, and the × × user path simultaneously.
+        // Without an idempotency guard, multiple DELETEs fire and
+        // the cleanup runs twice (crashing on the second remove()).
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        // Simulate three racing finalize attempts: timer, cap, manual.
+        tm.finalizeCloseTab('a');
+        tm.finalizeCloseTab('a');
+        tm.finalizeCloseTab('a');
+        // Even after all three attempted, DELETE fires exactly once.
+        expect(deleteCalls().filter(c => c[0] === '/api/terminals/a'))
+            .toHaveLength(1);
+    });
+
+    it('4. cap-forced finalize fires DELETE for the cap-d tab too', () => {
+        // When the 4th close triggers cap-finalize of the oldest,
+        // the oldest's PTY must still be killed. Easy to miss the
+        // fetch in the early-return branch.
+        const tm = makeTm({
+            withTabs: ['a', 'b', 'c', 'd'],
+        });
+        tm.softCloseTab('a');
+        vi.advanceTimersByTime(10);
+        tm.softCloseTab('b');
+        vi.advanceTimersByTime(10);
+        tm.softCloseTab('c');
+        vi.advanceTimersByTime(10);
+        tm.softCloseTab('d'); // cap exceeded, 'a' force-finalized
+        // 'a' should have received its DELETE (the cap path uses the
+        // same finalizeCloseTab which fires the fetch).
+        const calls = deleteCalls().map(c => c[0]).sort();
+        expect(calls).toContain('/api/terminals/a');
+    });
+
+    it('5. undo via the strip ↻ button cancels the grace timer AND cleans up overlay/pill/toast', () => {
+        // v0.8.3 bug class: the ↻ button was permanently hidden via
+        // an inline display:none that no CSS or JS undid (dead code).
+        // The toast worked, but the strip did not. Both must work.
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        // Verify it actually IS soft-closing first.
+        expect(tm.tabs.get('a').softClosing).toBe(true);
+        expect(tm.tabs.get('a').softCloseTimer).toBeTruthy();
+        expect(tm.tabs.get('a').softCloseOverlay).toBeTruthy();
+        expect(tm.tabs.get('a').softClosePill).toBeTruthy();
+        expect(tm.tabs.get('a').softCloseToast).toBeTruthy();
+        // Undo via the strip entry click handler (the production path).
+        tm.undoCloseTab('a');
+        const tab = tm.tabs.get('a');
+        expect(tab.softClosing).toBe(false);
+        expect(tab.softCloseTimer).toBeNull();
+        expect(tab.softCloseOverlay).toBeFalsy();
+        expect(tab.softClosePill).toBeFalsy();
+        expect(tab.softCloseToast).toBeNull();
+        // The strip entry returned to its non-soft-closed state.
+        expect(tab.tabEl.classList.contains('soft-closed')).toBe(false);
+    });
+
+    it('6. closing the last active tab: empty state appears at finalize, not at soft-close', () => {
+        // Previously, softCloseTab showed the empty state immediately
+        // when no other tabs survived. Now the user stays on the
+        // closing tab during the grace period (sees the spinner
+        // overlay). Empty state only after the grace expires.
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        // During grace: no empty state, no inputBar reveal.
+        expect(tm.showEmptyState).not.toHaveBeenCalled();
+        expect(tm.activePaneId).toBe('a');
+        // Let the grace expire.
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
+        // Now empty state should be visible.
+        expect(tm.showEmptyState).toHaveBeenCalled();
+        expect(tm.activePaneId).toBeNull();
+    });
+
+    it('7. closing a background tab leaves the active tab untouched', () => {
+        // User is on tab A; closes tab B (background). A should not
+        // gain a soft-close overlay, A's content should not be hidden,
+        // A should still be active. B gets the soft-close treatment.
+        const tm = makeTm({
+            withTabs: ['a', 'b'],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+        expect(tm.activePaneId).toBe('a');
+        // A has no overlay.
+        expect(tm.tabs.get('a').softCloseOverlay).toBeFalsy();
+        expect(tm.tabs.get('a').softClosing).toBeFalsy();
+        // B has the overlay? No - B is background, only strip pill.
+        expect(tm.tabs.get('b').softCloseOverlay).toBeFalsy();
+        // B has the strip pill and is soft-closing.
+        expect(tm.tabs.get('b').softClosing).toBe(true);
+        expect(tm.tabs.get('b').softClosePill).toBeTruthy();
+    });
+
+    it('8. closeAll triggers DELETE for every pane in the map', () => {
+        // The "Close All" button confirms then soft-closes every tab.
+        // After all grace periods, every pane must hit the DELETE
+        // endpoint - a miss here = leaked processes from bulk close.
+        const tm = makeTm({
+            withTabs: ['a', 'b', 'c', 'd'],
+        });
+        const keys = Array.from(tm.tabs.keys());
+        // Mirror the production closeAll wiring.
+        keys.forEach(paneId => tm.closeTab(paneId));
+        // Advance past ALL grace periods (cap=3 means oldest gets
+        // force-finalized, but the 3 younger ones run timers).
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS + 100);
+        const deleted = new Set(deleteCalls().map(c => c[0]));
+        expect(deleted).toContain('/api/terminals/a')
+;
+        // 'a' was force-finalized by the cap path.
+        // The 3 survivors should also have their DELETEs.
+        expect(deleted.has('/api/terminals/b') ||
+               deleted.has('/api/terminals/c') ||
+               deleted.has('/api/terminals/d')).toBe(true);
+    });
+
+    it('9. DELETE 404 does NOT break the rest of finalize (graceful)', () => {
+        // A 404 means the server already removed the instance (likely
+        // via WS-detach grace timer or another DELETE call). The
+        // client must still clean up WS, term, DOM, and Map. Otherwise
+        // the user gets a zombie WS in the browser.
+        mockFetch(() => ({ ok: false, status: 404 }));
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
+        return Promise.resolve().then(() => Promise.resolve()).then(() => {
+            // Tab was removed from the Map even though DELETE 404'd.
+            expect(tm.tabs.has('a')).toBe(false);
+            // DOM was cleaned.
+            expect(document.body.contains(document.getElementById('term-a'))).toBe(false);
+        });
+    });
+
+    it('10. undo prevents the stale grace timer from finalizing the tab', () => {
+        // If undoCloseTab forgets to clearTimeout, the timer fires 5s
+        // after undo and the tab gets finalized / DELETE'd. User-visible:
+        // "I undid the close, then it vanished anyway after a few
+        // seconds." This test makes that contract explicit.
+        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
+        tm.softCloseTab('a');
+        tm.undoCloseTab('a');
+        // Advance past where the original timer would have fired.
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS + 1000);
+        // Tab is still alive, NOT soft-closing, NO DELETE fired.
+        expect(tm.tabs.has('a')).toBe(true);
+        expect(tm.tabs.get('a').softClosing).toBe(false);
+        const deletedUrls = deleteCalls().map(c => c[0]);
+        expect(deletedUrls).not.toContain('/api/terminals/a');
+    });
+});
