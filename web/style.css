@@ -2823,7 +2823,7 @@ html, body {
         border-left: 1px solid var(--bg-border);
     }
     
-    .diff-panel:not(.hidden) {
+    .diff-panel:not(.hidden).mobile-open {
         display: flex !important;
         transform: translateX(0);
     }
