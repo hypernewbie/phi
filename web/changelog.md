@@ -2,7 +2,30 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.9.1 — 2026-07-14
+
+Polished theme details for the obsidian glassmorphic and Greek-Egyptian visual style.
+
+### Added
+- **Focus breathing on input textarea.** Focus glows now pulse gently with a 4s ease-in-out breathing animation, mimicking organic torchlight rather than static digital borders.
+- **Active tab inner top light.** Added a subtle radial accent glow to the inside top edge of active tabs, giving them a polished light-catching feel.
+- **Header button hover beacons.** Hovering over header action buttons casts a soft radial glow underneath, adding visual depth.
+- **Active coder tab accent sliver.** The active coder tab now has a thin accent-colored bottom border to unify it with the main terminal tabs.
+- **Session list active indicators.** The active session dot is now the Egyptian Ankh (`☥`), U+2625, indicating "running/active" status. Active session items also receive a deeper inset highlight.
+- **Heat-shimmer empty state.** The scattered hieroglyphs on the empty state wall drift slowly with staggered animation timings, creating a desert mirage heat-shimmer effect.
+- **Chromatic Φ logo.** The empty state hero logo now splits slightly into subtle cyan/rose chromatic drop-shadows at the peak of its breathing cycle.
+
+## v0.9.0 — 2026-07-14
+
+Egyptian theming across empty state landing page, worktree sidebar panels, and close countdowns.
+
+### Added
+- **Empty-state decoration.** Landing page features 15 hieroglyphs scattered with irregular scaling, rotation, and staggered entry, backed by a warm radial torchlight flicker.
+- **Worktree-header hover card.** Hovering left-panel worktree section headers shows compact hieroglyph preview details.
+- **Countdown theming.** Close grace countdown center spinner replaced with active worktree hieroglyphs alongside an animated ellipsis wave.
+
 ## v0.8.4 — 2026-07-13
+
 
 UX-densification release. Two affordances for "scan lots of tabs fast":
 
