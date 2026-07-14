@@ -2046,8 +2046,10 @@ html, body {
     line-height: 1;
     cursor: pointer;
     z-index: 5;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45),
-                0 0 6px var(--accent-trace);
+    /* Glow-only — no dark-rgba drop shadow. The aesthetic is luminous
+       surface floating in dark space, not material on a desk. */
+    box-shadow: 0 0 6px var(--accent-trace),
+                0 0 12px var(--accent-glow);
     opacity: 1;
     transform: translateY(0);
     transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.15s ease;
@@ -2060,8 +2062,8 @@ html, body {
 .scroll-to-bottom-btn:hover {
     background-color: rgba(20, 20, 25, 0.95);
     border-color: var(--accent);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.55),
-                0 0 10px var(--accent-glow);
+    box-shadow: 0 0 10px var(--accent-glow),
+                0 0 20px var(--accent-glow);
 }
 
 /* Force helper textarea to be fixed relative to screen so browser focusing does not scroll the viewport */
