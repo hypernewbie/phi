@@ -1578,6 +1578,36 @@ html, body {
     font-size: 11px;
     color: var(--text-muted);
 }
+
+/* Undo button on the soft-close overlay itself. The closing-tab
+   motif carries its own restore affordance so the user doesn't have
+   to chase the tiny ↻ in the tab strip or the corner toast — both
+   of which are easy to miss when the closing tab fills the screen.
+   Sized to be obvious, styled in the same glassmorphism as the
+   toast action button. */
+.tab-soft-close-undo {
+    margin-top: 18px;
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--accent-soft);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+.tab-soft-close-undo:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+    transform: translateY(-1px);
+}
+.tab-soft-close-undo:active {
+    transform: translateY(0);
+}
 .tab-reopen {
     border: none;
     background: transparent;

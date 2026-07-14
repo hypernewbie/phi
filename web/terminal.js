@@ -1641,7 +1641,19 @@ export class TabManager {
                 Closing in <span class="tab-soft-close-secs">5</span>s<span class="tab-soft-close-ellipsis"><span class="d1">.</span><span class="d2">.</span><span class="d3">.</span></span>
             </div>
             <div class="tab-soft-close-hint">Click ↻ in the tab strip to undo</div>
+            <button class="tab-soft-close-undo" type="button">↻ Undo close</button>
         `;
+        // The undo button on the overlay itself: previously the only
+        // affordances were the tiny ↻ in the tab strip (easy to miss
+        // when the closing tab fills the screen) and the corner toast.
+        // Now the closing-tab motif carries its own restore button.
+        const undoBtn = overlay.querySelector('.tab-soft-close-undo');
+        if (undoBtn) {
+            undoBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                this.undoCloseTab(tab.paneId);
+            });
+        }
         tab.termContainer.appendChild(overlay);
         tab.softCloseOverlay = overlay;
         // Tick the count text + ellipsis pulse while the overlay is up.
