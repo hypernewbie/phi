@@ -1748,12 +1748,49 @@ html, body {
         display: none;
     }
 
-    /* Simplify the empty-state bg too: drop the pulse animation and
-       use a flat radial. The pulse was also contributing to the
-       chaotic mobile look. */
+    /* The empty-state landing (logo + title + launch buttons + meta)
+       must remain fully visible on mobile. Earlier overrides stripped
+       the bg and the pulse animation — that's fine — but we also need
+       to shrink padding + font sizes so the content actually fits
+       inside a 375px-wide viewport without the buttons wrapping to a
+       3+ row ladder or clipping past the safe area. */
     .empty-state {
         animation: none;
-        background: radial-gradient(circle at 50% 35%, var(--bg-elevated) 0%, var(--bg-base) 70%);
+    }
+    .empty-state-content {
+        padding: 16px 12px;
+        gap: 10px;
+        max-width: 100%;
+    }
+    .empty-logo {
+        font-size: 52px;
+        margin-bottom: 4px;
+    }
+    .empty-title {
+        font-size: 22px;
+    }
+    .empty-subtitle {
+        font-size: 12px;
+        margin-bottom: 4px;
+        padding: 0 8px;
+    }
+    .empty-quick-launch {
+        gap: 6px;
+        margin-top: 4px;
+    }
+    .empty-launch-btn {
+        padding: 7px 14px;
+        font-size: 12px;
+    }
+    .empty-hostname-badge {
+        padding: 5px 10px;
+        font-size: 11px;
+        margin-bottom: 8px;
+    }
+    .empty-meta {
+        font-size: 10px;
+        margin-top: 12px;
+        padding: 0 8px;
     }
 }
 
