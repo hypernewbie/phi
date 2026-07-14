@@ -911,13 +911,14 @@ html, body {
     cursor: pointer;
     font-size: 11px;
     font-weight: 500;
-    padding: 4px 8px;
-    border-radius: 4px;
+    padding: 5px 10px;
+    border-radius: 5px;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     transition: all 0.15s;
     margin-bottom: 4px;
+    margin-left: 6px;
     flex-shrink: 0;
     text-shadow: 0 0 6px var(--accent-glow);
     box-shadow: 0 0 12px var(--accent-trace);
@@ -981,10 +982,10 @@ html, body {
 .worktree-legend {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px 6px;
-    padding: 6px 10px 8px;
+    gap: 6px 8px;
+    padding: 8px 12px 10px;
     border-top: 1px solid var(--bg-border);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     font-family: var(--font-mono);
     letter-spacing: 0.02em;
@@ -996,28 +997,34 @@ html, body {
 .worktree-legend-entry {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
-    border-radius: 8px;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 9px;
     background: var(--bg-elevated);
     border: 1px solid var(--bg-border);
     white-space: nowrap;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.worktree-legend-entry:hover {
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 6px var(--accent-glow);
 }
 .worktree-legend-entry-icon {
     color: var(--accent-bright);
-    text-shadow: 0 0 5px var(--accent-glow);
-    font-size: 11px;
+    text-shadow: 0 0 5px var(--accent-glow),
+                 0 0 10px var(--accent-glow);
+    font-size: 12px;
 }
 .worktree-legend-entry-label {
     color: var(--text-primary);
-    opacity: 0.85;
+    opacity: 0.9;
 }
 .worktree-legend-entry-count {
     color: var(--text-muted);
-    font-size: 9px;
+    font-size: 10px;
     padding: 1px 4px;
     border-radius: 6px;
     background: var(--bg-base);
@@ -1096,27 +1103,27 @@ html, body {
 .tab {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     background-color: transparent;
     border: 1px solid transparent;
     border-bottom: none;
     color: var(--text-muted);
     font-size: 13px;
     font-weight: 400;
-    padding: 8px 12px;
-    border-radius: 6px 6px 0 0;
+    padding: 6px 14px;
+    border-radius: 7px 7px 0 0;
     cursor: pointer;
-    height: 34px;
-    max-width: 180px;
-    min-width: 80px;
+    height: 38px;
+    min-width: 120px;
+    max-width: 240px;
     transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .tab-favicon {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     object-fit: contain;
-    border-radius: 2px;
+    border-radius: 3px;
     flex-shrink: 0;
     filter: grayscale(100%);
     opacity: 0.7;
@@ -1140,21 +1147,26 @@ html, body {
 /* Worktree glyph sits between the coder favicon and the title. Each
    worktree (cwd) hashes to a unique monochrome symbol so the user can
    group tabs at a glance without reading text. Color = accent bright
-   with a glow so it pops slightly without screaming. */
+   with a glow so it pops without screaming. Slightly bigger slot than
+   before so the glyph doesn't feel squeezed. */
 .tab-worktree-icon {
     flex: 0 0 auto;
-    width: 13px;
+    width: 16px;
+    margin-right: 1px;
     text-align: center;
-    font-size: 11px;
+    font-size: 13px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 5px var(--accent-glow),
-                 0 0 10px var(--accent-glow);
+    text-shadow: 0 0 6px var(--accent-glow),
+                 0 0 12px var(--accent-glow);
     user-select: none;
     font-family: var(--font-mono);
-    /* Tab is flex; flex: 0 0 auto so ellipsis truncation on title still
-       works correctly when the worktree glyph squeezes the available
-       width. */
+    transition: text-shadow 0.2s ease;
+}
+
+.tab.active .tab-worktree-icon {
+    text-shadow: 0 0 8px var(--accent-glow),
+                 0 0 18px var(--accent-glow);
 }
 
 .tab-title.marked {
@@ -1164,7 +1176,8 @@ html, body {
 
 .tab:hover {
     color: var(--text-primary);
-    background-color: var(--bg-elevated);
+    background-color: var(--accent-wash);
+    border-color: var(--accent-soft);
 }
 
 .tab.active {
@@ -1172,12 +1185,12 @@ html, body {
     background-color: var(--bg-base);
     border-color: var(--bg-border);
     border-top: 2px solid var(--accent);
-    padding-top: 7px;
+    padding-top: 5px;
     font-weight: 500;
     position: relative;
     z-index: 1;
     margin-bottom: -1px;
-    box-shadow: 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+    box-shadow: 0 -6px 18px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
 }
 
 .tab.active:hover {
@@ -2879,10 +2892,11 @@ html, body {
 .worktree-header {
     display: flex;
     align-items: center;
-    padding: 8px 12px;
+    gap: 6px;
+    padding: 9px 14px;
     background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
-    border-radius: 6px;
+    border-radius: 7px;
     cursor: pointer;
     transition: all 0.15s ease;
     user-select: none;
@@ -2895,13 +2909,12 @@ html, body {
 
 .worktree-section.active .worktree-header {
     border-color: var(--accent);
-    box-shadow: 0 0 6px var(--accent-glow);
+    box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .worktree-header .chevron-icon {
     width: 14px;
     height: 14px;
-    margin-right: 8px;
     color: var(--text-muted);
     transition: transform 0.15s ease;
     transform: rotate(0deg);
@@ -2924,24 +2937,23 @@ html, body {
 /* Worktree glyph in the section header: matches the one on the tab
    strip so the user can visually correlate a tab's icon with the
    worktree it belongs to without reading text. Same accent-bright
-   + glow as .tab-worktree-icon. */
+   + glow as .tab-worktree-icon, slightly larger slot for breathing. */
 .worktree-section-glyph {
     flex: 0 0 auto;
-    width: 14px;
-    margin-right: 2px;
+    width: 16px;
     text-align: center;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 5px var(--accent-glow),
-                 0 0 10px var(--accent-glow);
+    text-shadow: 0 0 6px var(--accent-glow),
+                 0 0 12px var(--accent-glow);
     user-select: none;
+    transition: text-shadow 0.2s ease;
 }
 .worktree-section.active .worktree-section-glyph {
-    color: var(--accent-bright);
     text-shadow: 0 0 8px var(--accent-glow),
-                 0 0 16px var(--accent);
+                 0 0 18px var(--accent-glow);
 }
 
 .worktree-branch {
