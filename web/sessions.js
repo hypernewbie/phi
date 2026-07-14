@@ -506,7 +506,7 @@ export class SessionsManager {
                 item.innerHTML = `
                     <div class="session-meta-top">
                         <span class="session-title">${sess.title}</span>
-                        ${isRunning ? '<span class="session-dot"></span>' : ''}
+                        ${isRunning ? '<span class="session-dot">☥</span>' : ''}
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
