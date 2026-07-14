@@ -276,13 +276,62 @@ func (m *Manager) SaveState() error {
 	}
 	m.mu.Unlock()
 
-	b, err := json.MarshalIndent(list, "", "  ")
+	// Snapshot each instance's serialisable fields under inst.mu so
+	// json.Marshal below doesn't race with the timer callback that
+	// writes to fields like DetachTimer / Busy / LastActivityUnix.
+	// The snapshot is a plain struct (no goroutine writes to it after
+	// build), so marshalling it is race-free.
+	snapshots := make([]PTYInstanceSnapshot, 0, len(list))
+	for _, inst := range list {
+		snapshots = append(snapshots, inst.Snapshot())
+	}
+
+	b, err := json.MarshalIndent(snapshots, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	path := tabsFilePath()
 	return system.WriteFileAtomic(path, b, 0644)
+}
+
+// PTYInstanceSnapshot is a lock-free, JSON-safe copy of a PTYInstance.
+// All fields here are copied under inst.mu in (*PTYInstance).Snapshot().
+type PTYInstanceSnapshot struct {
+	ID               string `json:"id"`
+	Cwd              string `json:"cwd"`
+	Coder            string `json:"coder"`
+	SessionID        string `json:"session_id"`
+	ActiveWS         bool   `json:"-"`
+	ActiveWSCount    int    `json:"-"`
+	Pinned           bool   `json:"pinned"`
+	Marked           bool   `json:"marked"`
+	LastActivityUnix int64  `json:"last_activity_unix"`
+	Busy             bool   `json:"busy"`
+	Title            string `json:"title"`
+	Workspace        string `json:"workspace"`
+}
+
+// Snapshot returns a lock-free, JSON-safe copy of the instance's
+// serialisable fields. The copy is taken under inst.mu so it doesn't
+// race with concurrent writers. Used by SaveState.
+func (inst *PTYInstance) Snapshot() PTYInstanceSnapshot {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return PTYInstanceSnapshot{
+		ID:               inst.ID,
+		Cwd:              inst.Cwd,
+		Coder:            inst.Coder,
+		SessionID:        inst.SessionID,
+		ActiveWS:         inst.ActiveWS,
+		ActiveWSCount:    inst.ActiveWSCount,
+		Pinned:           inst.Pinned,
+		Marked:           inst.Marked,
+		LastActivityUnix: inst.LastActivityUnix,
+		Busy:             inst.Busy,
+		Title:            inst.Title,
+		Workspace:        inst.Workspace,
+	}
 }
 
 // scheduleSave coalesces SaveState calls onto a 500ms debounce (plan §3.3).
