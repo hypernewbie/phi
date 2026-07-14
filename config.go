@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"testing"
 
 	"github.com/hypernewbie/phi/pkg/system"
 )
@@ -82,13 +84,26 @@ func expandHome(path string) string {
 	return path
 }
 
-// configFilePath returns the active config path. Tests override testConfigPath to
-// point at a temp file so they never touch ~/.phi/config.json.
+// testConfigPath points configFilePath() at a temp file during tests.
+// Set this (via withTempConfig or directly) so tests never touch
+// ~/.phi/config.json. Anything else will trigger the guard below.
 var testConfigPath string
 
+// configFilePath returns the active config path. Tests MUST override
+// testConfigPath to point at a temp file — otherwise the guard in
+// this function refuses to return the live ~/.phi/config.json path.
+// Without this guard, a test that forgets withTempConfig(t) silently
+// reads/writes the user's real config (as happened with the
+// `phi-test-alpha/beta/gamma` workspace poisoning on 2026-07-14).
 func configFilePath() string {
 	if testConfigPath != "" {
 		return testConfigPath
+	}
+	if testing.Testing() {
+		panic("configFilePath() called under `go test` without testConfigPath set. " +
+			"Use withTempConfig(t) (or set testConfigPath directly) to " +
+			"isolate this test from ~/.phi/config.json — see the doc comment on " +
+			"testConfigPath.")
 	}
 	return expandHome("~/.phi/config.json")
 }
@@ -192,8 +207,67 @@ func saveConfig(cfg Config) {
 	configMu.Lock()
 	defer configMu.Unlock()
 
+	// Defense in depth: never persist a workspace whose path looks
+	// like a test scratch dir (e.g. /tmp/phi-test-alpha). This guards
+	// against the earlier poisoning incident where a test wrote three
+	// fake workspaces into the live ~/.phi/config.json.
+	cfg.Workspaces = filterOutTestPaths(cfg.Workspaces)
+
 	path := configFilePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	_ = system.WriteFileAtomic(path, b, 0644)
+}
+
+// looksLikeTestArtifact returns true if `path` looks like a scratch
+// directory a Go test created via MkdirTemp / os.CreateTemp with a
+// phi-prefixed pattern. Used as a final defense-in-depth check: even
+// if saveConfig is somehow called during a test that bypassed the
+// withTempConfig guard, refuse to persist a workspace that lives
+// inside a phi-prefixed test scratch directory anywhere in its path.
+//
+// Heuristic: any path segment starts with `phi-test-` or `phi-shims-`.
+// This catches:
+//
+//	C:/Users/.../Temp/phi-test-1234.../working       (workspace inside)
+//	/tmp/phi-test-1234...                             (workspace == dir)
+//	/var/folders/.../T/phi-test-1234.../working       (macOS TempDir)
+//
+// Legitimate user workspaces never have such a segment anywhere in
+// their path. False-positive risk for a user-named project like
+// `/code/phi-test-tools` is non-zero but acceptable; renaming the
+// workspace is preferable to ever silently poisoning the live config
+// again.
+func looksLikeTestArtifact(path string) bool {
+	if path == "" {
+		return false
+	}
+	p := filepath.ToSlash(path)
+	// Check every path segment for the prefix.
+	for _, seg := range strings.Split(p, "/") {
+		if strings.HasPrefix(seg, "phi-test-") || strings.HasPrefix(seg, "phi-shims-") {
+			return true
+		}
+	}
+	// Also handle Windows backslash form (defensive; filepath.ToSlash
+	// already converts).
+	for _, seg := range strings.Split(filepath.FromSlash(p), string(filepath.Separator)) {
+		if strings.HasPrefix(seg, "phi-test-") || strings.HasPrefix(seg, "phi-shims-") {
+			return true
+		}
+	}
+	return false
+}
+
+// filterOutTestPaths returns a new slice containing only paths that
+// don't look like a test scratch directory. See saveConfig for the
+// call site (workspace list dedup is the primary use).
+func filterOutTestPaths(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, p := range in {
+		if !looksLikeTestArtifact(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
