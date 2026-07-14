@@ -2019,6 +2019,44 @@ html, body {
     background-color: var(--bg-base) !important;
 }
 
+/* Floating scroll-to-bottom button. Sits in the bottom-right of the
+   terminal viewport, fades in when the user scrolls up into
+   scrollback, fades out when they return to live output. Pattern
+   borrowed from iTerm / VS Code terminal / Hyper. */
+.scroll-to-bottom-btn {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--accent-soft);
+    background-color: rgba(13, 13, 16, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--accent-bright);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 5;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45),
+                0 0 6px var(--accent-trace);
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.15s ease;
+}
+.scroll-to-bottom-btn.hidden {
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+}
+.scroll-to-bottom-btn:hover {
+    background-color: rgba(20, 20, 25, 0.95);
+    border-color: var(--accent);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.55),
+                0 0 10px var(--accent-glow);
+}
+
 /* Force helper textarea to be fixed relative to screen so browser focusing does not scroll the viewport */
 .xterm-helper-textarea {
     position: fixed !important;
