@@ -191,7 +191,11 @@ export class MarkdownManager {
 
                         const item = document.createElement('button');
                         item.className = 'md-file-item';
-                        item.innerHTML = `<span class="md-file-icon">📄</span><span class="md-file-name">${f.name}</span>`;
+                        // 𓏞 is U+131DE — Hieroglyphic papyrus scroll.
+                        // Replaces the generic 📄 for the markdown file
+                        // list — semantic match for 'document' in the
+                        // existing Egyptian glyph pool.
+                        item.innerHTML = `<span class="md-file-icon">𓏞</span><span class="md-file-name">${f.name}</span>`;
                         item.title = f.path;
                         
                         item.addEventListener('click', (e) => {
