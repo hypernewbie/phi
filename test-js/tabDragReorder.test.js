@@ -261,19 +261,27 @@ describe('drag handlers', () => {
         rectSpy.mockRestore();
     });
 
-    it('handleTabDragOver on a pinned tab is a no-op', () => {
+    it('handleTabDragOver on a pinned tab is still a valid drop target', () => {
+        // Pinning protects the server-side PTY across WS disconnects; it
+        // no longer locks position. Pinned tabs are valid drop targets so
+        // users can still reorder the strip without unpinning.
         const tm = makeTabManager({ withTabs: ['a', 'b'], pinned: new Set(['b']) });
         tm.dragSourceId = 'a';
         const tabB = tm.tabsContainer.querySelector('[data-pane-id="b"]');
+        const rectSpy = vi.spyOn(tabB, 'getBoundingClientRect').mockReturnValue({
+            left: 0, right: 100, top: 0, bottom: 34, width: 100, height: 34,
+        });
         const e = {
             preventDefault: vi.fn(),
             dataTransfer: { dropEffect: '' },
             currentTarget: tabB,
-            clientX: 50,
+            clientX: 80, // right half -> drop-after
         };
         tm.handleTabDragOver(e, 'b');
-        expect(e.preventDefault).not.toHaveBeenCalled();
+        expect(e.preventDefault).toHaveBeenCalled();
+        expect(tabB.classList.contains('drop-after')).toBe(true);
         expect(tabB.classList.contains('drop-before')).toBe(false);
+        rectSpy.mockRestore();
     });
 
     it('handleTabDrop reorders and clears state', () => {
@@ -344,14 +352,17 @@ describe('saveTabsState - persists order alongside active pane', () => {
     });
 });
 
-describe('pinned tabs are not draggable (DOM attribute)', () => {
-    it('a tab created with pinned=true has draggable=false', () => {
+describe('tabs are draggable regardless of pin status', () => {
+    it('all tabs get draggable=true so reordering is always available', () => {
         // We can't go through full createTab() without xterm.js, but the
-        // contract is: draggable is set on the tabEl based on pinned flag.
-        // This is a static source check that locks in the convention.
+        // contract is: every tab is draggable. Pinning protects the
+        // server-side PTY but doesn't lock strip position. This is a
+        // static source check that locks in the convention.
         const fs = require('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
-        expect(src).toMatch(/tabEl\.draggable\s*=\s*!pinned/);
-        expect(src).toMatch(/if \(!pinned\) \{[\s\S]*dragstart/);
+        expect(src).toMatch(/tabEl\.draggable\s*=\s*true/);
+        expect(src).toMatch(/dragstart.*handleTabDragStart/);
+        // Drag listeners must be set unconditionally now (no `if (!pinned)` gate).
+        expect(src).not.toMatch(/if\s*\(\s*!pinned\s*\)\s*\{\s*tabEl\.addEventListener\(\s*['"]dragstart/);
     });
 });

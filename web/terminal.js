@@ -370,12 +370,11 @@ export class TabManager {
 
     handleTabDragOver(e, targetPaneId) {
         if (!this.dragSourceId || this.dragSourceId === targetPaneId) return;
-        // Pinned tabs aren't draggable so the source is never a pinned tab,
-        // but the target might be (dropping next to a pinned tab is fine -
-        // we just compute insert-before/after the pinned tab, and the move
-        // logic naturally lands the non-pinned source after all pinned tabs).
+        // Pin status no longer blocks drag targets - tabs default to
+        // pinned so we can't gate on the class. Order is purely visual
+        // and handled by moveTabTo's insert-before/after logic.
         const tabEl = e.currentTarget;
-        if (!tabEl || tabEl.classList.contains('pinned')) return;
+        if (!tabEl) return;
         e.preventDefault(); // required so the `drop` event fires
         try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
 
@@ -826,7 +825,7 @@ export class TabManager {
         this.fitActiveTerminal();
     }
     
-    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = false, marked = false, initialCmd = '') {
+    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = true, marked = false, initialCmd = '') {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId, { userInitiated: true });
@@ -840,14 +839,13 @@ export class TabManager {
         tabEl.className = 'tab';
         if (pinned) tabEl.classList.add('pinned');
         tabEl.setAttribute('data-pane-id', paneId);
-        // Pinned tabs are locked to the front of the bar - never draggable.
-        // Everything else gets HTML5 drag-reorder (localStorage only, see
-        // moveTabTo / applyTabOrder / saveTabOrder).
-        tabEl.draggable = !pinned;
-        if (!pinned) {
-            tabEl.addEventListener('dragstart', (e) => this.handleTabDragStart(e, paneId));
-            tabEl.addEventListener('dragend', (e) => this.handleTabDragEnd(e));
-        }
+        // Tabs default to pinned (server keeps the PTY alive across WS
+        // disconnects / reloads). Pinning is a session-protection concept,
+        // not a position-lock - all tabs get drag-reorder regardless of
+        // pin state (moveTabTo / applyTabOrder / saveTabOrder).
+        tabEl.draggable = true;
+        tabEl.addEventListener('dragstart', (e) => this.handleTabDragStart(e, paneId));
+        tabEl.addEventListener('dragend', (e) => this.handleTabDragEnd(e));
         tabEl.addEventListener('dragover', (e) => this.handleTabDragOver(e, paneId));
         tabEl.addEventListener('dragleave', (e) => this.handleTabDragLeave(e));
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
