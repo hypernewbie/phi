@@ -535,9 +535,19 @@ html, body {
 .coder-tab.active {
     color: var(--text-primary);
     background-color: var(--bg-elevated);
-    border-color: var(--bg-border);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-    border-bottom: 2px solid var(--accent);
+    /* Cartouche wrap on the active coder tab — same motif used for
+       live worktree glyphs (oval ring + bottom bar). Replaces the
+       flat 1px-border + bottom-bar style with a thin pill frame so
+       the active coder reads as 'inscribed / selected' in the same
+       language as the rest of the motif. */
+    border: 1px solid var(--accent-soft);
+    border-bottom-width: 2px;
+    border-radius: 999px;
+    box-shadow:
+        inset 0 0 0 1px var(--accent-trace),
+        0 0 6px var(--accent-glow);
+    background-image: linear-gradient(to bottom, transparent 70%, var(--accent-trace) 70%, var(--accent-trace) 85%, transparent 85%);
+    background-repeat: no-repeat;
 }
 
 .session-list-container {
