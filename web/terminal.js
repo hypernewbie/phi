@@ -671,7 +671,7 @@ export class TabManager {
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
             <button class="tab-close">×</button>
-            <button class="tab-reopen" style="display:none" title="Undo close">↻</button>
+            <button class="tab-reopen" title="Undo close">↻</button>
         `;
         
         const termContainer = document.createElement('div');
@@ -1234,13 +1234,14 @@ export class TabManager {
     // with a ↻ reopen button, and an "Undo" toast is shown. This solves
     // two real problems:
     //   1. Accidental close was a hard cliff: PTY killed, WS closed, term
-    //      disposed - no way back. Now the user has SOFT_CLOSE_GRACE_MS
-    //      to click Undo (in the toast) or click the ↻ icon (in the strip)
-    //      to restore the tab.
+    //      disposed — no way back. Now the user has SOFT_CLOSE_GRACE_MS
+    //      to click Undo (in the toast) or click the ↻ icon (in the
+    //      strip) to restore the tab.
     //   2. closeTab used to auto-switch to whatever happened to be last in
-    //      the Map (insertion order), which has no relationship to the
-    //      user's current project. pickNextTab() picks the most-related
-    //      surviving tab instead.
+    //      the Map (insertion order), which had no relationship to the
+    //      user's current project. Now soft-close never auto-switches:
+    //      the active tab is kept in place under a spinner overlay so
+    //      the user can see what they're losing and still hit undo.
     // If the user doesn't undo within the grace, finalizeCloseTab()
     // actually kills the PTY and removes the tab.
     //
@@ -1266,9 +1267,16 @@ export class TabManager {
         this.softCloseTab(paneId);
     }
 
-    // Mark tab as soft-closing: strip entry fades, ↻ replaces ×, PTY is
-    // NOT killed yet. After the grace expires, finalizeCloseTab runs.
-    // If this was the active tab, switch to the most-related survivor.
+    // Mark tab as soft-closing: strip entry fades, × swaps to ↻, a tiny
+    // countdown pill appears on the strip so the user can see how long
+    // they have to undo. The PTY is NOT killed yet — if the user clicks
+    // ↻, or the "Undo" button in the toast, the tab is restored.
+    //
+    // The active tab is NOT auto-switched on close. Instead, a content
+    // overlay covers the terminal with the same spinner + countdown so
+    // the user can still see what they were looking at while they
+    // decide whether to undo. After the 5s grace (or × twice), if the
+    // tab was the only one, the empty state finally shows.
     softCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab || tab.softClosing) return;
@@ -1287,23 +1295,19 @@ export class TabManager {
             return;
         }
 
-        // Switch away only if this tab was the active one.
+        // Active-tab close: keep the user where they are. Spin up a
+        // countdown overlay on top of the terminal so they can see
+        // what they're "losing" and still hit undo. No tab switch, no
+        // surprise "where did my view go" jump.
         if (this.activePaneId === paneId) {
-            const nextId = this.pickNextTab(tab);
-            if (nextId) {
-                this.switchTab(nextId);
-            } else {
-                // No other tabs survive (or all survivors are also
-                // soft-closing). Show empty state immediately.
-                this.activePaneId = null;
-                this.inputBarContainer.classList.add('hidden');
-                this.presetsContainer.classList.add('hidden');
-                this.showEmptyState();
-                if (this.app.markdownManager) {
-                    this.app.markdownManager.refreshFiles({ force: true });
-                }
-            }
+            this._showSoftCloseOverlay(tab);
         }
+
+        // Strip pill: a tiny "5s → 4s" countdown next to the title so
+        // the fading tab itself communicates "you have N seconds to
+        // bring me back." Visible even when the closing tab is not the
+        // active one — keeps the affordance consistent.
+        this._startSoftCloseCountdown(tab);
 
         // Undo toast for ALL soft-closes (active or background). The
         // toast auto-dismisses after the grace; clicking Undo restores.
@@ -1332,6 +1336,75 @@ export class TabManager {
         }, TabManager.SOFT_CLOSE_GRACE_MS);
     }
 
+    // Build the content-area overlay shown when the active tab is
+    // soft-closing: dark backdrop + spinner ring (drain animation) +
+    // countdown text + "click ↻ to undo" hint. Sits on top of the
+    // terminal so the user keeps visual context while they decide.
+    // Removed on undo or finalize.
+    _showSoftCloseOverlay(tab) {
+        if (!tab.termContainer) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'tab-soft-close-overlay';
+        overlay.innerHTML = `
+            <div class="tab-soft-close-ring" aria-hidden="true">
+                <svg viewBox="0 0 56 56">
+                    <circle class="tab-soft-close-ring-bg" cx="28" cy="28" r="24"/>
+                    <circle class="tab-soft-close-ring-fg" cx="28" cy="28" r="24"
+                            pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/>
+                </svg>
+                <div class="tab-soft-close-ring-spinner"></div>
+            </div>
+            <div class="tab-soft-close-text">
+                Closing in <span class="tab-soft-close-secs">5</span>s
+            </div>
+            <div class="tab-soft-close-hint">Click ↻ in the tab strip to undo</div>
+        `;
+        tab.termContainer.appendChild(overlay);
+        tab.softCloseOverlay = overlay;
+    }
+
+    // Tick a tiny countdown pill on the tab strip entry itself, so users
+    // closing inactive tabs (who don't get the content overlay) still
+    // see how long until finalize. Stops cleanly on undo / finalize.
+    _startSoftCloseCountdown(tab) {
+        const startedAt = tab.softCloseStartedAt || Date.now();
+        const duration = TabManager.SOFT_CLOSE_GRACE_MS;
+        const pill = document.createElement('span');
+        pill.className = 'tab-soft-close-pill';
+        tab.tabEl.appendChild(pill);
+        tab.softClosePill = pill;
+        const tick = () => {
+            const elapsed = Date.now() - startedAt;
+            const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
+            pill.textContent = `${remaining}s`;
+            if (remaining <= 0) {
+                if (tab.softClosePillTimer) clearInterval(tab.softClosePillTimer);
+                tab.softClosePillTimer = null;
+                return;
+            }
+        };
+        tick();
+        tab.softClosePillTimer = setInterval(tick, 250);
+    }
+
+    _stopSoftCloseCountdown(tab) {
+        if (tab.softClosePillTimer) {
+            clearInterval(tab.softClosePillTimer);
+            tab.softClosePillTimer = null;
+        }
+        if (tab.softClosePill) {
+            tab.softClosePill.remove();
+            tab.softClosePill = null;
+        }
+    }
+
+    _removeSoftCloseOverlay(tab) {
+        if (tab.softCloseOverlay) {
+            tab.softCloseOverlay.remove();
+            tab.softCloseOverlay = null;
+        }
+    }
+
     // Reverse a soft-close: cancel the timer, restore the strip entry,
     // switch back to the tab. Works whether the user clicked Undo in the
     // toast or the ↻ icon in the strip.
@@ -1350,6 +1423,8 @@ export class TabManager {
             setTimeout(() => tab.softCloseToast?.remove(), 200);
             tab.softCloseToast = null;
         }
+        this._stopSoftCloseCountdown(tab);
+        this._removeSoftCloseOverlay(tab);
 
         tab.softClosing = false;
         tab.softCloseStartedAt = null;
@@ -1374,6 +1449,8 @@ export class TabManager {
             setTimeout(() => tab.softCloseToast?.remove(), 200);
             tab.softCloseToast = null;
         }
+        this._stopSoftCloseCountdown(tab);
+        this._removeSoftCloseOverlay(tab);
 
         // Kill the server-side PTY process (fire-and-forget).
         fetch(`/api/terminals/${paneId}`, { method: 'DELETE' }).catch(() => {});
@@ -1398,49 +1475,36 @@ export class TabManager {
         this.updateDisconnectBanner();
         this.saveTabsState();
 
-        // If we just emptied the strip, show the empty state. (Should
-        // already be handled by softCloseTab, but defensive - what if
-        // the last soft-close tab was force-finalized by the cap and
-        // the user never undid any of them?)
+        // If we just finalized the last tab, show the empty state now
+        // (no overlay was up because grace expired without undo).
         if (this.tabs.size === 0) {
+            this.activePaneId = null;
+            this.inputBarContainer.classList.add('hidden');
+            this.presetsContainer.classList.add('hidden');
             this.showEmptyState();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: true });
             }
+        } else if (this.activePaneId === paneId) {
+            // Active tab finalized while other tabs exist (rare:
+            // grace expired without undo). Pick the most recently
+            // surviving tab. We intentionally do NOT auto-switch on
+            // soft-close (see softCloseTab) — this fallback only runs
+            // when the user let the grace expire on a non-last tab.
+            const remaining = Array.from(this.tabs.values());
+            if (remaining.length > 0) {
+                const survivor = remaining[remaining.length - 1];
+                this.switchTab(survivor.paneId, { userInitiated: false });
+            }
         }
     }
 
-    // Pick the most-related surviving tab to switch to after closing the
-    // given tab. Returns the paneId of the best candidate, or null if no
-    // candidate survives (or all survivors are themselves soft-closing -
-    // those are excluded so we don't auto-jump back onto a fading tab).
-    //
-    // Priority:
-    //   1. Same workspace + same coder  (most related: same project, same tool)
-    //   2. Same workspace, any coder    (same project)
-    //   3. Same coder, any workspace    (same tool)
-    //   4. Last remaining tab           (fallback; this is the old behavior
-    //                                    that caused the "random project" bug)
-    pickNextTab(closedTab) {
-        const candidates = Array.from(this.tabs.values()).filter(t =>
-            t.paneId !== closedTab.paneId && !t.softClosing
-        );
-        if (candidates.length === 0) return null;
-
-        const closedWs = closedTab.workspace || '';
-        const closedCoder = closedTab.coder || '';
-
-        let next = candidates.find(t => t.workspace === closedWs && t.coder === closedCoder);
-        if (next) return next.paneId;
-
-        next = candidates.find(t => t.workspace === closedWs);
-        if (next) return next.paneId;
-
-        next = candidates.find(t => t.coder === closedCoder);
-        if (next) return next.paneId;
-
-        return candidates[candidates.length - 1].paneId;
-    }
+    // pickNextTab was removed: soft-close never auto-switches anymore.
+    // The user stays on the closing tab via the spinner overlay until
+    // they either undo or let the grace expire. The previous priority
+    // chain (same workspace + coder, then same workspace, etc.) caused
+    // silent jumps to a different project on accidental close -
+    // worse than the problem it tried to solve.
 
     showEmptyState() {
         const el = document.getElementById('empty-state');
