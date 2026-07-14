@@ -1,0 +1,31 @@
+name: Fix npm dist-tag
+
+# Manual fixup workflow for when a retried npm publish moves the `latest`
+# tag backward (e.g. v0.9.2 published first, then v0.9.1 retry succeeded
+# last and bumped `latest` to 0.9.1). Triggers via workflow_dispatch.
+#
+# Usage:
+#   gh workflow run fix-dist-tag.yml -f version=0.9.2 -f dist=latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version to tag (e.g. 0.9.2)'
+        required: true
+      dist:
+        description: 'Dist-tag name (e.g. latest, next)'
+        required: true
+        default: 'latest'
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set dist-tag on npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm dist-tag add @hypernewbie/phi-code@${{ inputs.version }} ${{ inputs.dist }}
+          echo "---"
+          npm dist-tag ls @hypernewbie/phi-code
