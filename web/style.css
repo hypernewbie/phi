@@ -6081,15 +6081,6 @@ html, body {
     --bg-border:  rgba(122, 156, 142, 0.10);
 }
 
-/* Nile blue + gold — the Ptolemaic royal palette. Lapis lazuli base
-   pulled toward warm gold accent. Reads as Cleopatra-era tomb. */
-[data-theme-color="nile"] {
-    --bg-base:    #070b1a;
-    --bg-panel:   #0c1126;
-    --bg-elevated: #131a35;
-    --bg-border:  rgba(201, 166, 72, 0.12);
-}
-
 
 /* ===========================================================
    Kanban feature completeness additions (v0.7.15)
