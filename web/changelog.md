@@ -12,7 +12,7 @@ Polished theme details for the obsidian glassmorphic and Greek-Egyptian visual s
 - **Header button hover beacons.** Hovering over header action buttons casts a soft radial glow underneath, adding visual depth.
 - **Active coder tab accent sliver.** The active coder tab now has a thin accent-colored bottom border to unify it with the main terminal tabs.
 - **Session list active indicators.** The active session dot is now the Egyptian Ankh (`☥`), U+2625, indicating "running/active" status. Active session items also receive a deeper inset highlight.
-- **Heat-shimmer empty state.** The scattered hieroglyphs on the empty state wall drift slowly with staggered animation timings, creating a desert mirage heat-shimmer effect.
+- **Tomb-wall inscription registers.** Replaced the scattered, random empty state hieroglyphs with structured top and bottom inscription registers, lowering opacity to 0.045 and disabling all fade/drift animations for a static temple-wall feel.
 - **Chromatic Φ logo.** The empty state hero logo now splits slightly into subtle cyan/rose chromatic drop-shadows at the peak of its breathing cycle.
 
 ## v0.9.0 — 2026-07-14
