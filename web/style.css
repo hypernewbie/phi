@@ -326,6 +326,22 @@ html, body {
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.header-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at center, var(--accent-glow) 0%, transparent 75%);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+}
+
+.header-btn:hover::before {
+    opacity: 1;
 }
 
 .header-btn:hover {
@@ -521,6 +537,7 @@ html, body {
     background-color: var(--bg-elevated);
     border-color: var(--bg-border);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    border-bottom: 2px solid var(--accent);
 }
 
 .session-list-container {
@@ -571,7 +588,7 @@ html, body {
 .session-item.active {
     background-color: var(--accent-glow);
     border-color: var(--accent);
-    box-shadow: inset 2px 0 0 var(--accent), 0 0 18px var(--accent-trace);
+    box-shadow: inset 3px 0 0 var(--accent), inset -1px 0 0 var(--accent-trace), 0 0 18px var(--accent-trace);
 }
 
 .session-meta-top {
@@ -597,12 +614,15 @@ html, body {
 }
 
 .session-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background-color: var(--green);
-    box-shadow: 0 0 6px var(--green-glow);
-    flex-shrink: 0;
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--green);
+    text-shadow: 0 0 6px var(--green-glow);
 }
 
 .session-time {
@@ -1298,7 +1318,7 @@ html, body {
     position: relative;
     z-index: 1;
     margin-bottom: -1px;
-    box-shadow: 0 -6px 18px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+    box-shadow: 0 -6px 18px var(--accent-trace), inset 0 1px 0 var(--accent-edge), inset 0 2px 8px -4px var(--accent-glow);
 }
 
 .tab.active:hover {
@@ -1725,11 +1745,15 @@ html, body {
        glyph. Matches the lighting from upper-left so glyphs near the
        'torch' read slightly warmer. */
     text-shadow: 0 0 12px rgba(180, 140, 80, 0.05);
-    animation: hierofade 2.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: hierofade 2.2s cubic-bezier(0.16, 1, 0.3, 1) both, hiero-drift 28s ease-in-out infinite alternate;
 }
 @keyframes hierofade {
     from { opacity: 0; }
     to   { opacity: 1; }
+}
+@keyframes hiero-drift {
+    from { translate: 0 0; }
+    to   { translate: 3px -4px; }
 }
 
 /* Each hiero gets its own position, size, and rotation. Hand-placed
@@ -1750,6 +1774,14 @@ html, body {
 .empty-state-decoration .h13 { top: 92%; left: 50%; font-size: 64px; transform: rotate(-5deg); animation-delay: 0.55s; }
 .empty-state-decoration .h14 { top: 14%; left: 70%; font-size: 36px; transform: rotate(7deg);   animation-delay: 0.50s; }
 .empty-state-decoration .h15 { top: 60%; right: 35%; font-size: 32px; transform: rotate(-9deg); animation-delay: 0.70s; }
+
+/* Staggered animation duration overrides for drift */
+.empty-state-decoration .h1  { animation-duration: 2.2s, 31s; }
+.empty-state-decoration .h3  { animation-duration: 2.2s, 26s; }
+.empty-state-decoration .h5  { animation-duration: 2.2s, 34s; }
+.empty-state-decoration .h7  { animation-duration: 2.2s, 22s; }
+.empty-state-decoration .h9  { animation-duration: 2.2s, 37s; }
+.empty-state-decoration .h11 { animation-duration: 2.2s, 29s; }
 
 @media (max-width: 768px) {
     /* Mobile: keep the wall feel but tone it down. Smaller glyphs,
@@ -1803,8 +1835,18 @@ html, body {
 }
 
 @keyframes logoBreathe {
-    0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px var(--accent-glow)); }
-    50% { transform: scale(1.06); filter: drop-shadow(0 0 25px var(--accent)); }
+    0%, 100% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 10px var(--accent-glow));
+    }
+    50% {
+        transform: scale(1.06);
+        filter: drop-shadow(0 0 25px var(--accent));
+        text-shadow:
+            1px 0 0 rgba(0, 220, 255, 0.25),
+           -1px 0 0 rgba(255, 0, 100, 0.2),
+            0 0 30px var(--accent-glow);
+    }
 }
 
 .empty-title {
@@ -5578,9 +5620,14 @@ html, body {
     box-shadow: 0 0 22px var(--accent-glow), 0 0 6px var(--accent);
 }
 
+@keyframes torch-breathe {
+    0%, 100% { box-shadow: 0 0 20px var(--accent-glow), inset 0 0 10px var(--accent-trace); }
+    50%   { box-shadow: 0 0 28px var(--accent-glow), inset 0 0 12px var(--accent-trace); }
+}
+
 #input-textarea:focus {
     border-color: var(--accent-soft) !important;
-    box-shadow: 0 0 20px var(--accent-glow), inset 0 0 10px var(--accent-trace) !important;
+    animation: torch-breathe 4s ease-in-out infinite;
 }
 
 .header-btn:hover {
