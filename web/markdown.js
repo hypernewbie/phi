@@ -191,11 +191,14 @@ export class MarkdownManager {
 
                         const item = document.createElement('button');
                         item.className = 'md-file-item';
-                        // 𓏞 is U+131DE — Hieroglyphic papyrus scroll.
-                        // Replaces the generic 📄 for the markdown file
-                        // list — semantic match for 'document' in the
-                        // existing Egyptian glyph pool.
-                        item.innerHTML = `<span class="md-file-icon">𓏞</span><span class="md-file-name">${f.name}</span>`;
+                        // 𓏛 is U+133DB — Gardiner Y001, the canonical
+                        // 'rolled papyrus scroll' sign. Replaces the
+                        // generic 📄 for the markdown file list — semantic
+                        // match for 'document' in the Egyptian corpus.
+                        // (Earlier 𓏞 U+133DE = Y003 was the wrong
+                        // variant — Y001 is the primary, most-recognized
+                        // form.)
+                        item.innerHTML = `<span class="md-file-icon">𓏛</span><span class="md-file-name">${f.name}</span>`;
                         item.title = f.path;
                         
                         item.addEventListener('click', (e) => {
