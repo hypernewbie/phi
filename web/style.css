@@ -3466,6 +3466,15 @@ html, body {
     border-left-color: var(--red);
 }
 
+.toast.toast-success {
+    border-left-color: var(--green);
+}
+
+.toast.toast-success .toast-icon {
+    color: var(--green);
+    text-shadow: 0 0 6px var(--green-glow);
+}
+
 .toast-icon {
     flex: 0 0 auto;
     font-size: 15px;

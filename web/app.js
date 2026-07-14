@@ -766,13 +766,17 @@ export class App {
      * Show a transient toast notification in the top-right corner.
      * @param {string} message - body text (the precise error/info)
      * @param {object} [opts]
-     * @param {'error'|'info'} [opts.type='info']
+     * @param {'error'|'info'|'success'} [opts.type='info']
      * @param {string} [opts.title] - bold heading; defaults based on type
      * @param {number} [opts.duration=6000] - ms before auto-dismiss; 0 to persist
      */
     showToast(message, opts = {}) {
         const { type = 'info', duration = 6000 } = opts;
-        const title = opts.title || (type === 'error' ? "Couldn't open session" : 'Notice');
+        const title = opts.title || (
+            type === 'error' ? "Couldn't open session"
+            : type === 'success' ? 'Done'
+            : 'Notice'
+        );
 
         let container = document.getElementById('toast-container');
         if (!container) {
@@ -787,7 +791,10 @@ export class App {
 
         const icon = document.createElement('span');
         icon.className = 'toast-icon';
-        icon.textContent = type === 'error' ? '⚠' : 'ℹ';
+        // Scarab (𓆣) for success = cyclical completion in the
+        // Egyptian corpus. Replaces the generic checkmark for explicit
+        // task-done toasts only; info/error keep their glyphs.
+        icon.textContent = type === 'error' ? '⚠' : type === 'success' ? '𓆣' : 'ℹ';
 
         const body = document.createElement('div');
         body.className = 'toast-body';
