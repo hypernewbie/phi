@@ -2,7 +2,7 @@
 
 import { PTYWebSocket } from './ws.js';
 import { normalizePath } from './sessions.js';
-import { projectWorktreeLabel, cpuLevel } from './util.js';
+import { projectWorktreeLabel, cpuLevel, worktreeGlyph } from './util.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -210,6 +210,162 @@ export class TabManager {
         if (tabEl) tabEl.classList.remove('dragging');
         this.clearDropIndicators();
         this.dragSourceId = null;
+        this._stopDragAutoScroll();
+    }
+
+    // ---- Edge auto-scroll during drag --------------------------------
+    //
+    // Per-tab dragover only fires when the cursor is OVER a tab. The
+    // empty whitespace between/after tabs gets nothing — so even with
+    // overflow we can't drag past the visible window. This container-
+    // level handler fires over the whitespace (with preventDefault so
+    // dragover continues firing), and when the cursor is near the
+    // left/right edge, ramps a small horizontal scroll so the strip
+    // follows the cursor.
+    //
+    // Velocity ramp: closer to the edge = faster, capped at ~15px/frame.
+    // 48px edge zone is wide enough on trackpads that you don't fight
+    // the scroll, narrow enough that mid-strip drags stay put.
+    //
+    // STATIC so they're available even on `Object.create(prototype)`
+    // test harnesses that skip the constructor.
+    static _EDGE_ZONE_PX = 48;
+    static _EDGE_MAX_VEL = 15; // px per animation frame
+
+    _setupContainerDragHandlers() {
+        const strip = this.tabsContainer;
+        if (!strip || strip._dragHandlersWired) return;
+        strip._dragHandlersWired = true;
+        // Initialize drag-scroll state so callers reading from outside
+        // (and tests) get 0 rather than undefined on a fresh instance.
+        this._dragScrollDir = 0;
+        this._dragScrollVel = 0;
+        this._dragScrollRaf = null;
+
+        const onDragOver = (e) => {
+            // Only act if a tab is being dragged inside phi. If a file
+            // from outside is dragged in we still want drop targets to
+            // work via the per-tab handlers, but auto-scroll would be
+            // a weird experience.
+            if (!this.dragSourceId) return;
+            const EDGE_ZONE_PX = TabManager._EDGE_ZONE_PX;
+            const EDGE_MAX_VEL = TabManager._EDGE_MAX_VEL;
+            const rect = strip.getBoundingClientRect();
+            const x = e.clientX;
+            let dir = 0;
+            let prox = 0;
+            if (x < rect.left + EDGE_ZONE_PX) {
+                dir = -1;
+                prox = (rect.left + EDGE_ZONE_PX - x) / EDGE_ZONE_PX;
+            } else if (x > rect.right - EDGE_ZONE_PX) {
+                dir = 1;
+                prox = (x - (rect.right - EDGE_ZONE_PX)) / EDGE_ZONE_PX;
+            }
+            this._dragScrollDir = dir;
+            this._dragScrollVel = Math.min(Math.max(prox, 0), 1) * EDGE_MAX_VEL;
+            if (dir !== 0 && !this._dragScrollRaf) {
+                this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
+            }
+            // The whitespace case: we still need to preventDefault so
+            // that dragover keeps firing and the drop event is allowed.
+            // The per-tab handler does this too, but only over tabs.
+            if (!e.defaultPrevented) e.preventDefault();
+            try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        };
+
+        const onDragLeave = (e) => {
+            // Only when the cursor leaves the strip's bounding box
+            // entirely (not when sliding between tabs/whitespace inside).
+            const to = e.relatedTarget;
+            if (to && strip.contains(to)) return;
+            // Hit a tab and re-entered its dragover? per-tab keeps things
+            // alive. We're only clearing edge-scroll when truly gone.
+            // The dragend/drop on a tab will also clear via _stopDragAutoScroll.
+        };
+
+        strip.addEventListener('dragover', onDragOver);
+        strip.addEventListener('dragleave', onDragLeave);
+
+        // Container-level drop: fires when the user releases over
+        // whitespace past the last tab (or before the first). Without
+        // this the auto-scroll gets you there but the drop has no
+        // target - the reorder silently no-ops.
+        strip.addEventListener('drop', (e) => {
+            // Only handle drops in the whitespace area. Per-tab drop
+            // handlers have already eaten drops that fell on a tab.
+            const targetTab = e.target.closest && e.target.closest('.tab');
+            if (targetTab) return; // per-tab already handled
+            e.preventDefault();
+            this._stopDragAutoScroll();
+            if (!this.dragSourceId) return;
+            const order = Array.from(this.tabs.keys());
+            const sourceIdx = order.indexOf(this.dragSourceId);
+            if (sourceIdx < 0) {
+                this.dragSourceId = null;
+                return;
+            }
+            const rect = strip.getBoundingClientRect();
+            // Cursor past the right edge -> append to end.
+            // Cursor before the left edge -> prepend to start.
+            const atEnd = e.clientX > rect.right - 4;
+            order.splice(sourceIdx, 1);
+            if (atEnd) order.push(this.dragSourceId);
+            else order.unshift(this.dragSourceId);
+            this.applyTabOrder(order);
+            this.dragSourceId = null;
+        });
+
+        // Mouse wheel: when the strip is overflowing, map vertical wheel
+        // to horizontal scroll. Trackpads handle this natively via deltaX
+        // but most mice don't, so without this you can scroll horizontally
+        // on a trackpad but not on a regular mouse. We do NOT prevent
+        // default when there's no horizontal overflow so the page scrolls
+        // normally.
+        const onWheel = (e) => {
+            const overflowX = strip.scrollWidth - strip.clientWidth;
+            if (overflowX <= 4) return;
+            // Trackpad horizontal gestures come through as deltaX. Mouse
+            // vertical wheels come through as deltaY. We accept both.
+            const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (dx === 0) return;
+            // Only consume the event when there's actually room to scroll
+            // in the requested direction (so we don't trap a wheel that
+            // overshoots).
+            const before = strip.scrollLeft;
+            strip.scrollLeft = Math.max(0, Math.min(
+                strip.scrollWidth - strip.clientWidth,
+                strip.scrollLeft + dx));
+            if (strip.scrollLeft !== before) {
+                e.preventDefault();
+                this.updateTabOverflow();
+            }
+        };
+        strip.addEventListener('wheel', onWheel, { passive: false });
+    }
+
+    _stepDragAutoScroll() {
+        this._dragScrollRaf = null;
+        if (!this._dragScrollDir) return;
+        const strip = this.tabsContainer;
+        if (!strip) return;
+        // Velocity may have been set to 0 if cursor moved to mid-strip;
+        // keep the rAF idling so it can pick back up on edge re-entry.
+        if (this._dragScrollVel > 0) {
+            strip.scrollLeft = Math.max(0, Math.min(
+                strip.scrollWidth - strip.clientWidth,
+                strip.scrollLeft + this._dragScrollDir * this._dragScrollVel));
+            this.updateTabOverflow();
+        }
+        this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
+    }
+
+    _stopDragAutoScroll() {
+        this._dragScrollDir = 0;
+        this._dragScrollVel = 0;
+        if (this._dragScrollRaf) {
+            cancelAnimationFrame(this._dragScrollRaf);
+            this._dragScrollRaf = null;
+        }
     }
 
     handleTabDragOver(e, targetPaneId) {
@@ -302,6 +458,11 @@ export class TabManager {
 
     setupEventListeners() {
         document.addEventListener('keydown', (e) => this.handleGlobalTabShortcuts(e));
+
+        // Container-level drag-and-drop wiring: edge auto-scroll + drop-into-
+        // whitespace. Per-tab drag handlers already handle dragover/drop on
+        // tabs themselves; this covers the gaps.
+        this._setupContainerDragHandlers();
 
         // Click/focus input bar → exit direct mode
         this.inputTextArea.addEventListener('focus', () => {
@@ -543,7 +704,41 @@ export class TabManager {
                     hostDropdown.classList.add('hidden');
                 }
             }
+
+            const overflowDropdown = document.getElementById('tab-overflow-dropdown');
+            if (overflowDropdown && !overflowDropdown.classList.contains('hidden')) {
+                if (!e.target.closest('#tab-overflow-btn') && !e.target.closest('#tab-overflow-dropdown')) {
+                    this._closeOverflowDropdown();
+                }
+            }
         });
+
+        const overflowBtn = document.getElementById('tab-overflow-btn');
+        if (overflowBtn) {
+            overflowBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleOverflowDropdown();
+            });
+        }
+
+        // Passive scroll listener keeps the +N chip count in sync as the
+        // user horizontally scrolls the strip. rAF-coalesced via a tiny
+        // scheduler so we don't over-read.
+        const strip = document.getElementById('tabs-container');
+        if (strip) {
+            let rafPending = false;
+            const onScroll = () => {
+                if (rafPending) return;
+                rafPending = true;
+                requestAnimationFrame(() => {
+                    rafPending = false;
+                    this.updateTabOverflow();
+                });
+            };
+            strip.addEventListener('scroll', onScroll, { passive: true });
+            // Also recompute on resize so a window resize properly reveals/hides the chip.
+            window.addEventListener('resize', onScroll, { passive: true });
+        }
     }
     
     getActiveTab() {
@@ -658,17 +853,23 @@ export class TabManager {
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
         
         const projectLabel = this.getProjectWorktreeLabel(cwd);
+        // Stash the worktree glyph on the tab DOM so the legend and the
+        // +N dropdown can group by it without re-hashing.
+        const glyph = worktreeGlyph(cwd);
         let tooltipText = `Session: ${title} (${coder})`;
         if (projectLabel && projectLabel !== '—') {
             tooltipText += `\nProject: ${projectLabel}`;
         }
         if (cwd) {
             tooltipText += `\nPath: ${cwd}`;
+            tooltipText += `\nIcon: ${glyph} (this worktree)`;
         }
         tabEl.title = tooltipText;
+        tabEl.dataset.worktreeGlyph = glyph;
         tabEl.innerHTML = `
             <button class="tab-pin" title="Pin session (Keep alive overnight)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
+            <span class="tab-worktree-icon" aria-hidden="true">${glyph}</span>
             <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
             <button class="tab-close">×</button>
             <button class="tab-reopen" title="Undo close">↻</button>
@@ -691,9 +892,13 @@ export class TabManager {
 
         this.tabsContainer.appendChild(tabEl);
         this.terminalsWrapper.appendChild(termContainer);
-        
+
         // Hide empty state landing page on tab creation
         this.hideEmptyState();
+
+        // Refresh overflow chip + sidebar legend (cheap, idempotent).
+        this.updateTabOverflow();
+        this.updateWorktreeLegend();
         
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
@@ -1508,6 +1713,10 @@ export class TabManager {
         this.updateDisconnectBanner();
         this.saveTabsState();
 
+        // Refresh overflow chip + sidebar legend to reflect the removal.
+        this.updateTabOverflow();
+        this.updateWorktreeLegend();
+
         // If we just finalized the last tab, show the empty state now
         // (no overlay was up because grace expired without undo).
         if (this.tabs.size === 0) {
@@ -1554,7 +1763,200 @@ export class TabManager {
         const el = document.getElementById('empty-state');
         if (el) el.classList.add('hidden');
     }
-    
+
+    // ---- Tab overflow + worktree legend ----------------------------
+    //
+    // The +N "more" chip lives at the right edge of the tabs bar.
+    // It only appears when scrolled-off tabs exist. Click opens a
+    // dropdown listing ALL tabs (grouped by worktree glyph) so the
+    // user can jump to any tab without scrolling blindly. The
+    // sidebar legend summarizes the open worktrees at a glance.
+
+    updateTabOverflow() {
+        const strip = document.getElementById('tabs-container');
+        const btn = document.getElementById('tab-overflow-btn');
+        if (!strip || !btn) return;
+        const overflowX = strip.scrollWidth - strip.clientWidth;
+        if (overflowX <= 4) {
+            btn.classList.add('hidden');
+            btn.setAttribute('aria-expanded', 'false');
+            return;
+        }
+        // Count tabs whose left edge is past the visible right edge.
+        const stripRect = strip.getBoundingClientRect();
+        let hiddenCount = 0;
+        for (const tabEl of strip.querySelectorAll('.tab')) {
+            const tabRect = tabEl.getBoundingClientRect();
+            if (tabRect.left >= stripRect.right - 1) hiddenCount += 1;
+            else if (tabRect.right > stripRect.right + 1 && tabRect.left > stripRect.left) {
+                // Partially-clipped tab: count it as hidden too. Treat
+                // the half-tab as "effectively offscreen" since the
+                // important info (title, x) may be clipped.
+                if (tabRect.right - stripRect.right > tabRect.width / 2) hiddenCount += 1;
+            }
+        }
+        if (hiddenCount <= 0) {
+            btn.classList.add('hidden');
+            btn.setAttribute('aria-expanded', 'false');
+            return;
+        }
+        btn.classList.remove('hidden');
+        const label = btn.querySelector('.tab-overflow-btn-label');
+        if (label) label.textContent = `+${hiddenCount} more`;
+        btn.setAttribute('aria-expanded', btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false');
+    }
+
+    updateWorktreeLegend() {
+        const legend = document.getElementById('worktree-legend');
+        if (!legend) return;
+        // Group tabs by their worktree glyph (computed at createTab time
+        // and stored on the tab DOM via data-worktree-glyph). One entry
+        // per distinct glyph -> one entry per distinct cwd.
+        const groups = new Map(); // glyph -> { label, count, paneIds[] }
+        const labelFor = (paneId) => {
+            const t = this.tabs.get(paneId);
+            if (!t) return '';
+            return this.getProjectWorktreeLabel(t.cwd);
+        };
+        for (const [paneId, tab] of this.tabs.entries()) {
+            const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
+            if (!groups.has(glyph)) groups.set(glyph, { count: 0, label: labelFor(paneId) });
+            groups.get(glyph).count += 1;
+        }
+        legend.innerHTML = '';
+        for (const [glyph, info] of groups.entries()) {
+            const entry = document.createElement('span');
+            entry.className = 'worktree-legend-entry';
+            entry.title = `${info.label || 'unknown worktree'} · ${info.count} tab${info.count === 1 ? '' : 's'}`;
+            const icon = document.createElement('span');
+            icon.className = 'worktree-legend-entry-icon';
+            icon.textContent = glyph;
+            const label = document.createElement('span');
+            label.className = 'worktree-legend-entry-label';
+            label.textContent = info.label || '—';
+            const count = document.createElement('span');
+            count.className = 'worktree-legend-entry-count';
+            count.textContent = String(info.count);
+            entry.appendChild(icon);
+            entry.appendChild(label);
+            entry.appendChild(count);
+            legend.appendChild(entry);
+        }
+    }
+
+    _buildOverflowDropdown() {
+        const dropdown = document.getElementById('tab-overflow-dropdown');
+        if (!dropdown) return null;
+        dropdown.innerHTML = '';
+        if (this.tabs.size === 0) {
+            const empty = document.createElement('div');
+            empty.style.padding = '12px';
+            empty.style.color = 'var(--text-muted)';
+            empty.textContent = 'No tabs open';
+            dropdown.appendChild(empty);
+            return dropdown;
+        }
+
+        // Group by worktree glyph (== by cwd). Stable insertion order
+        // matches first-seen-in-tabs-Map order so a tab the user just
+        // created appears in the section their cursor is on.
+        const groups = new Map();
+        for (const [paneId, tab] of this.tabs.entries()) {
+            const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
+            const label = this.getProjectWorktreeLabel(tab.cwd);
+            if (!groups.has(glyph)) groups.set(glyph, { label, items: [] });
+            groups.get(glyph).items.push({ paneId, tab });
+        }
+        for (const [glyph, group] of groups.entries()) {
+            const header = document.createElement('div');
+            header.className = 'tab-overflow-dropdown-group';
+            const icon = document.createElement('span');
+            icon.className = 'tab-overflow-dropdown-group-icon';
+            icon.textContent = glyph;
+            const text = document.createElement('span');
+            text.textContent = group.label;
+            const count = document.createElement('span');
+            count.style.marginLeft = 'auto';
+            count.textContent = `${group.items.length} tab${group.items.length === 1 ? '' : 's'}`;
+            header.appendChild(icon);
+            header.appendChild(text);
+            header.appendChild(count);
+            dropdown.appendChild(header);
+
+            for (const { paneId, tab } of group.items) {
+                const row = document.createElement('div');
+                row.className = 'hostname-dropdown-row';
+                row.dataset.paneId = paneId;
+                if (paneId === this.activePaneId) row.classList.add('active');
+
+                const selectBtn = document.createElement('button');
+                selectBtn.className = 'hostname-dropdown-select-btn';
+                const faviconImg = document.createElement('img');
+                faviconImg.className = 'hostname-dropdown-favicon';
+                faviconImg.src = tab.faviconUrl || '';
+                faviconImg.alt = tab.coder || '';
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'hostname-dropdown-title';
+                titleSpan.innerText = tab.title || 'Session';
+                selectBtn.appendChild(faviconImg);
+                selectBtn.appendChild(titleSpan);
+                selectBtn.addEventListener('click', () => {
+                    this.switchTab(paneId, { userInitiated: true });
+                    this._closeOverflowDropdown();
+                });
+                row.appendChild(selectBtn);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'hostname-dropdown-close-btn';
+                closeBtn.innerHTML = '×';
+                closeBtn.title = 'Close session';
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.closeTab(paneId);
+                    // Re-render after async finalize so the row disappears.
+                    setTimeout(() => {
+                        if (!this._overflowDropdownHidden()) this._buildOverflowDropdown();
+                    }, 50);
+                });
+                row.appendChild(closeBtn);
+                dropdown.appendChild(row);
+            }
+        }
+
+        // Auto-scroll to the active row so users land on it.
+        const active = dropdown.querySelector('.hostname-dropdown-row.active');
+        if (active && active.scrollIntoView) {
+            active.scrollIntoView({ block: 'nearest' });
+        }
+        return dropdown;
+    }
+
+    _overflowDropdownHidden() {
+        const dd = document.getElementById('tab-overflow-dropdown');
+        return !dd || dd.classList.contains('hidden');
+    }
+
+    _toggleOverflowDropdown() {
+        const dd = document.getElementById('tab-overflow-dropdown');
+        const btn = document.getElementById('tab-overflow-btn');
+        if (!dd || !btn) return;
+        const open = dd.classList.contains('hidden');
+        if (open) {
+            this._buildOverflowDropdown();
+            dd.classList.remove('hidden');
+            btn.setAttribute('aria-expanded', 'true');
+        } else {
+            this._closeOverflowDropdown();
+        }
+    }
+
+    _closeOverflowDropdown() {
+        const dd = document.getElementById('tab-overflow-dropdown');
+        const btn = document.getElementById('tab-overflow-btn');
+        if (dd) dd.classList.add('hidden');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+
     sendInput(tabInfo, payload) {
         if (!tabInfo || !tabInfo.ws || tabInfo.isDead) {
             this.app.showToast("Tab is disconnected — input not sent", { type: 'error' });

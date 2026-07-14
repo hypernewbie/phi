@@ -2,6 +2,28 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.8.4 — 2026-07-13
+
+UX-densification release. Two affordances for "scan lots of tabs fast":
+
+### Added
+
+- **Worktree icon on every tab.** Each worktree (cwd) deterministically hashes to one of 12 monochrome glyphs (◆ ◇ ▣ ❖ ⏣ ⏢ ❘ ⌧ ▖ ⏧ ⬡ ⬢) — chosen to be readable at 11px and to avoid already-used shapes (● ◯ ★ etc.). Rendered between the coder favicon and the title, colored in the theme's accent bright with a soft glow so it pops without screaming. Same worktree = same glyph = instant group-by-shape scan without reading any text. Hover tooltip adds `Icon: <glyph>` so users learn the mapping.
+
+- **`+N more` chip at the strip's right edge.** Appears only when tabs overflow horizontally (`scrollWidth > clientWidth`); hidden when everything fits. Click opens a dropdown listing ALL open tabs grouped by worktree glyph (so the icon doubles as a section header inside the menu). Each row has click-to-switch + close. Auto-scrolls to the active tab. The existing `#hostname-tabs-dropdown` in the top header is unchanged — both surfaces share the same mental model, the chip is the discoverable one next to the tabs.
+
+- **Sidebar worktree legend.** One chip per distinct worktree (glyph + label + tab count). Always-visible at the bottom of the left sidebar; built incrementally as tabs are created/closed. Lets you decode the glyph-to-worktree mapping without a legend modal and answers "how many tabs per worktree, right now" at a glance.
+
+- **Edge auto-scroll while dragging.** During a tab drag, when the cursor enters a 48px zone at the left or right edge of the strip, the strip ramps an rAF-driven horizontal scroll. Velocity is proximity-ramped (closer = faster, capped at ~15px/frame) so it's controllable on trackpads. rAF loop self-idles when the cursor moves back to the middle, and is cancelled cleanly on dragend. The strip follows your drag now, so you can drop a tab past the visible end without first scrolling manually.
+
+- **Drop-into-whitespace for the far edge.** When the strip auto-scrolls you past the last tab, there's no tab DOM there for the per-tab drop handler to catch. The container-level `drop` listener fills that gap: drop on whitespace past the right edge → append to end; before the left edge → prepend to start. Without this, auto-scroll gets you there but the drop silently no-ops.
+
+- **Mouse wheel → horizontal scroll on the strip.** Plain-mouse users who couldn't horizontally scroll the strip at all (no trackpad, no horizontal tilt wheel) can now hover the strip and roll the wheel to scrub. Trackpads already worked via `deltaX`; the wheel handler unifies both. Doesn't preventDefault when there's no horizontal overflow, so the page scrolls normally elsewhere.
+
+### Changed
+
+- **Tab tooltip includes the worktree glyph** so users can correlate the tab icon with the worktree label without guessing.
+
 ## v0.8.3 — 2026-07-13
 
 Bugfix-only release on top of v0.8.2 — three regressions in the soft-close tab pipeline that were hidden behind the v0.8.2 picker rework.
