@@ -2,6 +2,24 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.8.3 — 2026-07-13
+
+Bugfix-only release on top of v0.8.2 — three regressions in the soft-close tab pipeline that were hidden behind the v0.8.2 picker rework.
+
+### Fixed
+
+- **Soft-close tab no longer renders as a "big white XX" (line-through + still-visible ×).** The `.tab.soft-closed .tab-title` rule used `text-decoration: line-through`, which drew a horizontal stroke through the title text. Combined with the × close button — which had inline `style="display:none"` on its sibling `.tab-reopen` so the swap never toggled — the tab looked like an ✗-marked ghost. Now the title just dims to `opacity: 0.7`, the line-through is gone, and the CSS toggle actually hides `.tab-close` while revealing the ↻ reopen button on soft-closed tabs. The strip entry is also slightly more readable (opacity `0.55` instead of `0.45`).
+
+- **Active-tab soft-close no longer auto-switches to a "next" tab.** The `pickNextTab` priority chain from v0.8.2 (same workspace + coder → same workspace → same coder → last tab) was a band-aid: the right fix is not to switch at all on close. Soft-close now keeps the user on the closing tab under a backdrop + spinner ring + countdown so they can still see what they were looking at and undo. Other tabs wait patiently in the strip; the picker is removed entirely. (If the user lets the 5s grace expire and other tabs survive, the most-recent one becomes active then — as a finality, not a surprise on every close.)
+
+- **Undoing a soft-close is possible from the tab strip, not just the toast.** Previously the ↻ button was permanently hidden via an inline style that no CSS or JS undid. Clicking the strip entry now actually undoes the close, since `.tab.soft-closed .tab-close { display:none }` and `.tab.soft-closed .tab-reopen { display:flex }` rule on the same condition.
+
+### Added
+
+- **Countdown pill on each soft-closed tab.** A tiny `5s → 4s → 3s → 2s → 1s` chip next to the title on the strip entry, so users closing background tabs (who don't get the content overlay since they're on a different tab) still see how long they have to undo.
+
+- **Content-area overlay on active-tab soft-close.** Dark backdrop + circular drain-ring that animates 100→0 over the 5s grace + rotating spinner + "Closing in Ns · Click ↻ in the tab strip to undo" text. Removed cleanly on undo or finalize.
+
 ## v0.8.2 — 2026-07-12
 
 Small followup on top of v0.8.1 — one tab-management upgrade plus a handful of UX fixes.
