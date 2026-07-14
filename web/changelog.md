@@ -2,7 +2,7 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## v0.9.1 — 2026-07-14
+## v0.9.2 — 2026-07-14
 
 Polished theme details for the obsidian glassmorphic and Greek-Egyptian visual style.
 
