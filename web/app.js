@@ -126,13 +126,26 @@ const ACCENT_COLORS = {
         accentDim: '#86198f',
         accentBright: '#f0abfc'
     },
-    // Bronze patina — verdigris green with oxidized bronze highlights.
-    // Pulled from actual patinated bronze statuary. Reads as aged, monumental.
-    bronze: {
-        accent: '#7a9c8e',
-        accentGlow: 'rgba(122, 156, 142, 0.18)',
-        accentDim: '#4a6b5d',
-        accentBright: '#b6d4c5'
+    // Bonus themes — must match the names in bonus/{btop,opencode,pi,vim}_themes/.
+    // If you add a bonus theme, add it here too. If you add it here without
+    // a bonus counterpart, it'll diverge from the bonus theme profile set.
+    canary: {
+        accent: '#ffee10',
+        accentGlow: 'rgba(255, 238, 16, 0.18)',
+        accentDim: '#b8ad00',
+        accentBright: '#ffff66'
+    },
+    copper: {
+        accent: '#d35400',
+        accentGlow: 'rgba(211, 84, 0, 0.18)',
+        accentDim: '#8a3700',
+        accentBright: '#e59866'
+    },
+    mint: {
+        accent: '#2ed573',
+        accentGlow: 'rgba(46, 213, 115, 0.18)',
+        accentDim: '#1a8a4a',
+        accentBright: '#7bed9f'
     }
 };
 
