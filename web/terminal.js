@@ -1051,6 +1051,54 @@ export class TabManager {
         // Open in DOM
         term.open(termContainer);
 
+        // Scroll-to-bottom affordance: a small floating button that
+        // fades in when the user scrolls up into scrollback, fades out
+        // when they return to the live bottom. Click jumps to the
+        // bottom. Pattern is universal in TUI/web-terminal apps (iTerm,
+        // VS Code terminal, Hyper, etc.) and removes the daily friction
+        // of "I scrolled up to read something, now I can't find my way
+        // back to live output."
+        const scrollToBottomBtn = document.createElement('button');
+        scrollToBottomBtn.className = 'scroll-to-bottom-btn hidden';
+        scrollToBottomBtn.setAttribute('type', 'button');
+        scrollToBottomBtn.setAttribute('aria-label', 'Jump to bottom of output');
+        scrollToBottomBtn.title = 'Jump to bottom';
+        scrollToBottomBtn.innerHTML = '\u2193'; // ↓
+        scrollToBottomBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tabInfo.term.scrollToBottom();
+            this._spamScrollToBottom(tabInfo);
+            scrollToBottomBtn.classList.add('hidden');
+        });
+        termContainer.appendChild(scrollToBottomBtn);
+        tabInfo.scrollToBottomBtn = scrollToBottomBtn;
+
+        const updateScrollBtn = () => {
+            if (tabInfo.isDead || tabInfo.coder === 'review' || tabInfo.coder === 'kanban') {
+                scrollToBottomBtn.classList.add('hidden');
+                return;
+            }
+            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+            if (!buf) return;
+            const atBottom = buf.viewportY >= buf.baseY - 1;
+            if (atBottom) {
+                scrollToBottomBtn.classList.add('hidden');
+            } else {
+                scrollToBottomBtn.classList.remove('hidden');
+            }
+        };
+        if (term.onScroll) {
+            term.onScroll(updateScrollBtn);
+        }
+        // Also re-evaluate on every write so a button shown while
+        // scrolled up hides itself once new output catches up to bottom.
+        const origWrite = tabInfo.term.write.bind(tabInfo.term);
+        tabInfo.term.write = (data, cb) => {
+            const r = origWrite(data, cb);
+            updateScrollBtn();
+            return r;
+        };
+
         // Register OSC 52 clipboard handler
         if (term.parser && term.parser.registerOscHandler) {
             term.parser.registerOscHandler(52, (data) => {
