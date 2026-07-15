@@ -47,15 +47,15 @@ export class PTYWebSocket {
     constructor(
         paneId: string,
         onData: (text: string) => void,
-        onControl: (msg: WSControlMessage) => void,
-        onClose: () => void,
-        onOpen: () => void,
+        onControl?: ((msg: WSControlMessage) => void) | null,
+        onClose?: (() => void) | null,
+        onOpen?: (() => void) | null,
     ) {
         this.paneId = paneId;
         this.onData = onData;
-        this.onControl = onControl;
-        this.onClose = onClose;
-        this.onOpen = onOpen;
+        this.onControl = onControl as typeof this.onControl;
+        this.onClose = onClose as typeof this.onClose;
+        this.onOpen = onOpen as typeof this.onOpen;
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.url = `${protocol}//${window.location.host}/ws/pane/${paneId}`;

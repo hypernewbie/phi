@@ -1,5 +1,8 @@
 /* Φ phi — Git Diff & Git Log Controller */
+
+import type { AppLike } from './types.js';
 import { PTYWebSocket } from './ws.js';
+
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
 //   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
@@ -9,73 +12,76 @@ import { PTYWebSocket } from './ws.js';
 // on Linux/macOS, case-insensitive on Windows). For phi this is fine
 // because both sides are produced from the same os.Getwd / platform
 // path-handling code.
-export function normalizeCwd(p) {
-    if (!p)
-        return '';
+export function normalizeCwd(p: string): string {
+    if (!p) return '';
     return String(p).replace(/\\/g, '/').replace(/\/+$/, '');
 }
+
 // isUsableShell reports whether a tab is an alive bash/pwsh shell (not btop).
 // Pure; returns a falsy value for null/undefined tabs (raw expression, kept
 // as-is because callers only use it in boolean contexts).
-export function isUsableShell(t) {
+export function isUsableShell(t: any): any {
     return t && !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh') && t.title !== 'btop' && !t.isBtop;
 }
+
 // findReusableShellTab picks the shell tab a quick-command should be sent to:
 //   1. the active tab, if it is itself a usable shell (user focused it);
 //   2. else, only when useExistingTerminalTab is on and activeCWD is set,
 //      an alive shell whose CWD matches activeCWD (exact, per normalizeCwd);
 //   3. else null (caller spawns a new shell).
 // Pure over a plain iterable of tab-like objects.
-export function findReusableShellTab(tabs, activeTab, { useExistingTerminalTab, activeCWD } = {}) {
-    if (isUsableShell(activeTab))
-        return activeTab;
+export function findReusableShellTab(tabs: Iterable<any>, activeTab: any, { useExistingTerminalTab, activeCWD }: { useExistingTerminalTab?: boolean; activeCWD?: string } = {}): any {
+    if (isUsableShell(activeTab)) return activeTab;
     const cwd = activeCWD || '';
     if (useExistingTerminalTab && cwd) {
         const wantedCWD = normalizeCwd(cwd);
-        const match = Array.from(tabs).find(t => isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
-        if (match)
-            return match;
+        const match = Array.from(tabs).find(t =>
+            isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
+        if (match) return match;
     }
     return null;
 }
+
 export class DiffController {
-    app;
-    activeTab; // 'diff' | 'log'
-    currentWs;
-    term;
-    fitAddon;
-    isPanelOpen;
-    diffPanel;
-    headerDiffToggleBtn;
-    closeDiffBtn;
-    refreshDiffBtn;
-    copyDiffBtn;
-    diffTermContainer;
-    commitSelect;
-    actionBar;
-    richDiffBtn;
-    diffModal;
-    diffModalClose;
-    diffModalBody;
-    contextToggleBtn;
-    layoutToggleBtn;
-    currentContextLines;
-    currentLayout;
-    lastRawDiffText;
-    constructor(app) {
+    app: AppLike;
+    activeTab: string; // 'diff' | 'log'
+    currentWs: PTYWebSocket | null;
+    term: any;
+    fitAddon: any;
+    isPanelOpen: boolean;
+    diffPanel: HTMLElement;
+    headerDiffToggleBtn: HTMLElement;
+    closeDiffBtn: HTMLElement;
+    refreshDiffBtn: HTMLElement;
+    copyDiffBtn: HTMLElement | null;
+    diffTermContainer: HTMLElement;
+    commitSelect: HTMLSelectElement | null;
+    actionBar: HTMLElement | null;
+    richDiffBtn: HTMLElement | null;
+    diffModal: HTMLElement | null;
+    diffModalClose: HTMLElement | null;
+    diffModalBody: HTMLElement | null;
+    contextToggleBtn: HTMLElement | null;
+    layoutToggleBtn: HTMLElement | null;
+    currentContextLines: number;
+    currentLayout: string;
+    lastRawDiffText: string;
+
+    constructor(app: AppLike) {
         this.app = app;
         this.activeTab = 'markdown'; // 'diff' | 'log'
         this.currentWs = null;
         this.term = null;
         this.fitAddon = null;
         this.isPanelOpen = true;
-        this.diffPanel = document.getElementById('diff-panel');
-        this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn');
-        this.closeDiffBtn = document.getElementById('close-diff-btn');
-        this.refreshDiffBtn = document.getElementById('refresh-diff-btn');
+
+        this.diffPanel = document.getElementById('diff-panel')!;
+        this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn')!;
+        this.closeDiffBtn = document.getElementById('close-diff-btn')!;
+        this.refreshDiffBtn = document.getElementById('refresh-diff-btn')!;
         this.copyDiffBtn = document.getElementById('copy-diff-btn');
-        this.diffTermContainer = document.getElementById('diff-term-container');
-        this.commitSelect = document.getElementById('diff-commit-select');
+        this.diffTermContainer = document.getElementById('diff-term-container')!;
+        this.commitSelect = document.getElementById('diff-commit-select') as HTMLSelectElement;
         this.actionBar = document.getElementById('diff-action-bar');
         this.richDiffBtn = document.getElementById('rich-diff-btn');
         this.diffModal = document.getElementById('diff-modal');
@@ -86,14 +92,17 @@ export class DiffController {
         this.currentContextLines = 3;
         this.currentLayout = 'line-by-line'; // Default unified
         this.lastRawDiffText = '';
+
         this.setupEventListeners();
     }
-    setupEventListeners() {
+
+    setupEventListeners(): void {
         // Toggle panel states
         this.closeDiffBtn.addEventListener('click', () => this.togglePanel(false));
         this.headerDiffToggleBtn.addEventListener('click', () => {
             this.togglePanel(!this.isPanelOpen);
         });
+
         // Copy button: copies the current xterm selection if there is one,
         // otherwise dumps the whole buffer (trimmed) so the user doesn't
         // have to drag-select to grab a small diff.
@@ -103,13 +112,13 @@ export class DiffController {
                     const sel = this.term.getSelection();
                     if (sel) {
                         this.app.tabManager.copyTextRobustly(sel);
-                    }
-                    else {
+                    } else {
                         this.copyDiffBuffer();
                     }
                 }
             });
         }
+
         // Rich diff modal triggering
         if (this.richDiffBtn) {
             this.richDiffBtn.addEventListener('click', () => this.openRichDiffModal());
@@ -119,8 +128,7 @@ export class DiffController {
         }
         if (this.diffModal) {
             this.diffModal.addEventListener('click', (e) => {
-                if (e.target === this.diffModal)
-                    this.closeRichDiffModal();
+                if (e.target === this.diffModal) this.closeRichDiffModal();
             });
         }
         // Escape closes the rich-diff modal — matches the pattern in
@@ -137,39 +145,42 @@ export class DiffController {
         if (this.layoutToggleBtn) {
             this.layoutToggleBtn.addEventListener('click', () => this.toggleRichDiffLayout());
         }
+
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
+
         // Diff sub-tabs
         document.querySelectorAll('.diff-tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelector('.diff-tab-btn.active').classList.remove('active');
+                document.querySelector('.diff-tab-btn.active')!.classList.remove('active');
                 btn.classList.add('active');
-                this.activeTab = btn.getAttribute('data-tab');
+                this.activeTab = btn.getAttribute('data-tab') as string;
                 this.refreshDiff(false); // Reload commit list when changing tabs
                 if (this.activeTab === 'markdown' && this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
-                }
-                else if (this.activeTab === 'sync' && this.app.syncManager) {
+                } else if (this.activeTab === 'sync' && this.app.syncManager) {
                     this.app.syncManager.refreshMessages();
                 }
             });
         });
+
         if (this.commitSelect) {
             this.commitSelect.addEventListener('change', () => {
                 this.refreshDiff(true); // Don't reload the list when user just changes selection
             });
         }
+
         // Debounced resize fitting
-        let resizeTimeout;
+        let resizeTimeout: ReturnType<typeof setTimeout>;
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
-                if (this.isPanelOpen)
-                    this.fitTerminal();
+                if (this.isPanelOpen) this.fitTerminal();
             }, 150);
         });
     }
-    initTerminal() {
+
+    initTerminal(): void {
         const isMobile = window.innerWidth <= 768;
         this.term = new window.Terminal({
             cursorBlink: false,
@@ -191,15 +202,18 @@ export class DiffController {
                 white: '#e4e3e9'
             }
         });
+
         this.fitAddon = new window.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
+
         this.term.open(this.diffTermContainer);
+
         // Graceful WebGL load
         try {
             const webgl = new window.WebglAddon.WebglAddon();
             this.term.loadAddon(webgl);
-        }
-        catch (e) { }
+        } catch (e) {}
+
         // Copy plumbing for the diff/status/log pane. The main terminal
         // wires these (terminal.js:817-878) so users can drag-select +
         // Cmd-C / Ctrl-Shift-C / right-click to copy. The diff xterm
@@ -211,6 +225,7 @@ export class DiffController {
         // We reuse this.app.tabManager.copyTextRobustly (handles clipboard
         // permission + execCommand fallback for insecure contexts).
         this._wireCopyHandlers(this.term, this.diffTermContainer);
+
         // Load initial state from local storage. Desktop defaults to
         // open; mobile defaults to closed unless the user has
         // previously opened it. (Diff panel is a desktop-first tool —
@@ -221,6 +236,7 @@ export class DiffController {
         const shouldOpen = isMobileForInit ? openState === 'true' : openState !== 'false';
         this.togglePanel(shouldOpen);
     }
+
     // Port of terminal.js:817-878 copy wiring, scoped to whichever xterm
     // is passed in. Three entry points for selection copying:
     //   1. onSelectionChange -> silent auto-copy (matches main terminal)
@@ -228,30 +244,30 @@ export class DiffController {
     //   3. Right-click contextmenu -> copy via clipboard (skip if no selection)
     // Plus a public copyAll() helper for the Copy button that dumps the
     // whole buffer when there's no active selection.
-    _wireCopyHandlers(term, termContainer) {
-        const copy = (text, silent) => {
-            if (!text)
-                return;
+    _wireCopyHandlers(term: any, termContainer: HTMLElement): void {
+        const copy = (text: string, silent?: boolean) => {
+            if (!text) return;
             this.app.tabManager.copyTextRobustly(text, silent);
         };
+
         term.onSelectionChange(() => {
             const sel = term.getSelection();
-            if (sel)
-                copy(sel, true); // silent: matches main-terminal behavior
+            if (sel) copy(sel, true); // silent: matches main-terminal behavior
         });
+
         termContainer.addEventListener('contextmenu', (e) => {
             const sel = term.getSelection();
-            if (!sel)
-                return;
+            if (!sel) return;
             e.preventDefault();
             e.stopPropagation();
             copy(sel);
         }, { capture: true });
-        term.attachCustomKeyEventHandler((e) => {
+
+        term.attachCustomKeyEventHandler((e: any) => {
             if (e.type === 'keydown') {
                 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
                 const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
-                    (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
+                               (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
                 if (isCopy) {
                     const sel = term.getSelection();
                     if (sel) {
@@ -264,31 +280,31 @@ export class DiffController {
             return true;
         });
     }
+
     // Dump the whole xterm buffer as plain text, trimming trailing empty
     // lines (xterm pads the buffer with whitespace rows). Used by the
     // "Copy" toolbar button when the user wants everything without
     // bothering to drag-select.
-    copyDiffBuffer() {
-        if (!this.term)
-            return;
-        const lines = [];
+    copyDiffBuffer(): void {
+        if (!this.term) return;
+        const lines: string[] = [];
         const buffer = this.term.buffer.active;
         for (let i = 0; i < buffer.length; i++) {
             const line = buffer.getLine(i);
-            if (!line)
-                continue;
+            if (!line) continue;
             lines.push(line.translateToString(true));
         }
         // Trim trailing empty/whitespace-only lines so pasted output
         // doesn't have a wall of blank padding at the end.
-        while (lines.length && !lines[lines.length - 1].trim())
-            lines.pop();
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
         const text = lines.join('\n');
         this.app.tabManager.copyTextRobustly(text);
     }
-    togglePanel(isOpen) {
+
+    togglePanel(isOpen: boolean): void {
         this.isPanelOpen = isOpen;
         localStorage.setItem('phi_diff_panel_open', String(isOpen));
+
         if (isOpen) {
             this.diffPanel.classList.remove('hidden');
             // mobile-open is the mobile-only opt-in that slides the
@@ -299,8 +315,7 @@ export class DiffController {
                 this.fitTerminal();
                 this.refreshDiff();
             }, 50);
-        }
-        else {
+        } else {
             this.diffPanel.classList.add('hidden');
             this.diffPanel.classList.remove('mobile-open');
             this.headerDiffToggleBtn.classList.remove('active');
@@ -309,14 +324,15 @@ export class DiffController {
                 this.currentWs = null;
             }
         }
+
         // Let terminal tab fit after layout shift
         setTimeout(() => {
             this.app.tabManager.fitActiveTerminal();
         }, 150);
     }
-    fitTerminal() {
-        if (!this.term || !this.isPanelOpen)
-            return;
+
+    fitTerminal(): void {
+        if (!this.term || !this.isPanelOpen) return;
         try {
             const isMobile = window.innerWidth <= 768;
             const size = isMobile ? 10 : 12;
@@ -327,21 +343,22 @@ export class DiffController {
             if (this.currentWs && this.term.cols && this.term.rows) {
                 this.currentWs.sendResize(this.term.cols, this.term.rows);
             }
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[diff] Fit error:", e);
         }
     }
-    _writeStaticTerminalOutput(text, emptyText) {
+
+    _writeStaticTerminalOutput(text: string, emptyText: string): void {
         this.fitTerminal();
         this.term.reset();
         this.term.clear();
         const normalized = (text || '').replace(/\r?\n/g, '\r\n');
         this.term.write(normalized && normalized.trim() ? normalized : emptyText);
     }
-    _setPanel(mode) {
-        const termEl = document.getElementById('diff-term-container');
-        const mdEl = document.getElementById('markdown-file-list');
+
+    _setPanel(mode: string): void {
+        const termEl = document.getElementById('diff-term-container')!;
+        const mdEl = document.getElementById('markdown-file-list')!;
         const cmdEl = document.getElementById('cmd-panel');
         const syncEl = document.getElementById('sync-panel');
         if (mode === 'markdown') {
@@ -350,22 +367,19 @@ export class DiffController {
             cmdEl?.classList.add('hidden');
             syncEl?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
-        }
-        else if (mode === 'sync') {
+        } else if (mode === 'sync') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
             cmdEl?.classList.add('hidden');
             syncEl?.classList.remove('hidden');
             this.actionBar?.classList.add('hidden');
-        }
-        else if (mode === 'cmd') {
+        } else if (mode === 'cmd') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
             cmdEl?.classList.remove('hidden');
             syncEl?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
-        }
-        else {
+        } else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
             cmdEl?.classList.add('hidden');
@@ -374,53 +388,55 @@ export class DiffController {
                 this.actionBar?.classList.remove('hidden');
                 this.commitSelect?.classList.remove('hidden');
                 this.richDiffBtn?.classList.remove('hidden');
-            }
-            else {
+            } else {
                 this.actionBar?.classList.add('hidden');
             }
         }
     }
-    async loadCommits() {
-        if (!this.commitSelect)
-            return;
+
+    async loadCommits(): Promise<void> {
+        if (!this.commitSelect) return;
         const cwd = this.app.sessionsManager.activeCWD || '';
         try {
             const res = await fetch(`/api/git/commits?cwd=${encodeURIComponent(cwd)}`);
-            if (!res.ok)
-                throw new Error("Failed to load commits");
+            if (!res.ok) throw new Error("Failed to load commits");
             const commits = await res.json();
+
             const currentSelected = this.commitSelect.value || 'unstaged';
+
             this.commitSelect.innerHTML = `
                 <option value="unstaged">Unstaged Changes</option>
                 <option value="staged">Staged Changes</option>
             `;
+
             if (Array.isArray(commits)) {
-                commits.forEach((commit) => {
+                commits.forEach((commit: any) => {
                     const opt = document.createElement('option');
                     opt.value = commit.hash;
                     opt.innerText = `${commit.hash} - ${commit.subject}`;
-                    this.commitSelect.appendChild(opt);
+                    this.commitSelect!.appendChild(opt);
                 });
             }
+
             if (Array.from(this.commitSelect.options).some(o => o.value === currentSelected)) {
                 this.commitSelect.value = currentSelected;
-            }
-            else {
+            } else {
                 this.commitSelect.value = 'unstaged';
             }
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[diff] Failed to load commits list:", e);
         }
     }
-    renderCmdPanel() {
+
+    renderCmdPanel(): void {
         const cmdEl = document.getElementById('cmd-panel');
-        if (!cmdEl)
-            return;
+        if (!cmdEl) return;
         cmdEl.innerHTML = '';
+
         // 1. Create toolbar
         const toolbar = document.createElement('div');
         toolbar.className = 'cmd-toolbar';
+
         const addBtn = document.createElement('button');
         addBtn.innerHTML = `
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
@@ -428,6 +444,7 @@ export class DiffController {
         `;
         addBtn.addEventListener('click', () => this.addCommand());
         toolbar.appendChild(addBtn);
+
         const copyAllBtn = document.createElement('button');
         copyAllBtn.innerHTML = `
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -435,6 +452,7 @@ export class DiffController {
         `;
         copyAllBtn.addEventListener('click', () => this.copyAllCommands(copyAllBtn));
         toolbar.appendChild(copyAllBtn);
+
         const pasteListBtn = document.createElement('button');
         pasteListBtn.innerHTML = `
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -442,7 +460,9 @@ export class DiffController {
         `;
         pasteListBtn.addEventListener('click', () => this.pasteCommands(pasteListBtn));
         toolbar.appendChild(pasteListBtn);
+
         cmdEl.appendChild(toolbar);
+
         // 1b. Reuse-existing-terminal-tab toggle (sits in its own row so
         // it doesn't get squeezed off-screen on narrow widths).
         const reuseRow = document.createElement('label');
@@ -451,9 +471,9 @@ export class DiffController {
         const reuseCheckbox = document.createElement('input');
         reuseCheckbox.type = 'checkbox';
         reuseCheckbox.id = 'use-existing-terminal-tab-toggle';
-        reuseCheckbox.checked = !!this.app.useExistingTerminalTab;
+        reuseCheckbox.checked = !!(this.app as any).useExistingTerminalTab;
         reuseCheckbox.addEventListener('change', async (e) => {
-            const target = e.target;
+            const target = e.target as HTMLInputElement;
             const enabled = target.checked;
             try {
                 await fetch('/api/config/use-existing-terminal-tab', {
@@ -461,10 +481,12 @@ export class DiffController {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled })
                 });
-                this.app.useExistingTerminalTab = enabled;
-                this.app.showToast(enabled ? 'Will reuse existing terminal tab' : 'Will always open new terminal tab', { type: 'info', title: 'Terminal routing' });
-            }
-            catch (err) {
+                (this.app as any).useExistingTerminalTab = enabled;
+                this.app.showToast(
+                    enabled ? 'Will reuse existing terminal tab' : 'Will always open new terminal tab',
+                    { type: 'info', title: 'Terminal routing' }
+                );
+            } catch (err) {
                 this.app.showToast('Failed to save preference', { type: 'error', title: 'Terminal routing' });
                 target.checked = !enabled;
             }
@@ -474,10 +496,12 @@ export class DiffController {
         reuseRow.appendChild(reuseCheckbox);
         reuseRow.appendChild(reuseText);
         cmdEl.appendChild(reuseRow);
+
         // 2. Create list
         const listContainer = document.createElement('div');
         listContainer.className = 'cmd-list';
-        const terminalCmds = this.app.terminalCommands || [];
+
+        const terminalCmds = (this.app as any).terminalCommands || [];
         if (terminalCmds.length === 0) {
             const emptyHint = document.createElement('div');
             emptyHint.style.color = 'var(--text-muted)';
@@ -485,28 +509,33 @@ export class DiffController {
             emptyHint.style.padding = '12px 4px';
             emptyHint.innerText = 'No terminal commands configured.';
             listContainer.appendChild(emptyHint);
-        }
-        else {
-            terminalCmds.forEach((cmd) => {
+        } else {
+            terminalCmds.forEach((cmd: any) => {
                 const item = document.createElement('div');
                 item.className = 'cmd-item';
+
                 const left = document.createElement('div');
                 left.className = 'cmd-item-left';
+
                 const runBtn = document.createElement('button');
                 runBtn.className = 'cmd-run-btn';
                 runBtn.innerText = cmd.name;
                 runBtn.title = `Click to run: ${cmd.command}`;
                 runBtn.addEventListener('click', () => this.runCommand(cmd));
                 left.appendChild(runBtn);
+
                 const val = document.createElement('div');
                 val.className = 'cmd-val';
                 val.innerText = cmd.command;
                 val.title = cmd.command;
                 left.appendChild(val);
+
                 item.appendChild(left);
+
                 // Actions
                 const actions = document.createElement('div');
                 actions.className = 'cmd-item-actions';
+
                 // Copy single
                 const copySingleBtn = document.createElement('button');
                 copySingleBtn.className = 'cmd-action-btn';
@@ -514,6 +543,7 @@ export class DiffController {
                 copySingleBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
                 copySingleBtn.addEventListener('click', () => this.copySingleCommand(cmd));
                 actions.appendChild(copySingleBtn);
+
                 // Edit
                 const editBtn = document.createElement('button');
                 editBtn.className = 'cmd-action-btn';
@@ -521,6 +551,7 @@ export class DiffController {
                 editBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
                 editBtn.addEventListener('click', () => this.editCommand(cmd));
                 actions.appendChild(editBtn);
+
                 // Delete
                 const delBtn = document.createElement('button');
                 delBtn.className = 'cmd-action-btn del';
@@ -528,14 +559,17 @@ export class DiffController {
                 delBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7 a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
                 delBtn.addEventListener('click', () => this.deleteCommand(cmd));
                 actions.appendChild(delBtn);
+
                 item.appendChild(actions);
                 listContainer.appendChild(item);
             });
         }
+
         cmdEl.appendChild(listContainer);
     }
-    async addCommand() {
-        const values = await this.app.openConfigEditor({
+
+    async addCommand(): Promise<void> {
+        const values = await (this.app as any).openConfigEditor({
             title: 'Add Terminal Command',
             subtitle: 'Terminal commands run from the cmd panel. Use {} as a placeholder for selected input text.',
             fields: [
@@ -544,27 +578,27 @@ export class DiffController {
             ],
             submitLabel: 'Add Command'
         });
-        if (!values)
-            return;
+        if (!values) return;
+
         try {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: values.name, command: values.command })
             });
-            if (!res.ok)
-                throw new Error(await res.text() || "Failed to add command");
+            if (!res.ok) throw new Error(await res.text() || "Failed to add command");
+
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
             this.app.showToast(`Added terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
-        }
-        catch (e) {
+        } catch (e) {
             console.error("Add command failed:", e);
-            this.app.showToast(e.message, { type: 'error', title: 'Commands' });
+            this.app.showToast((e as Error).message, { type: 'error', title: 'Commands' });
         }
     }
-    async editCommand(cmd) {
-        const values = await this.app.openConfigEditor({
+
+    async editCommand(cmd: any): Promise<void> {
+        const values = await (this.app as any).openConfigEditor({
             title: 'Edit Terminal Command',
             subtitle: 'Rename the action or change the command sent to the shell.',
             fields: [
@@ -573,59 +607,62 @@ export class DiffController {
             ],
             submitLabel: 'Save Command'
         });
-        if (!values || (values.name === cmd.name && values.command === cmd.command))
-            return;
+        if (!values || (values.name === cmd.name && values.command === cmd.command)) return;
+
         try {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ old_name: cmd.name, name: values.name, command: values.command })
             });
-            if (!res.ok)
-                throw new Error(await res.text() || "Failed to save command");
+            if (!res.ok) throw new Error(await res.text() || "Failed to save command");
+
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
             this.app.showToast(`Updated terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
-        }
-        catch (e) {
+        } catch (e) {
             console.error("Edit command failed:", e);
-            this.app.showToast(e.message, { type: 'error', title: 'Commands' });
+            this.app.showToast((e as Error).message, { type: 'error', title: 'Commands' });
         }
     }
-    async deleteCommand(cmd) {
-        if (!confirm(`Delete terminal command "${cmd.name}"?`))
-            return;
+
+    async deleteCommand(cmd: any): Promise<void> {
+        if (!confirm(`Delete terminal command "${cmd.name}"?`)) return;
+
         try {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: cmd.name })
             });
-            if (!res.ok)
-                throw new Error(await res.text() || "Failed to delete command");
+            if (!res.ok) throw new Error(await res.text() || "Failed to delete command");
+
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
-        }
-        catch (e) {
+        } catch (e) {
             console.error("Delete command failed:", e);
-            alert("Delete command failed: " + e.message);
+            alert("Delete command failed: " + (e as Error).message);
         }
     }
-    copyAllCommands(btnElement) {
+
+    copyAllCommands(btnElement: HTMLElement): void {
         // The cmd panel shows terminal commands (spawn new shell tabs), so the
         // copy button only exports those - not the unrelated quick_commands.
-        this.app.exportTerminalCommandsConfig(btnElement);
+        (this.app as any).exportTerminalCommandsConfig(btnElement);
     }
-    copySingleCommand(cmd) {
+
+    copySingleCommand(cmd: any): void {
         const jsonStr = JSON.stringify(cmd, null, 2);
         this.app.tabManager.copyTextRobustly(jsonStr);
     }
-    async runCommand(cmd) {
+
+    async runCommand(cmd: any): Promise<void> {
         const activeTab = this.app.tabManager.getActiveTab();
         const prefix = this.app.tabManager.inputTextArea.value.trim();
         const combined = prefix && cmd.command.includes('{}')
             ? cmd.command.replace('{}', prefix)
             : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+
         // Decide which tab to send the command to.
         //
         // Scoping rules (important — see bug fixed in commit after 439b3e5):
@@ -642,12 +679,13 @@ export class DiffController {
         // and active worktree selection, so it correctly scopes by both
         // project AND worktree boundaries in one check.
         const targetTab = findReusableShellTab(this.app.tabManager.tabs.values(), activeTab, {
-            useExistingTerminalTab: this.app.useExistingTerminalTab,
+            useExistingTerminalTab: (this.app as any).useExistingTerminalTab,
             activeCWD: this.app.sessionsManager.activeCWD || '',
         });
         if (targetTab && targetTab !== activeTab) {
             this.app.tabManager.switchTab(targetTab.paneId);
         }
+
         if (isUsableShell(targetTab)) {
             let payload = combined;
             if (combined.length > 16 || combined.includes('\n')) {
@@ -663,13 +701,13 @@ export class DiffController {
             this.app.tabManager.adjustInputHeight();
             this.app.tabManager.inputTextArea.focus({ preventScroll: true });
             this.app.tabManager._spamScrollToBottom(targetTab);
-        }
-        else {
+        } else {
             // Otherwise, launch a brand new terminal tab running the command!
             try {
                 const title = `+ Shell`;
                 const cwd = this.app.sessionsManager.activeCWD || '';
                 const workspace = this.app.sessionsManager.activeWorkspace || '';
+
                 const res = await fetch('/api/terminals', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -681,56 +719,68 @@ export class DiffController {
                         workspace: workspace
                     })
                 });
+
                 if (!res.ok) {
                     const errText = await res.text().catch(() => 'unknown error');
                     throw new Error(errText.trim() || 'Failed to spawn shell terminal');
                 }
+
                 const data = await res.json();
                 this.app.tabManager.createTab(data.pane_id, data.session_id, title, 'bash', workspace, cwd, false, false, combined);
+
                 if (this.app.sessionsManager) {
                     this.app.sessionsManager.loadSessions();
                 }
-            }
-            catch (e) {
-                this.app.showToast(e.message, { type: 'error', title: 'Launch Shell' });
+            } catch (e) {
+                this.app.showToast((e as Error).message, { type: 'error', title: 'Launch Shell' });
             }
         }
     }
-    async pasteCommands(btnElement) {
-        await this.app.importCmdsConfig(btnElement);
+
+    async pasteCommands(btnElement: HTMLElement): Promise<void> {
+        await (this.app as any).importCmdsConfig(btnElement);
         setTimeout(() => this.renderCmdPanel(), 1600);
     }
-    async refreshDiff(skipLoadCommits = false) {
-        if (!this.isPanelOpen || !this.term)
-            return;
+
+    async refreshDiff(skipLoadCommits: boolean = false): Promise<void> {
+        if (!this.isPanelOpen || !this.term) return;
+
         if (this.activeTab === 'markdown') {
             this._setPanel('markdown');
             this.app.markdownManager.refreshFiles();
             return;
         }
+
         if (this.activeTab === 'sync') {
             this._setPanel('sync');
             this.app.syncManager.refreshMessages();
             return;
         }
+
         if (this.activeTab === 'cmd') {
             this._setPanel('cmd');
             this.renderCmdPanel();
             return;
         }
+
         this._setPanel('git');
+
         // Clean up previous socket
         if (this.currentWs) {
             this.currentWs.close();
             this.currentWs = null;
         }
+
         this.term.clear();
         this.term.write('\x1b[35mStreaming git information...\x1b[0m\r\n\r\n');
+
         if (this.activeTab === 'diff' && !skipLoadCommits) {
             await this.loadCommits();
         }
+
         const cwd = this.app.sessionsManager.activeCWD;
         const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+
         try {
             if (this.activeTab === 'diff') {
                 const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`);
@@ -742,6 +792,7 @@ export class DiffController {
                 this._writeStaticTerminalOutput(text, '\x1b[90mNo changes detected.\x1b[0m\r\n');
                 return;
             }
+
             if (this.activeTab === 'status') {
                 const res = await fetch(`/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`);
                 if (!res.ok) {
@@ -752,88 +803,106 @@ export class DiffController {
                 this._writeStaticTerminalOutput(text, '\x1b[90mClean working tree.\x1b[0m\r\n');
                 return;
             }
+
             const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`);
             if (!res.ok) {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Spawn error');
             }
+
             const data = await res.json();
+
             // Connect and stream diff/log output
-            this.currentWs = new PTYWebSocket(data.pane_id, (text) => {
-                this.term.write(text);
-            }, null, () => {
-                // Closed natively on git exit
-                console.log(`[diff] Stream finished for ${this.activeTab}`);
-            });
+            this.currentWs = new PTYWebSocket(
+                data.pane_id,
+                (text) => {
+                    this.term.write(text);
+                },
+                null,
+                () => {
+                    // Closed natively on git exit
+                    console.log(`[diff] Stream finished for ${this.activeTab}`);
+                }
+            );
+
             // Send initial resize structure after socket gets active
             setTimeout(() => {
                 this.fitTerminal();
             }, 100);
-        }
-        catch (e) {
-            this.term.write(`\x1b[31mFailed to load: ${e.message}\x1b[0m\r\n`);
+
+        } catch (e) {
+            this.term.write(`\x1b[31mFailed to load: ${(e as Error).message}\x1b[0m\r\n`);
         }
     }
-    async openRichDiffModal() {
+
+    async openRichDiffModal(): Promise<void> {
         if (this.diffModal) {
             this.diffModal.classList.remove('hidden');
             await this.loadRichDiff();
         }
     }
-    closeRichDiffModal() {
+
+    closeRichDiffModal(): void {
         if (this.diffModal) {
             this.diffModal.classList.add('hidden');
         }
     }
-    async toggleRichDiffContext() {
+
+    async toggleRichDiffContext(): Promise<void> {
         this.currentContextLines = this.currentContextLines === 3 ? 30 : 3;
         if (this.contextToggleBtn) {
             this.contextToggleBtn.innerText = this.currentContextLines === 3 ? "Show 30 lines of context" : "Show 3 lines of context";
         }
         await this.loadRichDiff();
     }
-    toggleRichDiffLayout() {
-        if (window.innerWidth <= 768)
-            return;
+
+    toggleRichDiffLayout(): void {
+        if (window.innerWidth <= 768) return;
         this.currentLayout = this.currentLayout === 'line-by-line' ? 'side-by-side' : 'line-by-line';
         if (this.layoutToggleBtn) {
             this.layoutToggleBtn.innerText = this.currentLayout === 'line-by-line' ? 'Side-by-Side' : 'Unified';
         }
         this.renderRichDiff(this.lastRawDiffText);
     }
-    renderRichDiff(rawDiffText) {
+
+    renderRichDiff(rawDiffText: string): void {
         if (!rawDiffText || !rawDiffText.trim()) {
-            this.diffModalBody.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
+            this.diffModalBody!.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
             return;
         }
+
         const isMobile = window.innerWidth <= 768;
         const outputFormat = isMobile ? 'line-by-line' : this.currentLayout;
+
         const diffHtml = window.Diff2Html.html(rawDiffText, {
             drawFileList: !isMobile,
             matching: 'lines',
             outputFormat,
             colorScheme: 'dark'
         });
-        this.diffModalBody.innerHTML = diffHtml;
+
+        this.diffModalBody!.innerHTML = diffHtml;
     }
-    async loadRichDiff() {
-        if (!this.diffModalBody)
-            return;
+
+    async loadRichDiff(): Promise<void> {
+        if (!this.diffModalBody) return;
         this.diffModalBody.innerHTML = '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
+
         const cwd = this.app.sessionsManager.activeCWD || '';
         const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+
         try {
             const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`);
             if (!res.ok) {
                 const errText = await res.text();
                 throw new Error(errText || 'Failed to fetch raw diff');
             }
+
             const rawDiffText = await res.text();
             this.lastRawDiffText = rawDiffText;
             this.renderRichDiff(rawDiffText);
-        }
-        catch (e) {
-            this.diffModalBody.innerHTML = `<div style="padding: 20px; color: var(--red); font-family: var(--font-mono); font-size: 13px;">Error: ${e.message}</div>`;
+        } catch (e) {
+            this.diffModalBody.innerHTML = `<div style="padding: 20px; color: var(--red); font-family: var(--font-mono); font-size: 13px;">Error: ${(e as Error).message}</div>`;
         }
     }
 }
