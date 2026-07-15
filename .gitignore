@@ -10,6 +10,9 @@ coverage/
 *.out
 node_modules/
 
+# TypeScript build cache (one per tsconfig.build.json invocation).
+*.tsbuildinfo
+
 # pi-subagents scratch/artifacts
 .pi-subagents/
 
