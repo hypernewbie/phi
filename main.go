@@ -37,6 +37,12 @@ var (
 	Commit      = "none"
 	Date        = "unknown"
 	BuildSource = "source"
+
+	// StartedAt is the unix-second timestamp of server startup. Returned
+	// in /api/version so the front-end can detect a server restart
+	// (the value jumps forward when the user restarts phi) and clear
+	// localStorage references to tabs that no longer exist.
+	StartedAt = time.Now().Unix()
 )
 
 func main() {
@@ -88,9 +94,17 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
-	if err := ptyManager.LoadState(); err != nil {
-		log.Printf("[pty] Failed to load tabs state: %v", err)
-	}
+	// Do NOT call LoadState() here. tabs.json holds PTYInstance
+	// metadata for tabs the server was managing in its previous life,
+	// but in this codebase the underlying PTY process is always a
+	// child of the Go process — it dies with us. So loading tabs.json
+	// resurrects entries with Pty == nil: terminal-shaped zombies
+	// that the front-end renders as closed-but-not-closable black
+	// boxes after a server restart. Users have to click X on each.
+	// Just start with an empty Manager. tabs.json continues to be
+	// written during this session (pin/mark tracking) so any future
+	// revival mechanism (tmux-backed, out-of-process, etc.) has the
+	// metadata to work with.
 	if err := LoadSyncStore(); err != nil {
 		log.Printf("[sync] Failed to load sync store state: %v", err)
 	}
