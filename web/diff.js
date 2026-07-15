@@ -347,36 +347,36 @@ export class DiffController {
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
-            cmdEl?.classList.add('hidden');
-            syncEl?.classList.add('hidden');
-            this.actionBar?.classList.add('hidden');
+            cmdEl.classList.add('hidden');
+            syncEl.classList.add('hidden');
+            this.actionBar.classList.add('hidden');
         }
         else if (mode === 'sync') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            cmdEl?.classList.add('hidden');
-            syncEl?.classList.remove('hidden');
-            this.actionBar?.classList.add('hidden');
+            cmdEl.classList.add('hidden');
+            syncEl.classList.remove('hidden');
+            this.actionBar.classList.add('hidden');
         }
         else if (mode === 'cmd') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            cmdEl?.classList.remove('hidden');
-            syncEl?.classList.add('hidden');
-            this.actionBar?.classList.add('hidden');
+            cmdEl.classList.remove('hidden');
+            syncEl.classList.add('hidden');
+            this.actionBar.classList.add('hidden');
         }
         else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
-            cmdEl?.classList.add('hidden');
-            syncEl?.classList.add('hidden');
+            cmdEl.classList.add('hidden');
+            syncEl.classList.add('hidden');
             if (this.activeTab === 'diff') {
-                this.actionBar?.classList.remove('hidden');
-                this.commitSelect?.classList.remove('hidden');
-                this.richDiffBtn?.classList.remove('hidden');
+                this.actionBar.classList.remove('hidden');
+                this.commitSelect.classList.remove('hidden');
+                this.richDiffBtn.classList.remove('hidden');
             }
             else {
-                this.actionBar?.classList.add('hidden');
+                this.actionBar.classList.add('hidden');
             }
         }
     }
