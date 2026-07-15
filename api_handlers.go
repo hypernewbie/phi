@@ -617,6 +617,7 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"date":           Date,
 		"build_source":   BuildSource,
 		"install_method": update.DetectInstallMethod(BuildSource),
+		"started_at":     fmt.Sprintf("%d", StartedAt),
 	})
 }
 

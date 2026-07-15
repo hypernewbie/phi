@@ -1458,6 +1458,29 @@ export class App {
             if (res.ok) {
                 const data = await res.json();
                 this.versionInfo = data;
+                // Detect server restart by comparing the server's
+                // started_at to the value we cached last session. A
+                // newer value means the server died and was restarted
+                // — the tabs the user had in the old server are gone
+                // forever (their PTY processes died with it). Clear
+                // localStorage references to dead tabs and toast the
+                // user so they don't think "where did my tabs go?"
+                if (data.started_at) {
+                    const lastSeen = localStorage.getItem('phi_server_started_at');
+                    if (lastSeen && lastSeen !== data.started_at) {
+                        const hadTabs = localStorage.getItem('phi_active_pane')
+                            || localStorage.getItem('phi_tab_order');
+                        if (hadTabs) {
+                            localStorage.removeItem('phi_active_pane');
+                            localStorage.removeItem('phi_tab_order');
+                            this.showToast(
+                                'Server restarted — previous tabs are gone (PTY processes died with the server).',
+                                { type: 'info', title: 'Fresh start', duration: 8000 },
+                            );
+                        }
+                    }
+                    localStorage.setItem('phi_server_started_at', data.started_at);
+                }
                 const changelogBtn = document.getElementById('phi-changelog-btn');
                 if (changelogBtn) {
                     // Only overwrite the HTML default when the binary reports
