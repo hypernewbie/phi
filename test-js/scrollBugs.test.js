@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
@@ -160,6 +160,29 @@ describe('scroll-related source contracts', () => {
             /window\.scrollTo\(/.test(blurBlock),
             `Redundant window.scrollTo call found in input-bar blur handler:\n${rawBlock}`,
         ).toBe(false);
+    });
+});
+
+describe('user scroll interrupts stale restore, not the follow loop', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('cancels a pending saved-line restore before it can overwrite user scroll', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = {
+            isDead: false,
+            term: { scrollToBottom: vi.fn(), scrollToLine: vi.fn() },
+        };
+
+        // This is the unchanged stabilization loop's non-bottom path.
+        tm._spamScroll(tab, false, 41);
+        tm._cancelScrollFollowForUserScroll(tab);
+        vi.advanceTimersByTime(350);
+
+        expect(tab.term.scrollToLine).not.toHaveBeenCalled();
+        expect(tab.spamInterval).toBeNull();
+        expect(tab.stopSpamTimeout).toBeNull();
+        expect(tab.spamScrollY).toBeUndefined();
     });
 });
 
