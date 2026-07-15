@@ -1641,7 +1641,7 @@ export class TabManager {
     // MAX_SOFT_CLOSED_TABS caps how many faded tabs can sit in the strip
     // at once - past that, the oldest is force-finalized to keep the
     // strip readable.
-    static SOFT_CLOSE_GRACE_MS = 5000;
+    static SOFT_CLOSE_GRACE_MS = 3000;
     static MAX_SOFT_CLOSED_TABS = 3;
 
     closeTab(paneId) {
@@ -1668,7 +1668,7 @@ export class TabManager {
     // The active tab is NOT auto-switched on close. Instead, a content
     // overlay covers the terminal with the same spinner + countdown so
     // the user can still see what they were looking at while they
-    // decide whether to undo. After the 5s grace (or × twice), if the
+    // decide whether to undo. After the 3s grace (or × twice), if the
     // tab was the only one, the empty state finally shows.
     softCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
