@@ -20,7 +20,10 @@ export interface AppLike {
     markdownManager: any;
     syncManager: any;
     markdownDirs?: readonly string[];
-    updateStatus(...args: any[]): void;
+    // updateStatus is a data property (the latest response from /api/update/status),
+    // not a function. Typed as `any` because the wire shape is defined
+    // server-side in api_update.go and not formally mirrored here yet.
+    updateStatus?: any;
     useExistingTerminalTab?: boolean;
     terminalCommands?: any;
     quickCommands?: any;
