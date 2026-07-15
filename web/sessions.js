@@ -285,20 +285,12 @@ export class SessionsManager {
         if (!skipReload) {
             this.loadSessions();
         }
-        // Show / hide the Ctrl+Shift+X shortcut chip on the input bar
-        // depending on which coder is active. The chip is purely a
-        // discoverability affordance for the pi coding agent.
+        // The Ctrl+Shift+X chip is additive discoverability for pi — never
+        // a replacement for the primary Send button. Send remains visible in
+        // every staged-input coder mode; direct mode owns its separate UI.
         const chip = document.getElementById('pi-shortcut-send-btn');
-        const sendBtn = document.getElementById('send-input-btn');
-        if (chip && sendBtn) {
-            if (coderId === 'pi') {
-                chip.classList.remove('hidden');
-                sendBtn.classList.add('hidden');
-            }
-            else {
-                chip.classList.add('hidden');
-                sendBtn.classList.remove('hidden');
-            }
+        if (chip) {
+            chip.classList.toggle('hidden', coderId !== 'pi');
         }
     }
     highlightActiveWorktree(cwdPath) {
