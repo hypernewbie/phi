@@ -240,6 +240,25 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
         expect(tm.tabs.has('a')).toBe(false);
     });
 
+    it('does not surface its own WebSocket close as a disconnect', () => {
+        const tm = makeTm({ withTabs: ['a'] });
+        const tab = tm.tabs.get('a');
+        tab.term.write = vi.fn();
+        tm.updateDocumentTitle = vi.fn();
+        tm._showReconnectOverlay = vi.fn();
+        tm.maybeAutoReconnect = vi.fn();
+        // Model the browser delivering the asynchronous onclose callback
+        // when finalizeCloseTab deliberately closes this socket.
+        tab.ws.close = vi.fn(() => tm._handleTerminalDisconnect(tab));
+
+        tm.finalizeCloseTab('a');
+
+        expect(tab.term.write).not.toHaveBeenCalled();
+        expect(tab.tabEl.classList.contains('dead')).toBe(false);
+        expect(tm._showReconnectOverlay).not.toHaveBeenCalled();
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
     it('clears the toast reference and dismisses the toast element', () => {
         const tm = makeTm({ withTabs: ['a'] });
         const dismissEl = { classList: { remove: vi.fn() } };
