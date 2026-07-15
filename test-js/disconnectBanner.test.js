@@ -32,6 +32,24 @@ describe('Disconnect Banner UX', () => {
         tabManager.activateTabViewport = vi.fn();
     });
 
+    it('does not report an expected WebSocket close during tab finalization', () => {
+        const tab = makeTab({ finalizing: true });
+        tabManager.app.showToast = vi.fn();
+        tabManager.updateDocumentTitle = vi.fn();
+        tabManager._showReconnectOverlay = vi.fn();
+        tabManager.updateDisconnectBanner = vi.fn();
+        tabManager.maybeAutoReconnect = vi.fn();
+
+        tabManager._handleTerminalDisconnect(tab);
+
+        expect(tab.term.write).not.toHaveBeenCalled();
+        expect(tab.isDead).toBe(false);
+        expect(tab.tabEl.classList.contains('dead')).toBe(false);
+        expect(tabManager._showReconnectOverlay).not.toHaveBeenCalled();
+        expect(tabManager.updateDisconnectBanner).not.toHaveBeenCalled();
+        expect(tabManager.app.showToast).not.toHaveBeenCalled();
+    });
+
     it('banner is hidden when there are no dead tabs', () => {
         tabManager.updateDisconnectBanner();
         expect(banner.classList.contains('hidden')).toBe(true);

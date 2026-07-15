@@ -1314,33 +1314,7 @@ export class TabManager {
             paneId,
             (data) => { this.writeToTerminal(tabInfo, data); },
             (control) => { this.handleControlMessage(tabInfo, control); },
-            () => {
-                term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
-                tabInfo.isDead = true;
-                tabEl.classList.add('dead');
-                this.updateDocumentTitle();
-                this._showReconnectOverlay(tabInfo);
-                this.updateDisconnectBanner();
-                this.maybeAutoReconnect(tabInfo);
-                // Toast so the user notices the drop even when they're
-                // focused on a different tab (or the closing-tab overlay
-                // was already up). The on-terminal reconnect overlay
-                // stays for the local UX; this toast covers the peripheral
-                // case where the user wouldn't see it otherwise.
-                if (this.app && this.app.showToast) {
-                    this.app.showToast(
-                        `Connection lost on "${tabInfo.title || tabInfo.coder || 'tab'}"`,
-                        {
-                            type: 'error',
-                            title: 'Terminal disconnected',
-                            duration: 8000,
-                            action: tabInfo.exitCode === undefined || tabInfo.exitCode === null
-                                ? { text: 'Reconnect', callback: () => this.reconnectTab(tabInfo) }
-                                : null,
-                        },
-                    );
-                }
-            },
+            () => this._handleTerminalDisconnect(tabInfo),
             () => {
                 try {
                     if (tabInfo === this.getActiveTab()) {
@@ -1475,6 +1449,38 @@ export class TabManager {
                 this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: true });
             }
         }, 100);
+    }
+
+    // A user-initiated finalization closes the PTY WebSocket too. Its
+    // onclose callback is asynchronous, so it can arrive after the tab
+    // teardown starts; that expected close must not masquerade as a lost
+    // terminal or offer to reconnect a tab the user just closed.
+    _handleTerminalDisconnect(tabInfo) {
+        if (tabInfo.finalizing) return;
+
+        tabInfo.term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
+        tabInfo.isDead = true;
+        tabInfo.tabEl.classList.add('dead');
+        this.updateDocumentTitle();
+        this._showReconnectOverlay(tabInfo);
+        this.updateDisconnectBanner();
+        this.maybeAutoReconnect(tabInfo);
+        // Toast so the user notices the drop even when they're focused on
+        // a different tab. The on-terminal reconnect overlay stays for the
+        // local UX; this toast covers the peripheral case.
+        if (this.app && this.app.showToast) {
+            this.app.showToast(
+                `Connection lost on "${tabInfo.title || tabInfo.coder || 'tab'}"`,
+                {
+                    type: 'error',
+                    title: 'Terminal disconnected',
+                    duration: 8000,
+                    action: tabInfo.exitCode === undefined || tabInfo.exitCode === null
+                        ? { text: 'Reconnect', callback: () => this.reconnectTab(tabInfo) }
+                        : null,
+                },
+            );
+        }
     }
     
     switchTab(paneId, { userInitiated = false } = {}) {
