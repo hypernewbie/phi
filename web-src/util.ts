@@ -1,18 +1,27 @@
 /* Φ phi — pure, framework-free helpers (unit-tested in test-js/) */
+
+// A Vikunja kanban bucket shape. The runtime narrows `is_done` with
+// `bucket.is_done === true` rather than a truthy check, so the field
+// can be unknown (string, number, bool at the wire). We type it as
+// `unknown` to mirror that defensive behaviour.
+export interface VikunjaBucketLike {
+    title: string;
+    is_done?: unknown;
+}
+
 // projectWorktreeLabel renders a short "project/worktree" label from a cwd.
 // Pure: no DOM, no `this`. Handles mixed \ and / separators, drops empty
 // segments, and falls back to the em-dash sentinel for empty input.
-export function projectWorktreeLabel(cwd) {
-    if (!cwd)
-        return '—';
+export function projectWorktreeLabel(cwd: string | null | undefined): string {
+    if (!cwd) return '—';
     const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
-    if (parts.length === 0)
-        return '—';
+    if (parts.length === 0) return '—';
     if (parts.length >= 2) {
         return parts[parts.length - 2] + '/' + parts[parts.length - 1];
     }
     return parts[parts.length - 1] || '—';
 }
+
 // WORKTREE_GLYPHS is the pool of glyphs worktreeGlyph() picks from.
 // 96 real Egyptian Hieroglyphs from the Unicode block U+13000-U+1342F,
 // sampled evenly across the block for category variety and width-filtered
@@ -21,14 +30,14 @@ export function projectWorktreeLabel(cwd) {
 // after seeing a few of them. Collision rate at typical workloads
 // (4-10 worktrees): <5%, vs the old 12-entry geometric pool where it
 // was ~30%+.
-export const WORKTREE_GLYPHS = ['𓀀', '𓀊', '𓀔', '𓀞', '𓀨', '𓀲', '𓀼', '𓁇', '𓁑', '𓁛', '𓁥', '𓁯', '𓁹', '𓂃', '𓂎', '𓂘', '𓂢', '𓂬', '𓂹', '𓃃', '𓃏', '𓃙', '𓃣', '𓃭', '𓃷', '𓄁', '𓄋', '𓄕', '𓄡', '𓄫', '𓄵', '𓅀', '𓅊', '𓅖', '𓅠', '𓅫', '𓅵', '𓆀', '𓆋', '𓆕', '𓆟', '𓆩', '𓆵', '𓇃', '𓇏', '𓇚', '𓇫', '𓇵', '𓈀', '𓈊', '𓈕', '𓈟', '𓈩', '𓈳', '𓈽', '𓉇', '𓉑', '𓉛', '𓉦', '𓉰', '𓉿', '𓊉', '𓊓', '𓊝', '𓊪', '𓊴', '𓊾', '𓋉', '𓋓', '𓋝', '𓋧', '𓋱', '𓋼', '𓌍', '𓌛', '𓌪', '𓌶', '𓍀', '𓍎', '𓍞', '𓍬', '𓍶', '𓎀', '𓎏', '𓎞', '𓎨', '𓎳', '𓎽', '𓏈', '𓏔', '𓏟', '𓏱', '𓏾', '𓐌', '𓐖', '𓐠'];
+export const WORKTREE_GLYPHS: readonly string[] = ['𓀀', '𓀊', '𓀔', '𓀞', '𓀨', '𓀲', '𓀼', '𓁇', '𓁑', '𓁛', '𓁥', '𓁯', '𓁹', '𓂃', '𓂎', '𓂘', '𓂢', '𓂬', '𓂹', '𓃃', '𓃏', '𓃙', '𓃣', '𓃭', '𓃷', '𓄁', '𓄋', '𓄕', '𓄡', '𓄫', '𓄵', '𓅀', '𓅊', '𓅖', '𓅠', '𓅫', '𓅵', '𓆀', '𓆋', '𓆕', '𓆟', '𓆩', '𓆵', '𓇃', '𓇏', '𓇚', '𓇫', '𓇵', '𓈀', '𓈊', '𓈕', '𓈟', '𓈩', '𓈳', '𓈽', '𓉇', '𓉑', '𓉛', '𓉦', '𓉰', '𓉿', '𓊉', '𓊓', '𓊝', '𓊪', '𓊴', '𓊾', '𓋉', '𓋓', '𓋝', '𓋧', '𓋱', '𓋼', '𓌍', '𓌛', '𓌪', '𓌶', '𓍀', '𓍎', '𓍞', '𓍬', '𓍶', '𓎀', '𓎏', '𓎞', '𓎨', '𓎳', '𓎽', '𓏈', '𓏔', '𓏟', '𓏱', '𓏾', '𓐌', '𓐖', '𓐠'];
+
 // worktreeGlyph returns one of WORKTREE_GLYPHS deterministically from
 // cwd. FNV-1a 32-bit hash, mod pool length. Pure, no DOM. Same cwd
 // always returns the same glyph; different cwds usually return
 // different glyphs.
-export function worktreeGlyph(cwd) {
-    if (!cwd)
-        return '◆'; // fallback for falsy cwd (em-dash never reached here)
+export function worktreeGlyph(cwd: string | null | undefined): string {
+    if (!cwd) return '◆'; // fallback for falsy cwd (em-dash never reached here)
     let h = 2166136261;
     for (let i = 0; i < cwd.length; i++) {
         h ^= cwd.charCodeAt(i);
@@ -36,13 +45,14 @@ export function worktreeGlyph(cwd) {
     }
     return WORKTREE_GLYPHS[h % WORKTREE_GLYPHS.length];
 }
+
 // relativeToCwd converts a file path to one relative to cwd (both with \
 // normalized to /). Pure. NOTE: two long-standing quirks are preserved by
 // design — do NOT "fix" them here without a dedicated test + commit:
 //   1. Case-sensitive prefix match (unlike normalizePath, which lowercases).
 //   2. Naive startsWith: cwd '/foo' also matches path '/foobar' -> 'bar'.
 // Also mirrors the original: a nullish `path` throws (no defensive guard).
-export function relativeToCwd(path, cwd) {
+export function relativeToCwd(path: string, cwd: string): string {
     const cleanPath = path.replace(/\\/g, '/');
     const cleanCwd = (cwd || '').replace(/\\/g, '/');
     let relPath = cleanPath;
@@ -54,13 +64,13 @@ export function relativeToCwd(path, cwd) {
     }
     return relPath;
 }
+
 // escapeHtml escapes the five HTML-sensitive characters (attribute-safe) and
 // returns '' for falsy input. Shared by kanban + sync, whose impls were
 // byte-identical. NOTE: markdown.js `_escape` is intentionally NOT this
 // function — it escapes only & < > (3 chars) for a <pre> text fallback.
-export function escapeHtml(str) {
-    if (!str)
-        return '';
+export function escapeHtml(str: string | null | undefined): string {
+    if (!str) return '';
     return str
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -68,31 +78,35 @@ export function escapeHtml(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+
+// PriorityMeta is the badge shape returned by priorityMeta.
+export interface PriorityMeta {
+    label: string;
+    className: string;
+}
+
 // priorityMeta maps a Vikunja priority to its badge {label, className}. Pure.
 // Priorities 1..5 -> Low/Medium/High/Urgent/DOOM; anything else falls back to
 // the 'P0' label. className always uses the raw priority value (e.g.
 // 'priority-6' for 6), matching the original renderCard behavior.
-export function priorityMeta(priority) {
+export function priorityMeta(priority: number): PriorityMeta {
     const className = `priority-${priority}`;
     let label = 'P0';
-    if (priority === 1)
-        label = 'Low';
-    else if (priority === 2)
-        label = 'Medium';
-    else if (priority === 3)
-        label = 'High';
-    else if (priority === 4)
-        label = 'Urgent';
-    else if (priority === 5)
-        label = 'DOOM';
+    if (priority === 1) label = 'Low';
+    else if (priority === 2) label = 'Medium';
+    else if (priority === 3) label = 'High';
+    else if (priority === 4) label = 'Urgent';
+    else if (priority === 5) label = 'DOOM';
     return { label, className };
 }
+
 // isDoneBucket reports whether a Vikunja bucket represents "done". Pure and
 // null-safe: returns false for a nullish bucket WITHOUT touching .title (the
 // `bucket &&` short-circuit is load-bearing). Uses strict is_done === true.
-export function isDoneBucket(bucket) {
+export function isDoneBucket(bucket: VikunjaBucketLike | null | undefined): boolean {
     return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
 }
+
 // safeHexColor validates a 3/6-character hex color string from an external
 // source (Vikunja label.hex_color). Returns the cleaned color (no leading #)
 // if it matches /^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/, else an empty string so
@@ -101,13 +115,12 @@ export function isDoneBucket(bucket) {
 // `unknown` here because the original does `typeof c !== 'string'` early-out:
 // the wire value may be a number / null / undefined and the call must still
 // return '' rather than throw.
-export function safeHexColor(c) {
-    if (typeof c !== 'string')
-        return '';
-    if (!/^([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c))
-        return '';
+export function safeHexColor(c: unknown): string {
+    if (typeof c !== 'string') return '';
+    if (!/^([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c)) return '';
     return c;
 }
+
 // extractVikunjaError turns a Vikunja error response body into a readable
 // one-liner for the user. Vikunja returns shapes like:
 //   { "message": "method not allowed error" }           // single error
@@ -115,55 +128,47 @@ export function safeHexColor(c) {
 //   { "code": 4, "message": "..." }                     // same, reordered
 //   { "messages": { "field": ["msg1", "msg2"] } }       // per-field map
 // Falls back to the raw text (truncated) if none parse. Pure.
-export function extractVikunjaError(text, status) {
-    if (!text)
-        return `Request failed with status ${status}`;
+export function extractVikunjaError(text: string | null | undefined, status: number): string {
+    if (!text) return `Request failed with status ${status}`;
     let s = text;
     try {
         const obj = JSON.parse(text);
         if (obj && typeof obj === 'object') {
             if (typeof obj.message === 'string' && obj.message) {
                 s = obj.message;
-            }
-            else if (obj.messages && typeof obj.messages === 'object') {
-                const parts = [];
+            } else if (obj.messages && typeof obj.messages === 'object') {
+                const parts: string[] = [];
                 for (const [field, val] of Object.entries(obj.messages)) {
-                    if (Array.isArray(val))
-                        parts.push(`${field}: ${val.join(', ')}`);
-                    else if (typeof val === 'string')
-                        parts.push(`${field}: ${val}`);
+                    if (Array.isArray(val)) parts.push(`${field}: ${val.join(', ')}`);
+                    else if (typeof val === 'string') parts.push(`${field}: ${val}`);
                 }
-                if (parts.length)
-                    s = parts.join('; ');
+                if (parts.length) s = parts.join('; ');
             }
         }
-    }
-    catch (_) {
+    } catch (_) {
         // Not JSON — keep the raw text, but trim obvious HTML pages.
         s = s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
-    if (s.length > 240)
-        s = s.slice(0, 240) + '...';
+    if (s.length > 240) s = s.slice(0, 240) + '...';
     return s || `Request failed with status ${status}`;
 }
+
 // getLastFolderName returns the final path segment (splitting on / and \).
 // Pure. QUIRK preserved: a trailing separator yields an empty last segment,
 // so it falls back to returning the FULL original path.
-export function getLastFolderName(path) {
-    if (!path)
-        return '';
+export function getLastFolderName(path: string): string {
+    if (!path) return '';
     const parts = path.split(/[/\\]/);
     return parts[parts.length - 1] || path;
 }
+
 // formatWorkspaceLabel renders a workspace's display label: normally the last
 // folder name, but disambiguated as "folder (parent)" when another workspace
 // in allWorkspaces shares the same last-folder name. Pure.
-export function formatWorkspaceLabel(ws, allWorkspaces) {
-    if (!ws)
-        return '';
+export function formatWorkspaceLabel(ws: string, allWorkspaces?: readonly string[] | null): string {
+    if (!ws) return '';
     const folderName = getLastFolderName(ws);
-    if (!allWorkspaces || !Array.isArray(allWorkspaces))
-        return folderName;
+    if (!allWorkspaces || !Array.isArray(allWorkspaces)) return folderName;
     const duplicates = allWorkspaces.filter(w => getLastFolderName(w) === folderName);
     if (duplicates.length > 1) {
         const parts = ws.split(/[/\\]/);
@@ -174,21 +179,20 @@ export function formatWorkspaceLabel(ws, allWorkspaces) {
     }
     return folderName;
 }
+
 // cpuLevel maps a CPU utilization percentage to a brand-logo indicator class.
 // Pure. Thresholds: >90 critical, >70 high, >30 moderate, else idle.
-export function cpuLevel(cpuPercent) {
-    if (cpuPercent > 90)
-        return 'cpu-critical';
-    if (cpuPercent > 70)
-        return 'cpu-high';
-    if (cpuPercent > 30)
-        return 'cpu-moderate';
+export function cpuLevel(cpuPercent: number): string {
+    if (cpuPercent > 90) return 'cpu-critical';
+    if (cpuPercent > 70) return 'cpu-high';
+    if (cpuPercent > 30) return 'cpu-moderate';
     return 'cpu-idle';
 }
+
 // buildProxyUrl composes the local /api/proxy URL for a sync-coordinator
 // request: strips one trailing slash off the coordinator base, appends the
 // endpoint, and URL-encodes the result as the ?url= param. Pure.
-export function buildProxyUrl(coordinator, endpoint) {
+export function buildProxyUrl(coordinator: string, endpoint: string): string {
     const targetUrl = coordinator.replace(/\/$/, '') + endpoint;
     return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
 }
