@@ -1,18 +1,7 @@
 /* Φ phi — AI Sync Board Manager */
 
+import type { AppLike, ToastOptions } from './types.js';
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
-
-export interface ToastOptions {
-    type?: 'info' | 'success' | 'error';
-    title?: string;
-    duration?: number;
-}
-
-export interface AppLike {
-    showToast(message: string, opts?: ToastOptions): void;
-    sessionsManager: any;
-    diffController: any;
-}
 
 export class SyncManager {
     app: AppLike;
