@@ -2,6 +2,18 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.10.0 — 2026-07-14
+
+A stability-and-signal release: phi is now clearer about live terminal output,
+and the browser client has a durable TypeScript source pipeline.
+
+### Added
+- **Live terminal chrome.** The browser title and favicon use `Φ` while every terminal is quiet and `ϕ` while any live terminal is producing output. The header's former passive `—` before the hostname now becomes a subtly glowing terminal cursor (`▍`) during output. The existing leading `●` remains reserved for completion/attention, so combined states read as `● ϕ host`.
+- **TypeScript source pipeline.** Seven browser modules now live in `web-src/` as strict TypeScript and emit committed browser ESM into `web/`. CI typechecks, builds, and rejects source/artifact drift, while clone-and-build users still need no Node toolchain.
+
+### Fixed
+- **Restart no longer leaves zombie tabs.** Browser-local tab references are cleared when phi detects a new server process, avoiding dead tabs after restart.
+
 ## v0.9.2 — 2026-07-14
 
 Polished theme details for the obsidian glassmorphic and Greek-Egyptian visual style.
