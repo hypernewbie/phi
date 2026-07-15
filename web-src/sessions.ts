@@ -1,75 +1,85 @@
+import type { AppLike } from './types.js';
 import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph } from './util.js';
-export function normalizePath(p) {
-    if (!p)
-        return '';
+
+export function normalizePath(p: string): string {
+    if (!p) return '';
     let normalized = p.replace(/\\/g, '/');
     if (normalized.endsWith('/') && normalized.length > 1) {
         normalized = normalized.slice(0, -1);
     }
     return normalized.toLowerCase();
 }
+
 export class SessionsManager {
-    app;
-    activeCoder;
-    activeWorkspace;
-    activeCWD;
-    config;
-    sessionList;
-    newSessionBtn;
-    workspaceSelect;
-    addWorkspaceBtn;
-    removeWorkspaceBtn;
-    wsModal;
-    wsModalClose;
-    wsModalInput;
-    wsModalSuggestions;
-    wsModalCancelBtn;
-    wsModalAddBtn;
-    selectedSuggestionIndex;
-    worktreeDirtyRequestId;
-    _measureSpan = null;
-    _contextMenu;
-    _ctxDismissMousedown;
-    _ctxDismissKey;
-    constructor(app) {
+    app: AppLike;
+    activeCoder: string;
+    activeWorkspace: string;
+    activeCWD: string;
+    config: any;
+    sessionList: HTMLElement;
+    newSessionBtn: HTMLElement;
+    workspaceSelect: HTMLSelectElement;
+    addWorkspaceBtn: HTMLElement;
+    removeWorkspaceBtn: HTMLElement;
+    wsModal: HTMLElement;
+    wsModalClose: HTMLElement;
+    wsModalInput: HTMLInputElement;
+    wsModalSuggestions: HTMLElement;
+    wsModalCancelBtn: HTMLElement;
+    wsModalAddBtn: HTMLElement;
+    selectedSuggestionIndex: number;
+    worktreeDirtyRequestId: number;
+    _measureSpan: HTMLElement | null = null;
+    _contextMenu: HTMLElement | null;
+    _ctxDismissMousedown: ((ev: MouseEvent) => void) | null;
+    _ctxDismissKey: ((ev: KeyboardEvent) => void) | null;
+
+    constructor(app: AppLike) {
         this.app = app;
         this.activeCoder = 'opencode';
         this.activeWorkspace = '';
         this.activeCWD = '';
-        this.sessionList = document.getElementById('session-list');
-        this.newSessionBtn = document.getElementById('new-session-btn');
+
+        this.sessionList = document.getElementById('session-list')!;
+        this.newSessionBtn = document.getElementById('new-session-btn')!;
+
         // Workspace Controls
-        this.workspaceSelect = document.getElementById('workspace-select');
-        this.addWorkspaceBtn = document.getElementById('add-workspace-btn');
-        this.removeWorkspaceBtn = document.getElementById('remove-workspace-btn');
+        this.workspaceSelect = document.getElementById('workspace-select') as HTMLSelectElement;
+        this.addWorkspaceBtn = document.getElementById('add-workspace-btn')!;
+        this.removeWorkspaceBtn = document.getElementById('remove-workspace-btn')!;
+
         // Workspace Modal Controls
-        this.wsModal = document.getElementById('ws-modal');
-        this.wsModalClose = document.getElementById('ws-modal-close');
-        this.wsModalInput = document.getElementById('ws-modal-input');
-        this.wsModalSuggestions = document.getElementById('ws-modal-suggestions');
-        this.wsModalCancelBtn = document.getElementById('ws-modal-cancel-btn');
-        this.wsModalAddBtn = document.getElementById('ws-modal-add-btn');
+        this.wsModal = document.getElementById('ws-modal')!;
+        this.wsModalClose = document.getElementById('ws-modal-close')!;
+        this.wsModalInput = document.getElementById('ws-modal-input') as HTMLInputElement;
+        this.wsModalSuggestions = document.getElementById('ws-modal-suggestions')!;
+        this.wsModalCancelBtn = document.getElementById('ws-modal-cancel-btn')!;
+        this.wsModalAddBtn = document.getElementById('ws-modal-add-btn')!;
         this.selectedSuggestionIndex = -1;
         this.worktreeDirtyRequestId = 0;
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
+
         this.setupEventListeners();
     }
-    setupEventListeners() {
+
+    setupEventListeners(): void {
         // Coder Selector Tabs
         document.querySelectorAll('.coder-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
-                document.querySelector('.coder-tab.active').classList.remove('active');
+                document.querySelector('.coder-tab.active')!.classList.remove('active');
                 tab.classList.add('active');
-                this.activeCoder = tab.getAttribute('data-coder');
+                this.activeCoder = tab.getAttribute('data-coder') as string;
                 this.loadSessions();
             });
         });
+
         // New Session Trigger
         this.newSessionBtn.addEventListener('click', () => {
             this.spawnNewSession();
         });
+
         // Workspace Toggle and Auto-Width Formatter
         this.workspaceSelect.addEventListener('change', () => {
             this.activeWorkspace = this.workspaceSelect.value;
@@ -85,64 +95,67 @@ export class SessionsManager {
             }, 100);
         });
         window.addEventListener('resize', () => this.updateWorkspaceSelectWidth());
+
         this.addWorkspaceBtn.addEventListener('click', () => {
             this.openWorkspaceModal();
         });
+
         this.removeWorkspaceBtn.addEventListener('click', () => {
             if (confirm(`Remove workspace: ${this.activeWorkspace}?`)) {
                 this.removeWorkspace(this.activeWorkspace);
             }
         });
+
         // Modal Action Bindings
         this.wsModalClose.addEventListener('click', () => this.closeWorkspaceModal());
         this.wsModalCancelBtn.addEventListener('click', () => this.closeWorkspaceModal());
         this.wsModalAddBtn.addEventListener('click', () => this.submitWorkspaceModal());
+
         this.wsModalInput.addEventListener('input', () => {
             this.fetchAutocompleteSuggestions();
         });
+
         this.wsModalInput.addEventListener('keydown', (e) => {
             const items = this.wsModalSuggestions.querySelectorAll('.suggestion-item');
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 this.selectedSuggestionIndex = (this.selectedSuggestionIndex + 1) % items.length;
                 this.highlightSuggestion(items);
-            }
-            else if (e.key === 'ArrowUp') {
+            } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 this.selectedSuggestionIndex = (this.selectedSuggestionIndex - 1 + items.length) % items.length;
                 this.highlightSuggestion(items);
-            }
-            else if (e.key === 'Enter') {
+            } else if (e.key === 'Enter') {
                 e.preventDefault();
                 if (this.selectedSuggestionIndex >= 0 && this.selectedSuggestionIndex < items.length) {
-                    this.wsModalInput.value = items[this.selectedSuggestionIndex].innerText;
+                    this.wsModalInput.value = (items[this.selectedSuggestionIndex] as HTMLElement).innerText;
                     this.wsModalSuggestions.classList.add('hidden');
                     this.selectedSuggestionIndex = -1;
-                }
-                else {
+                } else {
                     this.submitWorkspaceModal();
                 }
-            }
-            else if (e.key === 'Escape') {
+            } else if (e.key === 'Escape') {
                 e.preventDefault();
                 this.closeWorkspaceModal();
             }
         });
     }
-    getLastFolderName(path) {
+
+    getLastFolderName(path: string): string {
         return getLastFolderNameUtil(path);
     }
-    formatWorkspaceLabel(ws, allWorkspaces) {
+
+    formatWorkspaceLabel(ws: string, allWorkspaces: readonly string[]): string {
         return formatWorkspaceLabelUtil(ws, allWorkspaces);
     }
-    updateWorkspaceSelectWidth() {
-        if (!this.workspaceSelect)
-            return;
+
+    updateWorkspaceSelectWidth(): void {
+        if (!this.workspaceSelect) return;
         const idx = this.workspaceSelect.selectedIndex;
         const selectedOpt = idx >= 0 ? this.workspaceSelect.options[idx] : null;
         const text = selectedOpt ? (selectedOpt.text || selectedOpt.innerText || selectedOpt.value) : '';
-        if (!text)
-            return;
+        if (!text) return;
+
         if (!this._measureSpan) {
             this._measureSpan = document.createElement('span');
             this._measureSpan.style.position = 'absolute';
@@ -154,51 +167,59 @@ export class SessionsManager {
             this._measureSpan.style.left = '-9999px';
             document.body.appendChild(this._measureSpan);
         }
+
         const style = window.getComputedStyle(this.workspaceSelect);
         this._measureSpan.style.fontFamily = style.fontFamily;
         this._measureSpan.style.fontSize = style.fontSize;
         this._measureSpan.style.fontWeight = style.fontWeight;
         this._measureSpan.style.letterSpacing = style.letterSpacing;
+
         this._measureSpan.textContent = text;
         const textWidth = this._measureSpan.getBoundingClientRect().width;
+
         const isMobile = window.innerWidth <= 768;
         const padding = isMobile ? 24 : 28;
         const calculatedWidth = Math.ceil(textWidth + padding);
+
         const minW = isMobile ? 50 : 60;
         const maxW = isMobile ? 130 : 280;
+
         const finalWidth = Math.max(minW, Math.min(maxW, calculatedWidth));
         this.workspaceSelect.style.width = `${finalWidth}px`;
         this.workspaceSelect.title = this.activeWorkspace || this.workspaceSelect.value || '';
         const emptyWs = document.getElementById('empty-workspace-path');
-        if (emptyWs)
-            emptyWs.textContent = this.activeWorkspace || this.workspaceSelect.value || 'Default';
+        if (emptyWs) emptyWs.textContent = this.activeWorkspace || this.workspaceSelect.value || 'Default';
     }
-    async loadConfig() {
+
+    async loadConfig(): Promise<void> {
         try {
             const res = await fetch('/api/config');
             const data = await res.json();
             this.config = data;
+
             this.workspaceSelect.innerHTML = '';
-            data.workspaces.forEach((ws) => {
+            data.workspaces.forEach((ws: string) => {
                 const opt = document.createElement('option');
                 opt.value = ws;
                 opt.innerText = this.formatWorkspaceLabel(ws, data.workspaces);
                 opt.title = ws;
                 this.workspaceSelect.appendChild(opt);
             });
+
             const lastChosen = localStorage.getItem('phi_last_chosen_project');
             if (lastChosen && data.workspaces.includes(lastChosen)) {
                 this.activeWorkspace = lastChosen;
-            }
-            else {
+            } else {
                 this.activeWorkspace = data.active_cwd || data.workspaces[0] || '';
             }
             this.workspaceSelect.value = this.activeWorkspace;
             this.updateWorkspaceSelectWidth();
+
             if (data.theme_color) {
-                this.app.accentColorSelect.value = data.theme_color;
-                this.app.applyAccentTheme(data.theme_color);
+                (this.app as any).accentColorSelect.value = data.theme_color;
+                (this.app as any).applyAccentTheme(data.theme_color);
             }
+
             // Save the model presets list, quick commands, and terminal commands, then redraw current tab presets.
             this.app.modelPresets = data.model_presets || {};
             this.app.quickCommands = data.quick_commands || [];
@@ -209,6 +230,7 @@ export class SessionsManager {
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);
             }
+
             if (data.hostname) {
                 this.app.hostname = data.hostname;
                 const hostEl = document.getElementById('hostname-display');
@@ -221,13 +243,14 @@ export class SessionsManager {
                     emptyHostEl.innerText = data.hostname;
                 }
             }
+
             await this.loadSessions();
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[config] Failed to load workspace config:", e);
         }
     }
-    async addWorkspace(path) {
+
+    async addWorkspace(path: string): Promise<void> {
         try {
             const res = await fetch('/api/config/workspaces', {
                 method: 'POST',
@@ -241,12 +264,12 @@ export class SessionsManager {
                 this.updateWorkspaceSelectWidth();
                 this.loadWorktrees();
             }
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[config] Failed to add workspace:", e);
         }
     }
-    async removeWorkspace(path) {
+
+    async removeWorkspace(path: string): Promise<void> {
         try {
             const res = await fetch('/api/config/workspaces', {
                 method: 'DELETE',
@@ -257,31 +280,32 @@ export class SessionsManager {
                 await this.loadConfig();
                 this.updateWorkspaceSelectWidth();
             }
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[config] Failed to remove workspace:", e);
         }
     }
-    async loadSessions() {
+
+    async loadSessions(): Promise<void> {
         await this.loadWorktrees();
     }
-    switchCoder(coderId, skipReload = false) {
-        if (coderId === 'review' || coderId === 'kanban')
-            return;
-        if (this.activeCoder === coderId)
-            return;
+
+    switchCoder(coderId: string, skipReload: boolean = false): void {
+        if (coderId === 'review' || coderId === 'kanban') return;
+        if (this.activeCoder === coderId) return;
         this.activeCoder = coderId;
+
         document.querySelectorAll('.coder-tab').forEach(tab => {
             if (tab.getAttribute('data-coder') === coderId) {
                 tab.classList.add('active');
-            }
-            else {
+            } else {
                 tab.classList.remove('active');
             }
         });
+
         if (!skipReload) {
             this.loadSessions();
         }
+
         // Show / hide the Ctrl+Shift+X shortcut chip on the input bar
         // depending on which coder is active. The chip is purely a
         // discoverability affordance for the pi coding agent.
@@ -291,66 +315,66 @@ export class SessionsManager {
             if (coderId === 'pi') {
                 chip.classList.remove('hidden');
                 sendBtn.classList.add('hidden');
-            }
-            else {
+            } else {
                 chip.classList.add('hidden');
                 sendBtn.classList.remove('hidden');
             }
         }
     }
-    highlightActiveWorktree(cwdPath) {
-        if (!cwdPath)
-            return;
+
+    highlightActiveWorktree(cwdPath: string): void {
+        if (!cwdPath) return;
         document.querySelectorAll('.worktree-section').forEach(sec => {
             const secPath = sec.getAttribute('data-worktree-path');
-            if (normalizePath(secPath) === normalizePath(cwdPath)) {
+            if (normalizePath(secPath!) === normalizePath(cwdPath)) {
                 sec.classList.add('active');
                 sec.classList.add('expanded');
                 const container = sec.querySelector('.worktree-sessions-container');
                 if (container && (container.innerHTML === '' || container.innerHTML.includes('Scanning sessions...'))) {
-                    this.loadWorktreeSessions(secPath, container);
+                    this.loadWorktreeSessions(secPath!, container as HTMLElement);
                 }
-            }
-            else {
+            } else {
                 sec.classList.remove('active');
                 sec.classList.remove('expanded');
             }
         });
     }
-    async loadWorktrees(targetCwd = null) {
+
+    async loadWorktrees(targetCwd: string | null = null): Promise<void> {
         this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
             const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(this.activeWorkspace)}`);
-            if (!res.ok)
-                throw new Error("Failed to scan worktrees");
+            if (!res.ok) throw new Error("Failed to scan worktrees");
+
             const worktrees = await res.json();
             this.sessionList.innerHTML = '';
+
             if (!worktrees || worktrees.length === 0) {
                 this.sessionList.innerHTML = '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
                 return;
             }
+
             if (targetCwd) {
                 this.activeCWD = targetCwd;
-            }
-            else {
-                const hasCwd = worktrees.some((wt) => normalizePath(wt.path) === normalizePath(this.activeCWD));
+            } else {
+                const hasCwd = worktrees.some((wt: any) => normalizePath(wt.path) === normalizePath(this.activeCWD));
                 if (!hasCwd) {
-                    const activeWT = worktrees.find((wt) => wt.active);
+                    const activeWT = worktrees.find((wt: any) => wt.active);
                     if (activeWT) {
                         this.activeCWD = activeWT.path;
-                    }
-                    else {
+                    } else {
                         this.activeCWD = worktrees[0].path;
                     }
                 }
             }
+
             localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+
             // Append a faint "-- No workspace --" section for sessions with no cwd.
             // Only relevant for agy (others don't have unworkspaced sessions).
             // Rendered after real worktrees, collapsed by default.
             const appendNoWorkspaceSection = () => {
-                if (this.activeCoder !== 'agy')
-                    return;
+                if (this.activeCoder !== 'agy') return;
                 const nwSection = document.createElement('div');
                 nwSection.className = 'worktree-section no-workspace-section';
                 nwSection.setAttribute('data-worktree-path', '--no-workspace--');
@@ -363,19 +387,21 @@ export class SessionsManager {
                     </div>
                     <div class="worktree-sessions-container"></div>
                 `;
-                const header = nwSection.querySelector('.worktree-header');
+                const header = nwSection.querySelector('.worktree-header') as HTMLElement;
                 header.addEventListener('click', async () => {
                     const isExpanded = nwSection.classList.toggle('expanded');
                     if (isExpanded) {
-                        await this.loadWorktreeSessions('--no-workspace--', nwSection.querySelector('.worktree-sessions-container'));
+                        await this.loadWorktreeSessions('--no-workspace--', nwSection.querySelector('.worktree-sessions-container')!);
                     }
                 });
                 this.sessionList.appendChild(nwSection);
             };
-            worktrees.forEach((wt) => {
+
+            worktrees.forEach((wt: any) => {
                 const wtSection = document.createElement('div');
                 wtSection.className = 'worktree-section';
                 wtSection.setAttribute('data-worktree-path', wt.path);
+
                 const isCurrentCWD = normalizePath(wt.path) === normalizePath(this.activeCWD);
                 if (wt.expanded || isCurrentCWD) {
                     wtSection.classList.add('expanded');
@@ -383,6 +409,7 @@ export class SessionsManager {
                 if (isCurrentCWD) {
                     wtSection.classList.add('active');
                 }
+
                 const parts = wt.path.split(/[/\\]/);
                 const baseName = parts[parts.length - 1] || wt.path;
                 // Same glyph as the tab uses for this path - lets the
@@ -390,6 +417,7 @@ export class SessionsManager {
                 // worktree section in the left panel without reading
                 // anything.
                 const wtGlyph = worktreeGlyph(wt.path);
+
                 // Cartouche (oval ring + bar) wraps the glyph when the
                 // worktree has any live/open tab. Egyptian cartouches
                 // historically framed royal names; reusing the motif
@@ -407,6 +435,7 @@ export class SessionsManager {
                 if (hasLiveTab) {
                     wtSection.classList.add('has-live-tab');
                 }
+
                 wtSection.innerHTML = `
                     <div class="worktree-header">
                         <svg class="icon chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -421,71 +450,82 @@ export class SessionsManager {
                         <div class="scanning-sessions">Scanning sessions...</div>
                     </div>
                 `;
-                const header = wtSection.querySelector('.worktree-header');
+
+                const header = wtSection.querySelector('.worktree-header') as HTMLElement;
                 header.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const isExpanded = wtSection.classList.toggle('expanded');
+
                     document.querySelectorAll('.worktree-section').forEach(sec => {
                         sec.classList.remove('active');
                         if (sec !== wtSection) {
                             sec.classList.remove('expanded');
                         }
                     });
+
                     wtSection.classList.add('active');
                     this.activeCWD = wt.path;
+
                     this.app.diffController.refreshDiff();
+
                     const activeTab = this.app.tabManager.getActiveTab();
                     if (activeTab && activeTab.coder === this.activeCoder) {
                         this.highlightActiveSession(activeTab.sessionId);
                     }
+
                     await this.saveWorktreeState();
+
                     if (isExpanded) {
-                        await this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
+                        await this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container')!);
                     }
                 });
+
                 this.sessionList.appendChild(wtSection);
+
                 if (wt.expanded || isCurrentCWD) {
-                    this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container'));
+                    this.loadWorktreeSessions(wt.path, wtSection.querySelector('.worktree-sessions-container')!);
                 }
             });
+
             appendNoWorkspaceSection();
             this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
-        }
-        catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${e.message}</div>`;
+
+        } catch (e) {
+            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${(e as Error).message}</div>`;
         }
     }
-    async loadWorktreeDirtyStates(workspace, requestId) {
+
+    async loadWorktreeDirtyStates(workspace: string, requestId: number): Promise<void> {
         try {
             const res = await fetch(`/api/git/worktree-dirty?cwd=${encodeURIComponent(workspace)}`);
-            if (!res.ok)
-                throw new Error('Failed to load worktree dirty state');
+            if (!res.ok) throw new Error('Failed to load worktree dirty state');
+
             const dirtyStates = await res.json();
             if (requestId !== this.worktreeDirtyRequestId || workspace !== this.activeWorkspace) {
                 return;
             }
+
             this.sessionList.querySelectorAll('.worktree-section').forEach(section => {
                 const path = section.getAttribute('data-worktree-path');
-                if (!path || path === '--no-workspace--')
-                    return;
+                if (!path || path === '--no-workspace--') return;
+
                 const indicator = section.querySelector('.worktree-dirty-indicator');
-                if (!indicator)
-                    return;
+                if (!indicator) return;
+
                 if (dirtyStates[path]) {
                     indicator.classList.remove('hidden');
-                }
-                else {
+                } else {
                     indicator.classList.add('hidden');
                 }
             });
-        }
-        catch (e) {
+        } catch (e) {
             if (requestId === this.worktreeDirtyRequestId) {
                 console.error('[worktrees] Failed to load dirty state:', e);
             }
         }
     }
-    async loadWorktreeSessions(wtPath, container) {
+
+    async loadWorktreeSessions(wtPath: string, container: HTMLElement): Promise<void> {
         container.innerHTML = '<div class="scanning-sessions">Scanning sessions...</div>';
         try {
             const res = await fetch(`/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`);
@@ -493,31 +533,35 @@ export class SessionsManager {
                 const errMsg = await res.text();
                 throw new Error(errMsg || "Failed to scan sessions");
             }
+
             const sessions = await res.json();
             container.innerHTML = '';
+
             if (!sessions || sessions.length === 0) {
                 container.innerHTML = '<div class="no-sessions-found">No sessions found</div>';
                 return;
             }
-            sessions.forEach((sess) => {
+
+            sessions.forEach((sess: any) => {
                 const item = document.createElement('div');
                 item.className = 'session-item';
                 item.setAttribute('data-session-id', sess.id);
                 item.setAttribute('data-worktree-path', wtPath);
+
                 const timeStr = new Date(sess.time_updated).toLocaleDateString(undefined, {
                     month: 'short',
                     day: 'numeric',
                     hour: '2-digit',
                     minute: '2-digit'
                 });
+
                 let isRunning = false;
                 let isIdleAlive = false;
                 for (const t of this.app.tabManager.tabs.values()) {
                     if (t.sessionId === sess.id && t.coder === this.activeCoder && !t.isDead) {
                         if (t.isBusy) {
                             isRunning = true;
-                        }
-                        else {
+                        } else {
                             // Tab exists and is alive, but the watcher
                             // is just monitoring it (not generating
                             // output). Eye of Horus = "being watched."
@@ -526,6 +570,7 @@ export class SessionsManager {
                         break;
                     }
                 }
+
                 // Three glyph states for a live session row:
                 //   ☥  ankh     — actively running, recent (< 2 min)
                 //   𓊽  djed    — running, stable (> 2 min)
@@ -538,13 +583,12 @@ export class SessionsManager {
                     const ageMs = Date.now() - new Date(sess.time_updated).getTime();
                     const isStable = ageMs > 2 * 60 * 1000;
                     statusGlyph = isStable ? '𓊽' : '☥';
-                    if (isStable)
-                        statusClass = 'stable';
-                }
-                else if (isIdleAlive) {
+                    if (isStable) statusClass = 'stable';
+                } else if (isIdleAlive) {
                     statusGlyph = '𓂀';
                     statusClass = 'idle';
                 }
+
                 item.innerHTML = `
                     <div class="session-meta-top">
                         <span class="session-title">${sess.title}</span>
@@ -564,20 +608,23 @@ export class SessionsManager {
                         ` : ''}
                     </div>
                 `;
+
                 item.addEventListener('click', (e) => {
-                    if (e.target.closest('.session-action-btn'))
-                        return;
+                    if ((e.target as Element).closest('.session-action-btn')) return;
                     this.launchSession(sess.id, sess.title);
+
                     const sidebar = document.getElementById('sidebar-panel');
                     if (sidebar) {
                         sidebar.classList.remove('drawer-open');
                     }
                 });
+
                 item.addEventListener('contextmenu', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     this._showSessionContextMenu(e, item, sess);
                 });
+
                 if (this.activeCoder === 'opencode' || this.activeCoder === 'pi') {
                     const reviewBtn = item.querySelector('.review-btn');
                     if (reviewBtn) {
@@ -591,6 +638,7 @@ export class SessionsManager {
                         });
                     }
                 }
+
                 if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
                     const renameBtn = item.querySelector('.rename-btn');
                     if (renameBtn) {
@@ -600,23 +648,26 @@ export class SessionsManager {
                         });
                     }
                 }
+
                 container.appendChild(item);
             });
+
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab && activeTab.coder === this.activeCoder) {
                 this.highlightActiveSession(activeTab.sessionId);
             }
-        }
-        catch (e) {
-            container.innerHTML = `<div class="error-sessions">Error: ${e.message}</div>`;
+        } catch (e) {
+            container.innerHTML = `<div class="error-sessions">Error: ${(e as Error).message}</div>`;
         }
     }
-    async saveWorktreeState() {
-        const expandedStates = {};
+
+    async saveWorktreeState(): Promise<void> {
+        const expandedStates: Record<string, boolean> = {};
         document.querySelectorAll('.worktree-section').forEach(sec => {
             const path = sec.getAttribute('data-worktree-path');
-            expandedStates[path] = sec.classList.contains('expanded');
+            expandedStates[path!] = sec.classList.contains('expanded');
         });
+
         try {
             await fetch('/api/config/worktree-state', {
                 method: 'POST',
@@ -627,33 +678,30 @@ export class SessionsManager {
                     expanded: expandedStates
                 })
             });
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[worktree-state] Failed to save worktree state:", e);
         }
     }
-    highlightActiveSession(sessionId) {
+
+    highlightActiveSession(sessionId: string): void {
         document.querySelectorAll('.session-item').forEach(item => {
             if (item.getAttribute('data-session-id') === sessionId) {
                 item.classList.add('active');
-            }
-            else {
+            } else {
                 item.classList.remove('active');
             }
         });
     }
-    async spawnNewSession() {
+
+    async spawnNewSession(): Promise<void> {
         try {
             let coderName = 'Shell';
-            if (this.activeCoder === 'opencode')
-                coderName = 'OpenCode';
-            else if (this.activeCoder === 'claude')
-                coderName = 'Claude';
-            else if (this.activeCoder === 'pi')
-                coderName = 'Pi';
-            else if (this.activeCoder === 'agy')
-                coderName = 'Agy';
+            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
+            else if (this.activeCoder === 'claude') coderName = 'Claude';
+            else if (this.activeCoder === 'pi') coderName = 'Pi';
+            else if (this.activeCoder === 'agy') coderName = 'Agy';
             const title = `+ ${coderName}`;
+
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -669,15 +717,17 @@ export class SessionsManager {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Failed to spawn session');
             }
+
             const data = await res.json();
             this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
+
             this.loadSessions();
-        }
-        catch (e) {
-            this.app.showToast(e.message, { type: 'error' });
+        } catch (e) {
+            this.app.showToast((e as Error).message, { type: 'error' });
         }
     }
-    async launchSession(sessionId, title, extraArgs = []) {
+
+    async launchSession(sessionId: string, title: string, extraArgs: string[] = []): Promise<void> {
         try {
             const res = await fetch('/api/terminals', {
                 method: 'POST',
@@ -695,61 +745,69 @@ export class SessionsManager {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Failed to connect session');
             }
+
             const data = await res.json();
             this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
+
             this.highlightActiveSession(sessionId);
-        }
-        catch (e) {
-            this.app.showToast(e.message, { type: 'error' });
+        } catch (e) {
+            this.app.showToast((e as Error).message, { type: 'error' });
         }
     }
-    _showSessionContextMenu(e, item, sess) {
+
+    _showSessionContextMenu(e: MouseEvent, item: HTMLElement, sess: any): void {
         this._dismissContextMenu();
+
         const menu = document.createElement('div');
         menu.className = 'session-ctx-menu';
         menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
-        const mkItem = (label, onClick) => {
+
+        const mkItem = (label: string, onClick: () => void) => {
             const el = document.createElement('div');
             el.className = 'session-ctx-item';
             el.textContent = label;
             el.addEventListener('click', () => { this._dismissContextMenu(); onClick(); });
             menu.appendChild(el);
         };
+
         mkItem('▶ Launch', () => {
             this.launchSession(sess.id, sess.title);
             const sidebar = document.getElementById('sidebar-panel');
-            if (sidebar)
-                sidebar.classList.remove('drawer-open');
+            if (sidebar) sidebar.classList.remove('drawer-open');
         });
+
         mkItem('⚙ Launch with args…', () => {
             this._openArgsInput(item, sess);
         });
+
         if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
             mkItem('✏ Rename', () => {
                 this.openInlineRenamer(item, sess.id, sess.title);
             });
         }
+
         document.body.appendChild(menu);
         this._contextMenu = menu;
+
         // Adjust if menu would overflow viewport bottom
         const rect = menu.getBoundingClientRect();
         if (rect.bottom > window.innerHeight) {
             menu.style.top = `${e.clientY - rect.height}px`;
         }
+
         this._ctxDismissMousedown = (ev) => {
-            if (!menu.contains(ev.target))
-                this._dismissContextMenu();
+            if (!menu.contains(ev.target as Node)) this._dismissContextMenu();
         };
         this._ctxDismissKey = (ev) => {
-            if (ev.key === 'Escape')
-                this._dismissContextMenu();
+            if (ev.key === 'Escape') this._dismissContextMenu();
         };
         setTimeout(() => {
-            document.addEventListener('mousedown', this._ctxDismissMousedown);
-            document.addEventListener('keydown', this._ctxDismissKey);
+            document.addEventListener('mousedown', this._ctxDismissMousedown!);
+            document.addEventListener('keydown', this._ctxDismissKey!);
         }, 0);
     }
-    _dismissContextMenu() {
+
+    _dismissContextMenu(): void {
         if (this._contextMenu) {
             this._contextMenu.remove();
             this._contextMenu = null;
@@ -763,56 +821,58 @@ export class SessionsManager {
             this._ctxDismissKey = null;
         }
     }
-    _openArgsInput(item, sess) {
+
+    _openArgsInput(item: HTMLElement, sess: any): void {
         const existing = item.nextElementSibling;
-        if (existing && existing.classList.contains('args-input-row'))
-            existing.remove();
+        if (existing && existing.classList.contains('args-input-row')) existing.remove();
+
         const row = document.createElement('div');
         row.className = 'args-input-row';
+
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'rename-input args-input';
         input.placeholder = 'extra args...';
+
         const hint = document.createElement('span');
         hint.className = 'args-input-hint';
         hint.textContent = '↵ launch · Esc cancel';
+
         row.appendChild(input);
         row.appendChild(hint);
         item.insertAdjacentElement('afterend', row);
         input.focus({ preventScroll: true });
+
         const submit = () => {
             const argsStr = input.value.trim();
             const extraArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : [];
             row.remove();
             this.launchSession(sess.id, sess.title, extraArgs);
             const sidebar = document.getElementById('sidebar-panel');
-            if (sidebar)
-                sidebar.classList.remove('drawer-open');
+            if (sidebar) sidebar.classList.remove('drawer-open');
         };
+
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                submit();
-            }
-            else if (e.key === 'Escape') {
-                e.preventDefault();
-                row.remove();
-            }
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); row.remove(); }
         });
+
         input.addEventListener('blur', () => {
-            setTimeout(() => { if (document.body.contains(row))
-                row.remove(); }, 150);
+            setTimeout(() => { if (document.body.contains(row)) row.remove(); }, 150);
         });
     }
-    openInlineRenamer(itemEl, sessionId, currentTitle) {
+
+    openInlineRenamer(itemEl: HTMLElement, sessionId: string, currentTitle: string): void {
         const titleEl = itemEl.querySelector('.session-title');
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'rename-input';
         input.value = currentTitle;
+
         titleEl?.replaceWith(input);
         input.focus({ preventScroll: true });
         input.select();
+
         const saveRename = async () => {
             const newName = input.value.trim();
             if (newName && newName !== currentTitle) {
@@ -824,33 +884,32 @@ export class SessionsManager {
                     });
                     if (res.ok) {
                         this.loadSessions();
-                    }
-                    else {
+                    } else {
                         throw new Error("Failed to save");
                     }
-                }
-                catch (e) {
-                    alert(`Failed to rename: ${e.message}`);
+                } catch (e) {
+                    alert(`Failed to rename: ${(e as Error).message}`);
                     this.loadSessions();
                 }
-            }
-            else {
+            } else {
                 this.loadSessions();
             }
         };
+
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 saveRename();
-            }
-            else if (e.key === 'Escape') {
+            } else if (e.key === 'Escape') {
                 this.loadSessions();
             }
         });
+
         input.addEventListener('blur', () => {
             saveRename();
         });
     }
-    openWorkspaceModal() {
+
+    openWorkspaceModal(): void {
         this.wsModalInput.value = '';
         this.wsModalSuggestions.innerHTML = '';
         this.wsModalSuggestions.classList.add('hidden');
@@ -858,17 +917,20 @@ export class SessionsManager {
         this.wsModal.classList.remove('hidden');
         setTimeout(() => this.wsModalInput.focus({ preventScroll: true }), 50);
     }
-    closeWorkspaceModal() {
+
+    closeWorkspaceModal(): void {
         this.wsModal.classList.add('hidden');
     }
-    submitWorkspaceModal() {
+
+    submitWorkspaceModal(): void {
         const path = this.wsModalInput.value.trim();
         if (path) {
             this.addWorkspace(path);
             this.closeWorkspaceModal();
         }
     }
-    async fetchAutocompleteSuggestions() {
+
+    async fetchAutocompleteSuggestions(): Promise<void> {
         const val = this.wsModalInput.value;
         if (!val) {
             this.wsModalSuggestions.innerHTML = '';
@@ -876,57 +938,64 @@ export class SessionsManager {
             this.selectedSuggestionIndex = -1;
             return;
         }
+
         try {
             const res = await fetch(`/api/fs/autocomplete?path=${encodeURIComponent(val)}`);
-            if (!res.ok)
-                throw new Error();
+            if (!res.ok) throw new Error();
             const suggestions = await res.json();
+
             this.wsModalSuggestions.innerHTML = '';
             this.selectedSuggestionIndex = -1;
+
             if (suggestions.length === 0) {
                 this.wsModalSuggestions.classList.add('hidden');
                 return;
             }
+
             this.wsModalSuggestions.classList.remove('hidden');
-            suggestions.forEach((sugg, idx) => {
+            suggestions.forEach((sugg: string, idx: number) => {
                 const div = document.createElement('div');
                 div.className = 'suggestion-item';
                 div.innerText = sugg;
+
                 div.addEventListener('click', () => {
                     this.wsModalInput.value = sugg;
                     this.wsModalSuggestions.classList.add('hidden');
                     this.selectedSuggestionIndex = -1;
                     this.wsModalInput.focus({ preventScroll: true });
                 });
+
                 this.wsModalSuggestions.appendChild(div);
             });
-        }
-        catch (e) {
+        } catch (e) {
             console.error("[autocomplete] Suggestion fetch error:", e);
         }
     }
-    highlightSuggestion(items) {
+
+    highlightSuggestion(items: NodeListOf<Element>): void {
         items.forEach((item, idx) => {
             if (idx === this.selectedSuggestionIndex) {
                 item.classList.add('selected');
                 item.scrollIntoView({ block: 'nearest' });
-            }
-            else {
+            } else {
                 item.classList.remove('selected');
             }
         });
     }
-    async openReviewTab(sess) {
+
+    async openReviewTab(sess: any): Promise<void> {
         const paneId = 'review-' + sess.id;
+
         if (this.app.tabManager.tabs.has(paneId)) {
             this.app.tabManager.switchTab(paneId);
             return;
         }
+
         this.app.tabManager.createTab(paneId, sess.id, `Review: ${sess.title}`, 'review', this.activeWorkspace, sess.cwd);
         const activeTab = this.app.tabManager.tabs.get(paneId);
-        if (!activeTab)
-            return;
+        if (!activeTab) return;
         const container = activeTab.termContainer;
+
         container.innerHTML = `
             <div class="review-header-bar">
                 <div class="review-header-left">
@@ -942,9 +1011,11 @@ export class SessionsManager {
             </div>
             <div class="review-content-body"></div>
         `;
-        const refreshBtn = container.querySelector('.review-refresh-btn');
-        const contentBody = container.querySelector('.review-content-body');
-        const loadData = async () => {
+
+        const refreshBtn = container.querySelector('.review-refresh-btn') as HTMLButtonElement;
+        const contentBody = container.querySelector('.review-content-body') as HTMLElement;
+
+        const loadData = async (): Promise<void> => {
             contentBody.innerHTML = `
                 <div class="review-loading">
                     <span class="spinner"></span>
@@ -953,35 +1024,35 @@ export class SessionsManager {
             `;
             try {
                 const res = await fetch(`/api/session-transcript?coder=${sess.coder}&id=${sess.id}&cwd=${encodeURIComponent(sess.cwd || '')}`);
-                if (!res.ok)
-                    throw new Error("Failed to load transcript");
+                if (!res.ok) throw new Error("Failed to load transcript");
                 const messages = await res.json();
+
                 contentBody.innerHTML = '';
                 const chatWrapper = document.createElement('div');
                 chatWrapper.className = 'review-chat-wrapper';
+
                 if (!messages || messages.length === 0) {
                     chatWrapper.innerHTML = '<div class="review-empty">No messages found in this session.</div>';
-                }
-                else {
-                    messages.forEach((msg) => {
+                } else {
+                    messages.forEach((msg: any) => {
                         const bubble = document.createElement('div');
                         bubble.className = `review-bubble role-${msg.role}`;
+
                         const header = document.createElement('div');
                         header.className = 'review-bubble-header';
+
                         const roleSpan = document.createElement('span');
                         if (msg.role === 'user') {
                             roleSpan.innerText = 'User';
-                        }
-                        else if (msg.role === 'assistant') {
+                        } else if (msg.role === 'assistant') {
                             roleSpan.innerText = 'Assistant';
-                        }
-                        else if (msg.role === 'toolResult') {
+                        } else if (msg.role === 'toolResult') {
                             roleSpan.innerText = 'Tool Output';
-                        }
-                        else {
+                        } else {
                             roleSpan.innerText = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
                         }
                         header.appendChild(roleSpan);
+
                         const copyBtn = document.createElement('button');
                         copyBtn.className = 'copy-bubble-btn';
                         copyBtn.title = 'Copy message markdown';
@@ -995,23 +1066,26 @@ export class SessionsManager {
                         copyBtn.addEventListener('click', () => {
                             this.app.tabManager.copyTextRobustly(msg.text, true);
                             const btnText = copyBtn.querySelector('span');
-                            btnText.innerText = 'Copied!';
+                            btnText!.innerText = 'Copied!';
                             copyBtn.classList.add('copied');
                             setTimeout(() => {
-                                btnText.innerText = 'Copy';
+                                btnText!.innerText = 'Copy';
                                 copyBtn.classList.remove('copied');
                             }, 2000);
                         });
                         header.appendChild(copyBtn);
                         bubble.appendChild(header);
+
                         const content = document.createElement('div');
                         content.className = 'review-bubble-content';
                         content.innerHTML = window.marked ? window.marked.parse(msg.text) : msg.text;
+
                         if (window.hljs) {
-                            content.querySelectorAll('pre code').forEach((block) => {
+                            content.querySelectorAll('pre code').forEach((block: Element) => {
                                 window.hljs.highlightElement(block);
                             });
                         }
+
                         bubble.appendChild(content);
                         chatWrapper.appendChild(bubble);
                     });
@@ -1020,16 +1094,16 @@ export class SessionsManager {
                 setTimeout(() => {
                     chatWrapper.scrollTop = chatWrapper.scrollHeight;
                 }, 150);
-            }
-            catch (e) {
+            } catch (e) {
                 contentBody.innerHTML = `
                     <div class="review-error">
                         <h3>Error loading transcript</h3>
-                        <p>${e.message}</p>
+                        <p>${(e as Error).message}</p>
                     </div>
                 `;
             }
         };
+
         refreshBtn.addEventListener('click', loadData);
         await loadData();
     }
