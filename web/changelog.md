@@ -2,7 +2,21 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## v0.10.0 — 2026-07-14
+## v0.10.1 — 2026-07-15
+
+A focused terminal-control reliability release.
+
+### Fixed
++- **User scroll wins over stale restoration.** The established 10ms/300ms terminal stabilization loop remains intact, but a real wheel, touch, or scrollbar gesture now cancels an already-pending stale line restore instead of snapping output back to an earlier position.
++- **Mobile scroll position.** Generic page scrolling no longer resets the document to its origin; only input-focus keyboard handling corrects iOS focus-scroll.
++- **Exact terminal bottom state.** A viewport one line above xterm's live bottom is no longer reported as being at bottom.
++- **Close behavior.** Intentional tab finalization no longer produces a disconnect banner, and the Undo grace after closing a tab is now three seconds.
++- **Staged input.** The visible `Send ↵` control remains available beside the pi shortcut.
++
++### Maintenance
++- CI uses the current Node 24 and matching current GitHub Actions releases.
++
++## v0.10.0 — 2026-07-14
 
 A stability-and-signal release: phi is now clearer about live terminal output,
 and the browser client has a durable TypeScript source pipeline.
