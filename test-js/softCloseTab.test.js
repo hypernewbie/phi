@@ -8,7 +8,7 @@ import { TabManager } from '../web/terminal.js';
 //   undoCloseTab       -> restore
 //   finalizeCloseTab   -> actually kill the PTY
 //
-// The grace timer is 5s (TabManager.SOFT_CLOSE_GRACE_MS). These tests
+// The grace timer is 3s (TabManager.SOFT_CLOSE_GRACE_MS). These tests
 // use vi.useFakeTimers so we can advance the clock without waiting in
 // real time. The MAX_SOFT_CLOSED_TABS cap = 3.
 //
@@ -125,6 +125,10 @@ afterEach(() => {
 // ---- softCloseTab ----------------------------------------------------
 
 describe('softCloseTab - grace period behavior', () => {
+    it('uses a three-second undo grace', () => {
+        expect(TabManager.SOFT_CLOSE_GRACE_MS).toBe(3000);
+    });
+
     it('marks the tab soft-closed without immediately killing the PTY', () => {
         const tm = makeTm({ withTabs: ['a'] });
         const tab = tm.tabs.get('a');
@@ -165,7 +169,7 @@ describe('softCloseTab - grace period behavior', () => {
 
     it('second closeTab on a soft-closing tab force-finalizes immediately', () => {
         // "I really mean it" - user clicked × twice. Finalize right away
-        // (no need to wait the full 5s grace).
+        // (no need to wait the full 3s grace).
         const tm = makeTm({ withTabs: ['a'] });
         const finalizeSpy = vi.spyOn(tm, 'finalizeCloseTab');
         tm.softCloseTab('a'); // first ×
