@@ -3,7 +3,7 @@ import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { KanbanManager } from './kanban.js';
-import { escapeHtml } from './util.js';
+import { escapeHtml, buildPhiFaviconSvg } from './util.js';
 import { SyncManager } from './sync.js';
 
 // NOTE: When adding a new theme color, you must update:
@@ -153,6 +153,11 @@ export class App {
     constructor() {
         this.codersPresetRegistry = {};
         this.accentColorSelect = document.getElementById('accent-color-select');
+        // Browser chrome state is independent from the in-app CPU logo state.
+        // The TabManager toggles this only when live PTY output starts/stops.
+        this.terminalActivity = false;
+        this.faviconAccent = null;
+        this.faviconAccentDim = null;
         
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -727,12 +732,31 @@ export class App {
             this.tabManager.applyThemeToAllActiveTerminals(theme.accent);
         }
 
-        // Dynamically update SVG favicon to match the selected theme
+        // Dynamically update SVG favicon to match the selected theme.
         this.updateFavicon(theme.accent, theme.accentDim);
     }
 
+    // Browser chrome's live-output state is intentionally separate from the
+    // in-app Phi logo, which already visualizes CPU load. Re-render only on a
+    // quiet ↔ output transition; never animate or churn the tab favicon.
+    setTerminalActivity(hasActivity) {
+        const next = Boolean(hasActivity);
+        if (this.terminalActivity === next) return;
+        this.terminalActivity = next;
+        this.updateFavicon();
+    }
+
     updateFavicon(accent, accentDim) {
-        // Remove all existing icon links to force Safari to clear its cache hook for the node
+        // Theme application supplies explicit colors; an early terminal write
+        // can arrive before config does, in which case CSS already has the
+        // boot-time palette from index.html.
+        if (accent) this.faviconAccent = accent;
+        if (accentDim) this.faviconAccentDim = accentDim;
+        const styles = getComputedStyle(document.documentElement);
+        const faviconAccent = this.faviconAccent || styles.getPropertyValue('--accent').trim();
+        const faviconAccentDim = this.faviconAccentDim || styles.getPropertyValue('--accent-dim').trim();
+
+        // Remove all existing icon links to force Safari to clear its cache hook for the node.
         const links = document.querySelectorAll("link[rel~='icon']");
         links.forEach(l => l.remove());
         
@@ -740,18 +764,7 @@ export class App {
         link.rel = 'icon';
         link.type = 'image/svg+xml';
         
-        const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <defs>
-    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="${accent}" />
-      <stop offset="100%" stop-color="${accentDim}" />
-    </radialGradient>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#glow)"/>
-  <text x="50%" y="60%" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">Φ</text>
-</svg>
-        `.trim();
+        const svg = buildPhiFaviconSvg(faviconAccent, faviconAccentDim, this.terminalActivity);
         
         link.href = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
         document.getElementsByTagName('head')[0].appendChild(link);

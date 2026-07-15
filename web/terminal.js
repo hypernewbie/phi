@@ -2,7 +2,13 @@
 
 import { PTYWebSocket } from './ws.js';
 import { normalizePath } from './sessions.js';
-import { projectWorktreeLabel, cpuLevel, worktreeGlyph } from './util.js';
+import {
+    projectWorktreeLabel,
+    cpuLevel,
+    worktreeGlyph,
+    getTerminalActivityState,
+    formatTerminalActivityTitle,
+} from './util.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -805,6 +811,34 @@ export class TabManager {
     getActiveTab() {
         return this.tabs.get(this.activePaneId);
     }
+
+    // Browser chrome has a deliberately small, composable language:
+    // Φ = all quiet, ϕ = a live terminal emitted output recently, and
+    // the pre-existing leading ● remains exclusively for done/attention.
+    // The header cursor mirrors only the live-output half of that state.
+    updateDocumentTitle() {
+        const state = getTerminalActivityState(this.tabs.values());
+        document.title = formatTerminalActivityTitle(this.app.hostname, state);
+
+        const indicator = document.getElementById('terminal-activity-indicator');
+        if (indicator) {
+            const hostnameKnown = Boolean(this.app.hostname);
+            indicator.classList.toggle('hidden', !hostnameKnown);
+            indicator.classList.toggle('is-active', state.hasActivity);
+            indicator.textContent = state.hasActivity ? '▍' : '—';
+            const label = state.hasActivity
+                ? 'Terminal output on one or more tabs'
+                : 'All terminal tabs are quiet';
+            indicator.setAttribute('aria-label', label);
+            indicator.title = label;
+        }
+
+        // App owns favicon generation; guard keeps TabManager independently
+        // usable in focused tests and lightweight embeds.
+        if (this.app && typeof this.app.setTerminalActivity === 'function') {
+            this.app.setTerminalActivity(state.hasActivity);
+        }
+    }
     
     focusActiveTerminal() {
         const activeTab = this.getActiveTab();
@@ -839,6 +873,9 @@ export class TabManager {
             if (!tabInfo.pinned) {
                 this.syncBackendPin(tabInfo.paneId, true);
             }
+            // First byte after quiet is the only transition we need to render.
+            // Subsequent writes stay in the same live-output state.
+            this.updateDocumentTitle();
         }
 
         if (!tabInfo.writePending) {
@@ -1281,6 +1318,7 @@ export class TabManager {
                 term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
                 tabInfo.isDead = true;
                 tabEl.classList.add('dead');
+                this.updateDocumentTitle();
                 this._showReconnectOverlay(tabInfo);
                 this.updateDisconnectBanner();
                 this.maybeAutoReconnect(tabInfo);
@@ -1905,6 +1943,7 @@ export class TabManager {
         }
 
         this.tabs.delete(paneId);
+        this.updateDocumentTitle();
         this.updateDisconnectBanner();
         this.saveTabsState();
 
@@ -2402,6 +2441,7 @@ export class TabManager {
             tabInfo.exitCode = control.code;
             tabInfo.isDead = true;
             tabInfo.tabEl.classList.add('dead');
+            this.updateDocumentTitle();
             this._showReconnectOverlay(tabInfo);
         } else if (control.type === 'replay-complete') {
             if (localStorage.getItem('phi_replay_divider') === 'true') {
@@ -2495,6 +2535,7 @@ export class TabManager {
                     } else {
                         tabInfo.isDead = true;
                         tabInfo.tabEl.classList.add('dead');
+                        this.updateDocumentTitle();
                         this._showReconnectOverlay(tabInfo);
                         this.updateDisconnectBanner();
                         this.maybeAutoReconnect(tabInfo);
@@ -2505,7 +2546,13 @@ export class TabManager {
                     tabInfo.reconnectAttempts = 0;
                     tabInfo.reconnectInFlight = false;
                     tabInfo.isDead = false;
+                    // A reconnect starts quiet. Without this reset, a PTY
+                    // that disconnected while busy would revive the ϕ mark
+                    // before it had emitted any new output.
+                    tabInfo.isBusy = false;
+                    tabInfo.lastOutputAt = undefined;
                     tabInfo.tabEl.classList.remove('dead');
+                    this.updateDocumentTitle();
                     if (overlay) overlay.remove();
                     tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
                     this.updateDisconnectBanner();
@@ -2595,6 +2642,7 @@ export class TabManager {
                     } else {
                         tabInfo.isDead = true;
                         tabInfo.tabEl.classList.add('dead');
+                        this.updateDocumentTitle();
                         this._showReconnectOverlay(tabInfo);
                         this.updateDisconnectBanner();
                     }
@@ -2602,7 +2650,10 @@ export class TabManager {
                 () => {
                     opened = true;
                     tabInfo.isDead = false;
+                    tabInfo.isBusy = false;
+                    tabInfo.lastOutputAt = undefined;
                     tabInfo.tabEl.classList.remove('dead');
+                    this.updateDocumentTitle();
                     if (overlay) overlay.remove();
                     this.updateDisconnectBanner();
                     
@@ -3802,6 +3853,7 @@ export class TabManager {
 
     pollTerminalIdleAndNotifications() {
         const isTabVisible = !document.hidden;
+        let statusChanged = false;
 
         for (const tab of this.tabs.values()) {
             if (tab.isDead) continue;
@@ -3809,12 +3861,10 @@ export class TabManager {
             const isActiveAndVisible = (tab.paneId === this.activePaneId) && isTabVisible;
 
             // If the tab is currently focused and visible, clear attention states immediately.
-            if (isActiveAndVisible) {
-                if (tab.isAttention) {
-                    tab.isAttention = false;
-                    tab.tabEl.classList.remove('has-attention');
-                    this.updateDocumentTitle();
-                }
+            if (isActiveAndVisible && tab.isAttention) {
+                tab.isAttention = false;
+                tab.tabEl.classList.remove('has-attention');
+                statusChanged = true;
             }
 
             // Track busy-to-idle transition for active terminal connections.
@@ -3823,6 +3873,7 @@ export class TabManager {
                 if (idleTime > 3000) {
                     // Output has stopped for 3 seconds. The PTY transitioned to idle!
                     tab.isBusy = false;
+                    statusChanged = true;
 
                     // Release backend pin if NOT manually pinned by the user.
                     if (!tab.pinned) {
@@ -3847,8 +3898,8 @@ export class TabManager {
 
                         // Trigger attention indicator.
                         tab.isAttention = true;
+                        statusChanged = true;
                         tab.tabEl.classList.add('has-attention');
-                        this.updateDocumentTitle();
 
                         // Escalate with notification chimes and browser popups.
                         this.triggerAttentionNotification(tab, promptDetected);
@@ -3856,23 +3907,10 @@ export class TabManager {
                 }
             }
         }
-    }
 
-    updateDocumentTitle() {
-        let anyAttention = false;
-        for (const tab of this.tabs.values()) {
-            if (tab.isAttention) {
-                anyAttention = true;
-                break;
-            }
-        }
-
-        const cleanTitle = document.title.startsWith('● ') ? document.title.substring(2) : document.title;
-        if (anyAttention) {
-            document.title = '● ' + cleanTitle;
-        } else {
-            document.title = cleanTitle;
-        }
+        // A single render after the scan covers both the ϕ → Φ quiet
+        // transition and any completion attention marker without title churn.
+        if (statusChanged) this.updateDocumentTitle();
     }
 
     triggerAttentionNotification(tab, promptDetected) {
@@ -3915,17 +3953,16 @@ export class TabManager {
     }
 
     clearAttentionIndicators() {
-        // Restore document title.
-        if (document.title.startsWith('● ')) {
-            document.title = document.title.substring(2);
-        }
-        
-        // Clear isAttention flags.
+        // Clear the completion/attention layer, then recompose the title.
+        // This intentionally preserves ϕ when another tab is still emitting.
+        let cleared = false;
         for (const tab of this.tabs.values()) {
             if (tab.isAttention) {
                 tab.isAttention = false;
                 tab.tabEl.classList.remove('has-attention');
+                cleared = true;
             }
         }
+        if (cleared) this.updateDocumentTitle();
     }
 }
