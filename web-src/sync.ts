@@ -1,26 +1,42 @@
 /* Φ phi — AI Sync Board Manager */
+
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
+
+export interface ToastOptions {
+    type?: 'info' | 'success' | 'error';
+    title?: string;
+    duration?: number;
+}
+
+export interface AppLike {
+    showToast(message: string, opts?: ToastOptions): void;
+    sessionsManager: any;
+    diffController: any;
+}
+
 export class SyncManager {
-    app;
-    panelEl;
-    pollInterval;
-    coordinatorInput;
-    addBtn;
-    formContainer;
-    formKey;
-    formValue;
-    formCancel;
-    formSubmit;
-    messagesList;
-    constructor(app) {
+    app: AppLike;
+    panelEl: HTMLElement | null;
+    pollInterval: ReturnType<typeof setInterval> | null;
+    coordinatorInput!: HTMLInputElement;
+    addBtn!: HTMLElement;
+    formContainer!: HTMLElement;
+    formKey!: HTMLInputElement;
+    formValue!: HTMLTextAreaElement;
+    formCancel!: HTMLElement;
+    formSubmit!: HTMLElement;
+    messagesList!: HTMLElement;
+
+    constructor(app: AppLike) {
         this.app = app;
         this.panelEl = document.getElementById('sync-panel');
         this.pollInterval = null;
         this.setupPanel();
     }
-    setupPanel() {
-        if (!this.panelEl)
-            return;
+
+    setupPanel(): void {
+        if (!this.panelEl) return;
+
         this.panelEl.innerHTML = `
             <div class="sync-header">
                 <div class="sync-coordinator-bar">
@@ -45,14 +61,16 @@ export class SyncManager {
                 <div class="sync-empty-state">No messages synced.</div>
             </div>
         `;
-        this.coordinatorInput = document.getElementById('sync-coordinator-input');
-        this.addBtn = document.getElementById('sync-add-btn');
-        this.formContainer = document.getElementById('sync-form-container');
-        this.formKey = document.getElementById('sync-form-key');
-        this.formValue = document.getElementById('sync-form-value');
-        this.formCancel = document.getElementById('sync-form-cancel');
-        this.formSubmit = document.getElementById('sync-form-submit');
-        this.messagesList = document.getElementById('sync-messages-list');
+
+        this.coordinatorInput = document.getElementById('sync-coordinator-input') as HTMLInputElement;
+        this.addBtn = document.getElementById('sync-add-btn') as HTMLElement;
+        this.formContainer = document.getElementById('sync-form-container') as HTMLElement;
+        this.formKey = document.getElementById('sync-form-key') as HTMLInputElement;
+        this.formValue = document.getElementById('sync-form-value') as HTMLTextAreaElement;
+        this.formCancel = document.getElementById('sync-form-cancel') as HTMLElement;
+        this.formSubmit = document.getElementById('sync-form-submit') as HTMLElement;
+        this.messagesList = document.getElementById('sync-messages-list') as HTMLElement;
+
         // Event listeners
         this.coordinatorInput.addEventListener('blur', () => this.saveCoordinator());
         this.coordinatorInput.addEventListener('keydown', (e) => {
@@ -60,6 +78,7 @@ export class SyncManager {
                 this.coordinatorInput.blur();
             }
         });
+
         this.addBtn.addEventListener('click', () => {
             this.formContainer.classList.remove('hidden');
             this.formKey.value = '';
@@ -67,13 +86,17 @@ export class SyncManager {
             this.formKey.disabled = false;
             this.formKey.focus({ preventScroll: true });
         });
+
         this.formCancel.addEventListener('click', () => {
             this.formContainer.classList.add('hidden');
         });
+
         this.formSubmit.addEventListener('click', () => this.submitMessage());
+
         this.startPolling();
     }
-    async saveCoordinator() {
+
+    async saveCoordinator(): Promise<void> {
         const url = this.coordinatorInput.value.trim();
         try {
             await fetch('/api/config/sync-coordinator', {
@@ -83,16 +106,17 @@ export class SyncManager {
             });
             await this.app.sessionsManager.loadConfig(); // reload global config
             this.refreshMessages();
-        }
-        catch (e) {
+        } catch (e) {
             console.error('Failed to save sync coordinator:', e);
-            this.app.showToast('Failed to save coordinator: ' + e.message, { type: 'error' });
+            this.app.showToast('Failed to save coordinator: ' + (e as Error).message, { type: 'error' });
         }
     }
-    startPolling() {
-        if (this.pollInterval)
-            clearInterval(this.pollInterval);
+
+    startPolling(): void {
+        if (this.pollInterval) clearInterval(this.pollInterval);
+
         this.refreshMessages();
+
         this.pollInterval = setInterval(() => {
             const diffCtrl = this.app.diffController;
             if (diffCtrl && diffCtrl.isPanelOpen && diffCtrl.activeTab === 'sync') {
@@ -100,13 +124,16 @@ export class SyncManager {
             }
         }, 15000);
     }
-    async getCoordinatorUrl() {
+
+    async getCoordinatorUrl(): Promise<string> {
         const config = this.app.sessionsManager.config;
         return (config && config.sync_coordinator) || 'http://localhost:7070';
     }
-    async fetchWithProxy(endpoint, options = {}) {
+
+    async fetchWithProxy(endpoint: string, options: RequestInit = {}): Promise<Response> {
         const coordinator = await this.getCoordinatorUrl();
         const proxyUrl = buildProxyUrl(coordinator, endpoint);
+
         const res = await fetch(proxyUrl, options);
         if (!res.ok) {
             const text = await res.text().catch(() => 'Unknown error');
@@ -114,31 +141,38 @@ export class SyncManager {
         }
         return res;
     }
-    async refreshMessages() {
+
+    async refreshMessages(): Promise<void> {
         try {
             if (document.activeElement !== this.coordinatorInput) {
                 this.coordinatorInput.value = await this.getCoordinatorUrl();
             }
+
             const res = await this.fetchWithProxy('/api/sync/messages');
             const messages = await res.json();
+
             this.renderMessages(messages);
-        }
-        catch (e) {
+        } catch (e) {
             console.error('[sync] Failed to refresh:', e);
-            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${e.message}</div>`;
+            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${(e as Error).message}</div>`;
         }
     }
-    renderMessages(messages) {
+
+    renderMessages(messages: any[]): void {
         if (!messages || messages.length === 0) {
             this.messagesList.innerHTML = '<div class="sync-empty-state">No messages synced.</div>';
             return;
         }
-        messages.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+        messages.sort((a, b) => (new Date(b.updated_at) as any) - (new Date(a.updated_at) as any));
+
         this.messagesList.innerHTML = '';
         messages.forEach(msg => {
             const card = document.createElement('div');
             card.className = 'sync-card';
+
             const localTime = new Date(msg.updated_at).toLocaleTimeString();
+
             card.innerHTML = `
                 <div class="sync-card-header">
                     <span class="sync-card-key" title="${this.escapeHtml(msg.key)}">${this.escapeHtml(msg.key)}</span>
@@ -154,11 +188,13 @@ export class SyncManager {
                 <div class="sync-card-value collapsed">${this.escapeHtml(msg.value)}</div>
                 <div class="sync-card-footer">${localTime}</div>
             `;
-            const valEl = card.querySelector('.sync-card-value');
+
+            const valEl = card.querySelector('.sync-card-value')!;
             valEl.addEventListener('click', () => {
                 valEl.classList.toggle('collapsed');
             });
-            card.querySelector('.sync-edit-btn').addEventListener('click', (e) => {
+
+            card.querySelector('.sync-edit-btn')!.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.formContainer.classList.remove('hidden');
                 this.formKey.value = msg.key;
@@ -166,7 +202,8 @@ export class SyncManager {
                 this.formValue.value = msg.value;
                 this.formValue.focus({ preventScroll: true });
             });
-            card.querySelector('.sync-del-btn').addEventListener('click', async (e) => {
+
+            card.querySelector('.sync-del-btn')!.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 if (confirm(`Delete sync key "${msg.key}"?`)) {
                     try {
@@ -174,22 +211,24 @@ export class SyncManager {
                             method: 'DELETE'
                         });
                         this.refreshMessages();
-                    }
-                    catch (err) {
-                        this.app.showToast('Failed to delete: ' + err.message, { type: 'error' });
+                    } catch (err) {
+                        this.app.showToast('Failed to delete: ' + (err as Error).message, { type: 'error' });
                     }
                 }
             });
+
             this.messagesList.appendChild(card);
         });
     }
-    async submitMessage() {
+
+    async submitMessage(): Promise<void> {
         const key = this.formKey.value.trim();
         const value = this.formValue.value;
         if (!key) {
             this.app.showToast('Key is required', { type: 'error' });
             return;
         }
+
         try {
             await this.fetchWithProxy('/api/sync/messages', {
                 method: 'POST',
@@ -198,12 +237,12 @@ export class SyncManager {
             });
             this.formContainer.classList.add('hidden');
             this.refreshMessages();
-        }
-        catch (e) {
-            this.app.showToast('Failed to save message: ' + e.message, { type: 'error' });
+        } catch (e) {
+            this.app.showToast('Failed to save message: ' + (e as Error).message, { type: 'error' });
         }
     }
-    escapeHtml(str) {
+
+    escapeHtml(str: string): string {
         return escapeHtmlUtil(str);
     }
 }
