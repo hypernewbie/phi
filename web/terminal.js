@@ -483,20 +483,18 @@ export class TabManager {
                 this.updateDirectModeUI(activeTab);
             }
             if (window.innerWidth <= 768) {
-                // updateLayoutPosition already forces window.scrollTo(0,0) on
-                // mobile to counteract iOS WebKit's focus-scroll behaviour.
-                // Run it twice (now + 50ms) so we cover the keyboard-show
-                // animation; the second pass is a defensive re-fit in case
-                // the keyboard appeared with a delay.
-                this.app.updateLayoutPosition?.(true);
-                setTimeout(() => this.app.updateLayoutPosition?.(true), 50);
+                // Only an input-focus transition may correct iOS WebKit's
+                // focus-scroll. Generic page/terminal scrolling must never
+                // be reset to the document origin.
+                this.app.updateLayoutPosition?.(true, true);
+                setTimeout(() => this.app.updateLayoutPosition?.(true, true), 50);
             }
         });
 
         this.inputTextArea.addEventListener('blur', () => {
             if (window.innerWidth <= 768) {
-                // Same defensive re-fit on blur - keyboard is hiding, layout
-                // needs to snap back to full height.
+                // Refit after the keyboard hides, but do not reset document
+                // scroll: the user may already be scrolling terminal output.
                 setTimeout(() => this.app.updateLayoutPosition?.(true), 150);
             }
         });
@@ -894,8 +892,7 @@ export class TabManager {
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
             const buffer = tab.term.buffer.active;
-            tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
-            tab.lastScrollY = buffer.viewportY;
+            tab.isAtBottom = buffer.viewportY >= buffer.baseY;
         }
 
         if (tab.directMode) {
@@ -1380,7 +1377,7 @@ export class TabManager {
             }
             const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
             if (!buf) return;
-            const atBottom = buf.viewportY >= buf.baseY - 1;
+            const atBottom = buf.viewportY >= buf.baseY;
             if (atBottom) {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
@@ -1421,8 +1418,7 @@ export class TabManager {
             if (tab) {
                 // 1. Capture scroll state BEFORE any focus or UI changes
                 const buffer = tab.term.buffer.active;
-                tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
-                tab.lastScrollY = buffer.viewportY;
+                tab.isAtBottom = buffer.viewportY >= buffer.baseY;
                 
                 // 2. Toggle mode
                 tab.directMode = !tab.directMode;
@@ -1502,8 +1498,7 @@ export class TabManager {
         const prevTab = this.getActiveTab();
         if (prevTab) {
             if (prevTab.term) {
-                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY - 1;
-                prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
+                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY;
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
@@ -1905,6 +1900,7 @@ export class TabManager {
         }
         this._stopSoftCloseCountdown(tab);
         this._removeSoftCloseOverlay(tab);
+        this._stopScrollFollow(tab);
 
         // Kill the server-side PTY process. We previously swallowed
         // failures with .catch(() => {}) — that hid the actual user
@@ -2919,35 +2915,31 @@ export class TabManager {
         this.inputTextArea.style.height = newHeight + 'px';
     }
 
-    _spamScroll(tabInfo, isAtBottom, scrollY = null) {
-        if (!tabInfo || tabInfo.isDead) return;
-        
-        clearInterval(tabInfo.spamInterval);
-        clearTimeout(tabInfo.stopSpamTimeout);
-        
-        tabInfo.isSpammingBottom = isAtBottom;
-        tabInfo.spamScrollY = scrollY;
-        
-        tabInfo.spamInterval = setInterval(() => {
-            if (isAtBottom) {
-                tabInfo.term.scrollToBottom();
-            } else if (scrollY !== null) {
-                tabInfo.term.scrollToLine(scrollY);
-            }
-        }, 10);
-        
-        tabInfo.stopSpamTimeout = setTimeout(() => {
-            clearInterval(tabInfo.spamInterval);
-            tabInfo.spamInterval = null;
-            tabInfo.stopSpamTimeout = null;
+    _stopScrollFollow(tabInfo) {
+        if (!tabInfo) return;
+        if (tabInfo.scrollFollowRaf !== undefined && tabInfo.scrollFollowRaf !== null) {
+            cancelAnimationFrame(tabInfo.scrollFollowRaf);
+        }
+        tabInfo.scrollFollowRaf = null;
+        tabInfo.isSpammingBottom = undefined;
+    }
+
+    // Reassert the live bottom only after explicit intent (send, activation,
+    // reconnect). One immediate move plus one animation-frame recheck covers
+    // xterm's fit/reflow timing without repeatedly fighting a user's scroll.
+    _spamScroll(tabInfo, isAtBottom) {
+        if (!tabInfo) return;
+        this._stopScrollFollow(tabInfo);
+        if (tabInfo.isDead || !isAtBottom) return;
+
+        tabInfo.isSpammingBottom = true;
+        tabInfo.term.scrollToBottom();
+        tabInfo.scrollFollowRaf = requestAnimationFrame(() => {
+            tabInfo.scrollFollowRaf = null;
+            if (tabInfo.isDead || !tabInfo.isSpammingBottom) return;
+            tabInfo.term.scrollToBottom();
             tabInfo.isSpammingBottom = undefined;
-            tabInfo.spamScrollY = undefined;
-            if (isAtBottom) {
-                tabInfo.term.scrollToBottom();
-            } else if (scrollY !== null) {
-                tabInfo.term.scrollToLine(scrollY);
-            }
-        }, 300);
+        });
     }
 
     _spamScrollToBottom(tabInfo) {
@@ -3058,8 +3050,7 @@ export class TabManager {
         // Save the correct, stable scroll state before the continuous resize begins
         if (activeTab.isAtBottom === undefined) {
             const buffer = activeTab.term.buffer.active;
-            activeTab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
-            activeTab.lastScrollY = buffer.viewportY;
+            activeTab.isAtBottom = buffer.viewportY >= buffer.baseY;
         }
         this.isResizing = true;
     }
@@ -3069,7 +3060,6 @@ export class TabManager {
         const activeTab = this.getActiveTab();
         if (activeTab) {
             activeTab.isAtBottom = undefined;
-            activeTab.lastScrollY = undefined;
         }
     }
 
@@ -3087,33 +3077,31 @@ export class TabManager {
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
             let isAtBottom;
-            let scrollY;
-            
-            // If we are resizing continuously, cache these stable coordinates on the tab
+
+            // During a continuous resize, retain only whether the user was at
+            // the live bottom. xterm owns non-bottom scrollback preservation;
+            // forcing a stale absolute line after fit can turn a transient 0
+            // into a jump to the top of the terminal.
             if (this.isResizing) {
-                isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
-                scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
+                isAtBottom = activeTab.isAtBottom !== undefined
+                    ? activeTab.isAtBottom
+                    : (buffer.viewportY >= buffer.baseY);
                 activeTab.isAtBottom = isAtBottom;
-                activeTab.lastScrollY = scrollY;
-            } else if (activeTab.spamInterval && activeTab.isSpammingBottom !== undefined) {
-                // If a spam scroll is already trying to force the scroll position, respect its intended target 
-                // instead of capturing a mid-flight coordinate.
-                isAtBottom = activeTab.isSpammingBottom;
-                scrollY = activeTab.spamScrollY;
+            } else if (activeTab.isSpammingBottom) {
+                isAtBottom = true;
             } else {
-                isAtBottom = (buffer.viewportY >= buffer.baseY - 1);
-                scrollY = buffer.viewportY;
+                isAtBottom = buffer.viewportY >= buffer.baseY;
             }
 
             activeTab.fitAddon.fit();
-            
-            // Restore scroll state POST-FIT using the unified helper to synchronise viewport
-            this._spamScroll(activeTab, isAtBottom, scrollY);
+
+            // Only explicit live-bottom state is restored after fitting.
+            // Non-bottom scrollback is left entirely under user/xterm control.
+            this._spamScroll(activeTab, isAtBottom);
             
             // Clear temporary saved scroll state only if NOT in the middle of a continuous resize
             if (!this.isResizing) {
                 activeTab.isAtBottom = undefined;
-                activeTab.lastScrollY = undefined;
             }
             
             this.sendResizeToBackend(activeTab);

@@ -163,6 +163,81 @@ describe('scroll-related source contracts', () => {
     });
 });
 
+describe('terminal scroll ownership', () => {
+    it('does not force a non-bottom viewport to any remembered line', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = {
+            isDead: false,
+            term: { scrollToBottom: vi.fn() },
+        };
+
+        tm._spamScroll(tab, false);
+
+        expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
+        expect(tab.isSpammingBottom).toBeUndefined();
+        expect(tab.scrollFollowRaf).toBeNull();
+    });
+
+    it('does not follow bottom after the tab dies before its frame recheck', () => {
+        const tm = Object.create(TabManager.prototype);
+        const frameCallbacks = [];
+        vi.stubGlobal('requestAnimationFrame', (callback) => {
+            frameCallbacks.push(callback);
+            return frameCallbacks.length;
+        });
+        vi.stubGlobal('cancelAnimationFrame', vi.fn());
+        const tab = {
+            isDead: false,
+            term: { scrollToBottom: vi.fn() },
+        };
+
+        tm._spamScroll(tab, true);
+        tab.isDead = true;
+        frameCallbacks[0]();
+
+        expect(tab.term.scrollToBottom).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves user scrollback alone when fitting a non-bottom terminal', () => {
+        const tm = Object.create(TabManager.prototype);
+        const tab = {
+            isDead: false,
+            term: {
+                options: { fontSize: 14 },
+                buffer: { active: { viewportY: 4, baseY: 5 } },
+            },
+            fitAddon: { fit: vi.fn() },
+        };
+        tm.getActiveTab = () => tab;
+        tm.isResizing = false;
+        tm._spamScroll = vi.fn();
+        tm.sendResizeToBackend = vi.fn();
+
+        tm.fitActiveTerminal();
+
+        expect(tab.fitAddon.fit).toHaveBeenCalledOnce();
+        expect(tm._spamScroll).toHaveBeenCalledWith(tab, false);
+    });
+});
+
+describe('scroll source contracts', () => {
+    it('has one exact at-bottom predicate and no absolute scrollback restore', async () => {
+        const fs = await import('node:fs');
+        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        expect(src).not.toContain('baseY - 1');
+        expect(src).not.toContain('scrollToLine(');
+        expect(src).not.toContain('lastScrollY');
+    });
+
+    it('never resets document scroll from a generic window scroll event', async () => {
+        const fs = await import('node:fs');
+        const src = fs.readFileSync('web/app.js', 'utf8');
+        expect(src).not.toContain("window.addEventListener('scroll'");
+        expect(src).toContain("window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true, true))");
+        expect(src).toContain("window.visualViewport.addEventListener('scroll', () => this.updateLayoutPosition(false))");
+    });
+});
+
 // Page-scroll invariant: on desktop viewports, body overflow is hidden,
 // so the window itself cannot scroll. Defense-in-depth: even if some
 // future code path forgets to gate by viewport width, the user is
