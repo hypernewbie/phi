@@ -483,20 +483,18 @@ export class TabManager {
                 this.updateDirectModeUI(activeTab);
             }
             if (window.innerWidth <= 768) {
-                // updateLayoutPosition already forces window.scrollTo(0,0) on
-                // mobile to counteract iOS WebKit's focus-scroll behaviour.
-                // Run it twice (now + 50ms) so we cover the keyboard-show
-                // animation; the second pass is a defensive re-fit in case
-                // the keyboard appeared with a delay.
-                this.app.updateLayoutPosition?.(true);
-                setTimeout(() => this.app.updateLayoutPosition?.(true), 50);
+                // Only an input-focus transition may correct iOS WebKit's
+                // focus-scroll. Generic page/terminal scrolling must never
+                // be reset to the document origin.
+                this.app.updateLayoutPosition?.(true, true);
+                setTimeout(() => this.app.updateLayoutPosition?.(true, true), 50);
             }
         });
 
         this.inputTextArea.addEventListener('blur', () => {
             if (window.innerWidth <= 768) {
-                // Same defensive re-fit on blur - keyboard is hiding, layout
-                // needs to snap back to full height.
+                // Refit after the keyboard hides, but do not reset document
+                // scroll: the user may already be scrolling terminal output.
                 setTimeout(() => this.app.updateLayoutPosition?.(true), 150);
             }
         });
@@ -894,7 +892,7 @@ export class TabManager {
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
             const buffer = tab.term.buffer.active;
-            tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+            tab.isAtBottom = buffer.viewportY >= buffer.baseY;
             tab.lastScrollY = buffer.viewportY;
         }
 
@@ -1380,7 +1378,7 @@ export class TabManager {
             }
             const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
             if (!buf) return;
-            const atBottom = buf.viewportY >= buf.baseY - 1;
+            const atBottom = buf.viewportY >= buf.baseY;
             if (atBottom) {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
@@ -1421,7 +1419,7 @@ export class TabManager {
             if (tab) {
                 // 1. Capture scroll state BEFORE any focus or UI changes
                 const buffer = tab.term.buffer.active;
-                tab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+                tab.isAtBottom = buffer.viewportY >= buffer.baseY;
                 tab.lastScrollY = buffer.viewportY;
                 
                 // 2. Toggle mode
@@ -1502,7 +1500,7 @@ export class TabManager {
         const prevTab = this.getActiveTab();
         if (prevTab) {
             if (prevTab.term) {
-                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY - 1;
+                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY;
                 prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             }
             prevTab.tabEl.classList.remove('active');
@@ -3058,7 +3056,7 @@ export class TabManager {
         // Save the correct, stable scroll state before the continuous resize begins
         if (activeTab.isAtBottom === undefined) {
             const buffer = activeTab.term.buffer.active;
-            activeTab.isAtBottom = buffer.viewportY >= buffer.baseY - 1;
+            activeTab.isAtBottom = buffer.viewportY >= buffer.baseY;
             activeTab.lastScrollY = buffer.viewportY;
         }
         this.isResizing = true;
@@ -3091,7 +3089,7 @@ export class TabManager {
             
             // If we are resizing continuously, cache these stable coordinates on the tab
             if (this.isResizing) {
-                isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY - 1);
+                isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY);
                 scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
                 activeTab.isAtBottom = isAtBottom;
                 activeTab.lastScrollY = scrollY;
@@ -3101,7 +3099,7 @@ export class TabManager {
                 isAtBottom = activeTab.isSpammingBottom;
                 scrollY = activeTab.spamScrollY;
             } else {
-                isAtBottom = (buffer.viewportY >= buffer.baseY - 1);
+                isAtBottom = (buffer.viewportY >= buffer.baseY);
                 scrollY = buffer.viewportY;
             }
 

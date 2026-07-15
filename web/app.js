@@ -505,11 +505,12 @@ export class App {
         //   2. Bind to `window.visualViewport`'s `resize` and `scroll` events.
         //   3. Track `visualViewport.height` and assign it to a CSS custom property (e.g., `--vv-height`) on the root element.
         //   4. Set the main container height to `var(--vv-height)` and pin it with `position: fixed; top: 0; bottom: auto;`.
-        //   5. Aggressively intercept scroll events and force `window.scrollTo(0, 0)` to counteract iOS's native scroll-on-focus behaviour.
+        //   5. Correct document scroll only from the input-focus path that
+        //      triggered iOS's native focus-scroll — never from generic scroll events.
         // ==========================================
         if (window.visualViewport) {
             const appEl = document.getElementById('app');
-            this.updateLayoutPosition = (shouldFit = false) => {
+            this.updateLayoutPosition = (shouldFit = false, resetDocumentScroll = false) => {
                 const isMobile = window.innerWidth <= 768;
                 if (isMobile && window.visualViewport) {
                     const viewport = window.visualViewport;
@@ -518,8 +519,10 @@ export class App {
                     // This perfectly accounts for the space above the iOS keyboard.
                     document.documentElement.style.setProperty('--vv-height', `${viewport.height}px`);
 
-                    // Reset layout scroll so our fixed container stays exactly pinned.
-                    if (window.scrollY > 0 || window.scrollX > 0) {
+                    // iOS may move the document to reveal a focused input.
+                    // Correct that specific focus side effect only; doing this
+                    // for every scroll event steals terminal/page scrolling.
+                    if (resetDocumentScroll && (window.scrollY > 0 || window.scrollX > 0)) {
                         window.scrollTo(0, 0);
                     }
 
@@ -532,13 +535,10 @@ export class App {
                 }
             };
             
-            // Aggressively prevent iOS from permanently scrolling the layout viewport away from 0,0
-            window.addEventListener('scroll', () => {
-                if (window.innerWidth <= 768 && (window.scrollY > 0 || window.scrollX > 0)) {
-                    window.scrollTo(0, 0);
-                }
-            }, { passive: true });
-            window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true));
+            // Keyboard geometry changes are layout events, so they may
+            // correct iOS focus-scroll; visualViewport scroll remains a user
+            // gesture and must never reset the document origin.
+            window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true, true));
             window.visualViewport.addEventListener('scroll', () => this.updateLayoutPosition(false));
             
             // Run initially to position correctly
