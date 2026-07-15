@@ -163,6 +163,22 @@ describe('scroll-related source contracts', () => {
     });
 });
 
+describe('bottom and document-scroll contracts', () => {
+    it('treats only the exact xterm baseY as bottom', async () => {
+        const fs = await import('node:fs');
+        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        expect(src).not.toContain('baseY - 1');
+    });
+
+    it('never resets document scroll from a generic window scroll event', async () => {
+        const fs = await import('node:fs');
+        const src = fs.readFileSync('web/app.js', 'utf8');
+        expect(src).not.toContain("window.addEventListener('scroll'");
+        expect(src).toContain("window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true, true))");
+        expect(src).toContain("window.visualViewport.addEventListener('scroll', () => this.updateLayoutPosition(false))");
+    });
+});
+
 // Page-scroll invariant: on desktop viewports, body overflow is hidden,
 // so the window itself cannot scroll. Defense-in-depth: even if some
 // future code path forgets to gate by viewport width, the user is
