@@ -235,9 +235,12 @@ export class SessionsManager {
                 this.app.hostname = data.hostname;
                 const hostEl = document.getElementById('hostname-display');
                 if (hostEl) {
-                    hostEl.innerText = ` — ${data.hostname}`;
+                    hostEl.innerText = data.hostname;
                 }
-                document.title = `Φ ${data.hostname}`;
+                // TabManager owns the composable Φ / ϕ / ● title grammar
+                // and the matching header cursor. Re-render now that the
+                // hostname half of the title is known.
+                this.app.tabManager.updateDocumentTitle();
                 const emptyHostEl = document.getElementById('empty-state-hostname');
                 if (emptyHostEl) {
                     emptyHostEl.innerText = data.hostname;
