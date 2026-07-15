@@ -1341,6 +1341,18 @@ export class TabManager {
         tabInfo.ws = ws;
         this.tabs.set(paneId, tabInfo);
 
+        // A real scroll gesture takes ownership away from any in-flight
+        // fit/reflow restore. Do not use term.onScroll for this: xterm emits
+        // it for our own programmatic scrolls too, which would weaken the
+        // proven 10ms/300ms stabilization loop. DOM input events identify
+        // user intent without changing that loop's timing or behavior.
+        const cancelFollowForUserScroll = () => this._cancelScrollFollowForUserScroll(tabInfo);
+        termContainer.addEventListener('wheel', cancelFollowForUserScroll, { capture: true, passive: true });
+        termContainer.addEventListener('touchstart', cancelFollowForUserScroll, { capture: true, passive: true });
+        term.element?.querySelector('.xterm-viewport')?.addEventListener(
+            'pointerdown', cancelFollowForUserScroll, { capture: true, passive: true },
+        );
+
         // Scroll-to-bottom affordance: a small floating button that
         // fades in when the user scrolls up into scrollback, fades out
         // when they return to the live bottom. Click jumps to the
@@ -2915,6 +2927,20 @@ export class TabManager {
             }
         }
         this.inputTextArea.style.height = newHeight + 'px';
+    }
+
+    // A wheel, touch, or native scrollbar-thumb gesture is an explicit user
+    // choice. Cancel only the currently pending restore; `_spamScroll` itself
+    // remains the established 10ms / 300ms mechanism for non-interrupted
+    // resize, reflow, output, and explicit bottom-follow paths.
+    _cancelScrollFollowForUserScroll(tabInfo) {
+        if (!tabInfo) return;
+        clearInterval(tabInfo.spamInterval);
+        clearTimeout(tabInfo.stopSpamTimeout);
+        tabInfo.spamInterval = null;
+        tabInfo.stopSpamTimeout = null;
+        tabInfo.isSpammingBottom = undefined;
+        tabInfo.spamScrollY = undefined;
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
