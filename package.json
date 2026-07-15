@@ -5,6 +5,8 @@
   "description": "Dev-only tooling for phi frontend JS tests. NOT the published package (see npm/package.json).",
   "type": "module",
   "scripts": {
+    "build:web": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
