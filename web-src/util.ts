@@ -189,6 +189,76 @@ export function cpuLevel(cpuPercent: number): string {
     return 'cpu-idle';
 }
 
+// TerminalActivityTabLike is deliberately narrow: terminal.js has a large,
+// dynamic TabInfo object, but title/status rendering needs only these three
+// facts. Keeping the boundary tiny lets the presentation grammar stay pure.
+export interface TerminalActivityTabLike {
+    isDead?: boolean;
+    isBusy?: boolean;
+    isAttention?: boolean;
+}
+
+export interface TerminalActivityState {
+    hasActivity: boolean;
+    hasAttention: boolean;
+}
+
+// getTerminalActivityState reduces an iterable of terminal tabs into the two
+// independent signals used by the browser chrome. "Activity" means a live PTY
+// emitted output recently; a dead tab cannot keep the live marker awake.
+// "Attention" deliberately survives a dead tab, matching the existing
+// completion-notification contract until the user clears it.
+export function getTerminalActivityState(tabs: Iterable<TerminalActivityTabLike | null | undefined>): TerminalActivityState {
+    let hasActivity = false;
+    let hasAttention = false;
+    for (const tab of tabs) {
+        if (!tab) continue;
+        if (tab.isAttention) hasAttention = true;
+        if (!tab.isDead && tab.isBusy) hasActivity = true;
+        if (hasActivity && hasAttention) break;
+    }
+    return { hasActivity, hasAttention };
+}
+
+// phiActivityGlyph is the compact visual language shared by the browser title
+// and favicon. Capital Phi is the settled mark; curly Phi means terminal output
+// is flowing. The existing leading ● remains reserved for done/attention.
+export function phiActivityGlyph(hasActivity: boolean): string {
+    return hasActivity ? 'ϕ' : 'Φ';
+}
+
+// formatTerminalActivityTitle composes the browser title without mutating
+// prior title text. This makes the two states composable:
+//   Φ host   quiet        ϕ host   output now
+//   ● Φ host attention    ● ϕ host attention + output elsewhere
+export function formatTerminalActivityTitle(
+    hostname: string | null | undefined,
+    state: TerminalActivityState,
+): string {
+    const host = hostname || 'phi';
+    const attention = state.hasAttention ? '● ' : '';
+    return `${attention}${phiActivityGlyph(state.hasActivity)} ${host}`;
+}
+
+// buildPhiFaviconSvg produces the dynamic data-URI payload used by App.
+// The favicon follows the title's Φ ↔ ϕ state but stays static between real
+// quiet/output transitions; browser tabs should not become a spinner.
+export function buildPhiFaviconSvg(accent: string, accentDim: string, hasActivity: boolean): string {
+    const glyph = phiActivityGlyph(hasActivity);
+    return `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="${accent}" />
+      <stop offset="100%" stop-color="${accentDim}" />
+    </radialGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#glow)"/>
+  <text x="50%" y="60%" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">${glyph}</text>
+</svg>
+    `.trim();
+}
+
 // buildProxyUrl composes the local /api/proxy URL for a sync-coordinator
 // request: strips one trailing slash off the coordinator base, appends the
 // endpoint, and URL-encodes the result as the ?url= param. Pure.

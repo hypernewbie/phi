@@ -106,6 +106,7 @@ function stubApp() {
     return {
         showToast() {},
         applyAccentTheme() {},
+        setTerminalActivity() {},
         accentColorSelect: { value: '' },
         tabManager,
         sessionsManager: {
@@ -179,6 +180,7 @@ const expectations = [
 const appExpectations = [
     { name: 'showToast', kind: 'method' },
     { name: 'applyAccentTheme', kind: 'method' },
+    { name: 'setTerminalActivity', kind: 'method' },
     { name: 'openConfigEditor', kind: 'method' },
     { name: 'exportTerminalCommandsConfig', kind: 'method' },
     { name: 'importCmdsConfig', kind: 'method' },
