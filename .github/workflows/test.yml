@@ -17,11 +17,45 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
           cache: true
 
       - name: Run Go Tests
         run: go test -race -v ./...
+
+  test-ts:
+    name: TS Build + Type Check + Drift Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Type Check (web-src)
+        run: npm run typecheck
+
+      - name: Build Emitted JS
+        run: npm run build:web
+
+      # Drift guard. If web-src/*.ts sources are out of sync with
+      # committed web/*.js artifacts, this fails the build. The
+      # porcelain status catches both modified AND untracked files,
+      # which a plain git diff --exit-code would not.
+      - name: Verify Emitted Artifacts Clean
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=all -- web)" ]; then
+            echo "::error::Emitted web/ tree is out of sync with web-src/."
+            git status --porcelain --untracked-files=all -- web
+            exit 1
+          fi
 
   test-js:
     name: JS Frontend Tests
