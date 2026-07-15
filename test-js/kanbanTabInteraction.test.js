@@ -75,7 +75,7 @@ function makeApp(fx) {
         vi.clearAllMocks();
         localStorage.clear();
         sessionStorage.clear();
-        // Soft-close uses setTimeout(SOFT_CLOSE_GRACE_MS=5000). Tests that
+        // Soft-close uses setTimeout(SOFT_CLOSE_GRACE_MS=3000). Tests that
         // exercise the finalize path advance the fake clock; tests that
         // exercise the undo path clear it.
         vi.useFakeTimers();
@@ -176,7 +176,7 @@ describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () =
 // -- BUG-3 ----------------------------------------------------------------
 describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
     // Soft-close: with the grace period in place, closeTab() now does the
-    // kanban cleanup only when the tab FINALIZES (after 5s) - not on the
+    // kanban cleanup only when the tab FINALIZES (after 3s) - not on the
     // initial soft-close. So this test calls closeTab + advances the
     // timers past the grace to exercise the finalize path.
     it('calls kanbanManager.cleanup() and removes phi_kanban_open (after grace)', async () => {
@@ -211,8 +211,8 @@ describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
         await ctx.closeTab('kanban-board');
         // closeTab is now soft-close: cleanup happens when the grace
         // timer fires (finalizeCloseTab). Advance fake timers past the
-        // 5s grace to drive the finalize path.
-        await vi.advanceTimersByTimeAsync(5000);
+        // 3s grace to drive the finalize path.
+        await vi.advanceTimersByTimeAsync(TabManager.SOFT_CLOSE_GRACE_MS);
         expect(app.kanbanManager.cleanup).toHaveBeenCalled();
         expect(cleaned).toBe(true);
         expect(localStorage.getItem('phi_kanban_open')).toBeNull();
