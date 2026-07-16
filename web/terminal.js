@@ -9,6 +9,13 @@ import {
     getTerminalActivityState,
     formatTerminalActivityTitle,
 } from './util.js';
+import {
+    formatAttachment,
+    extractImageItems,
+    extractImageFiles,
+    uploadClipboardImage,
+    formatChipName,
+} from './attachments.js';
 
 const CODER_FAVICONS = {
     'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
@@ -29,6 +36,8 @@ export class TabManager {
         this.terminalsWrapper = document.getElementById('terminals-wrapper');
         this.inputBarContainer = document.getElementById('input-bar-container');
         this.inputTextArea = document.getElementById('input-textarea');
+        this.attachmentStrip = document.getElementById('attachment-strip');
+        this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.piShortcutSendBtn = null; // chip is now rendered into presets-container per-tab in renderPresets()
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
@@ -580,6 +589,14 @@ export class TabManager {
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
         });
+
+        // Drag-and-drop and clipboard-paste attachments. Drop handler is on
+        // .input-bar-container (not document) so tab-reorder drags on the
+        // tabs strip don't conflict. Paste handler is on #input-textarea
+        // so Cmd+V in the terminal pane still flows raw bytes to the PTY.
+        this._initAttachmentDropZone();
+        this._initAttachmentPasteHandler();
+        this._initDocumentDropGuard();
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
         // which element is focused (textarea, terminal, anywhere). The
@@ -2342,36 +2359,220 @@ export class TabManager {
         return true;
     }
 
+    // _initAttachmentDropZone wires drag-and-drop file ingestion on the
+    // input bar container. Drop fires only when the user releases over
+    // the input bar; nothing changes for drops on the tabs strip or
+    // terminal pane (those have their own handlers / behavior).
+    //
+    // Visual feedback: a glow on the input bar while a drag is over it,
+    // driven by `.is-drop-target` class. Uses existing --accent-glow
+    // tokens — no new colours per AGENTS.md.
+    _initAttachmentDropZone() {
+        if (!this.inputBarContainer) return;
+        let dragDepth = 0; // dragenter/leave fire on every child boundary
+
+        this.inputBarContainer.addEventListener('dragenter', (e) => {
+            const dt = e.dataTransfer;
+            if (!dt) return;
+            // Only react to file drags — text/uri-list drags no-op cleanly.
+            if (!dt.types || !Array.from(dt.types).includes('Files')) return;
+            e.preventDefault();
+            dragDepth += 1;
+            this.inputBarContainer.classList.add('is-drop-target');
+        });
+        this.inputBarContainer.addEventListener('dragover', (e) => {
+            const dt = e.dataTransfer;
+            if (!dt || !dt.types || !Array.from(dt.types).includes('Files')) return;
+            // Required so the drop event fires after release.
+            e.preventDefault();
+            try { dt.dropEffect = 'copy'; } catch (_) { /* some browsers */ }
+        });
+        this.inputBarContainer.addEventListener('dragleave', (e) => {
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0) {
+                this.inputBarContainer.classList.remove('is-drop-target');
+            }
+        });
+        this.inputBarContainer.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dragDepth = 0;
+            this.inputBarContainer.classList.remove('is-drop-target');
+            const files = extractImageFiles(e.dataTransfer && e.dataTransfer.files);
+            for (const file of files) {
+                try {
+                    const attachment = await uploadClipboardImage(file, file.name || 'dropped');
+                    attachment.source = 'drop';
+                    this._addAttachmentChip(attachment);
+                } catch (err) {
+                    this._attachmentToast(`Drop failed: ${err.message}`);
+                }
+            }
+        });
+    }
+
+    // _initAttachmentPasteHandler intercepts image-bearing pastes on the
+    // textarea. Text-only pastes fall through to default behavior so
+    // pasting a URL into the prompt still works normally.
+    //
+    // The handler is on the textarea, NOT document — if focus is on the
+    // terminal pane, Cmd+V flows raw bytes into the PTY as before. This
+    // is the only correct way to not break paste-in-terminal.
+    _initAttachmentPasteHandler() {
+        if (!this.inputTextArea) return;
+        this.inputTextArea.addEventListener('paste', async (e) => {
+            const items = extractImageItems(e.clipboardData);
+            if (items.length === 0) return; // text paste → let browser handle
+            e.preventDefault();
+            for (const item of items) {
+                const blob = item.getAsFile && item.getAsFile();
+                if (!blob) continue;
+                try {
+                    const attachment = await uploadClipboardImage(blob, 'clipboard.png');
+                    this._addAttachmentChip(attachment);
+                } catch (err) {
+                    this._attachmentToast(`Paste failed: ${err.message}`);
+                }
+            }
+        });
+    }
+
+    // _initDocumentDropGuard prevents the browser from navigating away
+    // when a file is dropped outside the input bar. Without this, a
+    // missed drop on the page background replaces phi with the file's
+    // contents in the tab — losing every session.
+    _initDocumentDropGuard() {
+        document.addEventListener('dragover', (e) => {
+            // Only intercept if a file is being dragged.
+            if (!e.dataTransfer || !e.dataTransfer.types) return;
+            if (Array.from(e.dataTransfer.types).includes('Files')) {
+                e.preventDefault();
+            }
+        });
+        document.addEventListener('drop', (e) => {
+            if (!e.dataTransfer || !e.dataTransfer.types) return;
+            if (Array.from(e.dataTransfer.types).includes('Files')) {
+                e.preventDefault();
+            }
+        });
+    }
+
+    // _addAttachmentChip stores the attachment and re-renders the strip.
+    _addAttachmentChip(attachment) {
+        // De-dupe by path: same file dropped twice shouldn't chip twice.
+        if (this.stagedAttachments.some((a) => a.path === attachment.path)) return;
+        this.stagedAttachments.push(attachment);
+        this._renderAttachmentStrip();
+    }
+
+    // _removeAttachmentChip removes a single attachment by id.
+    _removeAttachmentChip(id) {
+        this.stagedAttachments = this.stagedAttachments.filter((a) => a.id !== id);
+        this._renderAttachmentStrip();
+    }
+
+    // _renderAttachmentStrip repaints the chip strip from stagedAttachments.
+    // Idempotent — called on add/remove/send.
+    _renderAttachmentStrip() {
+        if (!this.attachmentStrip) return;
+        this.attachmentStrip.innerHTML = '';
+        if (this.stagedAttachments.length === 0) {
+            this.attachmentStrip.classList.add('hidden');
+            return;
+        }
+        this.attachmentStrip.classList.remove('hidden');
+        for (const a of this.stagedAttachments) {
+            const chip = document.createElement('span');
+            chip.className = 'attachment-chip';
+            chip.setAttribute('data-id', a.id);
+            chip.title = a.path;
+
+            const icon = document.createElement('span');
+            icon.className = 'attachment-icon';
+            icon.textContent = a.source === 'paste' ? '⎘' : '⎗';
+            chip.appendChild(icon);
+
+            const name = document.createElement('span');
+            name.className = 'attachment-name';
+            name.textContent = formatChipName(a.name, 40);
+            chip.appendChild(name);
+
+            const size = document.createElement('span');
+            size.className = 'attachment-size';
+            size.textContent = this._formatSize(a.sizeBytes);
+            chip.appendChild(size);
+
+            const remove = document.createElement('button');
+            remove.className = 'attachment-remove';
+            remove.setAttribute('aria-label', 'Remove attachment');
+            remove.textContent = '✕';
+            remove.addEventListener('click', () => this._removeAttachmentChip(a.id));
+            chip.appendChild(remove);
+
+            this.attachmentStrip.appendChild(chip);
+        }
+    }
+
+    _formatSize(bytes) {
+        if (!Number.isFinite(bytes) || bytes < 0) return '';
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    _attachmentToast(message) {
+        if (this.app && typeof this.app.showToast === 'function') {
+            this.app.showToast(message, { type: 'error', title: 'Attachments' });
+        } else {
+            console.warn('[attachments]', message);
+        }
+    }
+
     sendStagedInput() {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
-        
+
         const val = this.inputTextArea.value;
-        if (!val) return;
-        
+        const attachments = this.stagedAttachments;
+        // Empty guard now also allows attachments-only sends. Without
+        // this, "drop a screenshot, hit Send with no text" silently
+        // does nothing — a confusing dead end.
+        if (!val && attachments.length === 0) return;
+
+        // Compose payload: text first (if any), then one formatted
+        // attachment path per line. Path formatting is per-active-tab
+        // coder (claude → @path, bash → raw path).
+        const coder = activeTab.coder;
+        const lines = [];
+        if (val && val.trim()) lines.push(val.trim());
+        for (const a of attachments) {
+            lines.push(formatAttachment(coder, a));
+        }
+        let payload = lines.join('\n');
+
         // Wrap in bracketed paste markers for large prompts or multiline text
         // to prevent TUI trickle-rendering / autocomplete lagging.
-        let payload = val;
-        if (val.length > 16 || val.includes('\n')) {
-            payload = '\x1b[200~' + val + '\x1b[201~';
+        if (payload.length > 16 || payload.includes('\n')) {
+            payload = '\x1b[200~' + payload + '\x1b[201~';
         }
-        
+
         // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
         const sent = this.sendInput(activeTab, payload + '\r');
         if (!sent) return;
 
         this.inputTextArea.value = '';
         this.lastInputValue = '';
+        this.stagedAttachments = [];
+        this._renderAttachmentStrip();
         this.adjustInputHeight();
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
-        if (val.includes('/copy')) {
+        if (val && val.includes('/copy')) {
             setTimeout(() => {
                 this.app.syncRemoteClipboard();
             }, 300);
         }
-        
+
         this.inputTextArea.focus({ preventScroll: true });
     }
     
