@@ -30,7 +30,7 @@ export class TabManager {
         this.inputBarContainer = document.getElementById('input-bar-container');
         this.inputTextArea = document.getElementById('input-textarea');
         this.sendInputBtn = document.getElementById('send-input-btn');
-        this.piShortcutSendBtn = document.getElementById('pi-shortcut-send-btn');
+        this.piShortcutSendBtn = null; // chip is now rendered into presets-container per-tab in renderPresets()
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
@@ -580,16 +580,6 @@ export class TabManager {
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
         });
-
-        // Pi-coder shortcut chip: visible only when the active coder
-        // is pi. Clicking the chip OR pressing Ctrl+Shift+X anywhere
-        // sends the staged input. The chip is purely a discoverability
-        // affordance; the keybinding works without it being on screen.
-        if (this.piShortcutSendBtn) {
-            this.piShortcutSendBtn.addEventListener('click', () => {
-                this.sendStagedInput();
-            });
-        }
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
         // which element is focused (textarea, terminal, anywhere). The
@@ -3282,6 +3272,22 @@ export class TabManager {
             const divider = document.createElement('div');
             divider.className = 'presets-divider';
             this.presetsContainer.appendChild(divider);
+        }
+
+        // 2b. Pi-specific shortcut chip: lives in the presets row alongside
+        // /quit /resume /model /compact. Visible only when the active tab is
+        // a pi session. Clicking sends the staged input — same as Send ↵.
+        // The keyboard binding itself is global (document-level keydown
+        // listener below) and works whether the chip is rendered or not.
+        if (coderId === 'pi') {
+            const chip = document.createElement('button');
+            chip.className = 'kbd-shortcut-btn';
+            chip.title = 'Send staged input (Ctrl+Shift+X)';
+            chip.innerHTML = '<span class="kbd-key">Ctrl</span><span class="kbd-plus">+</span><span class="kbd-key">Shift</span><span class="kbd-plus">+</span><span class="kbd-key">X</span><span class="kbd-label">send</span>';
+            chip.addEventListener('click', () => {
+                this.sendStagedInput();
+            });
+            this.presetsContainer.appendChild(chip);
         }
         
         // 3. Render QuickCmds trigger button
