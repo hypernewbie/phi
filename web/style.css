@@ -3369,6 +3369,22 @@ html, body {
         line-height: 1.35 !important;
     }
 
+    /* Mobile: wrap long lines instead of horizontal-scrolling them. The
+       line-by-line layout is forced for mobile via diff.ts → renderRichDiff
+       (`outputFormat: 'line-by-line'`), so wrapping only makes a row taller
+       and can't misalign two panes. Pin the line number column to the top
+       visual row of a wrapped line. */
+    .diff-modal-body .d2h-code-line-ctn,
+    .diff-modal-body .d2h-code-line {
+        white-space: pre-wrap !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+    }
+    .diff-modal-body .d2h-code-linenumber,
+    .diff-modal-body .d2h-code-side-linenumber {
+        vertical-align: top !important;
+    }
+
     .diff-modal-body .d2h-file-list-wrapper {
         display: none !important;
     }
