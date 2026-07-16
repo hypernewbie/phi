@@ -506,7 +506,10 @@ export class SessionsManager {
                 let isIdleAlive = false;
                 for (const t of this.app.tabManager.tabs.values()) {
                     if (t.sessionId === sess.id && t.coder === this.activeCoder && !t.isDead) {
-                        if (t.isBusy) {
+                        // btop redraws the whole screen multiple times per
+                        // second; its isBusy stays true forever. Skip it so
+                        // the ankh/djed glyph doesn't pin on the row.
+                        if (t.isBusy && !t.isBtop) {
                             isRunning = true;
                         }
                         else {

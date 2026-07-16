@@ -10,6 +10,8 @@ const tab = (overrides = {}) => ({
     isDead: false,
     isBusy: false,
     isAttention: false,
+    coder: 'pi',
+    isBtop: false,
     ...overrides,
 });
 
@@ -52,5 +54,62 @@ describe('terminal activity browser-chrome grammar', () => {
     it('keeps the favicon in lockstep with the title glyph', () => {
         expect(buildPhiFaviconSvg('#abc', '#123', false)).toContain('>Φ</text>');
         expect(buildPhiFaviconSvg('#abc', '#123', true)).toContain('>ϕ</text>');
+    });
+
+    // Shell/btop tabs must not pin the global "working" indicator. btop
+    // redraws the screen at high frequency (isBusy=true forever), and a
+    // long-running interactive shell can emit bytes for minutes at a time.
+    // Neither is "the agent doing work" — only coding-agent tabs should
+    // flip the curly Phi.
+    describe('terminal-tab exclusion', () => {
+        it('excludes a busy btop tab from hasActivity', () => {
+            const state = getTerminalActivityState([
+                tab({ coder: 'bash', isBtop: true, isBusy: true }),
+            ]);
+            expect(state).toEqual({ hasActivity: false, hasAttention: false });
+            expect(formatTerminalActivityTitle('atlas', state)).toBe('Φ atlas');
+        });
+
+        it('excludes a busy bash shell tab from hasActivity', () => {
+            const state = getTerminalActivityState([
+                tab({ coder: 'bash', isBusy: true }),
+            ]);
+            expect(state).toEqual({ hasActivity: false, hasAttention: false });
+        });
+
+        it('excludes a busy pwsh shell tab from hasActivity', () => {
+            const state = getTerminalActivityState([
+                tab({ coder: 'pwsh', isBusy: true }),
+            ]);
+            expect(state).toEqual({ hasActivity: false, hasAttention: false });
+        });
+
+        it('still counts a busy coding-agent tab alongside a busy btop tab', () => {
+            const state = getTerminalActivityState([
+                tab({ coder: 'bash', isBtop: true, isBusy: true }),
+                tab({ coder: 'pi', isBusy: true }),
+            ]);
+            expect(state.hasActivity).toBe(true);
+            expect(formatTerminalActivityTitle('atlas', state)).toBe('ϕ atlas');
+        });
+
+        it('keeps attention independent of the coder/isBtop exclusion', () => {
+            // A btop tab that needs attention (e.g. process exited weirdly)
+            // should still set hasAttention even though it's not driving
+            // hasActivity.
+            const state = getTerminalActivityState([
+                tab({ coder: 'bash', isBtop: true, isBusy: true, isAttention: true }),
+            ]);
+            expect(state.hasActivity).toBe(false);
+            expect(state.hasAttention).toBe(true);
+            expect(formatTerminalActivityTitle('atlas', state)).toBe('● Φ atlas');
+        });
+
+        it('excludes review and kanban coders (UI-only, not PTY-backed)', () => {
+            for (const coder of ['review', 'kanban']) {
+                const state = getTerminalActivityState([tab({ coder, isBusy: true })]);
+                expect(state.hasActivity).toBe(false);
+            }
+        });
     });
 });
