@@ -282,3 +282,90 @@ export function buildProxyUrl(coordinator: string, endpoint: string): string {
     const targetUrl = coordinator.replace(/\/$/, '') + endpoint;
     return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
 }
+
+// SelfHud is the data the brand-logo hover popover renders. All fields
+// are computed from local state — no fetch is made to populate it. See
+// buildSelfHud() for the assembler.
+export interface SelfHud {
+    hostname: string;
+    version: string;
+    sessions: number;
+    busy: number;
+    attention: number;
+    cpuPercent: number | null;     // null = unknown / not yet sampled
+    lastActivityMin: number | null; // minutes since most recent tab output, null if no tabs ever emitted
+}
+
+// buildSelfHud assembles the hover-popover payload from a tab map and a
+// few preloaded app fields. Pure — no DOM, no fetch — so the unit test
+// surface is small and the same logic powers future variants (sidebar
+// stat tile, status bar, etc.) without re-deriving from a TabManager.
+//
+// TabLike is intentionally narrow: anything with the four status fields
+// we care about, so tests can pass plain objects.
+export interface TabLikeForHud {
+    isDead?: boolean;
+    isBusy?: boolean;
+    isAttention?: boolean;
+    lastOutputAt?: number;
+}
+
+// formatDurationMin is a small helper kept inline to avoid a second util
+// export. "4m" / "23s" / "—" — null/0 → em-dash (nothing to show).
+function formatDurationMin(ms: number | null): string {
+    if (ms == null) return '—';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h`;
+    return `${Math.floor(hr / 24)}d`;
+}
+
+export function buildSelfHud(args: {
+    hostname: string;
+    version: string;
+    cpuPercent: number | null;
+    tabs: Iterable<TabLikeForHud | null | undefined>;
+    now?: number; // overridable for tests
+}): SelfHud {
+    const now = args.now ?? Date.now();
+    let sessions = 0;
+    let busy = 0;
+    let attention = 0;
+    let mostRecentOutputMs: number | null = null;
+    for (const t of args.tabs) {
+        if (!t || t.isDead) continue;
+        sessions += 1;
+        if (t.isBusy) busy += 1;
+        if (t.isAttention) attention += 1;
+        if (typeof t.lastOutputAt === 'number') {
+            const age = now - t.lastOutputAt;
+            if (age >= 0 && (mostRecentOutputMs === null || age < mostRecentOutputMs)) {
+                mostRecentOutputMs = age;
+            }
+        }
+    }
+    return {
+        hostname: args.hostname || 'phi',
+        version: args.version || '',
+        sessions,
+        busy,
+        attention,
+        cpuPercent: args.cpuPercent,
+        lastActivityMin: mostRecentOutputMs,
+    };
+}
+
+// formatHudLine composes the "Xm ago" / "now" footer string. Pure.
+export function formatHudLine(hud: SelfHud): string {
+    if (hud.lastActivityMin == null) return 'no recent activity';
+    return `last activity ${formatDurationMin(hud.lastActivityMin)} ago`;
+}
+
+// formatHudCpu returns "cpu 23%" or "cpu —" if unknown. Pure.
+export function formatHudCpu(hud: SelfHud): string {
+    if (hud.cpuPercent == null) return 'cpu —';
+    return `cpu ${Math.round(hud.cpuPercent)}%`;
+}
