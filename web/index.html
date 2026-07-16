@@ -69,6 +69,12 @@
                     <div id="hostname-tabs-dropdown" class="hostname-tabs-dropdown hidden"></div>
                 </div>
             </div>
+
+            <!-- Self-state HUD: hover the .brand to reveal. All data is
+                 local (hostname, version, session counts, CPU, last activity);
+                 no network is touched on hover or close. The popover is
+                 static markup; TabManager renders into it on hover/focus. -->
+            <div id="self-hud-popover" class="self-hud hidden" role="tooltip" aria-hidden="true"></div>
             
             <div class="workspace-area">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
