@@ -8,6 +8,10 @@ import {
     worktreeGlyph,
     getTerminalActivityState,
     formatTerminalActivityTitle,
+    buildSelfHud,
+    formatHudLine,
+    formatHudCpu,
+    escapeHtml,
 } from './util.js';
 import {
     formatAttachment,
@@ -38,6 +42,10 @@ export class TabManager {
         this.inputTextArea = document.getElementById('input-textarea');
         this.attachmentStrip = document.getElementById('attachment-strip');
         this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
+        this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
+        this.selfHudEl = document.getElementById('self-hud-popover');
+        this.selfHudOpen = false;
+        this.selfHudCloseTimer = null;
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.piShortcutSendBtn = null; // chip is now rendered into presets-container per-tab in renderPresets()
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
@@ -99,6 +107,9 @@ export class TabManager {
         const logo = document.querySelector('.brand .logo');
         const brandName = document.querySelector('.brand .brand-name');
         if (!logo) return;
+        // Cache for the self-state HUD so hovering doesn't trigger a fetch.
+        // The HUD reads this on every render — polling keeps it fresh.
+        this.lastCpuPercent = cpuPercent;
         // Thresholds: idle < 30, moderate 30–70, high 70-90, critical > 90
         const level = cpuLevel(cpuPercent);
         // Don't churn the DOM if the level hasn't changed
@@ -597,6 +608,7 @@ export class TabManager {
         this._initAttachmentDropZone();
         this._initAttachmentPasteHandler();
         this._initDocumentDropGuard();
+        this._initBrandHud();
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
         // which element is focused (textarea, terminal, anywhere). The
@@ -2525,6 +2537,168 @@ export class TabManager {
         } else {
             console.warn('[attachments]', message);
         }
+    }
+
+    // _initBrandHud wires hover/focus on the top-left Φ logo to open the
+    // self-state HUD popover. No fetch on open/close — every field is
+    // computed from local state (hostname, version, tab map, CPU sample).
+    // The popover itself is a static element in index.html; we only paint.
+    _initBrandHud() {
+        const brand = document.querySelector('.brand');
+        if (!brand) return;
+        // Make the brand discoverable as interactive for keyboard users.
+        if (!brand.hasAttribute('tabindex')) brand.setAttribute('tabindex', '0');
+        if (!brand.hasAttribute('role')) brand.setAttribute('role', 'button');
+        if (!brand.getAttribute('aria-describedby')) {
+            brand.setAttribute('aria-describedby', 'self-hud-popover');
+        }
+
+        const open = () => {
+            if (this.selfHudCloseTimer) {
+                clearTimeout(this.selfHudCloseTimer);
+                this.selfHudCloseTimer = null;
+            }
+            this._renderSelfHud();
+            this._openSelfHud();
+        };
+        const scheduleClose = (delay = 150) => {
+            if (this.selfHudCloseTimer) clearTimeout(this.selfHudCloseTimer);
+            this.selfHudCloseTimer = setTimeout(() => {
+                this.selfHudCloseTimer = null;
+                this._closeSelfHud();
+            }, delay);
+        };
+
+        brand.addEventListener('mouseenter', open);
+        brand.addEventListener('focus', open);
+        brand.addEventListener('mouseleave', () => scheduleClose());
+        brand.addEventListener('blur', () => scheduleClose(0));
+
+        // Keep the popover open if the cursor moves onto it (grace period).
+        if (this.selfHudEl) {
+            this.selfHudEl.addEventListener('mouseenter', () => {
+                if (this.selfHudCloseTimer) {
+                    clearTimeout(this.selfHudCloseTimer);
+                    this.selfHudCloseTimer = null;
+                }
+            });
+            this.selfHudEl.addEventListener('mouseleave', () => scheduleClose());
+        }
+
+        // Esc closes the popover if focus is on the brand. Listening on
+        // brand (not document) keeps scope narrow and avoids leaking
+        // listeners across test instances.
+        brand.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.selfHudOpen) {
+                e.preventDefault();
+                this._closeSelfHud();
+                brand.focus({ preventScroll: true });
+            }
+        });
+
+        // Click toggle for touch devices (no hover). Tap once = open,
+        // tap again = close. Outside-click closes.
+        brand.addEventListener('click', (e) => {
+            // Don't interfere with the brand's own children (mobile-sidebar
+            // toggle, hostname dropdown, etc.) — those handle their own
+            // click semantics.
+            if (e.target.closest('button, .hostname-wrapper')) return;
+            if (this.selfHudOpen) {
+                this._closeSelfHud();
+            } else {
+                open();
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (!this.selfHudOpen) return;
+            const t = e.target;
+            if (t.closest('.brand') || t.closest('#self-hud-popover')) return;
+            this._closeSelfHud();
+        });
+    }
+
+    _openSelfHud() {
+        if (!this.selfHudEl) return;
+        this.selfHudEl.classList.remove('hidden');
+        this.selfHudEl.classList.add('is-open');
+        this.selfHudEl.setAttribute('aria-hidden', 'false');
+        this.selfHudOpen = true;
+    }
+
+    _closeSelfHud() {
+        if (!this.selfHudEl) return;
+        this.selfHudEl.classList.remove('is-open');
+        this.selfHudEl.setAttribute('aria-hidden', 'true');
+        this.selfHudOpen = false;
+        // Hide from layout after the fade-out so it doesn't intercept clicks.
+        setTimeout(() => {
+            if (!this.selfHudOpen) this.selfHudEl.classList.add('hidden');
+        }, 220);
+    }
+
+    // _renderSelfHud paints the popover from local state. Pure DOM
+    // mutation — no network. Re-run on every open so the values are
+    // current as of the most recent open event.
+    _renderSelfHud() {
+        if (!this.selfHudEl) return;
+        const version = (this.app && this.app.versionInfo && this.app.versionInfo.version) || '';
+        const hud = buildSelfHud({
+            hostname: (this.app && this.app.hostname) || '',
+            version,
+            cpuPercent: typeof this.lastCpuPercent === 'number' ? this.lastCpuPercent : null,
+            tabs: this.tabs.values(),
+        });
+
+        // CPU-driven emphasis class on the popover so the cpu line tints
+        // when load climbs. Matches the brand-logo class names.
+        const level = hud.cpuPercent != null ? cpuLevel(hud.cpuPercent) : 'cpu-idle';
+        for (const cls of ['cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical']) {
+            this.selfHudEl.classList.remove(cls);
+        }
+        this.selfHudEl.classList.add(level);
+
+        const workingGlyph = hud.busy > 0
+            ? '<span class="glyph glyph-working" title="Working">ϕ</span>'
+            : '<span class="glyph glyph-idle" title="Idle">Φ</span>';
+        const attentionGlyph = hud.attention > 0
+            ? '<span class="glyph glyph-attention" title="Needs attention">☥</span>'
+            : '';
+
+        const versionBit = hud.version
+            ? `<span class="self-hud-version">v${escapeHtml(hud.version)}</span>`
+            : '';
+        const hostBit = hud.hostname
+            ? `<span class="glyph">Φ</span><span class="self-hud-host-name">${escapeHtml(hud.hostname)}</span>`
+            : '<span class="glyph">Φ</span><span class="self-hud-host-name">phi</span>';
+
+        this.selfHudEl.innerHTML = `
+            <div class="self-hud-header">
+                <span class="self-hud-host">${hostBit}</span>
+                ${versionBit}
+            </div>
+            <div class="self-hud-rule" aria-hidden="true"></div>
+            <div class="self-hud-metrics">
+                <span class="metric">
+                    <span class="metric-count">${hud.sessions}</span>
+                    <span class="metric-label">session${hud.sessions === 1 ? '' : 's'}</span>
+                </span>
+                <span class="metric glyph-working">
+                    ${workingGlyph}
+                    <span class="metric-count">${hud.busy}</span>
+                    <span class="metric-label">working</span>
+                </span>
+                ${hud.attention > 0 ? `
+                <span class="metric glyph-attention">
+                    ${attentionGlyph}
+                    <span class="metric-count">${hud.attention}</span>
+                    <span class="metric-label">attention</span>
+                </span>` : ''}
+            </div>
+            <div class="self-hud-footer">
+                <span class="cpu">${escapeHtml(formatHudCpu(hud))}</span>
+                <span class="dim">${escapeHtml(formatHudLine(hud))}</span>
+            </div>
+        `;
     }
 
     sendStagedInput() {

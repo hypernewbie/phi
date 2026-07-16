@@ -261,3 +261,62 @@ export function buildProxyUrl(coordinator, endpoint) {
     const targetUrl = coordinator.replace(/\/$/, '') + endpoint;
     return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
 }
+// formatDurationMin is a small helper kept inline to avoid a second util
+// export. "4m" / "23s" / "—" — null/0 → em-dash (nothing to show).
+function formatDurationMin(ms) {
+    if (ms == null)
+        return '—';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60)
+        return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60)
+        return `${min}m`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24)
+        return `${hr}h`;
+    return `${Math.floor(hr / 24)}d`;
+}
+export function buildSelfHud(args) {
+    const now = args.now ?? Date.now();
+    let sessions = 0;
+    let busy = 0;
+    let attention = 0;
+    let mostRecentOutputMs = null;
+    for (const t of args.tabs) {
+        if (!t || t.isDead)
+            continue;
+        sessions += 1;
+        if (t.isBusy)
+            busy += 1;
+        if (t.isAttention)
+            attention += 1;
+        if (typeof t.lastOutputAt === 'number') {
+            const age = now - t.lastOutputAt;
+            if (age >= 0 && (mostRecentOutputMs === null || age < mostRecentOutputMs)) {
+                mostRecentOutputMs = age;
+            }
+        }
+    }
+    return {
+        hostname: args.hostname || 'phi',
+        version: args.version || '',
+        sessions,
+        busy,
+        attention,
+        cpuPercent: args.cpuPercent,
+        lastActivityMin: mostRecentOutputMs,
+    };
+}
+// formatHudLine composes the "Xm ago" / "now" footer string. Pure.
+export function formatHudLine(hud) {
+    if (hud.lastActivityMin == null)
+        return 'no recent activity';
+    return `last activity ${formatDurationMin(hud.lastActivityMin)} ago`;
+}
+// formatHudCpu returns "cpu 23%" or "cpu —" if unknown. Pure.
+export function formatHudCpu(hud) {
+    if (hud.cpuPercent == null)
+        return 'cpu —';
+    return `cpu ${Math.round(hud.cpuPercent)}%`;
+}
