@@ -2,6 +2,23 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.11.0 — 2026-07-16
+
+A content-density release: more visual information at glance, fewer file-finding rituals before asking the agent.
+
+### Added
+- **Drag-drop and clipboard-image attachments into the staged input.** Drop a file (or paste a screenshot) onto the input bar to attach it to the next Send. Both paths converge on a single `/api/attachments` endpoint (image/* MIME allowlist, 25 MB cap, server-generated unique filenames, automatic 50-file sweep in `~/.phi/clipboard/`). Vision-capable coders receive paths in their preferred mention syntax: `@/path` for Claude / OpenCode / Antigravity, raw path for pi / bash / pwsh. Send with empty text + an attachment now works — the previous empty-guard was relaxed.
+- **Self-state HUD on hover/focus the Φ logo.** Cartouche-shaped glass popover in the top-left shows hostname, version, sessions, busy, attention, CPU, and last activity. Zero network on open or close — every field is computed from local state phi already maintains. CPU-driven emphasis glows the cpu line at high load, pulses at critical. Touch users get click-to-toggle; keyboard users get Escape-to-close.
+
+### Changed
+- **btop and shell tabs no longer pin the global "working" indicator.** The curly-Phi ϕ glyph in the browser title and the ▍ indicator in the header now reflect *agent* activity, not *terminal* activity. A running btop can no longer hold the chrome lit forever. Both the global indicator (`getTerminalActivityState` in `web-src/util.ts`) and the sidebar session-row ankh/djed glyph respect the exclusion.
+- **Pi Ctrl+Shift+X shortcut chip moved into the presets row.** Sits alongside /quit /resume /model /compact / ⚡ Cmds ▾ / 🤖 Models ▾ instead of crowding the primary Send ↵ button. Construction is now driven by `renderPresets()` keyed on the active tab's coder, so the chip appears exactly when the user is in a pi session.
+- **Rich diff viewer wraps long lines on mobile.** Forced to `line-by-line` layout already (mobile-only); inside the `@media (max-width: 768px)` block each `.d2h-code-line` now wraps with `white-space: pre-wrap / word-break: break-word / overflow-wrap: anywhere`. The line-number column pins to `vertical-align: top` so wrapped rows stay aligned. Desktop CSS and JS untouched.
+
+### Notes
+- The 10ms / 300ms `_spamScroll` terminal stabilization loop remains unchanged. AGENTS.md canonically guards this loop; see the “Terminal scroll stabilization loop — do not infer it away” section.
+- The new shortcut chip placement, like all conditional UI changes, follows the “UI action and shortcut contract” section: Send ↵ remains visible for every staged-input coder; the chip is additive discoverability, never a substitute.
+
 ## v0.10.1 — 2026-07-15
 
 A focused terminal-control reliability release.
