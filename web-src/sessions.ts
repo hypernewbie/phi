@@ -309,13 +309,10 @@ export class SessionsManager {
             this.loadSessions();
         }
 
-        // The Ctrl+Shift+X chip is additive discoverability for pi — never
-        // a replacement for the primary Send button. Send remains visible in
-        // every staged-input coder mode; direct mode owns its separate UI.
-        const chip = document.getElementById('pi-shortcut-send-btn');
-        if (chip) {
-            chip.classList.toggle('hidden', coderId !== 'pi');
-        }
+        // The Ctrl+Shift+X chip is rendered inside the presets-container row
+        // by renderPresets() based on the *active tab's* coder, so it appears
+        // exactly when the user is in a pi session — not just when the sidebar
+        // coder-tab is set to pi. The keybinding itself remains global.
     }
 
     highlightActiveWorktree(cwdPath: string): void {
