@@ -24,6 +24,10 @@ function ctx(activeTab) {
     c._spamScrollToBottom = vi.fn();
     c._showReconnectOverlay = vi.fn();
     c.focusActiveTerminal = vi.fn();
+    // sendStagedInput now reads stagedAttachments and the attachment
+    // strip; both default to empty in the no-attachment path.
+    c.stagedAttachments = [];
+    c.attachmentStrip = { classList: { add: vi.fn(), remove: vi.fn() } };
     return c;
 }
 
