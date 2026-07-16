@@ -2133,6 +2133,83 @@ html, body {
     box-shadow: 0 -10px 24px var(--accent-trace);
 }
 
+/* Drop-target state: a file is being dragged over the input bar. Glow,
+   not shadow — follows AGENTS.md "glow > shadows" rule. Uses existing
+   --accent tokens; no new colours introduced. */
+.input-bar-container.is-drop-target {
+    border-top-color: var(--accent);
+    box-shadow:
+        inset 0 1px 0 var(--accent-soft),
+        0 -10px 28px var(--accent-glow);
+}
+
+/* Attachment chip strip: flex row above the textarea. Hidden when
+   empty so it doesn't take vertical space when unused. */
+.attachment-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 0 6px 0;
+    align-self: stretch;
+    width: 100%;
+}
+.attachment-strip.hidden {
+    display: none;
+}
+
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px 3px 8px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--accent-trace);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.2;
+    max-width: 320px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.attachment-chip:hover {
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.attachment-chip .attachment-icon {
+    color: var(--accent-bright);
+    font-size: 12px;
+    line-height: 1;
+}
+.attachment-chip .attachment-name {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 180px;
+}
+.attachment-chip .attachment-size {
+    color: var(--text-dim);
+    font-size: 10px;
+}
+.attachment-chip .attachment-remove {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 0.15s, background-color 0.15s;
+}
+.attachment-chip .attachment-remove:hover {
+    color: var(--red, #ef4444);
+    background-color: rgba(239, 68, 68, 0.08);
+}
+
 .input-bar-container textarea {
     flex: 1;
     background-color: var(--bg-base);
