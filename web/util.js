@@ -185,11 +185,27 @@ export function cpuLevel(cpuPercent) {
         return 'cpu-moderate';
     return 'cpu-idle';
 }
+// isTerminalActivityEligible returns false for shell/btop tabs whose PTY
+// output is user-driven or constant (btop redraws forever). Only coding-agent
+// tabs (pi, claude, agy, opencode) should drive the global "working" signal.
+// UI-only tabs (review, kanban) are not PTY-backed and never carry isBusy.
+function isTerminalActivityEligible(tab) {
+    if (tab.isBtop)
+        return false;
+    const coder = tab.coder;
+    if (coder === 'bash' || coder === 'pwsh')
+        return false;
+    if (coder === 'review' || coder === 'kanban')
+        return false;
+    return true;
+}
 // getTerminalActivityState reduces an iterable of terminal tabs into the two
 // independent signals used by the browser chrome. "Activity" means a live PTY
-// emitted output recently; a dead tab cannot keep the live marker awake.
-// "Attention" deliberately survives a dead tab, matching the existing
-// completion-notification contract until the user clears it.
+// emitted output recently; a dead tab cannot keep the live marker awake, and
+// shell/btop tabs are excluded so a running btop or an interactive shell
+// cannot pin the global "working" indicator on. "Attention" deliberately
+// survives a dead tab, matching the existing completion-notification
+// contract until the user clears it.
 export function getTerminalActivityState(tabs) {
     let hasActivity = false;
     let hasAttention = false;
@@ -198,7 +214,7 @@ export function getTerminalActivityState(tabs) {
             continue;
         if (tab.isAttention)
             hasAttention = true;
-        if (!tab.isDead && tab.isBusy)
+        if (!tab.isDead && tab.isBusy && isTerminalActivityEligible(tab))
             hasActivity = true;
         if (hasActivity && hasAttention)
             break;
