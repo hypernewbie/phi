@@ -75,7 +75,7 @@ function stubDom() {
         'sync-form-container', 'sync-form-key', 'sync-form-value',
         'sync-form-cancel', 'sync-form-submit', 'sync-messages-list',
         // Misc
-        'empty-workspace-path', 'pi-shortcut-send-btn', 'send-input-btn',
+        'empty-workspace-path', 'send-input-btn',
     ];
     for (const id of ids) {
         if (!document.getElementById(id)) {

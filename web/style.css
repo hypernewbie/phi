@@ -2231,6 +2231,15 @@ html, body {
     display: none;
 }
 
+/* When the shortcut chip lives in the presets row (pi coder), match
+   preset-btn height/padding so it sits flush with /quit /resume /model
+   /compact etc. The input-bar variant (38px tall) keeps its original
+   sizing for that surface. */
+.presets-container .kbd-shortcut-btn {
+    height: auto;
+    padding: 4px 8px;
+}
+
 .direct-mode-btn {
     background-color: var(--bg-elevated);
     border: 1px solid var(--bg-border);
