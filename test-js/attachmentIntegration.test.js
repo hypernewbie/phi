@@ -58,7 +58,6 @@ function makeTm({ coder = 'claude', inputText = '' } = {}) {
     // without invoking the rest of the constructor (PTY, sockets, etc.).
     tm._initAttachmentDropZone();
     tm._initAttachmentPasteHandler();
-    tm._initDocumentDropGuard();
 
     return tm;
 }
@@ -83,7 +82,7 @@ function pngFile(name = 'shot.png', size = 8) {
 }
 
 describe('attachment wiring — drop', () => {
-    it('uploads a dropped image and chips it', async () => {
+    it('uploads a dropped image and chips it (drop anywhere on page)', async () => {
         serverResponse = {
             path: '/home/u/.phi/clipboard/clip-1-aaaa.png',
             name: 'clip-1-aaaa.png',
@@ -92,13 +91,21 @@ describe('attachment wiring — drop', () => {
         };
         const tm = makeTm();
 
+        // Simulate dropping on the terminal pane — a sibling of the
+        // input bar, not inside it. The page-wide handler should still
+        // catch it. This is the regression test for "drag and drop
+        // literally doesn't work" when the user drops where their
+        // cursor naturally is.
+        const terminalPane = document.createElement('div');
+        terminalPane.className = 'term-container';
+        document.body.appendChild(terminalPane);
+
         const file = pngFile('dropped.png');
-        const dt = { files: [file] };
+        const dt = { files: [file], types: ['Files'] };
         const event = new Event('drop', { bubbles: true, cancelable: true });
         Object.defineProperty(event, 'dataTransfer', { value: dt });
-        tm.inputBarContainer.dispatchEvent(event);
+        terminalPane.dispatchEvent(event);
 
-        // Wait for the async upload to resolve + chip to render.
         await vi.waitFor(() => {
             expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(1);
         });
@@ -113,6 +120,33 @@ describe('attachment wiring — drop', () => {
         expect(tm.stagedAttachments[0].path).toBe('/home/u/.phi/clipboard/clip-1-aaaa.png');
         expect(tm.stagedAttachments[0].source).toBe('drop');
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(false);
+        // Visual feedback was toggled and reset.
+        expect(tm.inputBarContainer.classList.contains('is-drop-target')).toBe(false);
+    });
+
+    it('skips drops that land inside a .tab element (tab reorder wins)', async () => {
+        serverResponse = { path: '/x.png', name: 'x.png' };
+        const tm = makeTm();
+
+        // Add a tab element to the DOM. Drop on the tab should be
+        // ignored by the attachment handler (closest('.tab') check).
+        const tab = document.createElement('div');
+        tab.className = 'tab';
+        document.body.appendChild(tab);
+
+        // Spy on the chip adder so we test the CURRENT handler, not
+        // accumulated handlers from previous tests.
+        const addSpy = vi.spyOn(tm, '_addAttachmentChip');
+
+        const file = pngFile('tabdrop.png');
+        const dt = { files: [file], types: ['Files'] };
+        const event = new Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'dataTransfer', { value: dt });
+        tab.dispatchEvent(event);
+
+        await new Promise((r) => setTimeout(r, 20));
+        expect(addSpy).not.toHaveBeenCalled();
+        expect(tm.stagedAttachments).toHaveLength(0);
     });
 
     it('skips non-image files in the drop', async () => {
