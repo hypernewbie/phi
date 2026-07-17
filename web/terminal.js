@@ -2587,6 +2587,24 @@ export class TabManager {
         brand.addEventListener('mouseleave', () => scheduleClose());
         brand.addEventListener('blur', () => scheduleClose(0));
 
+        // Hovering the hostname area must NOT open the HUD — the hostname
+        // has its own click behavior (toggles the tab-selector dropdown)
+        // and a HUD + tab-selector both opening would clash visually.
+        // Close any open HUD when the cursor enters the hostname wrapper,
+        // whether via direct entry or lateral movement from the logo.
+        const hostnameWrapper = brand.querySelector('.hostname-wrapper');
+        if (hostnameWrapper) {
+            hostnameWrapper.addEventListener('mouseenter', () => {
+                if (this.selfHudOpen) {
+                    if (this.selfHudCloseTimer) {
+                        clearTimeout(this.selfHudCloseTimer);
+                        this.selfHudCloseTimer = null;
+                    }
+                    this._closeSelfHud();
+                }
+            });
+        }
+
         // Keep the popover open if the cursor moves onto it (grace period).
         if (this.selfHudEl) {
             this.selfHudEl.addEventListener('mouseenter', () => {
