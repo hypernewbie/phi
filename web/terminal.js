@@ -607,7 +607,6 @@ export class TabManager {
         // so Cmd+V in the terminal pane still flows raw bytes to the PTY.
         this._initAttachmentDropZone();
         this._initAttachmentPasteHandler();
-        this._initDocumentDropGuard();
         this._initBrandHud();
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
@@ -2371,45 +2370,63 @@ export class TabManager {
         return true;
     }
 
-    // _initAttachmentDropZone wires drag-and-drop file ingestion on the
-    // input bar container. Drop fires only when the user releases over
-    // the input bar; nothing changes for drops on the tabs strip or
-    // terminal pane (those have their own handlers / behavior).
+    // _initAttachmentDropZone wires drag-and-drop file ingestion. The drop
+    // zone is intentionally broader than just the input bar: users drop
+    // where their cursor is, which is usually the terminal pane, not the
+    // narrow input strip. The page-wide dragover handler gives visual
+    // feedback (input bar glows) regardless of cursor position. The
+    // drop handler routes file drops from anywhere except the tabs
+    // strip (which has its own reorder handler) to the attachment
+    // pipeline.
     //
-    // Visual feedback: a glow on the input bar while a drag is over it,
-    // driven by `.is-drop-target` class. Uses existing --accent-glow
+    // Visual feedback: input bar glows via `.is-drop-target` whenever a
+    // file is being dragged anywhere on the page. Uses existing --accent
     // tokens — no new colours per AGENTS.md.
     _initAttachmentDropZone() {
         if (!this.inputBarContainer) return;
-        let dragDepth = 0; // dragenter/leave fire on every child boundary
 
-        this.inputBarContainer.addEventListener('dragenter', (e) => {
+        // Page-wide dragover: prevent default (required so drop fires)
+        // and toggle the visual feedback class on the input bar.
+        // Skip when the drag isn't a file (text/uri-list no-op cleanly).
+        const isFileDrag = (e) => {
             const dt = e.dataTransfer;
-            if (!dt) return;
-            // Only react to file drags — text/uri-list drags no-op cleanly.
-            if (!dt.types || !Array.from(dt.types).includes('Files')) return;
+            if (!dt || !dt.types) return false;
+            return Array.from(dt.types).includes('Files');
+        };
+
+        document.addEventListener('dragover', (e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {}
+            this.inputBarContainer.classList.add('is-drop-target');
+        });
+
+        // dragleave fires on every child boundary; gate by counter so
+        // moving across the page keeps the glow on.
+        let dragDepth = 0;
+        document.addEventListener('dragenter', (e) => {
+            if (!isFileDrag(e)) return;
             e.preventDefault();
             dragDepth += 1;
             this.inputBarContainer.classList.add('is-drop-target');
         });
-        this.inputBarContainer.addEventListener('dragover', (e) => {
-            const dt = e.dataTransfer;
-            if (!dt || !dt.types || !Array.from(dt.types).includes('Files')) return;
-            // Required so the drop event fires after release.
-            e.preventDefault();
-            try { dt.dropEffect = 'copy'; } catch (_) { /* some browsers */ }
-        });
-        this.inputBarContainer.addEventListener('dragleave', (e) => {
+        document.addEventListener('dragleave', (e) => {
             dragDepth = Math.max(0, dragDepth - 1);
             if (dragDepth === 0) {
                 this.inputBarContainer.classList.remove('is-drop-target');
             }
         });
-        this.inputBarContainer.addEventListener('drop', async (e) => {
+        document.addEventListener('drop', async (e) => {
+            // Skip if the drop landed inside a tab — the per-tab drop
+            // handler manages tab reordering. Use closest('.tab') rather
+            // than a stored tabsContainer reference so this check stays
+            // correct across TabManager instances and test resets.
+            if (e.target && e.target.closest && e.target.closest('.tab')) return;
+            if (!isFileDrag(e)) return;
             e.preventDefault();
             dragDepth = 0;
             this.inputBarContainer.classList.remove('is-drop-target');
-            const files = extractImageFiles(e.dataTransfer && e.dataTransfer.files);
+            const files = extractImageFiles(e.dataTransfer.files);
             for (const file of files) {
                 try {
                     const attachment = await uploadClipboardImage(file, file.name || 'dropped');
@@ -2448,25 +2465,9 @@ export class TabManager {
         });
     }
 
-    // _initDocumentDropGuard prevents the browser from navigating away
-    // when a file is dropped outside the input bar. Without this, a
-    // missed drop on the page background replaces phi with the file's
-    // contents in the tab — losing every session.
-    _initDocumentDropGuard() {
-        document.addEventListener('dragover', (e) => {
-            // Only intercept if a file is being dragged.
-            if (!e.dataTransfer || !e.dataTransfer.types) return;
-            if (Array.from(e.dataTransfer.types).includes('Files')) {
-                e.preventDefault();
-            }
-        });
-        document.addEventListener('drop', (e) => {
-            if (!e.dataTransfer || !e.dataTransfer.types) return;
-            if (Array.from(e.dataTransfer.types).includes('Files')) {
-                e.preventDefault();
-            }
-        });
-    }
+    // (Removed _initDocumentDropGuard: the page-wide dragover/drop handlers
+// in _initAttachmentDropZone now do both preventDefault AND the upload
+// in one place, so a separate "guard" listener is redundant.)
 
     // _addAttachmentChip stores the attachment and re-renders the strip.
     _addAttachmentChip(attachment) {
