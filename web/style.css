@@ -264,12 +264,16 @@ html, body {
 
 /* Cartouche-shaped glass surface. The high border-radius gives the
    capsule silhouette; the layered shadows carve the obsidian edge.
-   Existing --accent-* tokens only — no new colour introduced. */
+   Existing --accent-* tokens only — no new colour introduced.
+
+   Position: fixed + z-index 9999 + inline top/left so the popover
+   escapes .app-header's z-index:100 stacking context. Without this,
+   .diff-panel (z-index:1200) and .modal-overlay (z-index:10000) cover
+   the popover and steal its hover events. JS appends the element to
+   document.body and recomputes top/left on open + scroll + resize. */
 .self-hud {
-    position: absolute;
-    top: calc(100% + 10px);
-    left: 0;
-    z-index: 1100;
+    position: fixed;
+    z-index: 9999;
     min-width: 260px;
     max-width: 320px;
     padding: 14px 16px 12px;
