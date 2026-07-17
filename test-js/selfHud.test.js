@@ -166,7 +166,13 @@ describe('brand HUD popover', () => {
 
     beforeEach(() => {
         document.body.innerHTML = `
-            <div class="brand" id="brand"><span class="logo">Φ</span></div>
+            <div class="brand" id="brand">
+                <span class="logo">Φ</span>
+                <span class="brand-name">phi</span>
+                <div class="hostname-wrapper">
+                    <span id="hostname-display">atlas</span>
+                </div>
+            </div>
             <div id="self-hud-popover" class="self-hud hidden"></div>
         `;
         brand = document.getElementById('brand');
@@ -290,5 +296,36 @@ describe('brand HUD popover', () => {
             expect(/position\s*:\s*fixed/.test(css)).toBe(true);
             expect(/z-index\s*:\s*9999/.test(css)).toBe(true);
         }
+    });
+
+    it('closes the HUD when the cursor enters .hostname-wrapper (avoids clash with hostname tab-selector)', () => {
+        const hostnameWrapper = brand.querySelector('.hostname-wrapper');
+        expect(hostnameWrapper).not.toBeNull();
+
+        // Open HUD via the same path the brand mouseenter uses. Direct
+        // invocation is more reliable than dispatching synthetic mouseenter
+        // events (which jsdom treats with quirks around bubbling).
+        tm._openSelfHud();
+        expect(popover.classList.contains('is-open')).toBe(true);
+
+        // Cursor moves onto the hostname area — HUD must close so the
+        // hostname tab-selector dropdown doesn't have to coexist with it.
+        hostnameWrapper.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        // _closeSelfHud removes .is-open synchronously; the .hidden class
+        // is added after a 220ms fade-out.
+        expect(popover.classList.contains('is-open')).toBe(false);
+        expect(tm.selfHudOpen).toBe(false);
+    });
+
+    it('clicking the hostname does not toggle the HUD (its own dropdown owns the click)', () => {
+        // Existing brand click handler excludes .hostname-wrapper, so a
+        // click on the hostname element never opens or closes the HUD.
+        const hostnameDisplay = brand.querySelector('#hostname-display');
+        // Open HUD first.
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(popover.classList.contains('is-open')).toBe(true);
+        // Click on hostname — HUD state must not change.
+        hostnameDisplay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(popover.classList.contains('is-open')).toBe(true);
     });
 });
