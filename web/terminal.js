@@ -2543,15 +2543,27 @@ export class TabManager {
     // _initBrandHud wires hover/focus on the top-left Φ logo to open the
     // self-state HUD popover. No fetch on open/close — every field is
     // computed from local state (hostname, version, tab map, CPU sample).
-    // The popover itself is a static element in index.html; we only paint.
+    //
+    // The popover lives in index.html as a sibling of .brand inside
+    // .app-header, but on init we reparent it to <body> so it escapes
+    // .app-header's z-index:100 stacking context. Without that reparent,
+    // .diff-panel (z-index:1200) and .modal-overlay (z-index:10000)
+    // cover the popover and steal its hover events.
     _initBrandHud() {
         const brand = document.querySelector('.brand');
         if (!brand) return;
+        this.brandEl = brand;
         // Make the brand discoverable as interactive for keyboard users.
         if (!brand.hasAttribute('tabindex')) brand.setAttribute('tabindex', '0');
         if (!brand.hasAttribute('role')) brand.setAttribute('role', 'button');
         if (!brand.getAttribute('aria-describedby')) {
             brand.setAttribute('aria-describedby', 'self-hud-popover');
+        }
+
+        // Reparent the popover to <body> so its z-index competes in the
+        // root stacking context. Idempotent — no-op if already there.
+        if (this.selfHudEl && this.selfHudEl.parentNode !== document.body) {
+            document.body.appendChild(this.selfHudEl);
         }
 
         const open = () => {
@@ -2584,6 +2596,18 @@ export class TabManager {
                 }
             });
             this.selfHudEl.addEventListener('mouseleave', () => scheduleClose());
+        }
+
+        // Track scroll/resize while open so the popover follows the brand
+        // when the layout shifts. capture:true ensures we catch scrolls on
+        // any container (not just window). passive:true keeps it cheap.
+        if (this.selfHudEl) {
+            window.addEventListener('scroll', () => {
+                if (this.selfHudOpen) this._positionSelfHud();
+            }, { capture: true, passive: true });
+            window.addEventListener('resize', () => {
+                if (this.selfHudOpen) this._positionSelfHud();
+            });
         }
 
         // Esc closes the popover if focus is on the brand. Listening on
@@ -2620,10 +2644,22 @@ export class TabManager {
 
     _openSelfHud() {
         if (!this.selfHudEl) return;
+        this._positionSelfHud();
         this.selfHudEl.classList.remove('hidden');
         this.selfHudEl.classList.add('is-open');
         this.selfHudEl.setAttribute('aria-hidden', 'false');
         this.selfHudOpen = true;
+    }
+
+    // _positionSelfHud anchors the popover to the brand's current
+    // viewport rect. Called on every open and on scroll/resize while
+    // open. Inline style.top/.left beat any CSS rule, which is what
+    // we want for dynamic positioning.
+    _positionSelfHud() {
+        if (!this.selfHudEl || !this.brandEl) return;
+        const rect = this.brandEl.getBoundingClientRect();
+        this.selfHudEl.style.top = `${Math.round(rect.bottom + 10)}px`;
+        this.selfHudEl.style.left = `${Math.round(rect.left)}px`;
     }
 
     _closeSelfHud() {
