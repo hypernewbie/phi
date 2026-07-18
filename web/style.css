@@ -2299,14 +2299,27 @@ html, body {
     border-top: 1px solid var(--bg-border);
     background-color: var(--bg-panel);
     padding: 8px 12px;
+    /* Column layout: attachment-strip on top, .input-bar-row below.
+       Keeping the strip in its own row avoids any flex math contention
+       with the textarea + actions when a paste/drop un-hides the strip. */
     display: flex;
-    gap: 12px;
-    align-items: flex-end;
+    flex-direction: column;
+    gap: 8px;
     flex-shrink: 0;
     transition: box-shadow 0.15s ease, border-color 0.15s ease;
     /* Inset obsidian edge on the top mirrors the app-header's
        bottom edge — glass panels feel 'carved from stone'. */
     box-shadow: inset 0 1px 0 var(--accent-trace);
+}
+
+/* The textarea + actions row inside the column container. Owns the
+   align-items:flex-end behavior the container used to apply directly,
+   so the Send/cancel buttons bottom-align with the textarea's last
+   line regardless of textarea height. */
+.input-bar-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
 }
 
 .input-bar-container:focus-within {
@@ -2325,7 +2338,9 @@ html, body {
 }
 
 /* Attachment chip strip: flex row above the textarea. Hidden when
-   empty so it doesn't take vertical space when unused. */
+   empty so it doesn't take vertical space when unused. In the
+   column-flex container, align-self:stretch makes the strip fill the
+   horizontal width; width:100% is redundant but harmless. */
 .attachment-strip {
     display: flex;
     flex-wrap: wrap;
