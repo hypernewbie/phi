@@ -167,28 +167,25 @@ func TestHandleAttachments_RejectsMissingFileField(t *testing.T) {
 	}
 }
 
-func TestHandleAttachments_SweepKeepsRecentFifty(t *testing.T) {
+func TestHandleAttachments_SweepKeepsRecentTwenty(t *testing.T) {
 	home := withTempHome(t)
 	dir := filepath.Join(home, ".phi", "clipboard")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	// Pre-create 60 files with increasing mtimes.
-	for i := 0; i < 60; i++ {
+	// Pre-create 30 files with increasing mtimes — enough to force
+	// the sweep to drop the oldest 10.
+	for i := 0; i < 30; i++ {
 		p := filepath.Join(dir, "presweep-"+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+".png")
 		if err := os.WriteFile(p, []byte{0x89, 'P', 'N', 'G'}, 0644); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
-		// Stagger mtimes deterministically by sleeping 1ms.
-		// (Tests aren't time-critical; 60ms total is fine.)
-		if i < 59 {
-			now := offsetMtimeBy(int64(i))
-			_ = os.Chtimes(p, now, now)
-		}
+		now := offsetMtimeBy(int64(i))
+		_ = os.Chtimes(p, now, now)
 	}
 
-	// Trigger one upload; sweep should drop the 10 oldest.
+	// Trigger one upload; sweep should drop the oldest 10.
 	data := attachmentFixturePNG(16)
 	req := newMultipartRequest(t, "file", "fresh.png", "image/png", data)
 	w := httptest.NewRecorder()
