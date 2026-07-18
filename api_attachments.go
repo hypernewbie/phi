@@ -35,8 +35,10 @@ const attachmentMaxBytes = 25 << 20 // 25 MB
 
 // attachmentSweepKeep is the number of files we keep in the clipboard dir.
 // Older files (by mtime) are deleted on every successful upload so the dir
-// doesn't grow unbounded across long-running sessions.
-const attachmentSweepKeep = 50
+// doesn't grow unbounded across long-running sessions. 20 covers a
+// generous session's worth of drag-drop + clipboard pastes; anything
+// older than the last few minutes of activity is almost certainly stale.
+const attachmentSweepKeep = 20
 
 // attachmentMIMEToExt maps the allowlisted image MIME types to a safe
 // extension. The handler rejects any MIME outside this map so we never
