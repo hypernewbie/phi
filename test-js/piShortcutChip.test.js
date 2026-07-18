@@ -48,7 +48,7 @@ describe('pi shortcut chip placement', () => {
         const tm = makeTm();
         tm.renderPresets('pi');
 
-        const chip = tm.presetsContainer.querySelector('.kbd-shortcut-btn');
+        const chip = tm.presetsContainer.querySelector('#pi-shortcut-send-btn');
         expect(chip).not.toBeNull();
         expect(chip.classList.contains('hidden')).toBe(false);
         // The chip should carry the binding label so users see Ctrl+Shift+X.
@@ -60,10 +60,10 @@ describe('pi shortcut chip placement', () => {
     it('does NOT render the chip for non-pi coders', () => {
         const tm = makeTm();
         tm.renderPresets('bash');
-        expect(tm.presetsContainer.querySelector('.kbd-shortcut-btn')).toBeNull();
+        expect(tm.presetsContainer.querySelector('#pi-shortcut-send-btn')).toBeNull();
 
         tm.renderPresets('claude');
-        expect(tm.presetsContainer.querySelector('.kbd-shortcut-btn')).toBeNull();
+        expect(tm.presetsContainer.querySelector('#pi-shortcut-send-btn')).toBeNull();
     });
 
     it('leaves Send ↵ visible and untouched when the chip appears or disappears', () => {
@@ -84,7 +84,7 @@ describe('pi shortcut chip placement', () => {
         const tm = makeTm();
         tm.renderPresets('pi');
 
-        const chip = tm.presetsContainer.querySelector('.kbd-shortcut-btn');
+        const chip = tm.presetsContainer.querySelector('#pi-shortcut-send-btn');
         chip.click();
 
         expect(tm.sendStagedInput).toHaveBeenCalledTimes(1);
@@ -94,14 +94,14 @@ describe('pi shortcut chip placement', () => {
         const tm = makeTm();
 
         tm.renderPresets('pi');
-        const piChip = tm.presetsContainer.querySelector('.kbd-shortcut-btn');
+        const piChip = tm.presetsContainer.querySelector('#pi-shortcut-send-btn');
         expect(piChip).not.toBeNull();
 
         tm.renderPresets('bash');
-        expect(tm.presetsContainer.querySelector('.kbd-shortcut-btn')).toBeNull();
+        expect(tm.presetsContainer.querySelector('#pi-shortcut-send-btn')).toBeNull();
 
         tm.renderPresets('pi');
-        const piChipAgain = tm.presetsContainer.querySelector('.kbd-shortcut-btn');
+        const piChipAgain = tm.presetsContainer.querySelector('#pi-shortcut-send-btn');
         expect(piChipAgain).not.toBeNull();
         expect(piChipAgain).not.toBe(piChip); // renderPresets rebuilds the row
     });

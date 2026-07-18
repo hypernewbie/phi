@@ -3735,15 +3735,17 @@ export class TabManager {
         }
 
         // 2b. Pi-specific shortcut chip: lives in the presets row alongside
-        // /quit /resume /model /compact. Visible only when the active tab is
-        // a pi session. Clicking sends the staged input — same as Send ↵.
-        // The keyboard binding itself is global (document-level keydown
-        // listener below) and works whether the chip is rendered or not.
+        // /quit /resume /model /compact, with the same flat preset-btn
+        // shape (no kbd-key caps / glow). Visible only when the active
+        // tab is a pi session. Clicking sends the staged input — same
+        // as Send ↵. The keyboard binding itself is global (document-level
+        // keydown listener below) and works whether the chip is rendered.
         if (coderId === 'pi') {
             const chip = document.createElement('button');
-            chip.className = 'kbd-shortcut-btn';
+            chip.id = 'pi-shortcut-send-btn';
+            chip.className = 'preset-btn';
             chip.title = 'Send staged input (Ctrl+Shift+X)';
-            chip.innerHTML = '<span class="kbd-key">Ctrl</span><span class="kbd-plus">+</span><span class="kbd-key">Shift</span><span class="kbd-plus">+</span><span class="kbd-key">X</span><span class="kbd-label">send</span>';
+            chip.textContent = 'Ctrl+Shift+X · send';
             chip.addEventListener('click', () => {
                 this.sendStagedInput();
             });
