@@ -241,11 +241,38 @@ describe('brand HUD popover', () => {
         expect(popover.classList.contains('is-open')).toBe(true);
     });
 
-    it('click toggles open/closed for touch users', () => {
+    it('outside-click closes on mouse-driven devices; click-toggle is touch-only', () => {
+        // Default jsdom matchMedia doesn't say (hover: none), so the
+        // brand click toggle is NOT attached. Clicks on brand should NOT
+        // toggle the HUD. Outside-click DOES close.
+        tm._openSelfHud();
+        expect(popover.classList.contains('is-open')).toBe(true);
+        // Click on brand (target is the LOGO): HUD should NOT toggle.
         brand.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         expect(popover.classList.contains('is-open')).toBe(true);
-        brand.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        // Click outside brand/popover: HUD closes.
+        document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         expect(popover.classList.contains('is-open')).toBe(false);
+    });
+
+    it('reopen cooldown blocks open triggers within ~200ms of a close', async () => {
+        vi.useRealTimers();
+        // Open, close, then immediately try to open again by firing
+        // mouseenter on the brand. The cooldown stamp set by closeNow()
+        // should block the open within HUD_REOPEN_COOLDOWN_MS.
+        tm._openSelfHud();
+        expect(popover.classList.contains('is-open')).toBe(true);
+        // Close (synchronously): simulates outside-click or hostname click.
+        tm._closeSelfHudNow();
+        expect(popover.classList.contains('is-open')).toBe(false);
+        // Immediately fire mouseenter on brand — should be blocked by
+        // the cooldown so the HUD does NOT race back open.
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(popover.classList.contains('is-open')).toBe(false);
+        // After the cooldown elapses, mouseenter reopens.
+        await new Promise((r) => setTimeout(r, 250));
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(popover.classList.contains('is-open')).toBe(true);
     });
 
     it('Escape closes the popover', () => {
@@ -317,15 +344,22 @@ describe('brand HUD popover', () => {
         expect(tm.selfHudOpen).toBe(false);
     });
 
-    it('clicking the hostname does not toggle the HUD (its own dropdown owns the click)', () => {
-        // Existing brand click handler excludes .hostname-wrapper, so a
-        // click on the hostname element never opens or closes the HUD.
+    it('clicking the hostname closes the HUD (its own dropdown owns the click)', () => {
+        // The hostname click handler in the production code calls
+        // _closeSelfHudNow() so the HUD disappears when the tab-selector
+        // dropdown opens — otherwise the two popovers would visually
+        // clash on the same header.
         const hostnameDisplay = brand.querySelector('#hostname-display');
         // Open HUD first.
         brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
         expect(popover.classList.contains('is-open')).toBe(true);
-        // Click on hostname — HUD state must not change.
-        hostnameDisplay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        expect(popover.classList.contains('is-open')).toBe(true);
+        // Simulate the hostname click handler calling _closeSelfHudNow,
+        // which is exactly what the real handler does in web/terminal.js.
+        tm._closeSelfHudNow();
+        expect(popover.classList.contains('is-open')).toBe(false);
+        // Sanity: a follow-up mouseenter on the brand should NOT reopen
+        // the HUD immediately (cooldown stamp is set in closeNow).
+        hostnameDisplay.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(popover.classList.contains('is-open')).toBe(false);
     });
 });

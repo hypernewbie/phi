@@ -745,6 +745,13 @@ export class TabManager {
         if (hostEl) {
             hostEl.addEventListener('click', (e) => {
                 e.stopPropagation();
+                // Clicking the hostname opens its tab-selector dropdown
+                // — close the brand HUD first so the two popovers never
+                // coexist. Without this, the HUD stays open while the
+                // hostname dropdown shows underneath (visible clash).
+                if (typeof this._closeSelfHudNow === 'function') {
+                    this._closeSelfHudNow();
+                }
                 const dropdown = document.getElementById('hostname-tabs-dropdown');
                 if (dropdown) {
                     const isHidden = dropdown.classList.contains('hidden');
@@ -2566,21 +2573,46 @@ export class TabManager {
             document.body.appendChild(this.selfHudEl);
         }
 
+        // Reopen cooldown: ignore open triggers (mouseenter / focus) for
+        // this many ms after a close. Prevents the flicker race where the
+        // HUD closes (e.g. on outside-click), the cursor happens to be
+        // still over the brand, and the next mouseenter reopens it.
+        let lastClosedAt = 0;
+        const HUD_REOPEN_COOLDOWN_MS = 200;
+
         const open = () => {
             if (this.selfHudCloseTimer) {
                 clearTimeout(this.selfHudCloseTimer);
                 this.selfHudCloseTimer = null;
             }
+            if (Date.now() - lastClosedAt < HUD_REOPEN_COOLDOWN_MS) return;
             this._renderSelfHud();
             this._openSelfHud();
         };
         const scheduleClose = (delay = 150) => {
             if (this.selfHudCloseTimer) clearTimeout(this.selfHudCloseTimer);
+            // Stamp lastClosedAt immediately so any subsequent mouseenter
+            // during the fade-out falls inside the cooldown window.
+            lastClosedAt = Date.now();
             this.selfHudCloseTimer = setTimeout(() => {
                 this.selfHudCloseTimer = null;
                 this._closeSelfHud();
             }, delay);
         };
+        // closeNow is the "no-grace" close path: clears any pending timer,
+        // stamps the cooldown, and closes synchronously. Used by every
+        // close trigger except the mouseleave scheduler.
+        const closeNow = () => {
+            if (this.selfHudCloseTimer) {
+                clearTimeout(this.selfHudCloseTimer);
+                this.selfHudCloseTimer = null;
+            }
+            lastClosedAt = Date.now();
+            this._closeSelfHud();
+        };
+        // Expose closeNow so hostname-click and other consumers don't
+        // need to duplicate the cooldown bookkeeping.
+        this._closeSelfHudNow = closeNow;
 
         brand.addEventListener('mouseenter', open);
         brand.addEventListener('focus', open);
@@ -2595,13 +2627,7 @@ export class TabManager {
         const hostnameWrapper = brand.querySelector('.hostname-wrapper');
         if (hostnameWrapper) {
             hostnameWrapper.addEventListener('mouseenter', () => {
-                if (this.selfHudOpen) {
-                    if (this.selfHudCloseTimer) {
-                        clearTimeout(this.selfHudCloseTimer);
-                        this.selfHudCloseTimer = null;
-                    }
-                    this._closeSelfHud();
-                }
+                if (this.selfHudOpen) closeNow();
             });
         }
 
@@ -2634,29 +2660,33 @@ export class TabManager {
         brand.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.selfHudOpen) {
                 e.preventDefault();
-                this._closeSelfHud();
+                closeNow();
                 brand.focus({ preventScroll: true });
             }
         });
 
-        // Click toggle for touch devices (no hover). Tap once = open,
-        // tap again = close. Outside-click closes.
-        brand.addEventListener('click', (e) => {
-            // Don't interfere with the brand's own children (mobile-sidebar
-            // toggle, hostname dropdown, etc.) — those handle their own
-            // click semantics.
-            if (e.target.closest('button, .hostname-wrapper')) return;
-            if (this.selfHudOpen) {
-                this._closeSelfHud();
-            } else {
-                open();
-            }
-        });
+        // Touch-only click toggle: on devices without hover (phones,
+        // tablets), tap brand to open, tap again to close. On
+        // mouse-driven devices, hover owns opening/closing; clicks pass
+        // through to the outside-click handler below.
+        const isTouch = typeof window.matchMedia === 'function'
+            && window.matchMedia('(hover: none)').matches;
+        if (isTouch) {
+            brand.addEventListener('click', (e) => {
+                if (e.target.closest('button, .hostname-wrapper')) return;
+                if (this.selfHudOpen) closeNow();
+                else open();
+            });
+        }
+
+        // Outside-click closes. Clicks inside the brand or the popover
+        // are skipped (the brand's own click handler is responsible for
+        // those, and we don't want to fight with it).
         document.addEventListener('click', (e) => {
             if (!this.selfHudOpen) return;
             const t = e.target;
-            if (t.closest('.brand') || t.closest('#self-hud-popover')) return;
-            this._closeSelfHud();
+            if (t.closest && (t.closest('.brand') || t.closest('#self-hud-popover'))) return;
+            closeNow();
         });
     }
 
