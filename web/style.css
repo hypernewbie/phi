@@ -426,35 +426,13 @@ html, body {
     .self-hud.cpu-critical .self-hud-footer .cpu { animation: none; }
 }
 
-/* Light themes: the obsidian glass reads too dark on a pale header.
-   Re-tune the surface so the same shape still works. */
-[data-theme-color="white"] .self-hud,
-[data-theme-color="canary"] .self-hud,
-[data-theme-color="mint"] .self-hud,
-[data-theme-color="lime"] .self-hud {
-    background: linear-gradient(
-        180deg,
-        rgba(255, 255, 255, 0.86) 0%,
-        rgba(245, 245, 248, 0.92) 100%
-    );
-    color: #1a1a1f;
-}
-[data-theme-color="white"] .self-hud .self-hud-version,
-[data-theme-color="canary"] .self-hud .self-hud-version,
-[data-theme-color="mint"] .self-hud .self-hud-version,
-[data-theme-color="lime"] .self-hud .self-hud-version { color: rgba(0,0,0,0.45); }
-[data-theme-color="white"] .self-hud-metrics .metric-label,
-[data-theme-color="canary"] .self-hud-metrics .metric-label,
-[data-theme-color="mint"] .self-hud-metrics .metric-label,
-[data-theme-color="lime"] .self-hud-metrics .metric-label { color: rgba(0,0,0,0.55); }
-[data-theme-color="white"] .self-hud .self-hud-footer,
-[data-theme-color="canary"] .self-hud .self-hud-footer,
-[data-theme-color="mint"] .self-hud .self-hud-footer,
-[data-theme-color="lime"] .self-hud .self-hud-footer { color: rgba(0,0,0,0.55); }
-[data-theme-color="white"] .self-hud .self-hud-footer .dim,
-[data-theme-color="canary"] .self-hud .self-hud-footer .dim,
-[data-theme-color="mint"] .self-hud .self-hud-footer .dim,
-[data-theme-color="lime"] .self-hud .self-hud-footer .dim { color: rgba(0,0,0,0.35); }
+/* The self-HUD is a brand element — its identity is fixed across themes.
+   Don't override for white/canary/mint/lime: on light themes the accent
+   tokens map to near-white (e.g. --accent-bright: #ffffff on white), so
+   any rule that uses var(--accent-*) on a translucent-white surface
+   produces white-on-white invisible text. Lock the popover to obsidian
+   glass always; it stays readable on any header (light theme header
+   ends up with a dark popover floating on it, like a system widget). */
 
 .brand .brand-name {
     font-size: 16px;
