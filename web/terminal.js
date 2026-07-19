@@ -43,6 +43,14 @@ export class TabManager {
         this.attachmentStrip = document.getElementById('attachment-strip');
         this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
         this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
+        // Prompt history. Alt+Up / Alt+Down on the textarea cycles through
+        // previously-sent prompts in the active cwd. _historyCursor is the
+        // index into _historyCache for the currently-shown entry; -1 means
+        // no entry shown (the textarea holds fresh text the user is typing).
+        this._historyCache = [];      // newest-first: index 0 = most recent entry
+        this._historyCursor = -1;     // -1 = free-form, ≥0 = showing cache[idx]
+        this._historyCwd = '';        // cwd the cache was loaded for
+        this._historyLoaded = false;  // first Alt+Up needs a fetch
         this.selfHudEl = document.getElementById('self-hud-popover');
         this.selfHudOpen = false;
         this.selfHudCloseTimer = null;
@@ -530,10 +538,14 @@ export class TabManager {
             }
             this.lastInputValue = currentVal;
             this.adjustInputHeight();
+            // Cursor-reset-on-type for prompt history lives in
+            // _initPromptHistoryKeydown's own 'input' listener (kept
+            // separate so it's independently unit-testable).
         });
 
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
+
             // When input is empty, capture arrows, enter, escape and ctrl key shortcuts to control PTY directly.
             if (this.inputTextArea.value === '') {
                 // Capture Shift+Tab (Backtab) to prevent browser focus shift
@@ -607,6 +619,7 @@ export class TabManager {
         // so Cmd+V in the terminal pane still flows raw bytes to the PTY.
         this._initAttachmentDropZone();
         this._initAttachmentPasteHandler();
+        this._initPromptHistoryKeydown();
         this._initBrandHud();
 
         // Global Ctrl+Shift+X -> send staged input. Fires regardless of
@@ -2523,6 +2536,35 @@ export class TabManager {
 // in _initAttachmentDropZone now do both preventDefault AND the upload
 // in one place, so a separate "guard" listener is redundant.)
 
+    // _initPromptHistoryKeydown wires Alt+Up / Alt+Down on the staged
+    // input textarea to cycle through previously-sent prompts (see
+    // _cyclePromptHistory). Kept as its own listener — separate from the
+    // big Enter/Escape/arrows keydown handler — so it's easy to unit-test
+    // in isolation, matching the _initAttachmentDropZone /
+    // _initAttachmentPasteHandler pattern.
+    _initPromptHistoryKeydown() {
+        if (!this.inputTextArea) return;
+        this.inputTextArea.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                this._cyclePromptHistory('older');
+                return;
+            }
+            if (e.key === 'ArrowDown' && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                this._cyclePromptHistory('newer');
+                return;
+            }
+        });
+        // Any user-typed character breaks the history-cycle: the
+        // textarea is now the user's own draft, not a stored entry.
+        // Cursor goes back to -1 so the next Alt+Up starts from the
+        // most-recent stored entry.
+        this.inputTextArea.addEventListener('input', () => {
+            this._historyCursor = -1;
+        });
+    }
+
     // _addAttachmentChip stores the attachment and re-renders the strip.
     _addAttachmentChip(attachment) {
         // De-dupe by path: same file dropped twice shouldn't chip twice.
@@ -2864,6 +2906,23 @@ export class TabManager {
         // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
         const sent = this.sendInput(activeTab, payload + '\r');
         if (!sent) return;
+
+        // Record this prompt into ~/.phi/prompt_history.json BEFORE
+        // clearing the textarea. Fire-and-forget so a slow disk
+        // doesn't hold up the send. The backend handles dedup / cap
+        // (FIFO at 100 entries, per-cwd filter).
+        const sentText = val && val.trim() ? val.trim() : '';
+        if (sentText) {
+            const cwdForHistory = (this.app.sessionsManager && this.app.sessionsManager.activeCWD) || '';
+            fetch('/api/prompt-history/append', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: sentText, cwd: cwdForHistory }),
+            }).catch((err) => console.warn('[prompt_history] append failed', err));
+            // Reset history cursor — user just sent fresh text, cycling
+            // should start back at the most-recent prior entry.
+            this._historyCursor = -1;
+        }
 
         this.inputTextArea.value = '';
         this.lastInputValue = '';
@@ -4512,5 +4571,93 @@ export class TabManager {
             }
         }
         if (cleared) this.updateDocumentTitle();
+    }
+
+    // _cyclePromptHistory advances/retreats through the user's previously
+    // sent prompts for the active cwd. direction is 'older' (Alt+Up) or
+    // 'newer' (Alt+Down). On first call for a cwd, fetches from the
+    // server; subsequent calls walk the in-memory cache. Replaces the
+    // textarea value and places the cursor at the end.
+    //
+    // Cursor semantics: -1 = free-form textarea (no entry shown). Any
+    // non-negative index is an offset into _historyCache. Pressing Alt+Up
+    // from -1 jumps to 0 (newest). Pressing Alt+Up from 0 jumps to 1
+    // (older). Pressing Alt+Down decrements; reaching -1 restores the
+    // pre-cycle value (saved in _historyPreCycleValue).
+    async _cyclePromptHistory(direction) {
+        if (!this.inputTextArea) return;
+
+        // Capture the value before any cycle starts so Alt+Down can
+        // return to it.
+        if (this._historyCursor === -1 && direction === 'newer') {
+            return; // already at the "newest" position
+        }
+        if (this._historyPreCycleValue === undefined && this._historyCursor === -1) {
+            this._historyPreCycleValue = this.inputTextArea.value;
+        }
+
+        const cwd = (this.app.sessionsManager && this.app.sessionsManager.activeCWD) || '';
+        if (cwd !== this._historyCwd || !this._historyLoaded) {
+            // Lazy-load the cache for this cwd.
+            const ok = await this._loadPromptHistory(cwd);
+            if (!ok) return;
+        }
+        if (this._historyCache.length === 0) {
+            return; // nothing to cycle through
+        }
+
+        if (direction === 'older') {
+            this._historyCursor = Math.min(
+                this._historyCursor < 0 ? 0 : this._historyCursor + 1,
+                this._historyCache.length - 1,
+            );
+        } else {
+            // 'newer' (Alt+Down)
+            if (this._historyCursor <= 0) {
+                // Past the newest — restore pre-cycle value.
+                this.inputTextArea.value = this._historyPreCycleValue || '';
+                this._historyCursor = -1;
+                this._historyPreCycleValue = undefined;
+                this._placeCursorAtEnd();
+                this.adjustInputHeight();
+                return;
+            }
+            this._historyCursor -= 1;
+        }
+
+        const entry = this._historyCache[this._historyCursor];
+        if (entry) {
+            this.inputTextArea.value = entry.text;
+            this._placeCursorAtEnd();
+            this.adjustInputHeight();
+        }
+    }
+
+    _placeCursorAtEnd() {
+        if (!this.inputTextArea) return;
+        const len = this.inputTextArea.value.length;
+        this.inputTextArea.setSelectionRange(len, len);
+    }
+
+    async _loadPromptHistory(cwd) {
+        try {
+            const res = await fetch(`/api/prompt-history/recent?cwd=${encodeURIComponent(cwd)}&n=50`);
+            if (!res.ok) return false;
+            const entries = await res.json();
+            if (!Array.isArray(entries)) return false;
+            // Server returns newest-first; cache as-is.
+            this._historyCache = entries;
+            this._historyCwd = cwd;
+            this._historyLoaded = true;
+            // Do NOT touch _historyCursor / _historyPreCycleValue here:
+            // _cyclePromptHistory captures the pre-cycle draft (and
+            // reads/advances the cursor) around this call, and this
+            // load can run mid-cycle. Clobbering either field here
+            // would drop the user's draft on the first Alt+Up.
+            return true;
+        } catch (err) {
+            console.warn('[prompt_history] load failed', err);
+            return false;
+        }
     }
 }
