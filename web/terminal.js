@@ -1327,7 +1327,13 @@ export class TabManager {
             searchAddon,
             tabEl,
             termContainer,
-            directMode: false, // Hybrid focus model by default
+            // Default to focused (direct) mode: keyboard goes straight to
+            // the terminal on focus, no separate input bar visible. Click
+            // the direct-mode toggle in the header to opt into the staged
+            // input flow (queue prompts, attach files, Ctrl+Shift+X chip).
+            // Restored tabs pick this up because directMode isn't persisted
+            // — it's a per-session UI choice, not a per-tab config.
+            directMode: true,
             isDead: false,
             isAtBottom: true,
             isBtop: title === 'btop',
