@@ -1327,13 +1327,14 @@ export class TabManager {
             searchAddon,
             tabEl,
             termContainer,
-            // Default to focused (direct) mode: keyboard goes straight to
-            // the terminal on focus, no separate input bar visible. Click
-            // the direct-mode toggle in the header to opt into the staged
-            // input flow (queue prompts, attach files, Ctrl+Shift+X chip).
-            // Restored tabs pick this up because directMode isn't persisted
-            // — it's a per-session UI choice, not a per-tab config.
-            directMode: true,
+            // Per-coder default focus mode. Shell tabs (bash, pwsh) and btop
+            // open in focused/direct mode — keyboard goes straight to the
+            // terminal, no input bar visible. AI-coder tabs (pi, claude,
+            // agy, opencode) keep the staged-input flow as default because
+            // that's the whole phi workflow: queue prompts, attach files,
+            // Ctrl+Shift+X chip. DirectMode is not persisted — restored
+            // tabs pick this up via createTab() on each load.
+            directMode: (coder === 'bash' || coder === 'pwsh'),
             isDead: false,
             isAtBottom: true,
             isBtop: title === 'btop',

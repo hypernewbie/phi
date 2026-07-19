@@ -89,7 +89,11 @@ func LoadSessionMetaMap() (map[string]SessionMeta, error) {
 	}
 
 	if err := json.Unmarshal(b, &m); err != nil {
-		return make(map[string]SessionMeta), nil
+		// Return both the error AND an empty map: callers see the
+		// corruption (so they can surface a "your sessions file is
+		// unreadable" toast) but the loader still produces something
+		// safe for the rest of the server to consume.
+		return make(map[string]SessionMeta), err
 	}
 
 	return m, nil
