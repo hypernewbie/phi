@@ -218,6 +218,8 @@ func main() {
 	http.HandleFunc("/api/markdown/paste", handleMarkdownPaste)
 	http.HandleFunc("/api/markdown/delete", handleMarkdownDelete)
 	http.HandleFunc("/api/markdown/copy-all-worktrees", handleMarkdownCopyAllWorktrees)
+	http.HandleFunc("/api/markdown/export-bundle", handleMarkdownExportBundle)
+	http.HandleFunc("/api/markdown/import-bundle", handleMarkdownImportBundle)
 	http.HandleFunc("/api/attachments", handleAttachments)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
