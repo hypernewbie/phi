@@ -2,6 +2,33 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.12.0 — 2026-07-16
+
+A UI-density release. Tighter hover popovers, fewer layout-shift regressions, and clipboard round-trip for markdown files.
+
+### Added
+- **Self-state HUD on hover/focus the Φ logo.** Cartouche-shaped glass popover in the top-left showing hostname, version, sessions, busy, attention, CPU, last activity. Zero network on open or close — every field computed from local state phi already maintains. CPU-driven emphasis glows the cpu line at high load, pulses at critical. Touch users get click-to-toggle; keyboard users get Escape-to-close.
+- **Markdown clipboard export/import.** 'Export' button in the markdown panel packs every .md file in the configured dirs into a tamper-detected gzip+base64 blob (PHIMD:…); 'Import' reads it from clipboard (or prompts) and writes files into the first configured markdownDir. Path-validated server-side. Click → clipboard → click.
+
+### Changed
+- **Terminal default to direct (focused) mode.** New tabs and restored tabs open with keyboard going straight to the terminal — no separate input bar, no presets row, no file-attach strip visible. Click the direct-mode toggle in the header to opt into the staged input flow. Direct mode is implicit on the workspace landing.
+- **Pi Ctrl+Shift+X shortcut chip uses preset-btn shape** instead of the heavy kbd-key+glow aesthetic. Sits flush alongside /quit /resume /model /compact in the presets row.
+- **Markdown file-list icon is a standard document SVG.** The 𓏛 hieroglyph that depended on a system font (and rendered as tofu on systems without one) is replaced with a 14 px lucide 'file' SVG. The decorative papyrus-scroll styling moves to the markdown VIEWER modal header where there's room for it.
+- **Clipboard-image attachment sweep keeps the 20 most recent files** in `~/.phi/clipboard/` (was 50 — generous for a session's typical attachment load).
+- **Rich diff viewer wraps long lines on mobile.** Forced to line-by-line layout already (mobile-only); inside the `@media (max-width: 768px)` block each `.d2h-code-line` now wraps with `white-space: pre-wrap` / `word-break: break-word` / `overflow-wrap: anywhere`. Line-number column pins to `vertical-align: top`. Desktop bit-identical.
+
+### Fixed
+- **Terminal scrollbar matches content on PTY output.** xterm's native syncScrollArea leaves the scrollbar stale when only PTY output grows (no layout reflow). A `userFollowBottom` flag now gates an explicit `term.scrollToBottom()` on each output write — the same sync the user accidentally triggered by typing in the input bar. Wheel/touch/pointerdown disengage follow; scrolling back to the bottom re-engages; the existing `Jump to bottom` button is the explicit re-engage path.
+- **Paste into the input bar no longer reflows the textarea row.** The attachment chip strip had `width: 100%` inside the same flex container as the textarea, fighting it for row width. The strip is now its own row above a new `.input-bar-row` wrapper for textarea + actions.
+- **Brand HUD popover escapes `.app-header`'s stacking context.** Popover reparented to `<body>`, switched to `position: fixed` + `z-index: 9999`, and top/left computed from the brand's bounding rect on every open/scroll/resize. Otherwise `.diff-panel` and `.modal-overlay` were covering it.
+- **HUD closes when the cursor enters `.hostname-wrapper`.** Otherwise the HUD and the hostname tab-selector dropdown would coexist visually when the cursor drifted from the logo onto the hostname area.
+- **HUD race + white-theme popover.** Click toggle on mouse-driven devices is now touch-only (gated via `(hover: none)` media query). 200ms reopen cooldown after every close — mouseenter/focus within that window is ignored, so cursor jitter doesn't flicker the HUD back open. White-theme overrides removed; popover uses theme-independent obsidian glass so it doesn't collapse into the header on light themes.
+- **Drag-drop is page-wide, not just the input bar.** Drop handler moved to document level so dropping on the terminal pane (where the cursor usually is) also captures the file. Skips `.tab` elements (per-tab drop is for tab reorder). Visual feedback (input-bar glow) now shows whenever a file drag is anywhere on the page.
+
+### Notes
+- The 10 ms / 300 ms `_spamScroll` terminal stabilization loop remains unchanged. AGENTS.md canonically guards this loop; see the "Terminal scroll stabilization loop — do not infer it away" section.
+- The new HUD shortcut chip placement, like all conditional UI changes, follows the "UI action and shortcut contract" section: Send ↵ remains visible for every staged-input coder; the chip is additive discoverability, never a substitute.
+
 ## v0.11.0 — 2026-07-16
 
 A content-density release: more visual information at glance, fewer file-finding rituals before asking the agent.
