@@ -4051,7 +4051,28 @@ html, body {
     color: var(--accent-bright);
 }
 
-.md-file-icon { font-size: 12px; opacity: 0.7; color: var(--accent); }
+.md-file-icon {
+    font-size: 12px;
+    opacity: 0.7;
+    color: var(--accent);
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+/* SVG document glyph rendered alongside each markdown file row. Smaller
+   than the hieroglyph that previously occupied this slot — its job is to
+   be a clear icon, not decoration. */
+.md-file-icon-doc {
+    width: 14px;
+    height: 14px;
+    opacity: 0.6;
+    color: var(--text-muted);
+    transition: color 0.15s, opacity 0.15s;
+}
+.md-file-row:hover .md-file-icon-doc {
+    color: var(--accent);
+    opacity: 0.95;
+}
 .md-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .md-context-menu {
@@ -4180,6 +4201,30 @@ html, body {
     color: var(--accent-bright);
     font-weight: 500;
     overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+.md-modal-title-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Stylized papyrus-scroll glyph that decorates the markdown VIEWER
+   header. Pure SVG paths so it renders on every system (the prior
+   hieroglyph 𓏛 in the file-list slot depended on a system font that
+   several users didn't have). The accent glow reuses --accent-glow so
+   no new color tokens are introduced — AGENTS.md Greek+Egyptian
+   constraint. */
+.md-modal-scroll {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    color: var(--accent);
+    filter: drop-shadow(0 0 6px var(--accent-glow));
+}
     text-overflow: ellipsis;
     white-space: nowrap;
 }

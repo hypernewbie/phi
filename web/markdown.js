@@ -203,14 +203,13 @@ export class MarkdownManager {
                         row.className = 'md-file-row';
                         const item = document.createElement('button');
                         item.className = 'md-file-item';
-                        // 𓏛 is U+133DB — Gardiner Y001, the canonical
-                        // 'rolled papyrus scroll' sign. Replaces the
-                        // generic 📄 for the markdown file list — semantic
-                        // match for 'document' in the Egyptian corpus.
-                        // (Earlier 𓏞 U+133DE = Y003 was the wrong
-                        // variant — Y001 is the primary, most-recognized
-                        // form.)
-                        item.innerHTML = `<span class="md-file-icon">𓏛</span><span class="md-file-name">${f.name}</span>`;
+                        // Standard lucide-style 'file' icon. Universal render,
+                        // no font dependency (the prior 𓏛 hieroglyph depended
+                        // on a system font that some users didn't have).
+                        // Decorative scroll/hieroglyph styling lives in the
+                        // markdown VIEWER modal header instead, where it has
+                        // room to breathe and a font fallback is acceptable.
+                        item.innerHTML = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg><span class="md-file-name">${f.name}</span>`;
                         item.title = f.path;
                         item.addEventListener('click', (e) => {
                             if (e.ctrlKey || e.metaKey) {
@@ -252,9 +251,30 @@ export class MarkdownManager {
         manageRow.appendChild(addDirBtn);
         this.fileListEl.appendChild(manageRow);
     }
+    // _setModalTitle renders the modal title with a stylized papyrus-scroll
+    // SVG glyph on the left and the file name as text. Uses pure SVG paths
+    // (no font dependency, unlike the prior 𓏛 hieroglyph in the file list).
+    // Glow + accent color come from existing tokens — no new tokens per
+    // AGENTS.md.
+    _setModalTitle(name) {
+        const scrollSvg = `<svg class="md-modal-scroll" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <ellipse cx="5" cy="16" rx="2.5" ry="9"/>
+            <ellipse cx="27" cy="16" rx="2.5" ry="9"/>
+            <path d="M 5 8 Q 16 5 27 8 L 27 24 Q 16 27 5 24 Z"/>
+            <line x1="13" y1="5.2" x2="13" y2="2.8"/>
+            <line x1="19" y1="5.2" x2="19" y2="2.8"/>
+            <line x1="13" y1="26.8" x2="13" y2="29.2"/>
+            <line x1="19" y1="26.8" x2="19" y2="29.2"/>
+            <line x1="11" y1="13" x2="21" y2="13" stroke-width="0.9" opacity="0.55"/>
+            <line x1="11" y1="16" x2="20" y2="16" stroke-width="0.9" opacity="0.55"/>
+            <line x1="11" y1="19" x2="21" y2="19" stroke-width="0.9" opacity="0.55"/>
+        </svg>`;
+        this.modalTitle.innerHTML =
+            `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
+    }
     async openFile(f) {
         const cwd = this.app.sessionsManager.activeCWD || '';
-        this.modalTitle.innerText = f.name;
+        this._setModalTitle(f.name);
         this.modalBody.innerHTML = '<div class="md-rendering">Rendering...</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
