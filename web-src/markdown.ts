@@ -259,6 +259,27 @@ export class MarkdownManager {
         // Dir management row at the bottom
         const manageRow = document.createElement('div');
         manageRow.className = 'md-manage-row';
+        // Clipboard export: pulls every .md file in the configured dirs,
+        // gzips + base64-encodes them server-side, copies to clipboard.
+        // Reuses the same server-blob format as config import/export.
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'md-manage-btn';
+        exportBtn.innerText = '⤓  Export';
+        exportBtn.title = 'Copy all markdown files to clipboard (gzip + clipboard)';
+        exportBtn.addEventListener('click', () => this._exportMarkdownBundle());
+        manageRow.appendChild(exportBtn);
+
+        // Clipboard import: reads a PHIMD blob (from clipboard or paste),
+        // decompresses, validates signature + path-safety, writes into
+        // the first configured markdownDir. Skip-existing behavior by
+        // default; overwrite flag re-enables the replace.
+        const importBtn = document.createElement('button');
+        importBtn.className = 'md-manage-btn';
+        importBtn.innerText = '⤒  Import';
+        importBtn.title = 'Import markdown files from a clipboard blob';
+        importBtn.addEventListener('click', () => this._importMarkdownBundle());
+        manageRow.appendChild(importBtn);
+
         const addDirBtn = document.createElement('button');
         addDirBtn.className = 'md-manage-btn';
         addDirBtn.innerText = '+ Add Dir';
@@ -870,6 +891,89 @@ export class MarkdownManager {
             this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
         } catch (err) {
             this.app.showToast('Failed to copy content', { type: 'error' });
+        }
+    }
+
+    // _exportMarkdownBundle asks the server to pack every .md file in
+    // the configured markdownDirs, then copies the resulting PHIMD: blob
+    // to the clipboard. Falls back to a paste-into-prompt path when the
+    // Clipboard API is blocked.
+    async _exportMarkdownBundle(): Promise<void> {
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/export-bundle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd }),
+            });
+            if (!res.ok) throw new Error(`export failed: ${res.status}`);
+            const data = (await res.json()) as { blob: string; count: number };
+            if (!data.blob) {
+                this.app.showToast('No markdown files to export', { type: 'info' });
+                return;
+            }
+            await this._copyToClipboard(
+                data.blob,
+                `Exported ${data.count} markdown file${data.count === 1 ? '' : 's'} to clipboard`
+            );
+        } catch (err) {
+            this.app.showToast(`Export failed: ${(err as Error).message}`, { type: 'error' });
+        }
+    }
+
+    // _importMarkdownBundle reads a PHIMD: blob from the clipboard (or a
+    // prompt fallback) and posts it to the server for safe decode +
+    // path-validated write. Overwrite is opt-in via a confirm() so the
+    // user doesn't silently clobber existing files by accident.
+    async _importMarkdownBundle(): Promise<void> {
+        let blob = '';
+        try {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                blob = await navigator.clipboard.readText();
+            }
+        } catch (err) {
+            // Browser blocked clipboard read — fall through to prompt.
+            console.warn('[md] clipboard read blocked', err);
+        }
+        if (!blob || !blob.trim()) {
+            blob = (typeof prompt === 'function')
+                ? (prompt('Paste your markdown bundle here (starts with PHIMD:):') || '')
+                : '';
+        }
+        if (!blob || !blob.trim()) {
+            this.app.showToast('No bundle text to import', { type: 'info' });
+            return;
+        }
+        if (!blob.startsWith('PHIMD:')) {
+            this.app.showToast('Clipboard does not contain a markdown bundle (expected PHIMD:…)', { type: 'error' });
+            return;
+        }
+        const overwrite = typeof confirm === 'function'
+            ? confirm('Overwrite existing files with the same name?\nClick Cancel to skip existing files (safe default).')
+            : false;
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/import-bundle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, blob, overwrite }),
+            });
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(errText || `${res.status}`);
+            }
+            const data = (await res.json()) as { written: string[]; skipped: string[] };
+            const written = data.written?.length || 0;
+            const skipped = data.skipped?.length || 0;
+            this.app.showToast(
+                `Imported ${written} file${written === 1 ? '' : 's'}` +
+                (skipped ? `, skipped ${skipped}` : ''),
+                { type: 'info', title: 'Markdown' }
+            );
+            // Refresh the file list so newly written files appear.
+            await this.refreshFiles({ force: true });
+        } catch (err) {
+            this.app.showToast(`Import failed: ${(err as Error).message}`, { type: 'error' });
         }
     }
 }
