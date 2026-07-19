@@ -903,10 +903,27 @@ export class TabManager {
 
         if (!tabInfo.writePending) {
             tabInfo.writePending = true;
+            // Capture the user's pre-write scroll position so we can decide
+            // whether to auto-follow bottom on the rAF tick. Standard
+            // xterm "is-at-bottom" predicate, matching the scroll-to-bottom
+            // button's check (viewportY >= baseY, no slack).
+            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+            const preAtBottom = buf && (buf.viewportY >= buf.baseY);
             requestAnimationFrame(() => {
                 if (tabInfo.writeBuffer.length > 0 && !tabInfo.isDead) {
                     tabInfo.term.write(tabInfo.writeBuffer);
                     tabInfo.writeBuffer = '';
+
+                    // Force the scrollbar to reflect the new bottom.
+                    // xterm's native syncScrollArea leaves the scrollbar
+                    // stale when output grows without a layout reflow;
+                    // the only reliable cross-version fix is an explicit
+                    // scroll-to-bottom call. Respects userFollowBottom:
+                    // if the user has scrolled up (flag = false), we
+                    // honor that and leave the scroll position alone.
+                    if (preAtBottom && tabInfo.userFollowBottom !== false) {
+                        tabInfo.term.scrollToBottom();
+                    }
                 }
                 tabInfo.writePending = false;
             });
@@ -1322,7 +1339,17 @@ export class TabManager {
             writeBuffer: '',
             writePending: false,
             loaderEl: loaderEl,
-            hasStarted: false
+            hasStarted: false,
+            // Scrollbar follow mode. xterm's native syncScrollArea leaves
+            // the scrollbar stale when PTY output grows without a layout
+            // reflow (e.g., the input bar auto-resize that fires when the
+            // user types). Tracking this flag separately lets us:
+            //   - Snap to bottom on PTY output when at bottom (real follow)
+            //   - Stop overriding xterm's scroll position when user wheels up
+            //   - Re-engage follow if user scrolls back to bottom
+            // Without it, the scrollbar shows the line from N minutes ago
+            // while content scrolls past, then snaps when the user wheels.
+            userFollowBottom: true
         };
 
         if (pinned) {
@@ -1403,6 +1430,8 @@ export class TabManager {
             e.stopPropagation();
             tabInfo.term.scrollToBottom();
             this._spamScrollToBottom(tabInfo);
+            // Explicit jump-to-bottom click re-engages follow mode.
+            tabInfo.userFollowBottom = true;
             scrollToBottomBtn.classList.add('hidden');
         });
         termContainer.appendChild(scrollToBottomBtn);
@@ -1424,6 +1453,17 @@ export class TabManager {
         };
         if (term.onScroll) {
             term.onScroll(updateScrollBtn);
+            // Re-engage follow mode when the user scrolls back to bottom.
+            // Wheel/touch inputs disabled follow by setting
+            // userFollowBottom = false; this reverses it once they return
+            // to the live tail. Lets the user "release" and re-follow
+            // without needing to click Jump-to-bottom.
+            term.onScroll(() => {
+                const b = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+                if (b && b.viewportY >= b.baseY) {
+                    tabInfo.userFollowBottom = true;
+                }
+            });
         }
         // Also re-evaluate on every write so a button shown while
         // scrolled up hides itself once new output catches up to bottom.
@@ -3382,7 +3422,9 @@ export class TabManager {
     // A wheel, touch, or native scrollbar-thumb gesture is an explicit user
     // choice. Cancel only the currently pending restore; `_spamScroll` itself
     // remains the established 10ms / 300ms mechanism for non-interrupted
-    // resize, reflow, output, and explicit bottom-follow paths.
+    // resize, reflow, output, and explicit bottom-follow paths. Also flips
+    // userFollowBottom to false so PTY output arriving in this state
+    // doesn't snap the viewport back to bottom.
     _cancelScrollFollowForUserScroll(tabInfo) {
         if (!tabInfo) return;
         clearInterval(tabInfo.spamInterval);
@@ -3391,6 +3433,7 @@ export class TabManager {
         tabInfo.stopSpamTimeout = null;
         tabInfo.isSpammingBottom = undefined;
         tabInfo.spamScrollY = undefined;
+        tabInfo.userFollowBottom = false;
     }
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
