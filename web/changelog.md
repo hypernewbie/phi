@@ -2,6 +2,18 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.12.1 — 2026-07-16
+
+Hotfix: the v0.12.0 default-to-direct focus change was too broad — AI-coder tabs (pi, claude, agy, opencode) lost their staged input bar / attachment strip / presets row, breaking the core phi workflow.
+
+### Fixed
+- **Per-coder focus default.** Shell tabs (bash, pwsh) and btop (registered with `coder: "bash"`) now default to focused/direct mode so the terminal gets keystrokes immediately. AI-coder tabs (pi, claude, agy, opencode) keep the staged-input flow as default — the input bar, attachment chip strip, presets row, and Ctrl+Shift+X chip are visible without an extra click. Click the direct-mode toggle to flip either way.
+
+### Tests
+- **Session persistence round-trip proven.** New `pkg/session/sessions_persist_test.go` round-trips a 3-entry `SessionMeta` map through `SaveSessionMetaMap` and `LoadSessionMetaMap`, asserts the file lives at `~/.phi/sessions.json`, and covers empty + corrupt file paths. Surfaces and fixes a latent bug: a corrupt `sessions.json` previously returned an empty map with no error, silently wiping the user's prior state on server restart. Now the loader returns `(empty map, error)` so the caller can surface a toast.
+- **Tab restoration end-to-end proven.** New `test-js/tabsRestore.test.js` covers `restoreTabsState` against a mocked `/api/terminals` — GETs the endpoint, calls `createTab` once per server entry in order, forwards pinned/marked flags, shows the empty state when the server has zero terminals, sweeps the legacy `phi_tabs` localStorage key, calls `applySavedTabOrder` for user reorder, restores `phi_active_pane`, falls back to the first tab on missing pane, survives a non-OK server response, falls back to the coder name when the entry has no title.
+- **Per-coder default pinned.** New `test-js/directModeDefault.test.js` mirrors the production predicate (`bash | pwsh → focused`) so the contract is locked and any new coder defaults correctly.
+
 ## v0.12.0 — 2026-07-16
 
 A UI-density release. Tighter hover popovers, fewer layout-shift regressions, and clipboard round-trip for markdown files.
