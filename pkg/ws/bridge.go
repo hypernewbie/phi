@@ -2,14 +2,13 @@ package ws
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"fmt"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"strings"
 
@@ -62,12 +61,20 @@ func (c *Client) WritePump() {
 	}
 }
 
-func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
+// ReadPump drains client frames for the lifetime of the connection.
+// endSpan, if non-nil, closes out the ws.connection span HandleWS opened
+// for this connection — called from the defer below so every teardown
+// path (client-initiated close, PTY write error, read error) ends it
+// exactly once.
+func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub, endSpan func(error)) {
 	logger := c.logger()
 	defer func() {
 		hub.Unregister(inst.ID, c)
 		manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", c))
 		_ = c.Ws.Close()
+		if endSpan != nil {
+			endSpan(nil)
+		}
 	}()
 
 	// Capture pongWait into a local for the pong handler. The handler
@@ -127,7 +134,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	if inst.Pty == nil {
 		return
 	}
-	logger := slog.Default().With("pane", inst.ID)
+	logger := componentLogger().With("pane", inst.ID)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -152,34 +159,22 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	}()
 }
 
-// newConnID mints a 16-hex-char id from crypto/rand, mirroring the format
-// of the M2 HTTP trace id (see logging.go's newTraceID in package main) —
-// used as a WS conn id when the upgrade request carried no X-Request-Id.
-func newConnID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%016x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
-}
-
 func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
-	// Reuse the M2 HTTP request-id of the upgrade request as the conn id —
-	// one id links the "GET /ws/pane/..." log line to every frame this
-	// connection ever sends. traceMiddleware (package main) already set
-	// this response header before routing reached us; fall back to a fresh
-	// id if it's absent (e.g. a test that calls HandleWS directly).
-	connID := w.Header().Get("X-Request-Id")
-	if connID == "" {
-		connID = newConnID()
-	}
-	logger := slog.Default().With("conn", connID, "pane", inst.ID)
+	// Correlation is via the structured comp=ws + pane=<id> attrs on this
+	// connection's logger (both builds) — no hand-minted conn id. Under
+	// -tags otel, the ws.connection span below gives each connection its
+	// own real trace id (obs.Span is a no-op + debug line in the default
+	// build), spanning the connection's lifetime rather than the short
+	// upgrade request.
+	logger := componentLogger().With("pane", inst.ID)
 
 	conn, err := Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		logger.Error("ws upgrade error", "err", err)
 		return
 	}
+
+	_, endSpan := obs.Span(r.Context(), "ws.connection", "pane", inst.ID)
 
 	client := &Client{
 		Ws:     conn,
@@ -205,9 +200,10 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 			hub.Unregister(inst.ID, client)
 			manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", client))
 			_ = conn.Close()
+			endSpan(nil)
 		}()
 		return
 	}
 
-	client.ReadPump(inst, manager, hub)
+	client.ReadPump(inst, manager, hub, endSpan)
 }

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -171,7 +172,7 @@ func TestWebSocketKeepalive(t *testing.T) {
 		hub.Register(inst.ID, client)
 
 		go client.WritePump()
-		client.ReadPump(inst, manager, hub)
+		client.ReadPump(inst, manager, hub, nil)
 	}))
 	defer server.Close()
 
@@ -207,7 +208,7 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 	shell, args := getTestShellForBridge()
 
 	manager := pty.NewManager()
-	inst, err := manager.Spawn("", shell, args, "shell", "died-in-place")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "died-in-place")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -269,59 +270,52 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 	}
 }
 
-// TestHandleWS_DistinctConnIDs (L4): two independent HandleWS connections
-// must carry two distinct "conn" ids in their captured logs — the
-// per-connection Client.Logger set up in HandleWS, not a shared global.
-func TestHandleWS_DistinctConnIDs(t *testing.T) {
+// TestHandleWS_LoggerCarriesCompAndPane (L4): HandleWS's per-connection
+// logger — used for frame traces, upgrade/PTY errors, and overflow lines —
+// carries comp="ws" and pane=<inst.ID>. There is no hand-minted conn id
+// (correlating distinct connections to the same pane is what the
+// otel-build-only ws.connection span, via its own trace id, is for).
+func TestHandleWS_LoggerCarriesCompAndPane(t *testing.T) {
+	rh := installRecordingHandler(t)
 	shell, args := getTestShellForBridge()
 
-	dialAndGetConnID := func() string {
-		rh := installRecordingHandler(t)
+	manager := pty.NewManager()
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "comp-pane-test")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() { _ = manager.Kill(inst.ID) }()
 
-		manager := pty.NewManager()
-		inst, err := manager.Spawn("", shell, args, "shell", "conn-id-test")
-		if err != nil {
-			t.Fatalf("Spawn: %v", err)
-		}
-		defer func() { _ = manager.Kill(inst.ID) }()
+	hub := NewHub(0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		HandleWS(w, r, inst, manager, hub)
+	}))
+	defer server.Close()
 
-		hub := NewHub(0)
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			HandleWS(w, r, inst, manager, hub)
-		}))
-		defer server.Close()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-		conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
-		if err != nil {
-			t.Fatalf("dial: %v", err)
-		}
-		defer conn.Close()
-
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-		// Drain the 0x06 replay-complete frame; WritePump's debug frame
-		// trace on the way out carries this connection's "conn" attr.
-		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Fatalf("read replay-complete frame: %v", err)
-		}
-
-		for _, r := range rh.records() {
-			if id, ok := attrMap(r)["conn"]; ok {
-				return fmt.Sprint(id)
-			}
-		}
-		t.Fatal("no captured log record carried a conn attr")
-		return ""
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	// Drain the 0x06 replay-complete frame; WritePump's debug frame trace
+	// on the way out carries this connection's comp+pane attrs.
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read replay-complete frame: %v", err)
 	}
 
-	id1 := dialAndGetConnID()
-	id2 := dialAndGetConnID()
-
-	if id1 == "" || id2 == "" {
-		t.Fatalf("expected non-empty conn ids, got %q and %q", id1, id2)
+	var found bool
+	for _, r := range rh.records() {
+		attrs := attrMap(r)
+		if fmt.Sprint(attrs["comp"]) == "ws" && fmt.Sprint(attrs["pane"]) == inst.ID {
+			found = true
+			break
+		}
 	}
-	if id1 == id2 {
-		t.Errorf("expected distinct conn ids across independent connections, got %q for both", id1)
+	if !found {
+		t.Error("expected at least one captured log record with comp=ws and pane=<inst.ID>")
 	}
 }
 
