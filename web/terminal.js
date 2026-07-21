@@ -1106,7 +1106,7 @@ export class TabManager {
             cursorBlink: true,
             cursorStyle: 'bar',
             fontSize: isMobile ? 10 : 14,
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: (this.app && this.app.terminalFontFamily) || 'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: {
                 background: '#08080a',
@@ -4454,6 +4454,23 @@ export class TabManager {
                     ...tab.term.options.theme,
                     cursor: color
                 };
+            }
+        }
+    }
+
+    // applyFontToAllActiveTerminals sets a new fontFamily on every
+    // live xterm and re-fits the viewport so layout stays correct.
+    // Empty/invalid input falls back to 'JetBrains Mono, monospace'.
+    // Deliberately does NOT touch any scroll / _spamScroll timing
+    // (see AGENTS.md hard-won-stabilization rule).
+    applyFontToAllActiveTerminals(family) {
+        const safe = (family && String(family).trim()) || 'JetBrains Mono, monospace';
+        for (const tab of this.tabs.values()) {
+            if (tab.term) {
+                tab.term.options.fontFamily = safe;
+                if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
+                    try { tab.fitAddon.fit(); } catch (e) { /* tolerate closed term */ }
+                }
             }
         }
     }
