@@ -2234,7 +2234,11 @@ func TestDiagContract(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&d); err != nil {
 		t.Fatalf("response is not a JSON object: %v", err)
 	}
-	requiredKeys := []string{"version", "install_method", "uptime_seconds", "goroutines", "mem_alloc_mb", "pty_count", "panes"}
+	requiredKeys := []string{
+		"version", "install_method", "uptime_seconds", "goroutines", "mem_alloc_mb", "pty_count", "panes",
+		// M4: additive runtime fields.
+		"go_version", "gomaxprocs", "num_cpu", "num_gc",
+	}
 	for _, k := range requiredKeys {
 		if _, ok := d[k]; !ok {
 			t.Errorf("missing required field %q in /api/diag response: %+v", k, d)
