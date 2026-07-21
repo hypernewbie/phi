@@ -51,11 +51,11 @@ func TestIsNewer(t *testing.T) {
 
 func TestInstructionsFor(t *testing.T) {
 	cases := map[string]string{
-		"npm":         "npm update -g @hypernewbie/phi-code",
-		"standalone":  "Download the latest release",
-		"go-install":  "go install github.com/hypernewbie/phi@latest",
-		"dev":         "Self-update is unavailable for development builds",
-		"unexpected":  "Self-update is unavailable for development builds",
+		"npm":        "npm update -g @hypernewbie/phi-code",
+		"standalone": "Download the latest release",
+		"go-install": "go install github.com/hypernewbie/phi@latest",
+		"dev":        "Self-update is unavailable for development builds",
+		"unexpected": "Self-update is unavailable for development builds",
 	}
 	for method, want := range cases {
 		got := instructionsFor(method)
