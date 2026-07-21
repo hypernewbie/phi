@@ -216,7 +216,9 @@ export class SessionsManager {
             this.updateWorkspaceSelectWidth();
 
             if (data.theme_color) {
-                (this.app as any).accentColorSelect.value = data.theme_color;
+                // applyAccentTheme sets data-theme-color on <html>;
+                // that's what the Settings modal reads on open to
+                // pre-select the active swatch.
                 (this.app as any).applyAccentTheme(data.theme_color);
             }
 
@@ -226,6 +228,15 @@ export class SessionsManager {
             this.app.terminalCommands = data.terminal_commands || [];
             this.app.markdownDirs = data.markdown_dirs || [];
             this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
+            // Ingest appearance settings and apply so the Settings
+            // modal opens with the persisted values + the body shows
+            // the chosen UI font / size immediately. terminalFontFamily
+            // is read by new terminals (see terminal.js), so no live
+            // re-apply needed here.
+            this.app.uiFontFamily = (data.ui_font_family as string) || '';
+            this.app.uiFontSize = Number(data.ui_font_size) || 0;
+            this.app.terminalFontFamily = (data.terminal_font_family as string) || '';
+            this.app.applyUIFont?.();
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);
