@@ -8,39 +8,73 @@ import (
 	"strings"
 )
 
-type claudeActiveSession struct {
-	SessionID string `json:"sessionId"`
-	Name      string `json:"name"`
+// claudeConfigDir returns Claude Code's config directory, honoring
+// $CLAUDE_CONFIG_DIR (which Claude Code itself supports) and falling back to
+// ~/.claude. An empty/whitespace env value is treated as unset.
+func claudeConfigDir() string {
+	if d := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); d != "" {
+		return d
+	}
+	return expandHome("~/.claude")
 }
 
-func loadActiveClaudeSessionNames() map[string]string {
-	active := make(map[string]string)
-	sessionsPath := expandHome("~/.claude/sessions")
-	dirs, err := os.ReadDir(sessionsPath)
-	if err != nil {
-		return active
-	}
+// encodeClaudeProjectDir reproduces Claude Code's project-directory naming: the
+// cleaned absolute cwd with every non-alphanumeric ASCII character replaced by
+// '-'. This is Claude's documented, total forward mapping. We match on it rather
+// than trying to reverse the (lossy) directory name back into a path.
+//
+// Known limitation (do NOT try to handle): non-ASCII path characters — Claude's
+// JS replaces per UTF-16 code unit; we replace per rune with a single '-'. ASCII
+// paths (the overwhelming majority) match exactly.
+func encodeClaudeProjectDir(cwd string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, filepath.Clean(cwd))
+}
 
-	for _, d := range dirs {
+type claudeRegistryEntry struct {
+	SessionID  string `json:"sessionId"`
+	Name       string `json:"name"`
+	NameSource string `json:"nameSource"`
+}
+
+// loadClaudeRegistry reads Claude Code's live-session registry
+// (<config>/sessions/*.json) into a map keyed by sessionId. Used only to name
+// transcript-backed sessions (see resolveClaudeTitle); NOT used to introduce
+// sessions into the list.
+func loadClaudeRegistry() map[string]claudeRegistryEntry {
+	out := make(map[string]claudeRegistryEntry)
+	dir := filepath.Join(claudeConfigDir(), "sessions")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, d := range files {
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(sessionsPath, d.Name()))
+		b, err := os.ReadFile(filepath.Join(dir, d.Name()))
 		if err != nil {
 			continue
 		}
-		var data claudeActiveSession
-		if err := json.Unmarshal(b, &data); err == nil && data.SessionID != "" && data.Name != "" {
-			active[data.SessionID] = data.Name
+		var e claudeRegistryEntry
+		if err := json.Unmarshal(b, &e); err == nil && e.SessionID != "" {
+			out[e.SessionID] = e
 		}
 	}
-	return active
+	return out
 }
 
 type claudeFileMeta struct {
 	aiTitle string
 	slug    string
 	summary string
+	cwd     string // NEW
 }
 
 func (m claudeFileMeta) bestTitle() string {
@@ -61,6 +95,7 @@ type claudeLogLine struct {
 	Slug    string `json:"slug"`
 	AiTitle string `json:"aiTitle"`
 	Summary string `json:"summary"`
+	Cwd     string `json:"cwd"` // NEW
 }
 
 func extractClaudeMeta(filePath string) claudeFileMeta {
@@ -78,8 +113,9 @@ func extractClaudeMeta(filePath string) claudeFileMeta {
 		hasSlug := strings.Contains(line, `"slug":`)
 		hasAiTitle := strings.Contains(line, `"aiTitle":`)
 		hasSummary := strings.Contains(line, `"summary":`)
+		hasCwd := strings.Contains(line, `"cwd":`)
 
-		if hasSlug || hasAiTitle || hasSummary {
+		if hasSlug || hasAiTitle || hasSummary || hasCwd {
 			var cl claudeLogLine
 			if err := json.Unmarshal([]byte(line), &cl); err == nil {
 				if cl.Slug != "" && meta.slug == "" {
@@ -91,21 +127,52 @@ func extractClaudeMeta(filePath string) claudeFileMeta {
 				if cl.Summary != "" && meta.summary == "" {
 					meta.summary = cl.Summary
 				}
+				if cl.Cwd != "" && meta.cwd == "" {
+					meta.cwd = cl.Cwd
+				}
 			}
 		}
 
-		if meta.aiTitle != "" {
+		// cwd (line ~4) precedes aiTitle (line ~8) in practice; require both so we never
+		// stop before capturing the authoritative cwd.
+		if meta.aiTitle != "" && meta.cwd != "" {
 			break
 		}
 	}
 	return meta
 }
 
+// resolveClaudeTitle applies title priority for a Claude session:
+//  1. Phi custom rename (~/.phi/sessions.json)
+//  2. User-set live-session name (registry name whose nameSource != "derived")
+//  3. AI title, then slug, then summary (from the transcript)
+//  4. Derived live-session name (e.g. "phi-a4")
+//
+// Returns "" if none apply; the caller then uses the short-id + date fallback.
+func resolveClaudeTitle(sessionID string, renames map[string]AgyMeta, reg claudeRegistryEntry, hasReg bool, meta claudeFileMeta) string {
+	if pm, ok := renames[sessionID]; ok && pm.Name != "" {
+		return pm.Name
+	}
+	if hasReg && reg.Name != "" && reg.NameSource != "derived" {
+		return reg.Name
+	}
+	if t := meta.bestTitle(); t != "" {
+		return t
+	}
+	if hasReg && reg.Name != "" {
+		return reg.Name
+	}
+	return ""
+}
+
 func ListClaudeSessions(cwd string) ([]Session, error) {
-	projectsPath := expandHome("~/.claude/projects")
+	projectsPath := filepath.Join(claudeConfigDir(), "projects")
 	fi, err := os.Stat(projectsPath)
 	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	dirs, err := os.ReadDir(projectsPath)
@@ -113,74 +180,73 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 		return nil, err
 	}
 
-	m, err := LoadAgyMetaMap()
+	renames, err := LoadAgyMetaMap()
 	if err != nil {
-		m = make(map[string]AgyMeta)
+		renames = make(map[string]AgyMeta)
 	}
-
-	activeNames := loadActiveClaudeSessionNames()
+	registry := loadClaudeRegistry()
 
 	var sessions []Session
+
+	wantDir := ""
+	if cwd != "" {
+		wantDir = encodeClaudeProjectDir(cwd)
+	}
 
 	for _, d := range dirs {
 		if !d.IsDir() {
 			continue
 		}
-
-		decodedPath := decodeClaudePath(d.Name())
-		// Filter by requested CWD
-		if cwd != "" && NormalisePath(decodedPath) != NormalisePath(cwd) {
+		// Bug #1 fix: match by forward-encoding the requested cwd; never by
+		// reversing the (lossy) directory name. EqualFold preserves the old
+		// filter's case-insensitivity (it compared lowercased paths).
+		if wantDir != "" && !strings.EqualFold(d.Name(), wantDir) {
 			continue
 		}
 
 		projDir := filepath.Join(projectsPath, d.Name())
-		files, err := os.ReadDir(projDir)
-		if err != nil {
+		files, ferr := os.ReadDir(projDir)
+		if ferr != nil {
 			continue
 		}
-
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
 				continue
 			}
-
-			filePath := filepath.Join(projDir, f.Name())
-			info, err := f.Info()
-			if err != nil {
+			info, ierr := f.Info()
+			if ierr != nil {
 				continue
 			}
-
+			filePath := filepath.Join(projDir, f.Name())
 			sessionID := strings.TrimSuffix(f.Name(), ".jsonl")
-			title := ""
-			
-			// Priority 1: Phi custom rename
-			if meta, exists := m[sessionID]; exists && meta.Name != "" {
-				title = meta.Name
-			}
-			// Priority 2: Active session label (ae-e5 style)
+
+			meta := extractClaudeMeta(filePath)
+			reg, hasReg := registry[sessionID]
+
+			title := resolveClaudeTitle(sessionID, renames, reg, hasReg, meta)
 			if title == "" {
-				if activeName, exists := activeNames[sessionID]; exists && activeName != "" {
-					title = activeName
+				short := sessionID
+				if len(short) > 8 {
+					short = short[:8]
 				}
+				title = "Claude session " + short + " " + info.ModTime().Format("02 Jan 2006")
 			}
-			// Priority 3-5: extractClaudeMeta (aiTitle > slug > summary)
-			if title == "" {
-				meta := extractClaudeMeta(filePath)
-				title = meta.bestTitle()
-			}
-			// Priority 6: Fallback
-			if title == "" {
-				shortID := sessionID
-				if len(shortID) > 8 {
-					shortID = shortID[:8]
+
+			// Authoritative displayed cwd: when filtered we already know it equals
+			// cwd; otherwise take the transcript's own cwd, then the (imperfect)
+			// decoded dir name as a last resort.
+			sessCwd := cwd
+			if sessCwd == "" {
+				sessCwd = meta.cwd
+				if sessCwd == "" {
+					sessCwd = decodeClaudePath(d.Name())
 				}
-				title = "Claude session " + shortID + " " + info.ModTime().Format("02 Jan 2006")
 			}
 
 			sessions = append(sessions, Session{
 				ID:          sessionID,
 				Title:       title,
-				Cwd:         decodedPath,
+				Cwd:         sessCwd,
 				Coder:       "claude",
 				TimeUpdated: info.ModTime(),
 			})
