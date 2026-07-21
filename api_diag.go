@@ -35,6 +35,13 @@ type DiagResponse struct {
 	PTYs          int        `json:"pty_count"`
 	Panes         []PaneDiag `json:"panes"`
 	StartedAt     time.Time  `json:"started_at"`
+
+	// Additive M4 fields — a little more of the runtime state we already
+	// debug against, nothing more (no pprof, no /metrics).
+	GoVersion  string `json:"go_version"`
+	GOMAXPROCS int    `json:"gomaxprocs"`
+	NumCPU     int    `json:"num_cpu"`
+	NumGC      uint32 `json:"num_gc"`
 }
 
 var serverStartedAt = time.Now()
@@ -55,11 +62,15 @@ func handleDiag(w http.ResponseWriter, r *http.Request) {
 		Goroutines:    runtime.NumGoroutine(),
 		StartedAt:     serverStartedAt,
 		Panes:         []PaneDiag{}, // always serialize as [], never null
+		GoVersion:     runtime.Version(),
+		GOMAXPROCS:    runtime.GOMAXPROCS(0),
+		NumCPU:        runtime.NumCPU(),
 	}
 
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	resp.MemAllocMB = float64(m.Alloc) / (1024 * 1024)
+	resp.NumGC = m.NumGC
 
 	if ptyManager != nil {
 		insts := ptyManager.ListActive()
