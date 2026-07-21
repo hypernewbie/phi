@@ -14,14 +14,17 @@ func setupMockHome(t *testing.T) string {
 	// Backup existing env variables.
 	origHome := os.Getenv("HOME")
 	origUserProfile := os.Getenv("USERPROFILE")
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
 
 	// Set env variables to our temporary directory to mock the user home directory.
 	os.Setenv("HOME", tempDir)
 	os.Setenv("USERPROFILE", tempDir)
+	os.Setenv("CLAUDE_CONFIG_DIR", "") // force the ~/.claude fallback under mock HOME
 
 	t.Cleanup(func() {
 		os.Setenv("HOME", origHome)
 		os.Setenv("USERPROFILE", origUserProfile)
+		os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
 	})
 
 	return tempDir

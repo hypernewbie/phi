@@ -178,6 +178,10 @@ func TestClaudeSessionRename(t *testing.T) {
 	}
 	defer os.Setenv(homeKey, origHomeVal)
 
+	origConfigDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	os.Setenv("CLAUDE_CONFIG_DIR", "") // force the ~/.claude fallback under the mock HOME
+	defer os.Setenv("CLAUDE_CONFIG_DIR", origConfigDir)
+
 	// Create project directory path: ~ / .claude / projects / C--mock-path
 	projectDirName := "C--mock-path"
 	mockSessionID := "conv_abc123"
