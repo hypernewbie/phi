@@ -2,6 +2,8 @@ package ws
 
 import (
 	"bytes"
+	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -140,10 +142,14 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHub_BroadcastOverflow(t *testing.T) {
+	rh := installRecordingHandler(t)
+
 	h := NewHub(1024)
 	paneID := "pane-overflow-test"
+	connID := "conn-overflow-test"
 	client := &Client{
-		Send: make(chan []byte, 2),
+		Send:   make(chan []byte, 2),
+		Logger: slog.Default().With("conn", connID, "pane", paneID),
 	}
 	h.Register(paneID, client)
 
@@ -165,5 +171,19 @@ func TestHub_BroadcastOverflow(t *testing.T) {
 	second := <-client.Send
 	if !bytes.Contains(second, []byte("msg3")) {
 		t.Errorf("Expected second remaining message to be msg3, got %q", second)
+	}
+
+	// The overflow line must carry the offending conn+pane so the F4
+	// slow-client scenario is traceable end to end (M3/L4).
+	var found bool
+	for _, r := range rh.records() {
+		attrs := attrMap(r)
+		if fmt.Sprint(attrs["conn"]) == connID && fmt.Sprint(attrs["pane"]) == paneID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected the overflow log line to carry the offending conn+pane attrs")
 	}
 }

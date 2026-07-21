@@ -1,8 +1,11 @@
 package ws
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/binary"
-	"log"
+	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -29,6 +32,7 @@ var Upgrader = websocket.Upgrader{
 }
 
 func (c *Client) WritePump() {
+	logger := c.logger()
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -42,6 +46,9 @@ func (c *Client) WritePump() {
 				return
 			}
 			_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+				logger.Debug("frame", "dir", "hub->client", "bytes", len(msg))
+			}
 			err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
 			if err != nil {
 				return
@@ -56,6 +63,7 @@ func (c *Client) WritePump() {
 }
 
 func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
+	logger := c.logger()
 	defer func() {
 		hub.Unregister(inst.ID, c)
 		manager.UnregisterWS(inst.ID, fmt.Sprintf("%p", c))
@@ -91,11 +99,13 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 			if inst.Pty != nil {
 				_, writeErr := inst.Pty.Write(payload)
 				if writeErr != nil {
-					log.Printf("[ws] PTY write error for pane %s: %v", inst.ID, writeErr)
+					logger.Error("ws pty write error", "err", writeErr)
 					errMsg := writeErr.Error()
 					if strings.Contains(strings.ToLower(errMsg), "closed") || strings.Contains(strings.ToLower(errMsg), "eof") {
 						return
 					}
+				} else if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+					logger.Debug("frame", "dir", "client->pty", "bytes", len(payload))
 				}
 			}
 		case 0x02: // Resize
@@ -104,7 +114,7 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub)
 				rows := binary.BigEndian.Uint16(payload[2:4])
 				resizeErr := inst.Pty.Resize(cols, rows)
 				if resizeErr != nil {
-					log.Printf("[ws] PTY resize error for pane %s: %v", inst.ID, resizeErr)
+					logger.Error("ws pty resize error", "err", resizeErr)
 				}
 			}
 		case 0x03: // Ping
@@ -117,6 +127,7 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	if inst.Pty == nil {
 		return
 	}
+	logger := slog.Default().With("pane", inst.ID)
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -126,6 +137,9 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 			}
 			if n > 0 {
 				inst.UpdateActivity()
+				if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+					logger.Debug("frame", "dir", "pty->hub", "bytes", n)
+				}
 				hub.Ingest(inst.ID, buf[:n])
 			}
 		}
@@ -138,16 +152,39 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	}()
 }
 
+// newConnID mints a 16-hex-char id from crypto/rand, mirroring the format
+// of the M2 HTTP trace id (see logging.go's newTraceID in package main) —
+// used as a WS conn id when the upgrade request carried no X-Request-Id.
+func newConnID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
 func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, manager *pty.Manager, hub *Hub) {
+	// Reuse the M2 HTTP request-id of the upgrade request as the conn id —
+	// one id links the "GET /ws/pane/..." log line to every frame this
+	// connection ever sends. traceMiddleware (package main) already set
+	// this response header before routing reached us; fall back to a fresh
+	// id if it's absent (e.g. a test that calls HandleWS directly).
+	connID := w.Header().Get("X-Request-Id")
+	if connID == "" {
+		connID = newConnID()
+	}
+	logger := slog.Default().With("conn", connID, "pane", inst.ID)
+
 	conn, err := Upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[ws] Upgrade error: %v", err)
+		logger.Error("ws upgrade error", "err", err)
 		return
 	}
 
 	client := &Client{
-		Ws:   conn,
-		Send: make(chan []byte, 65536),
+		Ws:     conn,
+		Send:   make(chan []byte, 65536),
+		Logger: logger,
 	}
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
