@@ -2,6 +2,7 @@ package pty
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"runtime"
 	"strings"
@@ -51,7 +52,7 @@ func collectOutput(p *Pty, wantToken string, timeout time.Duration) string {
 
 func TestPTYStartAndKill(t *testing.T) {
 	shell, args := testShell()
-	p, err := Start("", shell, args)
+	p, err := Start(context.Background(), "", shell, args)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestPTYStartAndKill(t *testing.T) {
 
 func TestPTYResize(t *testing.T) {
 	shell, args := testShell()
-	p, err := Start("", shell, args)
+	p, err := Start(context.Background(), "", shell, args)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestPTYResize(t *testing.T) {
 
 func TestPTYEchoOutput(t *testing.T) {
 	shell, args := testShell()
-	p, err := Start("", shell, args)
+	p, err := Start(context.Background(), "", shell, args)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestPTYEchoOutput(t *testing.T) {
 
 func TestPTYMultipleCommands(t *testing.T) {
 	shell, args := testShell()
-	p, err := Start("", shell, args)
+	p, err := Start(context.Background(), "", shell, args)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestPTYWorkingDir(t *testing.T) {
 	shell, args := testShell()
 	tmpDir := t.TempDir()
 
-	p, err := Start(tmpDir, shell, args)
+	p, err := Start(context.Background(), tmpDir, shell, args)
 	if err != nil {
 		t.Fatalf("Start with dir %q: %v", tmpDir, err)
 	}
@@ -195,14 +196,14 @@ func TestValidateWorkingDir_Missing(t *testing.T) {
 
 func TestStart_InvalidDir(t *testing.T) {
 	shell, args := testShell()
-	_, err := Start("/nonexistent/path/phi-test", shell, args)
+	_, err := Start(context.Background(), "/nonexistent/path/phi-test", shell, args)
 	if err == nil {
 		t.Error("expected error for non-existent working dir")
 	}
 }
 
 func TestStart_InvalidCommand(t *testing.T) {
-	_, err := Start("", "phi-no-such-binary-xyzabc", nil)
+	_, err := Start(context.Background(), "", "phi-no-such-binary-xyzabc", nil)
 	if err == nil {
 		t.Error("expected error for unknown command")
 	}
@@ -212,7 +213,7 @@ func TestStart_InvalidCommand(t *testing.T) {
 
 func TestPTYWrite_CROnlyDoesNotHang(t *testing.T) {
 	shell, args := testShell()
-	p, err := Start("", shell, args)
+	p, err := Start(context.Background(), "", shell, args)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
