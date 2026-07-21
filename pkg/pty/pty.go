@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
@@ -213,8 +214,8 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 			p.exitCode = exitErr.ExitCode()
 		}
 		p.closePTY()
-		close(p.Closed)
-		_ = os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir) // remove shim dir BEFORE signaling done
+		close(p.Closed)           // Closed now means "process exited AND cleaned up"
 	}()
 
 	return p, nil
@@ -276,6 +277,19 @@ func (p *Pty) Kill() error {
 	}
 	p.closePTY()
 	return nil
+}
+
+// Terminate asks the child to exit cleanly: SIGTERM on Unix (agents can
+// catch it and flush session state); Windows has no SIGTERM, so fall back
+// to Kill. Escalation to SIGKILL is the caller's job (see Manager.Shutdown).
+func (p *Pty) Terminate() error {
+	if p.cmd.Process == nil {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return p.cmd.Process.Kill()
+	}
+	return p.cmd.Process.Signal(syscall.SIGTERM)
 }
 
 func createShims(tempDir string, clipboardFile string) error {
