@@ -65,14 +65,9 @@ func TestServeAll_TwoListeners(t *testing.T) {
 	}
 	listeners := []net.Listener{ln1, ln2}
 
-	// serveAll exits only when all listeners close. Run it async and
-	// close the listeners from the test to drive the shutdown.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = serveAll(listeners) // error path is logged inside; ignore
-	}()
+	// serveAll returns immediately with the started servers; the errCh
+	// drains as each listener's Serve returns (on Close/Shutdown).
+	servers, errCh := serveAll(listeners)
 
 	for i, ln := range listeners {
 		addr := ln.Addr().String()
@@ -100,12 +95,21 @@ func TestServeAll_TwoListeners(t *testing.T) {
 		_ = client
 	}
 
-	// Close the listeners; serveAll should exit cleanly. Use a
+	// Close the listeners; each Serve should exit cleanly via errCh. Use a
 	// watchdog so a hang in serveAll doesn't lock up the test.
-	for _, ln := range listeners {
-		_ = ln.Close()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range servers {
+			<-errCh // error path is logged inside serveAll; ignore here
+		}
+	}()
+
+	for _, srv := range servers {
+		_ = srv.Close()
 	}
-	waitDone(&wg, t, "serveAll did not return after listeners closed")
+	waitDone(&wg, t, "serveAll listeners did not exit after Close")
 }
 
 // waitDone waits on wg up to a hard cap. If we exceed it, the test
