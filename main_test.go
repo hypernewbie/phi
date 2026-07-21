@@ -976,6 +976,44 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	}
 }
 
+func TestHandleFallback_Rename(t *testing.T) {
+	ptyManager = pty.NewManager()
+	shell, args := testMainShell()
+
+	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	if err != nil {
+		t.Fatalf("Failed to spawn PTY for rename test: %v", err)
+	}
+	defer func() { _ = ptyManager.Kill(inst.ID) }()
+
+	// 404 for unknown pane.
+	reqNF := httptest.NewRequest(http.MethodPost, "/api/terminals/nope/title", strings.NewReader(`{"title":"x"}`))
+	wNF := httptest.NewRecorder()
+	handleFallback(wNF, reqNF)
+	if wNF.Code != http.StatusNotFound {
+		t.Errorf("unknown pane: want 404, got %d", wNF.Code)
+	}
+
+	// 400 for malformed JSON.
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":`))
+	wBad := httptest.NewRecorder()
+	handleFallback(wBad, reqBad)
+	if wBad.Code != http.StatusBadRequest {
+		t.Errorf("malformed JSON: want 400, got %d", wBad.Code)
+	}
+
+	// 200 + title mutated.
+	reqOK := httptest.NewRequest(http.MethodPost, "/api/terminals/"+inst.ID+"/title", strings.NewReader(`{"title":"deploy hotfix"}`))
+	wOK := httptest.NewRecorder()
+	handleFallback(wOK, reqOK)
+	if wOK.Code != http.StatusOK {
+		t.Fatalf("rename: want 200, got %d", wOK.Code)
+	}
+	if inst.Title != "deploy hotfix" {
+		t.Errorf("title not applied: want %q, got %q", "deploy hotfix", inst.Title)
+	}
+}
+
 func TestHandleFallback_Delete(t *testing.T) {
 	ptyManager = pty.NewManager()
 	shell, args := testMainShell()
