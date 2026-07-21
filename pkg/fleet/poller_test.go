@@ -115,8 +115,8 @@ func TestPoller_RecoveryClears(t *testing.T) {
 	p := NewPoller()
 	cfg := PeerCfg{Name: "recovering", URL: srv.URL}
 	p.states[srv.URL] = &peerState{
-		status: PeerStatus{Name: cfg.Name, URL: cfg.URL, Stale: true, Reachable: false},
-		misses: staleAfterMisses + 1,
+		status:     PeerStatus{Name: cfg.Name, URL: cfg.URL, Stale: true, Reachable: false},
+		misses:     staleAfterMisses + 1,
 		httpClient: &http.Client{Timeout: pollTimeout},
 	}
 	p.poll(cfg)

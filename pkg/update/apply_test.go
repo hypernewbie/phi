@@ -94,11 +94,11 @@ func TestAssetFor(t *testing.T) {
 
 func TestApplier_Eligible(t *testing.T) {
 	cases := map[string]bool{
-		"npm":         true,
-		"standalone":  true,
-		"go-install":  false,
-		"dev":         false,
-		"unexpected":  false,
+		"npm":        true,
+		"standalone": true,
+		"go-install": false,
+		"dev":        false,
+		"unexpected": false,
 	}
 	for method, want := range cases {
 		a := NewApplier("0.8.0", method)
@@ -174,7 +174,7 @@ func TestApplier_Apply_HappyPath(t *testing.T) {
 	// Override the assetURL builder by injecting a URL override.
 	// Simpler: use a proxy that rewrites release URLs to point at srv.
 	a.httpClient = &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:   5 * time.Second,
 		Transport: rewritingTransport{from: "github.com/hypernewbie", to: strings.TrimPrefix(srv.URL, "http://")},
 	}
 
@@ -294,11 +294,11 @@ func TestApplier_Apply_RefusesSameVersion_VPrefix(t *testing.T) {
 
 func TestNormalizeVersion(t *testing.T) {
 	cases := map[string]string{
-		"v0.8.2":  "0.8.2",
-		"V0.8.2":  "0.8.2",
-		"0.8.2":   "0.8.2",
+		"v0.8.2":     "0.8.2",
+		"V0.8.2":     "0.8.2",
+		"0.8.2":      "0.8.2",
 		"  v0.8.2  ": "0.8.2",
-		"":        "",
+		"":           "",
 	}
 	for in, want := range cases {
 		if got := normalizeVersion(in); got != want {
@@ -353,7 +353,7 @@ func TestApplier_Apply_ChecksumMismatchFailsClosed(t *testing.T) {
 
 	a := NewApplier("0.8.0", "standalone")
 	a.httpClient = &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:   5 * time.Second,
 		Transport: rewritingTransport{from: "github.com/hypernewbie", to: strings.TrimPrefix(srv.URL, "http://")},
 	}
 

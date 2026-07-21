@@ -35,20 +35,20 @@ const (
 // Status is the response shape of GET /api/update/status. Add fields
 // additively; old frontends ignore unknowns.
 type Status struct {
-	Current       string `json:"current"`
-	Latest        string `json:"latest"`
-	UpdateAvailable bool `json:"update_available"`
-	InstallMethod string `json:"install_method"`
-	Instructions  string `json:"instructions"`
-	LastChecked   string `json:"last_checked,omitempty"` // ISO-8601
-	Error         string `json:"error,omitempty"`
+	Current         string `json:"current"`
+	Latest          string `json:"latest"`
+	UpdateAvailable bool   `json:"update_available"`
+	InstallMethod   string `json:"install_method"`
+	Instructions    string `json:"instructions"`
+	LastChecked     string `json:"last_checked,omitempty"` // ISO-8601
+	Error           string `json:"error,omitempty"`
 }
 
 // CheckResult is what CheckLatest returns internally.
 type CheckResult struct {
-	Latest          string
-	CheckedAt       time.Time
-	Err             error
+	Latest    string
+	CheckedAt time.Time
+	Err       error
 }
 
 // Checker polls GitHub for the latest release tag and caches results.

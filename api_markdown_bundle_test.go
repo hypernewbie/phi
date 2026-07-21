@@ -151,8 +151,8 @@ func TestDecodeMarkdownBundle_RejectsWrongPrefix(t *testing.T) {
 
 func TestDecodeMarkdownBundle_RejectsMalformed(t *testing.T) {
 	cases := []string{
-		"PHIMD:",          // only one part
-		"PHIMD:a:b:c:d",   // too many parts
+		"PHIMD:",                 // only one part
+		"PHIMD:a:b:c:d",          // too many parts
 		"PHIMD:notvalidhex:Zm9v", // undecodable hash check
 	}
 	for _, c := range cases {

@@ -23,22 +23,22 @@ import (
 type Phase string
 
 const (
-	PhaseIdle       Phase = "idle"
+	PhaseIdle        Phase = "idle"
 	PhaseDownloading Phase = "downloading"
-	PhaseVerifying  Phase = "verifying"
-	PhaseExtracting Phase = "extracting"
-	PhaseStaging    Phase = "staging"
-	PhaseDone       Phase = "done"
-	PhaseError      Phase = "error"
+	PhaseVerifying   Phase = "verifying"
+	PhaseExtracting  Phase = "extracting"
+	PhaseStaging     Phase = "staging"
+	PhaseDone        Phase = "done"
+	PhaseError       Phase = "error"
 )
 
 // Progress is the status snapshot of an in-flight or last-completed apply.
 type Progress struct {
-	Phase     Phase  `json:"phase"`
-	Pct       int    `json:"pct"`
-	Version   string `json:"version,omitempty"`
-	OldPath   string `json:"old_path,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Phase     Phase     `json:"phase"`
+	Pct       int       `json:"pct"`
+	Version   string    `json:"version,omitempty"`
+	OldPath   string    `json:"old_path,omitempty"`
+	Error     string    `json:"error,omitempty"`
 	StartedAt time.Time `json:"started_at,omitempty"`
 	DoneAt    time.Time `json:"done_at,omitempty"`
 }
@@ -119,10 +119,11 @@ func AssetFor(version, goos, goarch string) string {
 const ChecksumsAsset = "checksums.txt"
 
 // Apply performs the full T2 pipeline:
-//   1. download asset + checksums.txt
-//   2. verify sha256
-//   3. extract binary to phi.new
-//   4. atomic swap phi -> phi.old, phi.new -> phi
+//  1. download asset + checksums.txt
+//  2. verify sha256
+//  3. extract binary to phi.new
+//  4. atomic swap phi -> phi.old, phi.new -> phi
+//
 // Returns ApplyResult; on success the running install is untouched
 // until the very last rename (plan R5: fail-closed).
 func (a *Applier) Apply(targetVersion string) ApplyResult {

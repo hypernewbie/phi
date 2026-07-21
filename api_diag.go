@@ -15,14 +15,14 @@ import (
 // live ring fill + client count so an operator can see when a
 // slow client is hurting the connection.
 type PaneDiag struct {
-	ID            string `json:"id"`
-	Coder         string `json:"coder"`
-	Title         string `json:"title"`
-	ClientCount   int    `json:"client_count"`
-	RingBytes     int    `json:"ring_bytes"`
-	RingCapacity  int    `json:"ring_capacity"`
-	Busy          bool   `json:"busy"`
-	LastActivity  int64  `json:"last_activity_unix"`
+	ID           string `json:"id"`
+	Coder        string `json:"coder"`
+	Title        string `json:"title"`
+	ClientCount  int    `json:"client_count"`
+	RingBytes    int    `json:"ring_bytes"`
+	RingCapacity int    `json:"ring_capacity"`
+	Busy         bool   `json:"busy"`
+	LastActivity int64  `json:"last_activity_unix"`
 }
 
 // DiagResponse is the full /api/diag payload.

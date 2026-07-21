@@ -28,4 +28,3 @@ func SpawnStatus(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	args := []string{"--no-pager", "-c", "color.status=always", "status", "--short", "--branch"}
 	return manager.Spawn(dir, "git", args, "git-status", "")
 }
-

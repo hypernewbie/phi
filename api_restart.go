@@ -13,10 +13,10 @@ import (
 // handleRestart triggers an in-process restart. POST /api/restart.
 //
 // Behavior:
-//   1. Broadcast 0x05 {"reason":"restart"} to all connected clients.
-//   2. Flush pending state (tabs + sync board) atomically.
-//   3. Unix: syscall.Exec replaces the process image (same PID, no rebind race).
-//   4. Windows: spawn detached child, exit. Child retry-binds via restart.BindWithRetry.
+//  1. Broadcast 0x05 {"reason":"restart"} to all connected clients.
+//  2. Flush pending state (tabs + sync board) atomically.
+//  3. Unix: syscall.Exec replaces the process image (same PID, no rebind race).
+//  4. Windows: spawn detached child, exit. Child retry-binds via restart.BindWithRetry.
 //
 // Returns immediately with JSON ack. Clients see 0x05 and arm reload pollers.
 func handleRestart(w http.ResponseWriter, r *http.Request) {

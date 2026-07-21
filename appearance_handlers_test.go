@@ -95,13 +95,13 @@ func TestHandleAppearanceUpdate_ClampsFontSize(t *testing.T) {
 		in   int
 		want int
 	}{
-		{4, 10},    // below min
-		{9, 10},    // just below min
-		{10, 10},   // at min — unchanged
-		{24, 24},   // at max — unchanged
-		{99, 24},   // above max
-		{16, 16},   // middle — unchanged
-		{0, 10},    // zero (sentinel for "unset") — clamp to min so client sees a real value
+		{4, 10},  // below min
+		{9, 10},  // just below min
+		{10, 10}, // at min — unchanged
+		{24, 24}, // at max — unchanged
+		{99, 24}, // above max
+		{16, 16}, // middle — unchanged
+		{0, 10},  // zero (sentinel for "unset") — clamp to min so client sees a real value
 	}
 	for _, tc := range cases {
 		t.Run("", func(t *testing.T) {

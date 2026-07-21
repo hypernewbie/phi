@@ -69,8 +69,8 @@ func main() {
 	// Drain timing. Both default to k8s-neutral values so local Ctrl-C stays
 	// instant; the Deployment sets PHI_DRAIN_DELAY so kube-proxy can deregister
 	// the pod before the socket closes.
-	drainDelay := envDuration("PHI_DRAIN_DELAY", 0)                // pause after /readyz flips 503
-	ptyGrace := envDuration("PHI_PTY_GRACE", 5*time.Second)        // SIGTERM->SIGKILL window for child PTYs
+	drainDelay := envDuration("PHI_DRAIN_DELAY", 0)                    // pause after /readyz flips 503
+	ptyGrace := envDuration("PHI_PTY_GRACE", 5*time.Second)            // SIGTERM->SIGKILL window for child PTYs
 	shutdownGrace := envDuration("PHI_SHUTDOWN_GRACE", 15*time.Second) // HTTP Shutdown(ctx) deadline
 
 	if *versionFlag {
@@ -282,8 +282,8 @@ func main() {
 			time.Sleep(30 * time.Second)
 			runGatedUpdateCheck(updateChecker, "Initial check")
 
-		// Re-check hourly; CheckIfStale/ShouldRunRealCheck gate the actual network call.
-		ticker := time.NewTicker(1 * time.Hour)
+			// Re-check hourly; CheckIfStale/ShouldRunRealCheck gate the actual network call.
+			ticker := time.NewTicker(1 * time.Hour)
 			for range ticker.C {
 				runGatedUpdateCheck(updateChecker, "Periodic check")
 			}
@@ -603,7 +603,7 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 var (
 	promptHistoryStoreMu sync.Mutex
 	promptHistoryStore   *prompt_history.Store
-	promptHistoryLoadErr  error
+	promptHistoryLoadErr error
 )
 
 func promptHistoryPath() string {

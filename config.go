@@ -63,16 +63,16 @@ type Config struct {
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
 	ReplayBufferBytes      *int `json:"replay_buffer_bytes"`
 
-	PushoverUserKey   string `json:"pushover_user_key"`
-	PushoverAppToken  string `json:"pushover_app_token"`
-	PushoverEnabled   bool   `json:"pushover_enabled"`
-	WebhookURL        string `json:"webhook_url"`
-	WebhookEnabled    bool   `json:"webhook_enabled"`
-	SimplepushKey     string `json:"simplepush_key"`
-	SimplepushEnabled bool   `json:"simplepush_enabled"`
-	KanbanPasswordEnc string `json:"kanban_password_enc"`
-	SyncCoordinator   string `json:"sync_coordinator"`
-	AutoReconnect     string `json:"auto_reconnect"`
+	PushoverUserKey   string       `json:"pushover_user_key"`
+	PushoverAppToken  string       `json:"pushover_app_token"`
+	PushoverEnabled   bool         `json:"pushover_enabled"`
+	WebhookURL        string       `json:"webhook_url"`
+	WebhookEnabled    bool         `json:"webhook_enabled"`
+	SimplepushKey     string       `json:"simplepush_key"`
+	SimplepushEnabled bool         `json:"simplepush_enabled"`
+	KanbanPasswordEnc string       `json:"kanban_password_enc"`
+	SyncCoordinator   string       `json:"sync_coordinator"`
+	AutoReconnect     string       `json:"auto_reconnect"`
 	Peers             []PeerConfig `json:"peers"`
 }
 

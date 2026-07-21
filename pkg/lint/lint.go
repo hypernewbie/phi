@@ -20,9 +20,9 @@ import (
 
 // Issue describes a lint finding.
 type Issue struct {
-	Line  int    // 1-indexed line where the problem was found
-	Kind  string // short identifier ("unbalanced", "media-not-closed", ...)
-	Msg   string // human-readable explanation
+	Line int    // 1-indexed line where the problem was found
+	Kind string // short identifier ("unbalanced", "media-not-closed", ...)
+	Msg  string // human-readable explanation
 }
 
 func (i Issue) String() string {
@@ -99,9 +99,9 @@ func CheckBraces(src string) []Issue {
 
 		if depth < 0 {
 			issues = append(issues, Issue{
-				Line:  lineNo,
-				Kind:  "unbalanced",
-				Msg:   fmt.Sprintf("brace depth went negative (%d) — extra '}' before this line", depth),
+				Line: lineNo,
+				Kind: "unbalanced",
+				Msg:  fmt.Sprintf("brace depth went negative (%d) — extra '}' before this line", depth),
 			})
 			// Reset to keep scanning without spamming.
 			depth = 0
@@ -110,18 +110,18 @@ func CheckBraces(src string) []Issue {
 
 	if depth != 0 {
 		issues = append(issues, Issue{
-			Line:  len(lines),
-			Kind:  "unbalanced",
-			Msg:   fmt.Sprintf("file ended with depth %d (expected 0) — missing %d closing '}'", depth, depth),
+			Line: len(lines),
+			Kind: "unbalanced",
+			Msg:  fmt.Sprintf("file ended with depth %d (expected 0) — missing %d closing '}'", depth, depth),
 		})
 	}
 
 	// Any @media still on the stack at EOF was never closed.
 	for _, frame := range stack {
 		issues = append(issues, Issue{
-			Line:  frame.openLine,
-			Kind:  "media-not-closed",
-			Msg:   fmt.Sprintf("@media block opened at line %d never closed", frame.openLine),
+			Line: frame.openLine,
+			Kind: "media-not-closed",
+			Msg:  fmt.Sprintf("@media block opened at line %d never closed", frame.openLine),
 		})
 	}
 
@@ -143,9 +143,9 @@ func checkMediaClose(frame mediaFrame, closeLine int, lines []string) []Issue {
 	// < 500 lines. If it's much larger, it likely swallowed a stray '}'.
 	if blockLen > 500 {
 		return []Issue{{
-			Line:  closeLine,
-			Kind:  "media-too-large",
-			Msg:   fmt.Sprintf("@media block opened at line %d spans %d lines — suspiciously large; check for stray '}' before this line that re-scoped mobile rules to global", frame.openLine, blockLen),
+			Line: closeLine,
+			Kind: "media-too-large",
+			Msg:  fmt.Sprintf("@media block opened at line %d spans %d lines — suspiciously large; check for stray '}' before this line that re-scoped mobile rules to global", frame.openLine, blockLen),
 		}}
 	}
 
@@ -171,7 +171,7 @@ func stripCommentsAndStrings(line string) string {
 			if c == '*' && i+1 < len(line) && line[i+1] == '/' {
 				inComment = false
 				b.WriteString("*/") // emit the close so structure is visible
-				i++ // skip the '/'
+				i++                 // skip the '/'
 				continue
 			}
 			continue // skip comment contents (braces inside don't count)
@@ -188,7 +188,7 @@ func stripCommentsAndStrings(line string) string {
 		if c == '/' && i+1 < len(line) && line[i+1] == '*' {
 			inComment = true
 			b.WriteString("/*") // emit the open so structure is visible
-			i++ // skip the '*'
+			i++                 // skip the '*'
 			continue
 		}
 		if c == '"' {
@@ -322,16 +322,16 @@ func CheckHTML(src string) []Issue {
 	// Any tags still open at EOF were never closed.
 	for _, t := range stack {
 		issues = append(issues, Issue{
-			Line:  t.line,
-			Kind:  "html-unclosed",
-			Msg:   fmt.Sprintf("<%s> opened at line %d never closed", t.name, t.line),
+			Line: t.line,
+			Kind: "html-unclosed",
+			Msg:  fmt.Sprintf("<%s> opened at line %d never closed", t.name, t.line),
 		})
 	}
 	if rawTextElement != "" {
 		issues = append(issues, Issue{
-			Line:  rawTextStartLine,
-			Kind:  "html-unclosed-rawtext",
-			Msg:   fmt.Sprintf("<%s> opened at line %d never closed", rawTextElement, rawTextStartLine),
+			Line: rawTextStartLine,
+			Kind: "html-unclosed-rawtext",
+			Msg:  fmt.Sprintf("<%s> opened at line %d never closed", rawTextElement, rawTextStartLine),
 		})
 	}
 
@@ -455,26 +455,26 @@ func processTag(
 	if isClose {
 		if htmlVoidElements[tagName] {
 			*issues = append(*issues, Issue{
-				Line:  tagLine,
-				Kind:  "html-illegal-close",
-				Msg:   fmt.Sprintf("</%s> is a void element and cannot be closed", tagName),
+				Line: tagLine,
+				Kind: "html-illegal-close",
+				Msg:  fmt.Sprintf("</%s> is a void element and cannot be closed", tagName),
 			})
 			return
 		}
 		if len(*stack) == 0 {
 			*issues = append(*issues, Issue{
-				Line:  tagLine,
-				Kind:  "html-unmatched-close",
-				Msg:   fmt.Sprintf("</%s> with no matching open tag", tagName),
+				Line: tagLine,
+				Kind: "html-unmatched-close",
+				Msg:  fmt.Sprintf("</%s> with no matching open tag", tagName),
 			})
 			return
 		}
 		top := (*stack)[len(*stack)-1]
 		if top.name != tagName {
 			*issues = append(*issues, Issue{
-				Line:  tagLine,
-				Kind:  "html-mismatched-close",
-				Msg:   fmt.Sprintf("</%s> closes <%s> opened at line %d (mismatch)", tagName, top.name, top.line),
+				Line: tagLine,
+				Kind: "html-mismatched-close",
+				Msg:  fmt.Sprintf("</%s> closes <%s> opened at line %d (mismatch)", tagName, top.name, top.line),
 			})
 			// Pop until we find the matching one (best-effort recovery).
 			for len(*stack) > 0 && (*stack)[len(*stack)-1].name != tagName {
@@ -503,9 +503,9 @@ func processTag(
 	if idVal, ok := extractID(attrs); ok {
 		if firstLine, dup := seenIDs[idVal]; dup {
 			*issues = append(*issues, Issue{
-				Line:  tagLine,
-				Kind:  "html-duplicate-id",
-				Msg:   fmt.Sprintf("id=%q is also defined at line %d", idVal, firstLine),
+				Line: tagLine,
+				Kind: "html-duplicate-id",
+				Msg:  fmt.Sprintf("id=%q is also defined at line %d", idVal, firstLine),
 			})
 		} else {
 			seenIDs[idVal] = tagLine
