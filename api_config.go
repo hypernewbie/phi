@@ -29,6 +29,9 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"markdown_dirs":             cfg.MarkdownDirs,
 		"use_existing_terminal_tab": cfg.UseExistingTerminalTab,
 		"sync_coordinator":          cfg.SyncCoordinator,
+		"ui_font_family":            cfg.UIFontFamily,
+		"ui_font_size":              cfg.UIFontSize,
+		"terminal_font_family":      cfg.TerminalFontFamily,
 	})
 }
 
@@ -333,6 +336,57 @@ func handleThemeUpdate(w http.ResponseWriter, r *http.Request) {
 	saveConfig(cfg)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleAppearanceUpdate persists font + UI display settings from the
+// Settings modal. POST only. Any field omitted from the request body
+// is left unchanged on disk; an empty string clears it (client falls
+// back to the built-in default). UIFontSize is clamped to 10..24 to
+// prevent rendering breakage.
+func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	if v, ok := req["ui_font_family"].(string); ok {
+		cfg.UIFontFamily = v
+	}
+	if v, ok := req["terminal_font_family"].(string); ok {
+		cfg.TerminalFontFamily = v
+	}
+	if v, ok := req["ui_font_size"]; ok {
+		switch n := v.(type) {
+		case float64:
+			cfg.UIFontSize = int(n)
+		case int:
+			cfg.UIFontSize = n
+		}
+		// Clamp to a sane rendering range. 10 is the smallest size
+		// xterm and most browsers still render legibly; 24 is well
+		// above accessibility-friendly and below "slideshow".
+		if cfg.UIFontSize < 10 {
+			cfg.UIFontSize = 10
+		}
+		if cfg.UIFontSize > 24 {
+			cfg.UIFontSize = 24
+		}
+	}
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ui_font_family":       cfg.UIFontFamily,
+		"ui_font_size":         cfg.UIFontSize,
+		"terminal_font_family": cfg.TerminalFontFamily,
+	})
 }
 
 func handleUseExistingTerminalTab(w http.ResponseWriter, r *http.Request) {
