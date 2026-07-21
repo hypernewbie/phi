@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
-	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
@@ -63,27 +61,6 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		}
 
 		err := ptyManager.SetMarked(id, req.Marked)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/title") {
-		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
-		id = strings.TrimSuffix(id, "/title")
-
-		var req struct {
-			Title string `json:"title"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		err := ptyManager.SetTitle(id, req.Title)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -282,11 +259,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := ptyManager.Spawn(spawnDir, command, args, req.Coder, req.SessionID)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, pty.ErrShuttingDown) {
-			status = http.StatusServiceUnavailable
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	inst.Title = req.Title
@@ -329,12 +302,6 @@ func handleSessionMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 }
-
-
-
-
-
-
 
 func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	typed := r.URL.Query().Get("path")
@@ -384,8 +351,6 @@ func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(suggestions)
 }
-
-
 
 func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
@@ -590,10 +555,6 @@ func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(messages)
 }
 
-
-
-
-
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -647,5 +608,3 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"started_at":     fmt.Sprintf("%d", StartedAt),
 	})
 }
-
-

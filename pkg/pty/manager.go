@@ -47,26 +47,26 @@ var (
 )
 
 type PTYInstance struct {
-	ID            string        `json:"id"`
-	Pty           *Pty          `json:"-"`
-	Cwd           string        `json:"cwd"`
-	Coder         string        `json:"coder"`
-	SessionID     string        `json:"session_id"`
-	DetachTimer   *time.Timer   `json:"-"`
-	mu            sync.Mutex
-	ActiveWS      bool
-	ActiveWSCount int
-	ActiveClients map[string]struct{} `json:"-"`
-	Pinned        bool          `json:"pinned"`
-	Marked        bool          `json:"marked"`
-	LastOutputAt  time.Time     `json:"-"`
-	Title         string        `json:"title"`
-	Workspace     string        `json:"workspace"`
-	IsBusy           bool          `json:"-"`
-	BusyStartTime    time.Time     `json:"-"`
-	NotifiedIdle     bool          `json:"-"`
-	LastActivityUnix int64         `json:"last_activity_unix"`
-	Busy             bool          `json:"busy"`
+	ID               string      `json:"id"`
+	Pty              *Pty        `json:"-"`
+	Cwd              string      `json:"cwd"`
+	Coder            string      `json:"coder"`
+	SessionID        string      `json:"session_id"`
+	DetachTimer      *time.Timer `json:"-"`
+	mu               sync.Mutex
+	ActiveWS         bool
+	ActiveWSCount    int
+	ActiveClients    map[string]struct{} `json:"-"`
+	Pinned           bool                `json:"pinned"`
+	Marked           bool                `json:"marked"`
+	LastOutputAt     time.Time           `json:"-"`
+	Title            string              `json:"title"`
+	Workspace        string              `json:"workspace"`
+	IsBusy           bool                `json:"-"`
+	BusyStartTime    time.Time           `json:"-"`
+	NotifiedIdle     bool                `json:"-"`
+	LastActivityUnix int64               `json:"last_activity_unix"`
+	Busy             bool                `json:"busy"`
 }
 
 func (inst *PTYInstance) UpdateActivity() {
@@ -664,4 +664,3 @@ func (m *Manager) StartIdleWatcher(callback func(info IdleNotification)) {
 		}
 	}()
 }
-

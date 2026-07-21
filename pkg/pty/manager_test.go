@@ -765,4 +765,3 @@ func TestBeginDrain_RejectsNewSpawns(t *testing.T) {
 		t.Errorf("expected no instances to be created during drain, got %d", len(manager.ListActive()))
 	}
 }
-
