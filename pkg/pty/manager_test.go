@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func TestManagerLifecycle(t *testing.T) {
 	shell, args := getTestShell()
 
 	// Spawn a PTY instance via the manager.
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY instance: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestActiveWSTracking(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestPinningBypass(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestDynamicPinToggle(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestGracePeriodActiveWSAndPinned(t *testing.T) {
 	shell, args := getTestShell()
 
 	// Scenario 1: ActiveWS is true when timer expires -> should not kill and should clear timer.
-	inst1, err := manager.Spawn("", shell, args, "shell", "test-session-1")
+	inst1, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session-1")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestGracePeriodActiveWSAndPinned(t *testing.T) {
 	}
 
 	// Scenario 2: Pinned is true when timer expires -> should not kill and should clear timer.
-	inst2, err := manager.Spawn("", shell, args, "shell", "test-session-2")
+	inst2, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session-2")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -302,7 +303,7 @@ func TestMultipleConcurrentWebSockets(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestWSIdempotency(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY: %v", err)
 	}
@@ -390,7 +391,7 @@ func TestStartIdleWatcher(t *testing.T) {
 	// (Dead/restored tabs with Pty=nil are skipped — the restore banner
 	// flow handles those separately; see LoadState.)
 	shell, args := getTestShell()
-	inst, err := manager.Spawn("", shell, args, "pi", "test-idle-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "pi", "test-idle-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY instance: %v", err)
 	}
@@ -467,7 +468,7 @@ func TestManagerPersistence(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "persist-test-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "persist-test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY instance: %v", err)
 	}
@@ -517,7 +518,7 @@ func TestManagerScheduleSaveDebounce(t *testing.T) {
 
 	// Three rapid mutations before the debounce fires.
 	for i := 0; i < 3; i++ {
-		_, err := manager.Spawn("", shell, args, "shell", "debounce-test")
+		_, err := manager.Spawn(context.Background(), "", shell, args, "shell", "debounce-test")
 		if err != nil {
 			t.Fatalf("Spawn %d: %v", i, err)
 		}
@@ -607,7 +608,7 @@ func TestIsPtyDead_GhostAndLive(t *testing.T) {
 
 	manager := NewManager()
 	shell, args := getTestShell()
-	inst, err := manager.Spawn("", shell, args, "shell", "isptydead-live")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "isptydead-live")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -626,7 +627,7 @@ func TestIsPtyDead_DiedInPlace(t *testing.T) {
 
 	manager := NewManager()
 	shell, args := getTestShell()
-	inst, err := manager.Spawn("", shell, args, "shell", "died-in-place-session")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "died-in-place-session")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

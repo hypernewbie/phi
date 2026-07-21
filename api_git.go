@@ -26,11 +26,11 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if diffType == "log" {
-		inst, err = diff.SpawnLog(cwd, ptyManager)
+		inst, err = diff.SpawnLog(r.Context(), cwd, ptyManager)
 	} else if diffType == "status" {
-		inst, err = diff.SpawnStatus(cwd, ptyManager)
+		inst, err = diff.SpawnStatus(r.Context(), cwd, ptyManager)
 	} else {
-		inst, err = diff.SpawnDiff(cwd, commit, ptyManager)
+		inst, err = diff.SpawnDiff(r.Context(), cwd, commit, ptyManager)
 	}
 
 	if err != nil {
@@ -114,11 +114,11 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 
 	var cmd *exec.Cmd
 	if commit == "staged" {
-		cmd = exec.Command("git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+		cmd = exec.CommandContext(r.Context(), "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
 	} else if commit == "" || commit == "unstaged" {
-		cmd = exec.Command("git", "diff", "-w", colorFlag, "-U"+contextLines)
+		cmd = exec.CommandContext(r.Context(), "git", "diff", "-w", colorFlag, "-U"+contextLines)
 	} else {
-		cmd = exec.Command("git", "show", "-w", colorFlag, "-U"+contextLines, commit)
+		cmd = exec.CommandContext(r.Context(), "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
 	}
 	cmd.Dir = cwd
 
@@ -133,7 +133,7 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if commit == "" || commit == "unstaged" {
-		statusCmd := exec.Command("git", "status", "--porcelain")
+		statusCmd := exec.CommandContext(r.Context(), "git", "status", "--porcelain")
 		statusCmd.Dir = cwd
 		statusOut, _ := statusCmd.Output()
 		for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
@@ -162,7 +162,7 @@ func handleRawStatus(w http.ResponseWriter, r *http.Request) {
 		cwd = activeCWD
 	}
 
-	cmd := exec.Command("git", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
+	cmd := exec.CommandContext(r.Context(), "git", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	if err != nil && len(out) == 0 {
@@ -186,7 +186,7 @@ func handleGetCommits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run git log to fetch the last 10 commits on active branch
-	cmd := exec.Command("git", "log", "-10", "--format=%h|%s")
+	cmd := exec.CommandContext(r.Context(), "git", "log", "-10", "--format=%h|%s")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {

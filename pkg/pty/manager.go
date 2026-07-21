@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -125,8 +126,12 @@ func GenerateID() string {
 	return hex.EncodeToString(b)
 }
 
-func (m *Manager) Spawn(dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
-	p, err := Start(dir, command, args)
+// Spawn starts a new PTY-backed terminal. ctx is used only to time the
+// pty.spawn span (see Start's doc comment) — the underlying process is
+// never cancelled by it, since the terminal must survive well past the
+// HTTP request that spawned it.
+func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
+	p, err := Start(ctx, dir, command, args)
 	if err != nil {
 		return nil, err
 	}

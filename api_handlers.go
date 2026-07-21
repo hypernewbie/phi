@@ -112,7 +112,7 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 
 	switch coder {
 	case "opencode":
-		sessions, err = session.ListOpenCodeSessions(cwd)
+		sessions, err = session.ListOpenCodeSessions(r.Context(), cwd)
 	case "claude":
 		sessions, err = session.ListClaudeSessions(cwd)
 	case "pi":
@@ -257,7 +257,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		spawnDir = activeCWD
 	}
 
-	inst, err := ptyManager.Spawn(spawnDir, command, args, req.Coder, req.SessionID)
+	inst, err := ptyManager.Spawn(r.Context(), spawnDir, command, args, req.Coder, req.SessionID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -358,7 +358,7 @@ func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 		cwd = activeCWD
 	}
 
-	wts, err := session.ListGitWorktrees(cwd)
+	wts, err := session.ListGitWorktrees(r.Context(), cwd)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -407,7 +407,7 @@ func handleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
 		cwd = activeCWD
 	}
 
-	wts, err := session.ListGitWorktrees(cwd)
+	wts, err := session.ListGitWorktrees(r.Context(), cwd)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -418,7 +418,7 @@ func handleGetWorktreeDirtyStates(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, wt.Path)
 	}
 
-	states := session.WorktreeDirtyStates(paths)
+	states := session.WorktreeDirtyStates(r.Context(), paths)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(states)
 }
@@ -538,7 +538,7 @@ func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
 
 	switch coder {
 	case "opencode":
-		messages, err = session.GetOpenCodeSessionTranscript(id)
+		messages, err = session.GetOpenCodeSessionTranscript(r.Context(), id)
 	case "pi":
 		messages, err = session.GetPiSessionTranscript(cwd, id)
 	default:
