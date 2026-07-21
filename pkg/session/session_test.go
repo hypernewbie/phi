@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,7 +113,7 @@ func TestAgySessionCwdAndSync(t *testing.T) {
 func TestListGitWorktrees(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err == nil {
-		wts, err := ListGitWorktrees(cwd)
+		wts, err := ListGitWorktrees(context.Background(), cwd)
 		if err != nil {
 			t.Errorf("Unexpected error listing worktrees in active directory: %v", err)
 		}
@@ -132,7 +133,7 @@ func TestListGitWorktrees(t *testing.T) {
 	}
 
 	tempDir := t.TempDir()
-	wts, err := ListGitWorktrees(tempDir)
+	wts, err := ListGitWorktrees(context.Background(), tempDir)
 	if err != nil {
 		t.Errorf("Unexpected error listing worktrees in temp directory: %v", err)
 	}

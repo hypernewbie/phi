@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -207,7 +208,7 @@ func TestListOpenCodeSessions_DBQuery(t *testing.T) {
 	// Close database to flush writes.
 	db.Close()
 
-	sessions, err := ListOpenCodeSessions("/mock/cwd")
+	sessions, err := ListOpenCodeSessions(context.Background(), "/mock/cwd")
 	if err != nil {
 		t.Fatalf("ListOpenCodeSessions failed: %v", err)
 	}
@@ -291,7 +292,7 @@ func TestGetOpenCodeSessionTranscript_DBQuery(t *testing.T) {
 
 	db.Close()
 
-	messages, err := GetOpenCodeSessionTranscript("sess-123")
+	messages, err := GetOpenCodeSessionTranscript(context.Background(), "sess-123")
 	if err != nil {
 		t.Fatalf("GetOpenCodeSessionTranscript failed: %v", err)
 	}

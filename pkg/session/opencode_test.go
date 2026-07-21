@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -65,7 +66,7 @@ func TestGetOpenCodeSessionTranscriptNestedFormat(t *testing.T) {
 	}
 
 	// 3. Test the function
-	messages, err := getOpenCodeSessionTranscriptFromDB(db, sessionID)
+	messages, err := getOpenCodeSessionTranscriptFromDB(context.Background(), db, sessionID)
 	if err != nil {
 		t.Fatalf("getOpenCodeSessionTranscriptFromDB returned error: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestGetOpenCodeSessionTranscriptOldFormat(t *testing.T) {
 	}
 
 	// 3. Test the function
-	messages, err := getOpenCodeSessionTranscriptFromDB(db, sessionID)
+	messages, err := getOpenCodeSessionTranscriptFromDB(context.Background(), db, sessionID)
 	if err != nil {
 		t.Fatalf("getOpenCodeSessionTranscriptFromDB returned error: %v", err)
 	}

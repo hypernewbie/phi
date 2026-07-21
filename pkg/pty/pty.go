@@ -2,6 +2,7 @@ package pty
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,7 +97,14 @@ func validateWorkingDir(dir string) error {
 	return nil
 }
 
-func Start(dir string, command string, args []string) (*Pty, error) {
+// Start spawns a PTY-backed process. ctx is accepted for the caller's
+// pty.spawn span (Manager.Spawn wraps this call) and MUST NOT be used to
+// cancel the spawned process itself — the terminal outlives the HTTP
+// request that created it (phi's 30-min detach-and-survive grace period),
+// so tying it to a request-scoped ctx would kill every terminal the
+// instant its spawn request returns. cmd.Start()/cmd.Wait() below are
+// deliberately left on their own non-cancellable lifetime.
+func Start(ctx context.Context, dir string, command string, args []string) (*Pty, error) {
 	resolvedCmd := ResolveCommand(command)
 
 	// Resolve the full path before creating the command — go-pty's Windows

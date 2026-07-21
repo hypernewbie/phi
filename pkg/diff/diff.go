@@ -1,10 +1,12 @@
 package diff
 
 import (
+	"context"
+
 	"github.com/hypernewbie/phi/pkg/pty"
 )
 
-func SpawnDiff(dir string, commit string, manager *pty.Manager) (*pty.PTYInstance, error) {
+func SpawnDiff(ctx context.Context, dir string, commit string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	var args []string
 	if commit == "staged" {
 		args = []string{"--no-pager", "diff", "--cached", "--color=always", "-w"}
@@ -13,18 +15,18 @@ func SpawnDiff(dir string, commit string, manager *pty.Manager) (*pty.PTYInstanc
 	} else {
 		args = []string{"--no-pager", "show", "--color=always", "-w", commit}
 	}
-	return manager.Spawn(dir, "git", args, "diff", "")
+	return manager.Spawn(ctx, dir, "git", args, "diff", "")
 }
 
-func SpawnLog(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
+func SpawnLog(ctx context.Context, dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	// Run git log with color, oneline format, capped to 10 entries
 	args := []string{"--no-pager", "log", "--oneline", "-10", "--color=always"}
-	return manager.Spawn(dir, "git", args, "git-log", "")
+	return manager.Spawn(ctx, dir, "git", args, "git-log", "")
 }
 
-func SpawnStatus(dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
+func SpawnStatus(ctx context.Context, dir string, manager *pty.Manager) (*pty.PTYInstance, error) {
 	// Run git status with brief output and branch info.
 	// We override colour settings using the global configuration flag -c.
 	args := []string{"--no-pager", "-c", "color.status=always", "status", "--short", "--branch"}
-	return manager.Spawn(dir, "git", args, "git-status", "")
+	return manager.Spawn(ctx, dir, "git", args, "git-status", "")
 }

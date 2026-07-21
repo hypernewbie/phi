@@ -316,7 +316,7 @@ func handleMarkdownCopyAllWorktrees(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Copy to all worktrees requires a workspace-relative markdown dir", http.StatusBadRequest)
 		return
 	}
-	wts, err := session.ListGitWorktrees(cwd)
+	wts, err := session.ListGitWorktrees(r.Context(), cwd)
 	if err != nil {
 		http.Error(w, "Failed to list worktrees: "+err.Error(), http.StatusInternalServerError)
 		return

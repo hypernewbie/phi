@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 	"strings"
 	"sync"
@@ -15,8 +16,8 @@ type GitWorktree struct {
 	HasUnstagedChanges bool   `json:"hasUnstagedChanges"`
 }
 
-func hasUnstagedChanges(dir string) bool {
-	cmd := exec.Command("git", "status", "--porcelain")
+func hasUnstagedChanges(ctx context.Context, dir string) bool {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -27,7 +28,7 @@ func hasUnstagedChanges(dir string) bool {
 	return strings.TrimSpace(out.String()) != ""
 }
 
-func WorktreeDirtyStates(paths []string) map[string]bool {
+func WorktreeDirtyStates(ctx context.Context, paths []string) map[string]bool {
 	states := make(map[string]bool, len(paths))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -37,7 +38,7 @@ func WorktreeDirtyStates(paths []string) map[string]bool {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dirty := hasUnstagedChanges(path)
+			dirty := hasUnstagedChanges(ctx, path)
 			mu.Lock()
 			states[path] = dirty
 			mu.Unlock()
@@ -50,8 +51,8 @@ func WorktreeDirtyStates(paths []string) map[string]bool {
 
 // ListGitWorktrees runs "git worktree list --porcelain" in dir. If it fails or is not a git repo,
 // it returns a single GitWorktree entry representing the dir itself.
-func ListGitWorktrees(dir string) ([]GitWorktree, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+func ListGitWorktrees(ctx context.Context, dir string) ([]GitWorktree, error) {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out

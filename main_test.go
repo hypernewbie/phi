@@ -927,7 +927,7 @@ func TestHandleFallback_Pinning(t *testing.T) {
 	ptyManager = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := ptyManager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for pinning test: %v", err)
 	}
@@ -1018,7 +1018,7 @@ func TestHandleFallback_Delete(t *testing.T) {
 	ptyManager = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := ptyManager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for delete test: %v", err)
 	}
