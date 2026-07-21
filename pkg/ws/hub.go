@@ -10,26 +10,40 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// componentLogger returns the "ws" component-tagged base logger, derived
+// from whatever slog.Default() currently is. Deliberately NOT a package
+// var baked in at init time: package-level vars in an imported package
+// initialize before main() runs, i.e. before initLogging() installs the
+// real handler (and before a test's installRecordingHandler swaps the
+// default) — a cached var would permanently hold the wrong handler and
+// silently stop honoring --log-level / PHI_LOG_FORMAT, or drop out of a
+// test's recorder entirely. Recomputing per call is cheap (called once per
+// connection/pane, never per frame) and always reflects the live default.
+func componentLogger() *slog.Logger {
+	return slog.Default().With("comp", "ws")
+}
+
 type Client struct {
 	Ws              *websocket.Conn
 	Send            chan []byte
 	LastDropWarning time.Time
 	FullSince       time.Time
 
-	// Logger carries this client's conn+pane fields (set by HandleWS) so
-	// every log line for its lifetime — writes, overflow, frame traces —
-	// correlates back to the same connection. Nil for Clients built
-	// directly in tests; logger() falls back to slog.Default().
+	// Logger carries this client's comp=ws + conn+pane fields (set by
+	// HandleWS, built on componentLogger()) so every log line for its
+	// lifetime — writes, overflow, frame traces — correlates back to the
+	// same connection. Nil for Clients built directly in tests; logger()
+	// falls back to componentLogger().
 	Logger *slog.Logger
 }
 
-// logger returns c.Logger if set, else slog.Default() — nil-safe so tests
-// that construct a bare &Client{} keep working unchanged.
+// logger returns c.Logger if set, else componentLogger() — nil-safe so
+// tests that construct a bare &Client{} keep working unchanged.
 func (c *Client) logger() *slog.Logger {
 	if c != nil && c.Logger != nil {
 		return c.Logger
 	}
-	return slog.Default()
+	return componentLogger()
 }
 
 type PaneHub struct {
