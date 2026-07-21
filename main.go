@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -16,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -53,25 +51,16 @@ var (
 	StartedAt = time.Now().Unix()
 )
 
-// shuttingDown flips true on SIGTERM/SIGINT so /readyz returns 503,
-// letting kube-proxy deregister the pod before the socket closes.
-var shuttingDown atomic.Bool
-
 func main() {
 	enableVirtualTerminalProcessing()
-	// PHI_PORT wins over PORT; an explicit --port flag wins over both.
-	portFlag := flag.Int("port", firstEnvInt(7070, "PHI_PORT", "PORT"), "Port to run Go web server on")
-	ipFlag := flag.String("ip", envOr("PHI_IP", "lan"), `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address. (env: PHI_IP)`)
+	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
+	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
+	logLevelFlag := flag.String("log-level", "", "Log level: debug|info|warn|error (default: info, or PHI_LOG env var)")
 	flag.Parse()
 
-	// Drain timing. Both default to k8s-neutral values so local Ctrl-C stays
-	// instant; the Deployment sets PHI_DRAIN_DELAY so kube-proxy can deregister
-	// the pod before the socket closes.
-	drainDelay := envDuration("PHI_DRAIN_DELAY", 0)                    // pause after /readyz flips 503
-	ptyGrace := envDuration("PHI_PTY_GRACE", 5*time.Second)            // SIGTERM->SIGKILL window for child PTYs
-	shutdownGrace := envDuration("PHI_SHUTDOWN_GRACE", 15*time.Second) // HTTP Shutdown(ctx) deadline
+	initLogging(*logLevelFlag)
 
 	if *versionFlag {
 		fmt.Printf("Phi %s (commit: %s, built: %s, source: %s)\n", Version, Commit, Date, BuildSource)
@@ -263,13 +252,6 @@ func main() {
 	http.HandleFunc("/api/restart", handleRestart)
 	http.HandleFunc("/api/diag", handleDiag)
 
-	// Kubernetes probes. Root-level, outside /api (so they stay exempt from any
-	// future auth on /api), GET-only, dependency-free. Exact-match patterns win
-	// over the "/" fallback on the default mux.
-	http.HandleFunc("/livez", handleLivez)
-	http.HandleFunc("/healthz", handleLivez)
-	http.HandleFunc("/readyz", handleReadyz)
-
 	// Start fleet poller with current peer config
 	startFleetPoller()
 
@@ -305,6 +287,24 @@ func main() {
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
 	http.HandleFunc("/", handleFallback)
+
+	// Graceful shutdown listener
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigChan
+		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
+		// Flush state before broadcasting shutdown so the next boot finds consistent files.
+		if err := ptyManager.FlushSaveState(); err != nil {
+			log.Printf("[main] FlushSaveState on shutdown: %v", err)
+		}
+		if err := FlushSyncStore(); err != nil {
+			log.Printf("[main] FlushSyncStore on shutdown: %v", err)
+		}
+		wsHub.BroadcastShutdown("shutdown")
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(0)
+	}()
 
 	// Bind phase. Banner prints AFTER successful binds so it only
 	// advertises URLs we actually serve.
@@ -365,36 +365,7 @@ func main() {
 	}
 
 	printWelcomeBanner(cfg, boundAddrs, *portFlag)
-
-	servers, errCh := serveAll(listeners)
-
-	sigChan := make(chan os.Signal, 2)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-sigChan
-		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
-		// A second signal force-quits a slow or hung drain — otherwise
-		// signal.Notify has disabled the default handler and Ctrl-C is inert.
-		go func() {
-			s := <-sigChan
-			log.Printf("[main] Second signal (%v) — forcing exit", s)
-			os.Exit(1)
-		}()
-		gracefulShutdown(servers, drainDelay, ptyGrace, shutdownGrace)
-		os.Exit(0)
-	}()
-
-	// Block on serve errors forever. A clean listener exit during graceful
-	// shutdown sends nil and is IGNORED — main must not return here, or the
-	// process would exit the instant Shutdown closes the listeners, before
-	// gracefulShutdown finishes draining in-flight HTTP. The signal goroutine
-	// owns the exit (os.Exit) once the drain completes; only a real
-	// (non-ErrServerClosed) serve error is fatal.
-	for err := range errCh {
-		if err != nil {
-			log.Fatalf("[serve] fatal: %v", err)
-		}
-	}
+	log.Fatal(serveAll(listeners))
 }
 
 // runGatedUpdateCheck runs one check if due (CheckIfStale + ShouldRunRealCheck gate it).
@@ -493,103 +464,28 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	fmt.Printf("\n")
 }
 
-// serveAll starts one *http.Server per listener over the default mux and
-// returns the servers so the shutdown path can drain them. Blocks until all
-// listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
-func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	servers := make([]*http.Server, len(listeners))
+// serveAll runs http.Serve on every listener concurrently and waits
+// for all of them to exit. Each listener has its own goroutine; the
+// returned error is the last non-nil serve error (most commonly
+// "use of closed network connection" when a sibling calls Close).
+// Returns only when all listeners have exited, so callers can log.Fatal
+// the result to keep the existing single-listener exit semantics.
+func serveAll(listeners []net.Listener) error {
 	errCh := make(chan error, len(listeners))
-	for i, ln := range listeners {
-		srv := &http.Server{} // Handler nil == DefaultServeMux, preserving current behavior
-		servers[i] = srv
-		go func(s *http.Server, l net.Listener) {
-			err := s.Serve(l)
-			if err != nil && err != http.ErrServerClosed {
-				log.Printf("[serve] listener exited: %v", err)
-				errCh <- err
-				return
-			}
-			errCh <- nil
-		}(srv, ln)
+	for _, ln := range listeners {
+		go func(l net.Listener) { errCh <- http.Serve(l, nil) }(ln)
 	}
-	return servers, errCh
-}
-
-// envDuration parses key as a Go duration string, falling back to def on
-// unset/invalid values so a malformed env var degrades gracefully instead
-// of failing startup.
-func envDuration(key string, def time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
+	var last error
+	for range listeners {
+		if err := <-errCh; err != nil {
+			log.Printf("[serve] listener exited: %v", err)
+			last = err
 		}
-		log.Printf("[config] invalid %s=%q, using default %s", key, v, def)
 	}
-	return def
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	if last != nil {
+		return fmt.Errorf("all listeners exited, last error: %w", last)
 	}
-	return def
-}
-
-// firstEnvInt returns the first of keys (in precedence order) that is set and
-// parses as an int; otherwise def. Later keys are only consulted when earlier
-// ones are unset, so a malformed value that is overridden by an earlier key
-// never gets looked at or warned about (no eager evaluation).
-func firstEnvInt(def int, keys ...string) int {
-	for _, k := range keys {
-		v := os.Getenv(k)
-		if v == "" {
-			continue
-		}
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-		log.Printf("[config] invalid %s=%q, ignoring", k, v)
-	}
-	return def
-}
-
-// gracefulShutdown flips readiness to 503, waits out the drain delay (so the
-// load balancer stops routing), flushes state, tells clients, gracefully
-// terminates child PTYs, then drains in-flight HTTP. Returns when done.
-func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
-	shuttingDown.Store(true) // /readyz -> 503
-	if ptyManager != nil {
-		ptyManager.BeginDrain() // reject new PTY spawns for the whole drain window
-	}
-	if drainDelay > 0 {
-		time.Sleep(drainDelay)
-	}
-	if err := flushStateForRestart(); err != nil { // reuse api_restart.go:60
-		log.Printf("[shutdown] flush failed: %v", err)
-	}
-	if wsHub != nil {
-		wsHub.BroadcastShutdown("shutdown")
-	}
-	time.Sleep(200 * time.Millisecond) // let the WS 0x05 frame flush (matches current behavior)
-	// Gracefully terminate child PTYs: SIGTERM each agent so it can flush its
-	// own session state, wait (bounded by ptyGrace) for exit — which fires the
-	// per-PTY temp-dir cleanup — then SIGKILL any stragglers.
-	if ptyManager != nil {
-		ptyManager.Shutdown(ptyGrace)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), grace)
-	defer cancel()
-	var wg sync.WaitGroup
-	for _, srv := range servers {
-		wg.Add(1)
-		go func(s *http.Server) {
-			defer wg.Done()
-			if err := s.Shutdown(ctx); err != nil {
-				log.Printf("[shutdown] drain: %v", err)
-			}
-		}(srv)
-	}
-	wg.Wait()
+	return nil
 }
 
 // ---------- prompt_history handlers ----------
