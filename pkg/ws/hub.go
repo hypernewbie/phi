@@ -3,6 +3,7 @@ package ws
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -14,6 +15,21 @@ type Client struct {
 	Send            chan []byte
 	LastDropWarning time.Time
 	FullSince       time.Time
+
+	// Logger carries this client's conn+pane fields (set by HandleWS) so
+	// every log line for its lifetime — writes, overflow, frame traces —
+	// correlates back to the same connection. Nil for Clients built
+	// directly in tests; logger() falls back to slog.Default().
+	Logger *slog.Logger
+}
+
+// logger returns c.Logger if set, else slog.Default() — nil-safe so tests
+// that construct a bare &Client{} keep working unchanged.
+func (c *Client) logger() *slog.Logger {
+	if c != nil && c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
 }
 
 type PaneHub struct {
@@ -143,7 +159,7 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 	if client.FullSince.IsZero() {
 		client.FullSince = now
 	} else if now.Sub(client.FullSince) > 30*time.Second {
-		log.Printf("[ws] Client send buffer full for >30s, closing connection")
+		client.logger().Warn("ws send buffer full for 30s+, closing connection")
 		if client.Ws != nil {
 			_ = client.Ws.Close()
 		}
@@ -161,7 +177,7 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 		case client.Send <- msg:
 			client.FullSince = time.Time{}
 			if dropped > 0 {
-				log.Printf("[ws] Dropped %d stale frames for slow client, kept connection alive", dropped)
+				client.logger().Warn("ws dropped stale frames for slow client, kept connection alive", "dropped", dropped)
 			}
 			return
 		default:
@@ -170,7 +186,7 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 	}
 
 	// Could not reclaim space in 100 drops: log and move on, will retry next tick.
-	log.Printf("[ws] Client send buffer still full after 100 drops, deferring frame")
+	client.logger().Warn("ws send buffer still full after 100 drops, deferring frame")
 
 	if now.Sub(client.LastDropWarning) > 5*time.Second {
 		client.LastDropWarning = now

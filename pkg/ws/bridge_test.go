@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -265,6 +266,62 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 	}
 	if !strings.Contains(payload, `"code":0`) {
 		t.Errorf("expected exit code 0 (clean 'exit' command), got payload %q", payload)
+	}
+}
+
+// TestHandleWS_DistinctConnIDs (L4): two independent HandleWS connections
+// must carry two distinct "conn" ids in their captured logs — the
+// per-connection Client.Logger set up in HandleWS, not a shared global.
+func TestHandleWS_DistinctConnIDs(t *testing.T) {
+	shell, args := getTestShellForBridge()
+
+	dialAndGetConnID := func() string {
+		rh := installRecordingHandler(t)
+
+		manager := pty.NewManager()
+		inst, err := manager.Spawn("", shell, args, "shell", "conn-id-test")
+		if err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		defer func() { _ = manager.Kill(inst.ID) }()
+
+		hub := NewHub(0)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			HandleWS(w, r, inst, manager, hub)
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		conn, _, err := (&websocket.Dialer{}).Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer conn.Close()
+
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		// Drain the 0x06 replay-complete frame; WritePump's debug frame
+		// trace on the way out carries this connection's "conn" attr.
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read replay-complete frame: %v", err)
+		}
+
+		for _, r := range rh.records() {
+			if id, ok := attrMap(r)["conn"]; ok {
+				return fmt.Sprint(id)
+			}
+		}
+		t.Fatal("no captured log record carried a conn attr")
+		return ""
+	}
+
+	id1 := dialAndGetConnID()
+	id2 := dialAndGetConnID()
+
+	if id1 == "" || id2 == "" {
+		t.Fatalf("expected non-empty conn ids, got %q and %q", id1, id2)
+	}
+	if id1 == id2 {
+		t.Errorf("expected distinct conn ids across independent connections, got %q for both", id1)
 	}
 }
 
