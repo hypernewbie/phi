@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestSpawnDiff(t *testing.T) {
 	dir := initialiseGitRepo(t)
 	manager := pty.NewManager()
 
-	inst, err := SpawnDiff(dir, "", manager)
+	inst, err := SpawnDiff(context.Background(), dir, "", manager)
 	if err != nil {
 		t.Fatalf("SpawnDiff failed: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestSpawnLog(t *testing.T) {
 	dir := initialiseGitRepo(t)
 	manager := pty.NewManager()
 
-	inst, err := SpawnLog(dir, manager)
+	inst, err := SpawnLog(context.Background(), dir, manager)
 	if err != nil {
 		t.Fatalf("SpawnLog failed: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestSpawnStatus(t *testing.T) {
 	dir := initialiseGitRepo(t)
 	manager := pty.NewManager()
 
-	inst, err := SpawnStatus(dir, manager)
+	inst, err := SpawnStatus(context.Background(), dir, manager)
 	if err != nil {
 		t.Fatalf("SpawnStatus failed: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestSpawnDiff_WithCommit(t *testing.T) {
 
 	manager := pty.NewManager()
 
-	inst, err := SpawnDiff(dir, hash, manager)
+	inst, err := SpawnDiff(context.Background(), dir, hash, manager)
 	if err != nil {
 		t.Fatalf("SpawnDiff with commit failed: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestSpawnDiff_Staged(t *testing.T) {
 	dir := initialiseGitRepo(t)
 	manager := pty.NewManager()
 
-	inst, err := SpawnDiff(dir, "staged", manager)
+	inst, err := SpawnDiff(context.Background(), dir, "staged", manager)
 	if err != nil {
 		t.Fatalf("SpawnDiff with staged failed: %v", err)
 	}
