@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 var (
@@ -68,6 +70,7 @@ func Read(shimPath string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	ctx, end := obs.Span(ctx, "clipboard.read", "os", runtime.GOOS)
 
 	var cmd *exec.Cmd
 
@@ -86,15 +89,18 @@ func Read(shimPath string) (string, error) {
 		} else if _, err := exec.LookPath("xsel"); err == nil {
 			cmd = exec.CommandContext(ctx, "xsel", "--clipboard", "--output")
 		} else {
+			end(nil)
 			return "", nil
 		}
 	default:
+		end(nil)
 		return "", nil
 	}
 
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
+	end(err)
 	if err != nil {
 		// Headless servers lack display/session contexts; fallback gracefully.
 		return "", nil
