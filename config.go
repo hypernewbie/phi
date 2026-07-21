@@ -46,6 +46,15 @@ type Config struct {
 	TerminalCommands  []QuickCommand    `json:"terminal_commands"`
 	MarkdownDirs      []string          `json:"markdown_dirs"`
 
+	// UIFontFamily, UIFontSize, and TerminalFontFamily drive the
+	// Settings modal's appearance fields. Empty values mean "use the
+	// built-in default" (set on the client). Size is clamped server-side
+	// in handleAppearanceUpdate. All three are optional — old config
+	// files load fine without them.
+	UIFontFamily       string `json:"ui_font_family,omitempty"`
+	UIFontSize         int    `json:"ui_font_size,omitempty"`
+	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
+
 	// UseExistingTerminalTab, when true, makes the command panel route
 	// terminal commands to the first alive bash/pwsh tab instead of
 	// spawning a new one. Defaults to false (preserves prior behavior
@@ -123,6 +132,11 @@ func loadConfig() Config {
 	}
 	if cfg.ThemeColor == "" {
 		cfg.ThemeColor = "purple"
+	}
+	// Font fields: zero/empty values mean "use built-in defaults on
+	// the client". No server-side coercion needed beyond this.
+	if cfg.UIFontSize < 0 {
+		cfg.UIFontSize = 0
 	}
 	if cfg.ExpandedWorktrees == nil {
 		cfg.ExpandedWorktrees = make(map[string]bool)

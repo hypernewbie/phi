@@ -212,6 +212,7 @@ func main() {
 	http.HandleFunc("/api/config/models", handleModelPresets)
 	http.HandleFunc("/api/fs/autocomplete", handleFSAutocomplete)
 	http.HandleFunc("/api/config/theme", handleThemeUpdate)
+	http.HandleFunc("/api/config/appearance", handleAppearanceUpdate)
 	http.HandleFunc("/api/git/worktrees", handleGetWorktrees)
 	http.HandleFunc("/api/git/worktree-dirty", handleGetWorktreeDirtyStates)
 	http.HandleFunc("/api/config/worktree-state", handleWorktreeStateUpdate)
