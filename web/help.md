@@ -72,6 +72,8 @@ Session controls:
 - Reconnect: attach the browser tab back to an existing PTY.
 - Restart: respawn a dead session when reconnect is not enough.
 
+> **Note:** Claude Code defaults to fullscreen TUI mode. Use `/tui` in the session to switch to inline (non-fullscreen) so it stays scrollable inside phi's terminal.
+
 ## Terminal Tabs
 
 Tabs are the active working surface.
