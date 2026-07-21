@@ -2,6 +2,21 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.13.0 — 2026-07-20
+
+A defaults-and-discovery release: phi now binds to your local network (and Tailscale) by default instead of every interface, stores your prompt history with Alt+Up/Down recall, and surfaces everything appearance-related through a new Settings modal.
+
+### Added
+- **LAN + Tailnet default bind.** New `pkg/bindaddr.Detect()` walks `net.InterfaceAddrs`, returns loopback + every IPv4 address in RFC 1918 (10/8, 172.16/12, 192.168/16) + Tailscale CGNAT (100.64/10). Phi opens one listener per detected interface; `serveAll` runs them in parallel. The public internet is no longer reachable by default — use `--ip 0.0.0.0` to opt back in. Welcome banner prints each bound URL with a `local` / `LAN` / `Tailnet` label so you know which one to hit from your phone vs your laptop. `--ip lan` is the new default sentinel; `--ip <specific>` retains the single-bind behavior for explicit opt-in.
+- **Prompt history with Alt+Up/Down.** `pkg/prompt_history` stores sent prompts to `~/.phi/prompt_history.json` (FIFO-capped at 100, filtered by cwd at recall time, atomic writes). Backend: `POST /api/prompt-history/append` and `GET /api/prompt-history/recent?cwd=…&n=…`. Frontend: `sendStagedInput` fire-and-forgets the append call before clearing the textarea; new `_initPromptHistoryKeydown` listens for Alt+ArrowUp/Down on the staged input and walks the in-memory cache, restoring the pre-cycle draft when you cycle back past the newest entry. Typing any character resets the cycle cursor.
+- **Settings modal.** The header `Config` pill label is now a button that opens a centered modal with: a 22-swatch accent grid sourced from `ACCENT_COLORS` (replaces the old `#accent-color-select`), UI font selector (System / Inter / Segoe UI / Helvetica Neue / mono-stack), UI font size (10–24, clamped server-side), terminal font input (live-applied to all xterm instances via the new `applyFontToAllActiveTerminals` — no scroll-timing code touched), a "Reuse shell tab for terminal commands" toggle, and an About group showing the Φ logo + version + commit + hostname + workspace count. Settings are live-applied (no Save button); font changes persist on a 300 ms debounce to the new `POST /api/config/appearance`. Dead DOM removed: `.theme-area` div + select + both CSS blocks.
+
+### Tests
+- **bindaddr coverage.** 10 unit tests on `Detect()` and the LAN/Tailnet/public/link-local classification, plus 4 main-package tests for `serveAll` (multi-listener) and the new welcome banner.
+- **prompt_history coverage.** 7 store tests (round-trip persistence, FIFO eviction, cwd filtering, n-limiting, empty-skip, missing-file, corrupt-file, concurrent append safety with 8 goroutines × 5 writes) + 5 handler tests + 12 vitest tests for the frontend cycling (Alt+Up/Down, cursor semantics, send-side append).
+- **appearance coverage.** 6 Go tests for `/api/config/appearance` (persist, partial update, size clamp boundaries, method enforcement, garbage-body rejection, config-response surfacing) + 16 vitest tests for the modal (swatch count + click → `applyAccentTheme` path, live font apply + debounced persist, close via ×/Escape/overlay, version-block render from cache, dead-DOM regression guard).
+- **Race-safe mutex discipline.** `Store.mu` is held across both filter+sort in `Recent()` and across the eviction+persist in `Append()`; the test concurrent-append case pins the invariant.
+
 ## v0.12.1 — 2026-07-16
 
 Hotfix: the v0.12.0 default-to-direct focus change was too broad — AI-coder tabs (pi, claude, agy, opencode) lost their staged input bar / attachment strip / presets row, breaking the core phi workflow.
