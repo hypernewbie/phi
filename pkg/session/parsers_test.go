@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -232,6 +233,39 @@ func TestListOpenCodeSessions_DBQuery(t *testing.T) {
 
 	if !foundSess1 || !foundSess2 {
 		t.Error("Did not find both expected database sessions in results")
+	}
+}
+
+// TestListOpenCodeSessions_CancelledContext (L6): a cancelled ctx must
+// surface as context.Canceled from the QueryContext call — proof the M5a
+// ctx-threading actually reaches db.QueryContext, not a lazily-ignored
+// context.TODO() that would still satisfy L5's parent-span assertion.
+func TestListOpenCodeSessions_CancelledContext(t *testing.T) {
+	mockHome := setupMockHome(t)
+
+	dbDir := filepath.Join(mockHome, ".local", "share", "opencode")
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		t.Fatalf("Failed to create mock opencode database folder: %v", err)
+	}
+	dbPath := filepath.Join(dbDir, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open temporary sqlite db: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE session (id TEXT, title TEXT, directory TEXT, project_id TEXT, parent_id TEXT, time_archived INTEGER, time_updated TEXT); CREATE TABLE project (id TEXT, worktree TEXT);`); err != nil {
+		t.Fatalf("Failed to initialise database tables: %v", err)
+	}
+	db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = ListOpenCodeSessions(ctx, "/mock/cwd")
+	if err == nil {
+		t.Fatal("expected an error from ListOpenCodeSessions with a pre-cancelled ctx")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected err to wrap context.Canceled, got: %v", err)
 	}
 }
 
