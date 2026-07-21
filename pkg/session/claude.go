@@ -152,7 +152,7 @@ func ListClaudeSessions(cwd string) ([]Session, error) {
 
 			sessionID := strings.TrimSuffix(f.Name(), ".jsonl")
 			title := ""
-			
+
 			// Priority 1: Phi custom rename
 			if meta, exists := m[sessionID]; exists && meta.Name != "" {
 				title = meta.Name

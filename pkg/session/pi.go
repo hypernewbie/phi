@@ -59,10 +59,10 @@ func ListPiSessions(cwd string) ([]Session, error) {
 	normalizedCwd := filepath.ToSlash(cwd)
 	normalized := strings.ReplaceAll(strings.Trim(normalizedCwd, "/"), ":", "-")
 	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
-	
+
 	sessionsDir := expandHome("~/.pi/agent/sessions")
 	projectPath := filepath.Join(sessionsDir, projectDirName)
-	
+
 	fi, err := os.Stat(projectPath)
 	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil
@@ -161,7 +161,7 @@ func GetPiSessionTranscript(cwd string, sessionID string) ([]Message, error) {
 	normalizedCwd := filepath.ToSlash(cwd)
 	normalized := strings.ReplaceAll(strings.Trim(normalizedCwd, "/"), ":", "-")
 	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
-	
+
 	sessionsDir := expandHome("~/.pi/agent/sessions")
 	projectPath := filepath.Join(sessionsDir, projectDirName)
 

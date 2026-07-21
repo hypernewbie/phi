@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hypernewbie/phi/pkg/pty"
 	"fmt"
+	"github.com/hypernewbie/phi/pkg/pty"
 	"strings"
 
 	"github.com/gorilla/websocket"

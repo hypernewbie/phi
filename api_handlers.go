@@ -303,12 +303,6 @@ func handleSessionMeta(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-
-
-
-
-
-
 func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	typed := r.URL.Query().Get("path")
 	expanded := expandHome(typed)
@@ -357,8 +351,6 @@ func handleFSAutocomplete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(suggestions)
 }
-
-
 
 func handleGetWorktrees(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
@@ -563,10 +555,6 @@ func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(messages)
 }
 
-
-
-
-
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -620,5 +608,3 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"started_at":     fmt.Sprintf("%d", StartedAt),
 	})
 }
-
-

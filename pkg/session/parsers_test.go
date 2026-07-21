@@ -305,4 +305,3 @@ func TestGetOpenCodeSessionTranscript_DBQuery(t *testing.T) {
 		t.Errorf("Unexpected second message: %+v", messages[1])
 	}
 }
-

@@ -261,8 +261,8 @@ func main() {
 			time.Sleep(30 * time.Second)
 			runGatedUpdateCheck(updateChecker, "Initial check")
 
-		// Re-check hourly; CheckIfStale/ShouldRunRealCheck gate the actual network call.
-		ticker := time.NewTicker(1 * time.Hour)
+			// Re-check hourly; CheckIfStale/ShouldRunRealCheck gate the actual network call.
+			ticker := time.NewTicker(1 * time.Hour)
 			for range ticker.C {
 				runGatedUpdateCheck(updateChecker, "Periodic check")
 			}
@@ -496,7 +496,7 @@ func serveAll(listeners []net.Listener) error {
 var (
 	promptHistoryStoreMu sync.Mutex
 	promptHistoryStore   *prompt_history.Store
-	promptHistoryLoadErr  error
+	promptHistoryLoadErr error
 )
 
 func promptHistoryPath() string {

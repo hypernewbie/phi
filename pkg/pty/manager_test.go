@@ -675,4 +675,3 @@ func TestIsPtyDead_DiedInPlace(t *testing.T) {
 		}
 	}
 }
-
