@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -52,7 +54,7 @@ var (
 func main() {
 	enableVirtualTerminalProcessing()
 	portFlag := flag.Int("port", 7070, "Port to run Go web server on")
-	ipFlag := flag.String("ip", "0.0.0.0", "IP address to bind the Go web server to")
+	ipFlag := flag.String("ip", "lan", `IP to bind. "lan" (default) binds loopback + every LAN (RFC 1918) + Tailscale (100.64/10) interface on the host. Use 0.0.0.0 to expose on every interface (public internet reachable), or an explicit IP to bind just one address.`)
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
 	flag.Parse()
@@ -300,15 +302,66 @@ func main() {
 		os.Exit(0)
 	}()
 
-	addr := fmt.Sprintf("%s:%d", *ipFlag, *portFlag)
-	printWelcomeBanner(cfg, *ipFlag, *portFlag)
+	// Bind phase. Banner prints AFTER successful binds so it only
+	// advertises URLs we actually serve.
+	var listeners []net.Listener
+	var boundAddrs []bindaddr.Addr
+	bindFailedFatal := func(err error) { log.Fatal(err) }
 
-	// Bind with retry for Windows restart port handoff; no-op fast path on Unix.
-	ln, err := restart.BindWithRetry(addr, 5*time.Second, 100*time.Millisecond)
-	if err != nil {
-		log.Fatalf("Failed to bind %s: %v", addr, err)
+	if *ipFlag == "lan" {
+		detected := bindaddr.Detect()
+		if len(detected) == 1 {
+			log.Printf("[bind] no LAN/Tailnet interfaces detected — binding 127.0.0.1 only. Use --ip to override.")
+		}
+		for _, a := range detected {
+			addr := net.JoinHostPort(a.IP.String(), strconv.Itoa(*portFlag))
+			ln, err := restart.BindWithRetry(addr, 5*time.Second, 100*time.Millisecond)
+			if err != nil {
+				// Log-and-continue: a single LAN bind failing (e.g. a
+				// service squatting on the same address) shouldn't kill
+				// the other listeners. serveAll will Fatal if nothing
+				// actually bound.
+				log.Printf("[bind] %s (%s) failed: %v — continuing", addr, a.Kind, err)
+				continue
+			}
+			listeners = append(listeners, ln)
+			boundAddrs = append(boundAddrs, a)
+		}
+		if len(listeners) == 0 {
+			bindFailedFatal(fmt.Errorf("failed to bind any detected interface on port %d", *portFlag))
+		}
+	} else {
+		// Explicit --ip (0.0.0.0, a specific address, hostname, etc.).
+		// Preserves the pre-existing single-listener behavior.
+		addr := net.JoinHostPort(*ipFlag, strconv.Itoa(*portFlag))
+		ln, err := restart.BindWithRetry(addr, 5*time.Second, 100*time.Millisecond)
+		if err != nil {
+			bindFailedFatal(fmt.Errorf("failed to bind %s: %w", addr, err))
+		}
+		listeners = append(listeners, ln)
+		// Classify for banner labelling. Anything that's an IP we can
+		// parse goes through bindaddr.IsAllowed-equivalent checks; for
+		// hostnames/0.0.0.0 we fall back to a generic LAN label.
+		parsed := net.ParseIP(*ipFlag)
+		kind := bindaddr.LAN
+		if parsed != nil {
+			detected := bindaddr.Detect() // reuses classification logic
+			kind = bindaddr.LAN
+			for _, a := range detected {
+				if a.IP.Equal(parsed) {
+					kind = a.Kind
+					break
+				}
+			}
+			if parsed.Equal(net.IPv4zero) || parsed.IsUnspecified() {
+				kind = bindaddr.LAN // labelled "LAN" with a "(public)" note in the banner
+			}
+		}
+		boundAddrs = []bindaddr.Addr{{IP: parsed, Kind: kind}}
 	}
-	log.Fatal(http.Serve(ln, nil))
+
+	printWelcomeBanner(cfg, boundAddrs, *portFlag)
+	log.Fatal(serveAll(listeners))
 }
 
 // runGatedUpdateCheck runs one check if due (CheckIfStale + ShouldRunRealCheck gate it).
@@ -327,7 +380,7 @@ func runGatedUpdateCheck(checker *update.Checker, label string) {
 	}
 }
 
-func printWelcomeBanner(cfg Config, ip string, port int) {
+func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	// NOTE: When adding a new theme color, you must update:
 	// 1. web/app.js: Add properties in ACCENT_COLORS
 	// 2. web/index.html: Add <option> in #accent-color-select
@@ -380,16 +433,55 @@ func printWelcomeBanner(cfg Config, ip string, port int) {
 	fmt.Printf("  %sWorkspaces:%s   %d active\n", colorEsc, resetEsc, len(cfg.Workspaces))
 	fmt.Printf("  %sHostname:%s     %s\n", colorEsc, resetEsc, strings.ToUpper(host))
 	fmt.Printf("  %sCoordinator:%s  %s\n", colorEsc, resetEsc, cfg.SyncCoordinator)
-	fmt.Printf("  %sBound IP:%s     %s\n", colorEsc, resetEsc, ip)
 	fmt.Printf("  %sPort:%s         %d\n", colorEsc, resetEsc, port)
 	fmt.Printf("  %sTheme:%s        %s\n", colorEsc, resetEsc, cfg.ThemeColor)
 	fmt.Printf("%s────────────────────────────────────────────────────────%s\n\n", dimEsc, resetEsc)
 
-	fmt.Printf("  Server running on: %shttp://%s:%d%s\n", boldEsc, ip, port, resetEsc)
-	if ip == "0.0.0.0" {
-		fmt.Printf("  Or locally:        %shttp://localhost:%d%s\n", boldEsc, port, resetEsc)
+	// Bind summary. In lan-detect mode this prints one labelled line
+	// per successfully bound interface (loopback, each LAN IP, each
+	// Tailnet IP). In explicit --ip mode it prints one line. Called
+	// AFTER binds so the banner only advertises URLs we actually serve.
+	for _, a := range addrs {
+		url := fmt.Sprintf("http://%s:%d", a.IP.String(), port)
+		switch {
+		case a.IP.Equal(net.IPv4zero):
+			// Explicit 0.0.0.0 bind — flag the public exposure so the
+			// user isn't surprised when their firewall ignores it.
+			fmt.Printf("  %sServer running on:%s %s%s%s %s(all interfaces, public reachable)%s\n",
+				boldEsc, resetEsc, boldEsc, url, resetEsc, dimEsc, resetEsc)
+			fmt.Printf("    %slocal:           http://localhost:%d%s\n", dimEsc, port, resetEsc)
+		case a.Kind == bindaddr.Loopback:
+			fmt.Printf("  %sServer running on:%s %s%s%s\n", boldEsc, resetEsc, boldEsc, url, resetEsc)
+			fmt.Printf("    %slocal%s\n", dimEsc, resetEsc)
+		default:
+			fmt.Printf("    %s%-8s%s %s%s%s\n", dimEsc, a.Kind.String()+":", resetEsc, boldEsc, url, resetEsc)
+		}
 	}
 	fmt.Printf("\n")
+}
+
+// serveAll runs http.Serve on every listener concurrently and waits
+// for all of them to exit. Each listener has its own goroutine; the
+// returned error is the last non-nil serve error (most commonly
+// "use of closed network connection" when a sibling calls Close).
+// Returns only when all listeners have exited, so callers can log.Fatal
+// the result to keep the existing single-listener exit semantics.
+func serveAll(listeners []net.Listener) error {
+	errCh := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		go func(l net.Listener) { errCh <- http.Serve(l, nil) }(ln)
+	}
+	var last error
+	for range listeners {
+		if err := <-errCh; err != nil {
+			log.Printf("[serve] listener exited: %v", err)
+			last = err
+		}
+	}
+	if last != nil {
+		return fmt.Errorf("all listeners exited, last error: %w", last)
+	}
+	return nil
 }
 
 // ---------- prompt_history handlers ----------
