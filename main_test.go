@@ -1149,6 +1149,38 @@ func TestHandleRawDiff(t *testing.T) {
 	}
 }
 
+// TestHandleRawDiff_CancelledContext (L6): a request whose ctx is already
+// cancelled must fail the git subprocess via exec.CommandContext, not run
+// it to completion — proof the M5a ctx-threading (git diff/show/status,
+// api_git.go) reaches the actual command, not just the function signature.
+func TestHandleRawDiff_CancelledContext(t *testing.T) {
+	tempDir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+	runGit("init")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir, nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	handleRawDiff(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a cancelled-ctx diff request, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "context canceled") {
+		t.Errorf("expected the cancelled-ctx error to surface, got body: %s", w.Body.String())
+	}
+}
+
 func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 	tempDir := t.TempDir()
 

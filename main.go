@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -59,9 +60,22 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	rollbackFlag := flag.Bool("rollback", false, "Roll back to the previously installed binary (undoes the last self-update) and exit")
 	logLevelFlag := flag.String("log-level", "", "Log level: debug|info|warn|error (default: info, or PHI_LOG env var)")
+	// Registered unconditionally (not behind //go:build otel) so a default
+	// build parses identical args — it just never has anywhere to send the
+	// endpoint. obs.Init's body is the only tag-split part (plan §B).
+	otelEndpointFlag := flag.String("otel-endpoint", "", "OTLP/gRPC collector endpoint for OpenTelemetry export (host:port). Only takes effect in a binary built with -tags otel. Falls back to PHI_OTEL_ENDPOINT.")
 	flag.Parse()
 
 	initLogging(*logLevelFlag)
+
+	otelEndpoint := *otelEndpointFlag
+	if otelEndpoint == "" {
+		otelEndpoint = os.Getenv("PHI_OTEL_ENDPOINT")
+	}
+	obsShutdown, obsErr := obs.Init(context.Background(), otelEndpoint)
+	if obsErr != nil {
+		log.Printf("[main] obs.Init: %v", obsErr)
+	}
 
 	if *versionFlag {
 		fmt.Printf("Phi %s (commit: %s, built: %s, source: %s)\n", Version, Commit, Date, BuildSource)
@@ -303,6 +317,9 @@ func main() {
 			log.Printf("[main] FlushSyncStore on shutdown: %v", err)
 		}
 		wsHub.BroadcastShutdown("shutdown")
+		if err := obsShutdown(context.Background()); err != nil {
+			log.Printf("[main] obs shutdown: %v", err)
+		}
 		time.Sleep(200 * time.Millisecond)
 		os.Exit(0)
 	}()

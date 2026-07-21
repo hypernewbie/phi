@@ -18,7 +18,7 @@ func ListOpenCodeSessions(ctx context.Context, cwd string) ([]Session, error) {
 	}
 
 	// Open SQLite in read-only and WAL compatible mode
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=query_only=true&_pragma=busy_timeout=5000")
+	db, err := openDB(dbPath + "?_pragma=query_only=true&_pragma=busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func GetOpenCodeSessionTranscript(ctx context.Context, sessionID string) ([]Mess
 		return []Message{}, nil
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=query_only=true&_pragma=busy_timeout=5000")
+	db, err := openDB(dbPath + "?_pragma=query_only=true&_pragma=busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
