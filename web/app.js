@@ -152,12 +152,16 @@ const ACCENT_COLORS = {
 export class App {
     constructor() {
         this.codersPresetRegistry = {};
-        this.accentColorSelect = document.getElementById('accent-color-select');
         // Browser chrome state is independent from the in-app CPU logo state.
         // The TabManager toggles this only when live PTY output starts/stops.
         this.terminalActivity = false;
         this.faviconAccent = null;
         this.faviconAccentDim = null;
+        // Appearance settings (ingested from /api/config on boot, mutated
+        // by the Settings modal, persisted to /api/config/appearance).
+        this.uiFontFamily = '';
+        this.uiFontSize = 0;
+        this.terminalFontFamily = '';
         
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -190,12 +194,12 @@ export class App {
         // 5. Initialize Diff terminal engine
         this.diffController.initTerminal();
 
-        // 6. Setup theme accent listener
-        this.accentColorSelect.addEventListener('change', () => {
-            const color = this.accentColorSelect.value;
-            this.applyAccentTheme(color);
-            this.saveTheme(color);
-        });
+        // 6. Wire up the Settings modal trigger (the pill's "Config" label,
+        // repurposed as a button — see #header-settings-btn).
+        const settingsBtn = document.getElementById('header-settings-btn');
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', () => this.openSettingsModal());
+        }
 
         // 6.5 Start fleet poller (plan §3.4). Polls every 15s while the
         // sidebar is visible. Renders peer rows; hides panel when no
@@ -779,6 +783,336 @@ export class App {
             });
         } catch (e) {
             console.error("[theme] Failed to save theme:", e);
+        }
+    }
+
+    // openSettingsModal renders the appearance + behavior + about modal.
+    // Settings are live-applied (no Save button) — see architect notes.
+    // The accent swatch grid is the source of truth for theme color
+    // selection; the previous #accent-color-select has been removed.
+    openSettingsModal() {
+        // Re-use guard so a duplicate click doesn't stack overlays.
+        if (document.querySelector('.settings-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay settings-overlay hidden';
+
+        const modal = document.createElement('div');
+        modal.className = 'modal-content settings-modal';
+
+        // ── Header: Φ logo + title + version ─────────────────────
+        const header = document.createElement('div');
+        header.className = 'modal-header settings-header';
+
+        const identity = document.createElement('div');
+        identity.className = 'settings-identity';
+
+        const logo = document.createElement('div');
+        logo.className = 'settings-logo';
+        logo.textContent = '\u03A6'; // Φ
+        identity.appendChild(logo);
+
+        const idText = document.createElement('div');
+        const titleEl = document.createElement('h3');
+        titleEl.textContent = 'Phi';
+        const verEl = document.createElement('div');
+        verEl.className = 'settings-version';
+        const v = this.versionInfo || {};
+        const short = (v.commit || '').slice(0, 7);
+        verEl.textContent = v.version
+            ? `v${v.version}${short ? ' · ' + short : ''}`
+            : 'v?';
+        verEl.title = [v.date, v.buildSource].filter(Boolean).join(' · ') || 'unknown build';
+        idText.appendChild(titleEl);
+        idText.appendChild(verEl);
+        identity.appendChild(idText);
+        header.appendChild(identity);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'modal-close-btn';
+        closeBtn.type = 'button';
+        closeBtn.textContent = '\u00d7'; // ×
+        closeBtn.title = 'Close';
+        header.appendChild(closeBtn);
+
+        // ── Body ─────────────────────────────────────────────────
+        const body = document.createElement('div');
+        body.className = 'modal-body settings-body';
+
+        // Appearance group ──────────────────────────────────────
+        const appGroup = this._buildSettingsGroup('Appearance');
+        body.appendChild(appGroup);
+
+        // Highlight color: 22-swatch grid (replaces #accent-color-select).
+        const activeColor = document.documentElement.getAttribute('data-theme-color') || 'purple';
+        const swatchRow = this._buildSwatchRow(activeColor);
+        appGroup.appendChild(swatchRow);
+
+        // UI font family
+        const uiFontRow = this._buildSelectRow('UI font', 'settings-ui-font', [
+            { value: '', label: 'System default' },
+            { value: 'Inter, system-ui, sans-serif', label: 'Inter' },
+            { value: 'system-ui, -apple-system, sans-serif', label: 'System UI' },
+            { value: '"Segoe UI", system-ui, sans-serif', label: 'Segoe UI' },
+            { value: '"Helvetica Neue", Arial, sans-serif', label: 'Helvetica Neue' },
+            { value: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace', label: 'Mono / dev-style' },
+        ], this.uiFontFamily);
+        appGroup.appendChild(uiFontRow);
+
+        // UI font size
+        const uiSizeRow = this._buildNumberRow('UI font size', 'settings-ui-font-size', this.uiFontSize || 14, 10, 24);
+        appGroup.appendChild(uiSizeRow);
+
+        // Terminal font family
+        const termFontRow = this._buildInputRow('Terminal font', 'settings-term-font', 'JetBrains Mono, monospace', this.terminalFontFamily);
+        appGroup.appendChild(termFontRow);
+
+        // Behavior group ────────────────────────────────────────
+        const behGroup = this._buildSettingsGroup('Behavior');
+        body.appendChild(behGroup);
+        const reuseRow = this._buildCheckboxRow(
+            'Reuse shell tab for terminal commands',
+            'settings-reuse-shell-tab',
+            !!this.useExistingTerminalTab,
+        );
+        behGroup.appendChild(reuseRow);
+
+        // About group ───────────────────────────────────────────
+        const aboutGroup = this._buildSettingsGroup('About');
+        body.appendChild(aboutGroup);
+        const hName = (this.hostname || '').toString();
+        aboutGroup.appendChild(this._buildAboutRow('Hostname', hName.toUpperCase()));
+        if (v.buildSource) {
+            aboutGroup.appendChild(this._buildAboutRow('Build source', v.buildSource));
+        }
+        aboutGroup.appendChild(this._buildAboutRow('Workspaces', `${(this.sessionsManager?.workspaces || []).length}`));
+
+        modal.appendChild(header);
+        modal.appendChild(body);
+
+        // ── Footer (Close only — no Save; settings live-apply) ───
+        const footer = document.createElement('div');
+        footer.className = 'modal-footer settings-footer';
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'btn btn-accent';
+        doneBtn.type = 'button';
+        doneBtn.textContent = 'Close';
+        footer.appendChild(doneBtn);
+        modal.appendChild(footer);
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // ── Wiring ─────────────────────────────────────────────
+        const close = () => {
+            document.removeEventListener('keydown', onKeydown);
+            overlay.classList.add('hidden');
+            overlay.remove();
+        };
+        const onKeydown = (e) => { if (e.key === 'Escape') close(); };
+        closeBtn.addEventListener('click', close);
+        doneBtn.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        document.addEventListener('keydown', onKeydown);
+
+        // Live font changes — debounced POST so rapid typing doesn't
+        // hammer the backend. Family is applied immediately for
+        // instant feedback; persist is debounced.
+        let persistTimer = null;
+        const debouncedPersist = () => {
+            clearTimeout(persistTimer);
+            persistTimer = setTimeout(() => this.persistAppearance(), 300);
+        };
+        uiFontRow.querySelector('select')?.addEventListener('change', (e) => {
+            this.uiFontFamily = e.target.value;
+            this.applyUIFont();
+            debouncedPersist();
+        });
+        uiSizeRow.querySelector('input')?.addEventListener('input', (e) => {
+            const n = parseInt(e.target.value, 10);
+            if (!Number.isFinite(n) || n < 10 || n > 24) return;
+            this.uiFontSize = n;
+            this.applyUIFont();
+            debouncedPersist();
+        });
+        termFontRow.querySelector('input')?.addEventListener('input', (e) => {
+            this.terminalFontFamily = e.target.value;
+            this.tabManager?.applyFontToAllActiveTerminals(this.terminalFontFamily || 'JetBrains Mono, monospace');
+            debouncedPersist();
+        });
+        reuseRow.querySelector('input')?.addEventListener('change', async (e) => {
+            this.useExistingTerminalTab = !!e.target.checked;
+            try {
+                await fetch('/api/config/use-existing-terminal-tab', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: this.useExistingTerminalTab }),
+                });
+            } catch (err) {
+                console.warn('[settings] failed to persist reuse-tab toggle', err);
+            }
+        });
+
+        requestAnimationFrame(() => overlay.classList.remove('hidden'));
+    }
+
+    _buildSettingsGroup(title) {
+        const group = document.createElement('div');
+        group.className = 'settings-group';
+        const h = document.createElement('h4');
+        h.className = 'settings-group-title';
+        h.textContent = title;
+        group.appendChild(h);
+        return group;
+    }
+
+    _buildSwatchRow(activeColor) {
+        const row = document.createElement('div');
+        row.className = 'settings-row';
+        const label = document.createElement('label');
+        label.textContent = 'Highlight color';
+        row.appendChild(label);
+        const grid = document.createElement('div');
+        grid.className = 'settings-swatch-grid';
+        grid.setAttribute('role', 'radiogroup');
+        grid.setAttribute('aria-label', 'Highlight color');
+        Object.entries(ACCENT_COLORS).forEach(([key, theme]) => {
+            const sw = document.createElement('button');
+            sw.type = 'button';
+            sw.className = 'settings-swatch';
+            sw.setAttribute('role', 'radio');
+            sw.setAttribute('aria-checked', key === activeColor ? 'true' : 'false');
+            sw.dataset.color = key;
+            sw.style.setProperty('--swatch', theme.accent);
+            sw.title = key;
+            sw.addEventListener('click', () => {
+                this.applyAccentTheme(key);
+                this.saveTheme(key);
+                grid.querySelectorAll('.settings-swatch').forEach((s) => {
+                    s.setAttribute('aria-checked', s.dataset.color === key ? 'true' : 'false');
+                });
+            });
+            grid.appendChild(sw);
+        });
+        row.appendChild(grid);
+        return row;
+    }
+
+    _buildSelectRow(labelText, id, options, current) {
+        const row = document.createElement('div');
+        row.className = 'settings-row';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        row.appendChild(label);
+        const sel = document.createElement('select');
+        sel.id = id;
+        options.forEach((o) => {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            if (o.value === current) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        row.appendChild(sel);
+        return row;
+    }
+
+    _buildNumberRow(labelText, id, current, min, max) {
+        const row = document.createElement('div');
+        row.className = 'settings-row';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        row.appendChild(label);
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.id = id;
+        inp.min = String(min);
+        inp.max = String(max);
+        inp.value = String(current || min);
+        row.appendChild(inp);
+        return row;
+    }
+
+    _buildInputRow(labelText, id, placeholder, current) {
+        const row = document.createElement('div');
+        row.className = 'settings-row';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        row.appendChild(label);
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.id = id;
+        inp.placeholder = placeholder;
+        inp.value = current || '';
+        row.appendChild(inp);
+        return row;
+    }
+
+    _buildCheckboxRow(labelText, id, checked) {
+        const row = document.createElement('div');
+        row.className = 'settings-row';
+        const label = document.createElement('label');
+        label.htmlFor = id;
+        label.textContent = labelText;
+        row.appendChild(label);
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.id = id;
+        inp.checked = !!checked;
+        row.appendChild(inp);
+        return row;
+    }
+
+    _buildAboutRow(k, v) {
+        const row = document.createElement('div');
+        row.className = 'settings-about-row';
+        const key = document.createElement('span');
+        key.textContent = k;
+        const val = document.createElement('span');
+        val.textContent = v;
+        row.appendChild(key);
+        row.appendChild(val);
+        return row;
+    }
+
+    // applyUIFont writes the current uiFontFamily / uiFontSize to
+    // document.body as inline style. We avoid introducing CSS custom
+    // properties (per AGENTS.md) — inline styles keep the change
+    // scoped and require no new tokens.
+    applyUIFont() {
+        const body = document.body;
+        if (!body) return;
+        if (this.uiFontFamily) {
+            body.style.fontFamily = this.uiFontFamily;
+        } else {
+            body.style.removeProperty('font-family');
+        }
+        if (this.uiFontSize >= 10) {
+            body.style.fontSize = `${this.uiFontSize}px`;
+        } else {
+            body.style.removeProperty('font-size');
+        }
+    }
+
+    // persistAppearance POSTs the current uiFontFamily / uiFontSize /
+    // terminalFontFamily to /api/config/appearance. Debounced at the
+    // call site (300ms after the last input change).
+    async persistAppearance() {
+        try {
+            await fetch('/api/config/appearance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ui_font_family: this.uiFontFamily || '',
+                    ui_font_size: this.uiFontSize || 0,
+                    terminal_font_family: this.terminalFontFamily || '',
+                }),
+            });
+        } catch (e) {
+            console.warn('[appearance] failed to persist:', e);
         }
     }
 
