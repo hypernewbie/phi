@@ -20,6 +20,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/fleet"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/restart"
@@ -471,7 +472,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // Returns only when all listeners have exited, so callers can log.Fatal
 // the result to keep the existing single-listener exit semantics.
 func serveAll(listeners []net.Listener) error {
-	handler := traceMiddleware(http.DefaultServeMux)
+	handler := obs.WrapHTTP(http.DefaultServeMux)
 	errCh := make(chan error, len(listeners))
 	for _, ln := range listeners {
 		go func(l net.Listener) { errCh <- http.Serve(l, handler) }(ln)
