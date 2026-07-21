@@ -191,7 +191,6 @@ func Start(dir string, command string, args []string) (*Pty, error) {
 		cmd.Env = append(cmd.Env, "DISPLAY=:99", "WAYLAND_DISPLAY=wayland-99")
 	}
 
-
 	if err := cmd.Start(); err != nil {
 		_ = pt.Close()
 		return nil, err

@@ -2215,4 +2215,3 @@ func TestDiagMethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405 on POST, got %d", w.Code)
 	}
 }
-

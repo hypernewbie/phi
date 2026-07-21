@@ -1,2 +1,3 @@
 web/*.js text eol=lf
 web-src/*.ts text eol=lf
+*.go text eol=lf

@@ -83,7 +83,7 @@ func TestAgySessionCwdAndSync(t *testing.T) {
 	// 1. Test SaveAgySessionCwd
 	testID := "test-session-uuid-12345"
 	testCwd := "/home/hypernewbie/code/test-cwd"
-	
+
 	err := SaveAgySessionCwd(testID, testCwd)
 	if err != nil {
 		t.Fatalf("Failed to save session cwd: %v", err)
@@ -181,12 +181,12 @@ func TestClaudeSessionRename(t *testing.T) {
 	// Create project directory path: ~ / .claude / projects / C--mock-path
 	projectDirName := "C--mock-path"
 	mockSessionID := "conv_abc123"
-	
+
 	claudeProjPath := filepath.Join(tempHome, ".claude", "projects", projectDirName)
 	if err := os.MkdirAll(claudeProjPath, 0755); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
-	
+
 	jsonlPath := filepath.Join(claudeProjPath, mockSessionID+".jsonl")
 	// Write standard JSONL file containing history but no summary
 	if err := os.WriteFile(jsonlPath, []byte(`{"type":"message","text":"hello"}`+"\n"), 0644); err != nil {
@@ -229,12 +229,12 @@ func TestGetPiSessionTranscript(t *testing.T) {
 	// Create project directory path: ~ / .pi / agent / sessions / --C--mock-path--
 	projectDirName := "--C--mock-path--"
 	mockSessionID := "conv_abc123"
-	
+
 	piProjPath := filepath.Join(tempHome, ".pi", "agent", "sessions", projectDirName)
 	if err := os.MkdirAll(piProjPath, 0755); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
-	
+
 	jsonlPath := filepath.Join(piProjPath, mockSessionID+".jsonl")
 	mockContent := `{"type":"session_info","name":"Custom Pi Title"}` + "\n" +
 		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello bot"}]}}` + "\n" +
