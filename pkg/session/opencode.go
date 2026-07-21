@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -9,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func ListOpenCodeSessions(cwd string) ([]Session, error) {
+func ListOpenCodeSessions(ctx context.Context, cwd string) ([]Session, error) {
 	dbPath := expandHome("~/.local/share/opencode/opencode.db")
 	fi, err := os.Stat(dbPath)
 	if os.IsNotExist(err) || (err == nil && fi.IsDir()) {
@@ -30,7 +31,7 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 		WHERE (s.parent_id IS NULL OR s.parent_id = '') AND (s.time_archived IS NULL OR s.time_archived = 0)
 		ORDER BY s.time_updated DESC
 	`
-	rows, err := db.Query(query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +68,7 @@ func ListOpenCodeSessions(cwd string) ([]Session, error) {
 	return sessions, nil
 }
 
-func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
+func GetOpenCodeSessionTranscript(ctx context.Context, sessionID string) ([]Message, error) {
 	dbPath := expandHome("~/.local/share/opencode/opencode.db")
 	fi, err := os.Stat(dbPath)
 	if os.IsNotExist(err) || (err == nil && fi.IsDir()) {
@@ -80,12 +81,12 @@ func GetOpenCodeSessionTranscript(sessionID string) ([]Message, error) {
 	}
 	defer db.Close()
 
-	return getOpenCodeSessionTranscriptFromDB(db, sessionID)
+	return getOpenCodeSessionTranscriptFromDB(ctx, db, sessionID)
 }
 
-func getOpenCodeSessionTranscriptFromDB(db *sql.DB, sessionID string) ([]Message, error) {
+func getOpenCodeSessionTranscriptFromDB(ctx context.Context, db *sql.DB, sessionID string) ([]Message, error) {
 	// 1. Get all messages for the session
-	msgRows, err := db.Query(`SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC`, sessionID)
+	msgRows, err := db.QueryContext(ctx, `SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +130,7 @@ func getOpenCodeSessionTranscriptFromDB(db *sql.DB, sessionID string) ([]Message
 		}
 
 		// 2. Get all text parts for this message
-		partRows, err := db.Query(`SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC`, id)
+		partRows, err := db.QueryContext(ctx, `SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC`, id)
 		if err != nil {
 			continue
 		}
