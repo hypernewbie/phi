@@ -471,9 +471,10 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // Returns only when all listeners have exited, so callers can log.Fatal
 // the result to keep the existing single-listener exit semantics.
 func serveAll(listeners []net.Listener) error {
+	handler := traceMiddleware(http.DefaultServeMux)
 	errCh := make(chan error, len(listeners))
 	for _, ln := range listeners {
-		go func(l net.Listener) { errCh <- http.Serve(l, nil) }(ln)
+		go func(l net.Listener) { errCh <- http.Serve(l, handler) }(ln)
 	}
 	var last error
 	for range listeners {
