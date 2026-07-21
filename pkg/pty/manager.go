@@ -1,18 +1,24 @@
 package pty
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/system"
 )
+
+// ErrShuttingDown is returned by Spawn once graceful shutdown has begun.
+var ErrShuttingDown = errors.New("pty: manager is shutting down")
 
 var testTabsPath string
 
@@ -110,7 +116,13 @@ func (inst *PTYInstance) HasDetachTimer() bool {
 type Manager struct {
 	instances map[string]*PTYInstance
 	mu        sync.RWMutex
+	draining  atomic.Bool // set at shutdown; blocks new Spawns
 }
+
+// BeginDrain stops the manager from spawning new PTYs. Idempotent; called at
+// the very start of graceful shutdown (before the drain delay) so in-flight
+// spawn requests during the whole drain window are rejected, not leaked.
+func (m *Manager) BeginDrain() { m.draining.Store(true) }
 
 func NewManager() *Manager {
 	return &Manager{
@@ -126,6 +138,9 @@ func GenerateID() string {
 }
 
 func (m *Manager) Spawn(dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
+	if m.draining.Load() {
+		return nil, ErrShuttingDown
+	}
 	p, err := Start(dir, command, args)
 	if err != nil {
 		return nil, err
@@ -251,6 +266,60 @@ func (m *Manager) Kill(id string) error {
 	_ = m.scheduleSave()
 
 	return killErr
+}
+
+// Shutdown gracefully terminates every managed PTY: stop detach timers,
+// SIGTERM all children, wait up to grace for each to exit (which fires its
+// temp-dir cleanup), then SIGKILL stragglers. Waits on Closed even after a
+// forced Kill so the cleanup goroutine's RemoveAll completes before we exit.
+func (m *Manager) Shutdown(grace time.Duration) {
+	m.BeginDrain() // defensive: also stops spawns if called directly (e.g. tests)
+	m.mu.Lock()
+	insts := make([]*PTYInstance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		insts = append(insts, inst)
+	}
+	m.mu.Unlock()
+
+	// Stop detach timers, SIGTERM each child, and collect live Ptys —
+	// reading inst.Pty under inst.mu so `go test -race` stays green.
+	ptys := make([]*Pty, 0, len(insts))
+	for _, inst := range insts {
+		inst.mu.Lock()
+		if inst.DetachTimer != nil {
+			inst.DetachTimer.Stop()
+			inst.DetachTimer = nil
+		}
+		p := inst.Pty
+		inst.mu.Unlock()
+		if p != nil {
+			_ = p.Terminate()
+			ptys = append(ptys, p)
+		}
+	}
+
+	// Wait up to grace for each to exit (fires its temp-dir cleanup); SIGKILL stragglers.
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, p := range ptys {
+		wg.Add(1)
+		go func(p *Pty) {
+			defer wg.Done()
+			select {
+			case <-p.Closed: // exited cleanly (temp dir already removed)
+			case <-ctx.Done():
+				_ = p.Kill() // straggler: SIGKILL
+				// Bounded wait for the cleanup goroutine — don't hang shutdown
+				// forever if the killed process is stuck (e.g. uninterruptible I/O).
+				select {
+				case <-p.Closed:
+				case <-time.After(2 * time.Second):
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
 }
 
 func (m *Manager) ListActive() []*PTYInstance {

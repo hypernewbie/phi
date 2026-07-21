@@ -2,6 +2,7 @@ package pty
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -673,6 +674,95 @@ func TestIsPtyDead_DiedInPlace(t *testing.T) {
 		if p["id"] == inst.ID {
 			t.Errorf("died-in-place instance %s should NOT be persisted to tabs.json, found: %v", inst.ID, p)
 		}
+	}
+}
+
+// TestManagerShutdown_GracefulTerminatesAndCleansUp spawns a live shell PTY,
+// calls Shutdown, and asserts the process is gone, Pty.Closed is closed, and
+// the per-PTY shim temp dir was removed (the reordered pty.go exit goroutine
+// removes it BEFORE closing Closed, so this ordering is guaranteed).
+func TestManagerShutdown_GracefulTerminatesAndCleansUp(t *testing.T) {
+	manager := NewManager()
+	shell, args := getTestShell()
+
+	inst, err := manager.Spawn("", shell, args, "shell", "shutdown-test")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	tempDir := filepath.Dir(inst.Pty.ClipboardFile())
+	if _, err := os.Stat(tempDir); err != nil {
+		t.Fatalf("expected shim temp dir to exist before shutdown: %v", err)
+	}
+
+	manager.Shutdown(2 * time.Second)
+
+	select {
+	case <-inst.Pty.Closed:
+		// exited and cleaned up, as expected
+	default:
+		t.Error("expected inst.Pty.Closed to be closed after Shutdown")
+	}
+
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Errorf("expected shim temp dir to be removed after Shutdown, stat err=%v", err)
+	}
+}
+
+// TestManagerShutdown_KillsStragglers spawns a child that ignores SIGTERM
+// (trap '' TERM) and confirms Shutdown still returns within its grace window
+// by escalating to SIGKILL, and that the straggler's temp dir is still
+// cleaned up afterward.
+func TestManagerShutdown_KillsStragglers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("trap/SIGTERM semantics are Unix-only; Windows Terminate() always hard-kills")
+	}
+
+	manager := NewManager()
+	inst, err := manager.Spawn("", "bash", []string{"--norc", "--noprofile", "-c", "trap '' TERM; sleep 1000"}, "shell", "straggler-test")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	tempDir := filepath.Dir(inst.Pty.ClipboardFile())
+
+	start := time.Now()
+	manager.Shutdown(300 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("Shutdown took too long waiting on a SIGTERM-ignoring straggler: %v", elapsed)
+	}
+
+	select {
+	case <-inst.Pty.Closed:
+		// SIGKILLed and cleaned up, as expected
+	default:
+		t.Error("expected inst.Pty.Closed to be closed after Shutdown SIGKILLed the straggler")
+	}
+
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Errorf("expected shim temp dir to be removed after straggler is SIGKILLed, stat err=%v", err)
+	}
+}
+
+// TestBeginDrain_RejectsNewSpawns confirms that once BeginDrain has been
+// called, Spawn rejects with ErrShuttingDown and creates no instance —
+// closing the spawn-during-drain leak at the Manager.Spawn choke point.
+func TestBeginDrain_RejectsNewSpawns(t *testing.T) {
+	manager := NewManager()
+	manager.BeginDrain()
+
+	shell, args := getTestShell()
+	inst, err := manager.Spawn("", shell, args, "shell", "drain-test")
+	if !errors.Is(err, ErrShuttingDown) {
+		t.Errorf("expected ErrShuttingDown, got %v", err)
+	}
+	if inst != nil {
+		t.Errorf("expected nil instance on rejected spawn, got %+v", inst)
+	}
+	if len(manager.ListActive()) != 0 {
+		t.Errorf("expected no instances to be created during drain, got %d", len(manager.ListActive()))
 	}
 }
 
