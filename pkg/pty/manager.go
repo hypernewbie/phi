@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
@@ -131,7 +132,12 @@ func GenerateID() string {
 // never cancelled by it, since the terminal must survive well past the
 // HTTP request that spawned it.
 func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
-	p, err := Start(ctx, dir, command, args)
+	// pty.spawn times only the spawn call itself, via the same ctx Start
+	// accepts but never uses to cancel the process (see Start's doc
+	// comment) — the span ends here; the terminal's own lifetime runs on.
+	spanCtx, end := obs.Span(ctx, "pty.spawn", "coder", coder, "command", command, "cwd", dir)
+	p, err := Start(spanCtx, dir, command, args)
+	end(err)
 	if err != nil {
 		return nil, err
 	}

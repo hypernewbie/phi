@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/hypernewbie/phi/pkg/diff"
+	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
@@ -112,17 +113,24 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 		colorFlag = "--color=always"
 	}
 
+	spanName := "git.diff"
+	if commit != "" && commit != "staged" && commit != "unstaged" {
+		spanName = "git.show"
+	}
+	ctx, end := obs.Span(r.Context(), spanName, "cwd", cwd, "commit", commit)
+
 	var cmd *exec.Cmd
 	if commit == "staged" {
-		cmd = exec.CommandContext(r.Context(), "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+		cmd = exec.CommandContext(ctx, "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
 	} else if commit == "" || commit == "unstaged" {
-		cmd = exec.CommandContext(r.Context(), "git", "diff", "-w", colorFlag, "-U"+contextLines)
+		cmd = exec.CommandContext(ctx, "git", "diff", "-w", colorFlag, "-U"+contextLines)
 	} else {
-		cmd = exec.CommandContext(r.Context(), "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
+		cmd = exec.CommandContext(ctx, "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
 	}
 	cmd.Dir = cwd
 
 	out, err := cmd.Output()
+	end(err)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			http.Error(w, fmt.Sprintf("Git error: %s", string(exitErr.Stderr)), http.StatusInternalServerError)
@@ -133,9 +141,11 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if commit == "" || commit == "unstaged" {
-		statusCmd := exec.CommandContext(r.Context(), "git", "status", "--porcelain")
+		statusCtx, statusEnd := obs.Span(r.Context(), "git.status", "cwd", cwd)
+		statusCmd := exec.CommandContext(statusCtx, "git", "status", "--porcelain")
 		statusCmd.Dir = cwd
-		statusOut, _ := statusCmd.Output()
+		statusOut, statusErr := statusCmd.Output()
+		statusEnd(statusErr)
 		for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
 			if !strings.HasPrefix(line, "?? ") {
 				continue
@@ -162,9 +172,11 @@ func handleRawStatus(w http.ResponseWriter, r *http.Request) {
 		cwd = activeCWD
 	}
 
-	cmd := exec.CommandContext(r.Context(), "git", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
+	ctx, end := obs.Span(r.Context(), "git.status", "cwd", cwd)
+	cmd := exec.CommandContext(ctx, "git", "--no-pager", "-c", "color.status=always", "status", "--short", "--branch")
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
+	end(err)
 	if err != nil && len(out) == 0 {
 		http.Error(w, fmt.Sprintf("Git error: %v", err), http.StatusInternalServerError)
 		return
@@ -186,9 +198,11 @@ func handleGetCommits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run git log to fetch the last 10 commits on active branch
-	cmd := exec.CommandContext(r.Context(), "git", "log", "-10", "--format=%h|%s")
+	ctx, end := obs.Span(r.Context(), "git.log", "cwd", cwd)
+	cmd := exec.CommandContext(ctx, "git", "log", "-10", "--format=%h|%s")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
+	end(err)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]CommitEntry{})

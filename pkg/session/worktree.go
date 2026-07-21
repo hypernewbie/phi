@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/hypernewbie/phi/pkg/obs"
 )
 
 type GitWorktree struct {
@@ -17,11 +19,13 @@ type GitWorktree struct {
 }
 
 func hasUnstagedChanges(ctx context.Context, dir string) bool {
+	ctx, end := obs.Span(ctx, "git.status", "cwd", dir)
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
+	end(err)
 	if err != nil {
 		return false
 	}
@@ -52,6 +56,9 @@ func WorktreeDirtyStates(ctx context.Context, paths []string) map[string]bool {
 // ListGitWorktrees runs "git worktree list --porcelain" in dir. If it fails or is not a git repo,
 // it returns a single GitWorktree entry representing the dir itself.
 func ListGitWorktrees(ctx context.Context, dir string) ([]GitWorktree, error) {
+	ctx, end := obs.Span(ctx, "git.worktree.list", "cwd", dir)
+	defer func() { end(nil) }() // this func never itself returns a non-nil error
+
 	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = dir
 	var out bytes.Buffer
