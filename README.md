@@ -93,9 +93,11 @@ The directory you launch Phi from becomes the default workspace; switch between 
 
 ### Flags
 
-| Flag    | Default | Description             |
-| ------- | ------- | ----------------------- |
-| `-port` | `7070`  | Port for the web server |
+| Flag              | Default | Description                                                                                                                        |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `-port`           | `7070`  | Port for the web server                                                                                                            |
+| `-log-level`      | `info`  | Log level: `debug`\|`info`\|`warn`\|`error` (or `PHI_LOG` env var). `debug` also enables WS/PTY frame traces and span timing lines. |
+| `-otel-endpoint`  | (none)  | OTLP/gRPC collector endpoint (`host:port`) for OpenTelemetry export (or `PHI_OTEL_ENDPOINT` env var). Only takes effect in a binary built with `-tags otel` — the default build parses and ignores it, adding zero OTel dependencies. |
 
 > **Note:** Phi binds to `0.0.0.0` and has no authentication. Only run it on a trusted network (or behind a reverse proxy / SSH tunnel).
 
