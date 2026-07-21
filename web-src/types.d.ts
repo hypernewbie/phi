@@ -30,7 +30,10 @@ export interface AppLike {
     modelPresets?: any;
     hostname?: string;
     applyAccentTheme?: (color: string) => void;
-    accentColorSelect?: HTMLSelectElement | null;
+    applyUIFont?: () => void;
+    uiFontFamily?: string;
+    uiFontSize?: number;
+    terminalFontFamily?: string;
     openConfigEditor?: (...args: any[]) => void;
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;
