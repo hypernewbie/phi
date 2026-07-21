@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -97,7 +98,8 @@ func main() {
 	var err error
 	activeCWD, err = os.Getwd()
 	if err != nil {
-		log.Fatalf("Failed to resolve current working directory: %v", err)
+		slog.Error("failed to resolve current working directory", "err", err)
+		os.Exit(1)
 	}
 
 	log.Printf("[main] Starting Phi in CWD: %s", activeCWD)
@@ -171,7 +173,8 @@ func main() {
 	var subErr error
 	webRoot, subErr = fs.Sub(webFS, "web")
 	if subErr != nil {
-		log.Fatalf("Failed to load embedded web assets: %v", subErr)
+		slog.Error("failed to load embedded web assets", "err", subErr)
+		os.Exit(1)
 	}
 
 	// API Routing
@@ -328,7 +331,7 @@ func main() {
 	// advertises URLs we actually serve.
 	var listeners []net.Listener
 	var boundAddrs []bindaddr.Addr
-	bindFailedFatal := func(err error) { log.Fatal(err) }
+	bindFailedFatal := func(err error) { slog.Error("bind failed", "err", err); os.Exit(1) }
 
 	if *ipFlag == "lan" {
 		detected := bindaddr.Detect()
@@ -383,7 +386,10 @@ func main() {
 	}
 
 	printWelcomeBanner(cfg, boundAddrs, *portFlag)
-	log.Fatal(serveAll(listeners))
+	if err := serveAll(listeners); err != nil {
+		slog.Error("serve failed", "err", err)
+		os.Exit(1)
+	}
 }
 
 // runGatedUpdateCheck runs one check if due (CheckIfStale + ShouldRunRealCheck gate it).
