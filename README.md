@@ -41,6 +41,7 @@ phi/
 | `0x01` | stdin bytes → PTY | PTY output → xterm.js |
 | `0x02` | resize `{cols, rows}` | control / metadata JSON |
 | `0x03` | ping | pong |
+| `0x07` | — | `md-changed` push `{"dir"}` (fsnotify: a watched markdown dir changed) |
 
 See [`PLAN.md`](PLAN.md) for the full design notes and locked decisions.
 

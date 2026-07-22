@@ -96,6 +96,32 @@ func TestHub_Broadcast(t *testing.T) {
 	}
 }
 
+func TestBroadcastAll(t *testing.T) {
+	h := NewHub(0)
+
+	client1 := &Client{Send: make(chan []byte, 10)}
+	client2 := &Client{Send: make(chan []byte, 10)}
+	h.Register("pane-a", client1)
+	h.Register("pane-b", client2)
+
+	payload := []byte(`{"dir":"/x"}`)
+	h.BroadcastAll(0x07, payload)
+
+	for _, c := range []*Client{client1, client2} {
+		select {
+		case msg := <-c.Send:
+			if msg[0] != 0x07 {
+				t.Errorf("expected first byte 0x07, got %#x", msg[0])
+			}
+			if !bytes.Equal(msg[1:], payload) {
+				t.Errorf("expected payload %q, got %q", payload, msg[1:])
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("Timeout waiting for BroadcastAll message")
+		}
+	}
+}
+
 func TestHub_ConcurrentAccess(t *testing.T) {
 	h := NewHub(0)
 	paneID := "concurrent-pane"

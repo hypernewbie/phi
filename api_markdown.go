@@ -52,6 +52,9 @@ func handleMarkdownDirs(w http.ResponseWriter, r *http.Request) {
 		cfg.MarkdownDirs = newDirs
 	}
 	saveConfig(cfg)
+	if mdWatcher != nil {
+		mdWatcher.Recompute()
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -94,6 +97,32 @@ func markdownAllowedDirs(cwd string, cfg Config) ([]string, error) {
 		allowed = append(allowed, absDir)
 	}
 	return allowed, nil
+}
+
+// markdownWatchDirs resolves the union of markdown dirs across the
+// boot cwd and every live pane cwd. Reuses markdownAllowedDirs so the
+// watcher and the /api/markdown/files listing can never disagree on
+// what a "markdown dir" is.
+func markdownWatchDirs() []string {
+	cfg := loadConfig()
+	cwds := map[string]bool{activeCWD: true}
+	for _, inst := range ptyManager.ListActive() {
+		if snap := inst.Snapshot(); snap.Cwd != "" {
+			cwds[snap.Cwd] = true
+		}
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	for cwd := range cwds {
+		allowed, _ := markdownAllowedDirs(cwd, cfg)
+		for _, d := range allowed {
+			if !seen[d] {
+				seen[d] = true
+				dirs = append(dirs, d)
+			}
+		}
+	}
+	return dirs
 }
 
 func markdownPathAllowed(absPath string, allowedDirs []string) bool {
