@@ -21,9 +21,11 @@ setupDomHarness();
 
 function makeAppDom() {
     document.body.innerHTML = `
-        <button id="header-settings-btn" class="pill-btn pill-label-btn">Config</button>
-        <button id="header-export-btn"></button>
-        <button id="header-import-btn"></button>
+        <div id="header-config-pill" class="header-config-pill">
+            <span class="pill-label">Config</span>
+            <button id="header-export-btn" class="pill-btn"></button>
+            <button id="header-import-btn" class="pill-btn"></button>
+        </div>
         <div id="self-hud-popover"></div>
     `;
 }
@@ -59,20 +61,36 @@ function buildApp(overrides = {}) {
 }
 
 describe('Settings modal — trigger', () => {
-    it('clicking #header-settings-btn opens the modal', async () => {
+    it('clicking the config pill opens the modal', async () => {
         makeAppDom();
         const app = buildApp();
         // Bind the production-style click handler.
-        document.getElementById('header-settings-btn').addEventListener('click', () => app.openSettingsModal());
-        document.getElementById('header-settings-btn').click();
+        const pill = document.getElementById('header-config-pill');
+        pill.addEventListener('click', (e) => {
+            if (e.target.closest('.pill-btn')) return; // ignore export/import
+            app.openSettingsModal();
+        });
+        pill.click();
         await Promise.resolve();
         const overlay = document.querySelector('.settings-overlay');
         expect(overlay, 'overlay should exist after click').toBeTruthy();
-        // The production code removes the 'hidden' class via rAF;
-        // jsdom's rAF is queued but not auto-flushed, so we only
-        // assert the element exists. Visibility is asserted separately
-        // in the integration tests.
         expect(overlay.classList.contains('settings-overlay')).toBe(true);
+    });
+
+    it('clicking export/import sub-button does NOT open the modal', async () => {
+        makeAppDom();
+        const app = buildApp();
+        const pill = document.getElementById('header-config-pill');
+        pill.addEventListener('click', (e) => {
+            if (e.target.closest('.pill-btn')) return;
+            app.openSettingsModal();
+        });
+        document.getElementById('header-export-btn').click();
+        await Promise.resolve();
+        expect(document.querySelector('.settings-overlay')).toBeNull();
+        document.getElementById('header-import-btn').click();
+        await Promise.resolve();
+        expect(document.querySelector('.settings-overlay')).toBeNull();
     });
 
     it('modal renders the 22 accent swatches', async () => {
