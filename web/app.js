@@ -194,11 +194,16 @@ export class App {
         // 5. Initialize Diff terminal engine
         this.diffController.initTerminal();
 
-        // 6. Wire up the Settings modal trigger (the pill's "Config" label,
-        // repurposed as a button — see #header-settings-btn).
-        const settingsBtn = document.getElementById('header-settings-btn');
-        if (settingsBtn) {
-            settingsBtn.addEventListener('click', () => this.openSettingsModal());
+        // 6. Wire up the Settings modal trigger (the entire config pill
+        // is clickable, not just the label — see #header-config-pill).
+        const settingsTrigger = document.getElementById('header-config-pill');
+        if (settingsTrigger) {
+            settingsTrigger.addEventListener('click', (e) => {
+                // Don't open settings if the user clicked one of the
+                // export/import sub-buttons (they have their own handlers).
+                if (e.target.closest('.pill-btn')) return;
+                this.openSettingsModal();
+            });
         }
 
         // 6.5 Start fleet poller (plan §3.4). Polls every 15s while the

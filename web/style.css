@@ -3002,6 +3002,7 @@ html, body {
 .settings-modal {
     width: min(560px, calc(100vw - 24px));
     max-height: 80vh;
+    overflow: hidden;
 }
 
 .settings-header {
@@ -3118,8 +3119,7 @@ html, body {
     display: grid;
     grid-template-columns: repeat(8, 28px);
     gap: 6px;
-    flex: 1 1 auto;
-    justify-content: flex-end;
+    flex: 0 0 auto;
 }
 
 .settings-swatch {
@@ -4793,6 +4793,13 @@ html, body {
     gap: 4px;
     height: 28px;
     user-select: none;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.header-config-pill:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .header-config-pill .pill-label {
