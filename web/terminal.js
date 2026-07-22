@@ -1217,11 +1217,19 @@ export class TabManager {
             }
             // In non-direct mode: redirect printable keystrokes to the input textarea
             if (!tabInfo.directMode && e.type === 'keydown' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                // preventDefault: focus moves to the textarea mid-keydown, so
+                // without it the browser's default insertion lands there too
+                // and doubles the character.
+                e.preventDefault();
                 this.inputTextArea.value += e.key;
                 this.inputTextArea.focus({ preventScroll: true });
                 const len = this.inputTextArea.value.length;
                 this.inputTextArea.setSelectionRange(len, len);
-                this.adjustInputHeight();
+                // Synthetic 'input': preventDefault suppresses the native one,
+                // but the textarea's input listeners (spam-scroll,
+                // lastInputValue, autosize, prompt-history cursor reset)
+                // still need to run.
+                this.inputTextArea.dispatchEvent(new Event('input', { bubbles: true }));
                 return false;
             }
             // Prevent browser default for standard CLI shortcuts in direct mode
