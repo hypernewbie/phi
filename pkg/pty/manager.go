@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/obs"
@@ -17,6 +19,12 @@ import (
 )
 
 var testTabsPath string
+
+// ErrShuttingDown is returned by Spawn once BeginDrain has been called,
+// matching the manager.draining flag. Callers should map it to an HTTP
+// 503 (Service Unavailable) so k8s-style readiness-aware frontends
+// stop routing new work to this instance.
+var ErrShuttingDown = errors.New("manager is shutting down")
 
 func tabsFilePath() string {
 	if testTabsPath != "" {
@@ -112,11 +120,62 @@ func (inst *PTYInstance) HasDetachTimer() bool {
 type Manager struct {
 	instances map[string]*PTYInstance
 	mu        sync.RWMutex
+	// draining flips true on graceful shutdown (see BeginDrain). Spawn
+	// consults IsDraining to refuse new PTYs during the drain window so
+	// the load balancer can stop routing requests before sockets close.
+	draining atomic.Bool
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		instances: make(map[string]*PTYInstance),
+	}
+}
+
+// BeginDrain stops the manager from spawning new PTYs. Idempotent; called
+// at the very start of graceful shutdown (before the drain delay) so
+// in-flight spawn requests during the whole drain window are rejected,
+// not leaked.
+func (m *Manager) BeginDrain() { m.draining.Store(true) }
+
+// Shutdown gracefully terminates every managed PTY: stop detach timers,
+// Terminate() each child, wait up to grace for exit (which fires its
+// temp-dir cleanup), then SIGKILL stragglers. Called as part of graceful
+// shutdown from main.go; safe to call directly from tests.
+func (m *Manager) Shutdown(grace time.Duration) {
+	m.BeginDrain() // defensive: also stops spawns if called directly
+	m.mu.Lock()
+	insts := make([]*PTYInstance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		insts = append(insts, inst)
+	}
+	m.mu.Unlock()
+
+	for _, inst := range insts {
+		inst.mu.Lock()
+		if inst.DetachTimer != nil {
+			inst.DetachTimer.Stop()
+			inst.DetachTimer = nil
+		}
+		p := inst.Pty
+		inst.mu.Unlock()
+		if p != nil {
+			_ = p.Terminate()
+		}
+	}
+
+	// Wait for the cleanup goroutines to finish (each instance's PTY exit
+	// triggers temp-dir removal). Bounded by 2x grace so a stuck child
+	// can't hang us forever.
+	deadline := time.Now().Add(2 * grace)
+	for time.Now().Before(deadline) {
+		m.mu.RLock()
+		remaining := len(m.instances)
+		m.mu.RUnlock()
+		if remaining == 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -132,6 +191,11 @@ func GenerateID() string {
 // never cancelled by it, since the terminal must survive well past the
 // HTTP request that spawned it.
 func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
+	// Refuse new spawns during the drain window (signal received). Tests
+	// can flip the flag directly via BeginDrain to assert this path.
+	if m.IsDraining() {
+		return nil, ErrShuttingDown
+	}
 	// pty.spawn times only the spawn call itself, via the same ctx Start
 	// accepts but never uses to cancel the process (see Start's doc
 	// comment) — the span ends here; the terminal's own lifetime runs on.
@@ -456,6 +520,32 @@ func (m *Manager) SetMarked(id string, marked bool) error {
 	_ = m.scheduleSave()
 	return nil
 }
+
+// SetTitle updates the user-facing title of a live PTY. Mirrors SetPinned
+// / SetMarked: m.mu (map) to find the instance, then inst.mu to write
+// the field. Returns the same "not found" error as its siblings so the
+// api_handlers /title endpoint can map the response to 404 cleanly.
+func (m *Manager) SetTitle(id string, title string) error {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("terminal instance %s not found", id)
+	}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	inst.Title = title
+	log.Printf("[pty] SetTitle %s: title=%q", id, title)
+	_ = m.scheduleSave()
+	return nil
+}
+
+// IsDraining reports whether BeginDrain has been called. Used by the
+// health endpoint to gate Readiness transitions.
+func (m *Manager) IsDraining() bool { return m.draining.Load() }
 
 func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 	id := inst.ID
