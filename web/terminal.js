@@ -11,6 +11,7 @@ import {
     buildSelfHud,
     formatHudLine,
     formatHudCpu,
+    formatDurationMin,
     escapeHtml,
 } from './util.js';
 import {
@@ -2212,16 +2213,20 @@ export class TabManager {
         el.setAttribute('aria-hidden', 'true');
         el.innerHTML = `
             <div class="tab-hiero-preview-glyph"></div>
+            <div class="tab-hiero-preview-title"></div>
             <div class="tab-hiero-preview-label"></div>
             <div class="tab-hiero-preview-path"></div>
             <div class="tab-hiero-preview-count"></div>
+            <div class="tab-hiero-preview-status"></div>
         `;
         document.body.appendChild(el);
         this._hieroPreview = el;
         this._hieroPreviewGlyph = el.querySelector('.tab-hiero-preview-glyph');
+        this._hieroPreviewTitle = el.querySelector('.tab-hiero-preview-title');
         this._hieroPreviewLabel = el.querySelector('.tab-hiero-preview-label');
         this._hieroPreviewPath = el.querySelector('.tab-hiero-preview-path');
         this._hieroPreviewCount = el.querySelector('.tab-hiero-preview-count');
+        this._hieroPreviewStatus = el.querySelector('.tab-hiero-preview-status');
 
         // Event delegation on the tabs container - one listener, works for
         // every tab and any tab created later (event bubbles up).
@@ -2269,7 +2274,26 @@ export class TabManager {
         // still show what we know from the DOM data attributes.
         const glyph = tabEl.dataset.worktreeGlyph || '◆';
         const label = (tab && this.getProjectWorktreeLabel(tab.cwd)) || '—';
-        const path = (tab && tab.cwd) || tabEl.title || '';
+        const path = (tab && tab.cwd) || tabEl.dataset.cwd || '';
+
+        // Title read at hover-time, never stashed, so renames and truncated
+        // tab strips always resolve to the current full title. Mid-createTab
+        // the Map entry doesn't exist yet - the .tab-title span does.
+        const titleSpan = tabEl.querySelector('.tab-title');
+        const titleText = (tab && tab.title) || (titleSpan ? titleSpan.textContent : '');
+
+        // Live status line - coder-agnostic, from the client-side busy/idle
+        // tracking every PTY tab gets (isBusy set on output frames, cleared
+        // by the idle sweep). Review/kanban tabs have neither field, so the
+        // row stays empty and :empty CSS hides it.
+        let statusText = '';
+        let busy = false;
+        if (tab && tab.isBusy) {
+            busy = true;
+            statusText = `● busy ${formatDurationMin(Date.now() - (tab.busyStartTime || Date.now()))}`;
+        } else if (tab && typeof tab.lastOutputAt === 'number') {
+            statusText = `idle · last output ${formatDurationMin(Date.now() - tab.lastOutputAt)} ago`;
+        }
 
         // Count tabs sharing this hieroglyph - lets users see "you have
         // 3 tabs in this worktree" at a glance from the preview.
@@ -2279,10 +2303,11 @@ export class TabManager {
         }
 
         this._populateHieroPreview({
-            glyph, label, path, sourceEl: tabEl, anchor: 'below', size: 'large',
+            glyph, titleText, label, path, sourceEl: tabEl, anchor: 'below', size: 'large',
             countText: count > 1
                 ? `${count} tabs in this worktree`
                 : (count === 1 ? '1 tab in this worktree' : ''),
+            statusText, busy,
         });
     }
 
@@ -2317,8 +2342,10 @@ export class TabManager {
     }
 
     // Common populate + show path. Sets the card text + position based
-    // on anchor (below|right) and size (large|medium).
-    _populateHieroPreview({ glyph, label, path, sourceEl, anchor, size, countText }) {
+    // on anchor (below|right) and size (large|medium). titleText/statusText
+    // are tab-hover-only; worktree headers leave them empty and the rows
+    // collapse via :empty CSS.
+    _populateHieroPreview({ glyph, titleText, label, path, sourceEl, anchor, size, countText, statusText, busy }) {
         const p = this._hieroPreview;
         if (!p) return;
 
@@ -2326,11 +2353,14 @@ export class TabManager {
         // transition between sources is clean (e.g., user hovers a
         // tab then a worktree header).
         p.classList.toggle('tab-hiero-preview-medium', size === 'medium');
+        p.classList.toggle('is-busy', !!busy);
 
         this._hieroPreviewGlyph.textContent = glyph;
+        this._hieroPreviewTitle.textContent = titleText || '';
         this._hieroPreviewLabel.textContent = label || '—';
         this._hieroPreviewPath.textContent = path || '';
         this._hieroPreviewCount.textContent = countText || '';
+        this._hieroPreviewStatus.textContent = statusText || '';
 
         // Position. Fixed positioning uses viewport coords, so we don't
         // need to account for scroll. Both anchors clamp so the card
