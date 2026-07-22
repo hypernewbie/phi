@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/XSAM/otelsql v0.43.0
 	github.com/aymanbagabas/go-pty v0.2.3
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.26.5
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0

@@ -256,19 +256,12 @@ func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {
 	}
 }
 
-// BroadcastShutdown announces server shutdown to every connected client.
-// The payload is the JSON envelope {"reason":"restart"|"update"|"shutdown"}
-// per WS protocol v2 §3.1, so the UI can render a distinct state and arm
-// the post-restart auto-reload poller. Best-effort: if a client's send
-// channel is full the message is dropped silently rather than blocking
-// the shutdown path.
-func (h *Hub) BroadcastShutdown(reason string) {
-	if reason == "" {
-		reason = "shutdown"
-	}
-	payload := []byte(fmt.Sprintf(`{"reason":%q}`, reason))
+// BroadcastAll pushes a typed frame to every client of every pane.
+// Best-effort: full client send channels drop the frame rather than
+// block (same contract as BroadcastShutdown, which now delegates here).
+func (h *Hub) BroadcastAll(msgType byte, payload []byte) {
 	msg := make([]byte, 1+len(payload))
-	msg[0] = 0x05
+	msg[0] = msgType
 	copy(msg[1:], payload)
 
 	h.mu.RLock()
@@ -284,6 +277,20 @@ func (h *Hub) BroadcastShutdown(reason string) {
 		}
 		ph.mu.Unlock()
 	}
+}
+
+// BroadcastShutdown announces server shutdown to every connected client.
+// The payload is the JSON envelope {"reason":"restart"|"update"|"shutdown"}
+// per WS protocol v2 §3.1, so the UI can render a distinct state and arm
+// the post-restart auto-reload poller. Best-effort: if a client's send
+// channel is full the message is dropped silently rather than blocking
+// the shutdown path.
+func (h *Hub) BroadcastShutdown(reason string) {
+	if reason == "" {
+		reason = "shutdown"
+	}
+	payload := []byte(fmt.Sprintf(`{"reason":%q}`, reason))
+	h.BroadcastAll(0x05, payload)
 }
 
 // PaneStats returns (client count, ring bytes used, ring capacity) for
