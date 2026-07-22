@@ -2,6 +2,7 @@
 
 import type { AppLike } from './types.js';
 import { relativeToCwd, escapeHtml } from './util.js';
+import { normalizePath } from './sessions.js';
 
 export class MarkdownManager {
     app: AppLike;
@@ -19,8 +20,9 @@ export class MarkdownManager {
     currentRawContent: string;
     markdownClipboard: { name: string; dir: string; content: string } | null;
     contextMenuEl: HTMLElement;
-    lastRefreshCwd: string | null;
     refreshRequestId: number;
+    _lastRenderedKey: string;
+    _externalDebounce: ReturnType<typeof setTimeout> | null;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -33,8 +35,9 @@ export class MarkdownManager {
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
-        this.lastRefreshCwd = null;
         this.refreshRequestId = 0;
+        this._lastRenderedKey = '';
+        this._externalDebounce = null;
         this._diagInterval = null;
 
         this._configureMarked();
@@ -120,8 +123,15 @@ export class MarkdownManager {
         });
     }
 
-    async refreshFiles(options: { force?: boolean } = {}): Promise<void> {
+    // refreshFiles re-scans the markdown dirs for the active cwd.
+    //   force  (default true): bypass the panel-visibility gate.
+    //   silent (default false): no "Scanning..." placeholder, and skip the
+    //     re-render when the fetched list is identical to what's shown —
+    //     this is what background triggers (fsnotify push, same-context
+    //     tab clicks) use so the list never flickers under the user.
+    async refreshFiles(options: { force?: boolean; silent?: boolean } = {}): Promise<void> {
         const force = options.force !== false;
+        const silent = options.silent === true;
 
         const diffCtrl = this.app.diffController;
         if (!force && diffCtrl && (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
@@ -129,23 +139,45 @@ export class MarkdownManager {
         }
 
         const cwd = this.app.sessionsManager.activeCWD || '';
-        if (!force && this.lastRefreshCwd === cwd) {
-            return;
-        }
-
-        this.lastRefreshCwd = cwd;
         const requestId = ++this.refreshRequestId;
-        this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
+        if (!silent) {
+            this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
+        }
         try {
             const res = await fetch(`/api/markdown/files?cwd=${encodeURIComponent(cwd)}`);
             if (!res.ok) throw new Error(await res.text());
             const files = await res.json();
             if (requestId !== this.refreshRequestId) return;
+            const key = cwd + ' ' + JSON.stringify(files);
+            if (silent && key === this._lastRenderedKey) return;
+            this._lastRenderedKey = key;
             this._renderFileList(files);
         } catch (e) {
             if (requestId !== this.refreshRequestId) return;
-            this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${(e as Error).message}</div>`;
+            if (!silent) {
+                this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${(e as Error).message}</div>`;
+            }
         }
+    }
+
+    // onExternalChange handles a 0x07 md-changed push. N open tabs mean N
+    // duplicate broadcasts per change, hence the debounce. The dir filter
+    // drops events for worktrees this browser isn't looking at.
+    onExternalChange(data: { dir?: string } = {}): void {
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        if (data.dir && cwd) {
+            const dirs = (this.app.markdownDirs || []).map((d: string) => {
+                if (d === '.' || d === './') return cwd;
+                if (d.startsWith('/') || /^[A-Za-z]:[\\/]/.test(d)) return d;
+                return cwd.replace(/\/+$/, '') + '/' + d.replace(/^\.\//, '');
+            });
+            if (!dirs.some((d: string) => normalizePath(d) === normalizePath(data.dir!))) return;
+        }
+        if (this._externalDebounce) clearTimeout(this._externalDebounce);
+        this._externalDebounce = setTimeout(() => {
+            this._externalDebounce = null;
+            this.refreshFiles({ force: false, silent: true });
+        }, 250);
     }
 
     _renderFileList(files: any[]): void {
