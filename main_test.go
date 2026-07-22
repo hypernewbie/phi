@@ -980,7 +980,7 @@ func TestHandleFallback_Rename(t *testing.T) {
 	ptyManager = pty.NewManager()
 	shell, args := testMainShell()
 
-	inst, err := ptyManager.Spawn("", shell, args, "shell", "test-session")
+	inst, err := ptyManager.Spawn(context.Background(), "", shell, args, "shell", "test-session")
 	if err != nil {
 		t.Fatalf("Failed to spawn PTY for rename test: %v", err)
 	}
