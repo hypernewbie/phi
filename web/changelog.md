@@ -14,7 +14,7 @@ fsnotify-backed markdown watcher + a same-context tab-click refresh fix. The ver
 
 ### Tests
 - **`pkg/mdwatch/watcher_test.go`** (new) — 6 cases: create/remove `.md` fires, non-`.md` ignored, a burst of 5 creates debounces to one event, a directory created after `Start()` gets armed by the rearm ticker, `Close()` is idempotent.
-- **`pkg/ws/hub_test.go`**`TestBroadcastAll`** (new) — two panes, two clients, one `BroadcastAll` call reaches both.
+- **`pkg/ws/hub_test.go` `TestBroadcastAll`** (new) — two panes, two clients, one `BroadcastAll` call reaches both.
 - **`test-js/mdChangedRefresh.test.js`** (new) — 5 cases: silent skip on identical data, silent re-render on changed data, `onExternalChange` debounce, dir-filter (ignores events outside the browser's own markdown dirs), silent refresh never shows the `Scanning...` placeholder.
 - **`test-js/wsMdChangedFrame.test.js`** (new) — 2 cases: `0x07` frame decodes to `onControl({type:'md-changed', ...})`; a malformed payload logs and doesn't throw.
 - `switchTab`'s final-else refresh is covered by manual E2E only (see plan §8) — a `TabManager` harness for a 3-line addition was judged disproportionate.
