@@ -1288,6 +1288,19 @@ html, body {
     60%  { transform: scale(1.08); filter: blur(0); opacity: 1; }
     100% { transform: scale(1); filter: blur(0); opacity: 1; }
 }
+/* Tab title - the primary line on tab hover (full, untruncated name of
+   the session; the tab strip clips at 240px). Empty for worktree-header
+   hovers, where the label below is the primary line instead. */
+.tab-hiero-preview-title {
+    font-weight: 600;
+    text-align: center;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+    font-size: 14px;
+    word-break: break-word;
+    line-height: 1.35;
+}
+.tab-hiero-preview-title:empty { display: none; }
 .tab-hiero-preview-label {
     font-weight: 600;
     text-align: center;
@@ -1314,6 +1327,21 @@ html, body {
     text-align: center;
     text-transform: uppercase;
     letter-spacing: 0.6px;
+}
+/* Busy/idle status - tab hover only ("● busy 3m" / "idle · last output
+   5m ago"). Empty (and hidden) for worktree headers and for tabs with
+   no PTY output yet (review/kanban). */
+.tab-hiero-preview-status {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+.tab-hiero-preview-status:empty { display: none; }
+.tab-hiero-preview.is-busy .tab-hiero-preview-status {
+    color: var(--accent-bright);
 }
 /* Mobile: tabs bar hidden at <=768px so the preview would never
    fire, but be explicit anyway. */

@@ -310,9 +310,10 @@ export interface TabLikeForHud {
     lastOutputAt?: number;
 }
 
-// formatDurationMin is a small helper kept inline to avoid a second util
-// export. "4m" / "23s" / "—" — null/0 → em-dash (nothing to show).
-function formatDurationMin(ms: number | null): string {
+// formatDurationMin renders a duration in the largest sensible unit.
+// "4m" / "23s" / "—" — null → em-dash (nothing to show). Exported: the
+// tab hover card's busy/idle status line uses it too.
+export function formatDurationMin(ms: number | null): string {
     if (ms == null) return '—';
     const sec = Math.floor(ms / 1000);
     if (sec < 60) return `${sec}s`;

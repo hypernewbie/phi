@@ -453,3 +453,122 @@ describe('_showWorktreeHieroPreview', () => {
         expect(p.classList.contains('tab-hiero-preview-medium')).toBe(false);
     });
 });
+// ---- Title + busy/idle status rows (tab hover only) ----------------------
+//
+// The hover card doubles as the tab's tooltip: the strip clips titles at
+// 240px, so the card shows the full title. It is read from the tabs Map
+// at hover-time (never stashed on the DOM) so renames are always current
+// - the old native title attribute went stale on rename. Below the count
+// row, a status line surfaces the client-tracked busy/idle state; both
+// rows stay empty (and :empty-hidden) on worktree-header hovers.
+
+describe('tab title + status rows', () => {
+    function hover(el) {
+        el.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    }
+
+    it('shows the full tab title from the tabs Map', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        tm.tabs.get('p1').title = 'a very long session title that the strip clips';
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent)
+            .toBe('a very long session title that the strip clips');
+    });
+
+    it('reflects a rename on the next hover (title is never stashed)', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('test');
+
+        tm.tabs.get('p1').title = 'renamed'; // what openTabRenamer commits
+        tabEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+        hover(tabEl);
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('renamed');
+    });
+
+    it('falls back to the .tab-title span + dataset.cwd mid-createTab', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        // Tab DOM exists but the Map entry doesn't yet (createTab sets it
+        // ~300 lines after appending the element).
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab';
+        tabEl.setAttribute('data-pane-id', 'p1');
+        tabEl.dataset.worktreeGlyph = '𓂀';
+        tabEl.dataset.cwd = '/spawn/dir';
+        tabEl.innerHTML = '<span class="tab-title">freshly-spawned</span>';
+        tm.tabsContainer.appendChild(tabEl);
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('freshly-spawned');
+        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe('/spawn/dir');
+    });
+
+    it('shows "● busy Xm" with the is-busy flag while the tab is busy', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        const tab = tm.tabs.get('p1');
+        tab.isBusy = true;
+        tab.busyStartTime = Date.now() - 65000;
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('● busy 1m');
+        expect(p.classList.contains('is-busy')).toBe(true);
+    });
+
+    it('shows "idle · last output ... ago" when the tab has gone idle', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        const tab = tm.tabs.get('p1');
+        tab.isBusy = false;
+        tab.lastOutputAt = Date.now() - 5000;
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent)
+            .toMatch(/^idle · last output \d+s ago$/);
+        expect(p.classList.contains('is-busy')).toBe(false);
+    });
+
+    it('leaves the status empty for tabs with no output tracking', () => {
+        // attachTab sets neither isBusy nor lastOutputAt - same shape as
+        // review/kanban tabs, which have no PTY.
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('');
+        expect(p.classList.contains('is-busy')).toBe(false);
+    });
+
+    it('clears title + status when switching to a worktree-header hover', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓂀', cwd: '/code/phi' });
+        const tab = tm.tabs.get('p1');
+        tab.isBusy = true;
+        tab.busyStartTime = Date.now();
+        hover(tabEl);
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('test');
+
+        const { header } = attachWorktreeSection(document.getElementById('session-list'), {
+            path: '/code/phi', glyph: '𓂀', name: 'phi',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('');
+        expect(p.classList.contains('is-busy')).toBe(false);
+    });
+});
