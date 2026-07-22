@@ -23,6 +23,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/fleet"
+	"github.com/hypernewbie/phi/pkg/mdwatch"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -38,6 +39,7 @@ var webFS embed.FS
 var (
 	ptyManager  *pty.Manager
 	wsHub       *ws.Hub
+	mdWatcher   *mdwatch.Watcher
 	cpuSampler  = system.NewSampler()
 	activeCWD   string
 	webRoot     fs.FS
@@ -175,6 +177,20 @@ func main() {
 		}
 	})
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+
+	// Markdown watcher: fsnotify over the resolved markdownDirs of every
+	// live pane cwd. Fires 0x07 md-changed so open UIs can silently
+	// refresh the md file list. Watch set follows panes, not browsers:
+	// a worktree nobody has a pane in is not covered (accepted edge).
+	mdWatcher, err = mdwatch.New(markdownWatchDirs, func(dir string) {
+		payload, _ := json.Marshal(map[string]string{"dir": dir})
+		wsHub.BroadcastAll(0x07, payload) // 0x07: md-changed
+	})
+	if err != nil {
+		slog.Warn("mdwatch unavailable; markdown panel won't live-update", "err", err)
+	} else {
+		mdWatcher.Start()
+	}
 
 	// Embedded web assets (served when running an installed binary from any dir)
 	var subErr error
@@ -578,6 +594,9 @@ func envDuration(key string, def time.Duration) time.Duration {
 //  8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	shuttingDown.Store(true) // /readyz -> 503
+	if mdWatcher != nil {
+		mdWatcher.Close()
+	}
 	if ptyManager != nil {
 		ptyManager.BeginDrain() // reject new PTY spawns for the whole drain window
 	}
