@@ -194,6 +194,58 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
     });
 });
 
+// mouseover/mouseout bubble on every child-boundary crossing inside a
+// tab (.tab-title, .tab-close). Without the relatedTarget guard each
+// crossing hid + repopulated the card, replaying the shimmer keyframe -
+// visible as the preview "re-rendering" while moving the mouse within
+// one tab.
+describe('intra-tab mouse movement (relatedTarget guard)', () => {
+    function attachTabWithChildren(tm, opts) {
+        const tabEl = attachTab(tm, opts);
+        tabEl.innerHTML = '<span class="tab-title">t</span><button class="tab-close">×</button>';
+        return tabEl;
+    }
+
+    it('keeps the preview visible when the mouse moves between children', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTabWithChildren(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        tabEl.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        const title = tabEl.querySelector('.tab-title');
+        const close = tabEl.querySelector('.tab-close');
+
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.classList.contains('visible')).toBe(true);
+
+        // Pointer slides from the title onto the close button: the
+        // browser fires mouseout(title)+mouseover(close), both with
+        // relatedTarget inside the same tab. Neither should touch the
+        // preview.
+        title.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: close }));
+        expect(p.classList.contains('visible')).toBe(true);
+        const show = vi.spyOn(tm, '_showHieroPreview');
+        close.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: title }));
+        expect(show).not.toHaveBeenCalled();
+        expect(p.classList.contains('visible')).toBe(true);
+    });
+
+    it('still hides when the mouse truly leaves the tab', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTabWithChildren(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
+        tabEl.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.classList.contains('visible')).toBe(true);
+
+        // relatedTarget outside the tab (document.body) -> real leave.
+        tabEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+        expect(p.classList.contains('visible')).toBe(false);
+    });
+});
+
 describe('hover preview integration with multiple workspaces', () => {
     it('shows correct hieroglyph + label for each tab across projects', () => {
         const tm = makeManager();
@@ -356,6 +408,28 @@ describe('_showWorktreeHieroPreview', () => {
         const count = document.getElementById('tab-hiero-preview')
             .querySelector('.tab-hiero-preview-count').textContent;
         expect(count).toBe('no tabs open in this worktree');
+    });
+
+    it('does not flicker when the mouse moves between children of a header', () => {
+        mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const sessionList = document.getElementById('session-list');
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/code/phi', glyph: '𓂀', name: 'phi', branch: 'main',
+        });
+        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        const glyphSpan = header.querySelector('.worktree-section-glyph');
+        const nameSpan = header.querySelector('.worktree-name');
+
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        const p = document.getElementById('tab-hiero-preview');
+        expect(p.classList.contains('visible')).toBe(true);
+
+        // Pointer slides from the glyph to the name - both inside the
+        // header, so the preview must not hide.
+        glyphSpan.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: nameSpan }));
+        expect(p.classList.contains('visible')).toBe(true);
     });
 
     it('toggles back to large variant when switching from worktree to tab hover', () => {
