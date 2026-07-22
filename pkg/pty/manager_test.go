@@ -711,7 +711,7 @@ func TestManagerShutdown_GracefulTerminatesAndCleansUp(t *testing.T) {
 }
 
 // TestManagerShutdown_KillsStragglers spawns a child that ignores SIGTERM
-// (trap '' TERM) and confirms Shutdown still returns within its grace window
+// (trap ” TERM) and confirms Shutdown still returns within its grace window
 // by escalating to SIGKILL, and that the straggler's temp dir is still
 // cleaned up afterward.
 func TestManagerShutdown_KillsStragglers(t *testing.T) {

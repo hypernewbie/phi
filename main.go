@@ -48,10 +48,10 @@ var (
 	Date        = "unknown"
 	BuildSource = "source"
 
-// shuttingDown flips true on SIGTERM/SIGINT (or a programmatic trigger)
-// so /readyz returns 503 and the load balancer drains us. Set inside
-// gracefulShutdown, NOT inside the signal handler directly, so the
-// /readyz 503 stays in lockstep with the actual drain starting.
+	// shuttingDown flips true on SIGTERM/SIGINT (or a programmatic trigger)
+	// so /readyz returns 503 and the load balancer drains us. Set inside
+	// gracefulShutdown, NOT inside the signal handler directly, so the
+	// /readyz 503 stays in lockstep with the actual drain starting.
 	shuttingDown atomic.Bool
 
 	// StartedAt is the unix-second timestamp of server startup. Returned
@@ -563,19 +563,19 @@ func envDuration(key string, def time.Duration) time.Duration {
 // the load balancer stops routing), flushes state, tells clients,
 // gracefully terminates child PTYs, then drains in-flight HTTP. Returns
 // when done. Sequence matches what a k8s+drain-system expects:
-//   1. shuttingDown = true (so /readyz returns 503 and k8s removes us
-//      from the service endpoints pool).
-//   2. ptyManager.BeginDrain() (so new spawn requests are rejected during
-//      the drain window).
-//   3. sleep drainDelay (k8s picks up the 503 and stops sending traffic).
-//   4. flush state to disk (so a restart picks up where we left off).
-//   5. wsHub.BroadcastShutdown (tell browsers to show the bulk-disconnect
-//      banner).
-//   6. small sleep (lets the WS 0x05 frame flush; matches current
-//      behavior).
-//   7. ptyManager.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
-//      by ptyGrace, force-kill stragglers.
-//   8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
+//  1. shuttingDown = true (so /readyz returns 503 and k8s removes us
+//     from the service endpoints pool).
+//  2. ptyManager.BeginDrain() (so new spawn requests are rejected during
+//     the drain window).
+//  3. sleep drainDelay (k8s picks up the 503 and stops sending traffic).
+//  4. flush state to disk (so a restart picks up where we left off).
+//  5. wsHub.BroadcastShutdown (tell browsers to show the bulk-disconnect
+//     banner).
+//  6. small sleep (lets the WS 0x05 frame flush; matches current
+//     behavior).
+//  7. ptyManager.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
+//     by ptyGrace, force-kill stragglers.
+//  8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	shuttingDown.Store(true) // /readyz -> 503
 	if ptyManager != nil {
