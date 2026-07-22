@@ -515,6 +515,24 @@ func (m *Manager) SetMarked(id string, marked bool) error {
 	return nil
 }
 
+func (m *Manager) SetTitle(id string, title string) error {
+	m.mu.RLock()
+	inst, ok := m.instances[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("terminal instance %s not found", id)
+	}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	inst.Title = title
+	log.Printf("[pty] SetTitle %s: title=%q", id, title)
+	_ = m.scheduleSave()
+	return nil
+}
+
 func (m *Manager) startGracePeriodTimer(inst *PTYInstance) {
 	id := inst.ID
 	inst.DetachTimer = time.AfterFunc(GracePeriod, func() {
