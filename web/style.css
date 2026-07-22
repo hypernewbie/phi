@@ -6446,6 +6446,13 @@ html, body {
     margin-bottom: 16px;
 }
 
+.sync-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
 .sync-coordinator-bar {
     display: flex;
     flex-direction: column;
