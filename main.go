@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,12 @@ var (
 	Commit      = "none"
 	Date        = "unknown"
 	BuildSource = "source"
+
+// shuttingDown flips true on SIGTERM/SIGINT (or a programmatic trigger)
+// so /readyz returns 503 and the load balancer drains us. Set inside
+// gracefulShutdown, NOT inside the signal handler directly, so the
+// /readyz 503 stays in lockstep with the actual drain starting.
+	shuttingDown atomic.Bool
 
 	// StartedAt is the unix-second timestamp of server startup. Returned
 	// in /api/version so the front-end can detect a server restart
@@ -304,27 +311,35 @@ func main() {
 	}
 
 	// Custom route for DELETE /api/terminals/:id and WS /ws/pane/:id
+	http.HandleFunc("/livez", handleLivez)
+	http.HandleFunc("/healthz", handleLivez) // alias
+	http.HandleFunc("/readyz", handleReadyz)
 	http.HandleFunc("/", handleFallback)
 
-	// Graceful shutdown listener
+	// Graceful shutdown listener. The signal handler drains via
+	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
+	// sleep+Exit — k8s-friendly without changing Ctrl-C on a tty because
+	// the drain defaults to 0 so the user-visible shutdown time is
+	// unchanged for local development.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	var shutdownServers []*http.Server
+	var shutdownOnce sync.Once
 	go func() {
 		sig := <-sigChan
-		log.Printf("[main] Graceful shutdown initiated via signal: %v", sig)
-		// Flush state before broadcasting shutdown so the next boot finds consistent files.
-		if err := ptyManager.FlushSaveState(); err != nil {
-			log.Printf("[main] FlushSaveState on shutdown: %v", err)
-		}
-		if err := FlushSyncStore(); err != nil {
-			log.Printf("[main] FlushSyncStore on shutdown: %v", err)
-		}
-		wsHub.BroadcastShutdown("shutdown")
-		if err := obsShutdown(context.Background()); err != nil {
-			log.Printf("[main] obs shutdown: %v", err)
-		}
-		time.Sleep(200 * time.Millisecond)
-		os.Exit(0)
+		slog.Info("graceful shutdown initiated", "signal", sig.String())
+		shutdownOnce.Do(func() {
+			gracefulShutdown(
+				shutdownServers,
+				envDuration("PHI_SHUTDOWN_DRAIN", 0),
+				envDuration("PHI_SHUTDOWN_PTY_GRACE", 5*time.Second),
+				envDuration("PHI_SHUTDOWN_GRACE", 15*time.Second),
+			)
+			if err := obsShutdown(context.Background()); err != nil {
+				slog.Error("obs shutdown", "err", err)
+			}
+			os.Exit(0)
+		})
 	}()
 
 	// Bind phase. Banner prints AFTER successful binds so it only
@@ -386,10 +401,30 @@ func main() {
 	}
 
 	printWelcomeBanner(cfg, boundAddrs, *portFlag)
-	if err := serveAll(listeners); err != nil {
-		slog.Error("serve failed", "err", err)
+	var serveErr error
+	shutdownServers, serveErr = serveAndCapture(listeners)
+	if serveErr != nil {
+		slog.Error("serve failed", "err", serveErr)
 		os.Exit(1)
 	}
+}
+
+// serveAndCapture is serveAll + capturing the per-listener *http.Server
+// slice so the SIGTERM handler can call Shutdown on each. Returns the
+// last non-nil error from any listener (same semantics as serveAll).
+func serveAndCapture(listeners []net.Listener) ([]*http.Server, error) {
+	servers, errCh := serveAll(listeners)
+	var last error
+	for range servers {
+		if err := <-errCh; err != nil {
+			slog.Error("listener exited", "err", err)
+			last = err
+		}
+	}
+	if last != nil {
+		return servers, fmt.Errorf("all listeners exited, last error: %w", last)
+	}
+	return servers, nil
 }
 
 // runGatedUpdateCheck runs one check if due (CheckIfStale + ShouldRunRealCheck gate it).
@@ -488,29 +523,90 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	fmt.Printf("\n")
 }
 
-// serveAll runs http.Serve on every listener concurrently and waits
-// for all of them to exit. Each listener has its own goroutine; the
-// returned error is the last non-nil serve error (most commonly
-// "use of closed network connection" when a sibling calls Close).
-// Returns only when all listeners have exited, so callers can log.Fatal
-// the result to keep the existing single-listener exit semantics.
-func serveAll(listeners []net.Listener) error {
+// serveAll starts one *http.Server per listener over the default mux and
+// returns the servers so the shutdown path can drain them. Blocks until all
+// listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
+func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
 	handler := obs.WrapHTTP(http.DefaultServeMux)
+	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
-	for _, ln := range listeners {
-		go func(l net.Listener) { errCh <- http.Serve(l, handler) }(ln)
+	for i, ln := range listeners {
+		srv := &http.Server{Handler: handler}
+		servers[i] = srv
+		go func(s *http.Server, l net.Listener) {
+			err := s.Serve(l)
+			if err != nil && err != http.ErrServerClosed {
+				slog.Error("listener exited", "err", err)
+				errCh <- err
+				return
+			}
+			errCh <- nil
+		}(srv, ln)
 	}
-	var last error
-	for range listeners {
-		if err := <-errCh; err != nil {
-			log.Printf("[serve] listener exited: %v", err)
-			last = err
+	return servers, errCh
+}
+
+// envDuration parses key as a Go duration string, falling back to def on
+// unset/invalid values so a malformed env var degrades gracefully instead
+// of failing startup.
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
 		}
+		slog.Warn("invalid duration env, using default", "key", key, "value", v, "default", def)
 	}
-	if last != nil {
-		return fmt.Errorf("all listeners exited, last error: %w", last)
+	return def
+}
+
+// gracefulShutdown flips readiness to 503, waits out the drain delay (so
+// the load balancer stops routing), flushes state, tells clients,
+// gracefully terminates child PTYs, then drains in-flight HTTP. Returns
+// when done. Sequence matches what a k8s+drain-system expects:
+//   1. shuttingDown = true (so /readyz returns 503 and k8s removes us
+//      from the service endpoints pool).
+//   2. ptyManager.BeginDrain() (so new spawn requests are rejected during
+//      the drain window).
+//   3. sleep drainDelay (k8s picks up the 503 and stops sending traffic).
+//   4. flush state to disk (so a restart picks up where we left off).
+//   5. wsHub.BroadcastShutdown (tell browsers to show the bulk-disconnect
+//      banner).
+//   6. small sleep (lets the WS 0x05 frame flush; matches current
+//      behavior).
+//   7. ptyManager.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
+//      by ptyGrace, force-kill stragglers.
+//   8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
+func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
+	shuttingDown.Store(true) // /readyz -> 503
+	if ptyManager != nil {
+		ptyManager.BeginDrain() // reject new PTY spawns for the whole drain window
 	}
-	return nil
+	if drainDelay > 0 {
+		time.Sleep(drainDelay)
+	}
+	if err := flushStateForRestart(); err != nil {
+		slog.Error("shutdown flush failed", "err", err)
+	}
+	if wsHub != nil {
+		wsHub.BroadcastShutdown("shutdown")
+	}
+	time.Sleep(200 * time.Millisecond) // let the WS 0x05 frame flush
+	if ptyManager != nil {
+		ptyManager.Shutdown(ptyGrace)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, srv := range servers {
+		wg.Add(1)
+		go func(s *http.Server) {
+			defer wg.Done()
+			if err := s.Shutdown(ctx); err != nil {
+				slog.Error("http drain", "err", err)
+			}
+		}(srv)
+	}
+	wg.Wait()
 }
 
 // ---------- prompt_history handlers ----------

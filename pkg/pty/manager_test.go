@@ -686,7 +686,7 @@ func TestManagerShutdown_GracefulTerminatesAndCleansUp(t *testing.T) {
 	manager := NewManager()
 	shell, args := getTestShell()
 
-	inst, err := manager.Spawn("", shell, args, "shell", "shutdown-test")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "shutdown-test")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestManagerShutdown_KillsStragglers(t *testing.T) {
 	}
 
 	manager := NewManager()
-	inst, err := manager.Spawn("", "bash", []string{"--norc", "--noprofile", "-c", "trap '' TERM; sleep 1000"}, "shell", "straggler-test")
+	inst, err := manager.Spawn(context.Background(), "", "bash", []string{"--norc", "--noprofile", "-c", "trap '' TERM; sleep 1000"}, "shell", "straggler-test")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestBeginDrain_RejectsNewSpawns(t *testing.T) {
 	manager.BeginDrain()
 
 	shell, args := getTestShell()
-	inst, err := manager.Spawn("", shell, args, "shell", "drain-test")
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "shell", "drain-test")
 	if !errors.Is(err, ErrShuttingDown) {
 		t.Errorf("expected ErrShuttingDown, got %v", err)
 	}
