@@ -10,10 +10,19 @@ import (
 	"strings"
 
 	"github.com/hypernewbie/phi/pkg/diff"
+	"github.com/hypernewbie/phi/pkg/gitutil"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
+
+// notGitRepoBody is the literal response body the raw git endpoints
+// emit when cwd isn't a repo. The diff panel frontend detects this exact
+// text and renders a muted "Not a git repository" line instead of
+// feeding the raw `fatal: not a git repository ...` stderr into the
+// terminal as a giant red message.
+const notGitRepoBody = "NOT_GIT_REPO"
+
 
 func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
@@ -21,6 +30,12 @@ func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	commit := r.URL.Query().Get("commit")
 	if cwd == "" {
 		cwd = activeCWD
+	}
+
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"notGitRepo":true}`))
+		return
 	}
 
 	var inst *pty.PTYInstance
@@ -103,6 +118,12 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 		cwd = activeCWD
 	}
 
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(notGitRepoBody))
+		return
+	}
+
 	contextLines := "3"
 	if contextVal == "30" {
 		contextLines = "30"
@@ -170,6 +191,12 @@ func handleRawStatus(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
 		cwd = activeCWD
+	}
+
+	if !gitutil.IsGitRepo(r.Context(), cwd) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(notGitRepoBody))
+		return
 	}
 
 	ctx, end := obs.Span(r.Context(), "git.status", "cwd", cwd)
