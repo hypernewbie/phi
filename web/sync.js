@@ -6,6 +6,7 @@ export class SyncManager {
     pollInterval;
     coordinatorInput;
     addBtn;
+    clearBtn;
     formContainer;
     formKey;
     formValue;
@@ -27,9 +28,12 @@ export class SyncManager {
                     <label for="sync-coordinator-input">Coordinator:</label>
                     <input type="text" id="sync-coordinator-input" class="sync-input" placeholder="http://localhost:7070">
                 </div>
-                <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                </button>
+                <div class="sync-header-actions">
+                    <button id="sync-clear-btn" class="sync-btn-secondary" title="Clear all messages">Clear all</button>
+                    <button id="sync-add-btn" class="sync-btn-primary" title="Add Message">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    </button>
+                </div>
             </div>
 
             <div id="sync-form-container" class="sync-form-container hidden">
@@ -53,6 +57,7 @@ export class SyncManager {
         this.formCancel = document.getElementById('sync-form-cancel');
         this.formSubmit = document.getElementById('sync-form-submit');
         this.messagesList = document.getElementById('sync-messages-list');
+        this.clearBtn = document.getElementById('sync-clear-btn');
         // Event listeners
         this.coordinatorInput.addEventListener('blur', () => this.saveCoordinator());
         this.coordinatorInput.addEventListener('keydown', (e) => {
@@ -71,6 +76,7 @@ export class SyncManager {
             this.formContainer.classList.add('hidden');
         });
         this.formSubmit.addEventListener('click', () => this.submitMessage());
+        this.clearBtn.addEventListener('click', () => this.clearAllMessages());
         this.startPolling();
     }
     async saveCoordinator() {
@@ -205,5 +211,55 @@ export class SyncManager {
     }
     escapeHtml(str) {
         return escapeHtmlUtil(str);
+    }
+    // clearAllMessages DELETEs every entry on the current coordinator.
+    // No dedicated bulk-delete endpoint exists; iterate the keys we just
+    // rendered and DELETE each one. The list before iteration is the
+    // source of truth — if a new key lands mid-drain (from another
+    // machine), it'll survive this pass and show up on the next refresh,
+    // which is the right UX (don't trash work-in-progress). All-or-
+    // nothing confirmation matches the per-card delete pattern.
+    async clearAllMessages() {
+        let keys = [];
+        try {
+            const res = await this.fetchWithProxy('/api/sync/messages');
+            const list = await res.json();
+            if (Array.isArray(list))
+                keys = list.map((m) => m.key).filter(Boolean);
+        }
+        catch (e) {
+            this.app.showToast('Failed to read messages: ' + e.message, { type: 'error' });
+            return;
+        }
+        if (keys.length === 0) {
+            this.app.showToast('No messages to clear', { type: 'info' });
+            return;
+        }
+        if (!confirm(`Delete all ${keys.length} sync message${keys.length === 1 ? '' : 's'} from this coordinator?`)) {
+            return;
+        }
+        // Run DELETEs sequentially so a partial failure doesn't strand
+        // an outage (parallel fan-out would multiply the load on the
+        // coordinator). Each failure is reported but doesn't abort the
+        // rest — best-effort clear.
+        let failed = 0;
+        for (const k of keys) {
+            try {
+                await this.fetchWithProxy(`/api/sync/messages/${encodeURIComponent(k)}`, {
+                    method: 'DELETE',
+                });
+            }
+            catch (e) {
+                console.error('[sync] clear delete failed for', k, e);
+                failed += 1;
+            }
+        }
+        await this.refreshMessages();
+        if (failed > 0) {
+            this.app.showToast(`Cleared; ${failed} delete${failed === 1 ? '' : 's'} failed (see console)`, { type: 'error' });
+        }
+        else {
+            this.app.showToast(`Cleared ${keys.length} message${keys.length === 1 ? '' : 's'}`, { type: 'success' });
+        }
     }
 }
