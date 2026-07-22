@@ -1,9 +1,9 @@
-// Package mdwatch watches the resolved markdown directories for the
-// live pane cwds and fires a debounced callback when the set of .md
-// files in a watched directory changes. Non-recursive by design: the
-// /api/markdown/files listing is a top-level os.ReadDir, so children
-// are the only thing that can change the list.
-package mdwatch
+// Package fswatch watches a dynamic set of directories and fires a
+// debounced per-directory callback when matching files are created,
+// removed, or renamed inside one of them. Non-recursive by design:
+// consumers watch flat listings (e.g. the markdown panel's top-level
+// os.ReadDir), so direct children are the only thing that matters.
+package fswatch
 
 import (
 	"log/slog"
@@ -18,7 +18,7 @@ import (
 
 // Watcher tracks a caller-supplied set of desired directories with an
 // fsnotify.Watcher and calls onChange (debounced, per directory) when a
-// .md file is created, removed, or renamed within one of them.
+// matching file is created, removed, or renamed within one of them.
 type Watcher struct {
 	// Debounce is the trailing quiet period per directory before
 	// onChange fires. Agents save in bursts; editors do atomic-rename
@@ -28,6 +28,10 @@ type Watcher struct {
 	// picks up configured dirs created while unwatched (mkdir research
 	// after boot) and pane spawn/exit drift. Tests may shorten it.
 	RearmInterval time.Duration
+	// Filter decides which file paths count as relevant events. Nil
+	// matches every file. Set before Start, like Debounce. Directory
+	// creations bypass it — they re-arm the watch set instead.
+	Filter func(path string) bool
 
 	getDirs  func() []string // desired absolute dirs (may not exist)
 	onChange func(absDir string)
@@ -43,7 +47,7 @@ type Watcher struct {
 // New creates a Watcher backed by a fresh fsnotify.Watcher. getDirs is
 // called on Start and on every rearm tick to resolve the desired watch
 // set; onChange fires (off the caller's mutex) whenever a watched
-// directory's .md contents change. Start must be called to begin
+// directory's matching contents change. Start must be called to begin
 // watching.
 func New(getDirs func() []string, onChange func(absDir string)) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
@@ -83,7 +87,7 @@ func (w *Watcher) Start() {
 				if !ok {
 					return
 				}
-				slog.Warn("mdwatch: fsnotify error", "err", err)
+				slog.Warn("fswatch: fsnotify error", "err", err)
 			case <-ticker.C:
 				w.Recompute()
 			case <-w.done:
@@ -111,7 +115,7 @@ func (w *Watcher) Recompute() {
 	for d := range desired {
 		if !w.watched[d] {
 			if err := w.fsw.Add(d); err != nil {
-				slog.Warn("mdwatch: failed to watch dir", "dir", d, "err", err)
+				slog.Warn("fswatch: failed to watch dir", "dir", d, "err", err)
 				continue
 			}
 			w.watched[d] = true
@@ -126,8 +130,9 @@ func (w *Watcher) Recompute() {
 }
 
 // handleEvent processes one fsnotify event: it either triggers a
-// Recompute (a directory may have just been created) or, for .md file
-// churn, debounces a call to onChange for the event's parent directory.
+// Recompute (a directory may have just been created) or, for matching
+// file churn, debounces a call to onChange for the event's parent
+// directory.
 func (w *Watcher) handleEvent(e fsnotify.Event) {
 	dir := filepath.Dir(e.Name)
 
@@ -141,7 +146,7 @@ func (w *Watcher) handleEvent(e fsnotify.Event) {
 		}
 	}
 
-	if !strings.EqualFold(filepath.Ext(e.Name), ".md") {
+	if w.Filter != nil && !w.Filter(e.Name) {
 		return
 	}
 
@@ -184,4 +189,12 @@ func (w *Watcher) Close() {
 		w.mu.Unlock()
 		_ = w.fsw.Close()
 	})
+}
+
+// ExtFilter returns a Filter matching files whose extension equals ext,
+// case-insensitively (ExtFilter(".md") matches "A.MD").
+func ExtFilter(ext string) func(path string) bool {
+	return func(path string) bool {
+		return strings.EqualFold(filepath.Ext(path), ext)
+	}
 }

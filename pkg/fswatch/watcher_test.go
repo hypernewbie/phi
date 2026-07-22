@@ -1,4 +1,4 @@
-package mdwatch
+package fswatch
 
 import (
 	"os"
@@ -30,8 +30,9 @@ func assertNoEvent(t *testing.T, ch chan string, window time.Duration) {
 }
 
 // newTestWatcher builds a Watcher over dirs (fixed set, via a closure)
-// with a short Debounce/RearmInterval suitable for tests, collecting
-// onChange calls into a buffered channel.
+// with a short Debounce/RearmInterval and the .md ExtFilter (matching
+// the markdown consumer in main.go), collecting onChange calls into a
+// buffered channel.
 func newTestWatcher(t *testing.T, getDirs func() []string) (*Watcher, chan string) {
 	t.Helper()
 	events := make(chan string, 16)
@@ -43,6 +44,7 @@ func newTestWatcher(t *testing.T, getDirs func() []string) (*Watcher, chan strin
 	}
 	w.Debounce = 50 * time.Millisecond
 	w.RearmInterval = 100 * time.Millisecond
+	w.Filter = ExtFilter(".md")
 	t.Cleanup(w.Close)
 	return w, events
 }
@@ -135,6 +137,21 @@ func TestLateCreatedDirArmed(t *testing.T) {
 
 	if _, ok := waitFor(t, events, 2*time.Second); !ok {
 		t.Fatal("expected the rearm ticker to arm the late-created dir and fire an event within 2s")
+	}
+}
+
+func TestNilFilterMatchesAll(t *testing.T) {
+	dir := t.TempDir()
+	w, events := newTestWatcher(t, func() []string { return []string{dir} })
+	w.Filter = nil // generic default: every file counts
+	w.Start()
+
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, ok := waitFor(t, events, 2*time.Second); !ok {
+		t.Fatal("expected a nil filter to fire for a non-.md file, got no event within 2s")
 	}
 }
 

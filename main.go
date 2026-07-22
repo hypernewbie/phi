@@ -23,7 +23,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/bindaddr"
 	"github.com/hypernewbie/phi/pkg/fleet"
-	"github.com/hypernewbie/phi/pkg/mdwatch"
+	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/obs"
 	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
@@ -39,7 +39,7 @@ var webFS embed.FS
 var (
 	ptyManager  *pty.Manager
 	wsHub       *ws.Hub
-	mdWatcher   *mdwatch.Watcher
+	mdWatcher   *fswatch.Watcher
 	cpuSampler  = system.NewSampler()
 	activeCWD   string
 	webRoot     fs.FS
@@ -178,17 +178,18 @@ func main() {
 	})
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
 
-	// Markdown watcher: fsnotify over the resolved markdownDirs of every
+	// Markdown watcher: fswatch over the resolved markdownDirs of every
 	// live pane cwd. Fires 0x07 md-changed so open UIs can silently
 	// refresh the md file list. Watch set follows panes, not browsers:
 	// a worktree nobody has a pane in is not covered (accepted edge).
-	mdWatcher, err = mdwatch.New(markdownWatchDirs, func(dir string) {
+	mdWatcher, err = fswatch.New(markdownWatchDirs, func(dir string) {
 		payload, _ := json.Marshal(map[string]string{"dir": dir})
 		wsHub.BroadcastAll(0x07, payload) // 0x07: md-changed
 	})
 	if err != nil {
-		slog.Warn("mdwatch unavailable; markdown panel won't live-update", "err", err)
+		slog.Warn("fswatch unavailable; markdown panel won't live-update", "err", err)
 	} else {
+		mdWatcher.Filter = fswatch.ExtFilter(".md")
 		mdWatcher.Start()
 	}
 
