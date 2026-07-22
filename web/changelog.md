@@ -2,6 +2,22 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.14.1 — 2026-07-22
+
+Patch batch from `n0mad-awx`'s air-updates PR: two tab UX polish items, a terminal input regression, a Vite-based frontend dev live-reload setup, and dev-workflow docs. The batch deliberately excludes the k8s-health, tracing, and claude-detection changes already in v0.14.0; the gofmt + rename-tabs commits in the same PR were skipped because v0.14.0 already has them. Just the new five below.
+
+### Added
+- **Tab hover card with busy/idle status.** The tab hover tooltip now shows the full session title (not the truncated tab-label form) plus a small busy/idle glyph so you can see at a glance which tabs are doing work. Falls back to coder name when the title is empty, matching the existing renamer semantics.
+- **Vite dev server for frontend live reload.** New `vite.config.js` proxies `/api` and `/ws` from `localhost:5173` to the Go binary on `:7070` (or `$PHI_PORT`). `npm run dev` runs the server; HMR triggers on `web/**` edits and on the `web-src/*.ts → tsc → web/*.js → reload` chain. Dev-only overlay: production remains tsc → committed `web/` → `go:embed`. `vite@^5.x` matches vitest 2.1.8's peer range. README grew an 8-line Dev Workflow section.
+
+### Fixed
+- **Tab hiero preview no longer replays on intra-tab mouse movement.** The hieroglyph glyph preview animation used to restart every time the cursor moved inside the same tab strip region, even when the cursor didn't cross a tab boundary. Now the animation only restarts when the pointer actually enters a different tab, so the hiero no longer flickers when the user is dragging the cursor along the tab bar.
+- **Terminal: prevent double character on first keystroke after click.** Clicking into the xterm canvas to focus no longer causes the first keypress to be delivered twice — the focus + keydown events used to race into two separate handlers, both sending the character to the PTY. Single delivery now.
+
+### Tests
+- **`test-js/tabHieroPreview.test.js`** (new) — asserts the preview animation does NOT restart on intra-tab mouse moves and DOES restart on cross-tab boundary crossing. 194 lines, 8 cases.
+- **`test-js/nonDirectKeyRedirect.test.js`** (new) — covers the keyboard-routing state machine for non-direct-mode tabs (staged input redirects the focused-tab's arrow keys to its PTY). 44 lines, 4 cases.
+
 ## v0.14.0 — 2026-07-21
 
 Five PRs cherry-picked from `n0madsky`: a gofmt CI gate (without the `.gitattributes` CRLF-forcing), k8s-friendly liveness/readiness probes with a real graceful shutdown, inline-renameable terminal tabs (double-click), a forward-encoding fix for Claude-session discovery that closes a path-decoding lossiness bug, and a 12-commit structured-logging + opt-in OpenTelemetry tracing pass.
