@@ -4793,13 +4793,6 @@ html, body {
     gap: 4px;
     height: 28px;
     user-select: none;
-    cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.header-config-pill:hover {
-    border-color: var(--accent);
-    box-shadow: 0 0 8px var(--accent-glow);
 }
 
 .header-config-pill .pill-label {
