@@ -9,12 +9,15 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "dev": "vite",
+    "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.8",
     "jsdom": "^29.1.1",
     "typescript": "5.9.3",
+    "vite": "^5.4.21",
     "vitest": "^2.1.8"
   }
 }
