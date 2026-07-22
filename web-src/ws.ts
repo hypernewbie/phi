@@ -7,7 +7,7 @@
 // verbatim by the receiving case-branch, so the catch-all `unknown`
 // is intentional.
 export interface WSControlMessage {
-    type?: 'pty-exited' | 'server-shutdown' | 'replay-complete' | string;
+    type?: 'pty-exited' | 'server-shutdown' | 'replay-complete' | 'md-changed' | string;
     [key: string]: unknown;
 }
 
@@ -23,7 +23,8 @@ export type WSMessageType =
     | 0x03  // pong (s→c)
     | 0x04  // pty-exited (s→c)
     | 0x05  // server-shutdown (s→c)
-    | 0x06; // replay-complete (s→c)
+    | 0x06  // replay-complete (s→c)
+    | 0x07; // md-changed (s→c)
 
 // Callbacks the host registers on construction. All are optional;
 // if omitted, the corresponding WS event becomes a no-op.
@@ -118,6 +119,15 @@ export class PTYWebSocket {
                     break;
                 case 0x06: // replay-complete
                     if (this.onControl) this.onControl({ type: 'replay-complete' });
+                    break;
+                case 0x07: // md-changed
+                    try {
+                        const dec = new TextDecoder('utf-8');
+                        const data = JSON.parse(dec.decode(payload));
+                        if (this.onControl) this.onControl({ type: 'md-changed', ...data });
+                    } catch (e) {
+                        console.error("[ws] Failed to parse md-changed JSON", e);
+                    }
                     break;
             }
         };

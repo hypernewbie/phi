@@ -290,6 +290,12 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		_ = session.SaveAgySessionCwd(req.SessionID, spawnDir)
 	}
 
+	// A new pane may be the first live one in this cwd/worktree, so it
+	// can widen the markdown watch set.
+	if mdWatcher != nil {
+		mdWatcher.Recompute()
+	}
+
 	ws.StartPTYReadLoop(inst, wsHub)
 
 	w.Header().Set("Content-Type", "application/json")

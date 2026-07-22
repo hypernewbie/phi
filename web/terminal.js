@@ -1693,8 +1693,11 @@ export class TabManager {
         } else {
             // Workspace, coder, and CWD are all the same, only session might have changed.
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+            if (this.app.markdownManager) {
+                this.app.markdownManager.refreshFiles({ force: false, silent: true });
+            }
         }
-        
+
         this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
     }
     
@@ -3123,6 +3126,13 @@ export class TabManager {
             // /api/version reports a different stamped version OR after 10s,
             // whichever comes first.
             this.handleServerShutdown(control.reason || 'shutdown');
+        } else if (control.type === 'md-changed') {
+            // fsnotify push: a watched markdown dir changed on disk. Every
+            // open pane WS receives the broadcast, so MarkdownManager
+            // debounces client-side.
+            if (this.app.markdownManager) {
+                this.app.markdownManager.onExternalChange(control);
+            }
         }
     }
 
