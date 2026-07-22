@@ -1020,7 +1020,7 @@ export class TabManager {
             <button class="tab-pin" title="Pin session (Keep alive overnight)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-worktree-icon" aria-hidden="true">${glyph}</span>
-            <span class="tab-title ${marked ? 'marked' : ''}">${title}</span>
+            <span class="tab-title ${marked ? 'marked' : ''}">${escapeHtml(title)}</span>
             <button class="tab-close">×</button>
             <button class="tab-reopen" title="Undo close">↻</button>
         `;
@@ -1035,7 +1035,7 @@ export class TabManager {
             loaderEl.className = 'tab-loader';
             loaderEl.innerHTML = `
                 <div class="spinner-ring"></div>
-                <div class="loader-text">Starting ${title}...</div>
+                <div class="loader-text">Starting ${escapeHtml(title)}...</div>
             `;
             termContainer.appendChild(loaderEl);
         }
@@ -1071,6 +1071,15 @@ export class TabManager {
             } else {
                 this.switchTab(currentPaneId, { userInitiated: true });
             }
+        });
+
+        tabEl.addEventListener('dblclick', (e) => {
+            const titleEl = e.target.closest('.tab-title');
+            if (!titleEl) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const currentPaneId = tabEl.getAttribute('data-pane-id');
+            this.openTabRenamer(currentPaneId, titleEl);
         });
 
         if (coder === 'review' || coder === 'kanban') {
@@ -1718,7 +1727,60 @@ export class TabManager {
             body: JSON.stringify({ marked: marked })
         }).catch(err => console.error('[term] Failed to sync mark on backend:', err));
     }
-    
+
+    openTabRenamer(paneId, titleEl) {
+        const tab = this.tabs.get(paneId);
+        if (!tab) return;
+        const current = tab.title || '';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'rename-input tab-title';
+        input.value = current;
+        titleEl.replaceWith(input);
+        input.focus({ preventScroll: true });
+        input.select();
+
+        let done = false;
+        const commit = () => {
+            if (done) return;
+            done = true;
+            const next = input.value.trim();
+            const span = document.createElement('span');
+            span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
+            if (next && next !== current) {
+                tab.title = next;
+                span.textContent = next;
+                if (!tab.isReview && !tab.isKanban) this.syncBackendTitle(paneId, next);
+            } else {
+                span.textContent = current;
+            }
+            input.replaceWith(span);
+        };
+        const cancel = () => {
+            if (done) return;
+            done = true;
+            const span = document.createElement('span');
+            span.className = `tab-title ${tab.marked ? 'marked' : ''}`;
+            span.textContent = current;
+            input.replaceWith(span);
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        });
+        input.addEventListener('blur', commit);
+    }
+
+    syncBackendTitle(paneId, title) {
+        fetch(`/api/terminals/${paneId}/title`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title })
+        }).catch(err => console.error('[term] Failed to sync title on backend:', err));
+    }
+
     // Soft-close: when the user clicks × on a tab, the tab doesn't actually
     // go away for SOFT_CLOSE_GRACE_MS - it stays in the strip faded out
     // with a ↻ reopen button, and an "Undo" toast is shown. This solves
