@@ -69,6 +69,27 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/title") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+		id = strings.TrimSuffix(id, "/title")
+
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		err := ptyManager.SetTitle(id, req.Title)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
 		err := ptyManager.Kill(id)
