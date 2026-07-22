@@ -2,6 +2,23 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## Unreleased
+
+fsnotify-backed markdown watcher + a same-context tab-click refresh fix. The version button / index.html display version is left untouched here — this batch doesn't include the dedicated "vX.Y.Z: version bump" commit the maintainer normally makes when cutting a release, so it's staged under Unreleased until that happens.
+
+### Added
+- **Live-updating markdown panel via fsnotify.** New `pkg/mdwatch` watches the resolved markdown dirs (reusing `markdownAllowedDirs`) of every live pane's cwd with a real OS-level watcher (inotify/kqueue/ReadDirectoryChangesW via `fsnotify/fsnotify`), debounced 500ms per directory, with a 15s rearm ticker that arms directories created after boot. On a `.md` file create/remove/rename, the server broadcasts a new WS frame `0x07 md-changed {"dir"}` to every connected pane client via the new `Hub.BroadcastAll`. The watch set is recomputed after markdown-dir config changes and new pane spawns; a browser watching a worktree with zero live panes anywhere in it isn't covered (accepted edge — the watch set derives from pane cwds, not browser tabs).
+
+### Fixed
+- **Markdown panel stale when clicking between same-context tabs.** `switchTab`'s final branch (workspace/coder/cwd unchanged, e.g. two agent tabs on one repo) used to refresh nothing. It now does a silent, non-flickering refresh. Root cause of the "even a forced refresh looked stale" half of the bug: `MarkdownManager` cached `lastRefreshCwd` and skipped re-fetching for an unchanged cwd even though directory *contents* change constantly — removed in favor of a content-diff silent mode (`refreshFiles({silent:true})` skips the re-render, not the fetch, when the fetched list is byte-identical to what's shown).
+
+### Tests
+- **`pkg/mdwatch/watcher_test.go`** (new) — 6 cases: create/remove `.md` fires, non-`.md` ignored, a burst of 5 creates debounces to one event, a directory created after `Start()` gets armed by the rearm ticker, `Close()` is idempotent.
+- **`pkg/ws/hub_test.go`**`TestBroadcastAll`** (new) — two panes, two clients, one `BroadcastAll` call reaches both.
+- **`test-js/mdChangedRefresh.test.js`** (new) — 5 cases: silent skip on identical data, silent re-render on changed data, `onExternalChange` debounce, dir-filter (ignores events outside the browser's own markdown dirs), silent refresh never shows the `Scanning...` placeholder.
+- **`test-js/wsMdChangedFrame.test.js`** (new) — 2 cases: `0x07` frame decodes to `onControl({type:'md-changed', ...})`; a malformed payload logs and doesn't throw.
+- `switchTab`'s final-else refresh is covered by manual E2E only (see plan §8) — a `TabManager` harness for a 3-line addition was judged disproportionate.
+
 ## v0.14.1 — 2026-07-22
 
 Patch batch from `n0mad-awx`'s air-updates PR: two tab UX polish items, a terminal input regression, a Vite-based frontend dev live-reload setup, and dev-workflow docs. The batch deliberately excludes the k8s-health, tracing, and claude-detection changes already in v0.14.0; the gofmt + rename-tabs commits in the same PR were skipped because v0.14.0 already has them. Just the new five below.
