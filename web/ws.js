@@ -81,6 +81,17 @@ export class PTYWebSocket {
                     if (this.onControl)
                         this.onControl({ type: 'replay-complete' });
                     break;
+                case 0x07: // md-changed
+                    try {
+                        const dec = new TextDecoder('utf-8');
+                        const data = JSON.parse(dec.decode(payload));
+                        if (this.onControl)
+                            this.onControl({ type: 'md-changed', ...data });
+                    }
+                    catch (e) {
+                        console.error("[ws] Failed to parse md-changed JSON", e);
+                    }
+                    break;
             }
         };
         this.ws.onclose = () => {
