@@ -4793,6 +4793,27 @@ html, body {
     gap: 4px;
     height: 28px;
     user-select: none;
+    transition: background-color 0.18s ease, border-color 0.18s ease,
+                box-shadow 0.18s ease, backdrop-filter 0.18s ease;
+}
+
+/* Hover: glassmorphism lift. Unhovered state stays byte-equivalent to
+   the v0.2.2 original (commit ba8a290) — the whole look is opt-in,
+   applied only while the cursor is over the pill. */
+.header-config-pill:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: var(--accent);
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 14px var(--accent-glow),
+        inset 0 0 0 1px var(--accent-trace);
+    backdrop-filter: blur(8px) saturate(160%);
+    -webkit-backdrop-filter: blur(8px) saturate(160%);
+}
+
+.header-config-pill:hover .pill-label {
+    color: var(--accent-bright);
+    text-shadow: 0 0 6px var(--accent-glow);
 }
 
 .header-config-pill .pill-label {
