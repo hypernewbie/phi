@@ -23,7 +23,6 @@ import (
 // terminal as a giant red message.
 const notGitRepoBody = "NOT_GIT_REPO"
 
-
 func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	diffType := r.URL.Query().Get("type")
