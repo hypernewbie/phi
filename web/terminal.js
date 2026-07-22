@@ -1002,20 +1002,14 @@ export class TabManager {
         tabEl.addEventListener('dragleave', (e) => this.handleTabDragLeave(e));
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
         
-        const projectLabel = this.getProjectWorktreeLabel(cwd);
-        // Stash the worktree glyph on the tab DOM so the legend and the
-        // +N dropdown can group by it without re-hashing.
+        // Stash the worktree glyph + cwd on the tab DOM so the legend, the
+        // +N dropdown, and the hover preview can read them without a tabs
+        // Map lookup (the Map entry lands ~300 lines later - see NOTE below).
+        // No native title attribute: the hiero hover card is the tooltip,
+        // and a title attr set here would go stale on rename anyway.
         const glyph = worktreeGlyph(cwd);
-        let tooltipText = `Session: ${title} (${coder})`;
-        if (projectLabel && projectLabel !== '—') {
-            tooltipText += `\nProject: ${projectLabel}`;
-        }
-        if (cwd) {
-            tooltipText += `\nPath: ${cwd}`;
-            tooltipText += `\nIcon: ${glyph} (this worktree)`;
-        }
-        tabEl.title = tooltipText;
         tabEl.dataset.worktreeGlyph = glyph;
+        tabEl.dataset.cwd = cwd;
         tabEl.innerHTML = `
             <button class="tab-pin" title="Pin session (Keep alive overnight)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
@@ -2232,13 +2226,17 @@ export class TabManager {
         // Event delegation on the tabs container - one listener, works for
         // every tab and any tab created later (event bubbles up).
         if (this.tabsContainer) {
+            // relatedTarget guard: mouseover/mouseout fire on every
+            // child-boundary crossing inside a tab; only react when the
+            // pointer actually enters/leaves the tab, so the preview
+            // (and its shimmer) doesn't replay on intra-tab movement.
             this.tabsContainer.addEventListener('mouseover', (e) => {
                 const tabEl = e.target.closest('.tab');
-                if (tabEl) this._showHieroPreview(tabEl);
+                if (tabEl && !tabEl.contains(e.relatedTarget)) this._showHieroPreview(tabEl);
             });
             this.tabsContainer.addEventListener('mouseout', (e) => {
                 const tabEl = e.target.closest('.tab');
-                if (tabEl) this._hideHieroPreview();
+                if (tabEl && !tabEl.contains(e.relatedTarget)) this._hideHieroPreview();
             });
         }
         // Sidebar worktree headers also drive the preview: hovering a
@@ -2248,11 +2246,11 @@ export class TabManager {
         if (sessionList) {
             sessionList.addEventListener('mouseover', (e) => {
                 const headerEl = e.target.closest('.worktree-header');
-                if (headerEl) this._showWorktreeHieroPreview(headerEl);
+                if (headerEl && !headerEl.contains(e.relatedTarget)) this._showWorktreeHieroPreview(headerEl);
             });
             sessionList.addEventListener('mouseout', (e) => {
                 const headerEl = e.target.closest('.worktree-header');
-                if (headerEl) this._hideHieroPreview();
+                if (headerEl && !headerEl.contains(e.relatedTarget)) this._hideHieroPreview();
             });
         }
         // Hide on scroll/resize so the preview never lags behind a moved tab.
