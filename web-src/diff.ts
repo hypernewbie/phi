@@ -781,6 +781,19 @@ export class DiffController {
         const cwd = this.app.sessionsManager.activeCWD;
         const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
 
+        // Helper: render the muted "not a git repo" line into the term.
+        // Used by both raw endpoints (sentinel text body) and the
+        // streaming endpoint (notGitRepo:true JSON flag) so the user
+        // gets a calm single muted line instead of git's raw
+        // "fatal: not a git repository ..." stderr in red.
+        const notAGitRepo = (label: string) => {
+            this._writeStaticTerminalOutput(
+                '',
+                `\x1b[90mNot a git repository \u2014 ${label} is empty for this workspace.\x1b[0m\r\n`,
+            );
+            return;
+        };
+
         try {
             if (this.activeTab === 'diff') {
                 const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`);
@@ -789,6 +802,7 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Diff fetch error');
                 }
                 const text = await res.text();
+                if (text === 'NOT_GIT_REPO') return notAGitRepo('the diff');
                 this._writeStaticTerminalOutput(text, '\x1b[90mNo changes detected.\x1b[0m\r\n');
                 return;
             }
@@ -800,6 +814,7 @@ export class DiffController {
                     throw new Error(errText.trim() || 'Status fetch error');
                 }
                 const text = await res.text();
+                if (text === 'NOT_GIT_REPO') return notAGitRepo('the status');
                 this._writeStaticTerminalOutput(text, '\x1b[90mClean working tree.\x1b[0m\r\n');
                 return;
             }
@@ -811,6 +826,11 @@ export class DiffController {
             }
 
             const data = await res.json();
+
+            // Streaming endpoint signals non-repo via JSON flag rather
+            // than by spawning a PTY that immediately exits with the
+            // fatal stderr.
+            if (data && data.notGitRepo) return notAGitRepo('this view');
 
             // Connect and stream diff/log output
             this.currentWs = new PTYWebSocket(
