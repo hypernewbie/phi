@@ -56,7 +56,6 @@ export class TabManager {
         this.selfHudOpen = false;
         this.selfHudCloseTimer = null;
         this.sendInputBtn = document.getElementById('send-input-btn');
-        this.piShortcutSendBtn = null; // chip is now rendered into presets-container per-tab in renderPresets()
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
@@ -3953,16 +3952,17 @@ export class TabManager {
 
         // 2b. Pi-specific shortcut chip: lives in the presets row alongside
         // /quit /resume /model /compact, with the same flat preset-btn
-        // shape (no kbd-key caps / glow). Visible only when the active
-        // tab is a pi session. Clicking sends the staged input — same
-        // as Send ↵. The keyboard binding itself is global (document-level
-        // keydown listener below) and works whether the chip is rendered.
+        // shape (no kbd-key caps / glow, no extra id, no title, label
+        // matches the existing binding convention — lowercase, no
+        // separator, no action-verb suffix). Visible only when the
+        // active tab is a pi session. Clicking sends the staged input
+        // — same as Send ↵. The keyboard binding itself is global
+        // (document-level keydown listener below) and works whether
+        // the chip is rendered.
         if (coderId === 'pi') {
             const chip = document.createElement('button');
-            chip.id = 'pi-shortcut-send-btn';
             chip.className = 'preset-btn';
-            chip.title = 'Send staged input (Ctrl+Shift+X)';
-            chip.textContent = 'Ctrl+Shift+X · send';
+            chip.innerText = 'ctrl+shift+x';
             chip.addEventListener('click', () => {
                 this.sendStagedInput();
             });
