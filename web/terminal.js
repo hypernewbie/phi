@@ -4645,7 +4645,11 @@ export class TabManager {
             this.app.showToast(message, {
                 title: 'Task Done',
                 type: 'info',
-                duration: 6000
+                duration: 6000,
+                action: {
+                    text: 'Go to tab',
+                    callback: () => this.switchTab(tab.paneId, { userInitiated: true }),
+                },
             });
         }
 
