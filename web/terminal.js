@@ -1108,7 +1108,7 @@ export class TabManager {
         const term = new window.Terminal({
             cursorBlink: true,
             cursorStyle: 'bar',
-            fontSize: isMobile ? 10 : 14,
+            fontSize: (this.app && this.app.terminalFontSize >= 8 && this.app.terminalFontSize <= 32) ? this.app.terminalFontSize : (isMobile ? 10 : 14),
             fontFamily: (this.app && this.app.terminalFontFamily) || 'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: {
@@ -3769,7 +3769,7 @@ export class TabManager {
         
         try {
             const isMobile = window.innerWidth <= 768;
-            const size = isMobile ? 10 : 14;
+            const size = (this.app && this.app.terminalFontSize >= 8 && this.app.terminalFontSize <= 32) ? this.app.terminalFontSize : (isMobile ? 10 : 14);
             if (activeTab.term.options.fontSize !== size) {
                 activeTab.term.options.fontSize = size;
             }
@@ -4579,6 +4579,23 @@ export class TabManager {
                 if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                     try { tab.fitAddon.fit(); } catch (e) { /* tolerate closed term */ }
                 }
+            }
+        }
+    }
+
+    // applyTerminalFontSizeToAll sets a new fontSize on every live xterm,
+    // re-fits, and pushes the resulting geometry to the backend PTY (size
+    // changes cols/rows, unlike family). Deliberately does NOT touch any
+    // scroll / _spamScroll timing (see AGENTS.md hard-won-stabilization rule).
+    applyTerminalFontSizeToAll(size) {
+        const isMobile = window.innerWidth <= 768;
+        const safe = (size >= 8 && size <= 32) ? size : (isMobile ? 10 : 14);
+        for (const tab of this.tabs.values()) {
+            if (!tab.term) continue;
+            if (tab.term.options.fontSize === safe) continue;
+            tab.term.options.fontSize = safe;
+            if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
+                try { tab.fitAddon.fit(); this.sendResizeToBackend(tab); } catch (e) { /* tolerate closed term */ }
             }
         }
     }
