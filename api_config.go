@@ -32,6 +32,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"ui_font_family":            cfg.UIFontFamily,
 		"ui_font_size":              cfg.UIFontSize,
 		"terminal_font_family":      cfg.TerminalFontFamily,
+		"terminal_font_size":        cfg.TerminalFontSize,
 	})
 }
 
@@ -379,6 +380,22 @@ func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
 			cfg.UIFontSize = 24
 		}
 	}
+	if v, ok := req["terminal_font_size"]; ok {
+		switch n := v.(type) {
+		case float64:
+			cfg.TerminalFontSize = int(n)
+		case int:
+			cfg.TerminalFontSize = n
+		}
+		if cfg.TerminalFontSize != 0 { // 0 = unset/default, leave as sentinel
+			if cfg.TerminalFontSize < 8 {
+				cfg.TerminalFontSize = 8
+			}
+			if cfg.TerminalFontSize > 32 {
+				cfg.TerminalFontSize = 32
+			}
+		}
+	}
 	saveConfig(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -386,6 +403,7 @@ func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
 		"ui_font_family":       cfg.UIFontFamily,
 		"ui_font_size":         cfg.UIFontSize,
 		"terminal_font_family": cfg.TerminalFontFamily,
+		"terminal_font_size":   cfg.TerminalFontSize,
 	})
 }
 
