@@ -16,7 +16,7 @@ import (
 // frontend.
 func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	path := withTempConfig(t)
-	body := `{"ui_font_family":"Inter","ui_font_size":16,"terminal_font_family":"Fira Code"}`
+	body := `{"ui_font_family":"Inter","ui_font_size":16,"terminal_font_family":"Fira Code","terminal_font_size":18}`
 	req := httptest.NewRequest(http.MethodPost, "/api/config/appearance", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -36,6 +36,9 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	if cfg.TerminalFontFamily != "Fira Code" {
 		t.Errorf("TerminalFontFamily: got %q want %q", cfg.TerminalFontFamily, "Fira Code")
 	}
+	if cfg.TerminalFontSize != 18 {
+		t.Errorf("TerminalFontSize: got %d want 18", cfg.TerminalFontSize)
+	}
 
 	// Confirm the on-disk file also has them (so a process restart
 	// would re-load them).
@@ -51,6 +54,9 @@ func TestHandleAppearanceUpdate_PersistsFields(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"terminal_font_family"`) {
 		t.Errorf("terminal_font_family not in persisted file: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"terminal_font_size"`) {
+		t.Errorf("terminal_font_size not in persisted file: %s", raw)
 	}
 }
 
@@ -123,6 +129,42 @@ func TestHandleAppearanceUpdate_ClampsFontSize(t *testing.T) {
 	}
 }
 
+// TestHandleAppearanceUpdate_ClampsTerminalFontSize — terminal font
+// size clamps to [8, 32], but 0 (the "unset/default" sentinel) must
+// round-trip as 0 rather than clamping up to 8.
+func TestHandleAppearanceUpdate_ClampsTerminalFontSize(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{4, 8},   // below min
+		{7, 8},   // just below min
+		{8, 8},   // at min — unchanged
+		{32, 32}, // at max — unchanged
+		{99, 32}, // above max
+		{0, 0},   // zero (sentinel for "unset") — must NOT clamp up to 8
+		{16, 16}, // middle — unchanged
+	}
+	for _, tc := range cases {
+		t.Run("", func(t *testing.T) {
+			withTempConfig(t)
+			body := `{"terminal_font_size":` + itoaSmall(tc.in) + `}`
+			req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
+				strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handleAppearanceUpdate(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+			}
+			cfg := loadConfig()
+			if cfg.TerminalFontSize != tc.want {
+				t.Errorf("size %d: got %d want %d", tc.in, cfg.TerminalFontSize, tc.want)
+			}
+		})
+	}
+}
+
 // TestHandleAppearanceUpdate_RequiresPost — GET/DELETE/etc. all 405.
 func TestHandleAppearanceUpdate_RequiresPost(t *testing.T) {
 	withTempConfig(t)
@@ -159,6 +201,7 @@ func TestHandleConfig_IncludesAppearanceFields(t *testing.T) {
 	cfg.UIFontFamily = "Inter"
 	cfg.UIFontSize = 15
 	cfg.TerminalFontFamily = "JetBrains Mono"
+	cfg.TerminalFontSize = 20
 	saveConfig(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
@@ -182,6 +225,9 @@ func TestHandleConfig_IncludesAppearanceFields(t *testing.T) {
 	}
 	if got["terminal_font_family"] != "JetBrains Mono" {
 		t.Errorf("terminal_font_family: got %v", got["terminal_font_family"])
+	}
+	if sz, ok := got["terminal_font_size"].(float64); !ok || int(sz) != 20 {
+		t.Errorf("terminal_font_size: got %v want 20", got["terminal_font_size"])
 	}
 }
 

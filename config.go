@@ -54,6 +54,7 @@ type Config struct {
 	UIFontFamily       string `json:"ui_font_family,omitempty"`
 	UIFontSize         int    `json:"ui_font_size,omitempty"`
 	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
+	TerminalFontSize   int    `json:"terminal_font_size,omitempty"`
 
 	// UseExistingTerminalTab, when true, makes the command panel route
 	// terminal commands to the first alive bash/pwsh tab instead of
@@ -137,6 +138,9 @@ func loadConfig() Config {
 	// the client". No server-side coercion needed beyond this.
 	if cfg.UIFontSize < 0 {
 		cfg.UIFontSize = 0
+	}
+	if cfg.TerminalFontSize < 0 {
+		cfg.TerminalFontSize = 0
 	}
 	if cfg.ExpandedWorktrees == nil {
 		cfg.ExpandedWorktrees = make(map[string]bool)

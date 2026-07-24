@@ -162,7 +162,9 @@ export class App {
         this.uiFontFamily = '';
         this.uiFontSize = 0;
         this.terminalFontFamily = '';
-        
+        this.terminalFontSize = 0;
+        this.customFontName = '';
+
         // Instantiate controllers
         this.tabManager = new TabManager(this);
         this.sessionsManager = new SessionsManager(this);
@@ -854,23 +856,91 @@ export class App {
         appGroup.appendChild(swatchRow);
 
         // UI font family
-        const uiFontRow = this._buildSelectRow('UI font', 'settings-ui-font', [
+        const uiFontOptions = [
             { value: '', label: 'System default' },
             { value: 'Inter, system-ui, sans-serif', label: 'Inter' },
             { value: 'system-ui, -apple-system, sans-serif', label: 'System UI' },
             { value: '"Segoe UI", system-ui, sans-serif', label: 'Segoe UI' },
             { value: '"Helvetica Neue", Arial, sans-serif', label: 'Helvetica Neue' },
             { value: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace', label: 'Mono / dev-style' },
-        ], this.uiFontFamily);
+        ];
+        // Custom uploaded font (Milestone 4): expose if active.
+        if (this.customFontName) {
+            uiFontOptions.push({ value: 'Phi Custom Font', label: `Custom: ${this.customFontName}` });
+        }
+        const uiFontRow = this._buildSelectRow('UI font', 'settings-ui-font', uiFontOptions, this.uiFontFamily);
         appGroup.appendChild(uiFontRow);
 
         // UI font size
         const uiSizeRow = this._buildNumberRow('UI font size', 'settings-ui-font-size', this.uiFontSize || 14, 10, 24);
         appGroup.appendChild(uiSizeRow);
 
-        // Terminal font family
-        const termFontRow = this._buildInputRow('Terminal font', 'settings-term-font', 'JetBrains Mono, monospace', this.terminalFontFamily);
+        // Terminal font family — curated dropdown (mirrors the UI font
+        // control). Nerd Font entries render glyphs only if that font is
+        // installed on the machine running the browser (xterm.js renders
+        // client-side; we do not bundle fonts) — otherwise the fallback
+        // chain still yields readable text without icons. Mono variants
+        // come first in every Nerd Font chain since xterm assumes fixed
+        // cell width, keeping Powerline glyphs single-cell.
+        const termFontOptions = [
+            { value: '',                                            label: 'Default (JetBrains Mono)' },
+            { value: "'Fira Code', ui-monospace, monospace",        label: 'Fira Code' },
+            { value: "'Cascadia Code', ui-monospace, monospace",    label: 'Cascadia Code' },
+            { value: "ui-monospace, 'SF Mono', Menlo, monospace",   label: 'SF Mono / Menlo' },
+            { value: "Consolas, 'Cascadia Mono', monospace",        label: 'Consolas' },
+            { value: "'Source Code Pro', ui-monospace, monospace",  label: 'Source Code Pro' },
+            // ── Nerd Fonts (mono variants) — for starship / powerline glyphs. ──
+            // Each chain: Nerd Font Mono (single-cell glyphs) → Nerd Font → base font
+            // (Google-Fonts/system, readable text w/o icons) → generic mono.
+            { value: "'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrains Mono', ui-monospace, monospace", label: 'JetBrainsMono Nerd Font' },
+            { value: "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font', 'Fira Code', ui-monospace, monospace",                label: 'FiraCode Nerd Font' },
+            { value: "'Hack Nerd Font Mono', 'Hack Nerd Font', Hack, ui-monospace, monospace",                               label: 'Hack Nerd Font' },
+            { value: "'MesloLGS NF', 'MesloLGM Nerd Font Mono', Menlo, ui-monospace, monospace",                             label: 'MesloLGS NF' },
+            { value: "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove Nerd Font', 'Cascadia Code', ui-monospace, monospace",  label: 'CaskaydiaCove Nerd Font' },
+            { value: "'SauceCodePro Nerd Font Mono', 'SauceCodePro Nerd Font', 'Source Code Pro', ui-monospace, monospace",  label: 'SauceCodePro Nerd Font' },
+            { value: 'monospace',                                   label: 'System monospace' },
+        ];
+        // Migration: a pre-existing free-text value that matches no option must survive.
+        if (this.terminalFontFamily && !termFontOptions.some(o => o.value === this.terminalFontFamily)) {
+            termFontOptions.splice(1, 0, { value: this.terminalFontFamily, label: `Current: ${this.terminalFontFamily}` });
+        }
+        // Custom uploaded font (Milestone 4): expose if active.
+        if (this.customFontName) {
+            termFontOptions.push({ value: 'Phi Custom Font', label: `Custom: ${this.customFontName}` });
+        }
+        const termFontRow = this._buildSelectRow('Terminal font', 'settings-term-font', termFontOptions, this.terminalFontFamily);
         appGroup.appendChild(termFontRow);
+
+        // Terminal font size
+        const termSizeRow = this._buildNumberRow('Terminal font size', 'settings-term-font-size', this.terminalFontSize || 14, 8, 32);
+        appGroup.appendChild(termSizeRow);
+
+        // Custom font upload — local-only (IndexedDB), never sent to the
+        // server. Selectable afterward as "Custom: <name>" in both font
+        // dropdowns above.
+        const uploadRow = document.createElement('div');
+        uploadRow.className = 'settings-row';
+        const uploadLabel = document.createElement('label');
+        uploadLabel.htmlFor = 'settings-font-upload';
+        uploadLabel.textContent = 'Upload font…';
+        uploadRow.appendChild(uploadLabel);
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.id = 'settings-font-upload';
+        fileInput.accept = '.woff2,.woff,.ttf,.otf';
+        uploadRow.appendChild(fileInput);
+        appGroup.appendChild(uploadRow);
+
+        // Reset appearance — clears the browser copy + pushes defaults to
+        // the server so both stores agree (see AGENTS.md appearance notes).
+        const resetRow = document.createElement('div');
+        resetRow.className = 'settings-row';
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'btn';
+        resetBtn.type = 'button';
+        resetBtn.textContent = 'Reset appearance';
+        resetRow.appendChild(resetBtn);
+        appGroup.appendChild(resetRow);
 
         // Behavior group ────────────────────────────────────────
         const behGroup = this._buildSettingsGroup('Behavior');
@@ -931,6 +1001,7 @@ export class App {
         uiFontRow.querySelector('select')?.addEventListener('change', (e) => {
             this.uiFontFamily = e.target.value;
             this.applyUIFont();
+            this._saveAppearanceLocal();
             debouncedPersist();
         });
         uiSizeRow.querySelector('input')?.addEventListener('input', (e) => {
@@ -938,12 +1009,57 @@ export class App {
             if (!Number.isFinite(n) || n < 10 || n > 24) return;
             this.uiFontSize = n;
             this.applyUIFont();
+            this._saveAppearanceLocal();
             debouncedPersist();
         });
-        termFontRow.querySelector('input')?.addEventListener('input', (e) => {
+        termFontRow.querySelector('select')?.addEventListener('change', (e) => {
             this.terminalFontFamily = e.target.value;
             this.tabManager?.applyFontToAllActiveTerminals(this.terminalFontFamily || 'JetBrains Mono, monospace');
+            this._saveAppearanceLocal();
             debouncedPersist();
+        });
+        termSizeRow.querySelector('input')?.addEventListener('input', (e) => {
+            const n = parseInt(e.target.value, 10);
+            if (!Number.isFinite(n) || n < 8 || n > 32) return;
+            this.terminalFontSize = n;
+            this.tabManager?.applyTerminalFontSizeToAll(n);
+            this._saveAppearanceLocal();
+            debouncedPersist();
+        });
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const MAX = 8 * 1024 * 1024; // 8MB guard — generous for a font, bounds IndexedDB use
+            if (file.size > MAX) { this.showToast('Font too large (max 8MB)', { type: 'error' }); return; }
+            try {
+                await this._putCustomFont(file.name, file);
+                this._injectCustomFontFace(file);           // File is a Blob
+                this.customFontName = file.name;
+                this._saveAppearanceLocal();
+                this.showToast(`Loaded ${file.name}. Pick "Custom: ${file.name}" in the font dropdowns.`, { type: 'success' });
+                // Re-open/refresh the modal so both dropdowns show the new "Custom: …" option.
+                // (Simplest: close + reopen, or append the option to both selects in place.)
+            } catch (err) {
+                this.showToast('Font upload failed: ' + err.message, { type: 'error' });
+            }
+        });
+        resetBtn.addEventListener('click', async () => {
+            try { localStorage.removeItem('phi_appearance'); } catch {}
+            document.getElementById('phi-prepaint-appearance')?.remove();
+            await this.clearCustomFont?.();               // Milestone 4: drop IndexedDB + <style> + name
+            this.uiFontFamily = ''; this.uiFontSize = 0;
+            this.terminalFontFamily = ''; this.terminalFontSize = 0;
+            this.customFontName = '';
+            this.applyUIFont();
+            this.tabManager?.applyFontToAllActiveTerminals('JetBrains Mono, monospace');
+            this.tabManager?.applyTerminalFontSizeToAll(0);
+            // Push cleared state to the server so both stores agree.
+            this.persistAppearance();
+            // Reflect defaults in the open modal controls.
+            document.getElementById('settings-ui-font').value = '';
+            document.getElementById('settings-ui-font-size').value = '14';
+            document.getElementById('settings-term-font').value = '';
+            document.getElementById('settings-term-font-size').value = '14';
         });
         reuseRow.querySelector('input')?.addEventListener('change', async (e) => {
             this.useExistingTerminalTab = !!e.target.checked;
@@ -1083,6 +1199,95 @@ export class App {
         return row;
     }
 
+    // _saveAppearanceLocal write-throughs the current appearance fields
+    // to localStorage so they survive a server config reset (browser is
+    // authoritative; server is the secondary mirror). Mirrors the
+    // phi_theme_color pre-paint precedent.
+    _saveAppearanceLocal() {
+        try {
+            localStorage.setItem('phi_appearance', JSON.stringify({
+                ui_font_family: this.uiFontFamily || '',
+                ui_font_size: this.uiFontSize || 0,
+                terminal_font_family: this.terminalFontFamily || '',
+                terminal_font_size: this.terminalFontSize || 0,
+                custom_font_name: this.customFontName || '',
+            }));
+        } catch (e) { console.warn('[appearance] localStorage write failed', e); }
+    }
+
+    // _fontDB / _putCustomFont / _getCustomFont / _deleteCustomFont —
+    // a tiny IndexedDB helper for the one active custom font. IndexedDB
+    // (not localStorage) because font bytes can exceed localStorage's
+    // ~5MB synchronous string quota; Blobs store natively with no
+    // base64 inflation. Local-only: never sent to the server.
+    _fontDB() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('phi', 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('fonts');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+    async _putCustomFont(displayName, blob) {
+        const db = await this._fontDB();
+        await new Promise((res, rej) => {
+            const tx = db.transaction('fonts', 'readwrite');
+            tx.objectStore('fonts').put({ displayName, blob }, 'custom');
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        });
+    }
+    async _getCustomFont() {
+        const db = await this._fontDB();
+        return new Promise((res, rej) => {
+            const tx = db.transaction('fonts', 'readonly');
+            const g = tx.objectStore('fonts').get('custom');
+            g.onsuccess = () => res(g.result || null); g.onerror = () => rej(g.error);
+        });
+    }
+    async _deleteCustomFont() {
+        const db = await this._fontDB();
+        await new Promise((res, rej) => {
+            const tx = db.transaction('fonts', 'readwrite');
+            tx.objectStore('fonts').delete('custom');
+            tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        });
+    }
+
+    // _injectCustomFontFace registers the uploaded font as the constant
+    // family 'Phi Custom Font' via an object URL (avoids base64 inflation).
+    _injectCustomFontFace(blob) {
+        const url = URL.createObjectURL(blob);
+        let styleEl = document.getElementById('phi-custom-fonts');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'phi-custom-fonts';
+            document.head.appendChild(styleEl);
+        }
+        styleEl.textContent =
+            "@font-face{font-family:'Phi Custom Font';src:url(" + url + ");font-display:swap;}";
+    }
+    // loadCustomFont re-injects the @font-face from IndexedDB on boot.
+    // Called from the sessions ingest after customFontName is set.
+    async loadCustomFont() {
+        if (!this.customFontName) return;
+        try {
+            const rec = await this._getCustomFont();
+            if (rec?.blob) this._injectCustomFontFace(rec.blob);
+        } catch (e) { console.warn('[font] load custom failed', e); }
+    }
+    // clearCustomFont drops the IndexedDB entry + <style> + name, and
+    // falls back either surface that was using the custom font.
+    async clearCustomFont() {
+        try { await this._deleteCustomFont(); } catch {}
+        document.getElementById('phi-custom-fonts')?.remove();
+        this.customFontName = '';
+        if (this.uiFontFamily === 'Phi Custom Font') { this.uiFontFamily = ''; this.applyUIFont(); }
+        if (this.terminalFontFamily === 'Phi Custom Font') {
+            this.terminalFontFamily = '';
+            this.tabManager?.applyFontToAllActiveTerminals('JetBrains Mono, monospace');
+        }
+    }
+
     // applyUIFont writes the current uiFontFamily / uiFontSize to
     // document.body as inline style. We avoid introducing CSS custom
     // properties (per AGENTS.md) — inline styles keep the change
@@ -1114,6 +1319,7 @@ export class App {
                     ui_font_family: this.uiFontFamily || '',
                     ui_font_size: this.uiFontSize || 0,
                     terminal_font_family: this.terminalFontFamily || '',
+                    terminal_font_size: this.terminalFontSize || 0,
                 }),
             });
         } catch (e) {
