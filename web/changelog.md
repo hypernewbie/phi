@@ -2,6 +2,29 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.14.3 — 2026-07-24
+
+Patch batch of three PRs from `n0mad-awx` (Franklin He) since v0.14.2: a CI/release workflow fix that builds the frontend before GoReleaser, a customizable terminal font (size + curated family + local custom-font upload via IndexedDB), and a vendored-xterm scroll-sync fix for streaming output.
+
+### Added
+- **Customizable terminal font** (`#12`). `TerminalFontSize` config field (8–32, clamped server-side; 0 is the responsive-default sentinel), curated `Terminal font` dropdown in Settings mirroring the existing UI font control — six mono families (JetBrains Mono, Fira Code, Hack, Iosevka, Cascadia Code, Source Code Pro), all with starship/powerline glyph coverage. Pre-existing free-text `terminal_font_family` values survive via a `Current: …` option so custom configs aren't lost.
+- **Custom font upload (local-only).** Drag-drop or pick a `.ttf`/`.otf`; the bytes stay in IndexedDB and are registered via `@font-face`; the family becomes available in both the UI-font and terminal-font dropdowns. Never sent to the server.
+- **Appearance now persists to `localStorage` too** (browser-authoritative, survives a server `config.json` reset). An inline pre-paint script applies the saved values before the first paint, so there's no flash of unstyled content on reload. New `Reset` button in the settings modal clears the browser-side overrides.
+- **CI: build UI before release.** `.github/workflows/release.yml` now runs `npm ci && npm run build:web` immediately before GoReleaser, so the embedded `web/` (via `//go:embed all:web`) reflects the current `web-src/*.ts` rather than whatever compiled JS happened to be committed. Keeps release artifacts authoritative.
+
+### Fixed
+- **Vendored xterm scroll desync during streaming** (`#13`). Two related bugs surfaced under sustained PTY output: (1) the DOM scroll area went stale so wheel-up jumped to a stale coordinate and wheel-down clamped before the real bottom; (2) the public `onScroll` was suppressed for user wheel/scrollbar input so the jump-to-bottom button and follow re-engagement never heard real user scrolls. Fix: sync the scroll area after each write batch; drive the button and follow state from the DOM `scroll` event in capture phase (rAF-coalesced); add a wheel-down escape hatch for a stale-clamped viewport.
+
+### Dev tooling
+- **Advisory pre-commit hook** at `.githooks/pre-commit`. Mirrors the CI frontend checks locally so drift, type errors, and syntax slips are caught at commit time instead of at push. Runs `node --check` on staged `web/*.js`, runs `typecheck + build:web` drift guard when `web-src/*.ts` changed, and `go test ./pkg/lint` when `web/style.css` or `web/index.html` changed. Enable once per clone: `git config core.hooksPath .githooks`. Bypass with `git commit --no-verify`. CI is still the enforced backstop.
+
+### Tests
+- **Frontend (vitest)** — 657 tests, +11 since v0.14.2:
+  - `test-js/settingsModal.test.js` — font dropdown change handlers, font-size clamp on input.
+  - `test-js/scrollSync.test.js` (new, `#13`) — 8 cases: DOM sync during streaming, `scroll` event capture + rAF coalesce, wheel-down escape hatch.
+  - `test-js/terminalActivityChrome.test.js` — write-completion callback assertion updated for the new argument.
+- **Backend (Go)** — `appearance_handlers_test.go` adds `terminal_font_size` to the persist-and-read round-trip.
+
 ## v0.14.2 — 2026-07-22
 
 Patch batch covering everything shipped between the v0.14.1 tag and now: two PRs merged directly into main by the maintainer (`n0mad-awx/#10`, `n0mad-awx/#11`), the config-pill UX fixes, the sync-board "Clear all" button, the ctrl+shift+x chip strict-subset refactor, and the git-stderr-spam fix. The version button / index.html display version is bumped by this commit.
