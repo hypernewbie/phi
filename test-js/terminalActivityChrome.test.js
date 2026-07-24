@@ -83,8 +83,10 @@ describe('terminal activity chrome rendering', () => {
 
         expect(tabInfo.isBusy).toBe(true);
         expect(updateDocumentTitle).toHaveBeenCalledTimes(1);
-        expect(term.write).toHaveBeenCalledWith('one');
-        expect(term.write).toHaveBeenCalledWith('two');
+        // writeToTerminal now passes a completion callback (scroll-area
+        // sync) as write's 2nd arg; the data payload is what this test pins.
+        expect(term.write).toHaveBeenCalledWith('one', expect.any(Function));
+        expect(term.write).toHaveBeenCalledWith('two', expect.any(Function));
     });
 
     it('returns to quiet after the existing three-second output idle window', () => {
