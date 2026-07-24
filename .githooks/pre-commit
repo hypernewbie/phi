@@ -1,0 +1,59 @@
+#!/bin/sh
+# phi pre-commit hook — fast LOCAL mirror of the CI frontend checks so drift,
+# type errors, and syntax slips are caught at commit time instead of at push.
+#
+# This is ADVISORY. CI (.github/workflows/test.yml) is the enforced backstop;
+# bypass locally with `git commit --no-verify` when you know what you're doing.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+#
+# Scope: only runs work relevant to what you actually staged. Backend-only
+# commits skip it entirely and stay fast.
+
+set -e
+
+staged() { git diff --cached --name-only --diff-filter=ACMR; }
+FILES="$(staged)"
+
+# What changed?
+FRONT_TS="$(printf '%s\n' "$FILES"  | grep -E '\.ts$' || true)"
+WEB_ANY="$(printf '%s\n'  "$FILES"  | grep -E '^web/' || true)"
+CSS_HTML="$(printf '%s\n' "$FILES"  | grep -E '^web/(style\.css|index\.html)$' || true)"
+JS_STAGED="$(printf '%s\n' "$FILES" | grep -E '^web/.*\.js$' || true)"
+
+# Nothing frontend staged → nothing to do.
+[ -z "$FRONT_TS$WEB_ANY" ] && exit 0
+
+# 1. Syntax-check staged JS (hand-authored web/app.js & web/terminal.js are not
+#    compiled, so nothing else validates them before runtime).
+for f in $JS_STAGED; do
+    if [ -f "$f" ]; then
+        node --check "$f" || { echo "pre-commit: syntax error in $f" >&2; exit 1; }
+    fi
+done
+
+# 2. When TypeScript sources changed: typecheck, rebuild emitted JS, and verify
+#    the emitted web/ tree matches (mirrors the CI drift guard).
+if [ -n "$FRONT_TS" ]; then
+    if [ ! -d node_modules ]; then
+        echo "pre-commit: node_modules missing — run 'npm ci' first (or --no-verify)." >&2
+        exit 1
+    fi
+    npm run typecheck
+    npm run build:web
+    DIRTY="$(git diff --name-only -- web)$(git ls-files --others --exclude-standard -- web)"
+    if [ -n "$DIRTY" ]; then
+        echo "::error:: web/ is out of sync with web-src/ — build:web produced changes not staged:" >&2
+        git diff --name-only -- web >&2
+        git ls-files --others --exclude-standard -- web >&2
+        echo "Fix: git add web/ && recommit." >&2
+        exit 1
+    fi
+fi
+
+# 3. Lint CSS/HTML via the existing Go linter (pkg/lint reads the real web/ files).
+if [ -n "$CSS_HTML" ]; then
+    go test ./pkg/lint/
+fi
+
+exit 0

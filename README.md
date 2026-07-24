@@ -100,6 +100,14 @@ The directory you launch Phi from becomes the default workspace; switch between 
 - If phi runs on a non-default port, set the env var for both: `PHI_PORT=8080 ./phi` + `PHI_PORT=8080 npm run dev` (the flag `-port` alone won't retarget the proxy).
 - Note: :5173 is dev-only; :7070 always serves the embedded (build-time) UI; prod is unchanged.
 
+**Enable the pre-commit hook** (once per clone) so frontend checks run before you commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook (`.githooks/pre-commit`) only acts on commits that touch frontend files: it syntax-checks staged `web/*.js`, and when `*.ts` sources change it runs `typecheck` + `build:web` and blocks if the emitted `web/` tree drifts from `web-src/` (stage the rebuilt files and recommit). It's advisory — bypass with `git commit --no-verify`; CI (`.github/workflows/test.yml`) is the enforced backstop.
+
 ### Flags
 
 | Flag              | Default | Description                                                                                                                        |
