@@ -924,7 +924,18 @@ export class TabManager {
             const preAtBottom = buf && (buf.viewportY >= buf.baseY);
             requestAnimationFrame(() => {
                 if (tabInfo.writeBuffer.length > 0 && !tabInfo.isDead) {
-                    tabInfo.term.write(tabInfo.writeBuffer);
+                    // write(data, cb): cb fires once the chunk is parsed into
+                    // the buffer. Sync the DOM scroll area then — xterm leaves
+                    // it stale during streaming (no reflow), which made the
+                    // first wheel-up compute from a minutes-old scrollTop (the
+                    // "jump") and wheel-down clamp before the real bottom (the
+                    // "stuck below bottom" state). xterm is vendored/pinned
+                    // (web/vendor/xterm.js), so reaching the core viewport is
+                    // version-stable; syncScrollArea(true) is a no-op when
+                    // already in sync.
+                    tabInfo.term.write(tabInfo.writeBuffer, () => {
+                        tabInfo.term._core?.viewport?.syncScrollArea(true);
+                    });
                     tabInfo.writeBuffer = '';
 
                     // Force the scrollbar to reflect the new bottom.
@@ -1436,6 +1447,25 @@ export class TabManager {
             'pointerdown', cancelFollowForUserScroll, { capture: true, passive: true },
         );
 
+        // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
+        // at a fake bottom while real output sits below (viewportY < baseY).
+        // Detect the clamp and scroll the buffer directly — reaching the true
+        // bottom re-engages follow via the scroll listeners in the button
+        // block below. Registered bubble-phase so the opencode capture
+        // handler's stopPropagation keeps opencode tabs out of this path.
+        termContainer.addEventListener('wheel', (e) => {
+            if (e.deltaY <= 0) return;
+            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+            if (!buf || buf.viewportY >= buf.baseY) return;
+            const vp = tabInfo.term.element && tabInfo.term.element.querySelector('.xterm-viewport');
+            if (!vp) return;
+            if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
+                // Same wheel→lines scaling as the opencode handler above.
+                const lines = Math.max(1, Math.min(Math.round(e.deltaY / 40), 8));
+                tabInfo.term.scrollLines(lines);
+            }
+        }, { passive: true });
+
         // Scroll-to-bottom affordance: a small floating button that
         // fades in when the user scrolls up into scrollback, fades out
         // when they return to the live bottom. Click jumps to the
@@ -1496,6 +1526,28 @@ export class TabManager {
                 }
             });
         }
+        // xterm's public onScroll fires only for PROGRAMMATIC scrolls: the
+        // vendored build passes suppressScrollEvent=true for user wheel /
+        // scrollbar input (Viewport._handleScroll), so the two onScroll
+        // subscriptions above never fire for real user gestures. The DOM
+        // 'scroll' event is the signal those gestures do produce. It does
+        // not bubble — listen in the capture phase on termContainer. The
+        // capture listener fires BEFORE xterm's own scroll handler updates
+        // the buffer, so defer one frame (house rAF-coalesce pattern) to
+        // read fresh coordinates.
+        let viewportScrollRafPending = false;
+        termContainer.addEventListener('scroll', () => {
+            if (viewportScrollRafPending) return;
+            viewportScrollRafPending = true;
+            requestAnimationFrame(() => {
+                viewportScrollRafPending = false;
+                updateScrollBtn();
+                const b = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+                if (b && b.viewportY >= b.baseY) {
+                    tabInfo.userFollowBottom = true;
+                }
+            });
+        }, { capture: true, passive: true });
         // Also re-evaluate on every write so a button shown while
         // scrolled up hides itself once new output catches up to bottom.
         const origWrite = tabInfo.term.write.bind(tabInfo.term);
