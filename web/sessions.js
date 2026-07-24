@@ -212,10 +212,18 @@ export class SessionsManager {
             // the chosen UI font / size immediately. terminalFontFamily
             // is read by new terminals (see terminal.js), so no live
             // re-apply needed here.
-            this.app.uiFontFamily = data.ui_font_family || '';
-            this.app.uiFontSize = Number(data.ui_font_size) || 0;
-            this.app.terminalFontFamily = data.terminal_font_family || '';
+            let ls = null;
+            try {
+                ls = JSON.parse(localStorage.getItem('phi_appearance') || 'null');
+            }
+            catch { /* ignore */ }
+            this.app.uiFontFamily = (ls?.ui_font_family ?? data.ui_font_family) || '';
+            this.app.uiFontSize = Number(ls?.ui_font_size ?? data.ui_font_size) || 0;
+            this.app.terminalFontFamily = (ls?.terminal_font_family ?? data.terminal_font_family) || '';
+            this.app.terminalFontSize = Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
+            this.app.customFontName = ls?.custom_font_name || '';
             this.app.applyUIFont?.();
+            await this.app.loadCustomFont?.();
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);

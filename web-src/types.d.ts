@@ -34,6 +34,9 @@ export interface AppLike {
     uiFontFamily?: string;
     uiFontSize?: number;
     terminalFontFamily?: string;
+    terminalFontSize?: number;
+    customFontName?: string;
+    loadCustomFont?: () => Promise<void>;
     openConfigEditor?: (...args: any[]) => void;
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;

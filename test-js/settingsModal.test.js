@@ -10,8 +10,9 @@ const ACCENT_COLORS_KEY_COUNT = 22;
 
 // Settings modal — the new "Config" button in the header pill opens a
 // modal with: 22-swatch accent grid, UI font (select), UI font size
-// (number), terminal font (text), "reuse shell tab" toggle, and an
-// About group showing Φ logo + version + hostname.
+// (number), terminal font (select) + terminal font size (number),
+// "reuse shell tab" toggle, and an About group showing Φ logo +
+// version + hostname.
 //
 // These tests pin the user-visible contract: button presence, swatch
 // count, live-apply (debounced POST), version from cache, mobile
@@ -208,18 +209,18 @@ describe('Settings modal — live apply', () => {
         expect(app.uiFontSize).toBe(18); // still unchanged
     });
 
-    it('terminal font input updates live terminals and persists', async () => {
+    it('terminal font select updates live terminals and persists', async () => {
         vi.useFakeTimers();
         try {
             makeAppDom();
             const app = buildApp();
             app.openSettingsModal();
             await Promise.resolve();
-            const input = document.getElementById('settings-term-font');
-            input.value = 'Fira Code, monospace';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            expect(app.terminalFontFamily).toBe('Fira Code, monospace');
-            expect(app.tabManager.applyFontToAllActiveTerminals).toHaveBeenCalledWith('Fira Code, monospace');
+            const select = document.getElementById('settings-term-font');
+            select.value = "'Fira Code', ui-monospace, monospace";
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            expect(app.terminalFontFamily).toBe("'Fira Code', ui-monospace, monospace");
+            expect(app.tabManager.applyFontToAllActiveTerminals).toHaveBeenCalledWith("'Fira Code', ui-monospace, monospace");
             vi.advanceTimersByTime(400);
             await Promise.resolve();
             expect(app.persistAppearance).toHaveBeenCalled();
@@ -228,14 +229,14 @@ describe('Settings modal — live apply', () => {
         }
     });
 
-    it('terminal font empty input falls back to JetBrains Mono on live terminals', async () => {
+    it('terminal font default option falls back to JetBrains Mono on live terminals', async () => {
         makeAppDom();
         const app = buildApp({ terminalFontFamily: 'Fira Code, monospace' });
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const input = document.getElementById('settings-term-font');
-        input.value = '';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const select = document.getElementById('settings-term-font');
+        select.value = '';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
         expect(app.terminalFontFamily).toBe('');
         expect(app.tabManager.applyFontToAllActiveTerminals).toHaveBeenCalledWith('JetBrains Mono, monospace');
     });
