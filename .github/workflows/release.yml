@@ -33,6 +33,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Build the frontend BEFORE GoReleaser so the embedded web/ (//go:embed
+      # all:web) reflects the current web-src/*.ts, not whatever compiled JS
+      # happened to be committed. Keeps release artifacts authoritative.
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Build web assets
+        run: |
+          npm ci
+          npm run build:web
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
