@@ -302,3 +302,131 @@ describe('BUG-2: phi_kanban_open is set on openBoard and cleared on cleanup', ()
         expect(localStorage.getItem('phi_kanban_open')).toBe('1');
     });
 });
+
+// -- BUG-5 ----------------------------------------------------------------
+// First-click black screen: initTabContainer used to overwrite className
+// with `term-container kanban-panel`, which wiped the `.active` class that
+// createTab → switchTab had just added. .kanban-panel alone is
+// `display:none`, so the kanban panel was invisible even though its
+// content (loading wrapper / login form / board) rendered correctly.
+// Clicking the kanban button or tab again hit switchTab's `activePaneId
+// === paneId` early-return at terminal.js:~1640, which never re-added
+// `.active` — so the black screen was permanent until hard-refresh.
+//
+// Regression net: the first-open path with the REAL initTabContainer (not
+// stubbed) must leave .active on the termContainer.
+describe('BUG-5: openBoard (real initTabContainer) preserves .active on first open', () => {
+    function buildRealTabManager(app) {
+        app.tabManager = Object.create(TabManager.prototype);
+        Object.assign(app.tabManager, {
+            app,
+            tabs: new Map(),
+            activePaneId: null,
+            inputBarContainer: document.getElementById('input-bar-container'),
+            presetsContainer: document.getElementById('presets-container'),
+            tabsContainer: document.getElementById('tabs-container'),
+            terminalsWrapper: document.getElementById('terminals-wrapper'),
+            emptyState: document.getElementById('empty-state'),
+            saveTabsState: vi.fn(),
+            hideEmptyState: vi.fn(),
+            updateTabOverflowChip: vi.fn(),
+            updateSidebarLegend: vi.fn(),
+            switchTab: TabManager.prototype.switchTab,
+            createTab: TabManager.prototype.createTab,
+        });
+        app.tabManager.setupEventListeners = vi.fn();
+    }
+
+    it('first-open: termContainer has .active AND children (no black screen)', async () => {
+        const fx = fixtures();
+        const app = makeApp(fx);
+        buildRealTabManager(app);
+        const km = Object.create(KanbanManager.prototype);
+        km.app = app;
+        km.activeDetailPanel = null;
+        km.activeOverlay = null;
+        km.escListener = null;
+        km.taskCache = {};
+        km._dragActive = false;
+        // Real methods — no stubs.
+        km.openBoard = KanbanManager.prototype.openBoard;
+        km.initTabContainer = KanbanManager.prototype.initTabContainer;
+
+        sessionStorage.clear();
+        localStorage.clear();
+        global.fetch = vi.fn(async () => ({ ok: false }));
+
+        await km.openBoard();
+
+        const tab = app.tabManager.tabs.get('kanban-board');
+        expect(tab).toBeDefined();
+        const tc = tab.termContainer;
+        expect(tc.classList.contains('kanban-panel')).toBe(true);
+        expect(tc.classList.contains('active')).toBe(true);
+        // Either loading wrapper, login form, or board — never empty.
+        expect(tc.children.length).toBeGreaterThan(0);
+    });
+
+    it('second openBoard (existing-tab path) keeps .active after re-init', async () => {
+        const fx = fixtures();
+        const app = makeApp(fx);
+        buildRealTabManager(app);
+        const km = Object.create(KanbanManager.prototype);
+        km.app = app;
+        km.activeDetailPanel = null;
+        km.activeOverlay = null;
+        km.escListener = null;
+        km.taskCache = {};
+        km._dragActive = false;
+        km.openBoard = KanbanManager.prototype.openBoard;
+        km.initTabContainer = KanbanManager.prototype.initTabContainer;
+
+        sessionStorage.clear();
+        localStorage.clear();
+        global.fetch = vi.fn(async () => ({ ok: false }));
+
+        // First open
+        await km.openBoard();
+        const tc = app.tabManager.tabs.get('kanban-board').termContainer;
+        expect(tc.classList.contains('active')).toBe(true);
+
+        // Second click — BUG-4 path: openBoard sees existing tab, calls
+        // initTabContainer again. The .active class must survive.
+        await km.openBoard();
+        expect(tc.classList.contains('kanban-panel')).toBe(true);
+        expect(tc.classList.contains('active')).toBe(true);
+        expect(tc.children.length).toBeGreaterThan(0);
+    });
+
+    it('clicking the kanban tab element does not lose .active', async () => {
+        const fx = fixtures();
+        const app = makeApp(fx);
+        buildRealTabManager(app);
+        const km = Object.create(KanbanManager.prototype);
+        km.app = app;
+        km.activeDetailPanel = null;
+        km.activeOverlay = null;
+        km.escListener = null;
+        km.taskCache = {};
+        km._dragActive = false;
+        km.openBoard = KanbanManager.prototype.openBoard;
+        km.initTabContainer = KanbanManager.prototype.initTabContainer;
+
+        sessionStorage.clear();
+        localStorage.clear();
+        global.fetch = vi.fn(async () => ({ ok: false }));
+
+        await km.openBoard();
+        const tab = app.tabManager.tabs.get('kanban-board');
+        const tc = tab.termContainer;
+        // After first open, .active is present.
+        expect(tc.classList.contains('active')).toBe(true);
+
+        // Switch to a non-existent tab — no-op in this fixture (activePaneId
+        // unchanged), so .active stays. The point of the test is the
+        // already-active click path: when user clicks the active kanban tab,
+        // switchTab's early-return must not strip .active.
+        await app.tabManager.switchTab('kanban-board');
+        expect(tc.classList.contains('active')).toBe(true);
+    });
+});

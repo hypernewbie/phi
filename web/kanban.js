@@ -63,7 +63,13 @@ export class KanbanManager {
     }
     async initTabContainer(container, isAutoRetry = false) {
         container.innerHTML = '';
-        container.className = 'term-container kanban-panel';
+        // Add kanban-panel without overwriting className — createTab →
+        // switchTab already added `.active` to make the panel visible, and
+        // blowing it away leaves the kanban invisible (display:none from the
+        // base .kanban-panel rule). Bug was a permanent black screen on first
+        // click; subsequent header-kanban-btn clicks hit the `activePaneId ===
+        // paneId` early-return in switchTab, which never re-adds `.active`.
+        container.classList.add('kanban-panel');
         const token = sessionStorage.getItem('vikunja_token');
         if (token) {
             await this.loadAndRenderBoard(container, isAutoRetry);
