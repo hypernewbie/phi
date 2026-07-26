@@ -7542,3 +7542,99 @@ html, body {
 }
 .kdp-timeline-filed-point { fill: var(--text-muted); }
 .kdp-timeline-completed-point { fill: var(--accent); }
+
+/* Kanban feature portfolio stats. */
+.kanban-features-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kanban-features-actions .toolbar-btn {
+    height: 28px;
+    padding: 0 9px;
+    font-size: 11px;
+}
+
+.kanban-features-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 24px;
+    border: 1px dashed var(--bg-border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    text-align: center;
+    font: 12px var(--font-ui);
+}
+
+.kanban-features-empty strong { color: var(--text-primary); font-weight: 600; }
+
+.kanban-stats-view {
+    width: min(980px, 100%);
+    height: 100%;
+    margin: 0 auto;
+    padding: 24px 28px;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.kanban-stats-heading { margin-bottom: 18px; }
+.kanban-stats-heading h3 { margin: 0 0 4px; color: var(--text-primary); font: 600 18px var(--font-ui); }
+.kanban-stats-heading p { margin: 0; color: var(--text-muted); font: 12px var(--font-ui); }
+
+.kanban-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.kanban-stat-card,
+.kanban-stats-chart-card {
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    background: var(--bg-panel);
+}
+
+.kanban-stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-height: 102px;
+    padding: 14px;
+    box-sizing: border-box;
+}
+
+.kanban-stat-card > span,
+.kanban-stat-card em {
+    color: var(--text-muted);
+    font: 10px var(--font-mono);
+    font-style: normal;
+}
+
+.kanban-stat-card > span { text-transform: uppercase; letter-spacing: 0.05em; }
+.kanban-stat-card > strong { color: var(--text-primary); font: 600 23px var(--font-ui); }
+.kanban-stat-card > strong small { color: var(--text-muted); font: 11px var(--font-mono); }
+.kanban-stat-card--forecast > strong { font-size: 15px; line-height: 1.3; }
+.kanban-stat-card--forecast > span { color: var(--text-muted); font: 11px/1.35 var(--font-ui); }
+
+.kanban-stats-chart-card { padding: 16px; }
+.kanban-stats-chart-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.kanban-stats-chart-heading h4 { margin: 0 0 3px; color: var(--text-primary); font: 600 13px var(--font-ui); }
+.kanban-stats-chart-heading p { margin: 0; color: var(--text-muted); font: 11px var(--font-ui); }
+.kanban-stats-chart-heading > span { align-self: center; color: var(--accent); font: 11px var(--font-mono); white-space: nowrap; }
+
+.kanban-velocity-chart svg { display: block; width: 100%; height: 132px; overflow: visible; }
+.kanban-velocity-baseline { stroke: var(--bg-border); stroke-width: 1; }
+.kanban-velocity-bar { fill: var(--accent); opacity: 0.82; }
+.kanban-velocity-bar:hover { opacity: 1; }
+.kanban-velocity-chart > div { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-muted); font: 9px var(--font-mono); }
+
+@media (max-width: 768px) {
+    .kanban-stats-view { padding: 16px 12px; }
+    .kanban-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kanban-stat-card { min-height: 94px; padding: 12px; }
+    .kanban-features-heading { gap: 10px; }
+    .kanban-features-actions { align-items: flex-end; flex-direction: column; }
+}

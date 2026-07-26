@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
-import { buildFeatures, featureProgress, featureTimeline } from '../web/kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline } from '../web/kanban-features.js';
 
 setupDomHarness();
 
@@ -16,6 +16,7 @@ function manager() {
     c.currentProjectId = 9;
     c.currentViewId = 5;
     c.boardMode = 'features';
+    c.showDoneFeatures = false;
     return c;
 }
 
@@ -52,6 +53,27 @@ describe('native Vikunja feature helpers', () => {
         expect(featureTimeline([child(1, false, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z')]))
             .toEqual([{ date: '2026-07-01', filed: 1, completed: 0 }]);
     });
+
+    it('calculates 28-day feature velocity and a forecast from parent completion', () => {
+        const features = buildFeatures([
+            { id: 1, done: true, done_at: '2026-07-27T10:00:00Z', related_tasks: { subtask: [child(2, true)] } },
+            { id: 3, done: false, related_tasks: { subtask: [child(4, false)] } },
+        ]);
+        const stats = featureStats(features, new Date('2026-07-28T12:00:00Z'));
+
+        expect(stats).toMatchObject({
+            totalFeatures: 2,
+            completedFeatures: 1,
+            featurePercent: 50,
+            totalSubtasks: 2,
+            completedSubtasks: 1,
+            velocityPerDay: 1 / 28,
+            remainingFeatures: 1,
+            estimatedDaysRemaining: 28,
+            projectedCompletionDate: '2026-08-25'
+        });
+        expect(stats.dailyCompletions.find(day => day.date === '2026-07-27')).toMatchObject({ completed: 1 });
+    });
 });
 
 describe('Feature surface', () => {
@@ -78,6 +100,42 @@ describe('Feature surface', () => {
 
         container.querySelector('[data-kanban-mode="board"]').click();
         expect(container.querySelector('.kanban-view-btn.active').dataset.kanbanMode).toBe('board');
+    });
+
+    it('hides completed features until explicitly shown', () => {
+        const c = manager();
+        c.taskCache = {
+            1: { id: 1, title: 'Done', done: true, related_tasks: { subtask: [child(2, true)] } },
+            3: { id: 3, title: 'Open', done: false, related_tasks: { subtask: [child(4, false)] } },
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
+        expect(container.querySelectorAll('.kanban-feature-row')).toHaveLength(1);
+        expect(container.querySelector('#kanban-show-done-features-btn').textContent).toContain('Show done (1)');
+
+        container.querySelector('#kanban-show-done-features-btn').click();
+        expect(container.querySelectorAll('.kanban-feature-row')).toHaveLength(2);
+        expect(container.querySelector('#kanban-show-done-features-btn').textContent).toContain('Hide done');
+    });
+
+    it('renders a portfolio Stats view without task search controls', () => {
+        const c = manager();
+        c.boardMode = 'stats';
+        c.taskCache = {
+            1: { id: 1, done: true, done_at: new Date().toISOString(), related_tasks: { subtask: [child(2, true)] } },
+            3: { id: 3, done: false, related_tasks: { subtask: [child(4, false)] } },
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
+
+        expect(container.querySelector('.kanban-stats-view')).toBeTruthy();
+        expect(container.textContent).toContain('Features done');
+        expect(container.textContent).toContain('Features completed by day');
+        expect(container.querySelector('#kanban-search-input')).toBeNull();
     });
 
     it('renders subtasks and their burn-up chart in the detail drawer', () => {
