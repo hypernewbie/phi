@@ -3100,14 +3100,14 @@ export class TabManager {
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         const sent = this.sendInput(activeTab, bytes);
         if (!sent) return;
-        
+
         const isMobile = window.innerWidth <= 768;
         if (isMobile && !activeTab.directMode && this.inputTextArea) {
             this.inputTextArea.focus({ preventScroll: true });
         } else {
             this.focusActiveTerminal();
         }
-        
+
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
@@ -3116,6 +3116,43 @@ export class TabManager {
                 this.app.syncRemoteClipboard();
             }, 300);
         }
+    }
+
+    /**
+     * Send input to a SPECIFIC tab — does NOT re-resolve the active tab.
+     * Thin wrapper over sendInput() (which owns the disconnect toast +
+     * reconnect overlay) plus the scroll follow-up. Deliberately does NOT
+     * steal focus — delayed callbacks must not refocus a tab the user has
+     * switched away from. Use from setTimeout chains or anywhere the
+     * active tab may have changed between scheduling and firing.
+     */
+    sendToTab(tabInfo, payload) {
+        const sent = this.sendInput(tabInfo, payload);
+        if (sent) this._spamScrollToBottom(tabInfo);
+        return sent;
+    }
+
+    /**
+     * Sends a slash command as one atomic bracketed-paste write. pkg/pty's
+     * Write() (pty.go:235) splits the trailing \r into its own ConPTY write
+     * with a crGapDur pause, so Enter registers as a distinct keypress on
+     * Windows with no frontend delay needed. Same atomic form the
+     * initial-cmd path (terminal.js:1421) has always used. Replaces the
+     * prior split (sendRawInput + setTimeout(sendRawInput('\r'), 200))
+     * which re-resolved the active tab in the delayed callback.
+     * Called synchronously at click time (tab is still active), so it
+     * preserves sendRawInput's focus behavior.
+     */
+    sendSlashCommand(tabInfo, cmd) {
+        const sent = this.sendToTab(tabInfo, `\x1b[200~${cmd}\x1b[201~\r`);
+        if (!sent) return false;
+        const isMobile = window.innerWidth <= 768;
+        if (isMobile && !tabInfo.directMode && this.inputTextArea) {
+            this.inputTextArea.focus({ preventScroll: true });
+        } else {
+            this.focusActiveTerminal();
+        }
+        return true;
     }
     
     _showReconnectOverlay(tabInfo) {
@@ -3982,9 +4019,11 @@ export class TabManager {
                         const activeTab = this.getActiveTab();
                         if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                             const cmd = p.value.slice(0, -1);
-                            this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
+                            // Pinned to the click-time tab so the delayed \r
+                            // can't land in a different session.
+                            this.sendToTab(activeTab, '\x1b[200~' + cmd + '\x1b[201~');
                             setTimeout(() => {
-                                this.sendRawInput('\r');
+                                this.sendToTab(activeTab, '\r');
                             }, 200);
                         } else {
                             this.sendRawInput(p.value);
@@ -4120,9 +4159,11 @@ export class TabManager {
                 const activeTab = this.getActiveTab();
                 if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                     const cmd = p.value.slice(0, -1);
-                    this.sendRawInput('\x1b[200~' + cmd + '\x1b[201~');
+                    // Pinned to the click-time tab so the delayed \r
+                    // can't land in a different session.
+                    this.sendToTab(activeTab, '\x1b[200~' + cmd + '\x1b[201~');
                     setTimeout(() => {
-                        this.sendRawInput('\r');
+                        this.sendToTab(activeTab, '\r');
                     }, 200);
                 } else {
                     this.sendRawInput(p.value);
@@ -4396,20 +4437,24 @@ export class TabManager {
             btn.innerText = model;
             btn.addEventListener('click', () => {
                 if (backend === 'opencode') {
-                    this.sendRawInput('/models');
+                    // Pinned to the click-time tab (captured at render, line 4376)
+                    // so the puppet sequence can't be redirected by a tab switch
+                    // mid-chain. Timing unchanged from prior behavior.
+                    this.sendToTab(activeTab, '/models');
                     setTimeout(() => {
-                        this.sendRawInput('\r');
+                        this.sendToTab(activeTab, '\r');
                         setTimeout(() => {
-                            this.sendRawInput(model);
+                            this.sendToTab(activeTab, model);
                             setTimeout(() => {
-                                this.sendRawInput('\r');
+                                this.sendToTab(activeTab, '\r');
                             }, 350);
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    this.sendRawInput(`\x1b[200~/model ${model}\x1b[201~`);
+                    // Pinned: same race window as opencode, only 200ms but real.
+                    this.sendToTab(activeTab, `\x1b[200~/model ${model}\x1b[201~`);
                     setTimeout(() => {
-                        this.sendRawInput('\r');
+                        this.sendToTab(activeTab, '\r');
                     }, 200);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
