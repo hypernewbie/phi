@@ -1,6 +1,6 @@
 import type { AppLike } from './types.js';
 import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor } from './util.js';
-import { buildFeatures, featureProgress, featureStats, featureTimeline, type FeatureDailyCompletion, type FeatureProgress } from './kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline, type FeatureProgress } from './kanban-features.js';
 
 export class KanbanManager {
     app: AppLike;
@@ -9,6 +9,7 @@ export class KanbanManager {
     escListener: ((e: KeyboardEvent) => void) | null;
     taskCache: Record<string, any>;
     _dragActive: boolean;
+    statsCharts: any[];
     boardMode: 'board' | 'features' | 'stats';
     showDoneFeatures: boolean;
     currentProjectId!: number | null;
@@ -22,6 +23,7 @@ export class KanbanManager {
         this.escListener = null;
         this.taskCache = {};
         this._dragActive = false;
+        this.statsCharts = [];
         this.boardMode = 'board';
         this.showDoneFeatures = false;
     }
@@ -73,6 +75,7 @@ export class KanbanManager {
         }
         this.activeOverlay = null;
         this._dragActive = false;
+        this.destroyStatsCharts();
         localStorage.removeItem('phi_kanban_open');
     }
 
@@ -361,6 +364,7 @@ export class KanbanManager {
     }
 
     renderBoardLayout(container: HTMLElement, projects: any[], currentProject: any, kanbanView: any, bucketsWithTasks: any[] | null): void {
+        this.destroyStatsCharts();
         let boardContentHtml = '';
 
         if (!kanbanView) {
@@ -702,6 +706,10 @@ export class KanbanManager {
             });
         });
 
+        if (this.boardMode === 'stats') {
+            this.initStatsCharts(container);
+        }
+
         // Initialize Sortable if buckets are rendered
         if (this.boardMode === 'board' && kanbanView && bucketsWithTasks && bucketsWithTasks.length > 0) {
             this.initSortable(container, bucketsWithTasks);
@@ -796,42 +804,196 @@ export class KanbanManager {
                         ${forecast}
                     </section>
                 </div>
-                <section class="kanban-stats-chart-card">
-                    <div class="kanban-stats-chart-heading">
-                        <div>
-                            <h4>Features completed by day</h4>
-                            <p>Last ${stats.velocityWindowDays} days. Forecast uses this rolling average.</p>
+                <div class="kanban-stats-charts">
+                    <section class="kanban-stats-chart-card kanban-stats-chart-card--health">
+                        <div class="kanban-stats-chart-heading">
+                            <div><h4>Feature health</h4><p>Done vs open feature parents.</p></div>
                         </div>
-                        <span>${stats.completedInWindow} completed</span>
-                    </div>
-                    ${this.renderFeatureVelocityChart(stats.dailyCompletions)}
-                </section>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-health-chart"></canvas></div>
+                    </section>
+                    <section class="kanban-stats-chart-card kanban-stats-chart-card--burnup">
+                        <div class="kanban-stats-chart-heading">
+                            <div><h4>Scope burn-up</h4><p>Features filed against features marked done.</p></div>
+                        </div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-burnup-chart"></canvas></div>
+                    </section>
+                    <section class="kanban-stats-chart-card kanban-stats-chart-card--velocity">
+                        <div class="kanban-stats-chart-heading">
+                            <div><h4>Completion velocity</h4><p>Last ${stats.velocityWindowDays} days, with rolling daily average.</p></div>
+                            <span>${stats.completedInWindow} completed</span>
+                        </div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-velocity-chart"></canvas></div>
+                    </section>
+                    <section class="kanban-stats-chart-card kanban-stats-chart-card--flow">
+                        <div class="kanban-stats-chart-heading">
+                            <div><h4>Project flow</h4><p>Tasks currently distributed across Kanban buckets.</p></div>
+                        </div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-bucket-flow-chart"></canvas></div>
+                    </section>
+                </div>
             </div>
         `;
     }
 
-    renderFeatureVelocityChart(days: FeatureDailyCompletion[]): string {
-        const width = 560;
-        const height = 116;
-        const maximum = Math.max(1, ...days.map(day => day.completed));
-        const barSlot = width / days.length;
-        const barWidth = Math.max(2, barSlot - 3);
-        const barHeight = (value: number) => (value / maximum) * (height - 10);
-        const first = new Date(`${days[0].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
-        const last = new Date(`${days[days.length - 1].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    destroyStatsCharts(): void {
+        (this.statsCharts || []).forEach(chart => {
+            try {
+                chart.destroy();
+            } catch (_) {
+                // A detached canvas can already have been cleaned up by Chart.
+            }
+        });
+        this.statsCharts = [];
+    }
 
-        return `
-            <div class="kanban-velocity-chart" aria-label="Features completed by day">
-                <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Feature completions from ${first} to ${last}">
-                    <line class="kanban-velocity-baseline" x1="0" y1="${height - 1}" x2="${width}" y2="${height - 1}"></line>
-                    ${days.map((day, index) => {
-                        const bar = barHeight(day.completed);
-                        return `<rect class="kanban-velocity-bar" x="${(index * barSlot + 1.5).toFixed(1)}" y="${(height - 1 - bar).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${bar.toFixed(1)}"><title>${day.date}: ${day.completed} feature${day.completed === 1 ? '' : 's'} completed</title></rect>`;
-                    }).join('')}
-                </svg>
-                <div><span>${first}</span><span>${last}</span></div>
-            </div>
-        `;
+    chartColor(name: string, fallback: string): string {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+    }
+
+    chartColorWithAlpha(color: string, alpha: number): string {
+        const hex = color.replace('#', '').trim();
+        if (/^[0-9a-f]{3}$/i.test(hex)) {
+            const [r, g, b] = hex.split('').map(component => parseInt(component + component, 16));
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+        if (/^[0-9a-f]{6}$/i.test(hex)) {
+            const r = parseInt(hex.slice(0, 2), 16);
+            const g = parseInt(hex.slice(2, 4), 16);
+            const b = parseInt(hex.slice(4, 6), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+        return color;
+    }
+
+    chartDateLabel(date: string): string {
+        return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    }
+
+    bucketFlow(): { labels: string[]; values: number[] } {
+        const buckets = (this.buckets || []).filter(bucket => Array.isArray(bucket.tasks));
+        if (buckets.length === 0) return { labels: ['No bucketed tasks'], values: [1] };
+        return {
+            labels: buckets.map(bucket => bucket.title || 'Untitled'),
+            values: buckets.map(bucket => bucket.tasks.length)
+        };
+    }
+
+    initStatsCharts(container: HTMLElement): void {
+        const Chart = window.Chart;
+        if (!Chart) return;
+
+        const features = buildFeatures(Object.values(this.taskCache));
+        const stats = featureStats(features);
+        if (stats.totalFeatures === 0) return;
+
+        const accent = this.chartColor('--accent', '#7c6af7');
+        const muted = this.chartColor('--text-muted', '#a4a3a9');
+        const border = this.chartColor('--bg-border', '#303038');
+        const panel = this.chartColor('--bg-panel', '#17171c');
+        const text = this.chartColor('--text-primary', '#f4f4f5');
+        const uiFont = this.chartColor('--font-ui', 'Inter, system-ui, sans-serif');
+        const monoFont = this.chartColor('--font-mono', 'ui-monospace, monospace');
+        const accentFill = this.chartColorWithAlpha(accent, 0.18);
+        const accentMid = this.chartColorWithAlpha(accent, 0.58);
+        const accentSoft = this.chartColorWithAlpha(accent, 0.28);
+        const quiet = this.chartColorWithAlpha(muted, 0.28);
+        const baseOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 360 },
+            plugins: {
+                legend: {
+                    labels: { color: muted, boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { family: uiFont, size: 11 } }
+                },
+                tooltip: {
+                    backgroundColor: panel,
+                    borderColor: border,
+                    borderWidth: 1,
+                    titleColor: text,
+                    bodyColor: muted,
+                    padding: 10
+                }
+            }
+        };
+        const push = (canvasId: string, config: any) => {
+            const canvas = container.querySelector(`#${canvasId}`) as HTMLCanvasElement | null;
+            if (canvas) this.statsCharts.push(new Chart(canvas, config));
+        };
+
+        push('kanban-feature-health-chart', {
+            type: 'doughnut',
+            data: {
+                labels: ['Done', 'Open'],
+                datasets: [{
+                    data: [stats.completedFeatures, stats.remainingFeatures],
+                    backgroundColor: [accent, quiet],
+                    borderColor: [panel, panel],
+                    borderWidth: 3,
+                    hoverOffset: 5
+                }]
+            },
+            options: {
+                ...baseOptions,
+                cutout: '72%',
+                plugins: {
+                    ...baseOptions.plugins,
+                    title: { display: true, text: `${stats.featurePercent}% complete`, color: text, font: { family: uiFont, size: 15, weight: '600' } }
+                }
+            }
+        });
+
+        const burnup = portfolioTimeline(features);
+        const burnupLabels = burnup.length > 0 ? burnup.map(point => this.chartDateLabel(point.date)) : ['Today'];
+        const filed = burnup.length > 0 ? burnup.map(point => point.filed) : [stats.totalFeatures];
+        const completed = burnup.length > 0 ? burnup.map(point => point.completed) : [stats.completedFeatures];
+        push('kanban-feature-burnup-chart', {
+            type: 'line',
+            data: {
+                labels: burnupLabels,
+                datasets: [
+                    { label: 'Filed', data: filed, borderColor: muted, backgroundColor: quiet, borderDash: [5, 4], tension: 0.25, pointRadius: 2, fill: true },
+                    { label: 'Completed', data: completed, borderColor: accent, backgroundColor: accentFill, tension: 0.25, pointRadius: 2, fill: true }
+                ]
+            },
+            options: {
+                ...baseOptions,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: { grid: { display: false }, border: { color: border }, ticks: { color: muted, maxTicksLimit: 6, font: { family: monoFont, size: 10 } } },
+                    y: { beginAtZero: true, grid: { color: this.chartColorWithAlpha(border, 0.65) }, border: { color: border }, ticks: { color: muted, precision: 0, font: { family: monoFont, size: 10 } } }
+                }
+            }
+        });
+
+        push('kanban-feature-velocity-chart', {
+            type: 'bar',
+            data: {
+                labels: stats.dailyCompletions.map(day => this.chartDateLabel(day.date)),
+                datasets: [
+                    { type: 'bar', label: 'Completed', data: stats.dailyCompletions.map(day => day.completed), backgroundColor: accentMid, borderRadius: 3, borderSkipped: false },
+                    { type: 'line', label: '28-day average', data: stats.dailyCompletions.map(() => stats.velocityPerDay), borderColor: accent, borderDash: [4, 3], pointRadius: 0, borderWidth: 1.5 }
+                ]
+            },
+            options: {
+                ...baseOptions,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: { grid: { display: false }, border: { color: border }, ticks: { color: muted, maxTicksLimit: 7, font: { family: monoFont, size: 9 } } },
+                    y: { beginAtZero: true, grid: { color: this.chartColorWithAlpha(border, 0.65) }, border: { color: border }, ticks: { color: muted, precision: 0, font: { family: monoFont, size: 10 } } }
+                }
+            }
+        });
+
+        const flow = this.bucketFlow();
+        const flowColors = flow.labels.map((_, index) => [accent, accentMid, accentSoft, quiet][index % 4]);
+        push('kanban-bucket-flow-chart', {
+            type: 'doughnut',
+            data: {
+                labels: flow.labels,
+                datasets: [{ data: flow.values, backgroundColor: flowColors, borderColor: [panel], borderWidth: 3, hoverOffset: 5 }]
+            },
+            options: { ...baseOptions, cutout: '62%' }
+        });
     }
 
     renderFeatureProgress(progress: FeatureProgress): string {
