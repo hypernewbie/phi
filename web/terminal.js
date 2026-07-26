@@ -4448,8 +4448,20 @@ export class TabManager {
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    // Atomic paste+Enter (see TabManager.sendSlashCommand).
-                    this.sendSlashCommand(activeTab, `/model ${model}`);
+                    // Picker routing — the `/model <name>` exact-match path
+                    // is flaky in pi 0.81.x (sometimes opens picker, sometimes
+                    // filters to nothing, sometimes works). The picker is
+                    // reliable: open it, type the model name as filter, Enter
+                    // to select the highlighted entry. Same shape as the
+                    // opencode branch above but with no leading \r (pi's
+                    // picker opens on /model\r with the search box focused).
+                    this.sendSlashCommand(activeTab, '/model');
+                    setTimeout(() => {
+                        this.sendToTab(activeTab, model);
+                        setTimeout(() => {
+                            this.sendToTab(activeTab, '\r');
+                        }, 400);
+                    }, 500);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
                 }
