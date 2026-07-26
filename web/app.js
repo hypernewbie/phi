@@ -955,41 +955,97 @@ export class App {
         behGroup.appendChild(reuseRow);
 
         // Security group ────────────────────────────────────────
+        const PASSWORD_MIN_LENGTH = 8;
         const securityGroup = this._buildSettingsGroup('Security');
         body.appendChild(securityGroup);
-        const passwordRow = document.createElement('div');
-        passwordRow.className = 'settings-row';
-        const passwordLabel = document.createElement('label');
-        passwordLabel.htmlFor = 'settings-access-password';
-        passwordLabel.textContent = 'Access password';
-        passwordRow.appendChild(passwordLabel);
-        const passwordInput = document.createElement('input');
-        passwordInput.id = 'settings-access-password';
-        passwordInput.type = 'password';
-        passwordInput.autocomplete = 'new-password';
-        passwordInput.placeholder = this.accessAuthEnabled ? 'New password' : 'Set a password';
-        passwordRow.appendChild(passwordInput);
-        securityGroup.appendChild(passwordRow);
-        const passwordActionRow = document.createElement('div');
-        passwordActionRow.className = 'settings-row';
-        const passwordState = document.createElement('span');
-        passwordState.className = 'settings-access-state';
-        passwordState.textContent = this.accessAuthEnabled ? 'Enabled' : 'Disabled';
-        passwordActionRow.appendChild(passwordState);
-        const passwordActions = document.createElement('div');
-        passwordActions.className = 'settings-access-actions';
+
+        // Header row: label + state dot
+        const headerRow = document.createElement('div');
+        headerRow.className = 'settings-row settings-access-header';
+        const headerLabel = document.createElement('span');
+        headerLabel.className = 'settings-access-title';
+        headerLabel.textContent = 'Access password';
+        const stateDot = document.createElement('span');
+        stateDot.className = 'settings-access-dot ' + (this.accessAuthEnabled ? 'is-on' : 'is-off');
+        const stateText = document.createElement('span');
+        stateText.className = 'settings-access-state-text';
+        stateText.textContent = this.accessAuthEnabled ? 'Enabled' : 'Disabled';
+        headerRow.append(headerLabel, stateDot, stateText);
+        securityGroup.appendChild(headerRow);
+
+        // New + confirm inputs. Two clean rows.
+        const newInput = document.createElement('input');
+        newInput.type = 'password';
+        newInput.id = 'settings-access-new';
+        newInput.autocomplete = 'new-password';
+        newInput.placeholder = 'New password';
+        const newRow = document.createElement('div');
+        newRow.className = 'settings-row';
+        newRow.appendChild(newInput);
+        securityGroup.appendChild(newRow);
+
+        const confirmInput = document.createElement('input');
+        confirmInput.type = 'password';
+        confirmInput.id = 'settings-access-confirm';
+        confirmInput.autocomplete = 'new-password';
+        confirmInput.placeholder = 'Confirm new password';
+        const confirmRow = document.createElement('div');
+        confirmRow.className = 'settings-row';
+        confirmRow.appendChild(confirmInput);
+        securityGroup.appendChild(confirmRow);
+
+        // Hint line + inline error (replaces per-row toast noise).
+        const hintRow = document.createElement('div');
+        hintRow.className = 'settings-row settings-access-hint-row';
+        const hint = document.createElement('span');
+        hint.className = 'settings-access-hint';
+        hint.textContent = `${PASSWORD_MIN_LENGTH}+ characters.`;
+        const inlineError = document.createElement('span');
+        inlineError.className = 'settings-access-error';
+        inlineError.setAttribute('role', 'alert');
+        hintRow.append(hint, inlineError);
+        securityGroup.appendChild(hintRow);
+
+        // Primary button + Remove link on a single row, right-aligned.
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'settings-row settings-access-actions-row';
         const setPasswordBtn = document.createElement('button');
-        setPasswordBtn.className = 'btn btn-primary';
+        setPasswordBtn.className = 'btn btn-accent settings-access-primary';
         setPasswordBtn.type = 'button';
-        setPasswordBtn.textContent = this.accessAuthEnabled ? 'Change' : 'Set password';
-        const clearPasswordBtn = document.createElement('button');
-        clearPasswordBtn.className = 'btn';
-        clearPasswordBtn.type = 'button';
-        clearPasswordBtn.textContent = 'Clear';
-        clearPasswordBtn.disabled = !this.accessAuthEnabled;
-        passwordActions.append(setPasswordBtn, clearPasswordBtn);
-        passwordActionRow.appendChild(passwordActions);
-        securityGroup.appendChild(passwordActionRow);
+        setPasswordBtn.textContent = this.accessAuthEnabled ? 'Update password' : 'Set password';
+
+        const removeLink = document.createElement('button');
+        removeLink.className = 'settings-access-remove-link';
+        removeLink.type = 'button';
+        removeLink.textContent = '·  Remove password';
+        removeLink.hidden = !this.accessAuthEnabled;
+
+        const confirmRemoveBtn = document.createElement('button');
+        confirmRemoveBtn.className = 'btn btn-red settings-access-confirm-remove';
+        confirmRemoveBtn.type = 'button';
+        confirmRemoveBtn.textContent = 'Confirm remove';
+        confirmRemoveBtn.hidden = true;
+
+        const actionsSpacer = document.createElement('span');
+        actionsSpacer.className = 'settings-access-spacer';
+        actionsRow.append(actionsSpacer, setPasswordBtn, removeLink, confirmRemoveBtn);
+        securityGroup.appendChild(actionsRow);
+
+        const showError = (msg) => {
+            inlineError.textContent = msg;
+            if (msg) {
+                newInput.classList.add('is-invalid');
+                confirmInput.classList.add('is-invalid');
+            } else {
+                newInput.classList.remove('is-invalid');
+                confirmInput.classList.remove('is-invalid');
+            }
+        };
+        const clearInputs = () => {
+            newInput.value = '';
+            confirmInput.value = '';
+            showError('');
+        };
 
         // About group ───────────────────────────────────────────
         const aboutGroup = this._buildSettingsGroup('About');
@@ -1113,37 +1169,65 @@ export class App {
             }
         });
         setPasswordBtn.addEventListener('click', async () => {
+            const newPw = newInput.value;
+            const confirmPw = confirmInput.value;
+            if (!newPw || newPw.length < PASSWORD_MIN_LENGTH) {
+                showError(`At least ${PASSWORD_MIN_LENGTH} characters.`);
+                newInput.focus();
+                return;
+            }
+            if (newPw !== confirmPw) {
+                showError('Passwords don\u2019t match.');
+                confirmInput.focus();
+                return;
+            }
             setPasswordBtn.disabled = true;
+            showError('');
             try {
-                await setAccessPassword(passwordInput.value);
-                passwordInput.value = '';
+                await setAccessPassword(newPw);
+                clearInputs();
                 this.accessAuthEnabled = true;
-                passwordState.textContent = 'Enabled';
-                passwordInput.placeholder = 'New password';
-                setPasswordBtn.textContent = 'Change';
-                clearPasswordBtn.disabled = false;
-                this.showToast('Access password saved', { type: 'success' });
+                stateDot.className = 'settings-access-dot is-on';
+                stateText.textContent = 'Enabled';
+                setPasswordBtn.textContent = 'Update password';
+                removeLink.hidden = false;
+                confirmRemoveBtn.hidden = true;
+                this.showToast('Password updated', { type: 'success' });
             } catch (err) {
                 this.showToast(err instanceof Error ? err.message : 'Unable to save access password', { type: 'error' });
             } finally {
                 setPasswordBtn.disabled = false;
             }
         });
-        clearPasswordBtn.addEventListener('click', async () => {
-            if (!window.confirm('Disable Phi access password?')) return;
-            clearPasswordBtn.disabled = true;
+
+        // Two-step Remove: click link → reveal Confirm button → click that.
+        // No window.confirm(); the session cookie authorizes the action.
+        removeLink.addEventListener('click', () => {
+            removeLink.hidden = true;
+            confirmRemoveBtn.hidden = false;
+            confirmRemoveBtn.focus();
+        });
+        confirmRemoveBtn.addEventListener('click', async () => {
+            confirmRemoveBtn.disabled = true;
             try {
                 await clearAccessPassword();
                 this.accessAuthEnabled = false;
-                passwordState.textContent = 'Disabled';
-                passwordInput.placeholder = 'Set a password';
+                stateDot.className = 'settings-access-dot is-off';
+                stateText.textContent = 'Disabled';
                 setPasswordBtn.textContent = 'Set password';
-                this.showToast('Access password disabled', { type: 'success' });
+                removeLink.hidden = true;
+                confirmRemoveBtn.hidden = true;
+                this.showToast('Password removed', { type: 'success' });
             } catch (err) {
                 this.showToast(err instanceof Error ? err.message : 'Unable to clear access password', { type: 'error' });
             } finally {
-                clearPasswordBtn.disabled = !this.accessAuthEnabled;
+                confirmRemoveBtn.disabled = false;
             }
+        });
+
+        // Clear inline error on input — the user is fixing it.
+        [newInput, confirmInput].forEach((el) => {
+            el.addEventListener('input', () => showError(''));
         });
 
         requestAnimationFrame(() => overlay.classList.remove('hidden'));
