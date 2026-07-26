@@ -22,6 +22,27 @@ export interface FeatureTimelinePoint {
     completed: number;
 }
 
+export interface FeatureDailyCompletion {
+    date: string;
+    completed: number;
+}
+
+export interface FeatureStats {
+    totalFeatures: number;
+    completedFeatures: number;
+    featurePercent: number;
+    totalSubtasks: number;
+    completedSubtasks: number;
+    subtaskPercent: number;
+    velocityWindowDays: number;
+    completedInWindow: number;
+    velocityPerDay: number;
+    remainingFeatures: number;
+    estimatedDaysRemaining: number | null;
+    projectedCompletionDate: string | null;
+    dailyCompletions: FeatureDailyCompletion[];
+}
+
 // Vikunja returns a RelatedTaskMap keyed by relation kind. A Feature is a
 // regular task whose `subtask` relation contains one or more direct children.
 // Keeping this pure lets the UI use native relations without Phi-side state.
@@ -91,4 +112,67 @@ export function featureTimeline<T extends FeatureTask>(subtasks: T[]): FeatureTi
         completed += change.completed;
         return { date, filed, completed };
     });
+}
+
+function utcDate(date: Date): string {
+    return date.toISOString().slice(0, 10);
+}
+
+// Calculates portfolio-level feature progress from current Vikunja task state.
+// Velocity is an explicit rolling-window average, not a promise: task reopen
+// history is not available from Vikunja's current done_at field.
+export function featureStats<T extends FeatureTask>(features: FeatureProgress<T>[], now: Date = new Date(), velocityWindowDays: number = 28): FeatureStats {
+    const windowDays = Math.max(1, Math.floor(velocityWindowDays));
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const start = new Date(today);
+    start.setUTCDate(start.getUTCDate() - (windowDays - 1));
+    const dailyCompletions: FeatureDailyCompletion[] = [];
+    const dailyByDate = new Map<string, FeatureDailyCompletion>();
+    for (let index = 0; index < windowDays; index++) {
+        const day = new Date(start);
+        day.setUTCDate(start.getUTCDate() + index);
+        const point = { date: utcDate(day), completed: 0 };
+        dailyCompletions.push(point);
+        dailyByDate.set(point.date, point);
+    }
+
+    let completedFeatures = 0;
+    let totalSubtasks = 0;
+    let completedSubtasks = 0;
+    features.forEach(feature => {
+        totalSubtasks += feature.total;
+        completedSubtasks += feature.completed;
+        if (!feature.task.done) return;
+        completedFeatures += 1;
+        const date = utcDay(feature.task.done_at);
+        const point = date ? dailyByDate.get(date) : null;
+        if (point) point.completed += 1;
+    });
+
+    const totalFeatures = features.length;
+    const remainingFeatures = totalFeatures - completedFeatures;
+    const completedInWindow = dailyCompletions.reduce((total, point) => total + point.completed, 0);
+    const velocityPerDay = completedInWindow / windowDays;
+    const estimatedDaysRemaining = remainingFeatures === 0
+        ? 0
+        : velocityPerDay > 0 ? Math.ceil(remainingFeatures / velocityPerDay) : null;
+    const projectedCompletionDate = estimatedDaysRemaining == null
+        ? null
+        : utcDate(new Date(today.getTime() + (estimatedDaysRemaining * 24 * 60 * 60 * 1000)));
+
+    return {
+        totalFeatures,
+        completedFeatures,
+        featurePercent: totalFeatures === 0 ? 0 : Math.round((completedFeatures / totalFeatures) * 100),
+        totalSubtasks,
+        completedSubtasks,
+        subtaskPercent: totalSubtasks === 0 ? 0 : Math.round((completedSubtasks / totalSubtasks) * 100),
+        velocityWindowDays: windowDays,
+        completedInWindow,
+        velocityPerDay,
+        remainingFeatures,
+        estimatedDaysRemaining,
+        projectedCompletionDate,
+        dailyCompletions
+    };
 }

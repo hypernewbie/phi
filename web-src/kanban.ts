@@ -1,6 +1,6 @@
 import type { AppLike } from './types.js';
 import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor } from './util.js';
-import { buildFeatures, featureProgress, featureTimeline, type FeatureProgress } from './kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, type FeatureDailyCompletion, type FeatureProgress } from './kanban-features.js';
 
 export class KanbanManager {
     app: AppLike;
@@ -9,7 +9,8 @@ export class KanbanManager {
     escListener: ((e: KeyboardEvent) => void) | null;
     taskCache: Record<string, any>;
     _dragActive: boolean;
-    boardMode: 'board' | 'features';
+    boardMode: 'board' | 'features' | 'stats';
+    showDoneFeatures: boolean;
     currentProjectId!: number | null;
     currentViewId!: number | null;
     buckets!: any[] | null;
@@ -22,6 +23,7 @@ export class KanbanManager {
         this.taskCache = {};
         this._dragActive = false;
         this.boardMode = 'board';
+        this.showDoneFeatures = false;
     }
 
     async openBoard(): Promise<void> {
@@ -370,6 +372,8 @@ export class KanbanManager {
             `;
         } else if (this.boardMode === 'features') {
             boardContentHtml = this.renderFeaturesView();
+        } else if (this.boardMode === 'stats') {
+            boardContentHtml = this.renderStatsView();
         } else if (!bucketsWithTasks || bucketsWithTasks.length === 0) {
             boardContentHtml = `
                 <div class="kanban-no-view-wrapper">
@@ -396,10 +400,13 @@ export class KanbanManager {
                         <div class="kanban-view-switch" role="group" aria-label="Kanban view">
                             <button class="kanban-view-btn ${this.boardMode === 'board' ? 'active' : ''}" data-kanban-mode="board">Board</button>
                             <button class="kanban-view-btn ${this.boardMode === 'features' ? 'active' : ''}" data-kanban-mode="features">Features</button>
+                            <button class="kanban-view-btn ${this.boardMode === 'stats' ? 'active' : ''}" data-kanban-mode="stats">Stats</button>
                         </div>
-                        <div class="kanban-search-wrapper" style="margin-left: 8px;">
-                            <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}..." />
-                        </div>
+                        ${this.boardMode !== 'stats' ? `
+                            <div class="kanban-search-wrapper" style="margin-left: 8px;">
+                                <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}..." />
+                            </div>
+                        ` : ''}
                         <button id="kanban-refresh-btn" class="toolbar-btn" title="Refresh Board">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -436,7 +443,8 @@ export class KanbanManager {
         // Attach listeners
         container.querySelectorAll('.kanban-view-btn').forEach((button: Element) => {
             button.addEventListener('click', () => {
-                this.boardMode = (button as HTMLElement).dataset.kanbanMode === 'features' ? 'features' : 'board';
+                const mode = (button as HTMLElement).dataset.kanbanMode;
+                this.boardMode = mode === 'features' || mode === 'stats' ? mode : 'board';
                 this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
             });
         });
@@ -648,6 +656,14 @@ export class KanbanManager {
         };
         addWrapperSetup();
 
+        const showDoneFeaturesButton = container.querySelector('#kanban-show-done-features-btn') as HTMLButtonElement | null;
+        if (showDoneFeaturesButton) {
+            showDoneFeaturesButton.addEventListener('click', () => {
+                this.showDoneFeatures = !this.showDoneFeatures;
+                this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+            });
+        }
+
         // Feature rows deliberately use the same task detail panel as cards;
         // completion applies to the parent only and never cascades silently.
         container.querySelectorAll('.kanban-feature-row').forEach((row: Element) => {
@@ -693,8 +709,12 @@ export class KanbanManager {
     }
 
     renderFeaturesView(): string {
-        const features = buildFeatures(Object.values(this.taskCache));
-        if (features.length === 0) {
+        const allFeatures = buildFeatures(Object.values(this.taskCache));
+        const completedFeatures = allFeatures.filter(feature => feature.task.done);
+        const features = this.showDoneFeatures
+            ? allFeatures
+            : allFeatures.filter(feature => !feature.task.done);
+        if (allFeatures.length === 0) {
             return `
                 <div class="kanban-no-view-wrapper">
                     <h3>No features yet</h3>
@@ -710,11 +730,106 @@ export class KanbanManager {
                         <h3>Features</h3>
                         <p>Progress is calculated from direct Vikunja subtasks.</p>
                     </div>
-                    <span class="column-count">${features.length}</span>
+                    <div class="kanban-features-actions">
+                        ${completedFeatures.length > 0 ? `<button id="kanban-show-done-features-btn" class="toolbar-btn">${this.showDoneFeatures ? 'Hide done' : `Show done (${completedFeatures.length})`}</button>` : ''}
+                        <span class="column-count">${features.length}${this.showDoneFeatures ? '' : `/${allFeatures.length}`}</span>
+                    </div>
                 </div>
-                <div class="kanban-features-list">
-                    ${features.map(feature => this.renderFeatureRow(feature)).join('')}
+                ${features.length > 0 ? `
+                    <div class="kanban-features-list">
+                        ${features.map(feature => this.renderFeatureRow(feature)).join('')}
+                    </div>
+                ` : `
+                    <div class="kanban-features-empty">
+                        <strong>All ${allFeatures.length} feature${allFeatures.length === 1 ? ' is' : 's are'} done.</strong>
+                        <span>Use Show done to review them.</span>
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    renderStatsView(): string {
+        const stats = featureStats(buildFeatures(Object.values(this.taskCache)));
+        if (stats.totalFeatures === 0) {
+            return `
+                <div class="kanban-no-view-wrapper">
+                    <h3>No feature stats yet</h3>
+                    <p>Add subtasks to a task and the portfolio statistics will appear here.</p>
                 </div>
+            `;
+        }
+
+        const formatDate = (date: string) => new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+        const forecast = stats.remainingFeatures === 0
+            ? '<strong>All features are done.</strong><span>No remaining feature parents.</span>'
+            : stats.estimatedDaysRemaining == null
+                ? '<strong>Waiting for velocity.</strong><span>No feature was marked done in the last 28 days.</span>'
+                : `<strong>~${stats.estimatedDaysRemaining} day${stats.estimatedDaysRemaining === 1 ? '' : 's'} remaining</strong><span>Projected finish: ${formatDate(stats.projectedCompletionDate!)}</span>`;
+
+        return `
+            <div class="kanban-stats-view">
+                <div class="kanban-stats-heading">
+                    <div>
+                        <h3>Feature stats</h3>
+                        <p>Current portfolio progress and completion velocity.</p>
+                    </div>
+                </div>
+                <div class="kanban-stats-grid">
+                    <section class="kanban-stat-card">
+                        <span>Features done</span>
+                        <strong>${stats.completedFeatures}/${stats.totalFeatures}</strong>
+                        <em>${stats.featurePercent}% complete</em>
+                    </section>
+                    <section class="kanban-stat-card">
+                        <span>Subtasks done</span>
+                        <strong>${stats.completedSubtasks}/${stats.totalSubtasks}</strong>
+                        <em>${stats.subtaskPercent}% complete</em>
+                    </section>
+                    <section class="kanban-stat-card">
+                        <span>Current velocity</span>
+                        <strong>${stats.velocityPerDay.toFixed(2)}<small>/day</small></strong>
+                        <em>${stats.completedInWindow} feature${stats.completedInWindow === 1 ? '' : 's'} done in ${stats.velocityWindowDays} days</em>
+                    </section>
+                    <section class="kanban-stat-card kanban-stat-card--forecast">
+                        <span>Forecast</span>
+                        ${forecast}
+                    </section>
+                </div>
+                <section class="kanban-stats-chart-card">
+                    <div class="kanban-stats-chart-heading">
+                        <div>
+                            <h4>Features completed by day</h4>
+                            <p>Last ${stats.velocityWindowDays} days. Forecast uses this rolling average.</p>
+                        </div>
+                        <span>${stats.completedInWindow} completed</span>
+                    </div>
+                    ${this.renderFeatureVelocityChart(stats.dailyCompletions)}
+                </section>
+            </div>
+        `;
+    }
+
+    renderFeatureVelocityChart(days: FeatureDailyCompletion[]): string {
+        const width = 560;
+        const height = 116;
+        const maximum = Math.max(1, ...days.map(day => day.completed));
+        const barSlot = width / days.length;
+        const barWidth = Math.max(2, barSlot - 3);
+        const barHeight = (value: number) => (value / maximum) * (height - 10);
+        const first = new Date(`${days[0].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+        const last = new Date(`${days[days.length - 1].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+        return `
+            <div class="kanban-velocity-chart" aria-label="Features completed by day">
+                <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Feature completions from ${first} to ${last}">
+                    <line class="kanban-velocity-baseline" x1="0" y1="${height - 1}" x2="${width}" y2="${height - 1}"></line>
+                    ${days.map((day, index) => {
+                        const bar = barHeight(day.completed);
+                        return `<rect class="kanban-velocity-bar" x="${(index * barSlot + 1.5).toFixed(1)}" y="${(height - 1 - bar).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${bar.toFixed(1)}"><title>${day.date}: ${day.completed} feature${day.completed === 1 ? '' : 's'} completed</title></rect>`;
+                    }).join('')}
+                </svg>
+                <div><span>${first}</span><span>${last}</span></div>
             </div>
         `;
     }
