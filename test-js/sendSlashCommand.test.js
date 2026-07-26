@@ -199,9 +199,10 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
         expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
     });
 
-    it('pi backend: atomic sendSlashCommand, no cross-tab fallback on switch', () => {
-        // After commit 2, the pi branch is atomic (no delayed \r).
-        // Tab switch is moot — there's no callback to redirect.
+    it('pi backend: picker routing survives a tab switch (commit 1 pinning preserved)', () => {
+        // After the defensive picker-routing switch, the pi branch is
+        // 3 sends instead of 1. Commit 1's sendToTab pinning keeps all
+        // 3 on the click-time tab even across a mid-chain switch.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -213,13 +214,14 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        // Even if the user switches tabs after the click, nothing
-        // pending fires against the new tab.
         tm.activePaneId = tabB.paneId;
         vi.advanceTimersByTime(5000);
 
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toMatch(/^\x1b\[200~\/model .+\x1b\[201~\r$/);
+        expect(tabA.sendInputCalls.length).toBe(3);
+        // send 1 is the atomic /model\r paste+Enter
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+        // send 3 is the final \r to select
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
         expect(tabB.sendInputCalls.length).toBe(0);
     });
 
@@ -333,7 +335,13 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
 // ---------------------------------------------------------------------------
 
 describe('sendSlashCommand — atomic paste+Enter, no delayed send', () => {
-    it('pi backend, model dropdown: exactly one ws.sendInput, zero delayed sends', () => {
+    it('pi backend, model dropdown: 3-step picker routing (open, filter, select)', () => {
+        // The `/model <name>` exact-match path is flaky in pi 0.81.x.
+        // Defensive: route through pi's picker (search + arrows + Enter),
+        // which the user reports as reliable. 3 sequential sends:
+        //   send 1 (sync):  /model\r        — open picker (atomic via sendSlashCommand)
+        //   send 2 (+500):  <model name>    — type filter
+        //   send 3 (+900):  \r              — select highlighted
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -343,15 +351,51 @@ describe('sendSlashCommand — atomic paste+Enter, no delayed send', () => {
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        // Synchronous single send: \x1b[200~/model <name>\x1b[201~\r
+        // Send 1 happened synchronously.
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toMatch(
-            /^\x1b\[200~\/model .+\x1b\[201~\r$/
-        );
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
 
-        // No delayed send — the split is gone.
+        // Advance to send 2 (filter text).
+        vi.advanceTimersByTime(500);
+        expect(tabA.sendInputCalls.length).toBe(2);
+        // dropup sorts models alphabetically; the first button is whichever
+        // sorts lowest. Filter text sent to pi should be the same model.
+        expect(tabA.sendInputCalls[1][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+
+        // Advance to send 3 (\r to select).
+        vi.advanceTimersByTime(400);
+        expect(tabA.sendInputCalls.length).toBe(3);
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+
+        // No further sends.
         vi.advanceTimersByTime(5000);
-        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls.length).toBe(3);
+    });
+
+    it('pi picker routing: cross-tab switch keeps all 3 sends on the click-time tab', () => {
+        // The sendToTab calls inside the chain are pinned to the tab
+        // captured at click time (commit 1's fix). A tab switch mid-chain
+        // must not redirect the filter text or final \r to the new tab.
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        const tabB = makeTab('pi-B', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.tabs.set(tabB.paneId, tabB);
+        tm.activePaneId = tabA.paneId;
+
+        tm.renderModelDropup();
+        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        btn.click();
+
+        // Switch tabs immediately after the atomic send.
+        tm.activePaneId = tabB.paneId;
+
+        vi.advanceTimersByTime(500);   // send 2 (filter) — should hit tabA
+        vi.advanceTimersByTime(400);   // send 3 (\r)       — should hit tabA
+        vi.advanceTimersByTime(5000);  // nothing further
+
+        expect(tabA.sendInputCalls.length).toBe(3);
+        expect(tabB.sendInputCalls.length).toBe(0);
     });
 
     it('opencode/pi coder preset button: single sendSlashCommand', () => {
