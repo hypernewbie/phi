@@ -257,11 +257,22 @@ export class KanbanManager {
                 this.renderBoardLayout(container, projects, currentProject, null, []);
                 return;
             }
-            // Fetch buckets and tasks
-            // `expand=subtasks` asks Vikunja for the native relation map in
-            // this same board request. That avoids an N+1 detail request for
-            // feature progress and keeps Vikunja as the only source of truth.
-            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500&expand=subtasks`);
+            // Keep the bucket endpoint unexpanded. Vikunja's `subtasks`
+            // expansion changes its Kanban-view response, which means cards
+            // can lose the authoritative bucket state Phi needs to render
+            // Todo / Review / Done correctly. Fetch hierarchy separately and
+            // merge only its relation map onto the unmodified board tasks.
+            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500`);
+            let projectTasks = [];
+            try {
+                projectTasks = await this.apiGet(`/projects/${selectedProjectId}/tasks?per_page=500&expand=subtasks`) || [];
+            }
+            catch (err) {
+                // Features are additive. A hierarchy fetch must never make the
+                // regular board unavailable when an older Vikunja lacks it.
+                console.warn('Failed to load Kanban subtask hierarchy:', err);
+            }
+            const projectTasksById = new Map(projectTasks.map(task => [String(task.id), task]));
             // Rebuild taskCache
             this.taskCache = {};
             // Cache the active view id and project id on the manager so later
@@ -274,12 +285,23 @@ export class KanbanManager {
             if (bucketsWithTasks) {
                 bucketsWithTasks.forEach((bucket) => {
                     if (bucket.tasks) {
-                        bucket.tasks.forEach((task) => {
+                        bucket.tasks = bucket.tasks.map((boardTask) => {
+                            const hierarchyTask = projectTasksById.get(String(boardTask.id));
+                            const task = hierarchyTask?.related_tasks
+                                ? { ...boardTask, related_tasks: hierarchyTask.related_tasks }
+                                : boardTask;
                             this.taskCache[task.id] = task;
+                            return task;
                         });
                     }
                 });
             }
+            // A feature parent may not itself be in a bucket. Retain it for
+            // the Features view without changing what the board renders.
+            projectTasks.forEach(task => {
+                if (task?.id != null && !this.taskCache[task.id])
+                    this.taskCache[task.id] = task;
+            });
             this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
         }
         catch (err) {
