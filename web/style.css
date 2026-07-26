@@ -6339,23 +6339,36 @@ html, body {
     overflow-y: auto;
 }
 
-.kanban-desc-html p {
-    margin-bottom: 10px;
+.kdp-description-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
 }
 
-.kanban-desc-html p:last-child {
-    margin-bottom: 0;
-}
+.kdp-description-heading label { margin-bottom: 0; }
+.kdp-description-toggle { width: 24px; height: 24px; padding: 0; }
+.kdp-description-toggle .icon { display: block; width: 13px; height: 13px; }
+.kdp-description-input { height: 160px; font-family: var(--font-mono) !important; font-size: 12px !important; line-height: 1.5 !important; }
+.kanban-desc-empty { color: var(--text-muted); font-style: italic; }
 
-.kanban-desc-html ul, .kanban-desc-html ol {
-    margin-bottom: 10px;
-    padding-left: 20px;
-}
-
-.kanban-desc-html li {
-    margin-bottom: 4px;
-}
-
+.kanban-desc-html > :first-child { margin-top: 0; }
+.kanban-desc-html > :last-child { margin-bottom: 0; }
+.kanban-desc-html p { margin: 0 0 10px; }
+.kanban-desc-html h1,
+.kanban-desc-html h2,
+.kanban-desc-html h3,
+.kanban-desc-html h4 { margin: 14px 0 7px; color: var(--text-primary); line-height: 1.3; }
+.kanban-desc-html h1 { font-size: 18px; }
+.kanban-desc-html h2 { font-size: 16px; }
+.kanban-desc-html h3,
+.kanban-desc-html h4 { font-size: 14px; }
+.kanban-desc-html ul,
+.kanban-desc-html ol { margin: 0 0 10px; padding-left: 20px; }
+.kanban-desc-html li { margin-bottom: 4px; }
+.kanban-desc-html a { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 2px; }
+.kanban-desc-html blockquote { margin: 10px 0; padding: 4px 12px; border-left: 2px solid var(--accent); color: var(--text-muted); }
+.kanban-desc-html pre { overflow-x: auto; margin: 10px 0; padding: 10px; border: 1px solid var(--bg-border); border-radius: 5px; background: var(--bg-base); }
 .kanban-desc-html code {
     font-family: var(--font-mono);
     background: var(--bg-base);
@@ -6365,6 +6378,12 @@ html, body {
     border: 1px solid var(--bg-border);
     color: var(--accent-bright);
 }
+.kanban-desc-html pre code { padding: 0; border: 0; background: transparent; color: var(--text-primary); }
+.kanban-desc-html img { display: block; max-width: 100%; height: auto; margin: 10px 0; border-radius: 5px; }
+.kanban-desc-html table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 12px; }
+.kanban-desc-html th,
+.kanban-desc-html td { padding: 6px 8px; border: 1px solid var(--bg-border); text-align: left; }
+.kanban-desc-html th { background: var(--bg-base); color: var(--text-primary); }
 
 .kdp-field-row {
     display: flex;
@@ -7504,10 +7523,23 @@ html, body {
     font: 12px/1.35 var(--font-ui);
 }
 
-.kdp-subtask-row input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
-.kdp-subtask-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kdp-subtask-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.kdp-subtask-open {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kdp-subtask-open:hover { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 2px; }
 .kdp-subtask-row.done { color: var(--text-muted); }
-.kdp-subtask-row.done span { text-decoration: line-through; }
+.kdp-subtask-row.done .kdp-subtask-open { text-decoration: line-through; }
 
 .kdp-add-subtask-row { display: flex; gap: 6px; }
 .kdp-add-subtask-row input {
