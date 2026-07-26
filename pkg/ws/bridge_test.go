@@ -86,6 +86,23 @@ func TestWebSocketCompression(t *testing.T) {
 	}
 }
 
+func TestWebSocketRejectsCrossOriginUpgrade(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = Upgrader.Upgrade(w, r, nil)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	header := http.Header{"Origin": []string{"https://not-phi.example"}}
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err == nil {
+		t.Fatal("cross-origin WebSocket upgrade unexpectedly succeeded")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin response: got %#v, want HTTP 403", resp)
+	}
+}
+
 func TestWebSocketPipes_10MB(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := Upgrader.Upgrade(w, r, nil)

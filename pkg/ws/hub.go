@@ -148,6 +148,29 @@ func (h *Hub) Unregister(paneID string, client *Client) {
 	log.Printf("[ws] Unregistered client from pane %s", paneID)
 }
 
+// CloseAllClients closes every live WebSocket without deleting pane state.
+// Callers use this when a security boundary changes (for example, Phi access
+// password rotation) so connections authorized at handshake cannot outlive
+// the session that authorized them. ReadPump performs normal unregistering.
+func (h *Hub) CloseAllClients() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	var clients []*Client
+	for _, ph := range h.panes {
+		ph.mu.Lock()
+		for client := range ph.clients {
+			clients = append(clients, client)
+		}
+		ph.mu.Unlock()
+	}
+	for _, client := range clients {
+		if client.Ws != nil {
+			_ = client.Ws.Close()
+		}
+	}
+}
+
 func (h *Hub) ClosePane(paneID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

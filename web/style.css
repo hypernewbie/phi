@@ -2997,6 +2997,68 @@ html, body {
     width: min(520px, calc(100vw - 24px));
 }
 
+/* ── Access password prompt ────────────────────────────────────────────── */
+
+.access-auth-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(5, 7, 13, 0.76);
+    backdrop-filter: blur(8px);
+}
+
+.access-auth-dialog {
+    width: min(360px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 22px;
+    border: 1px solid var(--bg-border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.42);
+}
+
+.access-auth-dialog h1,
+.access-auth-dialog p {
+    margin: 0;
+}
+
+.access-auth-dialog h1 {
+    font-size: 18px;
+}
+
+.access-auth-dialog label,
+.access-auth-error {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.access-auth-dialog input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    font: inherit;
+}
+
+.access-auth-dialog input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.access-auth-error {
+    min-height: 1em;
+    color: #f87171;
+}
+
 /* ── Settings modal (.settings-modal) ─────────────────────────────────── */
 
 .settings-modal {
@@ -3088,6 +3150,7 @@ html, body {
 }
 
 .settings-row input[type="text"],
+.settings-row input[type="password"],
 .settings-row input[type="number"],
 .settings-row select {
     flex: 1 1 auto;
@@ -3106,6 +3169,16 @@ html, body {
 .settings-row select:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.settings-access-state {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.settings-access-actions {
+    display: flex;
+    gap: 8px;
 }
 
 .settings-row input[type="checkbox"] {
