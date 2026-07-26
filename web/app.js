@@ -1018,13 +1018,12 @@ export class App {
         removeLink.className = 'settings-access-remove-link';
         removeLink.type = 'button';
         removeLink.textContent = '·  Remove password';
-        removeLink.hidden = !this.accessAuthEnabled;
+        removeLink.classList.toggle('hidden', !this.accessAuthEnabled);
 
         const confirmRemoveBtn = document.createElement('button');
-        confirmRemoveBtn.className = 'btn btn-red settings-access-confirm-remove';
+        confirmRemoveBtn.className = 'btn btn-red settings-access-confirm-remove hidden';
         confirmRemoveBtn.type = 'button';
         confirmRemoveBtn.textContent = 'Confirm remove';
-        confirmRemoveBtn.hidden = true;
 
         const actionsSpacer = document.createElement('span');
         actionsSpacer.className = 'settings-access-spacer';
@@ -1190,8 +1189,8 @@ export class App {
                 stateDot.className = 'settings-access-dot is-on';
                 stateText.textContent = 'Enabled';
                 setPasswordBtn.textContent = 'Update password';
-                removeLink.hidden = false;
-                confirmRemoveBtn.hidden = true;
+                removeLink.classList.remove('hidden');
+                confirmRemoveBtn.classList.add('hidden');
                 this.showToast('Password updated', { type: 'success' });
             } catch (err) {
                 this.showToast(err instanceof Error ? err.message : 'Unable to save access password', { type: 'error' });
@@ -1203,8 +1202,8 @@ export class App {
         // Two-step Remove: click link → reveal Confirm button → click that.
         // No window.confirm(); the session cookie authorizes the action.
         removeLink.addEventListener('click', () => {
-            removeLink.hidden = true;
-            confirmRemoveBtn.hidden = false;
+            removeLink.classList.add('hidden');
+            confirmRemoveBtn.classList.remove('hidden');
             confirmRemoveBtn.focus();
         });
         confirmRemoveBtn.addEventListener('click', async () => {
@@ -1215,8 +1214,8 @@ export class App {
                 stateDot.className = 'settings-access-dot is-off';
                 stateText.textContent = 'Disabled';
                 setPasswordBtn.textContent = 'Set password';
-                removeLink.hidden = true;
-                confirmRemoveBtn.hidden = true;
+                removeLink.classList.add('hidden');
+                confirmRemoveBtn.classList.add('hidden');
                 this.showToast('Password removed', { type: 'success' });
             } catch (err) {
                 this.showToast(err instanceof Error ? err.message : 'Unable to clear access password', { type: 'error' });
