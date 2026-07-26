@@ -117,8 +117,13 @@ function showUnlockPrompt() {
 
         const title = document.createElement('h1');
         title.id = 'access-auth-title';
-        title.textContent = 'Phi is locked';
+        title.textContent = 'Sign in to Phi';
         dialog.appendChild(title);
+
+        const subtitle = document.createElement('p');
+        subtitle.className = 'access-auth-subtitle';
+        subtitle.textContent = 'Enter your password to continue.';
+        dialog.appendChild(subtitle);
 
         const label = document.createElement('label');
         label.htmlFor = 'access-auth-password';
@@ -140,7 +145,7 @@ function showUnlockPrompt() {
         const submit = document.createElement('button');
         submit.className = 'btn btn-accent';
         submit.type = 'submit';
-        submit.textContent = 'Unlock';
+        submit.textContent = 'Sign in';
         dialog.appendChild(submit);
 
         dialog.addEventListener('submit', async (event) => {
