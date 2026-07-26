@@ -127,6 +127,36 @@ describe('Feature surface', () => {
     });
 });
 
+describe('Feature loading keeps the Kanban bucket view authoritative', () => {
+    it('loads hierarchy separately without changing bucket task state', async () => {
+        const c = manager();
+        c.boardMode = 'board';
+        c.renderBoardLayout = vi.fn();
+        sessionStorage.setItem('vikunja_token', 'tok');
+        localStorage.setItem('vikunja_url', 'http://vik.local');
+        mockFetch(url => {
+            const upstream = decodeURIComponent(url.split('url=')[1]);
+            if (upstream.endsWith('/projects?per_page=500')) return [{ id: 9, title: 'Phi' }];
+            if (upstream.endsWith('/projects/9/views?per_page=500')) return [{ id: 5, view_kind: 'kanban' }];
+            if (upstream.endsWith('/projects/9/views/5/tasks?per_page=500')) {
+                return [{ id: 10, title: 'Todo', tasks: [{ id: 1, title: 'Feature', bucket_id: 10, done: false }] }];
+            }
+            if (upstream.endsWith('/projects/9/tasks?per_page=500&expand=subtasks')) {
+                return [{ id: 1, related_tasks: { subtask: [child(2, false)] } }];
+            }
+            throw new Error(`Unexpected URL: ${upstream}`);
+        });
+
+        await c.loadAndRenderBoard(document.createElement('div'));
+
+        const upstreamUrls = fetch.mock.calls.map(([url]) => decodeURIComponent(url.split('url=')[1]));
+        expect(upstreamUrls).toContain('http://vik.local/api/v1/projects/9/views/5/tasks?per_page=500');
+        expect(upstreamUrls).toContain('http://vik.local/api/v1/projects/9/tasks?per_page=500&expand=subtasks');
+        expect(c.buckets[0].tasks[0]).toMatchObject({ id: 1, bucket_id: 10, related_tasks: { subtask: [{ id: 2 }] } });
+        expect(c.taskCache[1].bucket_id).toBe(10);
+    });
+});
+
 describe('Feature API operations', () => {
     it('creates a task, then links it as a native subtask relation', async () => {
         const c = manager();
