@@ -2,6 +2,31 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.14.4 — 2026-07-25
+
+Patch batch covering every commit since the v0.14.3 tag. Two user-facing features (optional access password, kanban feature roll-ups), a kanban black-screen fix, and three input-routing refactors that close a long-standing cross-tab race.
+
+### Added
+- **Optional access password** (`9c538aa`). A new `auth.go` middleware gates the HTTP API and a per-tab WebSocket auth handshake gates live panes. When no password is configured, behavior is unchanged; when set, the browser prompts for it on first load and the session cookie keeps the user signed in. Password is stored as a salted hash (Argon2id via `pkg/vendor/noble-hashes`); the Settings modal exposes the controls. README updated with the safe-default-binding note.
+- **Kanban feature roll-ups** (`522e805`). The Kanban panel now surfaces native phi task features alongside Vikunja items — a feature roll-up row appears at the top of every column showing the count of phi-native items in that bucket, clickable to filter. New `web-src/kanban-features.ts` module owns the roll-up logic; CSS adds the roll-up chip + collapsed/expanded states. Two new test files (`kanbanFeatures.test.js`, `vikunjaContract.test.js`) lock in the roll-up math and the Vikunja shape contract.
+
+### Fixed
+- **Kanban panel black screen on first click** (`929d938`). `KanbanManager.initTabContainer` used to overwrite `termContainer.className = 'term-container kanban-panel'`, which silently dropped the `.active` class that `createTab → switchTab` had just added. The kanban container's children rendered correctly but `.kanban-panel` without `.active` is `display:none`, so the panel showed only `--bg-base` (black on dark theme). Subsequent clicks hit `switchTab`'s `activePaneId === paneId` early-return, which never re-adds `.active` — the black screen was permanent until hard-refresh. Fixed via `container.classList.add('kanban-panel')` so `.active` survives.
+
+### Changed
+- **Slash-command input routing** (`3cd9f3a`, `29c414a`). Two new primitives on `TabManager`: `sendToTab(tabInfo, payload)` (thin wrapper over `sendInput` + scroll follow-up; does **not** re-resolve the active tab) and `sendSlashCommand(tabInfo, cmd)` (one atomic bracketed-paste write carrying both the slash command and Enter — replaces a 200ms split that re-resolved active tab in the delayed callback). Three sites collapsed to atomic: desktop coder presets (`terminal.js:4023`), mobile `renderSlashDropup` (`terminal.js:4155`), and the model dropup pi branch (`terminal.js:4454`). The opencode picker chain (4-send puppet sequence) keeps its timing but now also routes through `sendToTab`. Commit 1 carries the pinning + cross-tab regression test; commit 2 carries the atomic collapse + atomicity tests.
+- **Pi model dropdown routed through the picker** (`de9562e`). The previous `/model <name>` exact-match relied on pi 0.81.x's `findExactModelReferenceMatch`, which is flaky: sometimes switches, sometimes opens the picker prefiltered, sometimes filters to nothing. Manual finger-typed `/model <name>⏎` exhibits the same flakiness; the picker (search + arrows + Enter) is reliable per user report. Defensive fix: route the model dropdown through pi's picker with a 3-step sequence (open / type filter / select), pinned to the click-time tab via `sendToTab`. ~900ms total instead of the previous single atomic write. Same shape as the opencode branch above.
+
+### Tests
+- **Frontend (vitest)** — 692 tests, +32 since v0.14.3:
+  - `test-js/accessAuth.test.js` (new) — 11 cases: login flow, session persistence, expired-session re-prompt, websocket handshake, password hash round-trip.
+  - `test-js/accessPasswordSave.test.js` (new) — 4 cases: settings modal save/clear, password validation.
+  - `test-js/kanbanFeatures.test.js` (new) — 8 cases: feature roll-up counts, filter toggles, collapse/expand states.
+  - `test-js/vikunjaContract.test.js` (new) — 1 case: Vikunja shape contract pinned.
+  - `test-js/kanbanTabInteraction.test.js` (extended) — +3 BUG-5 cases: first-open `.active` preservation, second-open re-init, click-tab-element preserves `.active`.
+  - `test-js/sendSlashCommand.test.js` (new) — 12 cases: atomic paste+Enter, picker-routing shape, cross-tab regression, WS-drop mid-chain, default-coder unchanged, non-paste-eligible preset unchanged.
+- **Backend (Go)** — `auth_test.go` (new) — 9 cases: middleware allow/deny, hash round-trip, session cookie, websocket auth handshake.
+
 ## v0.14.3 — 2026-07-24
 
 Patch batch of three PRs from `n0mad-awx` (Franklin He) since v0.14.2: a CI/release workflow fix that builds the frontend before GoReleaser, a customizable terminal font (size + curated family + local custom-font upload via IndexedDB), and a vendored-xterm scroll-sync fix for streaming output.
