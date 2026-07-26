@@ -199,7 +199,9 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
         expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
     });
 
-    it('pi backend: delayed \\r is pinned to click-time tab across a switch', () => {
+    it('pi backend: atomic sendSlashCommand, no cross-tab fallback on switch', () => {
+        // After commit 2, the pi branch is atomic (no delayed \r).
+        // Tab switch is moot — there's no callback to redirect.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -209,18 +211,15 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
 
         tm.renderModelDropup();
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();  // sends the bracketed paste to tabA
+        btn.click();
 
-        // User switches tabs before the 200ms delayed \r fires.
+        // Even if the user switches tabs after the click, nothing
+        // pending fires against the new tab.
         tm.activePaneId = tabB.paneId;
-        vi.advanceTimersByTime(200);
+        vi.advanceTimersByTime(5000);
 
-        expect(tabA.sendInputCalls.length).toBe(2);
-        // dropup sorts models alphabetically; first model is whichever
-        // localeCompare sorts lowest. Assert the bracketed-paste frame
-        // shape, not a specific model name (more robust to fixture edits).
-        expect(tabA.sendInputCalls[0][0]).toMatch(/^\x1b\[200~\/model .+\x1b\[201~$/);
-        expect(tabA.sendInputCalls[1][0]).toBe('\r');
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toMatch(/^\x1b\[200~\/model .+\x1b\[201~\r$/);
         expect(tabB.sendInputCalls.length).toBe(0);
     });
 
@@ -247,7 +246,8 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
 });
 
 describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
-    it('opencode/pi coder, paste-eligible preset: delayed \\r is pinned to click-time tab', () => {
+    it('opencode/pi coder, paste-eligible preset: atomic sendSlashCommand', () => {
+        // After commit 2, the preset chip path is also atomic.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -255,22 +255,17 @@ describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
         tm.tabs.set(tabB.paneId, tabB);
         tm.activePaneId = tabA.paneId;
 
-        // Drive via the real renderPresets path.
         tm.renderPresets('pi');
-
-        // Find the /model preset chip (the paste-eligible one).
         const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
         const modelChip = chips.find((b) => b.innerText === '/model');
         expect(modelChip).toBeDefined();
         modelChip.click();
 
-        // User switches tabs before the 200ms delayed \r fires.
         tm.activePaneId = tabB.paneId;
-        vi.advanceTimersByTime(200);
+        vi.advanceTimersByTime(2000);
 
-        expect(tabA.sendInputCalls.length).toBe(2);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~');
-        expect(tabA.sendInputCalls[1][0]).toBe('\r');
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
         expect(tabB.sendInputCalls.length).toBe(0);
     });
 
@@ -328,5 +323,90 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
         // tabA's ws was called 4 times but each returned false — the
         // chain didn't fall through to a different tab.
         expect(tabA.sendInputCalls.length).toBe(4);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Commit 2 — atomic collapse. Replaces the 3 split sites
+// (sendRawInput paste + setTimeout(sendRawInput('\r'), 200)) with
+// sendSlashCommand, which sends `\x1b[200~<cmd>\x1b[201~\r` as one write.
+// ---------------------------------------------------------------------------
+
+describe('sendSlashCommand — atomic paste+Enter, no delayed send', () => {
+    it('pi backend, model dropdown: exactly one ws.sendInput, zero delayed sends', () => {
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.activePaneId = tabA.paneId;
+
+        tm.renderModelDropup();
+        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        btn.click();
+
+        // Synchronous single send: \x1b[200~/model <name>\x1b[201~\r
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toMatch(
+            /^\x1b\[200~\/model .+\x1b\[201~\r$/
+        );
+
+        // No delayed send — the split is gone.
+        vi.advanceTimersByTime(5000);
+        expect(tabA.sendInputCalls.length).toBe(1);
+    });
+
+    it('opencode/pi coder preset button: single sendSlashCommand', () => {
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.activePaneId = tabA.paneId;
+
+        tm.renderPresets('pi');
+        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
+        const modelChip = chips.find((b) => b.innerText === '/model');
+        modelChip.click();
+
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+
+        vi.advanceTimersByTime(2000);
+        expect(tabA.sendInputCalls.length).toBe(1);
+    });
+
+    it('slash preset for non-paste-eligible coders: sendRawInput unchanged', () => {
+        // Verifies commit 2 doesn't touch the else branch. The esc
+        // chip (value '\x1b') is non-paste-eligible and still goes
+        // through the raw sendRawInput path.
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.activePaneId = tabA.paneId;
+
+        tm.app.codersPresetRegistry.pi.presets.push({ name: 'esc', value: '\x1b' });
+        tm.renderPresets('pi');
+        const escChip = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'))
+            .find((b) => b.innerText === 'esc');
+        escChip.click();
+
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b');
+    });
+
+    it('mobile renderSlashDropup path: also atomic', () => {
+        // Mobile render method should produce the same atomic form.
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.activePaneId = tabA.paneId;
+
+        // The mobile render drops into #presets-container too
+        // (it's the same code path; the architectural difference is
+        // mobile-vs-desktop styling). Drive via renderPresets.
+        tm.renderPresets('pi');
+        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
+        const modelChip = chips.find((b) => b.innerText === '/model');
+        modelChip.click();
+
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
     });
 });

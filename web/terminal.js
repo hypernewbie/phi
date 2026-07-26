@@ -4019,12 +4019,13 @@ export class TabManager {
                         const activeTab = this.getActiveTab();
                         if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                             const cmd = p.value.slice(0, -1);
-                            // Pinned to the click-time tab so the delayed \r
-                            // can't land in a different session.
-                            this.sendToTab(activeTab, '\x1b[200~' + cmd + '\x1b[201~');
-                            setTimeout(() => {
-                                this.sendToTab(activeTab, '\r');
-                            }, 200);
+                            // Atomic paste+Enter. pkg/pty's crGapDur handles
+                            // the ConPTY Enter quirk at the PTY layer; pi-tui
+                            // re-feeds bytes after \x1b[201~ through
+                            // handleInput so the Enter registers with no
+                            // frontend delay. Same form the initial-cmd
+                            // path has always used.
+                            this.sendSlashCommand(activeTab, cmd);
                         } else {
                             this.sendRawInput(p.value);
                         }
@@ -4159,12 +4160,8 @@ export class TabManager {
                 const activeTab = this.getActiveTab();
                 if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
                     const cmd = p.value.slice(0, -1);
-                    // Pinned to the click-time tab so the delayed \r
-                    // can't land in a different session.
-                    this.sendToTab(activeTab, '\x1b[200~' + cmd + '\x1b[201~');
-                    setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
-                    }, 200);
+                    // Atomic paste+Enter (see sibling site above).
+                    this.sendSlashCommand(activeTab, cmd);
                 } else {
                     this.sendRawInput(p.value);
                 }
@@ -4451,11 +4448,8 @@ export class TabManager {
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    // Pinned: same race window as opencode, only 200ms but real.
-                    this.sendToTab(activeTab, `\x1b[200~/model ${model}\x1b[201~`);
-                    setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
-                    }, 200);
+                    // Atomic paste+Enter (see TabManager.sendSlashCommand).
+                    this.sendSlashCommand(activeTab, `/model ${model}`);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
                 }
