@@ -16,6 +16,7 @@ Phi gives you a single web UI to run, monitor, and switch between multiple AI co
 - **Git worktree aware** — browse and switch between git worktrees per workspace.
 - **Quick-action presets** — one-tap buttons for common agent commands (`/exit`, `/model`, `/compact`, `ctrl+c`, `y↵`, `esc`, …), plus a staged input bar for composing longer prompts.
 - **Multiple workspaces & themes** — register several project directories and pick a UI accent color.
+- **Optional access password** — set it from **Config** to gate Phi's APIs and terminal WebSockets; trusted browsers stay unlocked without repeated prompts.
 - **Vikunja Kanban Board** — a drag-and-drop Kanban dashboard (using SortableJS) embedded as a custom tab type, synced directly to your local Vikunja REST API via a backend HTTP proxy.
 
 ## Architecture
@@ -126,7 +127,7 @@ State is stored in `~/.phi/`:
 - `config.json` — registered workspaces, theme color, and per-workspace worktree state.
 - `sessions.json` — local names/timestamps for Antigravity sessions (its conversation files are binary, so Phi keeps a sidecar map).
 
-Both are created automatically.
+Both are created automatically. `config.json` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
 ## Supported assistants
 

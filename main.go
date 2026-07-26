@@ -115,6 +115,10 @@ func main() {
 
 	// Ensure config directory exists and contains CWD as a workspace
 	cfg := loadConfig()
+	if err := accessAuth.configure(cfg.AccessPasswordHash); err != nil {
+		slog.Error("invalid access password configuration", "err", err)
+		os.Exit(1)
+	}
 	found := false
 	for _, wsPath := range cfg.Workspaces {
 		if wsPath == activeCWD {
@@ -202,6 +206,9 @@ func main() {
 	}
 
 	// API Routing
+	http.HandleFunc("/api/auth/status", handleAccessAuthStatus)
+	http.HandleFunc("/api/auth/login", handleAccessAuthLogin)
+	http.HandleFunc("/api/auth/password", handleAccessPassword)
 	http.HandleFunc("/api/coders", handleGetCoders)
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/terminals", handleSpawnTerminal)
@@ -544,7 +551,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 // returns the servers so the shutdown path can drain them. Blocks until all
 // listeners exit; ErrServerClosed (from Shutdown) is a clean stop, not fatal.
 func serveAll(listeners []net.Listener) ([]*http.Server, <-chan error) {
-	handler := obs.WrapHTTP(http.DefaultServeMux)
+	handler := obs.WrapHTTP(accessAuthMiddleware(http.DefaultServeMux))
 	servers := make([]*http.Server, len(listeners))
 	errCh := make(chan error, len(listeners))
 	for i, ln := range listeners {

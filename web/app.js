@@ -5,6 +5,7 @@ import { MarkdownManager } from './markdown.js';
 import { KanbanManager } from './kanban.js';
 import { escapeHtml, buildPhiFaviconSvg } from './util.js';
 import { SyncManager } from './sync.js';
+import { bootstrapAccessAuth, clearAccessPassword, setAccessPassword } from './auth.js';
 
 // NOTE: When adding a new theme color, you must update:
 // 1. web/app.js: Add properties in ACCENT_COLORS
@@ -164,6 +165,7 @@ export class App {
         this.terminalFontFamily = '';
         this.terminalFontSize = 0;
         this.customFontName = '';
+        this.accessAuthEnabled = false;
 
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -952,6 +954,43 @@ export class App {
         );
         behGroup.appendChild(reuseRow);
 
+        // Security group ────────────────────────────────────────
+        const securityGroup = this._buildSettingsGroup('Security');
+        body.appendChild(securityGroup);
+        const passwordRow = document.createElement('div');
+        passwordRow.className = 'settings-row';
+        const passwordLabel = document.createElement('label');
+        passwordLabel.htmlFor = 'settings-access-password';
+        passwordLabel.textContent = 'Access password';
+        passwordRow.appendChild(passwordLabel);
+        const passwordInput = document.createElement('input');
+        passwordInput.id = 'settings-access-password';
+        passwordInput.type = 'password';
+        passwordInput.autocomplete = 'new-password';
+        passwordInput.placeholder = this.accessAuthEnabled ? 'New password' : 'Set a password';
+        passwordRow.appendChild(passwordInput);
+        securityGroup.appendChild(passwordRow);
+        const passwordActionRow = document.createElement('div');
+        passwordActionRow.className = 'settings-row';
+        const passwordState = document.createElement('span');
+        passwordState.className = 'settings-access-state';
+        passwordState.textContent = this.accessAuthEnabled ? 'Enabled' : 'Disabled';
+        passwordActionRow.appendChild(passwordState);
+        const passwordActions = document.createElement('div');
+        passwordActions.className = 'settings-access-actions';
+        const setPasswordBtn = document.createElement('button');
+        setPasswordBtn.className = 'btn btn-primary';
+        setPasswordBtn.type = 'button';
+        setPasswordBtn.textContent = this.accessAuthEnabled ? 'Change' : 'Set password';
+        const clearPasswordBtn = document.createElement('button');
+        clearPasswordBtn.className = 'btn';
+        clearPasswordBtn.type = 'button';
+        clearPasswordBtn.textContent = 'Clear';
+        clearPasswordBtn.disabled = !this.accessAuthEnabled;
+        passwordActions.append(setPasswordBtn, clearPasswordBtn);
+        passwordActionRow.appendChild(passwordActions);
+        securityGroup.appendChild(passwordActionRow);
+
         // About group ───────────────────────────────────────────
         const aboutGroup = this._buildSettingsGroup('About');
         body.appendChild(aboutGroup);
@@ -1071,6 +1110,39 @@ export class App {
                 });
             } catch (err) {
                 console.warn('[settings] failed to persist reuse-tab toggle', err);
+            }
+        });
+        setPasswordBtn.addEventListener('click', async () => {
+            setPasswordBtn.disabled = true;
+            try {
+                await setAccessPassword(passwordInput.value);
+                passwordInput.value = '';
+                this.accessAuthEnabled = true;
+                passwordState.textContent = 'Enabled';
+                passwordInput.placeholder = 'New password';
+                setPasswordBtn.textContent = 'Change';
+                clearPasswordBtn.disabled = false;
+                this.showToast('Access password saved', { type: 'success' });
+            } catch (err) {
+                this.showToast(err instanceof Error ? err.message : 'Unable to save access password', { type: 'error' });
+            } finally {
+                setPasswordBtn.disabled = false;
+            }
+        });
+        clearPasswordBtn.addEventListener('click', async () => {
+            if (!window.confirm('Disable Phi access password?')) return;
+            clearPasswordBtn.disabled = true;
+            try {
+                await clearAccessPassword();
+                this.accessAuthEnabled = false;
+                passwordState.textContent = 'Disabled';
+                passwordInput.placeholder = 'Set a password';
+                setPasswordBtn.textContent = 'Set password';
+                this.showToast('Access password disabled', { type: 'success' });
+            } catch (err) {
+                this.showToast(err instanceof Error ? err.message : 'Unable to clear access password', { type: 'error' });
+            } finally {
+                clearPasswordBtn.disabled = !this.accessAuthEnabled;
             }
         });
 
@@ -2091,8 +2163,26 @@ export class App {
     }
 }
 
-// Start Application on DOM Load
-window.addEventListener('DOMContentLoaded', () => {
-    const app = new App();
-    app.init();
+// Start Application on DOM Load. Access bootstrap happens before App.init so
+// protected API calls and PTY WebSockets never start before authentication.
+window.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const auth = await bootstrapAccessAuth();
+        const app = new App();
+        app.accessAuthEnabled = auth.enabled;
+        app.init();
+    } catch (err) {
+        console.error('[auth] Phi startup blocked:', err);
+        const overlay = document.createElement('div');
+        overlay.className = 'access-auth-overlay';
+        const dialog = document.createElement('div');
+        dialog.className = 'access-auth-dialog';
+        const title = document.createElement('h1');
+        title.textContent = 'Unable to open Phi';
+        const detail = document.createElement('p');
+        detail.textContent = err instanceof Error ? err.message : 'Access protection could not start';
+        dialog.append(title, detail);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+    }
 });
