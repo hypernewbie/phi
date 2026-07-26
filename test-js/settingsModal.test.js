@@ -157,8 +157,8 @@ describe('Settings modal — trigger', () => {
         expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
         expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
         // Remove link is hidden when password is not set.
-        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(true);
-        expect(document.querySelector('.settings-access-confirm-remove').hidden).toBe(true);
+        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(true);
+        expect(document.querySelector('.settings-access-confirm-remove').classList.contains('hidden')).toBe(true);
         // Hint visible, no error yet.
         expect(document.querySelector('.settings-access-hint').textContent).toMatch(/characters/);
         expect(document.querySelector('.settings-access-error').textContent).toBe('');
@@ -176,8 +176,8 @@ describe('Settings modal — trigger', () => {
         expect(document.querySelector('.settings-access-state-text').textContent).toBe('Enabled');
         expect(document.querySelector('.settings-access-primary').textContent).toBe('Update password');
         // Remove link visible (but Confirm button hidden until clicked).
-        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(false);
-        expect(document.querySelector('.settings-access-confirm-remove').hidden).toBe(true);
+        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(false);
+        expect(document.querySelector('.settings-access-confirm-remove').classList.contains('hidden')).toBe(true);
     });
 
     it('version block renders from app.versionInfo, no fetch', async () => {
@@ -437,12 +437,12 @@ describe('Settings modal — access password flow', () => {
 
         const removeLink = document.querySelector('.settings-access-remove-link');
         const confirmBtn = document.querySelector('.settings-access-confirm-remove');
-        expect(removeLink.hidden).toBe(false);
-        expect(confirmBtn.hidden).toBe(true);
+        expect(removeLink.classList.contains('hidden')).toBe(false);
+        expect(confirmBtn.classList.contains('hidden')).toBe(true);
 
         removeLink.click();
-        expect(removeLink.hidden).toBe(true);
-        expect(confirmBtn.hidden).toBe(false);
+        expect(removeLink.classList.contains('hidden')).toBe(true);
+        expect(confirmBtn.classList.contains('hidden')).toBe(false);
 
         confirmBtn.click();
         await new Promise((r) => setTimeout(r, 0));
@@ -451,7 +451,29 @@ describe('Settings modal — access password flow', () => {
         expect(document.querySelector('.settings-access-dot.is-off')).toBeTruthy();
         expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
         expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
-        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(true);
+        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(true);
         clearSpy.mockRestore();
+    });
+
+    it('uses .hidden class not [hidden] attribute (CSS specificity regression net)', async () => {
+        // The .btn { display: flex } rule has higher specificity than the
+        // user-agent [hidden] { display: none } rule, so el.hidden = true
+        // does NOT hide a button in real browsers. Use the .hidden class
+        // (which has !important) instead. This test pins the convention.
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = true;
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        const confirmBtn = document.querySelector('.settings-access-confirm-remove');
+        const removeLink = document.querySelector('.settings-access-remove-link');
+        // The Confirm button is initially hidden — via the .hidden CLASS,
+        // not the hidden ATTRIBUTE. Without this, it would render in big
+        // red despite `el.hidden = true`.
+        expect(confirmBtn).toBeTruthy();
+        expect(confirmBtn.hasAttribute('hidden')).toBe(false);
+        expect(confirmBtn.classList.contains('hidden')).toBe(true);
+        // The Remove link is visible (password is set).
+        expect(removeLink.classList.contains('hidden')).toBe(false);
     });
 });
