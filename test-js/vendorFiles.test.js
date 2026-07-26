@@ -86,6 +86,7 @@ describe('web/vendor/*.js - parse integrity', () => {
         'diff2html.min.js',
         'highlight.min.js',
         'marked.min.js',
+        'purify.min.js',
         'xterm.js',
         'xterm-addon-fit.js',
         'xterm-addon-search.js',

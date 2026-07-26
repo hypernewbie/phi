@@ -19,6 +19,7 @@ declare global {
         hljs: any;
         Diff2Html: any;
         Sortable: any;
+        DOMPurify: any;
         Chart: any;
     }
 }

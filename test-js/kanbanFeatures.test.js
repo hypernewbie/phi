@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import createDOMPurify from 'dompurify';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
 import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline } from '../web/kanban-features.js';
@@ -176,6 +177,30 @@ describe('Feature surface', () => {
         expect(c.statsCharts).toHaveLength(4);
     });
 
+    it('renders Vikunja HTML descriptions through the one shared safe component', () => {
+        const c = manager();
+        vi.stubGlobal('DOMPurify', createDOMPurify(window));
+        const source = '<h3>Plan</h3><p><strong>Ship</strong> it</p><img src="x" onerror="alert(1)"><script>alert(2)</script>';
+        const host = document.createElement('div');
+        host.innerHTML = c.renderTaskDescriptionField(source);
+        document.body.appendChild(host);
+        c.wireTaskDescriptionField(host);
+
+        expect(host.querySelector('.kdp-description-view h3').textContent).toBe('Plan');
+        expect(host.querySelector('.kdp-description-view strong').textContent).toBe('Ship');
+        expect(host.querySelector('.kdp-description-view script')).toBeNull();
+        expect(host.querySelector('.kdp-description-view img').hasAttribute('onerror')).toBe(false);
+        expect(host.querySelector('.kdp-description-input').value).toBe(source);
+
+        host.querySelector('.kdp-description-toggle').click();
+        const editor = host.querySelector('.kdp-description-input');
+        editor.value = '<p>Updated <em>HTML</em></p><iframe src="x"></iframe>';
+        host.querySelector('.kdp-description-toggle').click();
+        expect(host.querySelector('.kdp-description-view em').textContent).toBe('HTML');
+        expect(host.querySelector('.kdp-description-view iframe')).toBeNull();
+        expect(c.taskDescriptionValue(host)).toBe(editor.value);
+    });
+
     it('renders subtasks and their burn-up chart in the detail drawer', () => {
         const c = manager();
         const html = c.renderFeatureDetailSection({
@@ -184,9 +209,21 @@ describe('Feature surface', () => {
         });
 
         expect(html).toContain('kdp-subtask-row done');
+        expect(html).toContain('kdp-subtask-open');
         expect(html).toContain('<svg');
         expect(html).toContain('Filed 1');
         expect(html).toContain('Completed 1');
+
+        const panel = document.createElement('div');
+        const container = document.createElement('div');
+        panel.innerHTML = html;
+        c.openTaskDetail = vi.fn();
+        c.wireFeatureDetailSection(panel, {
+            id: 1,
+            related_tasks: { subtask: [child(2, true, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z')] }
+        }, panel, container);
+        panel.querySelector('.kdp-subtask-open').click();
+        expect(c.openTaskDetail).toHaveBeenCalledWith('2', panel.querySelector('.kdp-subtask-open'), container);
     });
 
     it('marks the parent done without mutating its subtasks', async () => {

@@ -1023,10 +1023,10 @@ export class KanbanManager {
         const subtaskRows = progress.subtasks.length === 0
             ? '<div class="kdp-subtasks-empty">Add a subtask to turn this task into a feature.</div>'
             : progress.subtasks.map(subtask => `
-                <label class="kdp-subtask-row ${subtask.done ? 'done' : ''}">
-                    <input type="checkbox" class="kdp-subtask-done" data-subtask-id="${subtask.id}" ${subtask.done ? 'checked' : ''}>
-                    <span>${this.escapeHtml(subtask.title || '')}</span>
-                </label>
+                <div class="kdp-subtask-row ${subtask.done ? 'done' : ''}">
+                    <input type="checkbox" class="kdp-subtask-done" data-subtask-id="${subtask.id}" aria-label="Mark ${this.escapeHtml(subtask.title || 'subtask')} done" ${subtask.done ? 'checked' : ''}>
+                    <button class="kdp-subtask-open" data-subtask-id="${subtask.id}" title="Open subtask">${this.escapeHtml(subtask.title || '')}</button>
+                </div>
             `).join('');
         return `
             <section class="kdp-feature-section">
@@ -1084,6 +1084,12 @@ export class KanbanManager {
                     checkbox.disabled = false;
                     this.app.showToast(`Failed to update subtask: ${err.message}`, { type: 'error', title: 'Kanban' });
                 }
+            });
+        });
+        panel.querySelectorAll('.kdp-subtask-open').forEach((button) => {
+            button.addEventListener('click', () => {
+                const childId = button.dataset.subtaskId;
+                this.openTaskDetail(childId, button, container);
             });
         });
         const input = panel.querySelector('#kdp-new-subtask');
@@ -1348,6 +1354,70 @@ export class KanbanManager {
             panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
         }
     }
+    sanitizeTaskDescription(description) {
+        if (!description)
+            return '';
+        if (!window.DOMPurify?.sanitize)
+            return this.escapeHtml(description);
+        return String(window.DOMPurify.sanitize(description, {
+            USE_PROFILES: { html: true },
+            FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
+            FORBID_ATTR: ['style']
+        }));
+    }
+    taskDescriptionIcon(mode) {
+        if (mode === 'preview') {
+            return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+        }
+        return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>';
+    }
+    taskDescriptionPreview(description) {
+        return this.sanitizeTaskDescription(description) || '<span class="kanban-desc-empty">No description provided</span>';
+    }
+    // One description component serves every task detail surface. Board cards,
+    // feature parents, and subtasks all open the same detail panel and therefore
+    // use the same HTML sanitization, preview, editor, and save field.
+    renderTaskDescriptionField(description) {
+        return `
+            <div class="kdp-field kdp-description-field">
+                <div class="kdp-description-heading">
+                    <label for="kdp-description">Description</label>
+                    <button class="dropup-action-btn kdp-description-toggle" title="Edit description" aria-label="Edit description">
+                        ${this.taskDescriptionIcon('edit')}
+                    </button>
+                </div>
+                <div class="kanban-desc-html kdp-description-view">${this.taskDescriptionPreview(description)}</div>
+                <textarea id="kdp-description" class="hidden kdp-description-input" placeholder="No description provided">${this.escapeHtml(description)}</textarea>
+            </div>
+        `;
+    }
+    wireTaskDescriptionField(scope) {
+        const toggle = scope.querySelector('.kdp-description-toggle');
+        const preview = scope.querySelector('.kdp-description-view');
+        const input = scope.querySelector('.kdp-description-input');
+        if (!toggle || !preview || !input)
+            return;
+        toggle.addEventListener('click', () => {
+            const editing = input.classList.contains('hidden');
+            input.classList.toggle('hidden', !editing);
+            preview.classList.toggle('hidden', editing);
+            if (editing) {
+                toggle.innerHTML = this.taskDescriptionIcon('preview');
+                toggle.title = 'Preview description';
+                toggle.setAttribute('aria-label', 'Preview description');
+                input.focus({ preventScroll: true });
+            }
+            else {
+                preview.innerHTML = this.taskDescriptionPreview(input.value);
+                toggle.innerHTML = this.taskDescriptionIcon('edit');
+                toggle.title = 'Edit description';
+                toggle.setAttribute('aria-label', 'Edit description');
+            }
+        });
+    }
+    taskDescriptionValue(scope) {
+        return scope.querySelector('.kdp-description-input')?.value || '';
+    }
     renderDetailPanelContent(panel, task, cardEl, container) {
         const idLabel = task.identifier || `#${task.index || task.id}`;
         let formattedDate = '';
@@ -1422,19 +1492,7 @@ export class KanbanManager {
 
                 ${this.renderFeatureDetailSection(task)}
 
-                <div class="kdp-field">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <label for="kdp-description" style="margin-bottom: 0;">Description</label>
-                        <button id="kdp-desc-toggle-btn" class="dropup-action-btn" title="Edit description" style="width: 24px; height: 24px; padding: 0;">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;">
-                                <path d="M12 20h9"></path>
-                                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                            </svg>
-                        </button>
-                    </div>
-                    <div id="kdp-description-view" class="kanban-desc-html">${this.escapeHtml(task.description || '') || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>'}</div>
-                    <textarea id="kdp-description" class="hidden" placeholder="No description provided" style="font-family: var(--font-mono); font-size: 12px; height: 160px; line-height: 1.5;">${this.escapeHtml(task.description || '')}</textarea>
-                </div>
+                ${this.renderTaskDescriptionField(task.description || '')}
 
                 <div class="kdp-meta">
                     <div>Created: ${createdDate}</div>
@@ -1449,31 +1507,9 @@ export class KanbanManager {
                 </div>
             </div>
         `;
-        // Wire events
-        const toggleBtn = panel.querySelector('#kdp-desc-toggle-btn');
-        const descView = panel.querySelector('#kdp-description-view');
-        const descInput = panel.querySelector('#kdp-description');
-        const PENCIL_SVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`;
-        const EYE_SVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 13px; height: 13px; display: block;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
-        toggleBtn.addEventListener('click', () => {
-            if (descInput.classList.contains('hidden')) {
-                descInput.classList.remove('hidden');
-                descView.classList.add('hidden');
-                toggleBtn.innerHTML = EYE_SVG;
-                toggleBtn.title = 'Preview description';
-            }
-            else {
-                descInput.classList.add('hidden');
-                descView.classList.remove('hidden');
-                // XSS-safe: escape the textarea value before injecting as HTML.
-                // The view already renders the (escaped) original description; we
-                // re-escape here so user-typed content cannot inject markup and
-                // so escape sequences round-trip consistently.
-                descView.innerHTML = this.escapeHtml(descInput.value) || '<span style="color: var(--text-muted); font-style: italic;">No description provided</span>';
-                toggleBtn.innerHTML = PENCIL_SVG;
-                toggleBtn.title = 'Edit description';
-            }
-        });
+        // The same HTML description component is wired for ordinary tasks and
+        // feature parents because both surfaces use this detail renderer.
+        this.wireTaskDescriptionField(panel);
         // Label picker: populate the dropdown with all labels (minus ones
         // already on this task), enable Add when a real option is chosen, and
         // wire remove-X on each existing label pill.
@@ -1508,7 +1544,7 @@ export class KanbanManager {
                 const newPriority = parseInt(panel.querySelector('#kdp-priority').value, 10);
                 const newDueDateVal = panel.querySelector('#kdp-due-date').value;
                 const newDone = panel.querySelector('#kdp-done').checked;
-                const newDescription = panel.querySelector('#kdp-description').value;
+                const newDescription = this.taskDescriptionValue(panel);
                 let newDueDate = null;
                 if (newDueDateVal) {
                     newDueDate = new Date(newDueDateVal).toISOString();
