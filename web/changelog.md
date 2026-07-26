@@ -2,6 +2,25 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.0 — 2026-07-26
+
+Minor bump for two user-facing fixes that together make phi feel less like raw infrastructure: the access-password UX rework and a Kanban fetch bug that was silently dropping bucket state.
+
+### Changed
+- **Unlock prompt copy** (`003b881`). "Phi is locked" → "Sign in to Phi" + "Unlock" → "Sign in" + new subtitle "Enter your password to continue." Industry convention over emergency-speak.
+- **Settings password section rebuild** (`003b881`). Single primary button ("Set password" / "Update password") properly sized with padding and `min-width: 140px`. New + Confirm fields with inline validation ("At least 8 characters." / "Passwords don't match."), error clears on input. State indicator is now a colored dot (gray off / accent-glow on) instead of a text badge. Remove password is a quiet text-link + two-step inline Confirm button — replaces `window.confirm()`. Session cookie authorizes the action server-side; no API change.
+- **Toast copy**: "Access password saved" → "Password updated", "Access password disabled" → "Password removed".
+
+### Fixed
+- **Kanban board: cards lost bucket state when the project had subtasks** (`cdb529a`). Vikunja's `?expand=subtasks` query parameter changes how it responds on Kanban views — cards were coming back without the authoritative bucket assignment, which made the board render cards in the wrong column whenever any task in the project had children. Fix: fetch the board unexpanded (preserves bucket state) and fetch the project tasks separately for the hierarchy; merge only the `related_tasks` relation map onto each board card. Features remain additive — if the hierarchy fetch fails the board still renders, just without phi-native subtask indicators.
+
+### Tests
+- `test-js/accessAuth.test.js` updated for the new copy.
+- `test-js/settingsModal.test.js` — +4 cases for the new flow: short-password blocked, mismatch blocked, typing clears error, two-step remove confirm.
+- `test-js/kanbanFeatures.test.js` — +2 cases pinning the subtask-merge behavior: cards retain bucket state when project has subtasks, hierarchy-only failures fall back to the board without features.
+
+697 vitest pass (was 692 at v0.14.4; +5: 4 settings flow + 1 kanban subtask).
+
 ## v0.14.4 — 2026-07-25
 
 Patch batch covering every commit since the v0.14.3 tag. Two user-facing features (optional access password, kanban feature roll-ups), a kanban black-screen fix, and three input-routing refactors that close a long-standing cross-tab race.
