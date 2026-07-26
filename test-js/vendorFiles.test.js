@@ -82,6 +82,7 @@ function loadAddon(file) {
 describe('web/vendor/*.js - parse integrity', () => {
     it.each([
         'Sortable.min.js',
+        'chart.umd.js',
         'diff2html.min.js',
         'highlight.min.js',
         'marked.min.js',

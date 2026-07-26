@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
-import { buildFeatures, featureProgress, featureStats, featureTimeline } from '../web/kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline } from '../web/kanban-features.js';
 
 setupDomHarness();
 
@@ -52,6 +52,18 @@ describe('native Vikunja feature helpers', () => {
     it('does not count a stale done_at for a task that was reopened', () => {
         expect(featureTimeline([child(1, false, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z')]))
             .toEqual([{ date: '2026-07-01', filed: 1, completed: 0 }]);
+    });
+
+    it('builds a project burn-up from feature parent dates', () => {
+        const features = buildFeatures([
+            { id: 1, created: '2026-07-01T00:00:00Z', done: true, done_at: '2026-07-03T00:00:00Z', related_tasks: { subtask: [child(2, true)] } },
+            { id: 3, created: '2026-07-02T00:00:00Z', done: false, related_tasks: { subtask: [child(4, false)] } },
+        ]);
+        expect(portfolioTimeline(features)).toEqual([
+            { date: '2026-07-01', filed: 1, completed: 0 },
+            { date: '2026-07-02', filed: 2, completed: 0 },
+            { date: '2026-07-03', filed: 2, completed: 1 },
+        ]);
     });
 
     it('calculates 28-day feature velocity and a forecast from parent completion', () => {
@@ -134,8 +146,34 @@ describe('Feature surface', () => {
 
         expect(container.querySelector('.kanban-stats-view')).toBeTruthy();
         expect(container.textContent).toContain('Features done');
-        expect(container.textContent).toContain('Features completed by day');
+        expect(container.textContent).toContain('Scope burn-up');
+        expect(container.querySelectorAll('.kanban-chart-wrap canvas')).toHaveLength(4);
         expect(container.querySelector('#kanban-search-input')).toBeNull();
+    });
+
+    it('uses the active Phi theme for all Stats charts', () => {
+        const c = manager();
+        c.boardMode = 'stats';
+        c.taskCache = {
+            1: { id: 1, created: '2026-07-01T00:00:00Z', done: true, done_at: new Date().toISOString(), related_tasks: { subtask: [child(2, true)] } },
+            3: { id: 3, created: '2026-07-02T00:00:00Z', done: false, related_tasks: { subtask: [child(4, false)] } },
+        };
+        c.buckets = [{ id: 10, title: 'Review', tasks: [{ id: 1 }] }];
+        document.documentElement.style.setProperty('--accent', '#123456');
+        document.documentElement.style.setProperty('--text-muted', '#777777');
+        document.documentElement.style.setProperty('--bg-border', '#333333');
+        document.documentElement.style.setProperty('--bg-panel', '#111111');
+        document.documentElement.style.setProperty('--text-primary', '#eeeeee');
+        const Chart = vi.fn(() => ({ destroy: vi.fn() }));
+        vi.stubGlobal('Chart', Chart);
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
+
+        expect(Chart).toHaveBeenCalledTimes(4);
+        expect(Chart.mock.calls[0][1].data.datasets[0].backgroundColor[0]).toBe('#123456');
+        expect(c.statsCharts).toHaveLength(4);
     });
 
     it('renders subtasks and their burn-up chart in the detail drawer', () => {
