@@ -7625,16 +7625,44 @@ html, body {
 .kanban-stats-chart-heading p { margin: 0; color: var(--text-muted); font: 11px var(--font-ui); }
 .kanban-stats-chart-heading > span { align-self: center; color: var(--accent); font: 11px var(--font-mono); white-space: nowrap; }
 
-.kanban-velocity-chart svg { display: block; width: 100%; height: 132px; overflow: visible; }
-.kanban-velocity-baseline { stroke: var(--bg-border); stroke-width: 1; }
-.kanban-velocity-bar { fill: var(--accent); opacity: 0.82; }
-.kanban-velocity-bar:hover { opacity: 1; }
-.kanban-velocity-chart > div { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-muted); font: 9px var(--font-mono); }
-
 @media (max-width: 768px) {
     .kanban-stats-view { padding: 16px 12px; }
     .kanban-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .kanban-stat-card { min-height: 94px; padding: 12px; }
     .kanban-features-heading { gap: 10px; }
     .kanban-features-actions { align-items: flex-end; flex-direction: column; }
+}
+
+/* Chart.js portfolio health charts inherit Phi's active accent at creation. */
+.kanban-stats-charts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.kanban-stats-chart-card {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.kanban-chart-wrap {
+    position: relative;
+    min-height: 220px;
+    flex: 1;
+}
+
+.kanban-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.kanban-stats-chart-card--health .kanban-chart-wrap,
+.kanban-stats-chart-card--flow .kanban-chart-wrap {
+    min-height: 208px;
+}
+
+@media (max-width: 768px) {
+    .kanban-stats-charts { grid-template-columns: 1fr; }
+    .kanban-chart-wrap { min-height: 200px; }
 }

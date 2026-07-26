@@ -71,6 +71,31 @@ export function featureTimeline(subtasks) {
 function utcDate(date) {
     return date.toISOString().slice(0, 10);
 }
+// Project-level burn-up for feature parents. Filed is the point a feature was
+// created; completed is when that parent was marked done.
+export function portfolioTimeline(features) {
+    const changes = new Map();
+    const add = (date, key) => {
+        if (!date)
+            return;
+        const change = changes.get(date) || { filed: 0, completed: 0 };
+        change[key] += 1;
+        changes.set(date, change);
+    };
+    features.forEach(feature => {
+        add(utcDay(feature.task.created), 'filed');
+        if (feature.task.done)
+            add(utcDay(feature.task.done_at), 'completed');
+    });
+    let filed = 0;
+    let completed = 0;
+    return [...changes.keys()].sort().map(date => {
+        const change = changes.get(date);
+        filed += change.filed;
+        completed += change.completed;
+        return { date, filed, completed };
+    });
+}
 // Calculates portfolio-level feature progress from current Vikunja task state.
 // Velocity is an explicit rolling-window average, not a promise: task reopen
 // history is not available from Vikunja's current done_at field.
