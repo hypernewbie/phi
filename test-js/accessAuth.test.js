@@ -81,8 +81,9 @@ describe('access-password bootstrap', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         const overlay = document.querySelector('.access-auth-overlay');
         expect(overlay).toBeTruthy();
-        expect(overlay.querySelector('h1').textContent).toBe('Phi is locked');
+        expect(overlay.querySelector('h1').textContent).toBe('Sign in to Phi');
+        expect(overlay.querySelector('.access-auth-subtitle').textContent).toBe('Enter your password to continue.');
         expect(overlay.querySelector('input[type="password"]')).toBeTruthy();
-        expect(overlay.querySelector('button[type="submit"]').textContent).toBe('Unlock');
+        expect(overlay.querySelector('button[type="submit"]').textContent).toBe('Sign in');
     });
 });

@@ -3031,6 +3031,12 @@ html, body {
     font-size: 18px;
 }
 
+.access-auth-subtitle {
+    font-size: 13px !important;
+    color: var(--text-muted) !important;
+    margin-bottom: 4px !important;
+}
+
 .access-auth-dialog label,
 .access-auth-error {
     color: var(--text-muted);
@@ -3179,6 +3185,92 @@ html, body {
 .settings-access-actions {
     display: flex;
     gap: 8px;
+}
+
+/* Access-password row: header (label + dot + state text), inputs, hint+error,
+   then primary button + Remove link on a single row, right-aligned. */
+.settings-access-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.settings-access-title {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.settings-access-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.settings-access-dot.is-off {
+    background-color: var(--text-muted);
+}
+.settings-access-dot.is-on {
+    background-color: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+}
+.settings-access-state-text {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.settings-access-hint-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    min-height: 14px;
+}
+.settings-access-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.settings-access-error {
+    font-size: 11px;
+    color: var(--red);
+}
+
+.settings-access-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.settings-access-spacer {
+    flex: 1 1 auto;
+}
+.settings-access-primary {
+    width: auto !important;
+    padding: 0 18px !important;
+    min-width: 140px;
+}
+.settings-access-remove-link {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+.settings-access-remove-link:hover {
+    color: var(--red);
+    background-color: rgba(255, 80, 80, 0.08);
+}
+.settings-access-confirm-remove {
+    width: auto !important;
+    padding: 0 14px !important;
+    min-width: 120px;
+    height: 32px !important;
+    font-size: 12px !important;
+}
+
+.settings-row input.is-invalid {
+    border-color: var(--red);
+    box-shadow: 0 0 0 2px rgba(255, 80, 80, 0.2);
 }
 
 .settings-row input[type="checkbox"] {
