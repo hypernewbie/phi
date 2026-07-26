@@ -2,6 +2,24 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.1 — 2026-07-26
+
+Patch bump. Kanban gets three new capabilities and one rendering fix; the access-password UX gets one CSS-specificity fix.
+
+### Added
+- **Feature portfolio stats** (`51bf080`). Kanban panel now shows aggregate counts of phi-native features by status (Active / Completed / Backlog) and by priority, alongside the existing Vikunja columns. Uses the same hierarchy-fetch path that landed in v0.15.0; failures are additive — Vikunja columns still render even when the feature fetch fails.
+- **Project health chart** (`8f06312`). A small inline SVG chart on the Kanban panel shows the breakdown of phi-native features (active vs completed vs backlog) plus per-priority counts. Pulls from the same feature cache. Empty projects show a clean "no features yet" placeholder rather than a broken chart.
+
+### Fixed
+- **Kanban shared-task HTML descriptions render as HTML, not escaped text** (`da6f818`). Vikunja tasks marked as shared have HTML descriptions intended to render inline; the previous code escaped them, which broke shared task formatting. Now renders with a sanitization pass (script tags / event handlers / javascript: URLs stripped) so shared content stays safe to render while preserving its intended formatting.
+- **Access-password Confirm remove was rendering in big red despite `el.hidden = true`** (`fce0ef9`). The HTML `hidden` attribute applies via the user-agent stylesheet (`[hidden] { display: none }`), but `.btn { display: flex }` has higher specificity (author > user-agent) and won. Switched to phi's existing `.hidden` class convention (which uses `!important`) — the button now actually disappears. Regression net added.
+
+### Tests
+- `test-js/kanbanFeatures.test.js` — extended with portfolio stats cases (counts by status, by priority, empty-state placeholder).
+- `test-js/kanbanHealth.test.js` (new) — chart render cases (active/completed/backlog slice, per-priority slice, empty placeholder, data update on project switch).
+- `test-js/kanbanSharedDescription.test.js` (new) — HTML render path with sanitization: tags preserved, `<script>` stripped, `onerror=` stripped, `javascript:` URLs stripped.
+- `test-js/settingsModal.test.js` — +1 case pinning the `.hidden`-class convention over the `[hidden]` attribute.
+
 ## v0.15.0 — 2026-07-26
 
 Minor bump for two user-facing fixes that together make phi feel less like raw infrastructure: the access-password UX rework and a Kanban fetch bug that was silently dropping bucket state.
