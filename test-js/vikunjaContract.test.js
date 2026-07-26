@@ -50,6 +50,23 @@ describe('Vikunja swagger contract (locked-in)', () => {
         expect(t.properties.bucket_id).toBeTruthy();
     });
 
+    it('supports native subtask relations and expanded view tasks', () => {
+        const relation = vikOp('PUT', '/tasks/{taskID}/relations');
+        expect(relation).toBeTruthy();
+        expect(relation.summary).toMatch(/relation/i);
+        const body = (relation.parameters || []).find(p => p.in === 'body');
+        expect(body && body.schema.$ref).toBe('#/definitions/models.TaskRelation');
+        expect(swagger.definitions['models.RelationKind'].enum).toContain('subtask');
+
+        const tasks = vikOp('GET', '/projects/{id}/views/{view}/tasks');
+        const expand = (tasks.parameters || []).find(p => p.name === 'expand');
+        expect(expand).toBeTruthy();
+        expect(expand.description).toMatch(/subtasks/i);
+        expect(swagger.definitions['models.Task'].properties.related_tasks).toBeTruthy();
+        expect(swagger.definitions['models.Task'].properties.created).toBeTruthy();
+        expect(swagger.definitions['models.Task'].properties.done_at).toBeTruthy();
+    });
+
     it('Vendor file is actually Vikunja swagger (sanity)', () => {
         expect(swagger.info && swagger.info.title).toMatch(/vikunja/i);
         expect(swagger.swagger).toMatch(/^2\./); // Swagger 2.0
