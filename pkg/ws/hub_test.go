@@ -67,6 +67,23 @@ func TestHub_RegisterAndUnregister(t *testing.T) {
 	}
 }
 
+func TestHubCloseAllClientsPreservesPaneState(t *testing.T) {
+	h := NewHub(0)
+	client := &Client{Send: make(chan []byte, 1)}
+	h.Register("pane", client)
+
+	// A nil Ws is valid for unit-created clients; the important contract is
+	// that forced live-connection cleanup does not discard pane/ring state.
+	h.CloseAllClients()
+	ph := h.GetOrCreatePaneHub("pane")
+	ph.mu.Lock()
+	registered := ph.clients[client]
+	ph.mu.Unlock()
+	if !registered {
+		t.Fatal("CloseAllClients removed pane state instead of only closing sockets")
+	}
+}
+
 func TestHub_Broadcast(t *testing.T) {
 	h := NewHub(0)
 

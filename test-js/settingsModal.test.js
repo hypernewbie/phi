@@ -138,6 +138,35 @@ describe('Settings modal — trigger', () => {
         expect(amber.getAttribute('aria-checked')).toBe('true');
     });
 
+    it('renders an access-password control in Config without changing other settings actions', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = false;
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        const password = document.getElementById('settings-access-password');
+        expect(password).toBeTruthy();
+        expect(password.type).toBe('password');
+        expect(password.placeholder).toBe('Set a password');
+        expect(Array.from(document.querySelectorAll('.settings-access-actions button')).map((b) => b.textContent))
+            .toEqual(['Set password', 'Clear']);
+        expect(document.querySelector('.settings-access-actions button:last-child').disabled).toBe(true);
+        // Existing primary Config close action remains present.
+        expect(Array.from(document.querySelectorAll('.settings-footer button')).some((b) => b.textContent === 'Close')).toBe(true);
+    });
+
+    it('renders password change and clear controls when access protection is enabled', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = true;
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.getElementById('settings-access-password').placeholder).toBe('New password');
+        expect(Array.from(document.querySelectorAll('.settings-access-actions button')).map((b) => b.textContent))
+            .toEqual(['Change', 'Clear']);
+        expect(document.querySelector('.settings-access-actions button:last-child').disabled).toBe(false);
+    });
+
     it('version block renders from app.versionInfo, no fetch', async () => {
         makeAppDom();
         const fetchSpy = mockFetch(() => {
