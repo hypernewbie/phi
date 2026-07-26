@@ -25,9 +25,9 @@ var Upgrader = websocket.Upgrader{
 	ReadBufferSize:    1024 * 32,
 	WriteBufferSize:   1024 * 32,
 	EnableCompression: true,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for localhost and SSH tunnels
-	},
+	// Nil keeps gorilla's same-origin default. Same-origin WebSockets still
+	// work through localhost and SSH tunnels; cross-site pages cannot attach
+	// to a browser's authenticated terminal session.
 }
 
 func (c *Client) WritePump() {
