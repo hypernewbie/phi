@@ -144,27 +144,40 @@ describe('Settings modal — trigger', () => {
         app.accessAuthEnabled = false;
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const password = document.getElementById('settings-access-password');
-        expect(password).toBeTruthy();
-        expect(password.type).toBe('password');
-        expect(password.placeholder).toBe('Set a password');
-        expect(Array.from(document.querySelectorAll('.settings-access-actions button')).map((b) => b.textContent))
-            .toEqual(['Set password', 'Clear']);
-        expect(document.querySelector('.settings-access-actions button:last-child').disabled).toBe(true);
+        const newInput = document.getElementById('settings-access-new');
+        const confirmInput = document.getElementById('settings-access-confirm');
+        expect(newInput).toBeTruthy();
+        expect(newInput.type).toBe('password');
+        expect(newInput.placeholder).toBe('New password');
+        expect(confirmInput).toBeTruthy();
+        expect(confirmInput.placeholder).toBe('Confirm new password');
+        // State dot renders off, primary button says "Set password".
+        expect(document.querySelector('.settings-access-dot.is-off')).toBeTruthy();
+        expect(document.querySelector('.settings-access-dot.is-on')).toBeNull();
+        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
+        expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
+        // Remove link is hidden when password is not set.
+        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(true);
+        expect(document.querySelector('.settings-access-confirm-remove').hidden).toBe(true);
+        // Hint visible, no error yet.
+        expect(document.querySelector('.settings-access-hint').textContent).toMatch(/characters/);
+        expect(document.querySelector('.settings-access-error').textContent).toBe('');
         // Existing primary Config close action remains present.
         expect(Array.from(document.querySelectorAll('.settings-footer button')).some((b) => b.textContent === 'Close')).toBe(true);
     });
 
-    it('renders password change and clear controls when access protection is enabled', async () => {
+    it('renders Update + Remove controls when access protection is enabled', async () => {
         makeAppDom();
         const app = buildApp();
         app.accessAuthEnabled = true;
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        expect(document.getElementById('settings-access-password').placeholder).toBe('New password');
-        expect(Array.from(document.querySelectorAll('.settings-access-actions button')).map((b) => b.textContent))
-            .toEqual(['Change', 'Clear']);
-        expect(document.querySelector('.settings-access-actions button:last-child').disabled).toBe(false);
+        expect(document.querySelector('.settings-access-dot.is-on')).toBeTruthy();
+        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Enabled');
+        expect(document.querySelector('.settings-access-primary').textContent).toBe('Update password');
+        // Remove link visible (but Confirm button hidden until clicked).
+        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(false);
+        expect(document.querySelector('.settings-access-confirm-remove').hidden).toBe(true);
     });
 
     it('version block renders from app.versionInfo, no fetch', async () => {
@@ -346,5 +359,99 @@ describe('Settings modal — DOM hygiene', () => {
         expect(() => imp.click()).not.toThrow();
         // app is unused here but referenced to keep build deterministic.
         expect(app).toBeTruthy();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Access-password Config flow: confirm-mismatch inline error, remove-link
+// two-step confirm, success-state transitions. No window.confirm().
+// ---------------------------------------------------------------------------
+
+describe('Settings modal — access password flow', () => {
+    it('short password shows inline error and does NOT call setAccessPassword', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = false;
+        const setPwSpy = vi.fn();
+        app._setAccessPassword = setPwSpy;  // not used — patching for the call we actually make
+        // openSettingsModal reaches into the auth.js module directly, so spy via global.
+        const authModule = await import('../web/auth.js');
+        const spy = vi.spyOn(authModule, 'setAccessPassword').mockResolvedValue({ enabled: true });
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        document.getElementById('settings-access-new').value = 'short';
+        document.getElementById('settings-access-confirm').value = 'short';
+        document.querySelector('.settings-access-primary').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(spy).not.toHaveBeenCalled();
+        const err = document.querySelector('.settings-access-error');
+        expect(err.textContent).toMatch(/characters/);
+        expect(document.getElementById('settings-access-new').classList.contains('is-invalid')).toBe(true);
+        spy.mockRestore();
+    });
+
+    it('password mismatch shows inline error and does NOT call setAccessPassword', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = false;
+        const authModule = await import('../web/auth.js');
+        const spy = vi.spyOn(authModule, 'setAccessPassword').mockResolvedValue({ enabled: true });
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        document.getElementById('settings-access-new').value = 'correct horse battery staple';
+        document.getElementById('settings-access-confirm').value = 'different password value';
+        document.querySelector('.settings-access-primary').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(spy).not.toHaveBeenCalled();
+        const err = document.querySelector('.settings-access-error');
+        expect(err.textContent).toMatch(/don.+match/);
+        spy.mockRestore();
+    });
+
+    it('typing into the inputs clears the inline error', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = false;
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+        document.getElementById('settings-access-new').value = 'short';
+        document.getElementById('settings-access-confirm').value = 'short';
+        document.querySelector('.settings-access-primary').click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(document.querySelector('.settings-access-error').textContent).not.toBe('');
+        // Typing into either input clears the error.
+        const evt = new Event('input', { bubbles: true });
+        document.getElementById('settings-access-new').dispatchEvent(evt);
+        expect(document.querySelector('.settings-access-error').textContent).toBe('');
+        expect(document.getElementById('settings-access-new').classList.contains('is-invalid')).toBe(false);
+    });
+
+    it('remove-link is hidden when password not set; clicking it reveals Confirm; clicking Confirm calls clearAccessPassword', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.accessAuthEnabled = true;
+        const authModule = await import('../web/auth.js');
+        const clearSpy = vi.spyOn(authModule, 'clearAccessPassword').mockResolvedValue({ enabled: false });
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+
+        const removeLink = document.querySelector('.settings-access-remove-link');
+        const confirmBtn = document.querySelector('.settings-access-confirm-remove');
+        expect(removeLink.hidden).toBe(false);
+        expect(confirmBtn.hidden).toBe(true);
+
+        removeLink.click();
+        expect(removeLink.hidden).toBe(true);
+        expect(confirmBtn.hidden).toBe(false);
+
+        confirmBtn.click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(clearSpy).toHaveBeenCalledTimes(1);
+        // After success: state flips to Disabled, primary reverts to Set password, link hidden again.
+        expect(document.querySelector('.settings-access-dot.is-off')).toBeTruthy();
+        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
+        expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
+        expect(document.querySelector('.settings-access-remove-link').hidden).toBe(true);
+        clearSpy.mockRestore();
     });
 });
