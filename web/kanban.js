@@ -1,4 +1,5 @@
 import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor } from './util.js';
+import { buildFeatures, featureProgress, featureTimeline } from './kanban-features.js';
 export class KanbanManager {
     app;
     activeDetailPanel;
@@ -6,6 +7,7 @@ export class KanbanManager {
     escListener;
     taskCache;
     _dragActive;
+    boardMode;
     currentProjectId;
     currentViewId;
     buckets;
@@ -16,6 +18,7 @@ export class KanbanManager {
         this.escListener = null;
         this.taskCache = {};
         this._dragActive = false;
+        this.boardMode = 'board';
     }
     async openBoard() {
         const paneId = 'kanban-board';
@@ -255,7 +258,10 @@ export class KanbanManager {
                 return;
             }
             // Fetch buckets and tasks
-            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500`);
+            // `expand=subtasks` asks Vikunja for the native relation map in
+            // this same board request. That avoids an N+1 detail request for
+            // feature progress and keeps Vikunja as the only source of truth.
+            const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500&expand=subtasks`);
             // Rebuild taskCache
             this.taskCache = {};
             // Cache the active view id and project id on the manager so later
@@ -311,6 +317,9 @@ export class KanbanManager {
                 </div>
             `;
         }
+        else if (this.boardMode === 'features') {
+            boardContentHtml = this.renderFeaturesView();
+        }
         else if (!bucketsWithTasks || bucketsWithTasks.length === 0) {
             boardContentHtml = `
                 <div class="kanban-no-view-wrapper">
@@ -334,8 +343,12 @@ export class KanbanManager {
                         <select id="kanban-project-select" class="kanban-select">
                             ${projects.map((p) => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${this.escapeHtml(p.title)}</option>`).join('')}
                         </select>
+                        <div class="kanban-view-switch" role="group" aria-label="Kanban view">
+                            <button class="kanban-view-btn ${this.boardMode === 'board' ? 'active' : ''}" data-kanban-mode="board">Board</button>
+                            <button class="kanban-view-btn ${this.boardMode === 'features' ? 'active' : ''}" data-kanban-mode="features">Features</button>
+                        </div>
                         <div class="kanban-search-wrapper" style="margin-left: 8px;">
-                            <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter tasks..." />
+                            <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}..." />
                         </div>
                         <button id="kanban-refresh-btn" class="toolbar-btn" title="Refresh Board">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -343,14 +356,16 @@ export class KanbanManager {
                                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                             </svg>
                         </button>
-                        <button id="kanban-add-column-btn" class="toolbar-btn" title="Add Column">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                                <line x1="12" y1="10" x2="12" y2="14"></line>
-                                <line x1="10" y1="12" x2="14" y2="12"></line>
-                            </svg>
-                            <span>Column</span>
-                        </button>
+                        ${this.boardMode === 'board' ? `
+                            <button id="kanban-add-column-btn" class="toolbar-btn" title="Add Column">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                                    <line x1="12" y1="10" x2="12" y2="14"></line>
+                                    <line x1="10" y1="12" x2="14" y2="12"></line>
+                                </svg>
+                                <span>Column</span>
+                            </button>
+                        ` : ''}
                     </div>
                     <div class="toolbar-right">
                         <button id="kanban-disconnect-btn" class="toolbar-btn text-danger" title="Disconnect Server">
@@ -368,6 +383,12 @@ export class KanbanManager {
             </div>
         `;
         // Attach listeners
+        container.querySelectorAll('.kanban-view-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+                this.boardMode = button.dataset.kanbanMode === 'features' ? 'features' : 'board';
+                this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+            });
+        });
         const projectSelect = container.querySelector('#kanban-project-select');
         projectSelect.addEventListener('change', () => {
             localStorage.setItem('vikunja_selected_project', projectSelect.value);
@@ -506,7 +527,7 @@ export class KanbanManager {
                     clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
                     const query = searchInput.value.trim().toLowerCase();
-                    const cards = container.querySelectorAll('.kanban-card');
+                    const cards = container.querySelectorAll('.kanban-card, .kanban-feature-row');
                     cards.forEach(card => {
                         const taskId = card.dataset.taskId;
                         const task = this.taskCache[taskId];
@@ -589,10 +610,224 @@ export class KanbanManager {
             });
         };
         addWrapperSetup();
+        // Feature rows deliberately use the same task detail panel as cards;
+        // completion applies to the parent only and never cascades silently.
+        container.querySelectorAll('.kanban-feature-row').forEach((row) => {
+            const rowElement = row;
+            const open = () => {
+                const taskId = rowElement.dataset.taskId;
+                this.openTaskDetail(taskId, rowElement, container);
+            };
+            rowElement.addEventListener('click', (event) => {
+                if (event.target.closest('button'))
+                    return;
+                open();
+            });
+            rowElement.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    open();
+                }
+            });
+        });
+        container.querySelectorAll('.kanban-feature-done-btn').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                const task = this.taskCache[button.dataset.taskId];
+                if (!task)
+                    return;
+                const progress = featureProgress(task);
+                if (!task.done && progress.completed < progress.total && !confirm(`Mark "${task.title}" done with ${progress.total - progress.completed} unfinished subtask${progress.total - progress.completed === 1 ? '' : 's'}?`))
+                    return;
+                const doneButton = button;
+                doneButton.disabled = true;
+                try {
+                    await this.setTaskDone(task, !task.done);
+                    await this.loadAndRenderBoard(container);
+                }
+                catch (err) {
+                    this.app.showToast(`Failed to update feature: ${err.message}`, { type: 'error', title: 'Kanban' });
+                    doneButton.disabled = false;
+                }
+            });
+        });
         // Initialize Sortable if buckets are rendered
-        if (kanbanView && bucketsWithTasks && bucketsWithTasks.length > 0) {
+        if (this.boardMode === 'board' && kanbanView && bucketsWithTasks && bucketsWithTasks.length > 0) {
             this.initSortable(container, bucketsWithTasks);
         }
+    }
+    renderFeaturesView() {
+        const features = buildFeatures(Object.values(this.taskCache));
+        if (features.length === 0) {
+            return `
+                <div class="kanban-no-view-wrapper">
+                    <h3>No features yet</h3>
+                    <p>Add a subtask in a task’s detail panel and it will appear here automatically.</p>
+                </div>
+            `;
+        }
+        return `
+            <div class="kanban-features-view">
+                <div class="kanban-features-heading">
+                    <div>
+                        <h3>Features</h3>
+                        <p>Progress is calculated from direct Vikunja subtasks.</p>
+                    </div>
+                    <span class="column-count">${features.length}</span>
+                </div>
+                <div class="kanban-features-list">
+                    ${features.map(feature => this.renderFeatureRow(feature)).join('')}
+                </div>
+            </div>
+        `;
+    }
+    renderFeatureProgress(progress) {
+        return `
+            <div class="kanban-feature-progress" aria-label="${progress.completed} of ${progress.total} subtasks complete">
+                <div class="kanban-feature-progress-meta"><span>${progress.completed}/${progress.total}</span><strong>${progress.percent}%</strong></div>
+                <div class="kanban-feature-progress-track"><span style="width: ${progress.percent}%"></span></div>
+            </div>
+        `;
+    }
+    renderFeatureRow(progress) {
+        const task = progress.task;
+        const idLabel = task.identifier || `#${task.index || task.id}`;
+        return `
+            <div class="kanban-feature-row ${task.done ? 'kanban-feature-row--done' : ''}" data-task-id="${task.id}" tabindex="0" role="button">
+                <div class="kanban-feature-main">
+                    <span class="kanban-feature-id">${this.escapeHtml(idLabel)}</span>
+                    <span class="kanban-feature-title">${this.escapeHtml(task.title || '')}</span>
+                </div>
+                ${this.renderFeatureProgress(progress)}
+                <button class="btn ${task.done ? 'btn-primary' : 'btn-accent'} kanban-feature-done-btn" data-task-id="${task.id}">${task.done ? 'Reopen' : 'Mark done'}</button>
+            </div>
+        `;
+    }
+    renderFeatureTimeline(subtasks) {
+        const timeline = featureTimeline(subtasks);
+        if (timeline.length === 0) {
+            return '<div class="kdp-feature-timeline-empty">No dated subtask activity yet.</div>';
+        }
+        const width = 260;
+        const height = 54;
+        const maximum = Math.max(1, ...timeline.map(point => Math.max(point.filed, point.completed)));
+        const x = (index) => timeline.length === 1 ? width : (index / (timeline.length - 1)) * width;
+        const y = (value) => height - ((value / maximum) * height);
+        const points = (field) => timeline.map((point, index) => `${x(index).toFixed(1)},${y(point[field]).toFixed(1)}`).join(' ');
+        const firstDate = new Date(`${timeline[0].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const lastDate = new Date(`${timeline[timeline.length - 1].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const last = timeline[timeline.length - 1];
+        return `
+            <div class="kdp-feature-timeline" aria-label="Subtasks filed and completed over time">
+                <div class="kdp-feature-timeline-legend"><span><i class="filed"></i>Filed ${last.filed}</span><span><i class="completed"></i>Completed ${last.completed}</span></div>
+                <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cumulative subtasks filed and completed from ${firstDate} to ${lastDate}">
+                    <polyline class="kdp-timeline-filed" points="${points('filed')}"></polyline>
+                    <polyline class="kdp-timeline-completed" points="${points('completed')}"></polyline>
+                    <circle class="kdp-timeline-filed-point" cx="${x(timeline.length - 1).toFixed(1)}" cy="${y(last.filed).toFixed(1)}" r="2"></circle>
+                    <circle class="kdp-timeline-completed-point" cx="${x(timeline.length - 1).toFixed(1)}" cy="${y(last.completed).toFixed(1)}" r="2"></circle>
+                </svg>
+                <div class="kdp-feature-timeline-dates"><span>${firstDate}</span><span>${lastDate}</span></div>
+            </div>
+        `;
+    }
+    renderFeatureDetailSection(task) {
+        const progress = featureProgress(task);
+        const subtaskRows = progress.subtasks.length === 0
+            ? '<div class="kdp-subtasks-empty">Add a subtask to turn this task into a feature.</div>'
+            : progress.subtasks.map(subtask => `
+                <label class="kdp-subtask-row ${subtask.done ? 'done' : ''}">
+                    <input type="checkbox" class="kdp-subtask-done" data-subtask-id="${subtask.id}" ${subtask.done ? 'checked' : ''}>
+                    <span>${this.escapeHtml(subtask.title || '')}</span>
+                </label>
+            `).join('');
+        return `
+            <section class="kdp-feature-section">
+                <div class="kdp-feature-section-heading">
+                    <label>Subtasks</label>
+                    ${progress.total > 0 ? `<span>${progress.completed}/${progress.total} · ${progress.percent}%</span>` : ''}
+                </div>
+                ${progress.total > 0 ? this.renderFeatureProgress(progress) : ''}
+                <div class="kdp-subtasks-list">${subtaskRows}</div>
+                <div class="kdp-add-subtask-row">
+                    <input id="kdp-new-subtask" type="text" placeholder="Add subtask…">
+                    <button id="kdp-add-subtask-btn" class="btn btn-primary">Add</button>
+                </div>
+                ${progress.total > 0 ? this.renderFeatureTimeline(progress.subtasks) : ''}
+            </section>
+        `;
+    }
+    withSubtask(parent, subtask) {
+        const children = featureProgress(parent).subtasks;
+        const existing = children.findIndex(child => String(child.id) === String(subtask.id));
+        const nextChildren = existing >= 0
+            ? children.map((child, index) => index === existing ? { ...child, ...subtask } : child)
+            : [...children, subtask];
+        const nextParent = {
+            ...parent,
+            related_tasks: { ...(parent.related_tasks || {}), subtask: nextChildren }
+        };
+        this.taskCache[nextParent.id] = nextParent;
+        this.taskCache[subtask.id] = { ...(this.taskCache[subtask.id] || {}), ...subtask };
+        return nextParent;
+    }
+    replaceFeatureDetailSection(panel, task, cardEl, container) {
+        const current = panel.querySelector('.kdp-feature-section');
+        if (!current)
+            return;
+        current.outerHTML = this.renderFeatureDetailSection(task);
+        this.wireFeatureDetailSection(panel, task, cardEl, container);
+    }
+    wireFeatureDetailSection(panel, task, cardEl, container) {
+        panel.querySelectorAll('.kdp-subtask-done').forEach((input) => {
+            input.addEventListener('change', async () => {
+                const checkbox = input;
+                const child = featureProgress(task).subtasks.find(item => String(item.id) === checkbox.dataset.subtaskId);
+                if (!child)
+                    return;
+                checkbox.disabled = true;
+                try {
+                    const updatedChild = await this.setTaskDone(child, checkbox.checked);
+                    const parent = this.withSubtask(task, updatedChild);
+                    this.replaceFeatureDetailSection(panel, parent, cardEl, container);
+                    await this.loadAndRenderBoard(container);
+                }
+                catch (err) {
+                    checkbox.checked = !checkbox.checked;
+                    checkbox.disabled = false;
+                    this.app.showToast(`Failed to update subtask: ${err.message}`, { type: 'error', title: 'Kanban' });
+                }
+            });
+        });
+        const input = panel.querySelector('#kdp-new-subtask');
+        const addButton = panel.querySelector('#kdp-add-subtask-btn');
+        if (!input || !addButton)
+            return;
+        const create = async () => {
+            const title = input.value.trim();
+            if (!title)
+                return;
+            input.disabled = true;
+            addButton.disabled = true;
+            try {
+                const child = await this.createSubtask(task, title);
+                const parent = this.withSubtask(task, child);
+                this.replaceFeatureDetailSection(panel, parent, cardEl, container);
+                await this.loadAndRenderBoard(container);
+                this.app.showToast('Subtask added.', { type: 'success', title: 'Kanban' });
+            }
+            catch (err) {
+                this.app.showToast(`Failed to add subtask: ${err.message}`, { type: 'error', title: 'Kanban' });
+                input.disabled = false;
+                addButton.disabled = false;
+            }
+        };
+        addButton.addEventListener('click', create);
+        input.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void create();
+            }
+        });
     }
     renderColumn(bucket) {
         const tasks = bucket.tasks || [];
@@ -648,6 +883,8 @@ export class KanbanManager {
                 </div>
             `;
         }
+        const progress = featureProgress(task);
+        const featureProgressHtml = progress.total > 0 ? this.renderFeatureProgress(progress) : '';
         // Due Date rendering
         let dueHtml = '';
         if (task.due_date && !task.due_date.startsWith('0001-01-01')) {
@@ -678,6 +915,7 @@ export class KanbanManager {
                 </button>
                 <div class="kanban-card-title">${this.escapeHtml(task.title)}</div>
                 ${labelsHtml}
+                ${featureProgressHtml}
                 <div class="kanban-card-meta">
                     <div class="meta-left">
                         <span class="kanban-task-id">${this.escapeHtml(idLabel)}</span>
@@ -792,7 +1030,17 @@ export class KanbanManager {
         };
         document.addEventListener('keydown', this.escListener);
         try {
-            const task = await this.apiGet(`/tasks/${taskId}`);
+            const fetchedTask = await this.apiGet(`/tasks/${taskId}`);
+            const cachedTask = this.taskCache[taskId];
+            // Some Vikunja versions only include the expanded relation map on
+            // collection endpoints. Preserve that map when the detail response
+            // omits it so feature progress stays visible in the drawer.
+            const task = {
+                ...cachedTask,
+                ...fetchedTask,
+                related_tasks: fetchedTask?.related_tasks?.subtask ? fetchedTask.related_tasks : cachedTask?.related_tasks
+            };
+            this.taskCache[task.id] = task;
             this.renderDetailPanelContent(panel, task, cardEl, container);
         }
         catch (err) {
@@ -884,6 +1132,8 @@ export class KanbanManager {
                     </div>
                 </div>
 
+                ${this.renderFeatureDetailSection(task)}
+
                 <div class="kdp-field">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                         <label for="kdp-description" style="margin-bottom: 0;">Description</label>
@@ -940,6 +1190,7 @@ export class KanbanManager {
         // already on this task), enable Add when a real option is chosen, and
         // wire remove-X on each existing label pill.
         this._wireLabelPicker(panel, task, container);
+        this.wireFeatureDetailSection(panel, task, cardEl, container);
         panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
         panel.querySelector('.kdp-cancel-btn').addEventListener('click', () => this.closeDetailPanel());
         // Detail-panel Delete button. Confirms, then deletes the task and closes
@@ -995,17 +1246,61 @@ export class KanbanManager {
             }
         });
     }
-    async saveTaskDetail(task, formData, cardEl, container) {
-        const payload = {
+    taskUpdatePayload(task, updates) {
+        return {
             ...task,
-            title: formData.title,
-            priority: formData.priority,
-            description: formData.description,
-            done: formData.done,
-            due_date: formData.due_date || '0001-01-01T00:00:00Z',
-            labels: (task.labels || []).map((l) => ({ id: l.id })),
-            assignees: (task.assignees || []).map((a) => ({ id: a.id }))
+            ...updates,
+            due_date: updates.due_date === undefined ? task.due_date : (updates.due_date || '0001-01-01T00:00:00Z'),
+            labels: (task.labels || []).map((label) => ({ id: label.id })),
+            assignees: (task.assignees || []).map((assignee) => ({ id: assignee.id }))
         };
+    }
+    async setTaskDone(task, done) {
+        const payload = this.taskUpdatePayload(task, { done });
+        // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
+        const response = await this.apiPost(`/tasks/${task.id}`, payload);
+        const next = { ...task, ...(response || {}), done };
+        // Normally the API returns done_at. Retain a local timestamp when an
+        // older server responds with 204 so the burn-up chart updates at once.
+        if (done && !next.done_at)
+            next.done_at = new Date().toISOString();
+        this.taskCache[next.id] = next;
+        return next;
+    }
+    async createSubtask(parent, title) {
+        const trimmed = title.trim();
+        if (!trimmed)
+            throw new Error('Subtask title cannot be empty.');
+        const projectId = this.currentProjectId || parent.project_id;
+        if (!projectId)
+            throw new Error('Subtask create failed: project not loaded yet.');
+        const payload = { title: trimmed, project_id: projectId };
+        if (parent.bucket_id != null)
+            payload.bucket_id = parent.bucket_id;
+        const child = await this.apiPut(`/projects/${projectId}/tasks`, payload);
+        if (!child?.id)
+            throw new Error('Vikunja did not return the new subtask.');
+        try {
+            await this.apiPut(`/tasks/${parent.id}/relations`, {
+                other_task_id: child.id,
+                relation_kind: 'subtask'
+            });
+        }
+        catch (err) {
+            // Creation and relation linking are separate upstream calls. Do not
+            // leave an unexpected orphan behind when the second call fails.
+            try {
+                await this.apiDelete(`/tasks/${child.id}`);
+            }
+            catch (cleanupErr) {
+                console.error('Failed to clean up unlinked subtask:', cleanupErr);
+            }
+            throw err;
+        }
+        return child;
+    }
+    async saveTaskDetail(task, formData, cardEl, container) {
+        const payload = this.taskUpdatePayload(task, formData);
         // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
         await this.apiPost(`/tasks/${task.id}`, payload);
         this.app.showToast('Task updated successfully.', { type: 'success' });
