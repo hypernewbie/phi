@@ -19,5 +19,6 @@ declare global {
         hljs: any;
         Diff2Html: any;
         Sortable: any;
+        Chart: any;
     }
 }
