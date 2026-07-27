@@ -133,7 +133,7 @@ afterEach(() => {
 // is captured at click time and the delayed callback doesn't re-resolve.
 // ---------------------------------------------------------------------------
 
-describe('opencode picker chain — tabInfo captured at click time', () => {
+describe('opencode picker chain + pi model dropdown — tabInfo captured at click time', () => {
     it('4 sends in order, all hit the click-time tab', () => {
         const tm = makeTm();
         const tabA = makeTab('opencode-A', 'opencode');
@@ -199,10 +199,57 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
         expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
     });
 
-    it('pi backend: picker routing survives a tab switch (commit 1 pinning preserved)', () => {
-        // After the defensive picker-routing switch, the pi branch is
-        // 3 sends instead of 1. Commit 1's sendToTab pinning keeps all
-        // 3 on the click-time tab even across a mid-chain switch.
+    it('pi backend: /model [pause]name[pause]\\r, 3 sends with trailing space', () => {
+        // B is not A. pi-tui requires the trailing SPACE after `/model`
+        // to recognise the command: `/model ` = "command recognised,
+        // arg-input open". The arg then arrives in a separate send so
+        // pi-tui transitions cleanly. Sequences:
+        //   send 1 (sync):    `/model `         (note trailing SPACE)
+        //   send 2 (+200ms):  `<model>`          arg in arg-input
+        //   send 3 (+400ms):  `\r`               commit
+        //
+        // PAUSES are not <Enter>s: a pause is just time for pi-tui to
+        // transition internal state between two sends without committing
+        // either one. commit 29c414a (atomic paste+Enter) bundled the \r
+        // INSIDE the paste which pi-tui received as a single event — the
+        // command-arg transition never happened. commit de9562e
+        // (picker routing) used a `\r` in the middle of the chain as a
+        // fake "open picker" event — that \r was confused with a
+        // transition \r which it isn't.
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        const tabB = makeTab('pi-B', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.tabs.set(tabB.paneId, tabB);
+        tm.activePaneId = tabA.paneId;
+
+        tm.renderModelDropup();
+        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        btn.click();
+
+        // Send 1 happened synchronously: `/model ` with trailing space.
+        expect(tabA.sendInputCalls.length).toBe(1);
+        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
+
+        // Advance to send 2 (after 200ms pause): the model name as the arg.
+        vi.advanceTimersByTime(200);
+        expect(tabA.sendInputCalls.length).toBe(2);
+        expect(tabA.sendInputCalls[1][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+
+        // Advance to send 3 (after another 400ms pause): the commit Enter.
+        vi.advanceTimersByTime(400);
+        expect(tabA.sendInputCalls.length).toBe(3);
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+
+        // No further sends. Total wall time: 600ms.
+        vi.advanceTimersByTime(5000);
+        expect(tabA.sendInputCalls.length).toBe(3);
+    });
+
+    it('pi 3-send cross-tab: all sends stay on click-time tab', () => {
+        // sendToTab pinning (commit 3cd9f3a) carries through: a tab
+        // switch mid-chain keeps the second and third sends on the
+        // tab that was active when the model button was clicked.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -215,14 +262,42 @@ describe('opencode picker chain — tabInfo captured at click time', () => {
         btn.click();
 
         tm.activePaneId = tabB.paneId;
-        vi.advanceTimersByTime(5000);
+
+        vi.advanceTimersByTime(200);    // send 2 (model name) -> tabA
+        vi.advanceTimersByTime(400);    // send 3 (\r)           -> tabA
+        vi.advanceTimersByTime(5000);   // nothing further
 
         expect(tabA.sendInputCalls.length).toBe(3);
-        // send 1 is the atomic /model\r paste+Enter
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
-        // send 3 is the final \r to select
+        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
         expect(tabA.sendInputCalls[2][0]).toBe('\r');
         expect(tabB.sendInputCalls.length).toBe(0);
+    });
+
+    it('pi 3-send assert: NO \\r in send 1 and NO \\r in send 2 (only commit \\r at end)', () => {
+        // Regression guard against re-introducing the picker-routing
+        // hallucination (commit de9562e) which had a `\r` in send 2's
+        // slot. The current shape is: space-terminated command, then
+        // arg, then sole commit \r. Anything else is a bug.
+        const tm = makeTm();
+        const tabA = makeTab('pi-A', 'pi');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.activePaneId = tabA.paneId;
+
+        tm.renderModelDropup();
+        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        btn.click();
+        vi.advanceTimersByTime(200);  // send 2 (arg)
+        vi.advanceTimersByTime(400);  // send 3 (commit)
+
+        expect(tabA.sendInputCalls.length).toBe(3);
+        // Send 1 = command with trailing space (no \r).
+        expect(tabA.sendInputCalls[0][0]).not.toMatch(/\r/);
+        expect(tabA.sendInputCalls[0][0]).toMatch(/ $/);
+        // Send 2 = bare model name (no \r, no brackets).
+        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\r/);
+        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\x1b/);
+        // Send 3 = exactly "\r" and nothing else.
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
     });
 
     it('default coder (/model X\\r): single sendRawInput, no chain', () => {
@@ -329,19 +404,26 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Commit 2 — atomic collapse. Replaces the 3 split sites
-// (sendRawInput paste + setTimeout(sendRawInput('\r'), 200)) with
-// sendSlashCommand, which sends `\x1b[200~<cmd>\x1b[201~\r` as one write.
+// Pi /model command-arg sequence: 3 sends, 2 pauses (200ms + 400ms).
+// A pause is a timed delay between sends that lets pi-tui transition
+// between command-recognized and arg-input states. It is NOT a
+// commit \r. Use sendToTab across the chain so the active tab is
+// pinned at click time and a mid-chain tab switch can't redirect.
 // ---------------------------------------------------------------------------
 
-describe('sendSlashCommand — atomic paste+Enter, no delayed send', () => {
-    it('pi backend, model dropdown: 3-step picker routing (open, filter, select)', () => {
-        // The `/model <name>` exact-match path is flaky in pi 0.81.x.
-        // Defensive: route through pi's picker (search + arrows + Enter),
-        // which the user reports as reliable. 3 sequential sends:
-        //   send 1 (sync):  /model\r        — open picker (atomic via sendSlashCommand)
-        //   send 2 (+500):  <model name>    — type filter
-        //   send 3 (+900):  \r              — select highlighted
+describe('pi /model command-arg buffer sequence', () => {
+    it('pi model dropdown: 3 sends (space-terminated command, arg, commit \\r)', () => {
+        // B is not A. Pi-tui needs the trailing SPACE on `/model ` so
+        // it can transition from "command recognised" to "arg-input
+        // open" before the arg arrives. Without the space, pi-tui sees
+        // `/model<arg>` and races the command-arg transition against
+        // the typing of the arg. With the space + a 200ms pause, the
+        // transition completes cleanly.
+        //
+        // Sequence:
+        //   send 1 (sync):   `/model `     — start command, arg-input open
+        //   send 2 (+200ms): `<model>`     — type arg
+        //   send 3 (+400ms): `\r`          — commit
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -351,51 +433,29 @@ describe('sendSlashCommand — atomic paste+Enter, no delayed send', () => {
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        // Send 1 happened synchronously.
+        // Send 1 happened synchronously. The trailing space is the
+        // load-bearing character — pi-tui's command-arg transition
+        // fails without it. Assert the SPACE is present, and assert
+        // there is NO \r in this send (the commit \r lives only in
+        // send 3; bundling it here was commit 29c414a's bug).
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
+        expect(tabA.sendInputCalls[0][0]).not.toMatch(/\r/);
 
-        // Advance to send 2 (filter text).
-        vi.advanceTimersByTime(500);
+        // Advance 200ms -> send 2 (arg).
+        vi.advanceTimersByTime(200);
         expect(tabA.sendInputCalls.length).toBe(2);
-        // dropup sorts models alphabetically; the first button is whichever
-        // sorts lowest. Filter text sent to pi should be the same model.
         expect(tabA.sendInputCalls[1][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\r/);
 
-        // Advance to send 3 (\r to select).
+        // Advance 400ms -> send 3 (commit \r).
         vi.advanceTimersByTime(400);
         expect(tabA.sendInputCalls.length).toBe(3);
         expect(tabA.sendInputCalls[2][0]).toBe('\r');
 
-        // No further sends.
+        // No further sends; total 600ms wall time.
         vi.advanceTimersByTime(5000);
         expect(tabA.sendInputCalls.length).toBe(3);
-    });
-
-    it('pi picker routing: cross-tab switch keeps all 3 sends on the click-time tab', () => {
-        // The sendToTab calls inside the chain are pinned to the tab
-        // captured at click time (commit 1's fix). A tab switch mid-chain
-        // must not redirect the filter text or final \r to the new tab.
-        const tm = makeTm();
-        const tabA = makeTab('pi-A', 'pi');
-        const tabB = makeTab('pi-B', 'pi');
-        tm.tabs.set(tabA.paneId, tabA);
-        tm.tabs.set(tabB.paneId, tabB);
-        tm.activePaneId = tabA.paneId;
-
-        tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();
-
-        // Switch tabs immediately after the atomic send.
-        tm.activePaneId = tabB.paneId;
-
-        vi.advanceTimersByTime(500);   // send 2 (filter) — should hit tabA
-        vi.advanceTimersByTime(400);   // send 3 (\r)       — should hit tabA
-        vi.advanceTimersByTime(5000);  // nothing further
-
-        expect(tabA.sendInputCalls.length).toBe(3);
-        expect(tabB.sendInputCalls.length).toBe(0);
     });
 
     it('opencode/pi coder preset button: single sendSlashCommand', () => {
