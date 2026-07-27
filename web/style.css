@@ -3728,6 +3728,8 @@ html, body {
     /* Bottom sheet modals on mobile */
     .modal-overlay,
     .md-modal-overlay {
+        height: var(--vv-height, 100dvh) !important;
+        bottom: auto !important;          /* base uses inset:0 / bottom:0; ignore it */
         align-items: flex-end !important;
     }
     .modal-content,
@@ -3738,8 +3740,8 @@ html, body {
         box-shadow: 0 -8px 24px rgba(0,0,0,0.4) !important;
         border-bottom: none !important;
         animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        max-height: 80vh !important;
-        overflow-y: auto !important;
+        max-height: var(--vv-height, 100dvh) !important;
+        /* overflow-y: auto removed — .modal-body is the scroller so .modal-footer stays pinned */
     }
 
     .md-modal-content.wide-modal {
@@ -3781,6 +3783,46 @@ html, body {
         border-radius: 50%;
         font-size: 14px;
         flex-shrink: 0;
+    }
+
+    /* Body scrolls so footer (Save/Cancel) stays pinned above the keyboard. */
+    .modal-body,
+    .md-modal-body {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;          /* lets flex actually shrink */
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    .modal-footer {
+        flex-shrink: 0 !important;
+    }
+
+    /* Config editor (Edit Model / Add-Edit Quick Command) — the user-reported
+       "edit models is broken and covered by software keyboard" case.
+       Without this, the modal grows past the visible viewport on iOS and
+       the Save button ends up under the keyboard. */
+    .config-editor-modal {
+        max-height: var(--vv-height, 100dvh) !important;
+    }
+
+    /* Kanban detail panel (description textarea + subtask input + Save
+       in .kdp-footer). Same bug class as the config editor — full-viewport
+       panel, focus the textarea, footer sits behind the keyboard. */
+    .kanban-detail-panel {
+        height: var(--vv-height, 100dvh) !important;
+        bottom: auto !important;          /* base: top:0; bottom:0; — pin top, vv-height */
+    }
+
+    /* Access password prompt. Dialog is small + centered; just make the
+       overlay vv-height tall so the dialog re-centers within the visible
+       strip above the keyboard. place-items: center stays from base. */
+    .access-auth-overlay {
+        height: var(--vv-height, 100dvh) !important;
+        bottom: auto !important;
+    }
+    .access-auth-dialog {
+        max-height: calc(var(--vv-height, 100dvh) - 40px) !important;
+        overflow-y: auto !important;
     }
 
     /* Touch friendly input actions */
