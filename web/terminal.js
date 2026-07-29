@@ -4448,55 +4448,25 @@ export class TabManager {
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    // /model [PAUSE]name[PAUSE]<Enter>.
+                    // Pi's current model command enters its picker before it
+                    // accepts a model identifier. Keep every state transition
+                    // discrete and pin all sends to the tab clicked above:
+                    //   send 1 (sync):   `/model`
+                    //   send 2 (+200ms): `\r`       open the picker
+                    //   send 3 (+200ms): `<model>`   filter/select identifier
+                    //   send 4 (+200ms): `\r`       confirm selection
                     //
-                    // PAUSES are a different concept from <Enter>s.
-                    // <Enter> (\r) is a commit keystroke; pi-tui treats it
-                    // as the boundary at which the current line becomes
-                    // a command. A pause is just time, used to let pi-tui
-                    // transition internal state between two sends
-                    // without committing either one.
-                    //
-                    // pi-tui requires the trailing SPACE after `/model`
-                    // to recognise the command: `/model ` is "command is
-                    // recognised, ready for argument". Without the space,
-                    // pi-tui sees `/model` followed immediately by the
-                    // arg characters, and the command-arg transition
-                    // races with the typing of the arg. With the space,
-                    // we get a clean discrete "command start" event.
-                    //
-                    // The 200ms pauses are sequenced as:
-                    //   send 1 (sync):   `/model `        start command + arg-input open
-                    //   send 2 (+200ms): `<model>`         type arg in arg-input
-                    //   send 3 (+200ms): `\r`              commit
-                    //
-                    // Why this is NOT atomic paste+Enter (commit 29c414a):
-                    //   atomic `\x1b[200~/model <n>\x1b[201~\r` bundles
-                    //   the trailing \r INSIDE the bracketed paste, which
-                    //   pi-tui receives as a single key sequence; the
-                    //   command-arg transition never happens because
-                    //   pi-tui sees one combined event, not two.
-                    //
-                    // Why this is NOT picker routing (commit de9562e):
-                    //   that form used `/model\r` (commit \r) as a fake
-                    //   "open picker" event. pi's picker is a different
-                    //   UI; routing through it requires arrows + filter,
-                    //   which we don't puppet. The commit \r was
-                    //   confused with a "transition \r", which it isn't.
-                    //
-                    // B is not A: opencode's picker dance is 4 sends
-                    // (`/models`, \r, `<model>`, \r) over opencode's
-                    // picker. pi's slash command is the same shape
-                    // (3 sends, 2 pauses) but goes through pi-tui's
-                    // command-arg buffer, not a picker. The pauses
-                    // here are pi-tui command-arg transition timing,
-                    // they are NOT picker-step timing.
-                    this.sendToTab(activeTab, '/model ');
+                    // This must not be collapsed into bracketed paste: pi-tui
+                    // needs to render each picker state before the next input.
+                    this.sendToTab(activeTab, '/model');
                     setTimeout(() => {
-                        this.sendToTab(activeTab, model);
+                        this.sendToTab(activeTab, '\r');
                         setTimeout(() => {
-                            this.sendToTab(activeTab, '\r');
-                        }, 400);
+                            this.sendToTab(activeTab, model);
+                            setTimeout(() => {
+                                this.sendToTab(activeTab, '\r');
+                            }, 200);
+                        }, 200);
                     }, 200);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
