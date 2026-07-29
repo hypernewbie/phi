@@ -199,23 +199,12 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
     });
 
-    it('pi backend: /model [pause]name[pause]\\r, 3 sends with trailing space', () => {
-        // B is not A. pi-tui requires the trailing SPACE after `/model`
-        // to recognise the command: `/model ` = "command recognised,
-        // arg-input open". The arg then arrives in a separate send so
-        // pi-tui transitions cleanly. Sequences:
-        //   send 1 (sync):    `/model `         (note trailing SPACE)
-        //   send 2 (+200ms):  `<model>`          arg in arg-input
-        //   send 3 (+400ms):  `\r`               commit
-        //
-        // PAUSES are not <Enter>s: a pause is just time for pi-tui to
-        // transition internal state between two sends without committing
-        // either one. commit 29c414a (atomic paste+Enter) bundled the \r
-        // INSIDE the paste which pi-tui received as a single event — the
-        // command-arg transition never happened. commit de9562e
-        // (picker routing) used a `\r` in the middle of the chain as a
-        // fake "open picker" event — that \r was confused with a
-        // transition \r which it isn't.
+    it('pi backend: opens the picker, enters the model, then confirms', () => {
+        // Pi now requires a discrete picker flow:
+        //   send 1 (sync):   `/model`
+        //   send 2 (+200ms): `\r`       open picker
+        //   send 3 (+200ms): `<model>`   enter identifier
+        //   send 4 (+200ms): `\r`       confirm
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -227,29 +216,25 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        // Send 1 happened synchronously: `/model ` with trailing space.
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
+        expect(tabA.sendInputCalls).toEqual([['/model']]);
 
-        // Advance to send 2 (after 200ms pause): the model name as the arg.
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls.length).toBe(2);
-        expect(tabA.sendInputCalls[1][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r']]);
 
-        // Advance to send 3 (after another 400ms pause): the commit Enter.
-        vi.advanceTimersByTime(400);
+        vi.advanceTimersByTime(200);
         expect(tabA.sendInputCalls.length).toBe(3);
-        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+
+        vi.advanceTimersByTime(200);
+        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r'], [expect.any(String)], ['\r']]);
 
         // No further sends. Total wall time: 600ms.
         vi.advanceTimersByTime(5000);
-        expect(tabA.sendInputCalls.length).toBe(3);
+        expect(tabA.sendInputCalls.length).toBe(4);
     });
 
-    it('pi 3-send cross-tab: all sends stay on click-time tab', () => {
-        // sendToTab pinning (commit 3cd9f3a) carries through: a tab
-        // switch mid-chain keeps the second and third sends on the
-        // tab that was active when the model button was clicked.
+    it('pi picker flow stays pinned to the click-time tab', () => {
+        // A tab switch mid-chain must not redirect picker input.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -263,41 +248,35 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
 
         tm.activePaneId = tabB.paneId;
 
-        vi.advanceTimersByTime(200);    // send 2 (model name) -> tabA
-        vi.advanceTimersByTime(400);    // send 3 (\r)           -> tabA
+        vi.advanceTimersByTime(200);    // send 2 (open picker) -> tabA
+        vi.advanceTimersByTime(200);    // send 3 (model) -> tabA
+        vi.advanceTimersByTime(200);    // send 4 (confirm) -> tabA
         vi.advanceTimersByTime(5000);   // nothing further
 
-        expect(tabA.sendInputCalls.length).toBe(3);
-        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
-        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        expect(tabA.sendInputCalls.length).toBe(4);
+        expect(tabA.sendInputCalls[0][0]).toBe('/model');
+        expect(tabA.sendInputCalls[1][0]).toBe('\r');
+        expect(tabA.sendInputCalls[3][0]).toBe('\r');
         expect(tabB.sendInputCalls.length).toBe(0);
     });
 
-    it('pi 3-send assert: NO \\r in send 1 and NO \\r in send 2 (only commit \\r at end)', () => {
-        // Regression guard against re-introducing the picker-routing
-        // hallucination (commit de9562e) which had a `\r` in send 2's
-        // slot. The current shape is: space-terminated command, then
-        // arg, then sole commit \r. Anything else is a bug.
+    it('pi picker flow keeps commands, picker input, and confirmation discrete', () => {
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();
-        vi.advanceTimersByTime(200);  // send 2 (arg)
-        vi.advanceTimersByTime(400);  // send 3 (commit)
+        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
+        vi.advanceTimersByTime(600);
 
-        expect(tabA.sendInputCalls.length).toBe(3);
-        // Send 1 = command with trailing space (no \r).
-        expect(tabA.sendInputCalls[0][0]).not.toMatch(/\r/);
-        expect(tabA.sendInputCalls[0][0]).toMatch(/ $/);
-        // Send 2 = bare model name (no \r, no brackets).
-        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\r/);
-        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\x1b/);
-        // Send 3 = exactly "\r" and nothing else.
-        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        expect(tabA.sendInputCalls).toHaveLength(4);
+        expect(tabA.sendInputCalls[0][0]).toBe('/model');
+        expect(tabA.sendInputCalls[0][0]).not.toMatch(/[\r\x1b]/);
+        expect(tabA.sendInputCalls[1][0]).toBe('\r');
+        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+        expect(tabA.sendInputCalls[2][0]).not.toMatch(/[\r\x1b]/);
+        expect(tabA.sendInputCalls[3][0]).toBe('\r');
     });
 
     it('default coder (/model X\\r): single sendRawInput, no chain', () => {
@@ -404,26 +383,18 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Pi /model command-arg sequence: 3 sends, 2 pauses (200ms + 400ms).
-// A pause is a timed delay between sends that lets pi-tui transition
-// between command-recognized and arg-input states. It is NOT a
-// commit \r. Use sendToTab across the chain so the active tab is
-// pinned at click time and a mid-chain tab switch can't redirect.
+// Pi /model picker sequence: 4 sends, each separated by a 200ms pause.
+// Use sendToTab across the chain so the active tab is pinned at click time
+// and a mid-chain tab switch cannot redirect picker input.
 // ---------------------------------------------------------------------------
 
-describe('pi /model command-arg buffer sequence', () => {
-    it('pi model dropdown: 3 sends (space-terminated command, arg, commit \\r)', () => {
-        // B is not A. Pi-tui needs the trailing SPACE on `/model ` so
-        // it can transition from "command recognised" to "arg-input
-        // open" before the arg arrives. Without the space, pi-tui sees
-        // `/model<arg>` and races the command-arg transition against
-        // the typing of the arg. With the space + a 200ms pause, the
-        // transition completes cleanly.
-        //
+describe('pi /model picker sequence', () => {
+    it('pi model dropdown: command, open picker, model, then confirm', () => {
         // Sequence:
-        //   send 1 (sync):   `/model `     — start command, arg-input open
-        //   send 2 (+200ms): `<model>`     — type arg
-        //   send 3 (+400ms): `\r`          — commit
+        //   send 1 (sync):   `/model`
+        //   send 2 (+200ms): `\r`       open picker
+        //   send 3 (+200ms): `<model>`   enter identifier
+        //   send 4 (+200ms): `\r`       confirm
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -433,29 +404,20 @@ describe('pi /model command-arg buffer sequence', () => {
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        // Send 1 happened synchronously. The trailing space is the
-        // load-bearing character — pi-tui's command-arg transition
-        // fails without it. Assert the SPACE is present, and assert
-        // there is NO \r in this send (the commit \r lives only in
-        // send 3; bundling it here was commit 29c414a's bug).
-        expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('/model ');
-        expect(tabA.sendInputCalls[0][0]).not.toMatch(/\r/);
+        expect(tabA.sendInputCalls).toEqual([['/model']]);
 
-        // Advance 200ms -> send 2 (arg).
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls.length).toBe(2);
-        expect(tabA.sendInputCalls[1][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
-        expect(tabA.sendInputCalls[1][0]).not.toMatch(/\r/);
+        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r']]);
 
-        // Advance 400ms -> send 3 (commit \r).
-        vi.advanceTimersByTime(400);
-        expect(tabA.sendInputCalls.length).toBe(3);
-        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        vi.advanceTimersByTime(200);
+        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+
+        vi.advanceTimersByTime(200);
+        expect(tabA.sendInputCalls[3][0]).toBe('\r');
 
         // No further sends; total 600ms wall time.
         vi.advanceTimersByTime(5000);
-        expect(tabA.sendInputCalls.length).toBe(3);
+        expect(tabA.sendInputCalls).toHaveLength(4);
     });
 
     it('opencode/pi coder preset button: single sendSlashCommand', () => {
