@@ -340,7 +340,7 @@ func TestApplier_Apply_ChecksumMismatchFailsClosed(t *testing.T) {
 	// Checksums file lists a WRONG hash.
 	fg := &fakeGitHub{
 		asset:     archiveBytes,
-		checksums: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  phi_0.9.0_linux_amd64.tar.gz\n",
+		checksums: fmt.Sprintf("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  %s\n", AssetFor("0.9.0", runtime.GOOS, runtime.GOARCH)),
 	}
 	srv := httptest.NewServer(fg.handler())
 	defer srv.Close()

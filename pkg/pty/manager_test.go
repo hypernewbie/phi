@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -624,7 +625,7 @@ func TestIsPtyDead_GhostAndLive(t *testing.T) {
 func TestIsPtyDead_DiedInPlace(t *testing.T) {
 	tmpDir := t.TempDir()
 	testTabsPath = filepath.Join(tmpDir, "tabs-died-in-place.json")
-	defer func() { testTabsPath = "" }()
+	t.Cleanup(func() { testTabsPath = "" })
 
 	manager := NewManager()
 	shell, args := getTestShell()
@@ -632,12 +633,20 @@ func TestIsPtyDead_DiedInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = manager.Kill(inst.ID)
+		_ = manager.FlushSaveState()
+	})
+	if err := manager.FlushSaveState(); err != nil {
+		t.Fatalf("FlushSaveState: %v", err)
+	}
 
 	if inst.IsPtyDead() {
 		t.Fatal("freshly spawned shell should not report dead yet")
 	}
 
 	// Exit naturally (not via Kill, so the record stays in the registry).
+	go func() { _, _ = io.Copy(io.Discard, inst.Pty) }()
 	if _, err := inst.Pty.Write([]byte("exit\r\n")); err != nil {
 		t.Fatalf("failed to write exit command: %v", err)
 	}
