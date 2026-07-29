@@ -222,6 +222,10 @@ func TestWebSocketKeepalive(t *testing.T) {
 
 // TestHandleWS_DiedInPlaceReportsRealExitCode: died-in-place PTY must send 0x04 with the real exit code, not -1.
 func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
 	shell, args := getTestShellForBridge()
 
 	manager := pty.NewManager()
@@ -229,7 +233,16 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = manager.Kill(inst.ID)
+		_ = manager.FlushSaveState()
+	})
+	if err := manager.FlushSaveState(); err != nil {
+		t.Fatalf("FlushSaveState: %v", err)
+	}
 
+	drainHub := NewHub(0)
+	StartPTYReadLoop(inst, drainHub)
 	if _, err := inst.Pty.Write([]byte("exit\r\n")); err != nil {
 		t.Fatalf("write exit command: %v", err)
 	}
@@ -239,9 +252,9 @@ func TestHandleWS_DiedInPlaceReportsRealExitCode(t *testing.T) {
 		t.Fatal("timed out waiting for shell to exit")
 	}
 
-	hub := NewHub(0)
+	assertionHub := NewHub(0)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		HandleWS(w, r, inst, manager, hub)
+		HandleWS(w, r, inst, manager, assertionHub)
 	}))
 	defer server.Close()
 
