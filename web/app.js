@@ -1216,6 +1216,28 @@ export class App {
                 console.warn('[settings] failed to persist fast-mode toggle', err);
             }
         });
+
+        // Applies at spawn time, so it cannot affect a pi tab that is already
+        // running -- hence the wording rather than a bare "Offline mode".
+        const piOfflineRow = this._buildCheckboxRow(
+            'Start pi with --offline (new tabs only)',
+            'settings-pi-offline',
+            !!(this.config && this.config.pi_offline),
+        );
+        behGroup.appendChild(piOfflineRow);
+        piOfflineRow.querySelector('input')?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (this.config) this.config.pi_offline = enabled;
+            try {
+                await fetch('/api/config/pi-offline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn('[settings] failed to persist pi-offline toggle', err);
+            }
+        });
         setPasswordBtn.addEventListener('click', async () => {
             const newPw = newInput.value;
             const confirmPw = confirmInput.value;

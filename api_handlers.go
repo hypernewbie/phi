@@ -221,13 +221,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	command := c.Command
-	var args []string
-	if req.SessionID != "" && c.ResumeArg != "" {
-		args = append(c.Args, c.ResumeArg, req.SessionID)
-	} else {
-		args = c.Args
-	}
-	args = append(args, req.ExtraArgs...)
+	args := buildCoderArgs(req.Coder, c, req.SessionID, req.ExtraArgs, loadConfig().PiOffline)
 
 	// On Unix, prefer the user's login shell ($SHELL) over hardcoded bash so that PATH
 	// and aliases from the user's shell config (e.g. ~/.zshrc on macOS) are available.
@@ -634,4 +628,33 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		"install_method": update.DetectInstallMethod(BuildSource),
 		"started_at":     fmt.Sprintf("%d", StartedAt),
 	})
+}
+
+// buildCoderArgs assembles the argv for a coder spawn: the registry's base
+// args, an optional session resume, the pi --offline opt-in, then any
+// caller-supplied extras.
+//
+// Split out of handleCreateTerminal so it is reachable from tests without
+// spawning a real PTY. Keep it that way -- a test that re-implements this
+// logic instead of calling it would pass while the handler was broken.
+func buildCoderArgs(coderID string, c coders.Coder, sessionID string, extra []string, piOffline bool) []string {
+	// Copy rather than append onto the registry's slice: coders.Registry is
+	// process-wide shared state, and appending to c.Args could write into a
+	// backing array other spawns read. It is len 0 today so append always
+	// reallocates, but that is a property of the registry literal, not a
+	// guarantee it will keep.
+	args := append([]string(nil), c.Args...)
+
+	if sessionID != "" && c.ResumeArg != "" {
+		args = append(args, c.ResumeArg, sessionID)
+	}
+
+	// pi's --offline skips its startup network calls. Opt-in via config so an
+	// airgapped or metered host can avoid them. Scoped to pi: the flag is
+	// pi's own and other coders would reject it.
+	if coderID == "pi" && piOffline {
+		args = append(args, "--offline")
+	}
+
+	return append(args, extra...)
 }

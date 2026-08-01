@@ -29,6 +29,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"markdown_dirs":             cfg.MarkdownDirs,
 		"use_existing_terminal_tab": cfg.UseExistingTerminalTab,
 		"fast_mode":                 cfg.FastMode,
+		"pi_offline":                cfg.PiOffline,
 		"auto_reconnect":            cfg.AutoReconnect,
 		"sync_coordinator":          cfg.SyncCoordinator,
 		"ui_font_family":            cfg.UIFontFamily,
@@ -451,6 +452,31 @@ func handleFastMode(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.FastMode})
+}
+
+// handlePiOffline toggles whether the pi coder is spawned with --offline.
+// Takes effect on the next spawn: an already-running pi process cannot be
+// switched, since the flag is set at exec time.
+func handlePiOffline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.PiOffline = req.Enabled
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.PiOffline})
 }
 
 // handleAutoReconnect toggles the automatic-reconnect master switch (wake,

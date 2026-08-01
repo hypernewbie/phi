@@ -67,6 +67,11 @@ type Config struct {
 	// backdrop blurs (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
 	FastMode bool `json:"fast_mode"`
 
+	// PiOffline passes --offline when spawning the pi coder. Applies to pi
+	// only; the flag is pi's, and other coders would reject it. Off by
+	// default, so a missing key in an existing config file changes nothing.
+	PiOffline bool `json:"pi_offline"`
+
 	ReplayBufferBytes *int `json:"replay_buffer_bytes"`
 
 	PushoverUserKey   string `json:"pushover_user_key"`
