@@ -46,7 +46,12 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 	if rel == "." {
 		rel = ""
 	}
-	if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// A leading separator is a root-relative path. filepath.IsAbs does not
+	// catch it on Windows, where an absolute path needs a drive letter or a
+	// UNC prefix, so "/etc" would be quietly treated as relative to cwd.
+	// Reject it explicitly so the guard means the same thing on every platform.
+	rooted := strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`)
+	if filepath.IsAbs(rel) || rooted || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
