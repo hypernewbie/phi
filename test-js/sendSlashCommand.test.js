@@ -279,25 +279,28 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         expect(tabA.sendInputCalls[3][0]).toBe('\r');
     });
 
-    it('default coder (/model X\\r): single sendRawInput, no chain', () => {
-        // The `else` branch was deliberately NOT changed. Verify it's a
-        // single atomic write via sendRawInput (which still re-resolves
-        // active tab — but there is no delayed callback, so no race).
+    it('claude model flow confirms a delayed cache-warning prompt on the click-time tab', () => {
         const tm = makeTm();
         const tabA = makeTab('claude-A', 'claude');
+        const tabB = makeTab('claude-B', 'claude');
         tm.tabs.set(tabA.paneId, tabA);
+        tm.tabs.set(tabB.paneId, tabB);
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();
+        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
 
-        expect(tabA.sendInputCalls.length).toBe(1);
-        // default branch emits `/model <name>\r` — assert shape, not name
-        // (fixture's claude preset sorts first alphabetically).
+        // The command itself retains Claude's normal `/model <name>` form.
+        expect(tabA.sendInputCalls).toHaveLength(1);
         expect(tabA.sendInputCalls[0][0]).toMatch(/^\/model .+\r$/);
-        vi.advanceTimersByTime(2000);
-        expect(tabA.sendInputCalls.length).toBe(1);
+
+        // The delayed confirmation must not land on a tab activated after
+        // the selection click.
+        tm.activePaneId = tabB.paneId;
+        vi.advanceTimersByTime(500);
+        expect(tabA.sendInputCalls).toHaveLength(2);
+        expect(tabA.sendInputCalls[1][0]).toBe('\r');
+        expect(tabB.sendInputCalls).toHaveLength(0);
     });
 });
 

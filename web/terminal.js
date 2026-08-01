@@ -4468,6 +4468,15 @@ export class TabManager {
                             }, 200);
                         }, 200);
                     }, 200);
+                } else if (backend === 'claude') {
+                    // Claude may show a model-switch cache warning after the
+                    // command resolves. The second Enter acknowledges it.
+                    // Pin it to the clicked tab just like the other delayed
+                    // backend-specific model flows.
+                    this.sendToTab(activeTab, `/model ${model}\r`);
+                    setTimeout(() => {
+                        this.sendToTab(activeTab, '\r');
+                    }, 500);
                 } else {
                     this.sendRawInput(`/model ${model}\r`);
                 }
