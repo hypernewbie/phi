@@ -1,5 +1,6 @@
 import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId } from './util.js';
 import { buildFeatures, featureProgress, featureStats, featureTimeline, cumulativeTimeline, taskStats } from './kanban-features.js';
+import { sanitizeHtml } from './md-render.js';
 export class KanbanManager {
     app;
     activeDetailPanel;
@@ -1355,11 +1356,7 @@ export class KanbanManager {
             return '';
         if (!window.DOMPurify?.sanitize)
             return this.escapeHtml(description);
-        return String(window.DOMPurify.sanitize(description, {
-            USE_PROFILES: { html: true },
-            FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
-            FORBID_ATTR: ['style']
-        }));
+        return sanitizeHtml(description);
     }
     taskDescriptionIcon(mode) {
         if (mode === 'preview') {
