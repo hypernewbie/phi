@@ -31,6 +31,12 @@ const CODER_FAVICONS = {
     'review': 'https://www.google.com/s2/favicons?domain=wikipedia.org&sz=64'
 };
 
+// Automatic-reconnect retry policy: full-jitter exponential backoff.
+// Attempt n (1-based) waits random(0, min(CAP, 1s * 2^(n-1))). Referenced by
+// maybeAutoReconnect and the reconnect overlay's attempt counter.
+const AUTO_RECONNECT_MAX_ATTEMPTS = 10;
+const AUTO_RECONNECT_MAX_DELAY_MS = 20000;
+
 export class TabManager {
     constructor(app) {
         this.app = app;
@@ -75,11 +81,21 @@ export class TabManager {
         }
 
         // Listen for visibility state changes to clear indicators dynamically.
+        // Returning to the page (laptop wake, phone unlock, tab switch-back)
+        // is also the moment to revive a dead active tab: the PTY survives
+        // detach server-side for 30 minutes, so an immediate redial repaints
+        // it from the replay buffer.
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
                 this.clearAttentionIndicators();
+                this._reviveActiveTabIfDead();
             }
         });
+        // Network restore and bfcache restore are the other two "we may have
+        // silently lost the socket" signals. The helper is idempotent (config
+        // gate + reconnectInFlight guard), so overlapping firings are harmless.
+        window.addEventListener('online', () => this._reviveActiveTabIfDead());
+        window.addEventListener('pageshow', () => this._reviveActiveTabIfDead());
 
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
@@ -3503,6 +3519,24 @@ export class TabManager {
         this.updateDisconnectBanner();
     }
 
+    // Revive the active tab after a wake-style signal (visibility return,
+    // network restore, bfcache restore). Config- and visibility-gated like
+    // the passive loop ('online' fires in hidden windows too — without the
+    // visibility check, a network restore would dial from every background
+    // window), but resets the attempt budget: a wake is a fresh start, not a
+    // continuation of an exhausted backoff run.
+    _reviveActiveTabIfDead() {
+        const autoReconnect = this.app.config && this.app.config.auto_reconnect;
+        if (autoReconnect !== 'visible') return;
+        if (document.visibilityState !== 'visible') return;
+        const tabInfo = this.getActiveTab();
+        if (!tabInfo || !tabInfo.isDead || tabInfo.reconnectInFlight) return;
+        if (tabInfo.coder === 'review' || tabInfo.coder === 'kanban') return;
+        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return;
+        tabInfo.reconnectAttempts = 0;
+        this.reconnectTab(tabInfo, { auto: true });
+    }
+
     maybeAutoReconnect(tabInfo) {
         const autoReconnect = this.app.config && this.app.config.auto_reconnect;
         if (autoReconnect !== 'visible') return false;
@@ -3512,19 +3546,19 @@ export class TabManager {
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return false;
 
         if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
-        if (tabInfo.reconnectAttempts >= 5) {
+        if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
             tabInfo.reconnectAttempts = 0;
             return false;
         }
 
         tabInfo.reconnectAttempts++;
-        const delay = Math.min(30000, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
+        const delay = Math.random() * Math.min(AUTO_RECONNECT_MAX_DELAY_MS, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
         
         console.log(`[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`);
         
         const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
-        if (msgEl) msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/5)...`;
+        if (msgEl) msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
 
         setTimeout(() => {
             if (tabInfo.isDead && tabInfo.paneId === this.activePaneId && (tabInfo.exitCode === undefined || tabInfo.exitCode === null)) {
