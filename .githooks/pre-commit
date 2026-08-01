@@ -36,11 +36,11 @@ done
 #    the emitted web/ tree matches (mirrors the CI drift guard).
 if [ -n "$FRONT_TS" ]; then
     if [ ! -d node_modules ]; then
-        echo "pre-commit: node_modules missing — run 'npm ci' first (or --no-verify)." >&2
+        echo "pre-commit: node_modules missing — run 'pnpm install' first (or --no-verify)." >&2
         exit 1
     fi
-    npm run typecheck
-    npm run build:web
+    pnpm run typecheck
+    pnpm run build:web
     DIRTY="$(git diff --name-only -- web)$(git ls-files --others --exclude-standard -- web)"
     if [ -n "$DIRTY" ]; then
         echo "::error:: web/ is out of sync with web-src/ — build:web produced changes not staged:" >&2

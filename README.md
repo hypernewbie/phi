@@ -96,9 +96,9 @@ The directory you launch Phi from becomes the default workspace; switch between 
 ### Frontend dev (live reload)
 
 - Terminal 1: `./phi` (backend, :7070)
-- Terminal 2: `npm run dev` → open <http://localhost:5173>
-- If editing `web-src/*.ts`, also run `npm run watch:web` (tsc rewrites `web/*.js`; Vite reloads on the output).
-- If phi runs on a non-default port, set the env var for both: `PHI_PORT=8080 ./phi` + `PHI_PORT=8080 npm run dev` (the flag `-port` alone won't retarget the proxy).
+- Terminal 2: `pnpm run dev` → open <http://localhost:5173>
+- If editing `web-src/*.ts`, also run `pnpm run watch:web` (tsc rewrites `web/*.js`; Vite reloads on the output).
+- If phi runs on a non-default port, set the env var for both: `PHI_PORT=8080 ./phi` + `PHI_PORT=8080 pnpm run dev` (the flag `-port` alone won't retarget the proxy).
 - Note: :5173 is dev-only; :7070 always serves the embedded (build-time) UI; prod is unchanged.
 
 **Enable the pre-commit hook** (once per clone) so frontend checks run before you commit:
