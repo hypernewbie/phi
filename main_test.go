@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -156,8 +157,9 @@ func TestModelPresets_BackwardCompatibilityAndDefaults(t *testing.T) {
 	}
 
 	claudeModels := cfg.ModelPresets["claude"]
-	if len(claudeModels) == 0 || claudeModels[0] != "claude-sonnet-4-6" {
-		t.Errorf("expected 'claude' defaults populated, got %v", claudeModels)
+	wantClaudeModels := []string{"fable", "opus", "sonnet", "haiku"}
+	if !reflect.DeepEqual(claudeModels, wantClaudeModels) {
+		t.Errorf("expected Claude defaults %v, got %v", wantClaudeModels, claudeModels)
 	}
 
 	// Test mapping format unmarshal works natively too

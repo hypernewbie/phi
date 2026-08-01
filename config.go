@@ -203,10 +203,10 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 			"opencode/big-pickle",
 		},
 		"claude": {
-			"claude-sonnet-4-6",
-			"claude-opus-4-8",
-			"sonnet[1m]",
-			"opus[1m]",
+			"fable",
+			"opus",
+			"sonnet",
+			"haiku",
 		},
 		"agy": {
 			"gemini-3.5-flash",
