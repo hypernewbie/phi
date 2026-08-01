@@ -2,6 +2,11 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.4 — 2026-08-01
+
+### Fixed
+- **macOS `.local` suffix no longer shows in the UI** (`cfd32dc`). macOS reports its hostname with the mDNS/Bonjour suffix attached, so the sidebar header, the empty state, the browser title and Settings ▸ About all read `studio.local` — the last of those uppercased into a shouty `.LOCAL`. phi labels a single machine, so the suffix carries no information. Display only: the raw hostname is unchanged everywhere it identifies the host. Case-insensitive, handles the fully-qualified trailing dot (`studio.local.`), strips only a trailing segment (`local.example.com` and `host.localdomain` are left alone), and never reduces a hostname to an empty string.
+
 ## v0.15.3 — 2026-07-31
 
 Patch batch covering every commit since v0.15.2: three contributed features, a Kanban reliability pass, and four fixes found while testing.
