@@ -19,6 +19,7 @@ export class KanbanManager {
     _boardKeyHandler;
     _boardDelegateHost;
     _taskWrites;
+    _reauthPromise;
     constructor(app) {
         this.app = app;
         this.activeDetailPanel = null;
@@ -35,6 +36,7 @@ export class KanbanManager {
         this._boardKeyHandler = null;
         this._boardDelegateHost = null;
         this._taskWrites = new Map();
+        this._reauthPromise = null;
     }
     async openBoard() {
         const paneId = 'kanban-board';
@@ -2231,6 +2233,41 @@ export class KanbanManager {
         // task, so we just adjust the fields we know changed.
         existing.bucket_id = targetBucketId;
     }
+    // Vikunja's JWT expires while the board sits open, so the next thing the
+    // user touches 401s. Log back in from the saved vault credentials and let
+    // the caller retry, instead of making them reconnect by hand.
+    //
+    // Single-flight: a board refresh fires several requests at once, and all
+    // of them will 401 together. Without sharing the attempt they would each
+    // start their own login.
+    async reauthenticate() {
+        if (this._reauthPromise)
+            return this._reauthPromise;
+        this._reauthPromise = (async () => {
+            try {
+                const password = await this.getSavedVaultPassword();
+                const url = (localStorage.getItem('vikunja_url') || '').replace(/\/$/, '');
+                const username = localStorage.getItem('vikunja_username');
+                if (!password || !username || !url)
+                    return false;
+                const token = await this.attemptLogin(url, username, password);
+                if (!token)
+                    return false;
+                sessionStorage.setItem('vikunja_token', token);
+                return true;
+            }
+            catch (err) {
+                console.warn('Kanban re-authentication failed:', err);
+                return false;
+            }
+        })();
+        try {
+            return await this._reauthPromise;
+        }
+        finally {
+            this._reauthPromise = null;
+        }
+    }
     async apiGet(path) {
         return this.apiRequest(path, 'GET');
     }
@@ -2265,7 +2302,7 @@ export class KanbanManager {
             }
         }
     }
-    async apiRequest(path, method, body) {
+    async apiRequest(path, method, body, allowRetry = true) {
         this.assertAddressable(path, body);
         const token = sessionStorage.getItem('vikunja_token');
         const url = localStorage.getItem('vikunja_url');
@@ -2283,6 +2320,11 @@ export class KanbanManager {
         });
         if (res.status === 401) {
             sessionStorage.removeItem('vikunja_token');
+            // One retry only: if the fresh token also 401s, the credentials
+            // are genuinely bad and looping would just hammer the server.
+            if (allowRetry && await this.reauthenticate()) {
+                return this.apiRequest(path, method, body, false);
+            }
             throw new Error('Session expired. Please reconnect.');
         }
         if (!res.ok) {
