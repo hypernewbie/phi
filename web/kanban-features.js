@@ -40,10 +40,10 @@ function utcDay(value) {
     return date.toISOString().slice(0, 10);
 }
 // A compact burn-up series: counts are cumulative, and points appear only on
-// days where a child was filed or completed. `done_at` is current-state data,
+// days where a task was filed or completed. `done_at` is current-state data,
 // so this intentionally represents created/completed tasks, not a full status
 // transition history.
-export function featureTimeline(subtasks) {
+export function cumulativeTimeline(tasks) {
     const changes = new Map();
     const add = (date, key) => {
         if (!date)
@@ -52,7 +52,7 @@ export function featureTimeline(subtasks) {
         change[key] += 1;
         changes.set(date, change);
     };
-    subtasks.forEach(task => {
+    tasks.forEach(task => {
         add(utcDay(task.created), 'filed');
         // An undone task may retain a historical done_at in some Vikunja
         // versions; count only currently done tasks.
@@ -68,33 +68,84 @@ export function featureTimeline(subtasks) {
         return { date, filed, completed };
     });
 }
+// Burn-up for one feature's direct children.
+export function featureTimeline(subtasks) {
+    return cumulativeTimeline(subtasks);
+}
 function utcDate(date) {
     return date.toISOString().slice(0, 10);
 }
 // Project-level burn-up for feature parents. Filed is the point a feature was
 // created; completed is when that parent was marked done.
 export function portfolioTimeline(features) {
-    const changes = new Map();
-    const add = (date, key) => {
-        if (!date)
+    return cumulativeTimeline(features.map(feature => feature.task));
+}
+// Whole-board task statistics. This counts every task, not just the ones that
+// happen to have subtasks: a project's health is its task flow, and most
+// boards have far more plain tasks than feature parents.
+//
+// createdInWindow pairs with completedInWindow so the view can show whether
+// work is being closed faster than it arrives; velocity alone hides that.
+export function taskStats(tasks, now = new Date(), velocityWindowDays = 28) {
+    const windowDays = Math.max(1, Math.floor(velocityWindowDays));
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const start = new Date(today);
+    start.setUTCDate(start.getUTCDate() - (windowDays - 1));
+    const dailyCompletions = [];
+    const dailyByDate = new Map();
+    for (let index = 0; index < windowDays; index++) {
+        const day = new Date(start);
+        day.setUTCDate(start.getUTCDate() + index);
+        const point = { date: utcDate(day), completed: 0 };
+        dailyCompletions.push(point);
+        dailyByDate.set(point.date, point);
+    }
+    // The cache holds board tasks and feature parents, which can overlap.
+    const seen = new Set();
+    let completedTasks = 0;
+    let createdInWindow = 0;
+    tasks.forEach(task => {
+        if (task?.id == null)
             return;
-        const change = changes.get(date) || { filed: 0, completed: 0 };
-        change[key] += 1;
-        changes.set(date, change);
+        const key = String(task.id);
+        if (seen.has(key))
+            return;
+        seen.add(key);
+        const created = utcDay(task.created);
+        if (created && dailyByDate.has(created))
+            createdInWindow += 1;
+        if (!task.done)
+            return;
+        completedTasks += 1;
+        const doneDay = utcDay(task.done_at);
+        const point = doneDay ? dailyByDate.get(doneDay) : null;
+        if (point)
+            point.completed += 1;
+    });
+    const totalTasks = seen.size;
+    const openTasks = totalTasks - completedTasks;
+    const completedInWindow = dailyCompletions.reduce((total, point) => total + point.completed, 0);
+    const velocityPerDay = completedInWindow / windowDays;
+    const estimatedDaysRemaining = openTasks === 0
+        ? 0
+        : velocityPerDay > 0 ? Math.ceil(openTasks / velocityPerDay) : null;
+    const projectedCompletionDate = estimatedDaysRemaining == null
+        ? null
+        : utcDate(new Date(today.getTime() + (estimatedDaysRemaining * 24 * 60 * 60 * 1000)));
+    return {
+        totalTasks,
+        completedTasks,
+        openTasks,
+        taskPercent: totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100),
+        velocityWindowDays: windowDays,
+        completedInWindow,
+        createdInWindow,
+        netFlow: completedInWindow - createdInWindow,
+        velocityPerDay,
+        estimatedDaysRemaining,
+        projectedCompletionDate,
+        dailyCompletions
     };
-    features.forEach(feature => {
-        add(utcDay(feature.task.created), 'filed');
-        if (feature.task.done)
-            add(utcDay(feature.task.done_at), 'completed');
-    });
-    let filed = 0;
-    let completed = 0;
-    return [...changes.keys()].sort().map(date => {
-        const change = changes.get(date);
-        filed += change.filed;
-        completed += change.completed;
-        return { date, filed, completed };
-    });
 }
 // Calculates portfolio-level feature progress from current Vikunja task state.
 // Velocity is an explicit rolling-window average, not a promise: task reopen

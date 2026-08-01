@@ -1,5 +1,5 @@
 import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId } from './util.js';
-import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline } from './kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, cumulativeTimeline, taskStats } from './kanban-features.js';
 export class KanbanManager {
     app;
     activeDetailPanel;
@@ -750,69 +750,85 @@ export class KanbanManager {
         `;
     }
     renderStatsView() {
-        const stats = featureStats(buildFeatures(Object.values(this.taskCache)));
-        if (stats.totalFeatures === 0) {
+        const tasks = Object.values(this.taskCache);
+        const stats = taskStats(tasks);
+        if (stats.totalTasks === 0) {
             return `
                 <div class="kanban-no-view-wrapper">
-                    <h3>No feature stats yet</h3>
-                    <p>Add subtasks to a task and the portfolio statistics will appear here.</p>
+                    <h3>No task stats yet</h3>
+                    <p>Add a task to the board and project statistics will appear here.</p>
                 </div>
             `;
         }
+        // Features are a subset of the board, so they stay on the page as one
+        // secondary card rather than defining the whole view.
+        const features = featureStats(buildFeatures(tasks));
         const formatDate = (date) => new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-        const forecast = stats.remainingFeatures === 0
-            ? '<strong>All features are done.</strong><span>No remaining feature parents.</span>'
+        const forecast = stats.openTasks === 0
+            ? '<strong>All tasks are done.</strong><span>Nothing open on this board.</span>'
             : stats.estimatedDaysRemaining == null
-                ? '<strong>Waiting for velocity.</strong><span>No feature was marked done in the last 28 days.</span>'
+                ? `<strong>Waiting for velocity.</strong><span>No task was completed in the last ${stats.velocityWindowDays} days.</span>`
                 : `<strong>~${stats.estimatedDaysRemaining} day${stats.estimatedDaysRemaining === 1 ? '' : 's'} remaining</strong><span>Projected finish: ${formatDate(stats.projectedCompletionDate)}</span>`;
+        const flowLabel = stats.netFlow > 0
+            ? `Closing ${stats.netFlow} more than filed`
+            : stats.netFlow < 0
+                ? `Filing ${Math.abs(stats.netFlow)} more than closed`
+                : 'Keeping pace with incoming work';
         return `
             <div class="kanban-stats-view">
                 <div class="kanban-stats-heading">
                     <div>
-                        <h3>Feature stats</h3>
-                        <p>Current portfolio progress and completion velocity.</p>
+                        <h3>Project stats</h3>
+                        <p>Board-wide progress, throughput and completion forecast.</p>
                     </div>
                 </div>
                 <div class="kanban-stats-grid">
                     <section class="kanban-stat-card">
-                        <span>Features done</span>
-                        <strong>${stats.completedFeatures}/${stats.totalFeatures}</strong>
-                        <em>${stats.featurePercent}% complete</em>
-                    </section>
-                    <section class="kanban-stat-card">
-                        <span>Subtasks done</span>
-                        <strong>${stats.completedSubtasks}/${stats.totalSubtasks}</strong>
-                        <em>${stats.subtaskPercent}% complete</em>
+                        <span>Tasks done</span>
+                        <strong>${stats.completedTasks}/${stats.totalTasks}</strong>
+                        <em>${stats.taskPercent}% complete</em>
                     </section>
                     <section class="kanban-stat-card">
                         <span>Current velocity</span>
                         <strong>${stats.velocityPerDay.toFixed(2)}<small>/day</small></strong>
-                        <em>${stats.completedInWindow} feature${stats.completedInWindow === 1 ? '' : 's'} done in ${stats.velocityWindowDays} days</em>
+                        <em>${stats.completedInWindow} task${stats.completedInWindow === 1 ? '' : 's'} done in ${stats.velocityWindowDays} days</em>
                     </section>
                     <section class="kanban-stat-card kanban-stat-card--forecast">
                         <span>Forecast</span>
                         ${forecast}
                     </section>
+                    <section class="kanban-stat-card">
+                        <span>Incoming vs done</span>
+                        <strong>${stats.createdInWindow}<small> filed</small> / ${stats.completedInWindow}<small> done</small></strong>
+                        <em>${flowLabel}</em>
+                    </section>
+                    ${features.totalFeatures > 0 ? `
+                        <section class="kanban-stat-card">
+                            <span>Features</span>
+                            <strong>${features.completedFeatures}/${features.totalFeatures}</strong>
+                            <em>${features.completedSubtasks}/${features.totalSubtasks} subtasks done</em>
+                        </section>
+                    ` : ''}
                 </div>
                 <div class="kanban-stats-charts">
                     <section class="kanban-stats-chart-card kanban-stats-chart-card--health">
                         <div class="kanban-stats-chart-heading">
-                            <div><h4>Feature health</h4><p>Done vs open feature parents.</p></div>
+                            <div><h4>Task health</h4><p>Done vs open across the whole board.</p></div>
                         </div>
-                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-health-chart"></canvas></div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-task-health-chart"></canvas></div>
                     </section>
                     <section class="kanban-stats-chart-card kanban-stats-chart-card--burnup">
                         <div class="kanban-stats-chart-heading">
-                            <div><h4>Scope burn-up</h4><p>Features filed against features marked done.</p></div>
+                            <div><h4>Scope burn-up</h4><p>Tasks filed against tasks marked done.</p></div>
                         </div>
-                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-burnup-chart"></canvas></div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-task-burnup-chart"></canvas></div>
                     </section>
                     <section class="kanban-stats-chart-card kanban-stats-chart-card--velocity">
                         <div class="kanban-stats-chart-heading">
                             <div><h4>Completion velocity</h4><p>Last ${stats.velocityWindowDays} days, with rolling daily average.</p></div>
                             <span>${stats.completedInWindow} completed</span>
                         </div>
-                        <div class="kanban-chart-wrap"><canvas id="kanban-feature-velocity-chart"></canvas></div>
+                        <div class="kanban-chart-wrap"><canvas id="kanban-task-velocity-chart"></canvas></div>
                     </section>
                     <section class="kanban-stats-chart-card kanban-stats-chart-card--flow">
                         <div class="kanban-stats-chart-heading">
@@ -868,9 +884,9 @@ export class KanbanManager {
         const Chart = window.Chart;
         if (!Chart)
             return;
-        const features = buildFeatures(Object.values(this.taskCache));
-        const stats = featureStats(features);
-        if (stats.totalFeatures === 0)
+        const tasks = Object.values(this.taskCache);
+        const stats = taskStats(tasks);
+        if (stats.totalTasks === 0)
             return;
         const accent = this.chartColor('--accent', '#7c6af7');
         const muted = this.chartColor('--text-muted', '#a4a3a9');
@@ -906,12 +922,12 @@ export class KanbanManager {
             if (canvas)
                 this.statsCharts.push(new Chart(canvas, config));
         };
-        push('kanban-feature-health-chart', {
+        push('kanban-task-health-chart', {
             type: 'doughnut',
             data: {
                 labels: ['Done', 'Open'],
                 datasets: [{
-                        data: [stats.completedFeatures, stats.remainingFeatures],
+                        data: [stats.completedTasks, stats.openTasks],
                         backgroundColor: [accent, quiet],
                         borderColor: [panel, panel],
                         borderWidth: 3,
@@ -923,15 +939,15 @@ export class KanbanManager {
                 cutout: '72%',
                 plugins: {
                     ...baseOptions.plugins,
-                    title: { display: true, text: `${stats.featurePercent}% complete`, color: text, font: { family: uiFont, size: 15, weight: '600' } }
+                    title: { display: true, text: `${stats.taskPercent}% complete`, color: text, font: { family: uiFont, size: 15, weight: '600' } }
                 }
             }
         });
-        const burnup = portfolioTimeline(features);
+        const burnup = cumulativeTimeline(tasks);
         const burnupLabels = burnup.length > 0 ? burnup.map(point => this.chartDateLabel(point.date)) : ['Today'];
-        const filed = burnup.length > 0 ? burnup.map(point => point.filed) : [stats.totalFeatures];
-        const completed = burnup.length > 0 ? burnup.map(point => point.completed) : [stats.completedFeatures];
-        push('kanban-feature-burnup-chart', {
+        const filed = burnup.length > 0 ? burnup.map(point => point.filed) : [stats.totalTasks];
+        const completed = burnup.length > 0 ? burnup.map(point => point.completed) : [stats.completedTasks];
+        push('kanban-task-burnup-chart', {
             type: 'line',
             data: {
                 labels: burnupLabels,
@@ -949,7 +965,7 @@ export class KanbanManager {
                 }
             }
         });
-        push('kanban-feature-velocity-chart', {
+        push('kanban-task-velocity-chart', {
             type: 'bar',
             data: {
                 labels: stats.dailyCompletions.map(day => this.chartDateLabel(day.date)),
