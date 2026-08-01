@@ -98,7 +98,7 @@ Clicking a dead tab (or using Alt+1–9) always attempts to reconnect it, even w
 
 ### Auto-Reconnect
 
-Set `auto_reconnect: "visible"` in config to enable automatic reconnection — but only for the active pane, only when the browser tab is visible and focused, with exponential backoff (1s→2s→4s→8s→16s, max 5 attempts). Default is `"off"` because many-browser-window workflows would create reconnect storms.
+Automatic reconnection is **on by default** (`auto_reconnect: "visible"`) and can be toggled in **Config → Behavior → "Auto-reconnect disconnected terminals (active tab)"**. It only ever redials the active pane of a visible window — returning to the page (laptop wake, phone unlock), a network restore, and a bfcache restore all trigger an immediate redial, and a passive retry loop covers drops that happen while you're watching: exponential backoff with full jitter, delays capped at 20s, up to 10 attempts. Background windows and background tabs never dial (that would create reconnect storms in many-window workflows); they revive when you switch to them. Turning the toggle off restores fully manual reconnection.
 
 ### Terminal Search
 

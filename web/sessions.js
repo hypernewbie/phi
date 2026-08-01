@@ -178,6 +178,9 @@ export class SessionsManager {
             const res = await fetch('/api/config');
             const data = await res.json();
             this.config = data;
+            // Mirror the raw config onto the App: terminal.js reads
+            // app.config.auto_reconnect to gate automatic reconnects.
+            this.app.config = data;
             this.workspaceSelect.innerHTML = '';
             data.workspaces.forEach((ws) => {
                 const opt = document.createElement('option');
