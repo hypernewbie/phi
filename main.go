@@ -355,11 +355,27 @@ func main() {
 		sig := <-sigChan
 		slog.Info("graceful shutdown initiated", "signal", sig.String())
 		shutdownOnce.Do(func() {
+			// A human pressing Ctrl-C wants out now. The long graces exist
+			// for orchestrated draining (k8s, systemd), which is precisely
+			// when there is no tty. Interactive shutdown used to wait up to
+			// 10s for PTYs plus 15s for HTTP; the old comment claimed a tty
+			// was unaffected, but that only ever applied to the drain delay.
+			// Safe to shorten because Manager.Shutdown now SIGKILLs whatever
+			// is left instead of leaving it to be orphaned on exit.
+			//
+			// Note Manager.Shutdown waits 2x the value it is given, so 1s
+			// here is a 2s ceiling. That ceiling only applies to a child
+			// that ignores SIGTERM: the wait returns the moment the last
+			// PTY deregisters, so a well-behaved agent still exits at once.
+			ptyGrace, httpGrace := 5*time.Second, 15*time.Second
+			if isInteractiveTTY() {
+				ptyGrace, httpGrace = 1*time.Second, 1*time.Second
+			}
 			gracefulShutdown(
 				shutdownServers,
 				envDuration("PHI_SHUTDOWN_DRAIN", 0),
-				envDuration("PHI_SHUTDOWN_PTY_GRACE", 5*time.Second),
-				envDuration("PHI_SHUTDOWN_GRACE", 15*time.Second),
+				envDuration("PHI_SHUTDOWN_PTY_GRACE", ptyGrace),
+				envDuration("PHI_SHUTDOWN_GRACE", httpGrace),
 			)
 			if err := obsShutdown(context.Background()); err != nil {
 				slog.Error("obs shutdown", "err", err)
@@ -602,6 +618,18 @@ func envDuration(key string, def time.Duration) time.Duration {
 //  7. ptyManager.Shutdown(ptyGrace) — SIGTERM each agent, wait bounded
 //     by ptyGrace, force-kill stragglers.
 //  8. drain in-flight HTTP via Server.Shutdown(ctx) within grace.
+//
+// isInteractiveTTY reports whether stdin is a terminal, i.e. whether a person
+// is sitting in front of this process rather than an init system or container
+// runtime. Redirected or piped stdin is not a char device.
+func isInteractiveTTY() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	shuttingDown.Store(true) // /readyz -> 503
 	if mdWatcher != nil {
