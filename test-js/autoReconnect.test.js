@@ -114,15 +114,29 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
         return c;
     }
 
-    it('attempt 1 with jitter=1 schedules exactly 1000ms out', () => {
+    // Every delay is now AUTO_RECONNECT_GRACE_MS (1000) + jittered backoff.
+    // The grace is a floor: full jitter alone can return ~0ms, which let a
+    // flapping pane redial almost instantly.
+    it('attempt 1 with jitter=1 schedules 1000ms grace + 1000ms backoff', () => {
         vi.spyOn(Math, 'random').mockReturnValue(1);
+        const tab = deadTab();
+        const c = armedCtx(tab);
+        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
+        vi.advanceTimersByTime(1999);
+        expect(c.reconnectTab).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+    });
+
+    it('never redials inside the grace window, even with zero jitter', () => {
+        vi.spyOn(Math, 'random').mockReturnValue(0);
         const tab = deadTab();
         const c = armedCtx(tab);
         expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
         vi.advanceTimersByTime(999);
         expect(c.reconnectTab).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
-        expect(c.reconnectTab).toHaveBeenCalledWith(tab, { auto: true });
+        expect(c.reconnectTab).toHaveBeenCalled();
     });
 
     it('attempt 6+ is capped at 20s pre-jitter (not 32s, not the old 30s)', () => {
@@ -131,7 +145,7 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
         const c = armedCtx(tab);
         expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(true);
         expect(tab.reconnectAttempts).toBe(6);
-        vi.advanceTimersByTime(19999);
+        vi.advanceTimersByTime(20999); // 1000 grace + 20000 cap
         expect(c.reconnectTab).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
         expect(c.reconnectTab).toHaveBeenCalled();
@@ -142,7 +156,7 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
         const tab = deadTab({ reconnectAttempts: 1 });
         const c = armedCtx(tab);
         TabManager.prototype.maybeAutoReconnect.call(c, tab); // attempt 2: 2000ms pre-jitter
-        vi.advanceTimersByTime(999);
+        vi.advanceTimersByTime(1999); // 1000 grace + 2000*0.5
         expect(c.reconnectTab).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
         expect(c.reconnectTab).toHaveBeenCalled();
