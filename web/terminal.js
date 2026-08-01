@@ -39,6 +39,10 @@ const AUTO_RECONNECT_MAX_DELAY_MS = 20000;
 // Floor under every redial. Full jitter alone can return ~0ms, which turned a
 // flapping PTY into a near-instant hammer loop against the server.
 const AUTO_RECONNECT_GRACE_MS = 1000;
+// Gap between the steps of pi's /model sequence. Time only -- long enough for
+// pi-tui to render the autocomplete before Esc dismisses it, and to settle
+// after the dismissal before Enter commits.
+const PI_MODEL_STEP_MS = 200;
 // How long a socket must stay up before it counts as a successful connection
 // rather than a failed attempt that happened to reach onopen.
 const AUTO_RECONNECT_STABLE_MS = 5000;
@@ -4534,26 +4538,34 @@ export class TabManager {
                         }, 350);
                     }, 350);
                 } else if (backend === 'pi') {
-                    // Pi's current model command enters its picker before it
-                    // accepts a model identifier. Keep every state transition
-                    // discrete and pin all sends to the tab clicked above:
-                    //   send 1 (sync):   `/model`
-                    //   send 2 (+200ms): `\r`       open the picker
-                    //   send 3 (+200ms): `<model>`   filter/select identifier
-                    //   send 4 (+200ms): `\r`       confirm selection
+                    // /model <id> [PAUSE] <Esc> [PAUSE] <Enter>, every send
+                    // pinned to the tab clicked above.
                     //
-                    // This must not be collapsed into bracketed paste: pi-tui
-                    // needs to render each picker state before the next input.
-                    this.sendToTab(activeTab, '/model');
+                    // The Esc is the load-bearing step. Typing `/model` opens
+                    // pi-tui's command autocomplete, and while that dropdown
+                    // is up it consumes Enter to accept its own highlighted
+                    // entry -- so an Enter sent straight after the identifier
+                    // submits whatever the dropdown had selected instead of
+                    // the line we typed. Esc dismisses the dropdown, leaving
+                    // the typed text intact, and the following Enter then
+                    // submits that text.
+                    //
+                    // A PAUSE is not an Enter. It is only time, letting pi-tui
+                    // render one state before the next key arrives; Enter is a
+                    // commit keystroke. Earlier revisions of this sequence
+                    // conflated the two (see 0e18ebc, f5b0d54, de9562e).
+                    //
+                    // Do not collapse this into a bracketed paste: pasting
+                    // bundles the keys into one event, so the dropdown never
+                    // opens, the Esc has nothing to dismiss, and the Enter
+                    // lands in whatever state pi-tui happened to be in.
+                    this.sendToTab(activeTab, `/model ${model}`);
                     setTimeout(() => {
-                        this.sendToTab(activeTab, '\r');
+                        this.sendToTab(activeTab, '\x1b');
                         setTimeout(() => {
-                            this.sendToTab(activeTab, model);
-                            setTimeout(() => {
-                                this.sendToTab(activeTab, '\r');
-                            }, 200);
-                        }, 200);
-                    }, 200);
+                            this.sendToTab(activeTab, '\r');
+                        }, PI_MODEL_STEP_MS);
+                    }, PI_MODEL_STEP_MS);
                 } else if (backend === 'claude') {
                     // Claude may show a model-switch cache warning after the
                     // command resolves. The second Enter acknowledges it.
