@@ -3,6 +3,7 @@
 import type { AppLike } from './types.js';
 import { relativeToCwd, escapeHtml } from './util.js';
 import { normalizePath } from './sessions.js';
+import { formatAttachment, type Attachment } from './attachments.js';
 
 export class MarkdownManager {
     app: AppLike;
@@ -764,6 +765,7 @@ export class MarkdownManager {
         this.contextMenuEl.innerHTML = '';
 
         const actions = [
+            { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertRelativePath(file, { mention: true }) },
             { icon: '⧉', label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
             { icon: '⇉', label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
             { icon: '⇩', label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
@@ -881,9 +883,19 @@ export class MarkdownManager {
         return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    _insertRelativePath(f: any): void {
+    // Inserts the file's cwd-relative path into the chat textarea at the
+    // cursor. With { mention: true } the path is formatted for the active
+    // tab's coder via ATTACHMENT_SYNTAX (claude → @path, bash → raw path);
+    // without it the raw relative path is inserted (Ctrl/Cmd+click behavior,
+    // unchanged).
+    _insertRelativePath(f: any, opts: { mention?: boolean } = {}): void {
         const cwd = this.app.sessionsManager.activeCWD || '';
         const relPath = relativeToCwd(f.path, cwd);
+        let insertText = relPath;
+        if (opts.mention) {
+            const coder = this.app.tabManager?.getActiveTab?.()?.coder || '';
+            insertText = formatAttachment(coder, { path: relPath } as Attachment);
+        }
 
         const textarea = document.getElementById('input-textarea') as HTMLTextAreaElement | null;
         if (textarea) {
@@ -896,9 +908,9 @@ export class MarkdownManager {
             const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
             const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
 
-            textarea.value = before + padBefore + relPath + padAfter + after;
+            textarea.value = before + padBefore + insertText + padAfter + after;
 
-            const newPos = start + padBefore.length + relPath.length;
+            const newPos = start + padBefore.length + insertText.length;
             textarea.setSelectionRange(newPos, newPos);
             textarea.focus({ preventScroll: true });
 
