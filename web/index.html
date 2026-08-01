@@ -58,9 +58,10 @@
     <script src="vendor/purify.min.js"></script>
     <script src="vendor/chart.umd.js"></script>
     <link rel="stylesheet" href="style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Fonts are vendored (web/vendor/fonts/). phi runs on LAN and airgapped
+         boxes where fonts.googleapis.com is unreachable, and the CDN link made
+         every page load reach out to Google. Do not restore the remote link. -->
+    <link href="vendor/fonts/fonts.css" rel="stylesheet">
 </head>
 <body>
     <div id="app" class="app-container">
@@ -184,23 +185,23 @@
                 
                 <div class="coder-selector">
                     <button class="coder-tab active" data-coder="opencode" title="OpenCode">
-                        <img class="coder-logo" src="https://www.google.com/s2/favicons?domain=opencode.ai&sz=64" alt="OpenCode">
+                        <img class="coder-logo" src="vendor/logos/opencode.png" alt="OpenCode">
                         <span>OpenCode</span>
                     </button>
                     <button class="coder-tab" data-coder="claude" title="Claude Code">
-                        <img class="coder-logo" src="https://www.google.com/s2/favicons?domain=claude.ai&sz=64" alt="Claude">
+                        <img class="coder-logo" src="vendor/logos/claude.png" alt="Claude">
                         <span>Claude</span>
                     </button>
                     <button class="coder-tab" data-coder="agy" title="Antigravity / Agy">
-                        <img class="coder-logo" src="https://www.google.com/s2/favicons?domain=antigravity.google&sz=64" alt="Agy">
+                        <img class="coder-logo" src="vendor/logos/agy.png" alt="Agy">
                         <span>Agy</span>
                     </button>
                     <button class="coder-tab" data-coder="pi" title="Pi Coder">
-                        <img class="coder-logo" src="https://www.google.com/s2/favicons?domain=pi.dev&sz=64" alt="Pi">
+                        <img class="coder-logo" src="vendor/logos/pi.png" alt="Pi">
                         <span>Pi</span>
                     </button>
                     <button class="coder-tab" data-coder="bash" title="Shell Prompt">
-                        <img class="coder-logo" src="https://www.google.com/s2/favicons?domain=iterm2.com&sz=64" alt="Shell">
+                        <img class="coder-logo" src="vendor/logos/bash.jpg" alt="Shell">
                         <span>Shell</span>
                     </button>
                 </div>
