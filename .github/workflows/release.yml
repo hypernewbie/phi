@@ -77,6 +77,14 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          # The repo root pins `packageManager: pnpm`, and setup-node's
+          # dependency cache is on by default -- it reads that field and shells
+          # out to pnpm, which is not installed in this job. That failed the
+          # v0.16.0 publish after goreleaser had already cut the release.
+          # This job only publishes the npm/ wrapper and never installs
+          # dependencies, so there is nothing to cache; disabling the cache is
+          # the fix rather than adding a pnpm setup step it would not use.
+          package-manager-cache: false
 
       - name: Publish to NPM
         run: |
