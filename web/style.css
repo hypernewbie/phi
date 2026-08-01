@@ -1203,11 +1203,6 @@ html, body {
     background-repeat: repeat-x;
     color: var(--accent);
 }
-@media (max-width: 768px) {
-    .terminal-panel::before {
-        display: none;
-    }
-}
 
 .terminal-tabs-bar {
     background-color: var(--bg-panel);
@@ -2107,25 +2102,11 @@ html, body {
 }
 
 @media (max-width: 768px) {
-    /* Mobile: drop the decoration entirely. On a phone the two flex
-       registers of hieroglyphs read as a chaotic gradient block -
-       scaled or not, they fight the content for attention. The
-       radials below the flex background also stack with .empty-state's
-       own radial and produce the "gradient square covering 3/4 of
-       the page" effect that was reported on 2026-07-14. */
-    .empty-state-decoration {
-        display: none;
-    }
-
     /* The empty-state landing (logo + title + launch buttons + meta)
-       must remain fully visible on mobile. Earlier overrides stripped
-       the bg and the pulse animation — that's fine — but we also need
-       to shrink padding + font sizes so the content actually fits
-       inside a 375px-wide viewport without the buttons wrapping to a
-       3+ row ladder or clipping past the safe area. */
-    .empty-state {
-        animation: none;
-    }
+       must remain fully visible on mobile — shrink padding + font sizes
+       so the content actually fits inside a 375px-wide viewport without
+       the buttons wrapping to a 3+ row ladder or clipping past the safe
+       area. */
     .empty-state-content {
         padding: 16px 12px;
         gap: 10px;
@@ -3645,6 +3626,12 @@ html, body {
     /* Hide the "reuse existing terminal tab" toggle on mobile — the
        terminal tabs bar is hidden there and the feature has no value. */
     .cmd-reuse-row {
+        display: none !important;
+    }
+    /* Hide the fast-mode toggle on mobile — the effects profile is
+       forced on for mobile viewports (see the fast-mode gate at the end
+       of this file), so a checkbox would be misleading there. */
+    .settings-fast-mode-row {
         display: none !important;
     }
     .header-actions > * {
@@ -7875,7 +7862,7 @@ html, body {
     .kanban-chart-wrap { min-height: 200px; }
 }
 
-/* ── Fast mode (config.fast_mode): perf crutch ─────────────────────────
+/* ── Fast mode (config.fast_mode; forced on mobile): perf crutch ───────
    Disables the idle-capable infinite animations and the always-visible
    backdrop blurs. Any single running animation keeps the 60fps repaint
    pipeline alive (~1 core on this page) — see
@@ -7894,6 +7881,15 @@ body.fast-mode .sidebar-version-btn.has-update::after,
 body.fast-mode .fleet-stale-badge,
 body.fast-mode #input-textarea:focus {
     animation: none !important;
+}
+
+/* Decorative trims — NOT perf rules: the gate above already stops their
+   motion. They carry mobile's visual fixes into the unified profile (the
+   decoration hide is the 2026-07-14 "gradient square" fix); without them,
+   forcing the profile on mobile would regress those fixes. */
+body.fast-mode .terminal-panel::before,
+body.fast-mode .empty-state-decoration {
+    display: none;
 }
 
 /* Fast mode stops the animations above, so the compositor layers they were
