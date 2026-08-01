@@ -71,10 +71,49 @@ describe('brand CPU tiers are isolated from the header backdrop-filter', () => {
         }
     });
 
+    // The breath was promoted first and the blink was missed, which would have
+    // negated it: one unpromoted animation inside .app-header keeps dirtying
+    // the header layer, and the indicator blinks whenever a terminal is live,
+    // so it is the animation most likely to actually be running.
+    it.each([
+        ['.brand .terminal-activity-indicator.is-active', 'the activity blink'],
+        ['.logo-glow-wrapper::after', 'the logo glow'],
+    ])('promotes %s (%s)', (selector) => {
+        const blocks = blocksContainingSelector(selector);
+        expect(blocks.some((b) => /will-change:\s*transform/.test(b))).toBe(true);
+    });
+
+    it('promotes every animating descendant of the backdrop-filtered header', () => {
+        // A promotion that covers only some of them buys nothing.
+        const promoted = blocksContainingSelector.length; // keep lint quiet
+        expect(promoted).toBeTypeOf('number');
+        for (const sel of [
+            '.brand .logo.cpu-moderate',
+            '.brand .brand-name.cpu-moderate',
+            '.brand .terminal-activity-indicator.is-active',
+            '.logo-glow-wrapper::after',
+        ]) {
+            expect(
+                blocksContainingSelector(sel).some((b) => /will-change:\s*transform/.test(b)),
+                `${sel} is animated inside .app-header but not promoted`,
+            ).toBe(true);
+        }
+    });
+
     it('releases the layer when the animation is disabled', () => {
         // A promoted layer with nothing animating is pure GPU-memory waste,
         // and fast mode exists to reclaim idle cost.
-        expect(css).toMatch(/body\.fast-mode \.brand \.logo,\s*[\r\n]\s*body\.fast-mode \.brand \.brand-name \{[^}]*will-change:\s*auto/);
+        for (const sel of [
+            'body.fast-mode .brand .logo',
+            'body.fast-mode .brand .brand-name',
+            'body.fast-mode .brand .terminal-activity-indicator.is-active',
+            'body.fast-mode .logo-glow-wrapper::after',
+        ]) {
+            expect(
+                blocksContainingSelector(sel).some((b) => /will-change:\s*auto/.test(b)),
+                `${sel} keeps a parked layer under fast mode`,
+            ).toBe(true);
+        }
         // prefers-reduced-motion kills the same animations.
         const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
         expect(rm).toMatch(/will-change:\s*auto/);
