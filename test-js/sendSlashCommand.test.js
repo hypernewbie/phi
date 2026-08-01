@@ -199,12 +199,13 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
     });
 
-    it('pi backend: opens the picker, enters the model, then confirms', () => {
-        // Pi now requires a discrete picker flow:
-        //   send 1 (sync):   `/model`
-        //   send 2 (+200ms): `\r`       open picker
-        //   send 3 (+200ms): `<model>`   enter identifier
-        //   send 4 (+200ms): `\r`       confirm
+    // /model <id> [PAUSE] Esc [PAUSE] Enter.
+    //
+    // The Esc is the load-bearing step. Typing `/model` opens pi-tui's command
+    // autocomplete, which consumes Enter to accept its own highlighted entry,
+    // so an Enter sent straight after the identifier submits the dropdown's
+    // pick rather than the typed line. Esc dismisses the dropdown first.
+    it('pi backend: types the command with the id, dismisses autocomplete, then commits', () => {
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -213,28 +214,25 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();
+        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
 
-        expect(tabA.sendInputCalls).toEqual([['/model']]);
-
-        vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r']]);
+        // Send 1 is the whole typed line: command, space, identifier.
+        expect(tabA.sendInputCalls).toHaveLength(1);
+        expect(tabA.sendInputCalls[0][0]).toMatch(/^\/model [a-zA-Z0-9/_.-]+$/);
 
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls.length).toBe(3);
-        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+        expect(tabA.sendInputCalls[1]).toEqual(['\x1b']);
 
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r'], [expect.any(String)], ['\r']]);
+        expect(tabA.sendInputCalls[2]).toEqual(['\r']);
 
-        // No further sends. Total wall time: 600ms.
+        // Nothing further. Total wall time: 400ms.
         vi.advanceTimersByTime(5000);
-        expect(tabA.sendInputCalls.length).toBe(4);
+        expect(tabA.sendInputCalls).toHaveLength(3);
     });
 
-    it('pi picker flow stays pinned to the click-time tab', () => {
-        // A tab switch mid-chain must not redirect picker input.
+    it('pi model flow stays pinned to the click-time tab', () => {
+        // A tab switch mid-sequence must not redirect the Esc or the Enter.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -243,24 +241,21 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();
+        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
 
         tm.activePaneId = tabB.paneId;
+        vi.advanceTimersByTime(5000);
 
-        vi.advanceTimersByTime(200);    // send 2 (open picker) -> tabA
-        vi.advanceTimersByTime(200);    // send 3 (model) -> tabA
-        vi.advanceTimersByTime(200);    // send 4 (confirm) -> tabA
-        vi.advanceTimersByTime(5000);   // nothing further
-
-        expect(tabA.sendInputCalls.length).toBe(4);
-        expect(tabA.sendInputCalls[0][0]).toBe('/model');
-        expect(tabA.sendInputCalls[1][0]).toBe('\r');
-        expect(tabA.sendInputCalls[3][0]).toBe('\r');
-        expect(tabB.sendInputCalls.length).toBe(0);
+        expect(tabA.sendInputCalls).toHaveLength(3);
+        expect(tabA.sendInputCalls[1][0]).toBe('\x1b');
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        expect(tabB.sendInputCalls).toHaveLength(0);
     });
 
-    it('pi picker flow keeps commands, picker input, and confirmation discrete', () => {
+    it('pi model flow keeps the typed line, the Esc, and the Enter discrete', () => {
+        // Collapsing these into one paste is the failure mode this sequence
+        // exists to avoid: the dropdown never opens, so Esc has nothing to
+        // dismiss and Enter commits in an unknown state.
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -268,15 +263,17 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
 
         tm.renderModelDropup();
         document.querySelector('#model-presets-dropup .dropup-model-btn').click();
-        vi.advanceTimersByTime(600);
+        vi.advanceTimersByTime(400);
 
-        expect(tabA.sendInputCalls).toHaveLength(4);
-        expect(tabA.sendInputCalls[0][0]).toBe('/model');
+        expect(tabA.sendInputCalls).toHaveLength(3);
+        // The typed line carries no commit or escape bytes of its own.
         expect(tabA.sendInputCalls[0][0]).not.toMatch(/[\r\x1b]/);
-        expect(tabA.sendInputCalls[1][0]).toBe('\r');
-        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
-        expect(tabA.sendInputCalls[2][0]).not.toMatch(/[\r\x1b]/);
-        expect(tabA.sendInputCalls[3][0]).toBe('\r');
+        expect(tabA.sendInputCalls[0][0]).not.toContain('\x1b[200~'); // not bracketed paste
+        expect(tabA.sendInputCalls[1][0]).toBe('\x1b');
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
+        // Esc must precede Enter; the reverse order commits the dropdown pick.
+        expect(tabA.sendInputCalls.findIndex(c => c[0] === '\x1b'))
+            .toBeLessThan(tabA.sendInputCalls.findIndex(c => c[0] === '\r'));
     });
 
     it('claude model flow confirms a delayed cache-warning prompt on the click-time tab', () => {
@@ -392,12 +389,11 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
 // ---------------------------------------------------------------------------
 
 describe('pi /model picker sequence', () => {
-    it('pi model dropdown: command, open picker, model, then confirm', () => {
+    it('pi model dropdown: typed line, Esc, then confirm', () => {
         // Sequence:
-        //   send 1 (sync):   `/model`
-        //   send 2 (+200ms): `\r`       open picker
-        //   send 3 (+200ms): `<model>`   enter identifier
-        //   send 4 (+200ms): `\r`       confirm
+        //   send 1 (sync):   `/model <id>`  type command and identifier
+        //   send 2 (+200ms): `\x1b`         dismiss pi-tui's autocomplete
+        //   send 3 (+200ms): `\r`           commit the typed line
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -407,20 +403,18 @@ describe('pi /model picker sequence', () => {
         const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
         btn.click();
 
-        expect(tabA.sendInputCalls).toEqual([['/model']]);
+        expect(tabA.sendInputCalls).toHaveLength(1);
+        expect(tabA.sendInputCalls[0][0]).toMatch(/^\/model [a-zA-Z0-9/_.-]+$/);
 
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls).toEqual([['/model'], ['\r']]);
+        expect(tabA.sendInputCalls[1][0]).toBe('\x1b');
 
         vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls[2][0]).toMatch(/^[a-zA-Z0-9/_.-]+$/);
+        expect(tabA.sendInputCalls[2][0]).toBe('\r');
 
-        vi.advanceTimersByTime(200);
-        expect(tabA.sendInputCalls[3][0]).toBe('\r');
-
-        // No further sends; total 600ms wall time.
+        // No further sends; total 400ms wall time.
         vi.advanceTimersByTime(5000);
-        expect(tabA.sendInputCalls).toHaveLength(4);
+        expect(tabA.sendInputCalls).toHaveLength(3);
     });
 
     it('opencode/pi coder preset button: single sendSlashCommand', () => {
