@@ -18,6 +18,7 @@ export class KanbanManager {
     boardContainer: HTMLElement | null;
     filterQuery: string;
     _boardClickHandler: ((e: Event) => void) | null;
+    _boardKeyHandler: ((e: Event) => void) | null;
     _boardDelegateHost: HTMLElement | null;
     _taskWrites: Map<string, Promise<any>>;
 
@@ -34,6 +35,7 @@ export class KanbanManager {
         this.boardContainer = null;
         this.filterQuery = '';
         this._boardClickHandler = null;
+        this._boardKeyHandler = null;
         this._boardDelegateHost = null;
         this._taskWrites = new Map();
     }
@@ -686,43 +688,9 @@ export class KanbanManager {
 
         // Feature rows deliberately use the same task detail panel as cards;
         // completion applies to the parent only and never cascades silently.
-        container.querySelectorAll('.kanban-feature-row').forEach((row: Element) => {
-            const rowElement = row as HTMLElement;
-            const open = () => {
-                const taskId = rowElement.dataset.taskId!;
-                this.openTaskDetail(taskId, rowElement, container);
-            };
-            rowElement.addEventListener('click', (event) => {
-                if ((event.target as Element).closest('button')) return;
-                open();
-            });
-            rowElement.addEventListener('keydown', event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    open();
-                }
-            });
-        });
-        container.querySelectorAll('.kanban-feature-done-btn').forEach((button: Element) => {
-            button.addEventListener('click', async (event) => {
-                event.stopPropagation();
-                const task = this.taskCache[(button as HTMLElement).dataset.taskId!];
-                if (!task) return;
-                const progress = featureProgress(task);
-                if (!task.done && progress.completed < progress.total && !confirm(`Mark "${task.title}" done with ${progress.total - progress.completed} unfinished subtask${progress.total - progress.completed === 1 ? '' : 's'}?`)) return;
-                const doneButton = button as HTMLButtonElement;
-                doneButton.disabled = true;
-                try {
-                    await this.setTaskDone(task, !task.done);
-                    // Feature rows aggregate their subtasks, so the roll-up is
-                    // re-derived by a refresh rather than patched per card.
-                    await this.refreshBoard(container);
-                } catch (err) {
-                    this.app.showToast(`Failed to update feature: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
-                    doneButton.disabled = false;
-                }
-            });
-        });
+        // Open and complete are delegated from the board root (see
+        // bindBoardDelegates) so a row repainted by patchFeatureRow stays
+        // interactive.
 
         if (this.boardMode === 'stats') {
             this.initStatsCharts(container);
@@ -1124,8 +1092,10 @@ export class KanbanManager {
             ...parent,
             related_tasks: { ...(parent.related_tasks || {}), subtask: nextChildren }
         };
-        this.taskCache[nextParent.id] = nextParent;
-        this.taskCache[subtask.id] = { ...(this.taskCache[subtask.id] || {}), ...subtask };
+        // Through upsertTaskState so buckets[].tasks and the cache stay in
+        // agreement; a bare cache write would leave the board rendering stale.
+        this.upsertTaskState(nextParent);
+        this.upsertTaskState({ ...(this.taskCache[subtask.id] || {}), ...subtask });
         return nextParent;
     }
 
@@ -1147,7 +1117,9 @@ export class KanbanManager {
                     const updatedChild = await this.setTaskDone(child, checkbox.checked);
                     const parent = this.withSubtask(task, updatedChild);
                     this.replaceFeatureDetailSection(panel, parent, cardEl, container);
-                    await this.refreshBoard(container);
+                    // Only the parent's roll-up moved, so repaint that row.
+                    this.patchFeatureRow(parent.id);
+                    this.patchCard(parent.id);
                 } catch (err) {
                     checkbox.checked = !checkbox.checked;
                     checkbox.disabled = false;
@@ -1175,7 +1147,8 @@ export class KanbanManager {
                 const child = await this.createSubtask(task, title);
                 const parent = this.withSubtask(task, child);
                 this.replaceFeatureDetailSection(panel, parent, cardEl, container);
-                await this.refreshBoard(container);
+                this.patchFeatureRow(parent.id);
+                this.patchCard(parent.id);
                 this.app.showToast('Subtask added.', { type: 'success', title: 'Kanban' });
             } catch (err) {
                 this.app.showToast(`Failed to add subtask: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
@@ -1825,21 +1798,92 @@ export class KanbanManager {
 
         this._boardClickHandler = (e: Event) => {
             const target = e.target as Element | null;
-            const btn = target?.closest?.('.kanban-card-delete-btn') as HTMLElement | null;
-            if (!btn || !container.contains(btn)) return;
-            e.stopPropagation();
-            void this.confirmDeleteCard(btn.dataset.taskId!, container);
+            if (!target?.closest || !container.contains(target)) return;
+
+            const deleteBtn = target.closest('.kanban-card-delete-btn') as HTMLElement | null;
+            if (deleteBtn) {
+                e.stopPropagation();
+                void this.confirmDeleteCard(deleteBtn.dataset.taskId!, container);
+                return;
+            }
+
+            const doneBtn = target.closest('.kanban-feature-done-btn') as HTMLButtonElement | null;
+            if (doneBtn) {
+                e.stopPropagation();
+                void this.toggleFeatureDone(doneBtn, container);
+                return;
+            }
+
+            const row = target.closest('.kanban-feature-row') as HTMLElement | null;
+            if (row && !target.closest('button')) {
+                this.openTaskDetail(row.dataset.taskId!, row, container);
+            }
         };
         container.addEventListener('click', this._boardClickHandler);
+
+        this._boardKeyHandler = (e: Event) => {
+            const event = e as KeyboardEvent;
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            const target = event.target as Element | null;
+            const row = target?.closest?.('.kanban-feature-row') as HTMLElement | null;
+            if (!row || !container.contains(row)) return;
+            event.preventDefault();
+            this.openTaskDetail(row.dataset.taskId!, row, container);
+        };
+        container.addEventListener('keydown', this._boardKeyHandler);
+
         this._boardDelegateHost = container;
     }
 
     unbindBoardDelegates(): void {
-        if (this._boardDelegateHost && this._boardClickHandler) {
-            this._boardDelegateHost.removeEventListener('click', this._boardClickHandler);
+        if (this._boardDelegateHost) {
+            if (this._boardClickHandler) this._boardDelegateHost.removeEventListener('click', this._boardClickHandler);
+            if (this._boardKeyHandler) this._boardDelegateHost.removeEventListener('keydown', this._boardKeyHandler);
         }
         this._boardClickHandler = null;
+        this._boardKeyHandler = null;
         this._boardDelegateHost = null;
+    }
+
+    // Completing a feature is structural, not a repaint: done features are
+    // hidden by default, so the row can leave the list and the "Show done"
+    // count changes with it.
+    async toggleFeatureDone(button: HTMLButtonElement, container: HTMLElement): Promise<void> {
+        const task = this.taskCache[button.dataset.taskId!];
+        if (!task) return;
+        const progress = featureProgress(task);
+        const remaining = progress.total - progress.completed;
+        if (!task.done && remaining > 0 &&
+            !confirm(`Mark "${task.title}" done with ${remaining} unfinished subtask${remaining === 1 ? '' : 's'}?`)) return;
+
+        button.disabled = true;
+        try {
+            await this.setTaskDone(task, !task.done);
+            await this.refreshBoard(container);
+        } catch (err) {
+            this.app.showToast(`Failed to update feature: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
+            button.disabled = false;
+        }
+    }
+
+    featureRowEl(taskId: string | number): HTMLElement | null {
+        if (!this.boardContainer) return null;
+        return this.boardContainer.querySelector(`.kanban-feature-row[data-task-id="${taskId}"]`);
+    }
+
+    // patchFeatureRow re-derives one roll-up from current state. Used when a
+    // subtask changes: the parent stays in the list and only its progress
+    // moves, so there is nothing structural to refetch.
+    patchFeatureRow(taskId: string | number): void {
+        const task = this.taskCache[String(taskId)];
+        const existing = this.featureRowEl(taskId);
+        if (!task || !existing) return;
+        const holder = document.createElement('div');
+        holder.innerHTML = this.renderFeatureRow(featureProgress(task)).trim();
+        const rendered = holder.firstElementChild as HTMLElement | null;
+        if (!rendered) return;
+        existing.replaceWith(rendered);
+        this.applyFilterToCard(rendered);
     }
 
     async confirmDeleteCard(taskId: string, container: HTMLElement): Promise<void> {
