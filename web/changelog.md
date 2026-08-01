@@ -2,6 +2,32 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.3 — 2026-07-31
+
+Patch batch covering every commit since v0.15.2: three contributed features, a Kanban reliability pass, and four fixes found while testing.
+
+### Added
+- **Automatic browser reconnects** (`80028d0`, #16). The active tab revives on visibility return, network restore, and bfcache restore, with full-jitter exponential backoff (20s cap, 10 attempts). `auto_reconnect` defaults to `visible` and has a Settings toggle. Kanban and review panes are excluded — they have no PTY to redial.
+- **File tree panel with per-coder `@path` insertion** (`90422b9`, #18). Browse the workspace and insert a path into the active coder's input, honouring `.gitignore`.
+- **`Insert @path` in the markdown panel** (`d0a18ad`, #17). Context-menu action mirroring the same insertion behaviour.
+
+### Changed
+- **Kanban edits no longer reload the board** (`2ef4e85`, `aebc6a6`). Renames, priority, due dates, done toggles, deletes and subtask changes repaint the card or roll-up they touched; the board stays on screen and keeps its scroll position and active filter. Full reloads remain for first paint, project switches, and bucket changes, which are structural. A rejected write rolls back and re-reads the task, so the cache cannot keep a value the server refused — task writes send the whole object, so a stale cached field would otherwise be persisted by the next save.
+- **Stats is board-wide, not feature-only** (`3a370c9`). The view was gated on feature parents, so a board of plain tasks showed an empty state and no charts. Every metric and chart now covers all tasks: completion, velocity, forecast, and filed-vs-done flow. Features remain as one secondary card, omitted when the board has none.
+
+### Fixed
+- **Kanban task creation on a fresh origin** (`44a9032`). Quick-add read the project id straight from `localStorage`, which is per-origin; on a host where the project dropdown had never been touched the key was absent, so the request went to the literal path `/projects/NaN/tasks` and Vikunja answered an opaque `400 Invalid model provided`. It now uses the resolved project id, and unresolved ids are refused before reaching the network.
+- **Expired Kanban sessions recover themselves** (`1be0324`). Vikunja's JWT expires while the board sits open. Only board load recovered, via the saved-vault login, so the board returned but the next click — opening a description, saving, dragging — died with `Session expired`. Re-authentication now happens per request, with one shared login for parallel failures and a single retry.
+- **Reconnect refreshes the terminal instead of stacking artefacts** (`e643bc8`). The server replays its whole ring buffer on every attach, so a reconnect appended a second copy of the scrollback. It now resets on the first replayed byte. The `[Connection lost]` / `[Reconnected]` buffer writes are gone — the overlay, banner and toast already report it without leaving permanent scrollback.
+- **Terminal recovers from a lost WebGL context** (`6553d14`). The renderer was only guarded against failing to construct; a context lost at runtime left the addon drawing into a dead GL context, rendering garbage that never recovered. Most visible on mobile, where GPUs drop contexts under memory pressure. Disposing falls back to the DOM renderer.
+- **File-tree path guard is consistent across platforms** (`b95700a`). `filepath.IsAbs("/etc")` is false on Windows, where an absolute path needs a drive letter or UNC prefix, so the traversal guard did not fire there. Containment still held, so this was guard consistency rather than an escape.
+
+### Tests
+- `test-js/vikunjaRequestContract.test.js` (new) — validates every Kanban mutation against the vendored Vikunja swagger: path, method, body fields and types, plus unresolved ids. Derives the mutation surface from the code, so a new call site without a contract case fails the build.
+- `test-js/kanbanIncremental.test.js` (new) — card and roll-up patching, delegated actions surviving a repaint, optimistic rollback, and refresh preserving scroll and filter.
+- `test-js/kanbanReauth.test.js`, `test-js/reconnectReplay.test.js` (new) — session recovery and replay handling.
+- `pkg/pty/manager_test.go` — `TestManagerShutdown_GracefulTerminatesAndCleansUp` polls for the asynchronous cleanup instead of asserting the instant `Shutdown` returns; it was failing CI intermittently at exactly the 4s bound (`ab846bf`).
+
 ## v0.15.2 — 2026-07-31
 
 Patch bump for current Pi and Claude model-switch behavior.
