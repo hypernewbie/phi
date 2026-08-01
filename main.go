@@ -273,6 +273,7 @@ func main() {
 	http.HandleFunc("/api/config/terminal-commands", handleTerminalCommands)
 	http.HandleFunc("/api/config/markdown-dirs", handleMarkdownDirs)
 	http.HandleFunc("/api/config/use-existing-terminal-tab", handleUseExistingTerminalTab)
+	http.HandleFunc("/api/config/fast-mode", handleFastMode)
 	http.HandleFunc("/api/config/auto-reconnect", handleAutoReconnect)
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
