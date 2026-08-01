@@ -237,6 +237,41 @@ html, body {
     100% { transform: translate(0, 0); }
 }
 
+/* ── Compositor isolation for the brand CPU tiers ──────────────────────
+   .brand is a direct child of .app-header, which carries
+   `backdrop-filter: blur(20px) saturate(180%)`. Without its own layer, any
+   repaint here dirties the header layer and forces that 20px blur to
+   re-run — at 60fps, for the whole header strip. Measured on a loaded
+   machine, one core:
+
+     all animations off ................................  5.3%
+     opacity blink only ............................... 121.3%
+     text-shadow breath only .......................... 120.8%
+     breath + blink ................................... 100.5%
+     breath + blink + own compositor layer ............  30.3%
+
+   Note the property being animated barely matters: a pure opacity blink
+   cost as much as a text-shadow breath. The cost is the backdrop-filter
+   recompute, not the animation. Promoting the animated elements out of
+   the header's layer is what removes it.
+
+   `will-change: transform` is the promotion hint, deliberately *not*
+   `transform: translateZ(0)` — the cpu-high/cpu-critical tiers animate
+   transform for the shiver, and a base transform here would be a value
+   the animation has to override on every keyframe.
+
+   Scoped to the .cpu-* tiers so the layer exists only while something is
+   actually animating. Layers cost GPU memory; a permanently promoted
+   idle logo would trade one waste for another. */
+.brand .logo.cpu-moderate,
+.brand .logo.cpu-high,
+.brand .logo.cpu-critical,
+.brand .brand-name.cpu-moderate,
+.brand .brand-name.cpu-high,
+.brand .brand-name.cpu-critical {
+    will-change: transform;
+}
+
 /* Respect prefers-reduced-motion: drop the animation, keep the color step. */
 @media (prefers-reduced-motion: reduce) {
     .brand .logo.cpu-moderate,
@@ -250,6 +285,16 @@ html, body {
     .hostname-tabs-dropdown,
     .tab.has-attention {
         animation: none !important;
+    }
+    /* No animation left to promote for; releasing the layer frees its
+       GPU memory rather than parking an idle one. */
+    .brand .logo.cpu-moderate,
+    .brand .logo.cpu-high,
+    .brand .logo.cpu-critical,
+    .brand .brand-name.cpu-moderate,
+    .brand .brand-name.cpu-high,
+    .brand .brand-name.cpu-critical {
+        will-change: auto;
     }
 }
 
@@ -7806,6 +7851,15 @@ body.fast-mode .sidebar-version-btn.has-update::after,
 body.fast-mode .fleet-stale-badge,
 body.fast-mode #input-textarea:focus {
     animation: none !important;
+}
+
+/* Fast mode stops the animations above, so the compositor layers they were
+   promoted into have nothing left to composite. Release them: a parked layer
+   costs GPU memory for no benefit, and fast mode exists to reclaim exactly
+   that kind of idle cost. */
+body.fast-mode .brand .logo,
+body.fast-mode .brand .brand-name {
+    will-change: auto !important;
 }
 
 body.fast-mode .sidebar-panel,
