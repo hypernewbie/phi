@@ -4,7 +4,7 @@ import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { FileTreeManager } from './filetree.js';
 import { KanbanManager } from './kanban.js';
-import { escapeHtml, buildPhiFaviconSvg } from './util.js';
+import { escapeHtml, buildPhiFaviconSvg, displayHostname } from './util.js';
 import { SyncManager } from './sync.js';
 import { bootstrapAccessAuth, clearAccessPassword, setAccessPassword } from './auth.js';
 
@@ -1060,7 +1060,9 @@ export class App {
         // About group ───────────────────────────────────────────
         const aboutGroup = this._buildSettingsGroup('About');
         body.appendChild(aboutGroup);
-        const hName = (this.hostname || '').toString();
+        // Uppercasing turned macOS's `studio.local` into a shouty `.LOCAL`;
+        // strip the suffix before casing rather than after.
+        const hName = displayHostname(this.hostname);
         aboutGroup.appendChild(this._buildAboutRow('Hostname', hName.toUpperCase()));
         if (v.buildSource) {
             aboutGroup.appendChild(this._buildAboutRow('Build source', v.buildSource));
