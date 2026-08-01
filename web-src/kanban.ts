@@ -15,6 +15,11 @@ export class KanbanManager {
     currentProjectId!: number | null;
     currentViewId!: number | null;
     buckets!: any[] | null;
+    boardContainer: HTMLElement | null;
+    filterQuery: string;
+    _boardClickHandler: ((e: Event) => void) | null;
+    _boardDelegateHost: HTMLElement | null;
+    _taskWrites: Map<string, Promise<any>>;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -26,6 +31,11 @@ export class KanbanManager {
         this.statsCharts = [];
         this.boardMode = 'board';
         this.showDoneFeatures = false;
+        this.boardContainer = null;
+        this.filterQuery = '';
+        this._boardClickHandler = null;
+        this._boardDelegateHost = null;
+        this._taskWrites = new Map();
     }
 
     async openBoard(): Promise<void> {
@@ -76,6 +86,8 @@ export class KanbanManager {
         this.activeOverlay = null;
         this._dragActive = false;
         this.destroyStatsCharts();
+        this.unbindBoardDelegates();
+        this.boardContainer = null;
         localStorage.removeItem('phi_kanban_open');
     }
 
@@ -250,13 +262,33 @@ export class KanbanManager {
         });
     }
 
+    // loadAndRenderBoard is the first-paint path: it clears to a spinner and
+    // rebuilds. For a post-edit refresh use refreshBoard, which keeps the
+    // board on screen.
     async loadAndRenderBoard(container: HTMLElement, isAutoRetry: boolean = false): Promise<void> {
-        container.innerHTML = `
-            <div class="kanban-loading-wrapper">
-                <div class="spinner-ring"></div>
-                <div class="loader-text">Loading Kanban data...</div>
-            </div>
-        `;
+        return this.loadBoard(container, { showSpinner: true, isAutoRetry });
+    }
+
+    async loadBoard(
+        container: HTMLElement,
+        { showSpinner = true, isAutoRetry = false }: { showSpinner?: boolean; isAutoRetry?: boolean } = {}
+    ): Promise<void> {
+        this.boardContainer = container;
+
+        // Only the first paint blanks the board. A refresh keeps the current
+        // board visible and marks the toolbar instead, so an edit does not
+        // flash the whole panel away and back.
+        const snapshot = showSpinner ? null : this.captureBoardUi(container);
+        if (showSpinner) {
+            container.innerHTML = `
+                <div class="kanban-loading-wrapper">
+                    <div class="spinner-ring"></div>
+                    <div class="loader-text">Loading Kanban data...</div>
+                </div>
+            `;
+        } else {
+            this.setBoardSyncing(true);
+        }
 
         try {
             // Fetch projects
@@ -340,6 +372,7 @@ export class KanbanManager {
             });
 
             this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+            this.restoreBoardUi(container, snapshot);
         } catch (err) {
             console.error('Kanban Load Error:', err);
 
@@ -365,6 +398,8 @@ export class KanbanManager {
                 sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container);
             });
+        } finally {
+            this.setBoardSyncing(false);
         }
     }
 
@@ -403,6 +438,7 @@ export class KanbanManager {
                 <div class="kanban-toolbar">
                     <div class="toolbar-left">
                         <span class="toolbar-label">Project:</span>
+                        <span id="kanban-sync-indicator" class="kanban-sync-indicator" aria-hidden="true"></span>
                         <select id="kanban-project-select" class="kanban-select">
                             ${projects.map((p: any) => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${this.escapeHtml(p.title)}</option>`).join('')}
                         </select>
@@ -465,7 +501,9 @@ export class KanbanManager {
         });
 
         container.querySelector('#kanban-refresh-btn')!.addEventListener('click', () => {
-            this.loadAndRenderBoard(container);
+            // Refresh in place. Blanking the board the user is looking at is
+            // worse feedback than the toolbar indicator.
+            this.refreshBoard(container);
         });
 
         // Add Column toolbar button. Prompts for a name; re-loads on success.
@@ -556,22 +594,10 @@ export class KanbanManager {
             });
         });
 
-        // Inline card delete (the X button revealed on hover). Confirms, then
-        // calls deleteTask which clears the cache and reloads the board.
-        container.querySelectorAll('.kanban-card-delete-btn').forEach((btn: Element) => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const id = (btn as HTMLElement).dataset.taskId!;
-                const task = this.taskCache[id];
-                const label = task ? `"${task.title}"` : `#${id}`;
-                if (!confirm(`Delete task ${label}? This cannot be undone.`)) return;
-                try {
-                    await this.deleteTask(id, container);
-                } catch (err) {
-                    this.app.showToast(`Failed to delete task: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
-                }
-            });
-        });
+        // Inline card delete is delegated from the board root (see
+        // bindBoardDelegates) so that a card re-rendered by an incremental
+        // patch keeps working. A per-card listener dies with the old node.
+        this.bindBoardDelegates(container);
 
         container.querySelector('#kanban-disconnect-btn')!.addEventListener('click', () => {
             sessionStorage.removeItem('vikunja_token');
@@ -586,27 +612,11 @@ export class KanbanManager {
             searchInput.addEventListener('input', () => {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
-                    const query = searchInput.value.trim().toLowerCase();
-                    const cards = container.querySelectorAll('.kanban-card, .kanban-feature-row');
-                    cards.forEach(card => {
-                        const taskId = (card as HTMLElement).dataset.taskId!;
-                        const task = this.taskCache[taskId];
-                        if (!query) {
-                            card.classList.remove('hidden-by-filter');
-                            return;
-                        }
-                        let match = false;
-                        if (task) {
-                            if (task.title && task.title.toLowerCase().includes(query)) match = true;
-                            if (task.identifier && task.identifier.toLowerCase().includes(query)) match = true;
-                            if (task.labels && task.labels.some((l: any) => l.title && l.title.toLowerCase().includes(query))) match = true;
-                        }
-                        if (match) {
-                            card.classList.remove('hidden-by-filter');
-                        } else {
-                            card.classList.add('hidden-by-filter');
-                        }
-                    });
+                    // Held on the manager so a card repainted by an
+                    // incremental patch is filtered the same way as one
+                    // rendered by a full pass.
+                    this.filterQuery = searchInput.value.trim().toLowerCase();
+                    this.applyFilter(container);
                 }, 150);
             });
         }
@@ -637,8 +647,18 @@ export class KanbanManager {
                             if (!val) { reset(); return; }
                             input.disabled = true;
                             try {
-                                await this.createTask(bucketId, val);
-                                await this.loadAndRenderBoard(container);
+                                // Vikunja assigns the id, index and identifier,
+                                // so the new card is rendered from its response
+                                // rather than guessed at, but still without a
+                                // board reload.
+                                const created = await this.createTask(bucketId, val);
+                                if (created?.id != null) {
+                                    this.addTaskState(created, bucketId);
+                                    this.insertCard(created, bucketId);
+                                    reset();
+                                    return;
+                                }
+                                await this.refreshBoard(container);
                             } catch (err) {
                                 alert(`Failed to create task: ${(err as Error).message}`);
                                 reset();
@@ -694,7 +714,9 @@ export class KanbanManager {
                 doneButton.disabled = true;
                 try {
                     await this.setTaskDone(task, !task.done);
-                    await this.loadAndRenderBoard(container);
+                    // Feature rows aggregate their subtasks, so the roll-up is
+                    // re-derived by a refresh rather than patched per card.
+                    await this.refreshBoard(container);
                 } catch (err) {
                     this.app.showToast(`Failed to update feature: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
                     doneButton.disabled = false;
@@ -1107,7 +1129,7 @@ export class KanbanManager {
                     const updatedChild = await this.setTaskDone(child, checkbox.checked);
                     const parent = this.withSubtask(task, updatedChild);
                     this.replaceFeatureDetailSection(panel, parent, cardEl, container);
-                    await this.loadAndRenderBoard(container);
+                    await this.refreshBoard(container);
                 } catch (err) {
                     checkbox.checked = !checkbox.checked;
                     checkbox.disabled = false;
@@ -1135,7 +1157,7 @@ export class KanbanManager {
                 const child = await this.createSubtask(task, title);
                 const parent = this.withSubtask(task, child);
                 this.replaceFeatureDetailSection(panel, parent, cardEl, container);
-                await this.loadAndRenderBoard(container);
+                await this.refreshBoard(container);
                 this.app.showToast('Subtask added.', { type: 'success', title: 'Kanban' });
             } catch (err) {
                 this.app.showToast(`Failed to add subtask: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
@@ -1644,13 +1666,23 @@ export class KanbanManager {
 
     async setTaskDone(task: any, done: boolean): Promise<any> {
         const payload = this.taskUpdatePayload(task, { done });
+        const optimistic: any = { done };
+        if (done) optimistic.done_at = task.done_at || new Date().toISOString();
+
         // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
-        const response = await this.apiPost(`/tasks/${task.id}`, payload);
-        const next = { ...task, ...(response || {}), done };
+        const response = await this.applyTaskMutation(task.id, optimistic, () =>
+            this.apiPost(`/tasks/${task.id}`, payload)
+        );
+        // Build from the cache, not from the `task` argument: applyTaskMutation
+        // has already merged the server response, and the caller's object is a
+        // pre-write snapshot that would discard it.
+        const current = this.taskCache[String(task.id)] || task;
+        const next = { ...current, ...(response || {}), done };
         // Normally the API returns done_at. Retain a local timestamp when an
         // older server responds with 204 so the burn-up chart updates at once.
         if (done && !next.done_at) next.done_at = new Date().toISOString();
-        this.taskCache[next.id] = next;
+        this.upsertTaskState(next);
+        this.patchCard(next.id);
         return next;
     }
 
@@ -1714,13 +1746,23 @@ export class KanbanManager {
         const payload = this.taskUpdatePayload(task, formData);
 
         // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
-        await this.apiPost(`/tasks/${task.id}`, payload);
+        // The card repaints immediately and rolls back if the save fails, so
+        // there is no board reload here.
+        //
+        // Patch the cache with the user's edits, NOT with `payload`: the wire
+        // payload strips labels and assignees down to bare {id}, and caching
+        // those stubs would both blank the label pills and send the stubs back
+        // on the next save. Only due_date is taken from the payload, for its
+        // empty-value normalisation.
+        const optimistic = { ...formData, due_date: payload.due_date };
+        await this.applyTaskMutation(task.id, optimistic, () =>
+            this.apiPost(`/tasks/${task.id}`, payload)
+        );
         this.app.showToast('Task updated successfully.', { type: 'success' });
 
-        // Update taskCache
-        this.taskCache[task.id] = payload;
-
-        await this.loadAndRenderBoard(container);
+        // Features and Stats are aggregates over many tasks, not one card per
+        // task, so there is nothing for patchCard to repaint in those modes.
+        if (this.boardMode !== 'board') await this.refreshBoard();
     }
 
     closeDetailPanel(): void {
@@ -1746,14 +1788,309 @@ export class KanbanManager {
     }
 
     // ============================================================
+    // Incremental board rendering
+    //
+    // The board is single-user in practice, so local state is authoritative
+    // between refreshes: a mutation can update taskCache and repaint the one
+    // card it touched instead of refetching four endpoints and rebuilding the
+    // DOM. Full reloads stay for structural changes (buckets, project switch)
+    // and the explicit Refresh button.
+    // ============================================================
+
+    // bindBoardDelegates attaches delegated click handling exactly once per
+    // container. renderBoardLayout reassigns container.innerHTML on every
+    // re-render, which discards listeners on descendants but NOT on the
+    // container itself, so re-binding per render would stack duplicates.
+    bindBoardDelegates(container: HTMLElement): void {
+        if (this._boardDelegateHost === container) return;
+        this.unbindBoardDelegates();
+
+        this._boardClickHandler = (e: Event) => {
+            const target = e.target as Element | null;
+            const btn = target?.closest?.('.kanban-card-delete-btn') as HTMLElement | null;
+            if (!btn || !container.contains(btn)) return;
+            e.stopPropagation();
+            void this.confirmDeleteCard(btn.dataset.taskId!, container);
+        };
+        container.addEventListener('click', this._boardClickHandler);
+        this._boardDelegateHost = container;
+    }
+
+    unbindBoardDelegates(): void {
+        if (this._boardDelegateHost && this._boardClickHandler) {
+            this._boardDelegateHost.removeEventListener('click', this._boardClickHandler);
+        }
+        this._boardClickHandler = null;
+        this._boardDelegateHost = null;
+    }
+
+    async confirmDeleteCard(taskId: string, container: HTMLElement): Promise<void> {
+        const task = this.taskCache[taskId];
+        const label = task ? `"${task.title}"` : `#${taskId}`;
+        if (!confirm(`Delete task ${label}? This cannot be undone.`)) return;
+        try {
+            await this.deleteTask(taskId, container);
+        } catch (err) {
+            this.app.showToast(`Failed to delete task: ${(err as Error).message}`, { type: 'error', title: 'Kanban' });
+        }
+    }
+
+    // ---- local state -------------------------------------------------
+    // buckets[].tasks and taskCache hold the same task objects, so both views
+    // of the board have to be updated together or a later render disagrees
+    // with the cache.
+
+    bucketIdOf(taskId: string | number): string | null {
+        const id = String(taskId);
+        for (const bucket of this.buckets || []) {
+            if ((bucket.tasks || []).some((t: any) => String(t.id) === id)) return String(bucket.id);
+        }
+        return null;
+    }
+
+    upsertTaskState(task: any): void {
+        if (!task || task.id == null) return;
+        const id = String(task.id);
+        this.taskCache[id] = task;
+        for (const bucket of this.buckets || []) {
+            const list = bucket.tasks;
+            if (!list) continue;
+            const idx = list.findIndex((t: any) => String(t.id) === id);
+            if (idx !== -1) list[idx] = task;
+        }
+    }
+
+    removeTaskState(taskId: string | number): void {
+        const id = String(taskId);
+        delete this.taskCache[id];
+        for (const bucket of this.buckets || []) {
+            if (!bucket.tasks) continue;
+            bucket.tasks = bucket.tasks.filter((t: any) => String(t.id) !== id);
+        }
+    }
+
+    addTaskState(task: any, bucketId: string | number | null): void {
+        if (!task || task.id == null) return;
+        this.removeTaskState(task.id);
+        this.taskCache[String(task.id)] = task;
+        const bucket = (this.buckets || []).find((b: any) => String(b.id) === String(bucketId));
+        if (!bucket) return;
+        if (!bucket.tasks) bucket.tasks = [];
+        bucket.tasks.push(task);
+    }
+
+    // ---- DOM patching --------------------------------------------------
+    // All of these no-op when the board is not mounted, so a mutation invoked
+    // from the detail drawer with no board behind it stays safe.
+
+    cardEl(taskId: string | number): HTMLElement | null {
+        if (!this.boardContainer) return null;
+        return this.boardContainer.querySelector(`.kanban-card[data-task-id="${taskId}"]`);
+    }
+
+    renderCardElement(task: any): HTMLElement | null {
+        const holder = document.createElement('div');
+        holder.innerHTML = this.renderCard(task).trim();
+        return holder.firstElementChild as HTMLElement | null;
+    }
+
+    patchCard(taskId: string | number): void {
+        const task = this.taskCache[String(taskId)];
+        const existing = this.cardEl(taskId);
+        if (!task || !existing) return;
+        const rendered = this.renderCardElement(task);
+        if (!rendered) return;
+        existing.replaceWith(rendered);
+        this.applyFilterToCard(rendered);
+    }
+
+    removeCard(taskId: string | number): void {
+        const existing = this.cardEl(taskId);
+        if (!existing) return;
+        existing.remove();
+        this.syncColumnCounts();
+    }
+
+    insertCard(task: any, bucketId: string | number | null): void {
+        if (!this.boardContainer || !task) return;
+        const list = this.boardContainer.querySelector(`.kanban-cards-list[data-bucket-id="${bucketId}"]`);
+        if (!list) return;
+        const rendered = this.renderCardElement(task);
+        if (!rendered) return;
+        list.appendChild(rendered);
+        this.applyFilterToCard(rendered);
+        this.syncColumnCounts();
+    }
+
+    syncColumnCounts(): void {
+        if (this.boardContainer) this.updateColumnCounts(this.boardContainer);
+    }
+
+    // ---- filtering -----------------------------------------------------
+    // One predicate behind the search box, reused whenever a card is
+    // re-rendered so an incremental patch cannot resurrect a card that the
+    // active filter had hidden.
+
+    matchesFilter(task: any, query: string): boolean {
+        if (!query) return true;
+        if (!task) return false;
+        if (task.title && task.title.toLowerCase().includes(query)) return true;
+        if (task.identifier && task.identifier.toLowerCase().includes(query)) return true;
+        return (task.labels || []).some((l: any) => l.title && l.title.toLowerCase().includes(query));
+    }
+
+    applyFilterToCard(card: HTMLElement): void {
+        const task = this.taskCache[card.dataset.taskId!];
+        card.classList.toggle('hidden-by-filter', !this.matchesFilter(task, this.filterQuery));
+    }
+
+    applyFilter(container: HTMLElement): void {
+        container.querySelectorAll('.kanban-card, .kanban-feature-row').forEach(card => {
+            this.applyFilterToCard(card as HTMLElement);
+        });
+    }
+
+    // ---- optimistic mutation -------------------------------------------
+
+    // applyTaskMutation shows the change immediately, then confirms it with
+    // Vikunja.
+    //
+    // Correctness note: task writes send the whole object back (see
+    // taskUpdatePayload), so a cached field that disagrees with the server is
+    // not a display glitch — the *next* save persists it. Everything below
+    // exists to stop the cache holding a value the server never accepted.
+    async applyTaskMutation(taskId: string | number, patch: any, commit: () => Promise<any>): Promise<any> {
+        const id = String(taskId);
+
+        // Serialize writes per task. Overlapping mutations let the first
+        // one's rollback discard the second's applied state, and that
+        // divergence would then be written back by a later full-object save.
+        // Lazily created so the in-flight map is optional state rather than a
+        // construction requirement for every caller that builds a manager.
+        if (!this._taskWrites) this._taskWrites = new Map();
+        const prior = this._taskWrites.get(id) || Promise.resolve();
+        const run = prior
+            .catch(() => undefined)
+            .then(() => this.runTaskMutation(id, patch, commit));
+        this._taskWrites.set(id, run);
+        try {
+            return await run;
+        } finally {
+            if (this._taskWrites.get(id) === run) this._taskWrites.delete(id);
+        }
+    }
+
+    async runTaskMutation(id: string, patch: any, commit: () => Promise<any>): Promise<any> {
+        const before = this.taskCache[id] ? { ...this.taskCache[id] } : null;
+
+        if (before) {
+            this.upsertTaskState({ ...before, ...patch });
+            this.patchCard(id);
+        }
+
+        try {
+            const result = await commit();
+            if (result && typeof result === 'object' && result.id != null) {
+                this.upsertTaskState({ ...this.taskCache[id], ...result });
+                this.patchCard(id);
+            }
+            return result;
+        } catch (err) {
+            if (before) {
+                this.upsertTaskState(before);
+                this.patchCard(id);
+            }
+            // The write may have landed before the failure surfaced, so
+            // neither the optimistic value nor the snapshot is trustworthy.
+            // Re-read instead of guessing which one won.
+            await this.resyncTask(id);
+            throw err;
+        }
+    }
+
+    // resyncTask restores one task from server truth. Best effort: if the
+    // re-read also fails there is nothing better to fall back to, so the
+    // rolled-back snapshot stands until the next board refresh.
+    async resyncTask(taskId: string | number): Promise<void> {
+        try {
+            const fresh = await this.apiGet(`/tasks/${taskId}`);
+            if (fresh && fresh.id != null) {
+                this.upsertTaskState(fresh);
+                this.patchCard(fresh.id);
+            }
+        } catch (err) {
+            console.warn('Failed to re-read task after a rejected update:', err);
+        }
+    }
+
+    // ---- board-level refresh -------------------------------------------
+
+    captureBoardUi(container: HTMLElement): any {
+        const scrolls: Record<string, number> = {};
+        container.querySelectorAll('.kanban-cards-list').forEach(list => {
+            scrolls[(list as HTMLElement).dataset.bucketId!] = list.scrollTop;
+        });
+        const wrapper = container.querySelector('.kanban-columns-wrapper');
+        const input = container.querySelector('#kanban-search-input') as HTMLInputElement | null;
+        return { scrolls, wrapperScrollLeft: wrapper ? wrapper.scrollLeft : 0, filter: input ? input.value : '' };
+    }
+
+    restoreBoardUi(container: HTMLElement, snapshot: any): void {
+        if (!snapshot) return;
+        for (const [bucketId, top] of Object.entries(snapshot.scrolls || {})) {
+            const list = container.querySelector(`.kanban-cards-list[data-bucket-id="${bucketId}"]`);
+            if (list) list.scrollTop = top as number;
+        }
+        const wrapper = container.querySelector('.kanban-columns-wrapper');
+        if (wrapper) wrapper.scrollLeft = snapshot.wrapperScrollLeft || 0;
+
+        const input = container.querySelector('#kanban-search-input') as HTMLInputElement | null;
+        if (input && snapshot.filter) {
+            input.value = snapshot.filter;
+            this.filterQuery = snapshot.filter.trim().toLowerCase();
+            this.applyFilter(container);
+        }
+    }
+
+    setBoardSyncing(on: boolean): void {
+        const indicator = this.boardContainer?.querySelector('#kanban-sync-indicator');
+        if (indicator) indicator.classList.toggle('is-syncing', on);
+    }
+
+    // refreshBoard refetches and re-renders in place. Unlike
+    // loadAndRenderBoard it never blanks the board to a spinner, and it puts
+    // scroll position and the active filter back afterwards. Use it for
+    // structural changes; use loadAndRenderBoard for first paint and project
+    // switches, where there is nothing worth preserving.
+    async refreshBoard(container?: HTMLElement | null): Promise<void> {
+        const host = container || this.boardContainer;
+        if (!host) return;
+        return this.loadBoard(host, { showSpinner: false });
+    }
+
+    // ============================================================
     // Task CRUD
     // ============================================================
 
     // deleteTask removes a task via Vikunja's DELETE /tasks/{id}.
-    async deleteTask(taskId: string, container: HTMLElement | null): Promise<void> {
-        await this.apiDelete(`/tasks/${taskId}`);
-        delete this.taskCache[taskId];
-        if (container) await this.loadAndRenderBoard(container);
+    // deleteTask drops the card straight away and restores it if Vikunja
+    // refuses, rather than reloading the whole board to find out.
+    async deleteTask(taskId: string, _container?: HTMLElement | null): Promise<void> {
+        const removed = this.taskCache[taskId];
+        const bucketId = this.bucketIdOf(taskId);
+
+        this.removeTaskState(taskId);
+        this.removeCard(taskId);
+
+        try {
+            await this.apiDelete(`/tasks/${taskId}`);
+        } catch (err) {
+            if (removed) {
+                this.addTaskState(removed, bucketId);
+                this.insertCard(removed, bucketId);
+            }
+            throw err;
+        }
     }
 
     // ============================================================
@@ -1771,7 +2108,7 @@ export class KanbanManager {
             `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets`,
             { title: t }
         );
-        if (container) await this.loadAndRenderBoard(container);
+        if (container) await this.refreshBoard(container);
     }
 
     // updateBucket renames a bucket via POST /projects/{p}/views/{v}/buckets/{b}.
@@ -1785,7 +2122,7 @@ export class KanbanManager {
             `/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets/${bucketId}`,
             { title: t }
         );
-        if (container) await this.loadAndRenderBoard(container);
+        if (container) await this.refreshBoard(container);
     }
 
     // deleteBucket removes a bucket. Drops cached tasks that belonged to it.
@@ -1800,7 +2137,7 @@ export class KanbanManager {
             if (t.bucket_id == bucketId) delete this.taskCache[id];
         }
         this.buckets = (this.buckets || []).filter((b: any) => b.id != bucketId);
-        if (container) await this.loadAndRenderBoard(container);
+        if (container) await this.refreshBoard(container);
     }
 
     // ============================================================
