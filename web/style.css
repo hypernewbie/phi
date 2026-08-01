@@ -7879,3 +7879,29 @@ body.fast-mode .input-bar-container {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   STANDALONE MARKDOWN VIEWER (md.html pop-out window)
+   ═══════════════════════════════════════════════════════════ */
+
+/* The app shell locks html/body to the viewport (overflow: hidden);
+   the pop-out is a plain document, so let the viewport scroll again —
+   md-view.js preserves scroll via document.scrollingElement. */
+html:has(> body.md-standalone) {
+    height: auto;
+    overflow-y: auto;
+    background: var(--bg-base);
+}
+
+body.md-standalone {
+    height: auto;
+    overflow: visible;
+}
+
+/* Readable column; content inside is a .md-rendered block, which
+   brings the existing markdown typography with it. */
+body.md-standalone #md-view-body {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 24px 32px;
+}
