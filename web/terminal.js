@@ -1342,9 +1342,23 @@ export class TabManager {
             bellAudio.play().catch(() => {});
         });
         
-        // Graceful WebGL/Canvas renderer
+        // Graceful WebGL/Canvas renderer.
+        //
+        // The try/catch only covers a renderer that fails to construct. A
+        // context lost at runtime is the other failure, and the damaging one:
+        // the addon keeps drawing into a dead GL context, so the terminal
+        // renders garbage and never recovers. Mobile GPUs drop contexts under
+        // memory pressure and on backgrounding, and heavy scrollback churn can
+        // provoke it on the desktop too. Disposing hands rendering back to the
+        // DOM renderer -- slower, but correct.
         try {
             const webgl = new window.WebglAddon.WebglAddon();
+            if (typeof webgl.onContextLoss === 'function') {
+                webgl.onContextLoss(() => {
+                    console.warn('[term] WebGL context lost; falling back to the DOM renderer');
+                    try { webgl.dispose(); } catch (e) { console.error('[term] WebGL dispose failed:', e); }
+                });
+            }
             term.loadAddon(webgl);
             console.log("[term] Loaded WebGL hardware acceleration");
         } catch (e) {
