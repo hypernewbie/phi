@@ -344,11 +344,13 @@ export class DiffController {
         const mdEl = document.getElementById('markdown-file-list');
         const cmdEl = document.getElementById('cmd-panel');
         const syncEl = document.getElementById('sync-panel');
+        const ftEl = document.getElementById('file-tree-list');
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
             cmdEl.classList.add('hidden');
             syncEl.classList.add('hidden');
+            ftEl.classList.add('hidden');
             this.actionBar.classList.add('hidden');
         }
         else if (mode === 'sync') {
@@ -356,6 +358,7 @@ export class DiffController {
             mdEl.classList.add('hidden');
             cmdEl.classList.add('hidden');
             syncEl.classList.remove('hidden');
+            ftEl.classList.add('hidden');
             this.actionBar.classList.add('hidden');
         }
         else if (mode === 'cmd') {
@@ -363,6 +366,15 @@ export class DiffController {
             mdEl.classList.add('hidden');
             cmdEl.classList.remove('hidden');
             syncEl.classList.add('hidden');
+            ftEl.classList.add('hidden');
+            this.actionBar.classList.add('hidden');
+        }
+        else if (mode === 'files') {
+            termEl.classList.add('hidden');
+            mdEl.classList.add('hidden');
+            cmdEl.classList.add('hidden');
+            syncEl.classList.add('hidden');
+            ftEl.classList.remove('hidden');
             this.actionBar.classList.add('hidden');
         }
         else {
@@ -370,6 +382,7 @@ export class DiffController {
             mdEl.classList.add('hidden');
             cmdEl.classList.add('hidden');
             syncEl.classList.add('hidden');
+            ftEl.classList.add('hidden');
             if (this.activeTab === 'diff') {
                 this.actionBar.classList.remove('hidden');
                 this.commitSelect.classList.remove('hidden');
@@ -716,6 +729,11 @@ export class DiffController {
         if (this.activeTab === 'cmd') {
             this._setPanel('cmd');
             this.renderCmdPanel();
+            return;
+        }
+        if (this.activeTab === 'files') {
+            this._setPanel('files');
+            this.app.fileTreeManager.refresh();
             return;
         }
         this._setPanel('git');
