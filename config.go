@@ -62,7 +62,12 @@ type Config struct {
 	// of "spawn new tab unless a shell tab is currently focused").
 	// Backwards compatible: missing in old config files means false.
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
-	ReplayBufferBytes      *int `json:"replay_buffer_bytes"`
+
+	// FastMode, when true, disables the expensive idle animations and
+	// backdrop blurs (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
+	FastMode bool `json:"fast_mode"`
+
+	ReplayBufferBytes *int `json:"replay_buffer_bytes"`
 
 	PushoverUserKey   string `json:"pushover_user_key"`
 	PushoverAppToken  string `json:"pushover_app_token"`

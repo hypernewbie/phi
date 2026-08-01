@@ -964,6 +964,12 @@ export class App {
             ((this.config && this.config.auto_reconnect) || 'visible') === 'visible',
         );
         behGroup.appendChild(autoReconnectRow);
+        const fastModeRow = this._buildCheckboxRow(
+            'Fast mode (disable expensive visual effects)',
+            'settings-fast-mode',
+            !!(this.config && this.config.fast_mode),
+        );
+        behGroup.appendChild(fastModeRow);
 
         // Security group ────────────────────────────────────────
         const PASSWORD_MIN_LENGTH = 8;
@@ -1194,6 +1200,20 @@ export class App {
                 });
             } catch (err) {
                 console.warn('[settings] failed to persist auto-reconnect toggle', err);
+            }
+        });
+        fastModeRow.querySelector('input')?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (this.config) this.config.fast_mode = enabled;
+            document.body.classList.toggle('fast-mode', enabled);
+            try {
+                await fetch('/api/config/fast-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn('[settings] failed to persist fast-mode toggle', err);
             }
         });
         setPasswordBtn.addEventListener('click', async () => {
