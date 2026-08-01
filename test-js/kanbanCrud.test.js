@@ -19,12 +19,18 @@ function ctxWithSession({ projectId = 9, viewId = 5 } = {}) {
     c.app = { showToast: vi.fn() };
     c.currentProjectId = projectId;
     c.currentViewId = viewId;
-    c.taskCache = {
+    // buckets[].tasks holds the same objects as taskCache, mirroring what
+    // loadBoard builds, so incremental state updates can be asserted.
+    const tasks = {
         1: { id: 1, title: 'A', bucket_id: 10, labels: [] },
         2: { id: 2, title: 'B', bucket_id: 10, labels: [] },
         3: { id: 3, title: 'C', bucket_id: 20, labels: [] },
     };
-    c.buckets = [{ id: 10, title: 'Todo' }, { id: 20, title: 'Done' }];
+    c.taskCache = { ...tasks };
+    c.buckets = [
+        { id: 10, title: 'Todo', tasks: [tasks[1], tasks[2]] },
+        { id: 20, title: 'Done', tasks: [tasks[3]] },
+    ];
     c.loadAndRenderBoard = vi.fn(async () => {});
     return c;
 }
@@ -44,19 +50,27 @@ describe('KanbanManager.deleteTask', () => {
         expect(c.taskCache[1]).toBeTruthy();
     });
 
-    it('reloads the board when a container is provided', async () => {
+    it('drops the card without reloading the board', async () => {
         const c = ctxWithSession();
         const container = document.createElement('div');
         mockFetch(() => ({ ok: true, status: 204 }));
+
         await c.deleteTask(1, container);
-        expect(c.loadAndRenderBoard).toHaveBeenCalledWith(container);
+
+        // Deleting one card is a local edit: the board is not refetched.
+        expect(c.loadAndRenderBoard).not.toHaveBeenCalled();
+        expect(c.taskCache[1]).toBeUndefined();
     });
 
-    it('skips the board reload when no container is provided', async () => {
+    it('puts the card back when the delete is rejected', async () => {
         const c = ctxWithSession();
-        mockFetch(() => ({ ok: true, status: 204 }));
-        await c.deleteTask(1);
-        expect(c.loadAndRenderBoard).not.toHaveBeenCalled();
+        mockFetch(() => ({ ok: false, status: 500, text: 'nope' }));
+
+        await expect(c.deleteTask(1, null)).rejects.toThrow();
+
+        // Optimistic removal must not survive a failed call.
+        expect(c.taskCache[1]).toBeTruthy();
+        expect(c.buckets.find(b => b.id === 10).tasks.map(t => t.id)).toContain(1);
     });
 });
 

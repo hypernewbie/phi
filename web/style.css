@@ -5840,6 +5840,32 @@ html, body {
     gap: 16px;
 }
 
+/* Board-level sync pip. Edits repaint their own card, so a refresh only has
+   to say "talking to the server" without taking the board away. */
+.kanban-sync-indicator {
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: transparent;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.kanban-sync-indicator.is-syncing {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+    animation: kanban-sync-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes kanban-sync-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kanban-sync-indicator.is-syncing { animation: none; opacity: 1; }
+}
+
 .toolbar-left, .toolbar-right {
     display: flex;
     align-items: center;

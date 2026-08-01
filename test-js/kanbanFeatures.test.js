@@ -232,6 +232,7 @@ describe('Feature surface', () => {
         c.taskCache = { 1: feature, 2: feature.related_tasks.subtask[0] };
         c.setTaskDone = vi.fn(async () => ({ ...feature, done: true }));
         c.loadAndRenderBoard = vi.fn(async () => {});
+        c.refreshBoard = vi.fn(async () => {});
         const container = document.createElement('div');
         document.body.appendChild(container);
 
@@ -240,7 +241,9 @@ describe('Feature surface', () => {
         await vi.waitFor(() => expect(c.setTaskDone).toHaveBeenCalledWith(feature, true));
 
         expect(feature.related_tasks.subtask[0].done).toBe(true);
-        expect(c.loadAndRenderBoard).toHaveBeenCalledWith(container);
+        // A feature roll-up is re-derived in place, never by blanking the board.
+        expect(c.refreshBoard).toHaveBeenCalledWith(container);
+        expect(c.loadAndRenderBoard).not.toHaveBeenCalled();
     });
 
     it('does not mark an incomplete feature done without confirmation', () => {
