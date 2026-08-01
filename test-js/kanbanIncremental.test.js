@@ -327,6 +327,92 @@ describe('the cache never keeps a value the server did not accept', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Feature rows
+//
+// A roll-up is derived from its subtasks, so a subtask change only moves the
+// parent's progress — that is a repaint. Completing the parent is structural:
+// done features are hidden by default, so the row leaves the list and the
+// "Show done" count changes with it.
+// ---------------------------------------------------------------------------
+
+describe('feature roll-ups', () => {
+    const sub = (id, done) => ({ id, title: `Sub ${id}`, done });
+
+    function mountFeatures() {
+        const parent = {
+            id: 1, title: 'Ship it', done: false, labels: [], assignees: [],
+            related_tasks: { subtask: [sub(2, true), sub(3, false)] },
+        };
+        const { c, container } = mountBoard({ tasks: [parent] });
+        c.boardMode = 'features';
+        c.renderBoardLayout(container, PROJECTS, PROJECTS[0], VIEW, c.buckets);
+        return { c, container, parent };
+    }
+
+    const rowText = (container) =>
+        container.querySelector('.kanban-feature-row')?.textContent || '';
+
+    it('repaints the row when a subtask completes, without refetching', async () => {
+        const { c, container, parent } = mountFeatures();
+        expect(rowText(container)).toContain('1/2');
+
+        c.refreshBoard = vi.fn(async () => {});
+        c.setTaskDone = vi.fn(async (task, done) => ({ ...task, done }));
+
+        const next = c.withSubtask(parent, { ...sub(3, true) });
+        c.patchFeatureRow(next.id);
+
+        expect(rowText(container)).toContain('2/2');
+        expect(c.refreshBoard).not.toHaveBeenCalled();
+    });
+
+    it('keeps a repainted row clickable', () => {
+        const { c, container, parent } = mountFeatures();
+        c.openTaskDetail = vi.fn();
+
+        // Replace the node, then interact with the replacement.
+        c.withSubtask(parent, { ...sub(3, true) });
+        c.patchFeatureRow(1);
+        container.querySelector('.kanban-feature-row').click();
+
+        expect(c.openTaskDetail).toHaveBeenCalledWith('1', expect.anything(), container);
+    });
+
+    it('keeps keyboard activation working on a repainted row', () => {
+        const { c, container } = mountFeatures();
+        c.openTaskDetail = vi.fn();
+        c.patchFeatureRow(1);
+
+        const row = container.querySelector('.kanban-feature-row');
+        row.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+        expect(c.openTaskDetail).toHaveBeenCalledWith('1', row, container);
+    });
+
+    it('still refreshes when the parent itself is completed', async () => {
+        const { c, container } = mountFeatures();
+        vi.stubGlobal('confirm', vi.fn(() => true));
+        c.setTaskDone = vi.fn(async (task, done) => ({ ...task, done }));
+        c.refreshBoard = vi.fn(async () => {});
+
+        container.querySelector('.kanban-feature-done-btn').click();
+
+        await vi.waitFor(() => expect(c.refreshBoard).toHaveBeenCalledWith(container));
+    });
+
+    it('does not stack feature delegates across re-renders', async () => {
+        const { c, container } = mountFeatures();
+        c.openTaskDetail = vi.fn();
+
+        c.renderBoardLayout(container, PROJECTS, PROJECTS[0], VIEW, c.buckets);
+        c.renderBoardLayout(container, PROJECTS, PROJECTS[0], VIEW, c.buckets);
+        container.querySelector('.kanban-feature-row').click();
+
+        expect(c.openTaskDetail).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Refresh without blanking
 // ---------------------------------------------------------------------------
 
