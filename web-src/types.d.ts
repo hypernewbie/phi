@@ -25,6 +25,10 @@ export interface AppLike {
     // server-side in api_update.go and not formally mirrored here yet.
     updateStatus?: any;
     useExistingTerminalTab?: boolean;
+    // Raw /api/config response, mirrored by SessionsManager.loadConfig so
+    // unconverted modules (terminal.js gates auto-reconnect on it) can read
+    // it without reaching through sessionsManager.
+    config?: any;
     terminalCommands?: any;
     quickCommands?: any;
     modelPresets?: any;

@@ -243,7 +243,7 @@ func TestHandleConfig_Fields(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, field := range []string{"workspaces", "theme_color", "model_presets", "quick_commands", "markdown_dirs"} {
+	for _, field := range []string{"workspaces", "theme_color", "model_presets", "quick_commands", "markdown_dirs", "auto_reconnect"} {
 		if _, ok := body[field]; !ok {
 			t.Errorf("response missing field %q", field)
 		}
@@ -336,6 +336,68 @@ func TestHandleUseExistingTerminalTab_RejectsWrongMethod(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/config/use-existing-terminal-tab", nil)
 	w := httptest.NewRecorder()
 	handleUseExistingTerminalTab(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET status: want 405, got %d", w.Code)
+	}
+}
+
+func TestAutoReconnect_DefaultIsVisible(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+	if cfg.AutoReconnect != "visible" {
+		t.Errorf("AutoReconnect default: want %q, got %q", "visible", cfg.AutoReconnect)
+	}
+}
+
+func TestAutoReconnect_PreservesExplicitOff(t *testing.T) {
+	// Locked decision: an on-disk "off" (whether user-chosen or persisted by
+	// an unrelated settings save) is respected as-is — no migration.
+	configPath := withTempConfig(t)
+	legacy := `{"workspaces": [], "auto_reconnect": "off"}`
+	if err := os.WriteFile(configPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	cfg := loadConfig()
+	if cfg.AutoReconnect != "off" {
+		t.Errorf("legacy off: want %q preserved, got %q", "off", cfg.AutoReconnect)
+	}
+}
+
+func TestHandleAutoReconnect_Toggle(t *testing.T) {
+	withTempConfig(t)
+
+	// POST: disable
+	body1 := strings.NewReader(`{"enabled":false}`)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/config/auto-reconnect", body1)
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handleAutoReconnect(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("POST disable status: want 200, got %d — %s", w1.Code, w1.Body.String())
+	}
+	if cfg := loadConfig(); cfg.AutoReconnect != "off" {
+		t.Errorf("after POST enabled=false: want %q, got %q", "off", cfg.AutoReconnect)
+	}
+
+	// POST: enable
+	body2 := strings.NewReader(`{"enabled":true}`)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/config/auto-reconnect", body2)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handleAutoReconnect(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("POST enable status: want 200, got %d", w2.Code)
+	}
+	if cfg := loadConfig(); cfg.AutoReconnect != "visible" {
+		t.Errorf("after POST enabled=true: want %q, got %q", "visible", cfg.AutoReconnect)
+	}
+}
+
+func TestHandleAutoReconnect_RejectsWrongMethod(t *testing.T) {
+	withTempConfig(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/config/auto-reconnect", nil)
+	w := httptest.NewRecorder()
+	handleAutoReconnect(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status: want 405, got %d", w.Code)
 	}

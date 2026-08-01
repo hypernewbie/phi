@@ -178,7 +178,7 @@ func loadConfig() Config {
 		cfg.ReplayBufferBytes = &defaultBytes
 	}
 	if cfg.AutoReconnect == "" {
-		cfg.AutoReconnect = "off"
+		cfg.AutoReconnect = "visible"
 	}
 	if cfg.Peers == nil {
 		cfg.Peers = []PeerConfig{}

@@ -953,6 +953,15 @@ export class App {
             !!this.useExistingTerminalTab,
         );
         behGroup.appendChild(reuseRow);
+        // Master switch for automatic reconnection (wake / network-restore /
+        // passive backoff redials of the active tab). Server default is
+        // "visible"; mirror that when config has not loaded yet.
+        const autoReconnectRow = this._buildCheckboxRow(
+            'Auto-reconnect disconnected terminals (active tab)',
+            'settings-auto-reconnect',
+            ((this.config && this.config.auto_reconnect) || 'visible') === 'visible',
+        );
+        behGroup.appendChild(autoReconnectRow);
 
         // Security group ────────────────────────────────────────
         const PASSWORD_MIN_LENGTH = 8;
@@ -1165,6 +1174,22 @@ export class App {
                 });
             } catch (err) {
                 console.warn('[settings] failed to persist reuse-tab toggle', err);
+            }
+        });
+        autoReconnectRow.querySelector('input')?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            // app.config and sessionsManager.config are the same object
+            // (mirrored in SessionsManager.loadConfig), so one write updates
+            // every reader, including terminal.js's gate.
+            if (this.config) this.config.auto_reconnect = enabled ? 'visible' : 'off';
+            try {
+                await fetch('/api/config/auto-reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn('[settings] failed to persist auto-reconnect toggle', err);
             }
         });
         setPasswordBtn.addEventListener('click', async () => {
