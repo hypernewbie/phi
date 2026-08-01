@@ -24,6 +24,7 @@ import { TabManager } from '../web/terminal.js';
 import { SessionsManager } from '../web/sessions.js';
 import { DiffController } from '../web/diff.js';
 import { MarkdownManager } from '../web/markdown.js';
+import { FileTreeManager } from '../web/filetree.js';
 import { SyncManager } from '../web/sync.js';
 import { KanbanManager } from '../web/kanban.js';
 // App is imported dynamically because app.js's module evaluation
@@ -65,7 +66,7 @@ function stubDom() {
         'diff-modal-body', 'diff-context-toggle-btn',
         'diff-layout-toggle-btn', 'diff-commit-select',
         // Markdown / help / changelog / restart
-        'markdown-file-list', 'md-modal', 'md-modal-title',
+        'markdown-file-list', 'file-tree-list', 'md-modal', 'md-modal-title',
         'md-modal-body', 'md-modal-close', 'md-modal-copy-btn',
         'restart-modal', 'restart-modal-close', 'restart-modal-cancel',
         'restart-modal-confirm', 'pi-help-btn', 'phi-changelog-btn',
@@ -164,6 +165,9 @@ const expectations = [
       field:  ['isPanelOpen', 'activeTab'] },
     { cls: 'MarkdownManager', newFn: () => new MarkdownManager(app),
       method: ['refreshFiles'],
+      field:  [] },
+    { cls: 'FileTreeManager', newFn: () => new FileTreeManager(app),
+      method: ['refresh'],
       field:  [] },
     { cls: 'SyncManager', newFn: () => new SyncManager(app),
       method: ['refreshMessages'],

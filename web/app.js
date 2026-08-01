@@ -2,6 +2,7 @@ import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
+import { FileTreeManager } from './filetree.js';
 import { KanbanManager } from './kanban.js';
 import { escapeHtml, buildPhiFaviconSvg } from './util.js';
 import { SyncManager } from './sync.js';
@@ -172,6 +173,7 @@ export class App {
         this.sessionsManager = new SessionsManager(this);
         this.diffController = new DiffController(this);
         this.markdownManager = new MarkdownManager(this);
+        this.fileTreeManager = new FileTreeManager(this);
         this.kanbanManager = new KanbanManager(this);
         this.syncManager = new SyncManager(this);
     }
