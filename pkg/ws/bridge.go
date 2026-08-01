@@ -3,8 +3,10 @@ package ws
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"fmt"
@@ -50,11 +52,26 @@ func (c *Client) WritePump() {
 			}
 			err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
 			if err != nil {
+				// Every write-side teardown used to return silently, so a
+				// disconnect left no trace at all and was indistinguishable
+				// from a clean client close. Log it: a write deadline hit at
+				// writeWait looks very different from a peer reset, and
+				// without the distinction there is nothing to diagnose from.
+				logger.Warn("ws write failed, closing connection",
+					"err", err,
+					"frame_bytes", len(msg),
+					"queued", len(c.Send),
+					"write_wait", writeWait,
+					"timeout", errors.Is(err, os.ErrDeadlineExceeded))
 				return
 			}
 		case <-ticker.C:
 			_ = c.Ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.Ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				logger.Warn("ws keepalive ping failed, closing connection",
+					"err", err,
+					"queued", len(c.Send),
+					"timeout", errors.Is(err, os.ErrDeadlineExceeded))
 				return
 			}
 		}
