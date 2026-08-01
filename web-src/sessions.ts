@@ -1,5 +1,5 @@
 import type { AppLike } from './types.js';
-import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph } from './util.js';
+import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
 
 export function normalizePath(p: string): string {
     if (!p) return '';
@@ -251,10 +251,13 @@ export class SessionsManager {
             }
 
             if (data.hostname) {
+                // app.hostname keeps the server's raw value; only the rendered
+                // surfaces drop the macOS .local suffix.
                 this.app.hostname = data.hostname;
+                const shown = displayHostname(data.hostname);
                 const hostEl = document.getElementById('hostname-display');
                 if (hostEl) {
-                    hostEl.innerText = data.hostname;
+                    hostEl.innerText = shown;
                 }
                 // TabManager owns the composable Φ / ϕ / ● title grammar
                 // and the matching header cursor. Re-render now that the
@@ -262,7 +265,7 @@ export class SessionsManager {
                 this.app.tabManager.updateDocumentTitle();
                 const emptyHostEl = document.getElementById('empty-state-hostname');
                 if (emptyHostEl) {
-                    emptyHostEl.innerText = data.hostname;
+                    emptyHostEl.innerText = shown;
                 }
             }
 
