@@ -2,6 +2,14 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.6 — 2026-08-01
+
+### Added
+- **Fast mode** (`e8f2d8a`). A setting that disables the idle-capable infinite animations and the always-visible backdrop blurs. Coarse by design — any single running animation is enough to keep the 60fps repaint pipeline alive.
+
+### Changed
+- **Idle UI animations no longer force the header blur to recompute** (`928f3b1`, `f9948f1`). `.app-header` carries `backdrop-filter: blur(20px) saturate(180%)`, and the brand, the terminal activity indicator and the logo glow all animate inside it. Without their own compositor layer each repaint dirtied the header layer and re-ran that blur for the whole strip, 60 times a second. Measured on one core: animations off 5.3%, breath + blink 100.5%, the same two with their own layer 30.3%. A pure opacity blink cost 121.3% on its own — as much as a text-shadow breath — which is the tell that the cost was the backdrop-filter recompute rather than the property being animated. Every animating descendant of the header is now promoted; promoting only some of them buys nothing. The layers are released under fast mode and `prefers-reduced-motion`, so none is parked while nothing animates. No visual change.
+
 ## v0.15.5 — 2026-08-01
 
 ### Changed
