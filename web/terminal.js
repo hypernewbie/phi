@@ -36,6 +36,12 @@ const CODER_FAVICONS = {
 // maybeAutoReconnect and the reconnect overlay's attempt counter.
 const AUTO_RECONNECT_MAX_ATTEMPTS = 10;
 const AUTO_RECONNECT_MAX_DELAY_MS = 20000;
+// Floor under every redial. Full jitter alone can return ~0ms, which turned a
+// flapping PTY into a near-instant hammer loop against the server.
+const AUTO_RECONNECT_GRACE_MS = 1000;
+// How long a socket must stay up before it counts as a successful connection
+// rather than a failed attempt that happened to reach onopen.
+const AUTO_RECONNECT_STABLE_MS = 5000;
 
 export class TabManager {
     constructor(app) {
@@ -3343,6 +3349,10 @@ export class TabManager {
                 (control) => { this.handleControlMessage(tabInfo, control); },
                 () => {
                     tabInfo.reconnectInFlight = false;
+                    // Died before proving itself: cancel the pending success
+                    // reset so this attempt still counts against the backoff.
+                    clearTimeout(tabInfo.reconnectStableTimer);
+                    tabInfo.reconnectStableTimer = null;
                     if (!opened) {
                         if (msgEl) msgEl.innerText = 'Session expired (PTY gone)';
                         if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
@@ -3360,7 +3370,16 @@ export class TabManager {
                 },
                 () => {
                     opened = true;
-                    tabInfo.reconnectAttempts = 0;
+                    // Clearing the backoff here on open (rather than after the
+                    // connection survives) meant the counter could never climb:
+                    // open -> die -> retry reset it every cycle, so the
+                    // exponential backoff never engaged and the attempt cap was
+                    // unreachable. A flapping pane redialled forever at ~500ms.
+                    clearTimeout(tabInfo.reconnectStableTimer);
+                    tabInfo.reconnectStableTimer = setTimeout(() => {
+                        tabInfo.reconnectAttempts = 0;
+                        tabInfo.reconnectStableTimer = null;
+                    }, AUTO_RECONNECT_STABLE_MS);
                     tabInfo.reconnectInFlight = false;
                     tabInfo.isDead = false;
                     // A reconnect starts quiet. Without this reset, a PTY
@@ -3584,7 +3603,8 @@ export class TabManager {
         }
 
         tabInfo.reconnectAttempts++;
-        const delay = Math.random() * Math.min(AUTO_RECONNECT_MAX_DELAY_MS, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
+        const backoff = Math.min(AUTO_RECONNECT_MAX_DELAY_MS, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
+        const delay = AUTO_RECONNECT_GRACE_MS + Math.random() * backoff;
         
         console.log(`[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`);
         
