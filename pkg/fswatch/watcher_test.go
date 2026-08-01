@@ -97,6 +97,34 @@ func TestDebounceCoalesces(t *testing.T) {
 	assertNoEvent(t, events, 300*time.Millisecond)
 }
 
+func TestWriteToExistingMdFires(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.md")
+	if err := os.WriteFile(path, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	w, events := newTestWatcher(t, func() []string { return []string{dir} })
+	w.Start()
+
+	// Append in place (no create/rename): the standalone md viewer
+	// relies on Write events to refresh content edited in place.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString("\nmore"); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, ok := waitFor(t, events, 2*time.Second); !ok {
+		t.Fatal("expected an onChange event for the in-place write, got none within 2s")
+	}
+}
+
 func TestRemoveMdFires(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "b.md")

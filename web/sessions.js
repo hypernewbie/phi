@@ -1,4 +1,5 @@
 import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
+import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -1027,12 +1028,8 @@ export class SessionsManager {
                         bubble.appendChild(header);
                         const content = document.createElement('div');
                         content.className = 'review-bubble-content';
-                        content.innerHTML = window.marked ? window.marked.parse(msg.text) : msg.text;
-                        if (window.hljs) {
-                            content.querySelectorAll('pre code').forEach((block) => {
-                                window.hljs.highlightElement(block);
-                            });
-                        }
+                        content.innerHTML = renderMarkdownSafe(msg.text);
+                        highlightCodeIn(content);
                         bubble.appendChild(content);
                         chatWrapper.appendChild(bubble);
                     });

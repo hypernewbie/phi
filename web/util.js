@@ -56,8 +56,7 @@ export function relativeToCwd(path, cwd) {
 }
 // escapeHtml escapes the five HTML-sensitive characters (attribute-safe) and
 // returns '' for falsy input. Shared by kanban + sync, whose impls were
-// byte-identical. NOTE: markdown.js `_escape` is intentionally NOT this
-// function — it escapes only & < > (3 chars) for a <pre> text fallback.
+// byte-identical.
 export function escapeHtml(str) {
     if (!str)
         return '';

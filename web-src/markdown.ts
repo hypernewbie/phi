@@ -2,6 +2,7 @@
 
 import type { AppLike } from './types.js';
 import { relativeToCwd, escapeHtml } from './util.js';
+import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn } from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment, type Attachment } from './attachments.js';
 
@@ -41,16 +42,7 @@ export class MarkdownManager {
         this._externalDebounce = null;
         this._diagInterval = null;
 
-        this._configureMarked();
         this._setupEventListeners();
-    }
-
-    _configureMarked(): void {
-        if (!window.marked) return;
-        window.marked.setOptions({
-            gfm: true,
-            breaks: false,
-        });
     }
 
     _setupEventListeners(): void {
@@ -355,15 +347,10 @@ export class MarkdownManager {
             if (!res.ok) throw new Error(await res.text());
             const raw = await res.text();
             this.currentRawContent = raw;
-            const html = window.marked ? window.marked.parse(raw) : `<pre>${this._escape(raw)}</pre>`;
+            const html = renderMarkdownSafe(raw);
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
-
-            // Syntax highlight any code blocks
-            if (window.hljs) {
-                this.modalBody.querySelectorAll('pre code').forEach((el: Element) => {
-                    window.hljs.highlightElement(el);
-                });
-            }
+            rewriteRelativeImages(this.modalBody, f.path, cwd);
+            highlightCodeIn(this.modalBody);
         } catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${(e as Error).message}</div>`;
         }
@@ -410,13 +397,9 @@ export class MarkdownManager {
     openRawMarkdown(title: string, rawMarkdown: string): void {
         this.modalTitle.innerText = title;
         this.currentRawContent = rawMarkdown;
-        const html = window.marked ? window.marked.parse(rawMarkdown) : `<pre>${this._escape(rawMarkdown)}</pre>`;
+        const html = renderMarkdownSafe(rawMarkdown);
         this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
-        if (window.hljs) {
-            this.modalBody.querySelectorAll('pre code').forEach((el: Element) => {
-                window.hljs.highlightElement(el);
-            });
-        }
+        highlightCodeIn(this.modalBody);
         this.modal.classList.remove('hidden');
     }
 
@@ -766,6 +749,7 @@ export class MarkdownManager {
 
         const actions = [
             { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertRelativePath(file, { mention: true }) },
+            { icon: '↗', label: 'Open in new window', className: 'open-window', handler: () => this._openInNewWindow(file) },
             { icon: '⧉', label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
             { icon: '⇉', label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
             { icon: '⇩', label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
@@ -796,6 +780,17 @@ export class MarkdownManager {
     _hideContextMenu(): void {
         if (!this.contextMenuEl) return;
         this.contextMenuEl.classList.add('hidden');
+    }
+
+    _openInNewWindow(f: any): void {
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        const url = `/md.html?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`;
+        // No 'noopener' in features: the spec makes window.open return null
+        // when noopener is set, which would defeat popup-blocked detection.
+        // Same-origin page; sever the back-reference manually instead.
+        const win = window.open(url, '_blank', 'width=860,height=1000');
+        if (win) { win.opener = null; }
+        else this.app.showToast('Popup blocked — allow popups for this site.', { type: 'error' });
     }
 
     async _copyMarkdownFile(file: any): Promise<void> {
@@ -877,10 +872,6 @@ export class MarkdownManager {
         } catch (e) {
             this.app.showToast(`Failed to delete file: ${(e as Error).message}`, { type: 'error', title: 'Markdown' });
         }
-    }
-
-    _escape(text: string): string {
-        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     // Inserts the file's cwd-relative path into the chat textarea at the

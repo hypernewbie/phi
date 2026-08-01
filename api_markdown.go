@@ -215,13 +215,130 @@ func handleMarkdownFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Path not in allowed markdown dirs", http.StatusForbidden)
 		return
 	}
-	content, err := os.ReadFile(absPath)
+	realPath, ok := confineToWorkspace(w, absPath, cfg)
+	if !ok {
+		return
+	}
+	content, err := os.ReadFile(realPath)
 	if err != nil {
 		http.Error(w, "Failed to read file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(content)
+}
+
+// handleMarkdownAsset serves local image files referenced by markdown
+// (e.g. ![x](./img.png)). Mirrors handleMarkdownFile's allowed-dirs gate,
+// with an image-extension allowlist in place of the .md gate.
+func handleMarkdownAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Missing path", http.StatusBadRequest)
+		return
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg":
+	default:
+		http.Error(w, "Only image files allowed", http.StatusForbidden)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		cwd = activeCWD
+	}
+	cfg := loadConfig()
+	allowedDirs, _ := markdownAllowedDirs(cwd, cfg)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	if !markdownPathAllowed(absPath, allowedDirs) {
+		http.Error(w, "Path not in allowed markdown dirs", http.StatusForbidden)
+		return
+	}
+	realPath, ok := confineToWorkspace(w, absPath, cfg)
+	if !ok {
+		return
+	}
+	// SVG is in the allowlist and can carry scripts. Scripts never run
+	// when embedded via <img>, but this CSP also neuters direct
+	// navigation to the asset URL (agents write files into the
+	// workspace; a planted SVG would otherwise execute same-origin
+	// with the auth cookie).
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "script-src 'none'")
+	http.ServeFile(w, r, realPath)
+}
+
+// confineToWorkspace is the trust boundary for the markdown read and asset
+// endpoints. The caller's markdown-dir gate uses the client-supplied cwd,
+// which cannot be trusted to keep the target inside the project; this pins
+// the real file to a directory Phi actually operates in. On failure it
+// writes the HTTP error and returns ok=false. Returns the resolved path.
+//
+//   - Symlinks (leaf or parent) are resolved first, so none can point the
+//     file outside the tree; an in-tree symlink resolves and serves normally.
+//   - Regular files only: directories, FIFOs (open blocks forever), and
+//     device nodes are rejected.
+func confineToWorkspace(w http.ResponseWriter, absPath string, cfg Config) (string, bool) {
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return "", false
+	}
+	if info, err := os.Stat(realPath); err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return "", false
+	}
+	if !markdownPathAllowed(realPath, workspaceRoots(cfg)) {
+		http.Error(w, "Path not under workspace", http.StatusForbidden)
+		return "", false
+	}
+	return realPath, true
+}
+
+// workspaceRoots returns the resolved directories Phi legitimately
+// operates in: the boot cwd, every configured workspace, and every live
+// pane's cwd (worktrees). Used to confine markdown reads to real project
+// trees rather than trusting the client-supplied cwd. Each root is
+// symlink-resolved so prefix checks match an EvalSymlinks'd target.
+func workspaceRoots(cfg Config) []string {
+	seen := map[string]bool{}
+	var roots []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			roots = append(roots, abs)
+		}
+	}
+	add(activeCWD)
+	for _, ws := range cfg.Workspaces {
+		add(ws)
+	}
+	if ptyManager != nil {
+		for _, inst := range ptyManager.ListActive() {
+			if snap := inst.Snapshot(); snap.Cwd != "" {
+				add(snap.Cwd)
+			}
+		}
+	}
+	return roots
 }
 
 func handleMarkdownPaste(w http.ResponseWriter, r *http.Request) {

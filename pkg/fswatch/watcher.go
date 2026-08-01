@@ -1,8 +1,9 @@
 // Package fswatch watches a dynamic set of directories and fires a
 // debounced per-directory callback when matching files are created,
-// removed, or renamed inside one of them. Non-recursive by design:
-// consumers watch flat listings (e.g. the markdown panel's top-level
-// os.ReadDir), so direct children are the only thing that matters.
+// written, removed, or renamed inside one of them. Non-recursive by
+// design: consumers watch flat listings (e.g. the markdown panel's
+// top-level os.ReadDir), so direct children are the only thing that
+// matters.
 package fswatch
 
 import (
@@ -18,7 +19,8 @@ import (
 
 // Watcher tracks a caller-supplied set of desired directories with an
 // fsnotify.Watcher and calls onChange (debounced, per directory) when a
-// matching file is created, removed, or renamed within one of them.
+// matching file is created, written, removed, or renamed within one of
+// them.
 type Watcher struct {
 	// Debounce is the trailing quiet period per directory before
 	// onChange fires. Agents save in bursts; editors do atomic-rename
@@ -150,7 +152,10 @@ func (w *Watcher) handleEvent(e fsnotify.Event) {
 		return
 	}
 
-	if e.Op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
+	// Write is included for consumers that track file *content*, not
+	// just listings (the standalone md viewer): in-place saves emit
+	// plain Write events with no Create/Rename pair.
+	if e.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
 		return
 	}
 

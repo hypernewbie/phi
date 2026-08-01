@@ -850,6 +850,11 @@ func TestHandleMarkdownFile_Success(t *testing.T) {
 	cfg.MarkdownDirs = []string{dir}
 	saveConfig(cfg)
 
+	// Anchor the workspace to dir so the confinement gate accepts it.
+	origCWD := activeCWD
+	activeCWD = dir
+	t.Cleanup(func() { activeCWD = origCWD })
+
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/markdown/file?path="+mdPath+"&cwd="+dir, nil)
 	w := httptest.NewRecorder()
@@ -860,6 +865,67 @@ func TestHandleMarkdownFile_Success(t *testing.T) {
 	}
 	if got := w.Body.String(); got != content {
 		t.Errorf("content mismatch: got %q", got)
+	}
+}
+
+// A crafted cwd + relative "." markdown dir passes the dir gate for a file
+// outside the workspace, but confinement rejects it — the .md endpoint gets
+// the same workspace guard as the asset endpoint.
+func TestHandleMarkdownFile_RejectsCraftedCwdEscape(t *testing.T) {
+	withTempConfig(t)
+	workspace := t.TempDir()
+	outside := t.TempDir()
+
+	cfg := loadConfig()
+	cfg.MarkdownDirs = []string{"."} // base controlled by cwd
+	saveConfig(cfg)
+
+	origCWD := activeCWD
+	activeCWD = workspace
+	t.Cleanup(func() { activeCWD = origCWD })
+
+	outsideMD := filepath.Join(outside, "secret.md")
+	os.WriteFile(outsideMD, []byte("secret"), 0644)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/markdown/file?path="+outsideMD+"&cwd="+outside, nil)
+	w := httptest.NewRecorder()
+	handleMarkdownFile(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for crafted-cwd escape, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// A symlink inside the workspace pointing OUTSIDE it is blocked: the guard
+// confines the symlink-resolved target, not the link's own path.
+func TestHandleMarkdownFile_RejectsSymlinkEscape(t *testing.T) {
+	withTempConfig(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+
+	cfg := loadConfig()
+	cfg.MarkdownDirs = []string{dir}
+	saveConfig(cfg)
+
+	origCWD := activeCWD
+	activeCWD = dir
+	t.Cleanup(func() { activeCWD = origCWD })
+
+	target := filepath.Join(outside, "target.md")
+	os.WriteFile(target, []byte("secret"), 0644)
+	link := filepath.Join(dir, "link.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/markdown/file?path="+link+"&cwd="+dir, nil)
+	w := httptest.NewRecorder()
+	handleMarkdownFile(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for symlink escaping workspace, got %d (%s)", w.Code, w.Body.String())
 	}
 }
 
