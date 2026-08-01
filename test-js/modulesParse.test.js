@@ -24,6 +24,7 @@ import fs from 'node:fs';
 const entryPoints = [
     '../web/diff.js',
     '../web/markdown.js',
+    '../web/filetree.js',
     '../web/app.js',
     '../web/terminal.js',
     '../web/sessions.js',
