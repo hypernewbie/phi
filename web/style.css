@@ -268,7 +268,14 @@ html, body {
 .brand .logo.cpu-critical,
 .brand .brand-name.cpu-moderate,
 .brand .brand-name.cpu-high,
-.brand .brand-name.cpu-critical {
+.brand .brand-name.cpu-critical,
+/* Every animating descendant of .app-header must be promoted, not just the
+   brand. One unpromoted animation is enough to keep dirtying the header layer
+   and re-running its blur, which would negate the promotions above. The
+   activity indicator is the important one: it blinks whenever any terminal is
+   live, so it is the animation most likely to actually be running. */
+.brand .terminal-activity-indicator.is-active,
+.logo-glow-wrapper::after {
     will-change: transform;
 }
 
@@ -293,7 +300,9 @@ html, body {
     .brand .logo.cpu-critical,
     .brand .brand-name.cpu-moderate,
     .brand .brand-name.cpu-high,
-    .brand .brand-name.cpu-critical {
+    .brand .brand-name.cpu-critical,
+    .brand .terminal-activity-indicator.is-active,
+    .logo-glow-wrapper::after {
         will-change: auto;
     }
 }
@@ -7858,7 +7867,9 @@ body.fast-mode #input-textarea:focus {
    costs GPU memory for no benefit, and fast mode exists to reclaim exactly
    that kind of idle cost. */
 body.fast-mode .brand .logo,
-body.fast-mode .brand .brand-name {
+body.fast-mode .brand .brand-name,
+body.fast-mode .brand .terminal-activity-indicator.is-active,
+body.fast-mode .logo-glow-wrapper::after {
     will-change: auto !important;
 }
 
