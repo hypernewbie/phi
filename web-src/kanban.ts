@@ -1,5 +1,5 @@
 import type { AppLike } from './types.js';
-import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor } from './util.js';
+import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId } from './util.js';
 import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline, type FeatureProgress } from './kanban-features.js';
 
 export class KanbanManager {
@@ -278,6 +278,11 @@ export class KanbanManager {
             if (!currentProject) {
                 currentProject = projects[0];
                 selectedProjectId = currentProject.id;
+                // Persist the fallback. localStorage is per-origin, so a user
+                // who never touched the project dropdown on this host has no
+                // stored id at all; leaving it unwritten makes the rendered
+                // board and the stored selection disagree.
+                localStorage.setItem('vikunja_selected_project', String(selectedProjectId));
             }
 
             // Fetch views for project
@@ -632,16 +637,7 @@ export class KanbanManager {
                             if (!val) { reset(); return; }
                             input.disabled = true;
                             try {
-                                const selectedProjectId = localStorage.getItem('vikunja_selected_project');
-                                // Vikunja's create-task endpoint is PUT (not POST) and
-                                // requires project_id in the body alongside title
-                                // and bucket_id. Path is /projects/{id}/tasks.
-                                const pid = parseInt(selectedProjectId!, 10);
-                                await this.apiPut(`/projects/${pid}/tasks`, {
-                                    title: val,
-                                    project_id: pid,
-                                    bucket_id: parseInt(bucketId, 10)
-                                });
+                                await this.createTask(bucketId, val);
                                 await this.loadAndRenderBoard(container);
                             } catch (err) {
                                 alert(`Failed to create task: ${(err as Error).message}`);
@@ -1658,6 +1654,32 @@ export class KanbanManager {
         return next;
     }
 
+    // createTask adds a task to a bucket. Vikunja's create endpoint is PUT
+    // (not POST) and wants project_id in the body as well as the path.
+    //
+    // The project id is read from this.currentProjectId, which
+    // loadAndRenderBoard has already resolved (including its fall back to the
+    // first project). Re-reading localStorage here instead was the source of
+    // an "Invalid model provided" 400: localStorage is per-origin, so on a
+    // host where the user had never picked a project by hand the key was
+    // unset, parseInt(null, 10) produced NaN, and the request went to the
+    // literal path /projects/NaN/tasks. The board itself still rendered,
+    // because it uses the fallback, so the same phi build appeared to work on
+    // one origin and fail on another.
+    async createTask(bucketId: any, title: string): Promise<any> {
+        const trimmed = (title || '').trim();
+        if (!trimmed) throw new Error('Task title cannot be empty.');
+
+        const projectId = toVikunjaId(this.currentProjectId);
+        if (projectId === null) throw new Error('Task create failed: project not loaded yet.');
+
+        const payload: any = { title: trimmed, project_id: projectId };
+        const bucket = toVikunjaId(bucketId);
+        if (bucket !== null) payload.bucket_id = bucket;
+
+        return await this.apiPut(`/projects/${projectId}/tasks`, payload);
+    }
+
     async createSubtask(parent: any, title: string): Promise<any> {
         const trimmed = title.trim();
         if (!trimmed) throw new Error('Subtask title cannot be empty.');
@@ -1935,7 +1957,27 @@ export class KanbanManager {
     // /api/proxy. Handles auth, 401 -> drop token, and extracts a readable
     // message from Vikunja's JSON error envelope instead of dumping raw
     // HTML / JSON to the user.
+    // assertAddressable refuses to put an unresolved id on the wire. Vikunja
+    // answers /projects/NaN/tasks with a generic 400 "Invalid model provided.",
+    // which tells the user nothing about the id that was never resolved. Fail
+    // locally instead, with the offending path in the message.
+    assertAddressable(path: string, body?: any): void {
+        const bad = path.split('?')[0].split('/')
+            .find(seg => seg === 'NaN' || seg === 'undefined' || seg === 'null');
+        if (bad) {
+            throw new Error(`Unresolved id "${bad}" in Vikunja request path ${path}`);
+        }
+        if (body && typeof body === 'object' && !Array.isArray(body)) {
+            for (const [key, value] of Object.entries(body)) {
+                if (typeof value === 'number' && !Number.isFinite(value)) {
+                    throw new Error(`Unresolved id in Vikunja payload field "${key}" for ${path}`);
+                }
+            }
+        }
+    }
+
     async apiRequest(path: string, method: string, body?: any): Promise<any> {
+        this.assertAddressable(path, body);
         const token = sessionStorage.getItem('vikunja_token');
         const url = localStorage.getItem('vikunja_url');
         const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;

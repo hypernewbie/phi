@@ -146,6 +146,18 @@ export function extractVikunjaError(text, status) {
         s = s.slice(0, 240) + '...';
     return s || `Request failed with status ${status}`;
 }
+// toVikunjaId coerces a Vikunja resource id into a positive integer, or null
+// when it is absent or unparseable. Guards the case that produces Vikunja's
+// opaque 400 "Invalid model provided.": parseInt(null, 10) is NaN, which
+// interpolates into a request path as the literal text "NaN". Pure.
+export function toVikunjaId(value) {
+    if (value === null || value === undefined || value === '')
+        return null;
+    const n = typeof value === 'number' ? value : parseInt(String(value), 10);
+    if (!Number.isInteger(n) || n <= 0)
+        return null;
+    return n;
+}
 // getLastFolderName returns the final path segment (splitting on / and \).
 // Pure. QUIRK preserved: a trailing separator yields an empty last segment,
 // so it falls back to returning the FULL original path.
