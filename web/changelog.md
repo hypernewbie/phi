@@ -2,7 +2,7 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## Unreleased
+## v0.16.0 — 2026-08-01
 
 ### Added
 - **Markdown files can pop out into their own window** (`ecf3d65`). "Open in new window" on the markdown list's context menu opens the file in a standalone popup (`web/md.html`) so the main UI stays free while you read. The popup shares the session cookie, live-refreshes when the file changes on disk — via a new listen-only `/ws/md-events` WebSocket that carries the existing fswatch broadcast — reconnects after a dropped connection, and preserves scroll position across refreshes.
@@ -10,6 +10,9 @@ All notable changes to phi are documented here. Newest versions first.
 
 ### Fixed
 - **Markdown rendered unsanitized HTML** (`ecf3d65`). Three call sites fed `marked.parse()` output straight into `innerHTML`, so a `<script>` tag or `onerror` attribute in any .md file or agent chat message executed with the page's session. All markdown-derived HTML now flows through one shared DOMPurify helper. The fswatcher also fires on in-place writes now, so external edits refresh the panel and popup reliably.
+
+### Internal
+- **JS tooling moved from npm to pnpm** (`6d701d4`). `package-lock.json` is replaced by `pnpm-lock.yaml`, `packageManager` pins `pnpm@11.18.0`, and CI plus `.githooks/pre-commit` invoke pnpm. Contributors need pnpm on PATH — `npm i -g pnpm@11.18.0` works without admin rights, where `corepack enable` may not.
 
 ## v0.15.6 — 2026-08-01
 
