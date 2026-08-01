@@ -707,15 +707,33 @@ func TestManagerShutdown_GracefulTerminatesAndCleansUp(t *testing.T) {
 
 	manager.Shutdown(2 * time.Second)
 
-	select {
-	case <-inst.Pty.Closed:
-		// exited and cleaned up, as expected
-	default:
-		t.Error("expected inst.Pty.Closed to be closed after Shutdown")
-	}
-
-	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
-		t.Errorf("expected shim temp dir to be removed after Shutdown, stat err=%v", err)
+	// Shutdown's wait is bounded by 2x grace and returns even when a child is
+	// still winding down, so the cleanup it triggers is asynchronous by
+	// contract. Assert the end state by polling rather than assuming it landed
+	// before Shutdown returned: a loaded CI runner overruns the 4s bound, which
+	// made this fail intermittently at exactly the deadline.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		closed := false
+		select {
+		case <-inst.Pty.Closed:
+			closed = true
+		default:
+		}
+		_, statErr := os.Stat(tempDir)
+		if closed && os.IsNotExist(statErr) {
+			return
+		}
+		if time.Now().After(deadline) {
+			if !closed {
+				t.Error("expected inst.Pty.Closed to be closed after Shutdown")
+			}
+			if !os.IsNotExist(statErr) {
+				t.Errorf("expected shim temp dir to be removed after Shutdown, stat err=%v", statErr)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
