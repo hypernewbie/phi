@@ -23,12 +23,12 @@ import {
 } from './attachments.js';
 
 const CODER_FAVICONS = {
-    'opencode': 'https://www.google.com/s2/favicons?domain=opencode.ai&sz=64',
-    'claude': 'https://www.google.com/s2/favicons?domain=claude.ai&sz=64',
-    'agy': 'https://www.google.com/s2/favicons?domain=antigravity.google&sz=64',
-    'pi': 'https://www.google.com/s2/favicons?domain=pi.dev&sz=64',
-    'bash': 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64',
-    'review': 'https://www.google.com/s2/favicons?domain=wikipedia.org&sz=64'
+    'opencode': 'vendor/logos/opencode.png',
+    'claude': 'vendor/logos/claude.png',
+    'agy': 'vendor/logos/agy.png',
+    'pi': 'vendor/logos/pi.png',
+    'bash': 'vendor/logos/bash.jpg',
+    'review': 'vendor/logos/review.png'
 };
 
 // Automatic-reconnect retry policy: full-jitter exponential backoff.
@@ -1021,7 +1021,7 @@ export class TabManager {
             return;
         }
         
-        const faviconUrl = CODER_FAVICONS[coder] || 'https://www.google.com/s2/favicons?domain=iterm2.com&sz=64';
+        const faviconUrl = CODER_FAVICONS[coder] || 'vendor/logos/bash.jpg';
 
         // Create elements
         const tabEl = document.createElement('div');
