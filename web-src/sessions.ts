@@ -232,7 +232,7 @@ export class SessionsManager {
             this.app.terminalCommands = data.terminal_commands || [];
             this.app.markdownDirs = data.markdown_dirs || [];
             this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
-            document.body.classList.toggle('fast-mode', !!data.fast_mode);
+            this.app.applyFastMode?.();
             // Ingest appearance settings and apply so the Settings
             // modal opens with the persisted values + the body shows
             // the chosen UI font / size immediately. terminalFontFamily

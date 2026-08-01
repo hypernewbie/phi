@@ -36,6 +36,7 @@ export interface AppLike {
     hostname?: string;
     applyAccentTheme?: (color: string) => void;
     applyUIFont?: () => void;
+    applyFastMode?: () => void;
     uiFontFamily?: string;
     uiFontSize?: number;
     terminalFontFamily?: string;

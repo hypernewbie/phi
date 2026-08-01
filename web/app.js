@@ -179,6 +179,17 @@ export class App {
     }
     
     async init() {
+        // Effects profile: apply synchronously before any await so a
+        // mobile viewport never renders the expensive visuals (every
+        // gated animation is JS-state-gated, so pre-script frames can
+        // only show static blur), then re-apply on breakpoint crossings
+        // (phone rotation, window resize).
+        this.applyFastMode();
+        if (typeof window.matchMedia === 'function') {
+            window.matchMedia('(max-width: 768px)')
+                .addEventListener('change', () => this.applyFastMode());
+        }
+
         // 0. Load version details
         await this.loadVersion();
 
@@ -797,6 +808,20 @@ export class App {
         }
     }
 
+    // applyFastMode computes the effects profile from both sources of
+    // truth: the shared config tick (desktop) and the viewport — the
+    // profile is forced on for mobile, where the animations and blurs
+    // cost the most (see research/2026-08-01-2138-mobile-is-fast-mode.md).
+    // Single writer of the body class; never toggle it directly elsewhere.
+    // matchMedia guard: jsdom (tests) has no matchMedia — treat as not
+    // mobile, same idiom as the isTouch check in terminal.js.
+    applyFastMode() {
+        const mobile = typeof window.matchMedia === 'function'
+            && window.matchMedia('(max-width: 768px)').matches;
+        const on = !!(this.config && this.config.fast_mode) || mobile;
+        document.body.classList.toggle('fast-mode', on);
+    }
+
     // openSettingsModal renders the appearance + behavior + about modal.
     // Settings are live-applied (no Save button) — see architect notes.
     // The accent swatch grid is the source of truth for theme color
@@ -969,6 +994,7 @@ export class App {
             'settings-fast-mode',
             !!(this.config && this.config.fast_mode),
         );
+        fastModeRow.classList.add('settings-fast-mode-row');
         behGroup.appendChild(fastModeRow);
 
         // Security group ────────────────────────────────────────
@@ -1205,7 +1231,7 @@ export class App {
         fastModeRow.querySelector('input')?.addEventListener('change', async (e) => {
             const enabled = !!e.target.checked;
             if (this.config) this.config.fast_mode = enabled;
-            document.body.classList.toggle('fast-mode', enabled);
+            this.applyFastMode();
             try {
                 await fetch('/api/config/fast-mode', {
                     method: 'POST',
