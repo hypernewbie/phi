@@ -49,13 +49,24 @@ func TestHandleFSList_TraversalRejected(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
+		// A drive-letter path is only absolute on Windows; elsewhere it is an
+		// ordinary (odd) relative filename and rejecting it would be wrong.
+		windowsOnly bool
 	}{
-		{"dotdot", ".."},
-		{"absolute", "/etc"},
-		{"collapsesToParent", "a/../../b"},
+		{name: "dotdot", path: ".."},
+		// filepath.IsAbs("/etc") is false on Windows, where an absolute path
+		// needs a drive letter or UNC prefix, so without an explicit
+		// root-relative check these are treated as relative to cwd.
+		{name: "absolute", path: "/etc"},
+		{name: "backslashRooted", path: `\etc`},
+		{name: "driveLetter", path: `C:\Windows`, windowsOnly: true},
+		{name: "collapsesToParent", path: "a/../../b"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.windowsOnly && runtime.GOOS != "windows" {
+				t.Skip("drive-letter paths are only absolute on windows")
+			}
 			w := httptest.NewRecorder()
 			handleFSList(w, fsListRequest(dir, c.path))
 			if w.Code != http.StatusBadRequest {
