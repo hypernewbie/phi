@@ -2,6 +2,11 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.15.5 — 2026-08-01
+
+### Changed
+- **Fonts and coder logos are vendored; phi no longer contacts a CDN** (`d20391b`). Two remote asset references were shipping: Google Fonts for Inter and JetBrains Mono, and `google.com/s2/favicons` for all six coder logos. Both were hard dependencies on the public internet for something the UI needs to render — on a LAN-only or airgapped install you got fallback fonts and broken logos — and both disclosed every page load to Google. The fonts are now 13 local woff2 files (320K) generated from the css2 response with every gstatic URL rewritten; all unicode subsets are kept, because the greek subset renders the activity indicator's Φ/ϕ glyphs in the UI font. `//go:embed all:web` picks the new directories up automatically, and the binary serves them with correct content types. `test-js/noExternalAssets.test.js` fails the build if a reference to any known asset CDN reappears.
+
 ## v0.15.4 — 2026-08-01
 
 ### Fixed
