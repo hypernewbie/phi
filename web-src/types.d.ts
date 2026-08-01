@@ -18,6 +18,7 @@ export interface AppLike {
     tabManager: any;
     diffController: any;
     markdownManager: any;
+    fileTreeManager: any;
     syncManager: any;
     markdownDirs?: readonly string[];
     // updateStatus is a data property (the latest response from /api/update/status),

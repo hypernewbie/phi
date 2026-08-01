@@ -4488,6 +4488,26 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   FILE TREE (files tab in right panel)
+   ═══════════════════════════════════════════════════════════ */
+
+.file-tree-list {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    padding: 8px 4px;
+    gap: 2px;
+}
+
+.ft-chevron {
+    width: 14px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════
    MARKDOWN VIEWER MODAL
    ═══════════════════════════════════════════════════════════ */
 
