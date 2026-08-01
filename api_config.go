@@ -28,6 +28,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"terminal_commands":         cfg.TerminalCommands,
 		"markdown_dirs":             cfg.MarkdownDirs,
 		"use_existing_terminal_tab": cfg.UseExistingTerminalTab,
+		"fast_mode":                 cfg.FastMode,
 		"auto_reconnect":            cfg.AutoReconnect,
 		"sync_coordinator":          cfg.SyncCoordinator,
 		"ui_font_family":            cfg.UIFontFamily,
@@ -428,6 +429,28 @@ func handleUseExistingTerminalTab(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.UseExistingTerminalTab})
+}
+
+func handleFastMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.FastMode = req.Enabled
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.FastMode})
 }
 
 // handleAutoReconnect toggles the automatic-reconnect master switch (wake,

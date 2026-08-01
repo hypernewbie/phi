@@ -7786,3 +7786,31 @@ html, body {
     .kanban-stats-charts { grid-template-columns: 1fr; }
     .kanban-chart-wrap { min-height: 200px; }
 }
+
+/* ── Fast mode (config.fast_mode): perf crutch ─────────────────────────
+   Disables the idle-capable infinite animations and the always-visible
+   backdrop blurs. Any single running animation keeps the 60fps repaint
+   pipeline alive (~1 core on this page) — see
+   research/2026-08-01-2019-ui-idle-cpu-burn.md. Coarse by design;
+   per-effect knobs arrive with the perf-regression system. The brand CPU
+   tiers keep their static colors — only their motion is disabled. */
+body.fast-mode .brand .logo,
+body.fast-mode .brand .brand-name,
+body.fast-mode .logo-glow-wrapper::after,
+body.fast-mode .terminal-activity-indicator.is-active,
+body.fast-mode .tab.has-attention,
+body.fast-mode .empty-state,
+body.fast-mode .empty-state-decoration,
+body.fast-mode .empty-logo,
+body.fast-mode .sidebar-version-btn.has-update::after,
+body.fast-mode .fleet-stale-badge,
+body.fast-mode #input-textarea:focus {
+    animation: none !important;
+}
+
+body.fast-mode .sidebar-panel,
+body.fast-mode .app-header,
+body.fast-mode .input-bar-container {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
