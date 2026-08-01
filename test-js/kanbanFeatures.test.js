@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import createDOMPurify from 'dompurify';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { KanbanManager } from '../web/kanban.js';
-import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline } from '../web/kanban-features.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, portfolioTimeline, taskStats, cumulativeTimeline } from '../web/kanban-features.js';
 
 setupDomHarness();
 
@@ -22,6 +22,91 @@ function manager() {
 }
 
 beforeEach(() => vi.clearAllMocks());
+
+describe('whole-board task stats', () => {
+    const now = new Date('2026-07-30T12:00:00Z');
+
+    it('counts every task, not only feature parents', () => {
+        const stats = taskStats([
+            { id: 1, done: true, created: '2026-07-20T00:00:00Z', done_at: '2026-07-25T00:00:00Z' },
+            { id: 2, done: false, created: '2026-07-21T00:00:00Z' },
+            { id: 3, done: false, created: '2026-07-22T00:00:00Z' },
+            { id: 4, done: true, created: '2026-07-23T00:00:00Z', done_at: '2026-07-26T00:00:00Z' },
+        ], now);
+
+        expect(stats).toMatchObject({ totalTasks: 4, completedTasks: 2, openTasks: 2, taskPercent: 50 });
+    });
+
+    it('de-duplicates tasks that appear as both board card and feature parent', () => {
+        const stats = taskStats([{ id: 1, done: true }, { id: 1, done: true }], now);
+        expect(stats.totalTasks).toBe(1);
+    });
+
+    it('derives velocity and a forecast from the rolling window', () => {
+        const stats = taskStats([
+            { id: 1, done: true, done_at: '2026-07-24T00:00:00Z' },
+            { id: 2, done: true, done_at: '2026-07-25T00:00:00Z' },
+            { id: 3, done: false },
+            { id: 4, done: false },
+        ], now, 28);
+
+        expect(stats.completedInWindow).toBe(2);
+        expect(stats.velocityPerDay).toBeCloseTo(2 / 28);
+        // 2 open at 2/28 per day rounds up to 28 days.
+        expect(stats.estimatedDaysRemaining).toBe(28);
+        expect(stats.projectedCompletionDate).toBe('2026-08-27');
+    });
+
+    it('reports no forecast when nothing was completed in the window', () => {
+        const stats = taskStats([{ id: 1, done: false }], now);
+        expect(stats.estimatedDaysRemaining).toBeNull();
+        expect(stats.projectedCompletionDate).toBeNull();
+    });
+
+    it('reports a finished board as zero days remaining', () => {
+        const stats = taskStats([{ id: 1, done: true, done_at: '2026-07-25T00:00:00Z' }], now);
+        expect(stats.openTasks).toBe(0);
+        expect(stats.estimatedDaysRemaining).toBe(0);
+    });
+
+    it('compares incoming work against completed work', () => {
+        const stats = taskStats([
+            { id: 1, created: '2026-07-25T00:00:00Z', done: true, done_at: '2026-07-26T00:00:00Z' },
+            { id: 2, created: '2026-07-26T00:00:00Z', done: false },
+            { id: 3, created: '2026-07-27T00:00:00Z', done: false },
+            // Filed before the window opened, so it is not incoming work.
+            { id: 4, created: '2026-01-01T00:00:00Z', done: false },
+        ], now, 28);
+
+        expect(stats.createdInWindow).toBe(3);
+        expect(stats.completedInWindow).toBe(1);
+        expect(stats.netFlow).toBe(-2);
+    });
+
+    it('ignores a stale done_at on a reopened task', () => {
+        const stats = taskStats([
+            { id: 1, done: false, done_at: '2026-07-25T00:00:00Z' },
+        ], now);
+        expect(stats.completedTasks).toBe(0);
+        expect(stats.completedInWindow).toBe(0);
+    });
+
+    it('handles an empty board', () => {
+        expect(taskStats([], now)).toMatchObject({ totalTasks: 0, taskPercent: 0, openTasks: 0 });
+    });
+
+    it('builds a board-wide burn-up from the same cumulative series', () => {
+        const tasks = [
+            { id: 1, created: '2026-07-01T00:00:00Z', done: true, done_at: '2026-07-03T00:00:00Z' },
+            { id: 2, created: '2026-07-02T00:00:00Z', done: false },
+        ];
+        expect(cumulativeTimeline(tasks)).toEqual([
+            { date: '2026-07-01', filed: 1, completed: 0 },
+            { date: '2026-07-02', filed: 2, completed: 0 },
+            { date: '2026-07-03', filed: 2, completed: 1 },
+        ]);
+    });
+});
 
 describe('native Vikunja feature helpers', () => {
     it('treats only a task with direct subtask relations as a feature', () => {
@@ -133,7 +218,7 @@ describe('Feature surface', () => {
         expect(container.querySelector('#kanban-show-done-features-btn').textContent).toContain('Hide done');
     });
 
-    it('renders a portfolio Stats view without task search controls', () => {
+    it('renders a whole-board Stats view without task search controls', () => {
         const c = manager();
         c.boardMode = 'stats';
         c.taskCache = {
@@ -146,10 +231,49 @@ describe('Feature surface', () => {
         c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
 
         expect(container.querySelector('.kanban-stats-view')).toBeTruthy();
-        expect(container.textContent).toContain('Features done');
+        expect(container.textContent).toContain('Tasks done');
         expect(container.textContent).toContain('Scope burn-up');
         expect(container.querySelectorAll('.kanban-chart-wrap canvas')).toHaveLength(4);
         expect(container.querySelector('#kanban-search-input')).toBeNull();
+    });
+
+    it('reports on a board that has no features at all', () => {
+        // The view used to be gated entirely on feature parents, so a board of
+        // plain tasks rendered "No feature stats yet" and no charts.
+        const c = manager();
+        c.boardMode = 'stats';
+        c.taskCache = {
+            1: { id: 1, title: 'A', created: '2026-07-01T00:00:00Z', done: true, done_at: '2026-07-02T00:00:00Z' },
+            2: { id: 2, title: 'B', created: '2026-07-01T00:00:00Z', done: false },
+            3: { id: 3, title: 'C', created: '2026-07-02T00:00:00Z', done: false },
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
+
+        expect(container.querySelector('.kanban-stats-view')).toBeTruthy();
+        expect(container.textContent).toContain('1/3');
+        expect(container.textContent).not.toContain('No task stats yet');
+        // Features are absent, so that card is omitted rather than shown as 0/0.
+        expect(container.textContent).not.toContain('subtasks done');
+        expect(container.querySelectorAll('.kanban-chart-wrap canvas')).toHaveLength(4);
+    });
+
+    it('keeps features as a secondary card when they exist', () => {
+        const c = manager();
+        c.boardMode = 'stats';
+        c.taskCache = {
+            1: { id: 1, done: false, related_tasks: { subtask: [child(2, true), child(3, false)] } },
+            4: { id: 4, done: false },
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+
+        c.renderBoardLayout(container, [{ id: 9, title: 'Phi' }], { id: 9, title: 'Phi' }, { id: 5 }, []);
+
+        expect(container.textContent).toContain('Features');
+        expect(container.textContent).toContain('1/2 subtasks done');
     });
 
     it('uses the active Phi theme for all Stats charts', () => {
