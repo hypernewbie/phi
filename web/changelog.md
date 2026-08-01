@@ -2,7 +2,20 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## v0.15.1 — 2026-07-26
+## v0.15.2 — 2026-07-31
+
+Patch bump for current Pi and Claude model-switch behavior.
+
+### Changed
+- **Pi saved-model picker** (`0e18ebc`). Model selection now follows Pi's current four-step interaction: `/model`, Enter, identifier, Enter, with a short pause between each state transition.
+- **Claude model presets** (`f16aa57`). New configurations start with the compact aliases `fable`, `opus`, `sonnet`, and `haiku`.
+- **Claude cache-warning confirmation** (`f16aa57`). After a Claude model command, Phi waits briefly and sends a final Enter to dismiss the CLI's model-switch cache warning. The delayed input stays pinned to the tab selected at click time.
++
+### Tests
+- `test-js/sendSlashCommand.test.js` — Pi picker ordering and Claude warning-confirmation routing, including cross-tab protection.
+- `main_test.go` — exact default Claude preset list.
++
++## v0.15.1 — 2026-07-26
 
 Patch bump. Kanban gets three new capabilities and one rendering fix; the access-password UX gets one CSS-specificity fix.
 
