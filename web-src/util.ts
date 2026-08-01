@@ -258,11 +258,25 @@ export function phiActivityGlyph(hasActivity: boolean): string {
 // prior title text. This makes the two states composable:
 //   Φ host   quiet        ϕ host   output now
 //   ● Φ host attention    ● ϕ host attention + output elsewhere
+// displayHostname trims the mDNS/Bonjour suffix macOS appends to the system
+// hostname, so `studio.local` shows as `studio`. Purely cosmetic: phi labels a
+// single machine, so the suffix is noise in every surface that shows it. The
+// raw value is left untouched everywhere it actually identifies the host.
+//
+// Also handles the fully-qualified trailing dot (`studio.local.`), and refuses
+// to strip itself down to nothing if the hostname is literally `.local`.
+export function displayHostname(hostname: string | null | undefined): string {
+    const raw = (hostname ?? '').toString().trim();
+    if (!raw) return '';
+    const trimmed = raw.replace(/\.local\.?$/i, '');
+    return trimmed || raw;
+}
+
 export function formatTerminalActivityTitle(
     hostname: string | null | undefined,
     state: TerminalActivityState,
 ): string {
-    const host = hostname || 'phi';
+    const host = displayHostname(hostname) || 'phi';
     const attention = state.hasAttention ? '● ' : '';
     return `${attention}${phiActivityGlyph(state.hasActivity)} ${host}`;
 }
@@ -360,7 +374,7 @@ export function buildSelfHud(args: {
         }
     }
     return {
-        hostname: args.hostname || 'phi',
+        hostname: displayHostname(args.hostname) || 'phi',
         version: args.version || '',
         sessions,
         busy,
