@@ -173,9 +173,29 @@ func (m *Manager) Shutdown(grace time.Duration) {
 		remaining := len(m.instances)
 		m.mu.RUnlock()
 		if remaining == 0 {
-			break
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Escalate. Anything still registered ignored SIGTERM or is wedged, and
+	// the caller exits the process straight after this returns -- so without
+	// a kill those children are orphaned. Both this function's doc comment
+	// and Pty.Terminate's promised this escalation; neither actually did it.
+	m.mu.RLock()
+	stragglers := make([]*PTYInstance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		stragglers = append(stragglers, inst)
+	}
+	m.mu.RUnlock()
+
+	for _, inst := range stragglers {
+		inst.mu.Lock()
+		p := inst.Pty
+		inst.mu.Unlock()
+		if p != nil {
+			_ = p.Kill()
+		}
 	}
 }
 
