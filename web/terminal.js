@@ -1632,7 +1632,10 @@ export class TabManager {
     _handleTerminalDisconnect(tabInfo) {
         if (tabInfo.finalizing) return;
 
-        tabInfo.term.write('\r\n\x1b[31m[Connection lost]\x1b[0m\r\n');
+        // Deliberately not written into the terminal buffer: the overlay,
+        // the disconnect banner and the toast below all say this already,
+        // and unlike them a buffer write is permanent scrollback that
+        // survives every later reconnect.
         tabInfo.isDead = true;
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
@@ -3221,6 +3224,9 @@ export class TabManager {
             this.updateDocumentTitle();
             this._showReconnectOverlay(tabInfo);
         } else if (control.type === 'replay-complete') {
+            // An empty replay still ends here, so drop the pending reset or
+            // the next live byte would clear the terminal underneath the user.
+            tabInfo.awaitingReplay = false;
             if (localStorage.getItem('phi_replay_divider') === 'true') {
                 tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
@@ -3302,11 +3308,24 @@ export class TabManager {
 
         if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
 
+        // The server replays the whole ring buffer on every attach, so without
+        // clearing first a reconnect appends a second copy of the scrollback.
+        // Reset on the first replayed byte rather than up front: when the
+        // replay buffer is disabled server-side no data arrives, and blanking
+        // the terminal would throw away history nothing is going to restore.
+        tabInfo.awaitingReplay = true;
+
         let opened = false;
         try {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
-                (data) => { this.writeToTerminal(tabInfo, data); },
+                (data) => {
+                    if (tabInfo.awaitingReplay) {
+                        tabInfo.awaitingReplay = false;
+                        try { tabInfo.term.reset(); } catch (e) { console.error('[term] reset on replay failed:', e); }
+                    }
+                    this.writeToTerminal(tabInfo, data);
+                },
                 (control) => { this.handleControlMessage(tabInfo, control); },
                 () => {
                     tabInfo.reconnectInFlight = false;
@@ -3338,7 +3357,6 @@ export class TabManager {
                     tabInfo.tabEl.classList.remove('dead');
                     this.updateDocumentTitle();
                     if (overlay) overlay.remove();
-                    tabInfo.term.write('\r\n\x1b[32m[Reconnected]\x1b[0m\r\n');
                     this.updateDisconnectBanner();
                     setTimeout(() => {
                         try {
