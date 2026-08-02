@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -32,9 +31,6 @@ import (
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
-
-//go:embed all:web
-var webFS embed.FS
 
 var (
 	ptyManager  *pty.Manager
@@ -197,9 +193,11 @@ func main() {
 		mdWatcher.Start()
 	}
 
-	// Embedded web assets (served when running an installed binary from any dir)
+	// Embedded web assets (served when running an installed binary from any
+	// dir). Dev builds embed web/ raw; release builds (-tags=embedassets)
+	// decompress the webdist/ mirror — see embed_dev.go / embed_release.go.
 	var subErr error
-	webRoot, subErr = fs.Sub(webFS, "web")
+	webRoot, subErr = newWebRoot()
 	if subErr != nil {
 		slog.Error("failed to load embedded web assets", "err", subErr)
 		os.Exit(1)

@@ -20,6 +20,7 @@ builds:
         goarch: arm64
     flags:
       - -trimpath
+      - -tags=embedassets
     ldflags:
       - -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}} -X main.Date={{.Date}} -X main.BuildSource=release
 
