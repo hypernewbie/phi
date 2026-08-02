@@ -148,11 +148,38 @@ export class TabManager {
         const level = cpuLevel(cpuPercent);
         // Don't churn the DOM if the level hasn't changed
         if (logo.dataset.cpuLevel === level) return;
+        const first = logo.dataset.cpuLevel === undefined;
         for (const el of [logo, brandName]) {
             if (!el) continue;
             el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical');
             el.classList.add(level);
             el.dataset.cpuLevel = level;
+        }
+        // The tiers are static now, so the change itself has to be what moves.
+        // A finite burst costs ~2.4ms/frame for its duration and then nothing,
+        // where the old per-tier loops cost that forever (cpu-critical was
+        // +87% of a core -- worst exactly when the machine was already loaded).
+        // Skipped on the first classification so the page doesn't pop on load.
+        if (!first) this._flourishBrand([logo, brandName]);
+    }
+
+    // Play the one-shot tier-change animation and clean up after itself, so
+    // nothing is left animating at rest.
+    _flourishBrand(els) {
+        for (const el of els) {
+            if (!el) continue;
+            el.classList.remove('cpu-flourish');
+            // Force a reflow so re-adding the class restarts the animation;
+            // without it a rapid second tier change would not replay.
+            void el.offsetWidth;
+            el.classList.add('cpu-flourish');
+            const done = () => {
+                el.classList.remove('cpu-flourish');
+                el.removeEventListener('animationend', done);
+                el.removeEventListener('animationcancel', done);
+            };
+            el.addEventListener('animationend', done);
+            el.addEventListener('animationcancel', done);
         }
     }
     
