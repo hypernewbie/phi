@@ -274,7 +274,6 @@ func main() {
 	http.HandleFunc("/api/config/use-existing-terminal-tab", handleUseExistingTerminalTab)
 	http.HandleFunc("/api/config/fast-mode", handleFastMode)
 	http.HandleFunc("/api/config/pi-offline", handlePiOffline)
-	http.HandleFunc("/api/config/sync-token", handleSyncToken)
 	http.HandleFunc("/api/config/auto-reconnect", handleAutoReconnect)
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
