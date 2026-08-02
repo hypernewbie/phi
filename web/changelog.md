@@ -2,6 +2,35 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.17.0 — 2026-08-02
+
+### Added
+- **The web UI now caches and compresses its assets** (`94644ec`). Embedded assets
+  shipped with no validators at all — `embed.FS` reports zero mod-times, so responses
+  carried neither `Last-Modified` nor `ETag` and every page load re-downloaded ~2 MB.
+  Each asset now gets a startup-computed strong ETag with `Cache-Control: no-cache`,
+  so a warm reload revalidates instead of refetching: measured live, 716 KB of content
+  arrives over 10.5 KB of wire (~300 bytes per asset). Responses also negotiate gzip
+  or brotli per `Accept-Encoding`, compressed once per process and cached in memory —
+  cold-load text drops ~74% (`xterm.js` 283→55 KB, `style.css` 200→31 KB over brotli)
+  and the 152 KB bell chime travels at 49–70 KB. woff2 fonts (already brotli inside)
+  and images are served as-is. Brotli only reaches Chromium-on-localhost and
+  TLS-proxied clients; plain-HTTP LAN browsers negotiate the gzip floor. New
+  `compression_enabled` setting (default on, config-file only) hands compression to a
+  reverse proxy like nginx or varnish; ETags stay on either way. The trade-offs, plainly:
+  the brotli library adds ~1.05 MB to the binary, partially offset by relocating the
+  425 KB vikunja swagger test fixture out of the embedded tree (net +646 KB), and the
+  "session done" chime now reuses one `Audio` object instead of constructing a fresh
+  one (and a fresh 152 KB fetch) per chime. `help.md`/`changelog.md` fetches drop
+  their `cache: 'no-store'` and revalidate like everything else.
+
+### Fixed
+- **`go test -race` no longer flakes on a leaked sync debounce timer** (`a2b7cfb`).
+  `TriggerSaveSyncStore`'s 500 ms `time.AfterFunc` resolved the store path when it
+  fired, reading `testSyncPath` while a later test rewrote it — roughly one full-suite
+  run in three failed on whatever test happened to be running at the time. The timer
+  now captures its path at schedule time; debounce semantics are unchanged.
+
 ## v0.16.2 — 2026-08-01
 
 ### Changed
