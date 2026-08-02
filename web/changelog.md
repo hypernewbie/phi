@@ -2,6 +2,18 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.16.2 — 2026-08-01
+
+### Changed
+- **The UI stops animating when nothing is happening** (`392f797`). The always-on animations cost about 1.4 cores on the idle screen and 0.7 in normal use, to produce motion that could not actually be seen. Measured by ablation on the real shell, as % of one core against a 10.7% floor: idle screen 146; with `backdrop-filter` disabled but animations kept 135; with animations disabled but `backdrop-filter` kept 11. Individually, the brand at `cpu-critical` 98, at `cpu-moderate` 70, the activity blink 35, the input focus glow 12. Afterwards: idle 11.8, typical use 10.9, critical load 11.2 — non-fast mode is now within noise of fast mode.
+
+  Static shadows are free; animating them is billed every 16.7ms forever. So each CPU tier's glow is baked in from the peak of the keyframes it replaces — the brand now sits at full intensity rather than averaging toward the trough — and motion is kept only where it carries information: a finite burst when the tier changes, a one-shot wake when the activity indicator lights up. Both stop by themselves. The activity blink expressed roughly 1.2 changes a second but was billed 60 times a second; the glyph already swaps between a bar and a dash, so the wake plays once. The chromatic split, nuclear glow, hieroglyph registers, torchlight and empty-logo glow are all unchanged, and every spinner tied to real work still spins.
+
+  This also removes a perverse incentive: `cpu-critical` previously cost the most CPU exactly when the machine was already under critical load.
+
+### Fixed
+- **Correction to the v0.16.0 entry below.** It claimed the idle CPU burn came from the header's `backdrop-filter` being recomputed, and credited compositor promotion with taking 100.5% down to 30.3%. That diagnosis was wrong. Ablation puts the blur at ~8% of the cost and the animations at ~99%, and on a blank page with no blur anywhere a single opacity animation on a 24px square still costs ~2.4ms per frame — twenty squares cost ~2.9ms. The charge is per frame for having any animation running at all, not per pixel and not for the blur. The promotion shipped in v0.16.0 measured as nothing, and its `will-change` hints are now scoped to the finite bursts that actually animate transform. The 30.3% figure was measured against a different implementation than the one released.
+
 ## v0.16.1 — 2026-08-01
 
 ### Added
@@ -23,6 +35,12 @@ All notable changes to phi are documented here. Newest versions first.
 - **Markdown rendered unsanitized HTML** (`ecf3d65`). Three call sites fed `marked.parse()` output straight into `innerHTML`, so a `<script>` tag or `onerror` attribute in any .md file or agent chat message executed with the page's session. All markdown-derived HTML now flows through one shared DOMPurify helper. The fswatcher also fires on in-place writes now, so external edits refresh the panel and popup reliably.
 
 ### Internal
+> **Correction (v0.16.2):** the performance note that shipped with this release
+> attributed the idle CPU cost to the header's `backdrop-filter` recompute and
+> credited compositor promotion with a 3.3x win. Later measurement showed the
+> blur was ~8% of the cost and the animations ~99%, and that the promotion
+> changed nothing outside noise. See the v0.16.2 entry.
+
 - **JS tooling moved from npm to pnpm** (`6d701d4`). `package-lock.json` is replaced by `pnpm-lock.yaml`, `packageManager` pins `pnpm@11.18.0`, and CI plus `.githooks/pre-commit` invoke pnpm. Contributors need pnpm on PATH — `npm i -g pnpm@11.18.0` works without admin rights, where `corepack enable` may not.
 
 ## v0.15.6 — 2026-08-01
