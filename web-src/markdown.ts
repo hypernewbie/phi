@@ -410,7 +410,7 @@ export class MarkdownManager {
         this.modal.classList.remove('hidden');
 
         try {
-            const res = await fetch('help.md', { cache: 'no-store' });
+            const res = await fetch('help.md');
             if (!res.ok) throw new Error(await res.text() || 'Failed to load help.md');
             const raw = await res.text();
             this.openRawMarkdown('Phi Documentation', raw);
@@ -517,7 +517,7 @@ export class MarkdownManager {
         }
 
         try {
-            const res = await fetch('changelog.md', { cache: 'no-store' });
+            const res = await fetch('changelog.md');
             if (!res.ok) throw new Error(await res.text() || 'Failed to load changelog.md');
             const raw = await res.text();
             this.openRawMarkdown(title, raw);
