@@ -22,6 +22,10 @@ import {
     formatChipName,
 } from './attachments.js';
 
+// Shared "session done" chime. Constructing a new Audio per chime
+// re-fetches bell.wav; one object per page is enough.
+let doneChimeAudio = null;
+
 const CODER_FAVICONS = {
     'opencode': 'vendor/logos/opencode.png',
     'claude': 'vendor/logos/claude.png',
@@ -4924,9 +4928,12 @@ export class TabManager {
         }
 
         // 2. Play subtle chime if backgrounded.
-        const bellAudio = new Audio('vendor/bell.wav');
-        bellAudio.volume = 0.2;
-        bellAudio.play().catch(() => {});
+        if (!doneChimeAudio) {
+            doneChimeAudio = new Audio('vendor/bell.wav');
+            doneChimeAudio.volume = 0.2;
+        }
+        doneChimeAudio.currentTime = 0;
+        doneChimeAudio.play().catch(() => {});
 
         // 3. Show OS-level notification if tab is hidden / not active.
         if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {

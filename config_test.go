@@ -214,3 +214,20 @@ func TestTestConfigPathOverrideBypassesGuard(t *testing.T) {
 		t.Errorf("override did not persist: got %s, want gold", got.ThemeColor)
 	}
 }
+
+func TestCompressionEnabledDefaultsTrue(t *testing.T) {
+	withTempConfig(t)
+	if !loadConfig().CompressionEnabled {
+		t.Fatal("CompressionEnabled must default to true with an empty config")
+	}
+}
+
+func TestCompressionEnabledExplicitFalse(t *testing.T) {
+	cfgPath := withTempConfig(t)
+	if err := os.WriteFile(cfgPath, []byte(`{"compression_enabled":false}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if loadConfig().CompressionEnabled {
+		t.Fatal("explicit false must win over the seeded default")
+	}
+}
