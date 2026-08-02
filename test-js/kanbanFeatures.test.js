@@ -289,7 +289,7 @@ describe('Feature surface', () => {
         document.documentElement.style.setProperty('--bg-border', '#333333');
         document.documentElement.style.setProperty('--bg-panel', '#111111');
         document.documentElement.style.setProperty('--text-primary', '#eeeeee');
-        const Chart = vi.fn(() => ({ destroy: vi.fn() }));
+        const Chart = vi.fn(function () { return { destroy: vi.fn() }; });
         vi.stubGlobal('Chart', Chart);
         const container = document.createElement('div');
         document.body.appendChild(container);
