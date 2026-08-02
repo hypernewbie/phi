@@ -8,10 +8,10 @@ import { fileURLToPath } from 'node:url';
 // https://raw.githubusercontent.com/go-vikunja/vikunja/main/pkg/swagger/swagger.json)
 // and verify that the methods/paths our kanban code uses match the contract.
 // This catches drift if Vikunja ever renames an endpoint. To refresh the
-// vendored copy: curl the URL above to test-js/.diag/vikunja_swagger.json.
+// vendored copy: curl the URL above to testdata/vikunja_swagger.json.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const swagger = JSON.parse(readFileSync(resolve(__dirname, '..', 'web', 'vendor', 'vikunja_swagger.json'), 'utf8'));
+const swagger = JSON.parse(readFileSync(resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'), 'utf8'));
 
 // Helper: {method, path} -> Vikunja op or undefined.
 function vikOp(method, path) {

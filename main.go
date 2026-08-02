@@ -204,6 +204,7 @@ func main() {
 		slog.Error("failed to load embedded web assets", "err", subErr)
 		os.Exit(1)
 	}
+	initStaticAssets(webRoot)
 
 	// API Routing
 	http.HandleFunc("/api/auth/status", handleAccessAuthStatus)

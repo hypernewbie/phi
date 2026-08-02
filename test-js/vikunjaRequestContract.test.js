@@ -24,7 +24,7 @@ setupDomHarness();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const swagger = JSON.parse(
-    readFileSync(resolve(__dirname, '..', 'web', 'vendor', 'vikunja_swagger.json'), 'utf8')
+    readFileSync(resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'), 'utf8')
 );
 
 // ---------------------------------------------------------------------------

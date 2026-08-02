@@ -72,6 +72,13 @@ type Config struct {
 	// default, so a missing key in an existing config file changes nothing.
 	PiOffline bool `json:"pi_offline"`
 
+	// CompressionEnabled gates gzip/brotli encoding of embedded web
+	// assets. Defaults to true, seeded in loadConfig before unmarshal
+	// (absent key keeps the default; explicit false wins). Operators
+	// running phi behind a reverse proxy that owns compression set this
+	// to false. Caching headers (ETag/no-cache) are unaffected.
+	CompressionEnabled bool `json:"compression_enabled"`
+
 	ReplayBufferBytes *int `json:"replay_buffer_bytes"`
 
 	PushoverUserKey   string `json:"pushover_user_key"`
@@ -137,6 +144,11 @@ func loadConfig() Config {
 
 	path := configFilePath()
 	var cfg Config
+	// Seed defaults that must survive an absent key: json.Unmarshal only
+	// touches fields present in the file, so a missing key keeps the seed
+	// and an explicit false wins. (Bools can't be defaulted after the
+	// fact — false is a meaningful user value.)
+	cfg.CompressionEnabled = true
 	b, err := os.ReadFile(path)
 	if err == nil {
 		_ = json.Unmarshal(b, &cfg)
