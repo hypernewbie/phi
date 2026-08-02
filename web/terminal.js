@@ -603,56 +603,12 @@ export class TabManager {
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
 
-            // When input is empty, capture arrows, enter, escape and ctrl key shortcuts to control PTY directly.
-            if (this.inputTextArea.value === '') {
-                // Capture Shift+Tab (Backtab) to prevent browser focus shift
-                if (e.key === 'Tab' && e.shiftKey) {
-                    e.preventDefault();
-                    const activeTab = this.getActiveTab();
-                    if (activeTab) {
-                        this.sendInput(activeTab, '\x1b[Z');
-                        this._spamScrollToBottom(activeTab);
-                    }
-                    return;
-                }
-
-                const keys = {
-                    'ArrowUp': '\u001b[A',
-                    'ArrowDown': '\u001b[B',
-                    'ArrowLeft': '\u001b[D',
-                    'ArrowRight': '\u001b[C',
-                    'PageUp': '\u001b[5~',
-                    'PageDown': '\u001b[6~',
-                    'Enter': '\r',
-                    'Escape': '\x1b',
-                    'Backspace': '\x7f'
-                };
-                
-                let sendChar = null;
-                if (keys[e.key]) {
-                    sendChar = keys[e.key];
-                } else if (e.ctrlKey) {
-                    const ctrlKeys = {
-                        'c': '\x03',
-                        'o': '\x0f',
-                        'p': '\x10',
-                        't': '\x14'
-                    };
-                    const lowerKey = e.key.toLowerCase();
-                    if (ctrlKeys[lowerKey]) {
-                        sendChar = ctrlKeys[lowerKey];
-                    }
-                }
-
-                if (sendChar !== null) {
-                    e.preventDefault();
-                    const activeTab = this.getActiveTab();
-                    if (activeTab) {
-                        this.sendInput(activeTab, sendChar);
-                        this._spamScrollToBottom(activeTab); // Keep viewport pinned to the bottom during reaction
-                    }
-                    return;
-                }
+            // When input is empty, capture arrows, enter, escape and ctrl key
+            // shortcuts to control PTY directly. The map lives in
+            // _forwardKeyToPty, shared with the terminal-focused and mobile
+            // paths; the emptiness gate is this caller's concern.
+            if (this.inputTextArea.value === '' && this._forwardKeyToPty(e, this.getActiveTab())) {
+                return;
             }
 
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -692,13 +648,12 @@ export class TabManager {
             }
             // Mobile arrow-key capture fallback. On mobile the WebKit
             // soft keyboard sometimes yanks focus off the input bar
-            // mid-type, so the per-textarea arrow handler at terminal.js:512
-            // never fires. Capture arrow / Enter / Escape / PageUp /
-            // PageDown at the document level whenever the staged input
-            // is empty AND a tab is active. Desktop keeps the original
-            // textarea-bound path; document-level capture would steal
-            // arrow keys from terminal-internal tools (fzf, less, etc.)
-            // on a real keyboard.
+            // mid-type, so the per-textarea handler never fires. Forward
+            // control keys at the document level whenever the staged
+            // input is empty AND a tab is active. Desktop keeps the
+            // original textarea-bound path; document-level capture would
+            // steal arrow keys from terminal-internal tools (fzf, less,
+            // etc.) on a real keyboard.
             if (window.innerWidth > 768) return;
             if (!this.inputTextArea || this.inputTextArea.value !== '') return;
             if (this.inputBarContainer?.classList.contains('hidden')) return;
@@ -707,22 +662,19 @@ export class TabManager {
             // Skip if a modal is open - let the modal handler have the key.
             if (document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) return;
 
-            const mobileKeys = {
-                'ArrowUp':    '\u001b[A',
-                'ArrowDown':  '\u001b[B',
-                'ArrowLeft':  '\u001b[D',
-                'ArrowRight': '\u001b[C',
-                'PageUp':     '\u001b[5~',
-                'PageDown':   '\u001b[6~',
-                'Enter':      '\r',
-                'Escape':     '\u001b',
-            };
-            const sendChar = mobileKeys[e.key];
-            if (sendChar !== undefined && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                e.preventDefault();
-                this.sendInput(activeTab, sendChar);
-                this._spamScrollToBottom(activeTab);
-            }
+            // Shared map (see _forwardKeyToPty). Two guards the old private
+            // map made unnecessary: skip keys another handler already
+            // consumed (the staged textarea's own listener — else Enter
+            // double-fires), and skip keys typed into other editable
+            // elements (find bar, tab renamer) now that Backspace/Tab are
+            // in the map. Modifier combos stay excluded on mobile so
+            // hardware keyboards on tablets keep their browser shortcuts.
+            if (e.defaultPrevented) return;
+            const t = e.target;
+            if (t instanceof HTMLElement && t !== this.inputTextArea &&
+                (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            this._forwardKeyToPty(e, activeTab);
         });
 
         if (this.cancelInputBtn) {
@@ -1280,6 +1232,14 @@ export class TabManager {
                 if (e.type === 'keydown') {
                     this.handleGlobalTabShortcuts(e);
                 }
+                return false;
+            }
+            // In non-direct mode: forward control keys (Enter, arrows, Esc,
+            // ...) straight to the PTY — the same map the empty staged-input
+            // bar uses, but with no emptiness gate: a draft in the input bar
+            // must not change what Enter means on a focused terminal
+            // (answering a TUI prompt mid-draft keeps the draft staged).
+            if (!tabInfo.directMode && e.type === 'keydown' && this._forwardKeyToPty(e, tabInfo)) {
                 return false;
             }
             // In non-direct mode: redirect printable keystrokes to the input textarea
@@ -3204,6 +3164,58 @@ export class TabManager {
         const sent = this.sendInput(tabInfo, payload);
         if (sent) this._spamScrollToBottom(tabInfo);
         return sent;
+    }
+
+    /**
+     * Raw key→PTY forwarding shared by the staged-input bar (when empty),
+     * the terminal's custom key handler (non-direct mode), and the mobile
+     * document-level fallback. Maps a keydown to the bytes the PTY expects
+     * and sends them via sendToTab (no focus steal — callers own focus).
+     * Consumes a matched key (preventDefault) even without an active tab,
+     * mirroring the original staged-input map. Returns true when consumed.
+     * Emptiness/modifier gates are caller concerns, not decided here.
+     */
+    _forwardKeyToPty(e, tab) {
+        if (e.isComposing) return false;  // never emit bytes mid-IME composition
+        let sendChar = null;
+        // Shift+Tab (Backtab) — also prevents the browser focus shift.
+        if (e.key === 'Tab' && e.shiftKey) {
+            sendChar = '\x1b[Z';
+        } else {
+            const keys = {
+                'ArrowUp': '\u001b[A',
+                'ArrowDown': '\u001b[B',
+                'ArrowLeft': '\u001b[D',
+                'ArrowRight': '\u001b[C',
+                'PageUp': '\u001b[5~',
+                'PageDown': '\u001b[6~',
+                'Home': '\u001b[H',
+                'End': '\u001b[F',
+                'Delete': '\u001b[3~',
+                'Tab': '\t',
+                'Enter': '\r',
+                'Escape': '\x1b',
+                'Backspace': '\x7f'
+            };
+            if (keys[e.key]) {
+                sendChar = keys[e.key];
+            } else if (e.ctrlKey) {
+                const ctrlKeys = {
+                    'c': '\x03',
+                    'o': '\x0f',
+                    'p': '\x10',
+                    't': '\x14'
+                };
+                const lowerKey = e.key.toLowerCase();
+                if (ctrlKeys[lowerKey]) {
+                    sendChar = ctrlKeys[lowerKey];
+                }
+            }
+        }
+        if (sendChar === null) return false;
+        e.preventDefault();
+        if (tab) this.sendToTab(tab, sendChar);
+        return true;
     }
 
     /**
