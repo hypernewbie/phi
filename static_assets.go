@@ -39,16 +39,20 @@ var compressibleStaticExts = map[string]bool{
 	".css":  true,
 	".html": true,
 	".js":   true,
-	".json": true,
 	".md":   true,
-	".svg":  true,
-	".txt":  true,
 	".wav":  true,
 }
+
+// staticCompressionOn captures compression_enabled once at startup —
+// toggling it requires a restart. Assets are the hottest request path;
+// re-reading the config file per request bought a live toggle nobody
+// needs for an operator flag.
+var staticCompressionOn bool
 
 // initStaticAssets walks the embedded web/ tree and computes a strong
 // ETag per file. Called once at startup, right after webRoot is set.
 func initStaticAssets(root fs.FS) {
+	staticCompressionOn = loadConfig().CompressionEnabled
 	staticAssets = make(map[string]*staticAsset)
 	_ = fs.WalkDir(root, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -161,6 +165,18 @@ func negotiateStaticEncoding(acceptEncoding string) string {
 // when enabled, negotiated gzip/brotli compression. Non-GET/HEAD
 // requests pass through untouched (a matching If-None-Match on other
 // methods would yield 412, and FileServer serves bodies for POST too).
+// ifMatchStrong reports whether an If-Match header lists etag (or *),
+// comparing whole comma-separated members so substrings and weak tags
+// cannot match.
+func ifMatchStrong(im, etag string) bool {
+	for _, part := range strings.Split(im, ",") {
+		if t := strings.TrimSpace(part); t == "*" || t == etag {
+			return true
+		}
+	}
+	return false
+}
+
 func serveStatic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
@@ -176,7 +192,7 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 
 	enc := ""
-	if compressibleStaticExts[path.Ext(p)] && loadConfig().CompressionEnabled {
+	if compressibleStaticExts[path.Ext(p)] && staticCompressionOn {
 		// The response for this path varies by Accept-Encoding even when
 		// this particular request ends up with the identity encoding.
 		w.Header().Set("Vary", "Accept-Encoding")
@@ -201,6 +217,14 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 
 	etag := a.etag(enc)
 	w.Header().Set("Etag", etag)
+	// If-Match evaluates before If-None-Match (RFC 9110 §13.2.2) and uses
+	// strong comparison against the selected representation's tag, so a
+	// weak W/"..." member never matches. The identity path gets the same
+	// treatment from ServeContent.
+	if im := r.Header.Get("If-Match"); im != "" && !ifMatchStrong(im, etag) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		return
+	}
 	if inm := r.Header.Get("If-None-Match"); inm != "" && (inm == "*" || strings.Contains(inm, etag)) {
 		w.WriteHeader(http.StatusNotModified)
 		return
