@@ -34,18 +34,18 @@ func TestReleaseBrServedVerbatim(t *testing.T) {
 
 func TestReleaseIdentityMatchesSourceTree(t *testing.T) {
 	setupStaticAssets(t)
-	// The generator ran against the checkout's web/ (gate order), so the
-	// decompressed identity bytes must reconstruct it exactly.
-	src, err := os.ReadFile("web/app.js")
+	// vendor/ is never minified, so its decompressed identity bytes must
+	// reconstruct the checkout's web/ copy exactly (generator gate order).
+	src, err := os.ReadFile("web/vendor/xterm.js")
 	if err != nil {
-		t.Fatalf("read web/app.js from disk: %v", err)
+		t.Fatalf("read web/vendor/xterm.js from disk: %v", err)
 	}
-	got, err := fs.ReadFile(webRoot, "app.js")
+	got, err := fs.ReadFile(webRoot, "vendor/xterm.js")
 	if err != nil {
-		t.Fatalf("read app.js from webRoot: %v", err)
+		t.Fatalf("read vendor/xterm.js from webRoot: %v", err)
 	}
 	if !bytes.Equal(got, src) {
-		t.Fatal("decompressed webRoot bytes differ from web/app.js")
+		t.Fatal("decompressed webRoot bytes differ from web/vendor/xterm.js")
 	}
 }
 
@@ -73,5 +73,22 @@ func TestReleaseWebRootSeekable(t *testing.T) {
 	// implementation detail of testing/fstest — this assertion pins it.
 	if _, ok := f.(io.Seeker); !ok {
 		t.Fatal("webRoot files must implement io.Seeker for Range support")
+	}
+}
+
+func TestReleaseFirstPartyMinified(t *testing.T) {
+	setupStaticAssets(t)
+	for _, p := range []string{"app.js", "style.css"} {
+		src, err := os.ReadFile("web/" + p)
+		if err != nil {
+			t.Fatalf("read web/%s from disk: %v", p, err)
+		}
+		got, err := fs.ReadFile(webRoot, p)
+		if err != nil {
+			t.Fatalf("read %s from webRoot: %v", p, err)
+		}
+		if len(got) == 0 || len(got) >= len(src) {
+			t.Fatalf("%s: webRoot %d bytes, source %d — expected minified (smaller, non-empty)", p, len(got), len(src))
+		}
 	}
 }
