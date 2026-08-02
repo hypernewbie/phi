@@ -6,6 +6,7 @@ require (
 	github.com/XSAM/otelsql v0.43.0
 	github.com/andybalholm/brotli v1.2.2
 	github.com/aymanbagabas/go-pty v0.2.3
+	github.com/evanw/esbuild v0.28.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.26.7

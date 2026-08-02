@@ -23,11 +23,11 @@ func setupStaticAssets(t *testing.T) string {
 	t.Helper()
 	cfgPath := withTempConfig(t)
 	if webRoot == nil {
-		sub, err := fs.Sub(webFS, "web")
+		root, err := newWebRoot()
 		if err != nil {
-			t.Fatalf("fs.Sub: %v", err)
+			t.Fatalf("newWebRoot: %v", err)
 		}
-		webRoot = sub
+		webRoot = root
 	}
 	initStaticAssets(webRoot)
 	return cfgPath

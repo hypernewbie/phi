@@ -32,6 +32,11 @@ type staticAsset struct {
 
 var staticAssets map[string]*staticAsset
 
+// preBrotli holds build-time brotli payloads keyed by asset path.
+// Populated only by the embedassets webRoot (embed_release.go); nil in
+// dev builds, where compressed() encodes lazily instead.
+var preBrotli map[string][]byte
+
 // compressibleStaticExts lists embedded extensions worth encoding.
 // woff2 is internally brotli-compressed (gzip grows it) and images are
 // already compressed; bell.wav is raw PCM and shrinks ~58-68%.
@@ -125,8 +130,15 @@ func (a *staticAsset) compressed(root fs.FS, p, enc string) []byte {
 		return a.gz
 	case "br":
 		a.brOnce.Do(func() {
+			if pre, ok := preBrotli[p]; ok {
+				a.br = pre
+				return
+			}
+			// Lazy fallback for dev builds (and any file the generator
+			// skipped). q6 over q11: ~60x faster for ~12% larger bodies —
+			// release builds ship prebuilt q11 via preBrotli instead.
 			a.br = build(func(buf *bytes.Buffer, data []byte) error {
-				bw := brotli.NewWriterLevel(buf, brotli.BestCompression)
+				bw := brotli.NewWriterLevel(buf, brotli.DefaultCompression)
 				if _, err := bw.Write(data); err != nil {
 					return err
 				}

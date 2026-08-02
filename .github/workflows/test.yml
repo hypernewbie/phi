@@ -35,6 +35,15 @@ jobs:
       - name: Run Go Tests
         run: go test -race -v ./...
 
+      # Release builds embed precompressed assets behind -tags=embedassets
+      # (see embed_release.go). Run the root-package tests against that
+      # path so it cannot rot behind the tag.
+      - name: Release-Tag Assets Smoke
+        run: |
+          go run ./tools/webdist
+          go vet -tags=embedassets ./...
+          go test -tags=embedassets -race .
+
   test-ts:
     name: TS Build + Type Check + Drift Guard
     runs-on: ubuntu-latest

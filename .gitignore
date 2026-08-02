@@ -6,6 +6,7 @@
 sessions.json
 config.json
 temp/
+/webdist/
 coverage/
 *.out
 node_modules/
