@@ -49,6 +49,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm run build:web
+          go run ./tools/webdist
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
