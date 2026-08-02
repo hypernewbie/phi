@@ -2,6 +2,17 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.16.1 — 2026-08-01
+
+### Added
+- **Option to start pi with `--offline`** (`319d851`). New `pi_offline` setting under Settings ▸ Behaviour, off by default so existing configs are unchanged. When on, the pi coder is spawned with `--offline` to skip its startup network calls — useful on airgapped or metered hosts. Scoped to pi, since the flag is pi's own and other coders would reject it, and applied at spawn, so it affects new tabs rather than a running session.
+
+### Fixed
+- **npm publish no longer fails on the pnpm pin** (`9e48b54`). `setup-node`'s dependency cache is on by default; it read the repo's `packageManager: pnpm` and shelled out to pnpm, which the publish job does not install. That job only publishes the `npm/` wrapper and installs nothing, so the cache is now disabled there. The v0.16.0 release hit this after goreleaser had already cut the GitHub release, leaving npm a version behind until it was re-cut.
+
+### Internal
+- **Coder argv assembly extracted to `buildCoderArgs`** (`319d851`). It also copies the registry's `Args` slice instead of appending onto it. `coders.Registry` is process-wide, and the previous `append(c.Args, ...)` was safe only because those slices are zero-length — giving any coder default args would have leaked flags between spawns.
+
 ## v0.16.0 — 2026-08-01
 
 ### Added
