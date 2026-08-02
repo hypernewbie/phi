@@ -395,7 +395,7 @@ export class MarkdownManager {
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
         try {
-            const res = await fetch('help.md', { cache: 'no-store' });
+            const res = await fetch('help.md');
             if (!res.ok)
                 throw new Error(await res.text() || 'Failed to load help.md');
             const raw = await res.text();
@@ -501,7 +501,7 @@ export class MarkdownManager {
             this.modalBody.appendChild(changelogHolder);
         }
         try {
-            const res = await fetch('changelog.md', { cache: 'no-store' });
+            const res = await fetch('changelog.md');
             if (!res.ok)
                 throw new Error(await res.text() || 'Failed to load changelog.md');
             const raw = await res.text();

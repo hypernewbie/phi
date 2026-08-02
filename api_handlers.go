@@ -113,7 +113,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback to static file server (embedded web assets).
-	http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
+	serveStatic(w, r)
 }
 
 func handleGetCoders(w http.ResponseWriter, r *http.Request) {
