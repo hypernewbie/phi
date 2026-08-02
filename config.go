@@ -76,7 +76,8 @@ type Config struct {
 	// assets. Defaults to true, seeded in loadConfig before unmarshal
 	// (absent key keeps the default; explicit false wins). Operators
 	// running phi behind a reverse proxy that owns compression set this
-	// to false. Caching headers (ETag/no-cache) are unaffected.
+	// to false. Caching headers (ETag/no-cache) are unaffected. Read
+	// once at startup (initStaticAssets) — changing it needs a restart.
 	CompressionEnabled bool `json:"compression_enabled"`
 
 	ReplayBufferBytes *int `json:"replay_buffer_bytes"`
