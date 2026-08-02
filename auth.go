@@ -279,8 +279,55 @@ func accessAuthMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if syncTokenAuthorized(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		http.Error(w, "access authentication required", http.StatusUnauthorized)
 	})
+}
+
+// syncTokenAuthorized allows machine-to-machine sync-board calls through the
+// access-password gate.
+//
+// This phi instance *is* the coordinator -- other machines POST to it -- so
+// those callers have no browser session and started failing with "access
+// authentication required" once a password was set.
+//
+// Deliberately narrow, because the alternative considered was exempting
+// /api/sync/* outright, which would leave the board readable and writable by
+// anyone who can reach the port on an otherwise password-protected phi:
+//
+//   - Only the sync-board paths. Nothing else is reachable with this token.
+//   - Fails closed. An empty SyncToken grants nothing, so an install that has
+//     not opted in is exactly as locked down as before.
+//   - Its own secret, not the access password, since it has to be copied to
+//     other machines and is far weaker to hold.
+//   - Constant-time compare, and a length check first so the comparison
+//     cannot be skipped by sending an empty header.
+func syncTokenAuthorized(r *http.Request) bool {
+	if !isSyncBoardPath(r.URL.Path) {
+		return false
+	}
+	want := strings.TrimSpace(loadConfig().SyncToken)
+	if want == "" {
+		return false
+	}
+	got := strings.TrimSpace(r.Header.Get("X-Phi-Sync-Token"))
+	if got == "" {
+		// Bearer form too, so curl --oauth2-bearer and similar work.
+		if a := strings.TrimSpace(r.Header.Get("Authorization")); len(a) > 7 && strings.EqualFold(a[:7], "bearer ") {
+			got = strings.TrimSpace(a[7:])
+		}
+	}
+	if got == "" || len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func isSyncBoardPath(path string) bool {
+	return path == "/api/sync/messages" || strings.HasPrefix(path, "/api/sync/messages/")
 }
 
 func accessAuthPublicPath(path string) bool {

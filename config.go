@@ -72,6 +72,17 @@ type Config struct {
 	// default, so a missing key in an existing config file changes nothing.
 	PiOffline bool `json:"pi_offline"`
 
+	// SyncToken authenticates machine-to-machine sync-board calls, which
+	// carry no browser session cookie and so are rejected once an access
+	// password is set. It is deliberately NOT the access password: the board
+	// is reachable by other machines, and a shared secret that also unlocks
+	// the terminal API would be a much worse thing to distribute.
+	//
+	// Empty means no bypass at all -- sync stays behind the normal session
+	// check. Generated on demand rather than at startup, so an install that
+	// never syncs never has a second credential sitting in its config.
+	SyncToken string `json:"sync_token"`
+
 	// CompressionEnabled gates gzip/brotli encoding of embedded web
 	// assets. Defaults to true, seeded in loadConfig before unmarshal
 	// (absent key keeps the default; explicit false wins). Operators
