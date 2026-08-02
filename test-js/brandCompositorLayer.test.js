@@ -107,6 +107,17 @@ describe('change is expressed by finite bursts', () => {
         expect(body).not.toMatch(/infinite/);
     });
 
+    it('attention and stale states hold statically, not by animating', () => {
+        // These persist until a human acts -- an unacknowledged tab could have
+        // pulsed all night. Static colour carries the state; the burst is
+        // bounded so the page returns to zero.
+        for (const sel of ['.tab.has-attention', '.fleet-stale-badge']) {
+            const body = ruleBody(sel);
+            expect(body, `${sel} should exist`).not.toBe('');
+            expect(body).not.toMatch(/animation:[^;]*infinite/);
+        }
+    });
+
     it('the activity wake plays once when is-active is applied', () => {
         const body = ruleBody('.brand .terminal-activity-indicator.is-active');
         expect(body).toMatch(/terminal-activity-wake/);
