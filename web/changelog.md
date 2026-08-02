@@ -2,6 +2,27 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.18.0 — 2026-08-02
+
+### Added
+- **Release binaries ship precompressed, minified web assets** (`40a2cc3`). Release
+  builds (`-tags=embedassets`) embed a build-time mirror of `web/`: first-party
+  JS/CSS minified with esbuild (per-file, module graph untouched; `vendor/` stays
+  upstream-minified), then brotli-q11 compressed where it shrinks, decompressed once
+  at startup (~10 ms) into an in-memory tree. The runtime brotli encoder from
+  v0.17.0 never runs in release — clients get the build-time q11 bytes verbatim, so
+  the ~200 ms first-hit encode spikes are gone. Measured: binary 15.24 → 13.53 MB
+  (−1.71 MB); `app.js` travels 108 KB → 11.2 KB; the four heaviest assets 694 KB →
+  64 KB of wire (~11×). Dev builds are untouched — `go run .` still embeds raw
+  `web/` with no generator step and vite serves readable sources; the dev-only lazy
+  encoder drops q11 → q6 (~60× faster encodes, bodies ~12% larger). ETags stay
+  derived from the bytes actually served; `serveStatic` is one code path in both
+  modes, and CI now smoke-tests the tagged build.
+
+### Fixed
+- **Control keys are forwarded to the PTY when the terminal is focused in
+  non-direct mode** (`b8eebd0`).
+
 ## v0.17.0 — 2026-08-02
 
 ### Added
