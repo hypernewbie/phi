@@ -47,8 +47,14 @@ func TriggerSaveSyncStore() {
 		saveTimer.Stop()
 	}
 
+	// Resolve the path now, on the caller's goroutine, instead of inside
+	// the timer callback. Tests swap testSyncPath out from under
+	// syncFilePath() between cases (api_health_test.go, main_test.go); a
+	// timer that re-read it 500ms later could fire while a later test was
+	// writing that var, which is exactly the data race this avoids.
+	path := syncFilePath()
 	saveTimer = time.AfterFunc(500*time.Millisecond, func() {
-		_ = FlushSyncStore()
+		_ = flushSyncStoreTo(path)
 	})
 }
 
@@ -60,6 +66,13 @@ func FlushSyncStore() error {
 	}
 	saveMu.Unlock()
 
+	return flushSyncStoreTo(syncFilePath())
+}
+
+// flushSyncStoreTo writes the current in-memory sync store to path.
+// FlushSyncStore and the debounced timer scheduled by TriggerSaveSyncStore
+// both funnel through here, each having resolved path at its own call time.
+func flushSyncStoreTo(path string) error {
 	syncMu.RLock()
 	list := make([]SyncMessage, 0, len(syncStore))
 	for _, msg := range syncStore {
@@ -72,7 +85,6 @@ func FlushSyncStore() error {
 		return err
 	}
 
-	path := syncFilePath()
 	return system.WriteFileAtomic(path, b, 0644)
 }
 
