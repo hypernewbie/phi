@@ -1060,7 +1060,11 @@ html, body {
     border-radius: 50%;
     background: var(--color-amber, #fbbf24);
     box-shadow: 0 0 6px var(--color-amber, #fbbf24);
-    animation: fleet-stale-pulse 1.6s ease-in-out infinite;
+    /* Stale is a standing condition -- it lasts until the peer returns, which
+       may be never. Amber plus the glow says so without animating. Bounded
+       burst on arrival only. */
+    opacity: 1;
+    animation: fleet-stale-pulse 1.6s ease-in-out 3;
 }
 
 .sidebar-help-btn {
@@ -1920,9 +1924,18 @@ html, body {
     color: var(--text-primary);
 }
 
+/* Attention persists until the tab is clicked, so an infinite pulse here runs
+   for as long as nobody is looking -- an agent that finishes overnight would
+   have pulsed until morning. The state is held by the static colour and glow
+   (which is the keyframe peak, so it reads stronger at rest than the old
+   animation's average), and the pulse plays a bounded three times to catch
+   the eye when the attention first arrives. Iteration count, not `infinite`:
+   the burst replays whenever the class is re-added. */
 .tab.has-attention {
-    animation: tab-pulse 2s infinite ease-in-out;
+    animation: tab-pulse 2s ease-in-out 3;
     color: var(--accent, #7c6af7) !important;
+    opacity: 1;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 @keyframes tab-pulse {
@@ -7334,7 +7347,8 @@ html, body {
     font-weight: 800;
     line-height: 1;
     cursor: help;
-    animation: fleet-stale-pulse 1.6s ease-in-out infinite;
+    opacity: 1;
+    animation: fleet-stale-pulse 1.6s ease-in-out 3;
 }
 
 @keyframes fleet-stale-pulse {
