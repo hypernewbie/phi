@@ -1878,12 +1878,45 @@ export class App {
     async _doExportConfig(url, btnElement) {
         try {
             if (btnElement) btnElement.classList.add('loading');
-            const res = await fetch(url);
-            if (!res.ok) throw new Error("Failed to export config");
-            const data = await res.json();
-            
+            // Safari only honours a clipboard write that is *initiated* in the
+            // same task as the click that triggered it. Awaiting the fetch
+            // first spends the transient user activation, so the writeText()
+            // that followed failed with NotAllowedError -- which is why copy
+            // worked in Chrome but silently did nothing on macOS.
+            //
+            // ClipboardItem accepts a Promise for exactly this situation: the
+            // write is registered synchronously while the activation is still
+            // live, and the data is attached when it resolves.
+            const configPromise = fetch(url).then(async (res) => {
+                if (!res.ok) throw new Error("Failed to export config");
+                const payload = await res.json();
+                if (!payload.config) throw new Error("Failed to export config");
+                return payload.config;
+            });
+
+            let copied = false;
+            if (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write) {
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            'text/plain': configPromise.then((text) => new Blob([text], { type: 'text/plain' })),
+                        }),
+                    ]);
+                    copied = true;
+                } catch (e) {
+                    // Fall through to the older paths below. configPromise is
+                    // reused rather than refetched, and if the failure was the
+                    // fetch itself it surfaces when it is awaited.
+                    console.warn('[config] ClipboardItem write failed, falling back', e);
+                }
+            }
+
+            const data = { config: await configPromise };
+
             if (data.config) {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
+                if (copied) {
+                    // Already on the clipboard via ClipboardItem.
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
                     await navigator.clipboard.writeText(data.config);
                 } else {
                     const textArea = document.createElement("textarea");
