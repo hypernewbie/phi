@@ -1,121 +1,137 @@
-// @vitest-environment node
+// Guards the "zero animations at rest" contract for the always-on UI.
+//
+// This file previously asserted the opposite design: that every brand CPU tier
+// carried `will-change: transform` to isolate it from the header's
+// backdrop-filter. That was built on a wrong diagnosis. Ablation on the real
+// shell measured the blur at ~8% of the cost and the animations at ~99%, and a
+// single opacity animation on a blank page with no blur still cost ~2.4ms per
+// frame. The charge is per frame for having any animation running at all.
+//
+// So the invariant worth protecting is not "promote the animations" but "do
+// not run animations when nothing is happening" -- while keeping the static
+// glow that carries the look. See temp/FASTMODE_PERF_JOURNAL.md.
+
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
-// .brand is a direct child of .app-header, which carries
-// `backdrop-filter: blur(20px) saturate(180%)`. Any repaint inside that
-// subtree forces the blur to re-run for the whole header strip, every frame.
-//
-// Measured on one core: animations off 5.3%, breath+blink 100.5%, and the
-// same two animations with their own compositor layer 30.3%. Notably a pure
-// opacity blink cost 121.3% on its own -- as much as a text-shadow breath --
-// which is the tell that the cost is the backdrop-filter recompute rather
-// than the property being animated.
-//
-// These pin the promotion, because it is invisible: removing `will-change`
-// changes nothing on screen and triples idle CPU.
+const css = readFileSync(join(process.cwd(), 'web', 'style.css'), 'utf8');
 
-// Comments must go first: a comment sitting directly above a rule would
-// otherwise be absorbed into that rule's first selector by the matcher below,
-// so only the first selector in a list would ever fail to match.
-const css = readFileSync(join(process.cwd(), 'web', 'style.css'), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+// Strip comments first: a comment sitting above a rule otherwise gets absorbed
+// into the first selector and breaks every matcher below.
+const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
 
-// Extract a rule's declaration block by exact selector-list membership.
-function blocksContainingSelector(selector) {
-    const out = [];
+/** Body of the last rule whose selector list contains `selector`. */
+function ruleBody(selector) {
+    const bodies = [];
     const re = /([^{}]+)\{([^{}]*)\}/g;
     let m;
-    while ((m = re.exec(css))) {
-        const selectors = m[1].split(',').map((s) => s.trim());
-        if (selectors.includes(selector)) out.push(m[2]);
+    while ((m = re.exec(stripped)) !== null) {
+        if (m[1].split(',').some((s) => s.trim() === selector)) bodies.push(m[2]);
     }
-    return out;
+    return bodies.join('\n');
 }
 
-const TIERS = ['moderate', 'high', 'critical'];
+const ALWAYS_ON = [
+    '.brand .logo.cpu-moderate',
+    '.brand .logo.cpu-high',
+    '.brand .logo.cpu-critical',
+    '.brand .brand-name.cpu-moderate',
+    '.brand .brand-name.cpu-high',
+    '.brand .brand-name.cpu-critical',
+    '.brand .terminal-activity-indicator.is-active',
+    '.empty-logo',
+];
 
-describe('brand CPU tiers are isolated from the header backdrop-filter', () => {
-    it('the premise still holds: .app-header has a backdrop-filter', () => {
-        // If this ever stops being true the promotion may be unnecessary --
-        // but re-measure before removing it.
-        const header = blocksContainingSelector('.app-header').join('\n');
-        expect(header).toMatch(/backdrop-filter:\s*blur\(/);
+describe('always-on UI runs no continuous animations', () => {
+    for (const sel of ALWAYS_ON) {
+        it(`${sel} has no infinite animation`, () => {
+            const body = ruleBody(sel);
+            expect(body, `${sel} should exist`).not.toBe('');
+            expect(body).not.toMatch(/animation:[^;]*infinite/);
+        });
+    }
+
+    it('the empty-state background and torchlight do not animate', () => {
+        // These ran at 15s and 6s periods -- imperceptible, billed 60fps.
+        expect(stripped).not.toMatch(/animation:[^;]*emptyBgPulse/);
+        expect(stripped).not.toMatch(/animation:[^;]*torchflicker/);
+        expect(stripped).not.toMatch(/animation:[^;]*logoBreathe/);
+        expect(stripped).not.toMatch(/animation:[^;]*terminal-activity-cursor/);
+    });
+});
+
+describe('the look is preserved statically', () => {
+    // Removing the animations must not remove the glow with them. The tiers
+    // had no static text-shadow at all -- it lived only inside the keyframes --
+    // so a naive deletion would have silently flattened the brand.
+    for (const sel of [
+        '.brand .logo.cpu-moderate',
+        '.brand .logo.cpu-high',
+        '.brand .logo.cpu-critical',
+    ]) {
+        it(`${sel} keeps a static text-shadow`, () => {
+            expect(ruleBody(sel)).toMatch(/text-shadow:/);
+        });
+    }
+
+    it('cpu-high keeps its chromatic split', () => {
+        const body = ruleBody('.brand .logo.cpu-high');
+        expect(body).toMatch(/rgba\(0,\s*220,\s*255/);
+        expect(body).toMatch(/rgba\(255,\s*0,\s*100/);
     });
 
-    it('the premise still holds: .brand is a child of .app-header', () => {
-        const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
-        expect(html).toMatch(/<header class="app-header">\s*[\r\n]\s*<div class="brand">/);
+    it('the empty logo keeps its glow', () => {
+        const body = ruleBody('.empty-logo');
+        expect(body).toMatch(/text-shadow:/);
+        expect(body).toMatch(/drop-shadow/);
     });
 
-    it.each(TIERS)('promotes .logo.cpu-%s to its own layer', (tier) => {
-        const blocks = blocksContainingSelector(`.brand .logo.cpu-${tier}`);
-        expect(blocks.some((b) => /will-change:\s*transform/.test(b))).toBe(true);
+    it('critical shows a standing ring instead of a repeating shockwave', () => {
+        const body = ruleBody('.brand:has(.cpu-critical) .logo-glow-wrapper::after');
+        expect(body).toMatch(/opacity:\s*0?\.\d/);
+        expect(body).not.toMatch(/animation:[^;]*infinite/);
+    });
+});
+
+describe('change is expressed by finite bursts', () => {
+    it('the tier flourish runs a bounded number of iterations', () => {
+        const body = ruleBody('.brand .logo.cpu-flourish');
+        expect(body).toMatch(/animation:[^;]*cpu-tier-pop/);
+        expect(body).not.toMatch(/infinite/);
     });
 
-    it.each(TIERS)('promotes .brand-name.cpu-%s to its own layer', (tier) => {
-        const blocks = blocksContainingSelector(`.brand .brand-name.cpu-${tier}`);
-        expect(blocks.some((b) => /will-change:\s*transform/.test(b))).toBe(true);
+    it('the critical flourish shiver is bounded', () => {
+        const body = ruleBody('.brand .logo.cpu-critical.cpu-flourish');
+        expect(body).toMatch(/logo-shiver-hard/);
+        expect(body).not.toMatch(/infinite/);
     });
 
-    it('does not set a base transform that the shiver would fight', () => {
-        // cpu-high / cpu-critical animate transform. A `transform: translateZ(0)`
-        // base would be overridden on every keyframe; will-change alone promotes.
-        const blocks = [
-            ...blocksContainingSelector('.brand .logo.cpu-high'),
-            ...blocksContainingSelector('.brand .logo.cpu-critical'),
-        ];
-        for (const b of blocks) {
-            if (/will-change/.test(b)) expect(b).not.toMatch(/^\s*transform:/m);
-        }
+    it('the activity wake plays once when is-active is applied', () => {
+        const body = ruleBody('.brand .terminal-activity-indicator.is-active');
+        expect(body).toMatch(/terminal-activity-wake/);
+        // Trailing "1" is the iteration count; anything else would loop.
+        expect(body).toMatch(/terminal-activity-wake[^;]*\s1\s*;/);
     });
+});
 
-    // The breath was promoted first and the blink was missed, which would have
-    // negated it: one unpromoted animation inside .app-header keeps dirtying
-    // the header layer, and the indicator blinks whenever a terminal is live,
-    // so it is the animation most likely to actually be running.
-    it.each([
-        ['.brand .terminal-activity-indicator.is-active', 'the activity blink'],
-        ['.logo-glow-wrapper::after', 'the logo glow'],
-    ])('promotes %s (%s)', (selector) => {
-        const blocks = blocksContainingSelector(selector);
-        expect(blocks.some((b) => /will-change:\s*transform/.test(b))).toBe(true);
-    });
-
-    it('promotes every animating descendant of the backdrop-filtered header', () => {
-        // A promotion that covers only some of them buys nothing.
-        const promoted = blocksContainingSelector.length; // keep lint quiet
-        expect(promoted).toBeTypeOf('number');
+describe('compositor promotion is scoped to what actually animates', () => {
+    it('does not permanently promote the static tiers', () => {
         for (const sel of [
             '.brand .logo.cpu-moderate',
-            '.brand .brand-name.cpu-moderate',
+            '.brand .logo.cpu-critical',
             '.brand .terminal-activity-indicator.is-active',
-            '.logo-glow-wrapper::after',
         ]) {
-            expect(
-                blocksContainingSelector(sel).some((b) => /will-change:\s*transform/.test(b)),
-                `${sel} is animated inside .app-header but not promoted`,
-            ).toBe(true);
+            // Specifically `will-change: transform`. The fast-mode and
+            // reduced-motion blocks also name these selectors, but to set
+            // `will-change: auto`, which releases a layer rather than
+            // creating one -- matching bare /will-change/ would flag those.
+            expect(ruleBody(sel)).not.toMatch(/will-change:\s*transform/);
         }
     });
 
-    it('releases the layer when the animation is disabled', () => {
-        // A promoted layer with nothing animating is pure GPU-memory waste,
-        // and fast mode exists to reclaim idle cost.
-        for (const sel of [
-            'body.fast-mode .brand .logo',
-            'body.fast-mode .brand .brand-name',
-            'body.fast-mode .brand .terminal-activity-indicator.is-active',
-            'body.fast-mode .logo-glow-wrapper::after',
-        ]) {
-            expect(
-                blocksContainingSelector(sel).some((b) => /will-change:\s*auto/.test(b)),
-                `${sel} keeps a parked layer under fast mode`,
-            ).toBe(true);
-        }
-        // prefers-reduced-motion kills the same animations.
-        const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
-        expect(rm).toMatch(/will-change:\s*auto/);
+    it('promotes the flourish, which does animate transform', () => {
+        expect(ruleBody('.brand .logo.cpu-flourish')).toBeDefined();
+        expect(stripped).toMatch(/\.brand \.logo\.cpu-flourish[\s\S]{0,200}will-change:\s*transform/);
     });
 });

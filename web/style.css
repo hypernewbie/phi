@@ -124,9 +124,14 @@ html, body {
     transition: opacity 0.3s;
 }
 
-/* If critical, animate the ring */
+/* Critical shows a standing ring rather than a repeating shockwave. The ring
+   carries the same "something is wrong" signal at zero cost; the shockwave
+   only re-expresses it 60 times a second. The expansion still plays once, as
+   a finite flourish, when the tier is entered (see .cpu-flourish below). */
 .brand:has(.cpu-critical) .logo-glow-wrapper::after {
-    animation: critical-shockwave 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+    opacity: 0.45;
+    transform: scale(1.5);
+    box-shadow: 0 0 8px 2px var(--accent-glow);
 }
 
 @keyframes critical-shockwave {
@@ -142,62 +147,79 @@ html, body {
     }
 }
 
-.brand .logo.cpu-moderate {
-    animation: logo-obsidian-breath 3.0s ease-in-out infinite;
-}
+/* ── CPU tiers: static, not animated ──────────────────────────────────
+   Each tier's glow is baked from the peak of the keyframes it replaces, so
+   the look is preserved (if anything it now sits at full intensity instead
+   of averaging toward the trough). A static text-shadow is free; animating
+   one costs a frame every 16.7ms forever.
 
-@keyframes logo-obsidian-breath {
-    0%, 100% {
-        text-shadow: 0 0 6px var(--accent), 0 0 12px var(--accent-glow);
-    }
-    50% {
-        text-shadow: 0 0 10px var(--accent-bright), 0 0 24px var(--accent-glow), 0 0 40px var(--accent-glow);
-    }
+   Measured before this change, % of one core over a 10.7% floor:
+     cpu-moderate breath ...... 69.6  (+59)
+     cpu-critical nuclear ..... 98.1  (+87)
+   The tier is legible from colour and glow alone; the motion at 3.0s/0.8s
+   periods was not perceptible on an idle desktop but was billed 60fps.
+   Change is expressed by .cpu-flourish, a finite burst on tier entry. */
+.brand .logo.cpu-moderate {
+    text-shadow: 0 0 8px var(--accent), 0 0 18px var(--accent-glow), 0 0 30px var(--accent-glow);
 }
 
 .brand .brand-name.cpu-moderate {
-    animation: brand-obsidian-breath 3.0s ease-in-out infinite;
-}
-
-@keyframes brand-obsidian-breath {
-    0%, 100% { opacity: 0.95; }
-    50% { opacity: 1.0; text-shadow: 0 0 8px var(--accent-glow); }
+    opacity: 1;
+    text-shadow: 0 0 8px var(--accent-glow);
 }
 
 .brand .logo.cpu-high {
     color: var(--accent-bright);
-    animation: logo-chromatic 1.2s infinite, logo-shiver-light 0.15s infinite;
+    /* Chromatic split kept -- it is the tier's signature and reads instantly. */
+    text-shadow: 1.75px 0 0 rgba(0, 220, 255, 0.8), -1.75px 0 0 rgba(255, 0, 100, 0.7), 0 0 18px var(--accent-glow);
 }
 
 .brand .brand-name.cpu-high {
     color: var(--accent);
-    animation: brand-obsidian-breath 1.2s infinite, logo-shiver-light 0.15s infinite;
-}
-
-@keyframes logo-chromatic {
-    0%, 100% {
-        text-shadow: 1.5px 0 0 rgba(0, 220, 255, 0.7), -1.5px 0 0 rgba(255, 0, 100, 0.6), 0 0 12px var(--accent-glow);
-    }
-    50% {
-        text-shadow: 2px 0 0 rgba(0, 220, 255, 0.9), -2px 0 0 rgba(255, 0, 100, 0.8), 0 0 24px var(--accent-glow);
-    }
-}
-
-@keyframes logo-shiver-light {
-    0%, 100% { transform: translate(0, 0); }
-    25% { transform: translate(-0.5px, 0.5px); }
-    75% { transform: translate(0.5px, -0.5px); }
+    opacity: 1;
+    text-shadow: 0 0 8px var(--accent-glow);
 }
 
 .brand .logo.cpu-critical {
     color: #fff;
     filter: brightness(1.5) saturate(2.0);
-    animation: logo-nuclear 0.8s infinite alternate, logo-shiver-hard 0.08s infinite;
+    text-shadow:
+        0 0 3px #fff,
+        0 0 12px var(--accent-bright),
+        0 0 24px var(--accent),
+        0 0 48px var(--accent-glow),
+        0 0 96px var(--accent-glow);
 }
 
 .brand .brand-name.cpu-critical {
     color: var(--accent-bright);
-    animation: brand-nuclear 0.8s infinite alternate, logo-shiver-hard 0.08s infinite;
+    text-shadow: 0 0 9px var(--accent-bright), 0 0 18px var(--accent);
+}
+
+/* ── Finite flourish on tier change ───────────────────────────────────
+   Added by applyCPUIndicator() when the tier actually changes, removed on
+   animationend. Cost is ~2.4ms/frame for the duration and then nothing --
+   a tier change happens at most a few times a minute. Because the marginal
+   cost of animating more elements is ~0.03ms, this burst can afford to be
+   showier than the loop it replaces. */
+.brand .logo.cpu-flourish,
+.brand .brand-name.cpu-flourish {
+    animation: cpu-tier-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1) 1;
+}
+
+.brand .logo.cpu-critical.cpu-flourish {
+    animation: cpu-tier-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1) 1,
+               logo-shiver-hard 0.08s 6;
+}
+
+.brand:has(.cpu-critical.cpu-flourish) .logo-glow-wrapper::after {
+    animation: critical-shockwave 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) 1;
+}
+
+@keyframes cpu-tier-pop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.18); }
+    100% { transform: scale(1); }
 }
 
 @keyframes logo-nuclear {
@@ -237,45 +259,27 @@ html, body {
     100% { transform: translate(0, 0); }
 }
 
-/* ── Compositor isolation for the brand CPU tiers ──────────────────────
-   .brand is a direct child of .app-header, which carries
-   `backdrop-filter: blur(20px) saturate(180%)`. Without its own layer, any
-   repaint here dirties the header layer and forces that 20px blur to
-   re-run — at 60fps, for the whole header strip. Measured on a loaded
-   machine, one core:
+/* ── Compositor promotion, only while a flourish is playing ────────────
+   An earlier version of this block promoted every CPU tier permanently and
+   blamed the brand's cost on .app-header's backdrop-filter being recomputed.
+   That attribution was wrong. Measured by ablation on the real shell:
 
-     all animations off ................................  5.3%
-     opacity blink only ............................... 121.3%
-     text-shadow breath only .......................... 120.8%
-     breath + blink ................................... 100.5%
-     breath + blink + own compositor layer ............  30.3%
+     idle, everything on ................................. 146%
+     ... backdrop-filter disabled, animations kept ........ 135%   (-8%)
+     ... animations disabled, backdrop-filter kept ........  11%  (-99%)
 
-   Note the property being animated barely matters: a pure opacity blink
-   cost as much as a text-shadow breath. The cost is the backdrop-filter
-   recompute, not the animation. Promoting the animated elements out of
-   the header's layer is what removes it.
+   The blur was ~8% of it; the animations ~99%. On a blank page with no blur
+   anywhere, one opacity animation on a 24px square still costs ~2.4ms/frame,
+   and twenty squares cost ~2.9ms. The charge is per frame for having any
+   animation at all -- not per pixel, not for the blur. Promotion bought
+   nothing measurable, and a permanently promoted layer costs GPU memory for
+   no benefit.
 
-   `will-change: transform` is the promotion hint, deliberately *not*
-   `transform: translateZ(0)` — the cpu-high/cpu-critical tiers animate
-   transform for the shiver, and a base transform here would be a value
-   the animation has to override on every keyframe.
-
-   Scoped to the .cpu-* tiers so the layer exists only while something is
-   actually animating. Layers cost GPU memory; a permanently promoted
-   idle logo would trade one waste for another. */
-.brand .logo.cpu-moderate,
-.brand .logo.cpu-high,
-.brand .logo.cpu-critical,
-.brand .brand-name.cpu-moderate,
-.brand .brand-name.cpu-high,
-.brand .brand-name.cpu-critical,
-/* Every animating descendant of .app-header must be promoted, not just the
-   brand. One unpromoted animation is enough to keep dirtying the header layer
-   and re-running its blur, which would negate the promotions above. The
-   activity indicator is the important one: it blinks whenever any terminal is
-   live, so it is the animation most likely to actually be running. */
-.brand .terminal-activity-indicator.is-active,
-.logo-glow-wrapper::after {
+   The tiers are static now, so there is normally nothing to promote. Scoped
+   to the finite flourish, which does animate transform. */
+.brand .logo.cpu-flourish,
+.brand .brand-name.cpu-flourish,
+.brand:has(.cpu-critical.cpu-flourish) .logo-glow-wrapper::after {
     will-change: transform;
 }
 
@@ -523,16 +527,27 @@ html, body {
     transition: color 180ms ease, opacity 180ms ease, text-shadow 180ms ease;
 }
 
+/* Active state is static. The blink here used to cost 35.4% of a core (+25
+   over floor) to express roughly 1.2 state changes a second -- it was billed
+   60 times a second regardless. The information is already carried
+   discretely: the glyph swaps between the bar and the dash, and the colour
+   steps to accent-bright through the 180ms transition above.
+
+   The wake below plays exactly once, when .is-active is added, because the
+   iteration count is 1. Adding a class is the event; no JS timer needed.
+   `steps()` would not have helped -- the animation machinery still ticks
+   every frame, only the output value is quantised. */
 .brand .terminal-activity-indicator.is-active {
     color: var(--accent-bright);
     opacity: 1;
     text-shadow: 0 0 8px var(--accent-glow);
-    animation: terminal-activity-cursor 1.6s ease-in-out infinite;
+    animation: terminal-activity-wake 420ms cubic-bezier(0.2, 0.9, 0.3, 1) 1;
 }
 
-@keyframes terminal-activity-cursor {
-    0%, 100% { opacity: 0.68; }
-    50% { opacity: 1; }
+@keyframes terminal-activity-wake {
+    0%   { opacity: 0.62; text-shadow: 0 0 2px var(--accent-glow); }
+    45%  { opacity: 1; text-shadow: 0 0 14px var(--accent-bright), 0 0 26px var(--accent-glow); }
+    100% { opacity: 1; text-shadow: 0 0 8px var(--accent-glow); }
 }
 
 .brand .hostname-display {
@@ -2008,7 +2023,11 @@ html, body {
     color: var(--text-primary);
     background: radial-gradient(circle at 50% 50%, var(--bg-elevated) 0%, var(--bg-base) 100%);
     z-index: 10;
-    animation: emptyBgPulse 15s infinite alternate ease-in-out;
+    /* emptyBgPulse animated background-size over a 15s period -- a resize of
+       a full-screen gradient every frame, to produce a change no eye can
+       track at that rate. Removed; the gradient itself is unchanged. */
+    background-size: 110% 110%;
+    background-position: 48% 52%;
 }
 
 @keyframes emptyBgPulse {
@@ -2039,7 +2058,9 @@ html, body {
         radial-gradient(ellipse 900px 700px at 12% 18%, rgba(255, 188, 110, 0.07), transparent 55%),
         radial-gradient(ellipse 700px 500px at 88% 82%, rgba(200, 150, 80, 0.04), transparent 60%),
         radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
-    animation: torchflicker 6s infinite ease-in-out;
+    /* torchflicker dipped opacity between 1.0 and 0.94 over 6s. Below the
+       perceptual threshold, billed 60fps. The torchlight gradients above are
+       what actually carry the mood, and they are static. */
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -2154,29 +2175,28 @@ html, body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* The breath here ran forever at a 4s period on the screen shown when
+   nothing is happening. It was not perceptible at rest and cost the idle
+   screen ~1.4 cores together with the wash and flicker below.
+
+   The look is kept by baking the peak of the old keyframes in as static:
+   the wider drop-shadow and the chromatic split now show all the time
+   rather than being averaged toward the trough. Static shadows are free;
+   animating them is billed every frame.
+
+   The emptyFadeSlide entrance still plays -- it is finite and it is the
+   part you can actually see. */
 .empty-logo {
     font-size: 64px;
     font-weight: bold;
     color: var(--accent);
-    text-shadow: 0 0 20px var(--accent-glow);
-    animation: logoBreathe 4s infinite ease-in-out;
+    text-shadow:
+        1px 0 0 rgba(0, 220, 255, 0.25),
+       -1px 0 0 rgba(255, 0, 100, 0.2),
+        0 0 30px var(--accent-glow);
+    filter: drop-shadow(0 0 18px var(--accent-glow));
     user-select: none;
     margin-bottom: 8px;
-}
-
-@keyframes logoBreathe {
-    0%, 100% {
-        transform: scale(1);
-        filter: drop-shadow(0 0 10px var(--accent-glow));
-    }
-    50% {
-        transform: scale(1.06);
-        filter: drop-shadow(0 0 25px var(--accent));
-        text-shadow:
-            1px 0 0 rgba(0, 220, 255, 0.25),
-           -1px 0 0 rgba(255, 0, 100, 0.2),
-            0 0 30px var(--accent-glow);
-    }
 }
 
 .empty-title {
