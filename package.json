@@ -19,12 +19,11 @@
   },
   "devDependencies": {
     "@noble/hashes": "^2.2.0",
-    "@vitest/coverage-v8": "^4.1.10",
-    "chart.js": "^4.5.1",
+    "@vitest/coverage-v8": "4.1.10",
     "dompurify": "^3.4.12",
     "jsdom": "^30.0.1",
     "typescript": "7.0.2",
     "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   }
 }
