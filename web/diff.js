@@ -639,6 +639,13 @@ export class DiffController {
         const combined = prefix && cmd.command.includes('{}')
             ? cmd.command.replace('{}', prefix)
             : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+        // Consume the prefix now, before any tab switch: switchTab parks
+        // the textarea per-tab, so clearing after the switch would wipe
+        // the target tab's restored draft and park the consumed prefix
+        // on the outgoing tab.
+        this.app.tabManager.inputTextArea.value = '';
+        this.app.tabManager.lastInputValue = '';
+        this.app.tabManager.adjustInputHeight();
         // Decide which tab to send the command to.
         //
         // Scoping rules (important — see bug fixed in commit after 439b3e5):
@@ -671,9 +678,6 @@ export class DiffController {
             // switch. Must use targetTab so the command lands in the tab
             // we just routed to.
             this.app.tabManager.sendInput(targetTab, payload + '\r');
-            this.app.tabManager.inputTextArea.value = '';
-            this.app.tabManager.lastInputValue = '';
-            this.app.tabManager.adjustInputHeight();
             this.app.tabManager.inputTextArea.focus({ preventScroll: true });
             this.app.tabManager._spamScrollToBottom(targetTab);
         }

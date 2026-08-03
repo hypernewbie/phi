@@ -1406,6 +1406,11 @@ export class TabManager {
             isBtop: title === 'btop',
             pinned: !!pinned,
             marked: !!marked,
+            // Per-tab staged input. The DOM textarea + stagedAttachments
+            // hold the ACTIVE tab's draft; these fields park it while the
+            // tab is inactive (written on switch-away, read on switch-in).
+            draft: '',
+            draftAttachments: [],
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
@@ -1697,6 +1702,13 @@ export class TabManager {
                 prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY;
                 prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             }
+            // Park the draft on the outgoing tab, mirroring the scroll save
+            // above. review/kanban tabs hide the input bar and never carry
+            // one. Guard inputTextArea: test harnesses build partial managers.
+            if (this.inputTextArea && prevTab.coder !== 'review' && prevTab.coder !== 'kanban') {
+                prevTab.draft = this.inputTextArea.value;
+                prevTab.draftAttachments = this.stagedAttachments;
+            }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
         }
@@ -1715,6 +1727,18 @@ export class TabManager {
         } else {
             this.inputBarContainer.classList.remove('hidden');
             this.updateDirectModeUI(newTab);
+            // Restore the incoming tab's parked draft. Reset the prompt-
+            // history cycle too: _historyPreCycleValue belongs to the
+            // outgoing tab's draft and Alt+Down would paste it here.
+            if (this.inputTextArea) {
+                this.inputTextArea.value = newTab.draft || '';
+                this.lastInputValue = this.inputTextArea.value;
+                this.stagedAttachments = newTab.draftAttachments || [];
+                this._renderAttachmentStrip();
+                this.adjustInputHeight();
+                this._historyCursor = -1;
+                this._historyPreCycleValue = undefined;
+            }
         }
         
         // Scroll tabs bar to active tab
