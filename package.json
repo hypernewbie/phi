@@ -15,13 +15,18 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "dev": "vite",
-    "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput"
+    "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
+    "lint:web": "stylelint web/style.css && html-validate web/index.html web/md.html",
+    "check": "pnpm typecheck && pnpm lint:web && pnpm test"
   },
   "devDependencies": {
     "@noble/hashes": "^2.2.0",
     "@vitest/coverage-v8": "4.1.10",
     "dompurify": "^3.4.12",
+    "html-validate": "11.6.2",
     "jsdom": "^30.0.1",
+    "stylelint": "17.14.1",
+    "stylelint-config-standard": "40.0.0",
     "typescript": "7.0.2",
     "vite": "^8.2.0",
     "vitest": "4.1.10"

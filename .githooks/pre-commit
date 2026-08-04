@@ -18,7 +18,7 @@ FILES="$(staged)"
 # What changed?
 FRONT_TS="$(printf '%s\n' "$FILES"  | grep -E '\.ts$' || true)"
 WEB_ANY="$(printf '%s\n'  "$FILES"  | grep -E '^web/' || true)"
-CSS_HTML="$(printf '%s\n' "$FILES"  | grep -E '^web/(style\.css|index\.html)$' || true)"
+CSS_HTML="$(printf '%s\n' "$FILES"  | grep -E '^web/(style\.css|index\.html|md\.html)$' || true)"
 JS_STAGED="$(printf '%s\n' "$FILES" | grep -E '^web/.*\.js$' || true)"
 
 # Nothing frontend staged → nothing to do.
@@ -51,9 +51,13 @@ if [ -n "$FRONT_TS" ]; then
     fi
 fi
 
-# 3. Lint CSS/HTML via the existing Go linter (pkg/lint reads the real web/ files).
+# 3. Lint CSS/HTML (stylelint + html-validate) against the real web/ files.
 if [ -n "$CSS_HTML" ]; then
-    go test ./pkg/lint/
+    if [ ! -d node_modules ]; then
+        echo "pre-commit: node_modules missing — run 'pnpm install' first (or --no-verify)." >&2
+        exit 1
+    fi
+    pnpm run lint:web
 fi
 
 exit 0
