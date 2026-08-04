@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
+import { TabManager } from '../web/terminal.js';
 
 // Phase 9 client reload poller. When the WS receives 0x05 with reason
 // "restart" or "update", the tab-level handleControlMessage delegates
@@ -9,54 +10,16 @@ import { setupDomHarness } from './_dom.js';
 
 setupDomHarness();
 
-function makeTabManager() {
-    // Object.create on a stand-in prototype that carries the methods we
-    // want to test. Mirrors terminal.js handleControlMessage +
-    // handleServerShutdown.
-    const proto = {
-        handleControlMessage(control) {
-            if (!control) return;
-            if (control.type === 'pty-exited') {
-                // ...
-            } else if (control.type === 'replay-complete') {
-                // ...
-            } else if (control.type === 'server-shutdown') {
-                this.handleServerShutdown(control.reason || 'shutdown');
-            }
-        },
-        handleServerShutdown(reason) {
-            if (this._reloadArmed) return;
-            this._reloadArmed = true;
+// Harness idiom (matches autoReconnect.test.js): bare prototype + hand-mocked
+// collaborators, calling the real terminal.js methods with an explicit ctx.
+function ctx() {
+    return Object.create(TabManager.prototype);
+}
 
-            if (this.app && this.app.showToast) {
-                this.app.showToast(`phi is ${reason}…`, { type: 'info', durationMs: 8000 });
-            }
-
-            const beforeCommit = (this.app && this.app.versionInfo && this.app.versionInfo.commit) || '';
-            const startedAt = Date.now();
-            const maxWaitMs = 10_000;
-
-            const poll = async () => {
-                if (Date.now() - startedAt > maxWaitMs) {
-                    window.location.reload();
-                    return;
-                }
-                try {
-                    const res = await fetch('/api/version', { cache: 'no-store' });
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data && data.commit && data.commit !== beforeCommit) {
-                            window.location.reload();
-                            return;
-                        }
-                    }
-                } catch (_) { /* keep polling */ }
-                setTimeout(poll, 1000);
-            };
-            setTimeout(poll, 1000);
-        }
-    };
-    return Object.create(proto);
+// The server-shutdown branch of handleControlMessage never touches tabInfo,
+// but the real signature is (tabInfo, control) — pass a stub to match it.
+function tabInfo() {
+    return { paneId: 'p1' };
 }
 
 describe('handleServerShutdown reload poller', () => {
@@ -73,22 +36,19 @@ describe('handleServerShutdown reload poller', () => {
     });
 
     afterEach(() => {
+        // Only useRealTimers is load-bearing here — setupDomHarness's own
+        // afterEach (_dom.js:15) already calls restoreAllMocks() +
+        // unstubAllGlobals() unconditionally, so this file doesn't need to.
         vi.useRealTimers();
-        vi.restoreAllMocks();
     });
 
-    it('arms the reload poller on server-shutdown', () => {
-        const tm = makeTabManager();
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'restart' });
+    it('arms the reload poller once — a second shutdown does not stack timers', () => {
+        const tm = ctx();
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
         expect(tm._reloadArmed).toBe(true);
-    });
-
-    it('is idempotent — second shutdown does not stack timers', () => {
-        const tm = makeTabManager();
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'restart' });
-        const first = tm._reloadArmed;
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'update' });
-        expect(tm._reloadArmed).toBe(first);
+        expect(vi.getTimerCount()).toBe(1);
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'update' });
+        expect(vi.getTimerCount()).toBe(1);
     });
 
     it('reloads when /api/version reports a different commit', async () => {
@@ -98,19 +58,18 @@ describe('handleServerShutdown reload poller', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'OLD-COMMIT' },
             showToast: vi.fn()
         };
 
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
 
         // First poll is scheduled at +1000ms
         await vi.advanceTimersByTimeAsync(1100);
 
         expect(reloadSpy).toHaveBeenCalled();
-        vi.unstubAllGlobals();
     });
 
     it('does NOT reload when /api/version reports the same commit', async () => {
@@ -120,17 +79,16 @@ describe('handleServerShutdown reload poller', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'SAME-COMMIT' },
             showToast: vi.fn()
         };
 
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
         await vi.advanceTimersByTimeAsync(3000);
 
         expect(reloadSpy).not.toHaveBeenCalled();
-        vi.unstubAllGlobals();
     });
 
     it('reloads after maxWaitMs timeout even if commit never changes', async () => {
@@ -140,19 +98,18 @@ describe('handleServerShutdown reload poller', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'STUCK' },
             showToast: vi.fn()
         };
 
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'shutdown' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'shutdown' });
 
         // Advance past the 10s maxWaitMs plus enough poll cycles
         await vi.advanceTimersByTimeAsync(11_000);
 
         expect(reloadSpy).toHaveBeenCalled();
-        vi.unstubAllGlobals();
     });
 
     it('keeps polling when fetch throws (network blip during bounce)', async () => {
@@ -164,27 +121,26 @@ describe('handleServerShutdown reload poller', () => {
             });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'OLD' },
             showToast: vi.fn()
         };
 
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
 
         // First poll: fetch rejects. Second poll (1s later): succeeds with new commit.
         await vi.advanceTimersByTimeAsync(2200);
 
         expect(reloadSpy).toHaveBeenCalled();
-        vi.unstubAllGlobals();
     });
 
     it('shows a toast describing the reason', () => {
         const showToast = vi.fn();
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = { showToast };
 
-        tm.handleControlMessage({ type: 'server-shutdown', reason: 'update' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'update' });
         expect(showToast).toHaveBeenCalledWith(
             expect.stringContaining('update'),
             expect.any(Object)
@@ -193,10 +149,10 @@ describe('handleServerShutdown reload poller', () => {
 
     it('defaults reason to "shutdown" when missing', () => {
         const showToast = vi.fn();
-        const tm = makeTabManager();
+        const tm = ctx();
         tm.app = { showToast };
 
-        tm.handleControlMessage({ type: 'server-shutdown' });
+        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown' });
         expect(showToast).toHaveBeenCalledWith(
             expect.stringContaining('shutdown'),
             expect.any(Object)
