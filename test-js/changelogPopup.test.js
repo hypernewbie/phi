@@ -96,14 +96,11 @@ describe('openChangelogModal', () => {
     it('wires the sidebar version button to openChangelogModal on init', async () => {
         fixture();
         mockFetch(() => '# changelog');
-        const m = makeManager();
-        // Replay the exact event-listeners line the production constructor adds.
-        // If someone removes that wiring in markdown.js, this test fires.
-        const btn = document.getElementById('phi-changelog-btn');
-        btn.addEventListener('click', () => m.openChangelogModal());
-        btn.click();
-        await Promise.resolve(); // let the async fetch settle
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
-        expect(document.getElementById('md-modal-title').innerText).toContain('v0.7.14');
+        // Real constructor, real _setupEventListeners — exercises the actual
+        // click wiring on #phi-changelog-btn, not a listener the test installs.
+        const m = new MarkdownManager({ showToast: vi.fn() });
+        const spy = vi.spyOn(m, 'openChangelogModal');
+        document.getElementById('phi-changelog-btn').click();
+        expect(spy).toHaveBeenCalledTimes(1);
     });
 });

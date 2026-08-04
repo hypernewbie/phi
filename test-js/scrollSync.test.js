@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { setupDomHarness, stubWebSocket } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
 // Scroll-area desync fixes (2026-07-24):
@@ -14,7 +15,13 @@ import { TabManager } from '../web/terminal.js';
 // (3) Wheel-down against a stale, clamped DOM viewport must still reach the
 //     true bottom via term.scrollLines.
 
-afterEach(() => vi.unstubAllGlobals());
+// setupDomHarness()'s afterEach also clears localStorage (createTab's
+// saveTabsState() writes phi_active_pane/phi_tab_order on every mount) and
+// calls vi.restoreAllMocks() — inert here since nothing in this file uses
+// vi.spyOn; restoreAllMocks only undoes spies, not plain vi.fn() mocks
+// (verified against @vitest/spy: mockRestore == mockReset + an optional
+// spyOn-only restore callback), and every mock here is fresh per test.
+setupDomHarness();
 
 function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
     const syncSpy = vi.fn();
@@ -26,7 +33,12 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
         writePending: false,
         userFollowBottom: follow,
         term: {
-            write: vi.fn((data, cb) => { if (cb) cb(); }),
+            // baseY advances on write, like a real terminal growing its
+            // buffer. This is what makes preAtBottom's capture point (before
+            // the rAF/write, per terminal.js:932-933) observable: capturing
+            // it late (after write) would see the new, taller baseY and
+            // wrongly conclude the user isn't at bottom.
+            write: vi.fn(function (data, cb) { this.buffer.active.baseY += 1; if (cb) cb(); }),
             scrollToBottom: vi.fn(),
             scrollLines: vi.fn(),
             buffer: { active: { viewportY, baseY } },
@@ -73,71 +85,178 @@ describe('write batches sync the DOM scroll area', () => {
     });
 });
 
-// Mirrors the viewport-scroll listener policy added in createTab: after the
-// rAF settles, update the button and re-engage follow only at the exact
-// bottom. (Same simulate-the-policy style as scrollFollow.test.js.)
-function simulateViewportScrollTick(tabInfo, updateScrollBtn) {
-    updateScrollBtn();
-    const b = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
-    if (b && b.viewportY >= b.baseY) {
-        tabInfo.userFollowBottom = true;
-    }
+// The viewport-scroll listener and the wheel-down escape hatch (both added
+// in createTab) are anonymous closures registered as a side effect of
+// createTab, not named TabManager methods — there's no prototype method to
+// call directly the way scrollFollow.test.js calls
+// _cancelScrollFollowForUserScroll. Reaching them means actually running
+// createTab() and dispatching the real DOM events it listens for.
+//
+// createTab() goes on to call this.switchTab(paneId), which pulls in
+// sessionsManager / diffController / markdownManager — a large, separately
+// tested surface (scrollBugs.test.js) that has nothing to do with
+// scrolling. switchTab() is the LAST thing createTab does before
+// saveTabsState(), i.e. strictly after both listeners under test are
+// already wired to the real termContainer — so stubbing it as a no-op
+// isolates the two closures under test without faking their behavior.
+function stubXtermGlobals() {
+    vi.stubGlobal('FitAddon', { FitAddon: class { fit() {} } });
+    vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
+    vi.stubGlobal('Terminal', function () {
+        // Mirrors real xterm.js DOM shape: term.element with a
+        // .xterm-viewport child, which is what both listeners query.
+        const viewportEl = document.createElement('div');
+        viewportEl.className = 'xterm-viewport';
+        const rootEl = document.createElement('div');
+        rootEl.appendChild(viewportEl);
+        return {
+            element: rootEl,
+            buffer: { active: { viewportY: 100, baseY: 100 } },
+            // Real xterm.js renders term.element into the container passed
+            // to open() — without this, .xterm-viewport is never actually a
+            // descendant of termContainer, and the capture-phase listener
+            // createTab installs on termContainer would silently never fire.
+            open: (container) => { if (container) container.appendChild(rootEl); },
+            loadAddon: () => {},
+            attachCustomKeyEventHandler: () => {},
+            onSelectionChange: () => {},
+            onBell: () => {},
+            onScroll: () => {},
+            onData: () => {},
+            getSelection: () => '',
+            write: vi.fn((data, cb) => { if (cb) cb(); }),
+            scrollToBottom: vi.fn(),
+            scrollLines: vi.fn(),
+            _core: { viewport: { syncScrollArea: vi.fn() } },
+        };
+    });
 }
 
-describe('DOM scroll listener policy (user scrolls, which never fire term.onScroll)', () => {
-    it('re-engages follow at the exact bottom', () => {
-        const tab = makeTab({ viewportY: 100, baseY: 100, follow: false });
-        const btn = vi.fn();
-        simulateViewportScrollTick(tab, btn);
-        expect(tab.userFollowBottom).toBe(true);
-        expect(btn).toHaveBeenCalledTimes(1);
+// Runs the real createTab() and returns the resulting tabInfo. Its
+// termContainer and the fake term's .xterm-viewport child are wired up
+// exactly as production does, so dispatching real 'scroll'/'wheel' DOM
+// events exercises the actual listeners createTab installs. Every call
+// gets its own TabManager with a fresh `tabs` Map, so a fixed paneId
+// never collides across tests — no caller needs to pick one.
+function mountRealTab({ coder = 'bash' } = {}) {
+    vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+    stubWebSocket();
+    stubXtermGlobals();
+    const tm = Object.create(TabManager.prototype);
+    tm.tabs = new Map();
+    tm.activePaneId = null;
+    tm.tabsContainer = document.createElement('div');
+    tm.terminalsWrapper = document.createElement('div');
+    document.body.appendChild(tm.tabsContainer);
+    document.body.appendChild(tm.terminalsWrapper);
+    tm.app = {};
+    tm.switchTab = vi.fn();
+    // pinned:false skips the fire-and-forget backend pin fetch(), which
+    // has nothing to do with the listeners under test and would otherwise
+    // reject noisily against jsdom's relative-URL fetch.
+    tm.createTab('p1', 'sess-p1', 'Title', coder, '', '', false);
+    return tm.tabs.get('p1');
+}
+
+describe('DOM scroll listener installed by createTab (drives the real handler)', () => {
+    it('re-engages follow at the exact bottom, and hides the scroll-to-bottom button', () => {
+        const tabInfo = mountRealTab();
+        tabInfo.userFollowBottom = false;
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
+        tabInfo.term.element.querySelector('.xterm-viewport')
+            .dispatchEvent(new Event('scroll', { bubbles: false }));
+        expect(tabInfo.userFollowBottom).toBe(true);
+        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(true);
     });
 
-    it('does NOT re-engage follow above the bottom (strict predicate, no slack)', () => {
-        const tab = makeTab({ viewportY: 99, baseY: 100, follow: false });
-        simulateViewportScrollTick(tab, vi.fn());
-        expect(tab.userFollowBottom).toBe(false);
+    it('does NOT re-engage follow above the bottom (strict predicate, no slack), and shows the button', () => {
+        const tabInfo = mountRealTab();
+        tabInfo.userFollowBottom = false;
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 99, baseY: 100 });
+        tabInfo.term.element.querySelector('.xterm-viewport')
+            .dispatchEvent(new Event('scroll', { bubbles: false }));
+        expect(tabInfo.userFollowBottom).toBe(false);
+        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(false);
+    });
+
+    it('defers the re-engage decision to the next animation frame, coalescing repeat scrolls into one frame', () => {
+        const tabInfo = mountRealTab();
+        // Override mountRealTab's synchronous rAF stub: the write-path
+        // block above needs the synchronous form, so this is a local,
+        // post-mount override rather than a change to mountRealTab.
+        const frames = [];
+        vi.stubGlobal('requestAnimationFrame', (fn) => { frames.push(fn); return frames.length; });
+        tabInfo.userFollowBottom = false;
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
+        const vp = tabInfo.term.element.querySelector('.xterm-viewport');
+        vp.dispatchEvent(new Event('scroll', { bubbles: false }));
+        vp.dispatchEvent(new Event('scroll', { bubbles: false }));
+        // Coalescing guard (viewportScrollRafPending): two scroll events
+        // before the frame runs queue exactly one frame, not two.
+        expect(frames.length).toBe(1);
+        // Deferred: the decision hasn't run yet, so follow is still off.
+        expect(tabInfo.userFollowBottom).toBe(false);
+        frames.forEach((f) => f());
+        expect(tabInfo.userFollowBottom).toBe(true);
     });
 });
 
-// Mirrors the wheel-down escape hatch added in createTab.
-function simulateWheelDown(tabInfo, vp, deltaY) {
-    if (deltaY <= 0) return;
-    const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
-    if (!buf || buf.viewportY >= buf.baseY) return;
-    if (!vp) return;
-    if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
-        const lines = Math.max(1, Math.min(Math.round(deltaY / 40), 8));
-        tabInfo.term.scrollLines(lines);
-    }
+// clientHeight/scrollHeight are getter-only in jsdom (no layout engine), so
+// they need defineProperty; scrollTop is a plain writable property.
+function setViewportScrollMetrics(tabInfo, { scrollTop, clientHeight, scrollHeight }) {
+    const vp = tabInfo.term.element.querySelector('.xterm-viewport');
+    vp.scrollTop = scrollTop;
+    Object.defineProperty(vp, 'clientHeight', { value: clientHeight, configurable: true });
+    Object.defineProperty(vp, 'scrollHeight', { value: scrollHeight, configurable: true });
+    return vp;
 }
 
-describe('wheel-down escape hatch (stale DOM clamp)', () => {
-    const clamped = { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 };
-    const roomy = { scrollTop: 0, clientHeight: 32, scrollHeight: 1000 };
-
-    it('scrolls the buffer when clamped below the real bottom', () => {
-        const tab = makeTab({ viewportY: 50, baseY: 100 });
-        simulateWheelDown(tab, clamped, 120);
-        expect(tab.term.scrollLines).toHaveBeenCalledWith(3);
+describe('wheel-down escape hatch installed by createTab (drives the real handler)', () => {
+    it('scrolls the buffer exactly once when clamped below the real bottom', () => {
+        const tabInfo = mountRealTab();
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
+        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
+        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        expect(tabInfo.term.scrollLines).toHaveBeenCalledWith(3);
+        expect(tabInfo.term.scrollLines).toHaveBeenCalledTimes(1);
     });
 
     it('does nothing at the real bottom', () => {
-        const tab = makeTab({ viewportY: 100, baseY: 100 });
-        simulateWheelDown(tab, clamped, 120);
-        expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        const tabInfo = mountRealTab();
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
+        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
+        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 
     it('does nothing when the DOM still has room to scroll', () => {
-        const tab = makeTab({ viewportY: 50, baseY: 100 });
-        simulateWheelDown(tab, roomy, 120);
-        expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        const tabInfo = mountRealTab();
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
+        setViewportScrollMetrics(tabInfo, { scrollTop: 0, clientHeight: 32, scrollHeight: 1000 });
+        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 
     it('does nothing on wheel-up', () => {
-        const tab = makeTab({ viewportY: 50, baseY: 100 });
-        simulateWheelDown(tab, clamped, -120);
-        expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        const tabInfo = mountRealTab();
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
+        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
+        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
+    });
+
+    // Bubble-phase registration (web/terminal.js:1503) is load-bearing, not
+    // cosmetic: the comment at :1490-1491 documents that it's what lets the
+    // opencode capture-phase handler's stopPropagation exclude opencode
+    // tabs from this path. A mirror-style test can't see event phase at
+    // all, so this regression (escape hatch silently firing for opencode
+    // tabs too) was uncatchable before driving the real listeners.
+    it('is excluded for opencode tabs by the capture-phase handler stopping propagation first', () => {
+        const tabInfo = mountRealTab({ coder: 'opencode' });
+        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
+        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
+        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+        expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 });
 
