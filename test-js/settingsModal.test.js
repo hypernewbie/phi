@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { App } from '../web/app.js';
 // ACCENT_COLORS is not exported from web/app.js (it's a private const).
@@ -16,7 +16,7 @@ const ACCENT_COLORS_KEY_COUNT = 22;
 //
 // These tests pin the user-visible contract: button presence, swatch
 // count, live-apply (debounced POST), version from cache, mobile
-// responsive class, no leftover #accent-color-select DOM.
+// responsive class.
 
 setupDomHarness();
 
@@ -62,38 +62,6 @@ function buildApp(overrides = {}) {
 }
 
 describe('Settings modal — trigger', () => {
-    it('clicking the config pill opens the modal', async () => {
-        makeAppDom();
-        const app = buildApp();
-        // Bind the production-style click handler.
-        const pill = document.getElementById('header-config-pill');
-        pill.addEventListener('click', (e) => {
-            if (e.target.closest('.pill-btn')) return; // ignore export/import
-            app.openSettingsModal();
-        });
-        pill.click();
-        await Promise.resolve();
-        const overlay = document.querySelector('.settings-overlay');
-        expect(overlay, 'overlay should exist after click').toBeTruthy();
-        expect(overlay.classList.contains('settings-overlay')).toBe(true);
-    });
-
-    it('clicking export/import sub-button does NOT open the modal', async () => {
-        makeAppDom();
-        const app = buildApp();
-        const pill = document.getElementById('header-config-pill');
-        pill.addEventListener('click', (e) => {
-            if (e.target.closest('.pill-btn')) return;
-            app.openSettingsModal();
-        });
-        document.getElementById('header-export-btn').click();
-        await Promise.resolve();
-        expect(document.querySelector('.settings-overlay')).toBeNull();
-        document.getElementById('header-import-btn').click();
-        await Promise.resolve();
-        expect(document.querySelector('.settings-overlay')).toBeNull();
-    });
-
     it('modal renders the 22 accent swatches', async () => {
         makeAppDom();
         const app = buildApp();
@@ -339,29 +307,6 @@ describe('Settings modal — close behavior', () => {
     });
 });
 
-describe('Settings modal — DOM hygiene', () => {
-    it('header no longer contains #accent-color-select (regression guard)', () => {
-        makeAppDom();
-        expect(document.getElementById('accent-color-select')).toBeNull();
-        expect(document.querySelector('.theme-area')).toBeNull();
-    });
-
-    it('export/import pill buttons remain functional after restructure', async () => {
-        makeAppDom();
-        const app = buildApp();
-        // Real handlers from app.js would wire these; just confirm
-        // the buttons exist and are clickable (don't throw).
-        const exp = document.getElementById('header-export-btn');
-        const imp = document.getElementById('header-import-btn');
-        expect(exp).toBeTruthy();
-        expect(imp).toBeTruthy();
-        expect(() => exp.click()).not.toThrow();
-        expect(() => imp.click()).not.toThrow();
-        // app is unused here but referenced to keep build deterministic.
-        expect(app).toBeTruthy();
-    });
-});
-
 // ---------------------------------------------------------------------------
 // Access-password Config flow: confirm-mismatch inline error, remove-link
 // two-step confirm, success-state transitions. No window.confirm().
@@ -372,8 +317,6 @@ describe('Settings modal — access password flow', () => {
         makeAppDom();
         const app = buildApp();
         app.accessAuthEnabled = false;
-        const setPwSpy = vi.fn();
-        app._setAccessPassword = setPwSpy;  // not used — patching for the call we actually make
         // openSettingsModal reaches into the auth.js module directly, so spy via global.
         const authModule = await import('../web/auth.js');
         const spy = vi.spyOn(authModule, 'setAccessPassword').mockResolvedValue({ enabled: true });

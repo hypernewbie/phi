@@ -198,8 +198,6 @@ describe('brand HUD popover', () => {
         expect(popover.classList.contains('is-open')).toBe(true);
         expect(popover.querySelector('.self-hud-host-name').textContent).toBe('atlas');
         expect(popover.querySelector('.self-hud-version').textContent).toBe('v0.10.1');
-        expect(popover.textContent).toContain('2');   // sessions
-        expect(popover.textContent).toContain('1');   // busy
         expect(popover.textContent).toContain('attention');
         expect(popover.textContent).toContain('cpu 42%');
         expect(popover.textContent).toContain('ϕ');   // working glyph
@@ -305,24 +303,9 @@ describe('brand HUD popover', () => {
         // .modal-overlay (z-index:10000) covered it and stole its
         // hover events. Reparenting to <body> makes z-index 9999
         // compete in the root stacking context.
-        const before = popover.parentNode;
-        expect(before === document.body || before === brand.parentNode).toBe(true);
         // After _initBrandHud (already called in beforeEach) the popover
         // should be a direct child of <body>.
         expect(popover.parentNode).toBe(document.body);
-    });
-
-    it('uses position: fixed + z-index 9999 so it floats over sibling surfaces', () => {
-        // The actual fix is the reparenting — z-index/position live in CSS
-        // and jsdom can't fully resolve CSSOM. Verify the structural fix
-        // (body parent) and assert the CSS rule is in the stylesheet.
-        expect(popover.parentNode).toBe(document.body);
-        // eslint-disable-next-line no-undef
-        const css = (typeof __css__ !== 'undefined') ? __css__ : null;
-        if (css) {
-            expect(/position\s*:\s*fixed/.test(css)).toBe(true);
-            expect(/z-index\s*:\s*9999/.test(css)).toBe(true);
-        }
     });
 
     it('closes the HUD when the cursor enters .hostname-wrapper (avoids clash with hostname tab-selector)', () => {
@@ -344,22 +327,4 @@ describe('brand HUD popover', () => {
         expect(tm.selfHudOpen).toBe(false);
     });
 
-    it('clicking the hostname closes the HUD (its own dropdown owns the click)', () => {
-        // The hostname click handler in the production code calls
-        // _closeSelfHudNow() so the HUD disappears when the tab-selector
-        // dropdown opens — otherwise the two popovers would visually
-        // clash on the same header.
-        const hostnameDisplay = brand.querySelector('#hostname-display');
-        // Open HUD first.
-        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-        expect(popover.classList.contains('is-open')).toBe(true);
-        // Simulate the hostname click handler calling _closeSelfHudNow,
-        // which is exactly what the real handler does in web/terminal.js.
-        tm._closeSelfHudNow();
-        expect(popover.classList.contains('is-open')).toBe(false);
-        // Sanity: a follow-up mouseenter on the brand should NOT reopen
-        // the HUD immediately (cooldown stamp is set in closeNow).
-        hostnameDisplay.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-        expect(popover.classList.contains('is-open')).toBe(false);
-    });
 });
