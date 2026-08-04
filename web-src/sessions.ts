@@ -1,5 +1,5 @@
 import type { AppLike } from './types.js';
-import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 
 export function normalizePath(p: string): string {
@@ -508,7 +508,7 @@ export class SessionsManager {
             this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
 
         } catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${(e as Error).message}</div>`;
+            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml((e as Error).message)}</div>`;
         }
     }
 
@@ -677,7 +677,7 @@ export class SessionsManager {
                 this.highlightActiveSession(activeTab.sessionId);
             }
         } catch (e) {
-            container.innerHTML = `<div class="error-sessions">Error: ${(e as Error).message}</div>`;
+            container.innerHTML = `<div class="error-sessions">Error: ${escapeHtml((e as Error).message)}</div>`;
         }
     }
 

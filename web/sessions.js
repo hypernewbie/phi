@@ -1,4 +1,4 @@
-import { getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname } from './util.js';
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 export function normalizePath(p) {
     if (!p)
@@ -471,7 +471,7 @@ export class SessionsManager {
             this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
         }
         catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${e.message}</div>`;
+            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
         }
     }
     async loadWorktreeDirtyStates(workspace, requestId) {
@@ -630,7 +630,7 @@ export class SessionsManager {
             }
         }
         catch (e) {
-            container.innerHTML = `<div class="error-sessions">Error: ${e.message}</div>`;
+            container.innerHTML = `<div class="error-sessions">Error: ${escapeHtml(e.message)}</div>`;
         }
     }
     async saveWorktreeState() {
