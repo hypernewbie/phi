@@ -131,7 +131,7 @@ export class SyncManager {
         }
         catch (e) {
             console.error('[sync] Failed to refresh:', e);
-            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${e.message}</div>`;
+            this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml(e.message)}</div>`;
         }
     }
     renderMessages(messages) {

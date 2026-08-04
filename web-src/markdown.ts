@@ -148,7 +148,7 @@ export class MarkdownManager {
         } catch (e) {
             if (requestId !== this.refreshRequestId) return;
             if (!silent) {
-                this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${(e as Error).message}</div>`;
+                this.fileListEl.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
             }
         }
     }
@@ -244,7 +244,7 @@ export class MarkdownManager {
                         // Decorative scroll/hieroglyph styling lives in the
                         // markdown VIEWER modal header instead, where it has
                         // room to breathe and a font fallback is acceptable.
-                        item.innerHTML = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg><span class="md-file-name">${f.name}</span>`;
+                        item.innerHTML = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg><span class="md-file-name">${escapeHtml(f.name)}</span>`;
                         item.title = f.path;
 
                         item.addEventListener('click', (e) => {
@@ -352,7 +352,7 @@ export class MarkdownManager {
             rewriteRelativeImages(this.modalBody, f.path, cwd);
             highlightCodeIn(this.modalBody);
         } catch (e) {
-            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${(e as Error).message}</div>`;
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
         }
     }
 
@@ -415,7 +415,7 @@ export class MarkdownManager {
             const raw = await res.text();
             this.openRawMarkdown('Phi Documentation', raw);
         } catch (e) {
-            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${(e as Error).message}</div>`;
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${escapeHtml((e as Error).message)}</div>`;
             this.app.showToast(`Failed to open help: ${(e as Error).message}`, { type: 'error', title: 'Help' });
         }
     }
@@ -522,7 +522,7 @@ export class MarkdownManager {
             const raw = await res.text();
             this.openRawMarkdown(title, raw);
         } catch (e) {
-            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load changelog: ${(e as Error).message}</div>`;
+            this.modalBody.innerHTML = `<div class="md-list-error">Failed to load changelog: ${escapeHtml((e as Error).message)}</div>`;
             this.app.showToast(`Failed to open changelog: ${(e as Error).message}`, { type: 'error', title: 'Changelog' });
         }
     }
