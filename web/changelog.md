@@ -2,6 +2,30 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.18.1 — 2026-08-05
+
+### Dev tooling
+- **Replaced the hand-rolled `pkg/lint` CSS/HTML linter with stylelint +
+  html-validate.** The 581-LOC Go linter (brace-balance check plus a
+  `media-too-large` size heuristic) is gone; `.stylelintrc.js` and
+  `.htmlvalidate.js` extend `stylelint-config-standard` /
+  `html-validate:recommended`, with every default-fighting rule disabled and
+  justified inline against the real files' conventions (legacy `rgba()`
+  color notation, BEM `--modifier` classes, inline `style=` attributes, and
+  so on). Both run via `pnpm run lint:web`, wired into the advisory
+  pre-commit hook (`web/style.css`, `web/index.html`, `web/md.html`) and
+  into CI's `test-ts` job on every push/PR — restoring the enforced
+  guarantee the old `go test ./pkg/lint` gave. Caught and fixed along the
+  way: a duplicate `box-shadow` declaration and an invalid `group: hover`
+  property in `web/style.css`; two missing `aria-label`s on `<aside>` panels
+  and one unescaped `&` in `web/index.html`. One capability is lost with no
+  replacement: the old heuristic flagged an `@media` block whose closing
+  brace lands hundreds of lines later than expected while still
+  brace-balanced (e.g. `@media block opened at line 3487 spans 620 lines —
+  suspiciously large`); neither stylelint nor html-validate has an
+  equivalent check. The largest legitimate `@media` block in the file today
+  is 428 lines, for scale.
+
 ## v0.18.0 — 2026-08-02
 
 ### Added
