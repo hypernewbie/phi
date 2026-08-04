@@ -1,87 +1,28 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { escapeHtml } from '../web/util.js';
+import { MarkdownManager } from '../web/markdown.js';
 
 // Phase 10: diag modal fetches /api/diag and renders a structured
 // table (version, goroutines, mem, panes). Auto-refreshes every 2s.
 
 setupDomHarness();
 
-function makeMarkdownManager() {
-    const mm = Object.create({
-        async openDiagModal() {
-            this.modalTitle.innerText = 'Phi Diagnostics';
-            this.modalBody.innerHTML = '<div class="md-rendering">Loading diagnostics…</div>';
-            this.currentRawContent = '';
-            this.modal.classList.remove('hidden');
-
-            const render = (d) => {
-                if (!d) {
-                    this.modalBody.innerHTML = `<div class="md-list-error">No data.</div>`;
-                    return;
-                }
-                const rows = [
-                    ['Version', d.version || 'dev'],
-                    ['Install', d.install_method || '—'],
-                    ['Uptime (s)', (d.uptime_seconds || 0).toFixed(0)],
-                    ['Goroutines', d.goroutines],
-                    ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
-                    ['PTYs', d.pty_count],
-                ];
-                // Production uses escapeHtml on every field that comes
-                // from the server - mirrors that here so this test is
-                // catching the same XSS defense the real code does.
-                const body = rows.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join('');
-                const panes = (d.panes || []).map(p => `<tr><td>${escapeHtml(p.title || p.id.slice(0,8))}</td><td>${escapeHtml(p.coder || '')}</td><td>${p.client_count}</td><td>${p.ring_bytes}/${p.ring_capacity}</td><td>${p.busy ? 'busy' : 'idle'}</td></tr>`).join('');
-                this.modalBody.innerHTML = `<div class="diag-panel"><table class="diag-table"><tbody>${body}</tbody></table><table class="diag-table diag-table-panes"><tbody>${panes || '<tr><td colspan=5>(no panes)</td></tr>'}</tbody></table></div>`;
-            };
-
-            const refresh = async () => {
-                try {
-                    const res = await fetch('/api/diag');
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    const data = await res.json();
-                    render(data);
-                } catch (err) {
-                    this.modalBody.innerHTML = `<div class="md-list-error">Failed: ${err.message}</div>`;
-                }
-            };
-            await refresh();
-            if (this._diagInterval) clearInterval(this._diagInterval);
-            this._diagInterval = setInterval(() => {
-                if (this.modal.classList.contains('hidden')) {
-                    clearInterval(this._diagInterval);
-                    this._diagInterval = null;
-                    return;
-                }
-                refresh();
-            }, 2000);
-        }
-    });
-    mm.modal = document.createElement('div');
-    mm.modal.classList.add('modal');
-    document.body.appendChild(mm.modal);
-    mm.modalTitle = document.createElement('div');
-    mm.modalTitle.className = 'modal-title';
-    mm.modalBody = document.createElement('div');
-    mm.modalBody.className = 'modal-body';
-    mm.modal.appendChild(mm.modalTitle);
-    mm.modal.appendChild(mm.modalBody);
-    mm.currentRawContent = '';
-    return mm;
+// Real MarkdownManager via its constructor (same pattern as
+// mdChangedRefresh.test.js's makeMm). fileListEl/modal/modalTitle/modalBody/
+// modalClose are the five ids the constructor dereferences un-guarded.
+function makeMm(app = {}) {
+    document.body.innerHTML = `
+        <div id="markdown-file-list"></div>
+        <div id="md-modal" class="hidden"></div>
+        <div id="md-modal-title"></div>
+        <div id="md-modal-body"></div>
+        <button id="md-modal-close"></button>
+    `;
+    return new MarkdownManager({ showToast: vi.fn(), ...app });
 }
 
 describe('openDiagModal', () => {
-    beforeEach(() => {
-        document.body.innerHTML = '';
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
-        vi.restoreAllMocks();
-    });
-
     it('fetches /api/diag and renders tables', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
@@ -100,7 +41,7 @@ describe('openDiagModal', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const mm = makeMarkdownManager();
+        const mm = makeMm();
         await mm.openDiagModal();
 
         expect(fakeFetch).toHaveBeenCalledWith('/api/diag');
@@ -116,21 +57,29 @@ describe('openDiagModal', () => {
         const fakeFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const mm = makeMarkdownManager();
+        const mm = makeMm();
         await mm.openDiagModal();
 
         expect(mm.modalBody.innerHTML).toContain('md-list-error');
         expect(mm.modalBody.innerHTML).toContain('HTTP 500');
     });
 
-    it('shows an error when fetch throws', async () => {
-        const fakeFetch = vi.fn().mockRejectedValue(new Error('offline'));
+    it('shows an error when fetch throws, HTML-escaped', async () => {
+        const fakeFetch = vi.fn().mockRejectedValue(new Error('offline & <broken>'));
         vi.stubGlobal('fetch', fakeFetch);
 
-        const mm = makeMarkdownManager();
+        const mm = makeMm();
         await mm.openDiagModal();
 
-        expect(mm.modalBody.innerHTML).toContain('offline');
+        // markdown.js wraps err.message in escapeHtml before interpolating
+        // (the catch branch is shared with the HTTP-status path above, but
+        // only a message with HTML-sensitive chars exercises the escaping).
+        // The escaped substring alone subsumes "no raw <broken> element"
+        // and "textContent still reads the literal message" — either
+        // failing would require this substring to be absent first. The
+        // 'md-list-error' wrapper is already covered by the test above on
+        // the same shared catch-block line, so it's not re-asserted here.
+        expect(mm.modalBody.innerHTML).toContain('offline &amp; &lt;broken&gt;');
     });
 
     it('handles empty panes list cleanly', async () => {
@@ -143,7 +92,7 @@ describe('openDiagModal', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const mm = makeMarkdownManager();
+        const mm = makeMm();
         await mm.openDiagModal();
 
         expect(mm.modalBody.innerHTML).toContain('(no panes)');
@@ -165,7 +114,7 @@ describe('openDiagModal', () => {
         });
         vi.stubGlobal('fetch', fakeFetch);
 
-        const mm = makeMarkdownManager();
+        const mm = makeMm();
         await mm.openDiagModal();
 
         // No actual <img> tag should be created

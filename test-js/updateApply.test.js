@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { escapeHtml } from '../web/util.js';
+import { MarkdownManager } from '../web/markdown.js';
 
 // Phase 8 UI: changelog modal prepended with update banner when
 // /api/update/status reports update_available. The banner shows
@@ -10,73 +10,12 @@ import { escapeHtml } from '../web/util.js';
 
 setupDomHarness();
 
-// MarkdownManager is a large class; we instantiate via Object.create and
-// provide only the methods our target code uses, since the test only
-// exercises _buildUpdateBanner + _startUpdateApply.
+// Drive the real MarkdownManager.prototype methods via Object.create,
+// skipping the constructor (which wires up a dozen DOM elements _buildUpdateBanner
+// and _startUpdateApply never touch). Mirrors the pattern in changelogPopup.test.js.
 function makeMarkdownManager(app = {}) {
-    const mm = Object.create({
-        _buildUpdateBanner: function () {
-            // Inline copy of the source method so we don't have to
-            // import the full class graph. Mirrors web/markdown.js.
-            const status = this.app && this.app.updateStatus;
-            if (!status || !status.update_available || status.current === 'dev') return null;
-
-            const banner = document.createElement('div');
-            banner.className = 'update-banner';
-            const head = document.createElement('div');
-            head.className = 'update-banner-head';
-            // Mirror production: escapeHtml defends against stored-XSS
-            // via /api/version's latest field.
-            head.innerHTML = `<span class="update-banner-icon">↑</span>
-                <span class="update-banner-title">Update available: ${escapeHtml(status.latest)}</span>`;
-            banner.appendChild(head);
-
-            const body = document.createElement('div');
-            body.className = 'update-banner-body';
-            body.textContent = status.instructions || '';
-            banner.appendChild(body);
-
-            if (status.install_method === 'npm' || status.install_method === 'standalone') {
-                const actions = document.createElement('div');
-                actions.className = 'update-banner-actions';
-                const applyBtn = document.createElement('button');
-                applyBtn.className = 'update-banner-btn';
-                applyBtn.textContent = 'Apply & restart next time';
-                applyBtn.addEventListener('click', () => this._startUpdateApply(status.latest, applyBtn, banner));
-                actions.appendChild(applyBtn);
-                banner.appendChild(actions);
-            }
-            return banner;
-        },
-        _startUpdateApply: async function (version, btn, banner) {
-            btn.disabled = true;
-            btn.textContent = 'Starting…';
-            const progressEl = document.createElement('div');
-            progressEl.className = 'update-banner-progress';
-            progressEl.textContent = 'starting…';
-            banner.appendChild(progressEl);
-
-            try {
-                const res = await fetch('/api/update/apply', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ version })
-                });
-                if (!res.ok) {
-                    throw new Error(await res.text() || `HTTP ${res.status}`);
-                }
-            } catch (err) {
-                btn.disabled = false;
-                btn.textContent = 'Apply & restart next time';
-                progressEl.textContent = `Error: ${err.message}`;
-                progressEl.classList.add('error');
-                return;
-            }
-            // Don't actually poll in tests - just verify the post state.
-        },
-        showToast: vi.fn(),
-        app
-    });
+    const mm = Object.create(MarkdownManager.prototype);
+    mm.app = { ...app };
     return mm;
 }
 
@@ -132,6 +71,8 @@ describe('Update banner (Phase 7/8 UI)', () => {
         const btn = banner.querySelector('.update-banner-btn');
         expect(btn).toBeTruthy();
         expect(btn.textContent).toContain('Apply');
+        // npm shim owns the child lifecycle -> no "restart now" chaining button.
+        expect(banner.querySelector('.update-banner-btn-restart')).toBeFalsy();
     });
 
     it('renders Apply button for standalone install method', () => {
@@ -145,6 +86,26 @@ describe('Update banner (Phase 7/8 UI)', () => {
         expect(banner.querySelector('.update-banner-btn')).toBeTruthy();
     });
 
+    it('renders "Apply & restart now" button for standalone installs, wired to _startUpdateApplyAndRestart', () => {
+        const spy = vi.spyOn(MarkdownManager.prototype, '_startUpdateApplyAndRestart').mockImplementation(() => {});
+        const mm = makeMarkdownManager({
+            updateStatus: {
+                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
+                install_method: 'standalone', instructions: 'Download'
+            }
+        });
+        const banner = mm._buildUpdateBanner();
+        const restartBtn = banner.querySelector('.update-banner-btn-restart');
+        const applyBtn = banner.querySelector('.update-banner-btn');
+        expect(restartBtn).toBeTruthy();
+        expect(restartBtn.textContent).toBe('Apply & restart now');
+
+        document.body.appendChild(banner);
+        restartBtn.click();
+
+        expect(spy).toHaveBeenCalledWith('v0.8.2', restartBtn, applyBtn, banner);
+    });
+
     it('does NOT render Apply button for go-install', () => {
         const mm = makeMarkdownManager({
             updateStatus: {
@@ -154,6 +115,7 @@ describe('Update banner (Phase 7/8 UI)', () => {
         });
         const banner = mm._buildUpdateBanner();
         expect(banner.querySelector('.update-banner-btn')).toBeFalsy();
+        expect(banner.querySelector('.update-banner-btn-restart')).toBeFalsy();
         // But the instructions should still show so the user knows what to do
         expect(banner.querySelector('.update-banner-body').textContent).toContain('go install');
     });
@@ -182,14 +144,31 @@ describe('Update apply click flow', () => {
         document.body.innerHTML = '';
     });
 
+    // The first case installs fake timers to defuse production's poll
+    // setTimeout (see below). Restoring in an afterEach — rather than at
+    // the tail of the test body — means an assertion failure above still
+    // leaves real timers in place for the next test, instead of hanging
+    // its real setTimeout wait for 5s and reporting a second, spurious
+    // failure on top of the real one.
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it('click on Apply button POSTs /api/update/apply with version', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({ ok: true });
         vi.stubGlobal('fetch', fakeFetch);
+        // Production polls /api/update/progress 500ms after a successful
+        // apply POST. Fake timers let us assert the immediate post-click
+        // state without a real setTimeout outliving this test.
+        vi.useFakeTimers();
 
+        // npm (not standalone) so '.update-banner-btn' matches exactly one
+        // element — standalone also renders '.update-banner-btn-restart',
+        // which carries the same 'update-banner-btn' class.
         const mm = makeMarkdownManager({
             updateStatus: {
                 current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'standalone', instructions: 'Download'
+                install_method: 'npm', instructions: 'npm update'
             }
         });
         const banner = mm._buildUpdateBanner();
@@ -197,8 +176,8 @@ describe('Update apply click flow', () => {
         const btn = banner.querySelector('.update-banner-btn');
         btn.click();
 
-        // Wait microtask for the async chain to settle.
-        await new Promise(r => setTimeout(r, 0));
+        // Flush the microtask chain up to (but not through) the poll's setTimeout.
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(fakeFetch).toHaveBeenCalledWith('/api/update/apply', expect.objectContaining({
             method: 'POST',
@@ -220,7 +199,7 @@ describe('Update apply click flow', () => {
         const mm = makeMarkdownManager({
             updateStatus: {
                 current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'standalone', instructions: 'Download'
+                install_method: 'npm', instructions: 'npm update'
             }
         });
         const banner = mm._buildUpdateBanner();
