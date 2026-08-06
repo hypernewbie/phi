@@ -18,6 +18,20 @@ export class MarkdownManager {
     restartModalClose!: HTMLElement | null;
     restartModalCancel!: HTMLElement | null;
     restartModalConfirm!: HTMLElement | null;
+    pasteModal!: HTMLElement;
+    pasteModalForm!: HTMLFormElement;
+    pasteModalTitle!: HTMLElement;
+    pasteModalHint!: HTMLElement;
+    pasteModalContent!: HTMLTextAreaElement;
+    pasteModalName!: HTMLInputElement;
+    pasteModalDir!: HTMLElement;
+    pasteModalDirLabel!: HTMLElement;
+    pasteModalError!: HTMLElement;
+    pasteModalCancel!: HTMLElement;
+    pasteModalSave!: HTMLButtonElement;
+    pasteModalClose!: HTMLElement;
+    _pastePending: boolean;
+    _pasteConflict: boolean;
     _diagInterval: ReturnType<typeof setInterval> | null;
     currentRawContent: string;
     markdownClipboard: { name: string; dir: string; content: string } | null;
@@ -34,6 +48,20 @@ export class MarkdownManager {
         this.modalBody = document.getElementById('md-modal-body')!;
         this.modalClose = document.getElementById('md-modal-close') as HTMLElement;
         this.modalCopyBtn = document.getElementById('md-modal-copy-btn') as HTMLElement;
+        this.pasteModal = document.getElementById('md-paste-modal')!;
+        this.pasteModalForm = document.getElementById('md-paste-modal-form') as HTMLFormElement;
+        this.pasteModalTitle = document.getElementById('md-paste-modal-title')!;
+        this.pasteModalHint = document.getElementById('md-paste-modal-hint')!;
+        this.pasteModalContent = document.getElementById('md-paste-modal-content') as HTMLTextAreaElement;
+        this.pasteModalName = document.getElementById('md-paste-modal-name') as HTMLInputElement;
+        this.pasteModalDir = document.getElementById('md-paste-modal-dir')!;
+        this.pasteModalDirLabel = document.getElementById('md-paste-modal-dir-label')!;
+        this.pasteModalError = document.getElementById('md-paste-modal-error')!;
+        this.pasteModalCancel = document.getElementById('md-paste-modal-cancel') as HTMLElement;
+        this.pasteModalSave = document.getElementById('md-paste-modal-save') as HTMLButtonElement;
+        this.pasteModalClose = document.getElementById('md-paste-modal-close') as HTMLElement;
+        this._pastePending = false;
+        this._pasteConflict = false;
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
@@ -99,12 +127,48 @@ export class MarkdownManager {
         if (this.restartModalConfirm) {
             this.restartModalConfirm.addEventListener('click', () => this._doRestart());
         }
+
+        // Paste-from-clipboard modal wires. Each handler reads/writes
+        // _pastePending and _pasteConflict so a double-click on Save can't
+        // double-POST, and so the second POST after a 409 carries
+        // overwrite:true.
+        if (this.pasteModalClose) {
+            this.pasteModalClose.addEventListener('click', () => this._closePasteModal());
+        }
+        if (this.pasteModalCancel) {
+            this.pasteModalCancel.addEventListener('click', () => this._closePasteModal());
+        }
+        if (this.pasteModal) {
+            this.pasteModal.addEventListener('click', (e) => {
+                if (e.target === this.pasteModal) this._closePasteModal();
+            });
+        }
+        if (this.pasteModalForm) {
+            this.pasteModalForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this._submitPaste();
+            });
+        }
+        // Filename edit clears the conflict state: if the user changes
+        // the name after a 409, the next POST should be overwrite:false.
+        if (this.pasteModalName) {
+            this.pasteModalName.addEventListener('input', () => {
+                if (this._pasteConflict) {
+                    this._pasteConflict = false;
+                    this.pasteModalSave.textContent = 'Save';
+                    this._setPasteError('');
+                }
+            });
+        }
+
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 if (!this.modal.classList.contains('hidden')) {
                     this.closeModal();
                 } else if (this.restartModal && !this.restartModal.classList.contains('hidden')) {
                     this._closeRestartModal();
+                } else if (this.pasteModal && !this.pasteModal.classList.contains('hidden')) {
+                    this._closePasteModal();
                 }
                 this._hideContextMenu();
             }
@@ -304,6 +368,20 @@ export class MarkdownManager {
         importBtn.title = 'Import markdown files from a clipboard blob';
         importBtn.addEventListener('click', () => this._importMarkdownBundle());
         manageRow.appendChild(importBtn);
+
+        // Paste from system clipboard: reads plain text via
+        // navigator.clipboard.readText() and opens a small modal that
+        // lets the user name the new file (with a timestamped default)
+        // and pick a target markdown directory. Falls back to an
+        // editable textarea in the modal when the browser blocks the
+        // clipboard read, so the user can paste by hand.
+        const pasteBtn = document.createElement('button');
+        pasteBtn.className = 'md-manage-btn';
+        pasteBtn.id = 'md-paste-btn';
+        pasteBtn.innerText = '📋  Paste';
+        pasteBtn.title = 'Paste clipboard text into a new markdown file';
+        pasteBtn.addEventListener('click', () => this._pasteFromSystemClipboard());
+        manageRow.appendChild(pasteBtn);
 
         const addDirBtn = document.createElement('button');
         addDirBtn.className = 'md-manage-btn';
@@ -855,6 +933,228 @@ export class MarkdownManager {
         } catch (e) {
             this.app.showToast(`Failed to paste file: ${(e as Error).message}`, { type: 'error', title: 'Markdown Clipboard' });
         }
+    }
+
+    // _pasteFromSystemClipboard is the public entry point for the manage
+    // row's Paste button. It reads plain text from the OS clipboard via
+    // navigator.clipboard.readText() and opens the paste modal pre-filled
+    // with that content. If the browser blocks the read (insecure context,
+    // missing API, permission denied) the modal opens with an empty
+    // editable textarea and a contextual hint, so the user can paste by
+    // hand. The actual write happens in _submitPaste; this method only
+    // owns the read + open sequence.
+    async _pasteFromSystemClipboard(): Promise<void> {
+        const dirs = (this.app.markdownDirs as string[] | undefined) || [];
+        if (dirs.length === 0) {
+            this.app.showToast('Add a markdown directory in Settings first', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
+        }
+
+        let content = '';
+        let clipboardAvailable = false;
+        try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+                content = await navigator.clipboard.readText();
+                clipboardAvailable = true;
+            }
+        } catch (err) {
+            console.warn('[md] clipboard read blocked', err);
+        }
+
+        let hint: string;
+        if (clipboardAvailable) {
+            if (!content || !content.trim()) {
+                hint = 'Clipboard is empty — paste markdown below.';
+            } else {
+                hint = 'Pasting clipboard text as a new markdown file.';
+            }
+        } else {
+            hint = 'Clipboard access was blocked — paste markdown below.';
+        }
+
+        this._openPasteModal({
+            content: content || '',
+            hint,
+            focusContent: !clipboardAvailable || !content,
+        });
+    }
+
+    // _openPasteModal fills the static #md-paste-modal from a clean state
+    // every call. The dir field is rendered as a read-only text label
+    // when exactly one directory is configured (the common case) and as
+    // a <select> when more than one. The default filename is local-time
+    // `pasted-YYYY-MM-DD-HHmmss.md` so two clicks in the same minute are
+    // rare; the 409 overwrite flow handles the residual collision.
+    _openPasteModal(opts: { content: string; hint: string; focusContent: boolean }): void {
+        const dirs = (this.app.markdownDirs as string[] | undefined) || [];
+        if (dirs.length === 0) {
+            // Race: directories cleared between button click and modal open.
+            this.app.showToast('No markdown directory configured', { type: 'error', title: 'Markdown' });
+            return;
+        }
+
+        this._pastePending = false;
+        this._pasteConflict = false;
+        this._setPasteError('');
+        this.pasteModalSave.disabled = false;
+        this.pasteModalSave.textContent = 'Save';
+
+        this.pasteModalHint.textContent = opts.hint;
+        this.pasteModalContent.value = opts.content;
+        this.pasteModalName.value = this._defaultPasteFilename();
+
+        // Dir field: text label (single) or <select> (multiple). The
+        // active directory is whichever option the user picks; the
+        // backend validates membership in markdownDirs server-side.
+        this.pasteModalDir.innerHTML = '';
+        if (dirs.length === 1) {
+            const span = document.createElement('span');
+            span.textContent = dirs[0];
+            this.pasteModalDir.appendChild(span);
+            this.pasteModalDirLabel.textContent = 'Target directory';
+        } else {
+            const select = document.createElement('select');
+            select.id = 'md-paste-modal-dir-select';
+            // html-validate wants <label for=...> to point at a labelable
+            // form control, but the target here is a <div> that may be
+            // either text or a <select>. Drop it on the <label> and
+            // bridge with aria-labelledby instead.
+            select.setAttribute('aria-labelledby', 'md-paste-modal-dir-label');
+            dirs.forEach((d) => {
+                const opt = document.createElement('option');
+                opt.value = d;
+                opt.textContent = d;
+                select.appendChild(opt);
+            });
+            this.pasteModalDir.appendChild(select);
+            this.pasteModalDirLabel.textContent = `Target directory (${dirs.length} configured)`;
+        }
+
+        this.pasteModal.classList.remove('hidden');
+        if (opts.focusContent) {
+            this.pasteModalContent.focus({ preventScroll: true });
+        } else {
+            this.pasteModalName.focus({ preventScroll: true });
+            this.pasteModalName.select();
+        }
+    }
+
+    // _defaultPasteFilename returns `pasted-YYYY-MM-DD-HHmmss.md` in local
+    // time. Seconds resolution makes a same-minute double-paste rare; if
+    // it does collide, the 409 overwrite flow catches it.
+    _defaultPasteFilename(): string {
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const yyyy = now.getFullYear();
+        const mm = pad(now.getMonth() + 1);
+        const dd = pad(now.getDate());
+        const hh = pad(now.getHours());
+        const mi = pad(now.getMinutes());
+        const ss = pad(now.getSeconds());
+        return `pasted-${yyyy}-${mm}-${dd}-${hh}${mi}${ss}.md`;
+    }
+
+    // _selectedPasteDir returns the directory the user picked. Falls back
+    // to dirs[0] for the single-dir case where there is no <select>.
+    _selectedPasteDir(): string {
+        const dirs = (this.app.markdownDirs as string[] | undefined) || [];
+        if (dirs.length === 1) return dirs[0];
+        const select = this.pasteModalDir.querySelector('select') as HTMLSelectElement | null;
+        return (select && select.value) ? select.value : (dirs[0] || '');
+    }
+
+    _setPasteError(msg: string): void {
+        this.pasteModalError.textContent = msg;
+    }
+
+    // _submitPaste is the form-submit path. It reads the modal fields,
+    // validates non-empty content + sane filename, then POSTs to
+    // /api/markdown/paste. On 409 it transitions the Save button to
+    // "Overwrite" and the next submit sends overwrite:true. On any other
+    // failure it surfaces the server's text in the inline error and
+    // re-enables Save. On success it closes the modal, refreshes, and
+    // toasts the server-returned normalized filename (the user may have
+    // typed "notes" but the file is "notes.md").
+    async _submitPaste(): Promise<void> {
+        if (this._pastePending) return;
+        const content = this.pasteModalContent.value;
+        const nameRaw = this.pasteModalName.value.trim();
+        if (!content || !content.trim()) {
+            this._setPasteError('Content is empty.');
+            this.pasteModalContent.focus({ preventScroll: true });
+            return;
+        }
+        if (!nameRaw) {
+            this._setPasteError('Filename is required.');
+            this.pasteModalName.focus({ preventScroll: true });
+            return;
+        }
+        if (/[\\/]/.test(nameRaw)) {
+            // Backend's filepath.Base would silently strip the path;
+            // surface it instead so the user knows the name they typed
+            // isn't what they'll get.
+            this._setPasteError('Filename cannot contain path separators.');
+            this.pasteModalName.focus({ preventScroll: true });
+            return;
+        }
+
+        const overwrite = this._pasteConflict;
+        const name = nameRaw.endsWith('.md') || nameRaw.toLowerCase().endsWith('.md')
+            ? nameRaw
+            : `${nameRaw}.md`;
+        const dir = this._selectedPasteDir();
+
+        this._pastePending = true;
+        this.pasteModalSave.disabled = true;
+        this._setPasteError('');
+
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch('/api/markdown/paste', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, dir, name, content, overwrite }),
+            });
+
+            if (res.status === 409 && !overwrite) {
+                // File exists: transition Save -> Overwrite without closing
+                // the modal. Next submit retries with overwrite:true.
+                this._pasteConflict = true;
+                this.pasteModalSave.textContent = 'Overwrite';
+                this._setPasteError(`"${name}" already exists. Click Overwrite to replace it.`);
+                this._pastePending = false;
+                this.pasteModalSave.disabled = false;
+                return;
+            }
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || `HTTP ${res.status}`);
+            }
+            const data = await res.json().catch(() => ({}));
+            const savedName = (data && data.name) || name;
+            // Clear pending BEFORE _closePasteModal: the close guard
+            // refuses to close while a request is in flight, and we are
+            // past the request.
+            this._pastePending = false;
+            this._closePasteModal();
+            this.app.showToast(`Pasted as "${savedName}"`, { type: 'info', title: 'Markdown' });
+            await this.refreshFiles();
+        } catch (e) {
+            // Keep modal open, surface the error inline. Save re-enabled
+            // so the user can correct and retry.
+            this._setPasteError((e as Error).message || 'Paste failed');
+            this._pastePending = false;
+            this.pasteModalSave.disabled = false;
+        }
+    }
+
+    _closePasteModal(): void {
+        if (this._pastePending) return; // don't yank the modal mid-request
+        this.pasteModal.classList.add('hidden');
+        this._setPasteError('');
     }
 
     async _deleteMarkdownFile(file: any): Promise<void> {

@@ -445,6 +445,30 @@
         </div>
     </div>
 
+    <!-- Markdown Paste-from-Clipboard Modal -->
+    <div id="md-paste-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="md-paste-modal-title">
+        <form id="md-paste-modal-form" class="modal-content md-paste-dialog" novalidate>
+            <div class="modal-header">
+                <span id="md-paste-modal-title" class="modal-title">New markdown from clipboard</span>
+                <button type="button" id="md-paste-modal-close" class="md-modal-close">×</button>
+            </div>
+            <div class="modal-body">
+                <p id="md-paste-modal-hint" class="md-paste-hint">Pasting markdown text as a new file.</p>
+                <label for="md-paste-modal-content" class="md-paste-label">Content</label>
+                <textarea id="md-paste-modal-content" class="md-paste-textarea" spellcheck="false" rows="10"></textarea>
+                <label for="md-paste-modal-name" class="md-paste-label">Filename</label>
+                <input id="md-paste-modal-name" type="text" class="md-paste-name-input" autocomplete="off" spellcheck="false" placeholder="pasted-YYYY-MM-DD-HHmmss.md">
+                <label id="md-paste-modal-dir-label" class="md-paste-label">Target directory</label>
+                <div id="md-paste-modal-dir" class="md-paste-dir-field"></div>
+                <div id="md-paste-modal-error" class="md-paste-error" role="alert"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="md-paste-modal-cancel" class="btn">Cancel</button>
+                <button type="submit" id="md-paste-modal-save" class="btn btn-accent">Save</button>
+            </div>
+        </form>
+    </div>
+
     <!-- Rich Diff Viewer Modal -->
     <div id="diff-modal" class="md-modal-overlay hidden">
         <div class="md-modal-content wide-modal">
