@@ -19,23 +19,24 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"workspaces":                cfg.Workspaces,
-		"active_cwd":                activeCWD,
-		"theme_color":               cfg.ThemeColor,
-		"hostname":                  hName,
-		"model_presets":             cfg.ModelPresets,
-		"quick_commands":            cfg.QuickCommands,
-		"terminal_commands":         cfg.TerminalCommands,
-		"markdown_dirs":             cfg.MarkdownDirs,
-		"use_existing_terminal_tab": cfg.UseExistingTerminalTab,
-		"fast_mode":                 cfg.FastMode,
-		"pi_offline":                cfg.PiOffline,
-		"auto_reconnect":            cfg.AutoReconnect,
-		"sync_coordinator":          cfg.SyncCoordinator,
-		"ui_font_family":            cfg.UIFontFamily,
-		"ui_font_size":              cfg.UIFontSize,
-		"terminal_font_family":      cfg.TerminalFontFamily,
-		"terminal_font_size":        cfg.TerminalFontSize,
+		"workspaces":                          cfg.Workspaces,
+		"active_cwd":                          activeCWD,
+		"theme_color":                         cfg.ThemeColor,
+		"hostname":                            hName,
+		"model_presets":                       cfg.ModelPresets,
+		"quick_commands":                      cfg.QuickCommands,
+		"terminal_commands":                   cfg.TerminalCommands,
+		"markdown_dirs":                       cfg.MarkdownDirs,
+		"use_existing_terminal_tab":           cfg.UseExistingTerminalTab,
+		"fast_mode":                           cfg.FastMode,
+		"pi_offline":                          cfg.PiOffline,
+		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
+		"auto_reconnect":                      cfg.AutoReconnect,
+		"sync_coordinator":                    cfg.SyncCoordinator,
+		"ui_font_family":                      cfg.UIFontFamily,
+		"ui_font_size":                        cfg.UIFontSize,
+		"terminal_font_family":                cfg.TerminalFontFamily,
+		"terminal_font_size":                  cfg.TerminalFontSize,
 	})
 }
 
@@ -477,6 +478,32 @@ func handlePiOffline(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.PiOffline})
+}
+
+// handleClaudeDangerouslySkipPermissions toggles whether the claude coder
+// is spawned with --dangerously-skip-permissions. Same shape as
+// handlePiOffline: takes effect on the next spawn, an already-running
+// claude process cannot be switched because the flag is set at exec time.
+func handleClaudeDangerouslySkipPermissions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.ClaudeDangerouslySkipPermissions = req.Enabled
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.ClaudeDangerouslySkipPermissions})
 }
 
 // handleAutoReconnect toggles the automatic-reconnect master switch (wake,

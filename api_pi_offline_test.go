@@ -9,8 +9,8 @@ import (
 // Calls the real buildCoderArgs that handleCreateTerminal uses, rather than
 // re-implementing it -- a mirrored copy would keep passing while the handler
 // itself was broken.
-func buildSpawnArgs(coder, sessionID string, extra []string, piOffline bool) []string {
-	return buildCoderArgs(coder, coders.Registry[coder], sessionID, extra, piOffline)
+func buildSpawnArgs(coder, sessionID string, extra []string, piOffline, claudeSkipPerms bool) []string {
+	return buildCoderArgs(coder, coders.Registry[coder], sessionID, extra, piOffline, claudeSkipPerms)
 }
 
 func contains(hay []string, needle string) bool {
@@ -29,13 +29,13 @@ func TestPiOfflineFlag(t *testing.T) {
 		if cfg.PiOffline {
 			t.Fatal("PiOffline should default to false so existing configs are unaffected")
 		}
-		if contains(buildSpawnArgs("pi", "", nil, cfg.PiOffline), "--offline") {
+		if contains(buildSpawnArgs("pi", "", nil, cfg.PiOffline, false), "--offline") {
 			t.Fatal("spawned pi with --offline while the setting was off")
 		}
 	})
 
 	t.Run("adds the flag when enabled", func(t *testing.T) {
-		if !contains(buildSpawnArgs("pi", "", nil, true), "--offline") {
+		if !contains(buildSpawnArgs("pi", "", nil, true, false), "--offline") {
 			t.Fatal("expected --offline when the setting is on")
 		}
 	})
@@ -43,14 +43,14 @@ func TestPiOfflineFlag(t *testing.T) {
 	t.Run("scoped to pi", func(t *testing.T) {
 		// The flag is pi's own; other coders would reject it.
 		for _, coder := range []string{"opencode", "claude", "bash"} {
-			if contains(buildSpawnArgs(coder, "", nil, true), "--offline") {
+			if contains(buildSpawnArgs(coder, "", nil, true, false), "--offline") {
 				t.Fatalf("%s must not receive pi's --offline", coder)
 			}
 		}
 	})
 
 	t.Run("coexists with session resume", func(t *testing.T) {
-		args := buildSpawnArgs("pi", "sess-1", nil, true)
+		args := buildSpawnArgs("pi", "sess-1", nil, true, false)
 		if !contains(args, "--offline") || !contains(args, "--session") || !contains(args, "sess-1") {
 			t.Fatalf("resume and offline should both apply, got %v", args)
 		}
@@ -78,12 +78,12 @@ func TestPiOfflineFlag(t *testing.T) {
 		// Registry is process-wide. Appending onto c.Args instead of a copy
 		// could leak flags into later spawns of the same coder.
 		before := len(coders.Registry["pi"].Args)
-		buildSpawnArgs("pi", "sess-1", []string{"--extra"}, true)
-		buildSpawnArgs("pi", "sess-2", nil, true)
+		buildSpawnArgs("pi", "sess-1", []string{"--extra"}, true, false)
+		buildSpawnArgs("pi", "sess-2", nil, true, false)
 		if got := len(coders.Registry["pi"].Args); got != before {
 			t.Fatalf("registry Args grew from %d to %d", before, got)
 		}
-		if contains(buildSpawnArgs("pi", "", nil, false), "--offline") {
+		if contains(buildSpawnArgs("pi", "", nil, false, false), "--offline") {
 			t.Fatal("a previous spawn leaked --offline into the registry")
 		}
 	})
