@@ -2,7 +2,42 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## v0.18.1 — 2026-08-05
+## v0.18.1 — 2026-08-06
+
+### Added
+- **Optional `claude --dangerously-skip-permissions` flag** (`08b0413`). Mirrors
+  the existing `pi --offline` opt-in: a per-coder boolean in `~/.phi/config.json`
+  (`claude_dangerously_skip_permissions`, default `false`) that, when set, makes
+  the next claude spawn pass `--dangerously-skip-permissions`. Scoped to claude
+  because the flag is claude's own and other coders would reject it. Applies at
+  exec time, so an already-running claude tab is unaffected. Surface is a new
+  settings row in the Behavior group, **"Start Claude with
+  --dangerously-skip-permissions (new tabs only)"**, that POSTs to
+  `/api/config/claude-dangerously-skip-permissions`. `buildCoderArgs` gained a
+  sixth parameter; the existing `pi --offline` plumbing was not touched. New
+  tests pin off-by-default, scope-to-claude, no-registry-mutation, coexistence
+  with `--resume`, save/load round-trip, and independence from the `--offline`
+  flag (turning claude on does not leak `--offline` onto a claude spawn, and
+  vice versa).
+
+- **Paste clipboard text into a new markdown file** (`994ee2b`). A new
+  **📋 Paste** button in the markdown tab's manage row reads plain text from
+  the OS clipboard via `navigator.clipboard.readText()` and opens a modal that
+  lets the user name the new file (default `pasted-YYYY-MM-DD-HHmmss.md` in
+  local time) and pick a target markdown directory. When the browser blocks the
+  clipboard read (insecure context, missing API, permission denied) the modal
+  opens with an empty editable textarea and a contextual hint, so the user can
+  paste by hand. The static modal markup reuses the generic
+  `.modal-overlay / .modal-content / .modal-body / .modal-footer` classes, so
+  it inherits the 2026-07-27 mobile-keyboard-aware fixes automatically — the
+  Save button stays pinned above the on-screen keyboard on iOS without any new
+  CSS in the `@media` block. The manage row gets `flex-wrap: wrap` so four
+  buttons (Export, Import, Paste, Add Dir) fit on narrow sidebars. 409
+  responses transition Save → Overwrite without closing the modal; editing the
+  filename resets the conflict state so the user can change the name and try
+  again without an overwrite. Every `focus()` call uses `{ preventScroll: true }`
+  per the scroll-contract rule. 16 new test cases in
+  `test-js/markdownPasteFromClipboard.test.js`.
 
 ### Dev tooling
 - **Replaced the hand-rolled `pkg/lint` CSS/HTML linter with stylelint +
