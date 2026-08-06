@@ -72,6 +72,16 @@ type Config struct {
 	// default, so a missing key in an existing config file changes nothing.
 	PiOffline bool `json:"pi_offline"`
 
+	// ClaudeDangerouslySkipPermissions passes --dangerously-skip-permissions
+	// to the claude coder. Opt-in because the flag's name is honest about
+	// what it disables: every Claude tool call that would normally prompt
+	// (file edits, bash, anything outside the workspace) runs without
+	// confirmation. Scoped to claude; other coders would reject the flag.
+	// Off by default, so a missing key in an existing config file changes
+	// nothing. Applies at spawn time, so it cannot affect a claude tab
+	// that is already running.
+	ClaudeDangerouslySkipPermissions bool `json:"claude_dangerously_skip_permissions"`
+
 	// CompressionEnabled gates gzip/brotli encoding of embedded web
 	// assets. Defaults to true, seeded in loadConfig before unmarshal
 	// (absent key keeps the default; explicit false wins). Operators

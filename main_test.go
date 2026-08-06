@@ -402,6 +402,62 @@ func TestHandleFastMode_RejectsWrongMethod(t *testing.T) {
 	}
 }
 
+func TestHandleClaudeDangerouslySkipPermissions_Toggle(t *testing.T) {
+	withTempConfig(t)
+
+	// Initial GET via /api/config: field is false
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	handleConfig(w, req)
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode initial: %v", err)
+	}
+	if enabled, _ := body["claude_dangerously_skip_permissions"].(bool); enabled {
+		t.Errorf("initial claude_dangerously_skip_permissions: want false, got true")
+	}
+
+	// POST: enable
+	body1 := strings.NewReader(`{"enabled":true}`)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/config/claude-dangerously-skip-permissions", body1)
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handleClaudeDangerouslySkipPermissions(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("POST status: want 200, got %d — %s", w1.Code, w1.Body.String())
+	}
+
+	// Verify persisted to disk
+	cfg := loadConfig()
+	if !cfg.ClaudeDangerouslySkipPermissions {
+		t.Errorf("after POST enabled=true, config still false")
+	}
+
+	// POST: disable
+	body2 := strings.NewReader(`{"enabled":false}`)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/config/claude-dangerously-skip-permissions", body2)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handleClaudeDangerouslySkipPermissions(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("POST disable status: want 200, got %d", w2.Code)
+	}
+	cfg = loadConfig()
+	if cfg.ClaudeDangerouslySkipPermissions {
+		t.Errorf("after POST enabled=false, config still true")
+	}
+}
+
+func TestHandleClaudeDangerouslySkipPermissions_RejectsWrongMethod(t *testing.T) {
+	withTempConfig(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/config/claude-dangerously-skip-permissions", nil)
+	w := httptest.NewRecorder()
+	handleClaudeDangerouslySkipPermissions(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET status: want 405, got %d", w.Code)
+	}
+}
+
 func TestAutoReconnect_DefaultIsVisible(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
