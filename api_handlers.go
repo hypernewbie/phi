@@ -221,7 +221,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	command := c.Command
-	args := buildCoderArgs(req.Coder, c, req.SessionID, req.ExtraArgs, loadConfig().PiOffline)
+	args := buildCoderArgs(req.Coder, c, req.SessionID, req.ExtraArgs, loadConfig().PiOffline, loadConfig().ClaudeDangerouslySkipPermissions)
 
 	// On Unix, prefer the user's login shell ($SHELL) over hardcoded bash so that PATH
 	// and aliases from the user's shell config (e.g. ~/.zshrc on macOS) are available.
@@ -631,13 +631,14 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildCoderArgs assembles the argv for a coder spawn: the registry's base
-// args, an optional session resume, the pi --offline opt-in, then any
+// args, an optional session resume, coder-specific opt-in flags
+// (pi --offline, claude --dangerously-skip-permissions), then any
 // caller-supplied extras.
 //
 // Split out of handleCreateTerminal so it is reachable from tests without
 // spawning a real PTY. Keep it that way -- a test that re-implements this
 // logic instead of calling it would pass while the handler was broken.
-func buildCoderArgs(coderID string, c coders.Coder, sessionID string, extra []string, piOffline bool) []string {
+func buildCoderArgs(coderID string, c coders.Coder, sessionID string, extra []string, piOffline, claudeSkipPerms bool) []string {
 	// Copy rather than append onto the registry's slice: coders.Registry is
 	// process-wide shared state, and appending to c.Args could write into a
 	// backing array other spawns read. It is len 0 today so append always
@@ -654,6 +655,14 @@ func buildCoderArgs(coderID string, c coders.Coder, sessionID string, extra []st
 	// pi's own and other coders would reject it.
 	if coderID == "pi" && piOffline {
 		args = append(args, "--offline")
+	}
+
+	// claude's --dangerously-skip-permissions bypasses every tool-use
+	// confirmation prompt (file edits, bash, etc.). Opt-in via config
+	// because the flag's name is honest about what it disables. Scoped to
+	// claude; other coders would reject the flag.
+	if coderID == "claude" && claudeSkipPerms {
+		args = append(args, "--dangerously-skip-permissions")
 	}
 
 	return append(args, extra...)

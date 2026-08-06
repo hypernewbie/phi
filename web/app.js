@@ -1264,6 +1264,31 @@ export class App {
                 console.warn('[settings] failed to persist pi-offline toggle', err);
             }
         });
+
+        // claude --dangerously-skip-permissions bypasses every tool-use
+        // confirmation (file edits, bash, etc.). The flag's name is honest
+        // about what it disables, so the label is explicit. Scoped to
+        // claude; other coders would reject the flag. Applies at spawn
+        // time, so it cannot affect a claude tab that is already running.
+        const claudeSkipPermsRow = this._buildCheckboxRow(
+            'Start Claude with --dangerously-skip-permissions (new tabs only)',
+            'settings-claude-skip-permissions',
+            !!(this.config && this.config.claude_dangerously_skip_permissions),
+        );
+        behGroup.appendChild(claudeSkipPermsRow);
+        claudeSkipPermsRow.querySelector('input')?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (this.config) this.config.claude_dangerously_skip_permissions = enabled;
+            try {
+                await fetch('/api/config/claude-dangerously-skip-permissions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn('[settings] failed to persist claude-skip-permissions toggle', err);
+            }
+        });
         setPasswordBtn.addEventListener('click', async () => {
             const newPw = newInput.value;
             const confirmPw = confirmInput.value;
