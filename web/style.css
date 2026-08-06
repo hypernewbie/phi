@@ -4539,6 +4539,7 @@ html, body {
     padding: 4px 8px;
     border-top: 1px solid var(--bg-border);
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
 }
 
@@ -4557,6 +4558,105 @@ html, body {
 .md-manage-btn:hover {
     color: var(--accent-bright);
     border-color: var(--accent);
+}
+
+/* Paste-from-clipboard modal: a small centered overlay that uses the
+   generic .modal-* classes (so the mobile-keyboard-aware fixes apply
+   automatically). Only the textarea, hint, and dir field need their
+   own rules; width and footer come from .modal-content/.modal-footer. */
+.md-paste-dialog {
+    width: 520px;
+    max-width: 92vw;
+}
+
+.md-paste-hint {
+    margin: 0 0 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.md-paste-label {
+    display: block;
+    margin: 10px 0 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.md-paste-textarea {
+    width: 100%;
+    min-height: 140px;
+    max-height: 320px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.45;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.md-paste-textarea:focus,
+.md-paste-name-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.md-paste-name-input {
+    width: 100%;
+    padding: 6px 10px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    box-sizing: border-box;
+}
+
+.md-paste-dir-field {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+.md-paste-dir-field select {
+    width: 100%;
+    padding: 6px 10px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    box-sizing: border-box;
+}
+
+.md-paste-error {
+    display: none;
+    margin-top: 10px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    background: rgba(255, 80, 80, 0.12);
+    border: 1px solid rgba(255, 80, 80, 0.4);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.md-paste-error:not(:empty) {
+    display: block;
 }
 
 /* ═══════════════════════════════════════════════════════════
