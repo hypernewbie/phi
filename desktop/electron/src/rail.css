@@ -102,16 +102,10 @@ body {
 }
 
 /* Hover previews the entry's own known accent (--entry-accent), the
-   browser button hover treatment; an unreachable chip stays muted. */
-.rail-item:not(.offline):hover {
-  background-color: var(--bg-border);
-  border-color: var(--entry-accent, var(--accent));
-  color: var(--entry-accent, var(--accent));
-  box-shadow:
-    0 0 12px color-mix(in srgb, var(--entry-accent, var(--accent)) 15%, transparent),
-    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
-  transform: translateY(-1px) scale(1.02);
-}
+   browser button hover treatment; an unreachable chip stays muted
+   (shadowed by `.rail-item.offline` further down). The rule lives
+   under `#rail .rail-item:hover` further below so it benefits from
+   the parent-scoped `transform` when the cursor is over the rail. */
 
 .rail-item:active {
   transform: translateY(1px) scale(0.98);
@@ -175,8 +169,11 @@ body {
   bottom: -5px;
 }
 
-/* The add control reuses the browser page's .header-btn material
-   (radius, elevated background, border, hover glow, press transform). */
+/* The add control stays NEUTRAL regardless of the active server's
+   accent — the '+' is a generic action, not a server-scoped one.
+   Hover reads as a quiet lift (border + translate) without recoloring
+   to the active accent (the earlier colour-on-hover behaviour made
+   the '+' look paired with the active entry, confusing the rail). */
 #rail-add {
   width: 40px;
   height: 40px;
@@ -192,29 +189,39 @@ body {
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-#rail-add::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at center, var(--accent-glow) 0%, transparent 75%);
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  pointer-events: none;
-}
-
-#rail-add:hover::before {
-  opacity: 1;
-}
-
 #rail-add:hover {
   background-color: var(--bg-border);
-  border-color: var(--accent);
-  box-shadow: 0 0 12px var(--accent-glow);
+  border-color: var(--border);
   transform: translateY(-1px) scale(1.02);
 }
 
 #rail-add:active {
   transform: translateY(1px) scale(0.98);
+}
+
+/* Rail all-entries subtle accent: when the cursor is over the rail
+   itself, every saved entry reads as a quiet shadow of its own accent
+   (--entry-accent). This lets the user eye-glance which colour each
+   server carries without committing to a hover. The resting state
+   stays neutral; only entries with an observed accent glow. */
+#rail:hover .rail-item {
+  border-color: color-mix(in srgb, var(--entry-accent, transparent) 35%, transparent);
+  box-shadow:
+    0 0 calc(4px + 4px * var(--cpu-strength))
+      color-mix(in srgb, var(--entry-accent, transparent) 18%, transparent),
+    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+}
+
+/* The hovered entry keeps the brighter hover treatment; the others
+   fade back to the resting state on its own hover. */
+#rail .rail-item:hover {
+  background-color: var(--bg-border);
+  border-color: var(--entry-accent, var(--accent));
+  color: var(--entry-accent, var(--accent));
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--entry-accent, var(--accent)) 22%, transparent),
+    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+  transform: translateY(-1px) scale(1.02);
 }
 
 /* Rail entry context menu (right-click on a saved entry). */

@@ -1,9 +1,8 @@
 // @vitest-environment node
 /**
  * Rail chrome contract tests (vitest + node). Pins that the rail's
- * styling matches the browser Phi's button / surface vocabulary byte-
- * for-byte (UX_KERFUFFLES2 "Rail buttons — sidecar slop" + "Rail
- * background gradient sidecar slop"). The rail is desktop-only DOM,
+ * styling matches the browser Phi's button / surface vocabulary
+ * byte-for-byte. The rail is desktop-only DOM,
  * but its CSS must trace every radius / gradient / glow property to
  * the browser Phi's `web/style.css` selectors — no hand-tuned
  * sidecar values that don't match `web/`.
@@ -97,12 +96,14 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
   });
 
   it(':hover transform matches .header-btn:hover', () => {
-    const railHover = ruleBody(railCss, '.rail-item:not(.offline):hover');
+    // Hover rule is scoped under `#rail` so it can sit next to the
+    // rail-hover-all-entries subtle accent rule without competing.
+    const railHover = ruleBody(railCss, '#rail .rail-item:hover');
     expect(railHover).not.toBeNull();
     const btnHover = ruleBody(webCss, '.header-btn:hover');
     expect(btnHover).not.toBeNull();
     // The transform lifts the chip the same way .header-btn does
-    // (browser button hover treatment; UX_KERFUFFLES2 "Rail buttons").
+    // (browser button hover treatment).
     expect(cssValue(railHover!, 'transform')).toBe(cssValue(btnHover!, 'transform'));
     // Both rules box-shadow on the accent token (the rail uses
     // --entry-accent, the per-server hover-preview accent set by the
@@ -132,12 +133,43 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(btnActive!).toMatch(/--accent-glow/);
   });
 
-  it('#rail-add::before hover-glow gradient matches .header-btn::before', () => {
-    const railBefore = ruleBody(railCss, '#rail-add::before');
-    expect(railBefore).not.toBeNull();
-    const btnBefore = ruleBody(webCss, '.header-btn::before');
-    expect(btnBefore).not.toBeNull();
-    expect(cssValue(railBefore!, 'background')).toBe(cssValue(btnBefore!, 'background'));
+  it('#rail:hover surfaces every entry’s own accent as a quiet preview glow', () => {
+    // When the cursor is over the rail, every .rail-item shows a faint
+    // shadow of its own observed accent (--entry-accent). The user
+    // eye-glances the colour of every server without committing to
+    // a hover; the active hover still wins because of higher
+    // specificity (#rail .rail-item:hover > #rail:hover .rail-item).
+    const rule = ruleBody(railCss, '#rail:hover .rail-item');
+    expect(rule).not.toBeNull();
+    expect(rule!).toMatch(/--entry-accent/);
+    expect(rule!).toMatch(/border-color/);
+    // The glow uses color-mix, not the raw accent — the preview is
+    // a *shadow* of the accent, not the accent itself.
+    expect(rule!).toMatch(/color-mix/);
+  });
+
+  it('#rail-add stays neutral on hover (does NOT adopt the active accent)', () => {
+    // Fix: the '+' button used to pick up `var(--accent)` on hover,
+    // making it read as the active server's colour and confusing the
+    // rail. The generic add action must read neutral regardless of
+    // which server is active.
+    const addHover = ruleBody(railCss, '#rail-add:hover');
+    expect(addHover).not.toBeNull();
+    expect(addHover!).not.toMatch(/var\(--accent\)/);
+    // The hover border and box-shadow stay off the accent tokens.
+    expect(addHover!).not.toMatch(/box-shadow/);
+    // The transform lift still matches the browser button language.
+    expect(cssValue(addHover!, 'transform')).toBe(
+      'translateY(-1px) scale(1.02)',
+    );
+  });
+
+  it('#rail-add has no ::before accent-glow pseudo (the colour lift is gone)', () => {
+    // Fix sister: removing the accent-glow ::before was the way the
+    // earlier version hid the active-accent recolour. Pin it absent
+    // so a regression that re-adds it is caught (the colour-on-hover
+    // bug returns silently with the pseudo restored).
+    expect(railCss).not.toMatch(/#rail-add::before\s*\{/);
   });
 
   it('every gradient in rail.css traces back to web/style.css (no sidecar gradients)', () => {
