@@ -1,6 +1,6 @@
 {
   "appId": "dev.phi.desktop",
-  "productName": "phi-desktop",
+  "productName": "phi-client",
   "artifactName": "phi-client-${version}-${os}-${arch}.${ext}",
   "directories": {
     "output": "out"
