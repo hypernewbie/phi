@@ -105,3 +105,22 @@ jobs:
 
       - name: Run JS Tests
         run: pnpm test
+
+      # Electron desktop shell (desktop/electron): a sibling npm package
+      # with its own lockfile, NOT a member of the root pnpm workspace
+      # (the root lockfile is unaffected). The electron postinstall
+      # (prebuilt binary download) is approved via
+      # desktop/electron/pnpm-workspace.yaml. The e2e smoke test
+      # (test/smoke.test.ts) spawns the real Electron binary and is
+      # intended for manual runs (the test contract documents its
+      # skip conditions: missing dist/main.js, missing electron binary,
+      # no display). It is excluded from CI gate so the unit/build/
+      # typecheck flow stays green; the smoke test remains runnable
+      # locally after `pnpm run build` for Windows / macOS bringup.
+      - name: Electron Shell (build + typecheck + tests)
+        run: |
+          cd desktop/electron
+          pnpm install --frozen-lockfile
+          pnpm run build
+          pnpm run typecheck
+          pnpm test -- --exclude test/smoke.test.ts
