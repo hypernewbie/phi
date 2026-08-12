@@ -1,0 +1,282 @@
+:root {
+  /* Phi dark-theme palette mirrored from web/style.css (same names, same
+     values): --bg is Phi's --bg-base, --panel its --bg-panel, --accent
+     its --accent, --text its --text-primary, --dim its --text-muted,
+     --border its --bg-border. The accent fallback is neutral: the active
+     server's observed accent is injected on #rail by the renderer; until
+     then the rail chrome stays muted instead of defaulting to a colour. */
+  --bg: #08080a;
+  --panel: #0d0d10;
+  --bg-elevated: #141418;
+  --bg-border: #1f1f26;
+  --accent: transparent;
+  --accent-fallback: transparent;
+  /* Resolves against #rail's late-bound --accent (the active server accent). */
+  --accent-glow: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-edge: color-mix(in srgb, var(--accent) 35%, transparent);
+  --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
+  --text: #e4e3e9;
+  --dim: #78768a;
+  --border: #1f1f26;
+  /* The web page's UI font stack (web/style.css --font-ui); Greek server
+     glyphs render in the vendored Inter, same typeface as the page. */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  user-select: none;
+  overflow: hidden;
+}
+
+#rail {
+  position: fixed;
+  inset: 0;
+  width: 72px;
+  display: flex;
+  flex-direction: column;
+  /* Phi's obsidian field — the same radial gradient as the web body
+     (web/style.css html, body background). */
+  background: radial-gradient(circle at 50% 0%, #16161c 0%, #08080a 70%);
+  border-right: 1px solid var(--border);
+}
+
+#rail-list {
+  list-style: none;
+  margin: 4px 0 12px;
+  padding: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* Server chips reuse the browser page's .header-btn material verbatim
+   (web/style.css .header-btn): the same radius, elevated background,
+   border, hover/focus glow and press transform. The accent tokens are
+   live (--accent on #rail, --entry-accent per chip); no default colour. */
+.rail-item {
+  width: 40px;
+  height: 40px;
+  margin: 8px auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  /* CPU intensity: the renderer sets --entry-cpu (0-100) from the
+     server's own reading; the entry's accent/glow strengthen as it
+     rises, and the resting material is unchanged at zero. No animation:
+     the intensity updates only on the sampling-cadence snapshot. */
+  --cpu-strength: calc(var(--entry-cpu, 0) / 100);
+  --cpu-glow: color-mix(in srgb, var(--entry-accent, var(--accent)) calc(45% * var(--cpu-strength)), transparent);
+  box-shadow: 0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+}
+
+.rail-item.active {
+  background-color: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-glow);
+  box-shadow:
+    inset 0 0 0 1px var(--accent-trace),
+    0 0 16px var(--accent-glow),
+    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+}
+
+/* Hover previews the entry's own known accent (--entry-accent), the
+   browser button hover treatment; an unreachable chip stays muted. */
+.rail-item:not(.offline):hover {
+  background-color: var(--bg-border);
+  border-color: var(--entry-accent, var(--accent));
+  color: var(--entry-accent, var(--accent));
+  box-shadow:
+    0 0 12px color-mix(in srgb, var(--entry-accent, var(--accent)) 15%, transparent),
+    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+  transform: translateY(-1px) scale(1.02);
+}
+
+.rail-item:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Diegetic health: an unreachable server's chip reads as a disabled
+   tile — no accent glow, dimmed text, a quiet inner stroke. No status
+   block, no semantic colour. */
+.rail-item.offline {
+  opacity: 0.55;
+  color: var(--dim);
+  border-color: var(--bg-border);
+  background-color: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--bg-border);
+  text-shadow: none;
+}
+
+.rail-item.offline.active {
+  color: var(--dim);
+  border-color: var(--bg-border);
+  box-shadow: inset 0 0 0 1px var(--bg-border);
+  text-shadow: none;
+}
+
+/* Attention marker: a geometric lozenge in the active accent. */
+.rail-item .attention {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+/* Drag-and-drop affordance: the dragged tile dims and the insertion
+   slot draws an accent line on the hovered entry. */
+.rail-item.dragging {
+  opacity: 0.4;
+}
+
+.rail-item.drop-before::before,
+.rail-item.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.rail-item.drop-before::before {
+  top: -5px;
+}
+
+.rail-item.drop-after::after {
+  bottom: -5px;
+}
+
+/* The add control reuses the browser page's .header-btn material
+   (radius, elevated background, border, hover glow, press transform). */
+#rail-add {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 12px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#rail-add::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, var(--accent-glow) 0%, transparent 75%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+
+#rail-add:hover::before {
+  opacity: 1;
+}
+
+#rail-add:hover {
+  background-color: var(--bg-border);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+  transform: translateY(-1px) scale(1.02);
+}
+
+#rail-add:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Rail entry context menu (right-click on a saved entry). */
+#rail-menu {
+  position: fixed;
+  left: 4px;
+  width: 64px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#rail-menu[hidden] {
+  display: none;
+}
+
+#rail-menu button {
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 11px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#rail-menu button:hover {
+  background: var(--bg-border);
+}
+
+#rail-menu button.remove {
+  color: var(--accent);
+}
+
+#rail-menu .menu-title {
+  margin: 0 2px 2px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--dim);
+  word-break: break-all;
+}
+
+#rail-menu input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 5px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  user-select: text;
+}
+
+#rail-menu input:focus {
+  border-color: var(--accent);
+}
