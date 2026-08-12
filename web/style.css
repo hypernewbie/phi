@@ -84,6 +84,21 @@ html, body {
     z-index: 100;
 }
 
+/* Desktop mode: the host renders the vendored header locally (the
+   desktop's main view page, the BrowserWindow's own webContents); the
+   remote Phi page's own header row is hidden so the retained body is the
+   beheaded Phi page. */
+html[data-phi-desktop] .app-header {
+    display: none;
+}
+
+/* Desktop windows are host-sized; pin the page to the viewport so the
+   body never scrolls or shifts out of the host's content area. */
+html[data-phi-desktop] body {
+    overflow: hidden;
+    height: 100vh;
+}
+
 .brand {
     display: flex;
     align-items: center;
@@ -3406,6 +3421,24 @@ html, body {
         min-width: 100%;
         margin-bottom: 4px;
     }
+}
+
+/* config.html hosts the settings modal as the full page, not a popup. */
+html[data-phi-config-page] .settings-overlay {
+    background-color: var(--bg-base);
+    backdrop-filter: none;
+    align-items: stretch;
+}
+
+html[data-phi-config-page] .settings-modal {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
 }
 
 .config-editor-subtitle {

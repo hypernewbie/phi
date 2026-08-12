@@ -147,4 +147,15 @@ describe('Restart phi button', () => {
         const btn = document.getElementById('restart-modal-confirm');
         expect(btn.disabled).toBe(false);
     });
+
+    it('desktop views (?desktop=1) hide the button and never open the modal', async () => {
+        const original = window.location.href;
+        window.history.replaceState({}, '', '/?desktop=1');
+        await loadManager();
+        const btn = document.getElementById('phi-restart-btn');
+        expect(btn.style.display).toBe('none');
+        btn.click();
+        expect(document.getElementById('restart-modal').classList.contains('hidden')).toBe(true);
+        window.history.replaceState({}, '', original);
+    });
 });
