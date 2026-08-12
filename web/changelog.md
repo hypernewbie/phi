@@ -2,6 +2,14 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.19.1 — 2026-08-12
+
+### Fixed
+- **Active server rail highlight** (`e2d681c`). Hovering another server no
+  longer demotes the currently selected server's highlight.
+- **Desktop runtime assets** (`e2d681c`). `phi-client` installers now package the icons,
+  tray assets, and alarm sound required at runtime.
+
 ## v0.19.0 — 2026-08-12
 
 ### Added
