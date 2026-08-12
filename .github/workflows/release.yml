@@ -106,8 +106,16 @@ jobs:
         with:
           name: phi-client-desktop-${{ matrix.os }}
           path: |
-            desktop/electron/out/*
-            !desktop/electron/out/builder-effective-config.yaml
+            desktop/electron/out/phi-client-*.exe
+            desktop/electron/out/phi-client-*.dmg
+            desktop/electron/out/phi-client-*.zip
+            desktop/electron/out/phi-client-*.AppImage
+            desktop/electron/out/phi-client-*.snap
+            desktop/electron/out/phi-client-*.deb
+            desktop/electron/out/phi-client-*.rpm
+            desktop/electron/out/phi-client-*.tar.gz
+            !desktop/electron/out/*.__uninstaller.exe
+            !desktop/electron/out/*.blockmap
           if-no-files-found: error
 
   desktop-release:
