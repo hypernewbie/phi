@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { MarkdownManager } from '../web/markdown.js';
 
@@ -8,6 +8,8 @@ import { MarkdownManager } from '../web/markdown.js';
 // that clicking the version button calls openChangelogModal.
 
 setupDomHarness();
+
+const ORIGINAL_HREF = window.location.href;
 
 // Minimal fixture mirroring what MarkdownManager touches: the #md-modal
 // shell, its close button, and the version/changelog trigger in the sidebar.
@@ -42,6 +44,10 @@ const makeManager = () => {
 beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+});
+
+afterEach(() => {
+    window.history.replaceState(null, '', ORIGINAL_HREF);
 });
 
 describe('openChangelogModal', () => {
@@ -102,5 +108,61 @@ describe('openChangelogModal', () => {
         const spy = vi.spyOn(m, 'openChangelogModal');
         document.getElementById('phi-changelog-btn').click();
         expect(spy).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Help/Changelog actions at the real click seam (?desktop=1 vs browser)', () => {
+    it('desktop view: Help click opens the named phi-help child window, not the overlay', () => {
+        fixture();
+        window.history.replaceState(null, '', '/?desktop=1');
+        const open = vi.spyOn(window, 'open').mockReturnValue({ opener: null });
+        new MarkdownManager({ showToast: vi.fn() });
+
+        document.getElementById('phi-help-btn').click();
+
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(open).toHaveBeenCalledWith('/md.html?page=help', 'phi-help', 'width=860,height=1000');
+        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(true);
+    });
+
+    it('desktop view: Changelog click opens the named phi-changelog child window, not the overlay', () => {
+        fixture();
+        window.history.replaceState(null, '', '/?desktop=1');
+        const open = vi.spyOn(window, 'open').mockReturnValue({ opener: null });
+        new MarkdownManager({ showToast: vi.fn() });
+
+        document.getElementById('phi-changelog-btn').click();
+
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(open).toHaveBeenCalledWith('/md.html?page=changelog', 'phi-changelog', 'width=860,height=1000');
+        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(true);
+    });
+
+    it('plain browser: Help click keeps the in-page help overlay', async () => {
+        fixture();
+        mockFetch(() => '# Phi Help\n\nHello');
+        const open = vi.spyOn(window, 'open');
+        new MarkdownManager({ showToast: vi.fn() });
+
+        document.getElementById('phi-help-btn').click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(open).not.toHaveBeenCalled();
+        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
+        expect(document.getElementById('md-modal-body').innerHTML).toContain('Hello');
+    });
+
+    it('plain browser: Changelog click keeps the in-page changelog overlay', async () => {
+        fixture();
+        mockFetch(() => '# Phi Changelog\n\n## v0.7.14');
+        const open = vi.spyOn(window, 'open');
+        new MarkdownManager({ showToast: vi.fn() });
+
+        document.getElementById('phi-changelog-btn').click();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(open).not.toHaveBeenCalled();
+        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
+        expect(document.getElementById('md-modal-body').innerHTML).toContain('v0.7.14');
     });
 });
