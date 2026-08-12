@@ -39,6 +39,15 @@ const OUT_TRAY_PNG = path.join(ASSETS, 'tray.png');
 const OUT_TRAY_ICO = path.join(ASSETS, 'tray.ico');
 const OUT_TTF = path.join(ASSETS, 'jetbrainsmono.ttf');
 const ICONS_DIR = path.join(ASSETS, 'icons');
+
+// GDI+ is only available on Windows. The checked-in assets are generated
+// there and are the portable packaging input for Linux and macOS; those
+// platforms must not try to invoke PowerShell during their builds.
+if (process.platform !== 'win32') {
+  console.log('gen-icon: non-Windows host; using committed icon assets');
+  process.exit(0);
+}
+
 const WEB_APP_JS = path.join(here, '..', '..', '..', 'web', 'app.js');
 const WEB_FONTS_DIR = path.join(here, '..', '..', '..', 'web', 'vendor', 'fonts');
 
