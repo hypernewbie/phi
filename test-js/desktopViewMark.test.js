@@ -49,12 +49,16 @@ describe('desktop body beheading source contract', () => {
         expect(rule[1]).toContain('height: 100vh');
     });
 
-    it('leaves no web-side header slots or drag hacks (the header is gone from the body)', () => {
+    it('leaves no web-side header slot CSS variables (the header is gone from the body)', () => {
         // The old title/caption slot-lane geometry must not come back: the
-        // remote page is beheaded, so it reserves nothing.
+        // remote page is beheaded, so it reserves no slot variables. (The
+        // desktop main view does reserve `padding-right: 138px` on the
+        // vendored header to make room for the caption lane — see the
+        // html[data-phi-desktop-root] .app-header rule. That is a desktop
+        // marker, not a web-side slot hack, so it lives outside this
+        // assertion's contract.)
         expect(css).not.toContain('--desktop-title-slot-width');
         expect(css).not.toContain('--desktop-caption-slot-width');
-        expect(css).not.toContain('padding-right: 138px');
     });
 
     it('keeps header controls interactive and leaves the left gutter to the native rail', () => {

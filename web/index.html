@@ -79,7 +79,7 @@
                 <span class="logo-glow-wrapper"><span class="logo">Φ</span></span>
                 <span class="brand-name">phi</span>
                 <div class="hostname-wrapper">
-                    <span id="terminal-activity-indicator" class="terminal-activity-indicator hidden" role="img" aria-label="All terminal tabs are quiet" title="All terminal tabs are quiet">—</span>
+                    <span id="terminal-activity-indicator" class="terminal-activity-indicator" role="img" aria-label="All terminal tabs are quiet" title="All terminal tabs are quiet">—</span>
                     <span id="hostname-display" class="hostname-display"></span>
                     <div id="hostname-tabs-dropdown" class="hostname-tabs-dropdown hidden"></div>
                 </div>
@@ -90,13 +90,21 @@
                  no network is touched on hover or close. The popover is
                  static markup; TabManager renders into it on hover/focus. -->
             <div id="self-hud-popover" class="self-hud hidden" role="tooltip" aria-hidden="true"></div>
-            
+
+            <!-- Left drag gutter; pairs with the right-side .app-header-drag-gap so the
+                 workspace cluster sits visually centered in the row (the two gutters share
+     the free space via `flex: 1 1 auto`). -->
+            <div class="app-header-drag-gap" aria-hidden="true"></div>
+
             <div class="workspace-area">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                 <select id="workspace-select"></select>
                 <button id="add-workspace-btn" title="Add Workspace">+</button>
                 <button id="remove-workspace-btn" title="Remove Active Workspace">-</button>
             </div>
+
+            <!-- Middle drag gutter for the desktop composed title row; empty by design. -->
+            <div class="app-header-drag-gap" aria-hidden="true"></div>
 
             <div class="header-actions">
                 <!-- Mobile only merged terminal buttons -->
@@ -120,20 +128,18 @@
                     </svg>
                 </button>
 
-                <button id="header-clipboard-btn" class="header-btn" title="Sync Remote Clipboard to Local Clipboard">
+                <button id="header-clipboard-btn" class="header-btn icon-only" title="Sync Remote Clipboard to Local Clipboard" aria-label="Sync Remote Clipboard to Local Clipboard">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
                         <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
                     </svg>
-                    <span>Get Clipboard</span>
                 </button>
 
-                <button id="header-ntfy-btn" class="header-btn" title="Push Notifications (Pushover)">
+                <button id="header-ntfy-btn" class="header-btn icon-only" title="Push Notifications (Pushover)" aria-label="Push Notifications (Pushover)">
                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                         <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
                     </svg>
-                    <span>Notifications</span>
                 </button>
 
                 <div id="header-config-pill" class="header-config-pill" title="Open settings (highlight color, fonts, behavior)">
