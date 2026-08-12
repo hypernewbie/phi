@@ -86,7 +86,7 @@ describe('main view page (web/index.html)', () => {
     // embeds it verbatim except for the desktop-local caption controls
     // appended immediately before </header>. The vendored header DOM
     // is untouched — no mutations, no injected drag-gaps, no hidden
-    // children. PLAN5 single-source-of-truth.
+    // children. Single source of truth via vendoring.
     expect(headerHtmlSource).toBe(browserHeaderBlock());
     expect(indexHtmlSource).toContain(headerHtmlSource.slice(0, -'</header>'.length));
     // The caption-controls is the only desktop-local element injected
@@ -111,8 +111,8 @@ describe('main view page (web/index.html)', () => {
 
 describe('main view page chrome (web/main.css)', () => {
   it('does not override any vendored .app-header styling (TBAR is byte-identical to web/index.html)', () => {
-    // The TBAR pipeline rule (DESKTOP_PLAN5): the desktop TBAR is the
-    // EXACT same DOM and styling as the browser Phi's `.app-header`.
+    // The TBAR pipeline rule: the desktop TBAR is the EXACT same DOM
+    // and styling as the browser Phi's `.app-header`.
     // main.css is only allowed to:
     //   - add `-webkit-app-region` rules (frameless-window drag regions,
     //     additive to the vendor's properties);
@@ -161,7 +161,8 @@ describe('main view page chrome (web/main.css)', () => {
     // injected by the vendor script is `.caption-controls`, appended
     // just before </header>. No drag-gap injections, no structural
     // mutations — any change to how the header renders belongs in
-    // web/index.html first and gets re-vendored (DESKTOP_PLAN5).
+    // web/index.html first and gets re-vendored (single source of
+    // truth via vendoring).
     const vendorSource = readFileSync(
       path.join(here, '..', 'scripts', 'vendor-web.mjs'),
       'utf8',
@@ -236,6 +237,7 @@ describe('main view page behaviors (web/mainview.js)', () => {
 
   it('populates the header from the active server config and relays actions to the body', () => {
     expect(mainJsSource).toContain('fetchServerConfig()');
+    expect(mainJsSource).toContain('fetchActiveWorkspace');
     expect(mainJsSource).toContain('postHeaderAction(');
     expect(mainJsSource).toContain('onActiveServer(');
     expect(mainJsSource).toContain('getElementById(\'workspace-select\')');

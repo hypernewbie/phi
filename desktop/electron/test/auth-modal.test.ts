@@ -34,6 +34,7 @@ const hasGenerated = existsSync(generatedIndex);
 interface FakeBridge {
   /** Plain function so tests can replace it per case. */
   fetchServerConfig: () => Promise<unknown>;
+  fetchActiveWorkspace: () => Promise<string | null>;
   submitAccessPassword: (requestId: string, password: string | null) => Promise<unknown>;
   postWindowMinimize: () => void;
   postWindowToggleMaximize: () => void;
@@ -63,6 +64,7 @@ beforeEach(() => {
   submitCalls = [];
   fakeBridge = {
     fetchServerConfig: vi.fn(async () => null),
+    fetchActiveWorkspace: vi.fn(async () => null),
     submitAccessPassword: vi.fn(async (requestId: string, password: string | null) => {
       submitCalls.push({ requestId, password });
       return { ok: true };
@@ -78,7 +80,11 @@ beforeEach(() => {
       recordedBodyObscuring = cb;
     },
     onActiveServer: (cb) => {
-      recordedActiveServer = cb;
+      const previous = recordedActiveServer;
+      recordedActiveServer = (info) => {
+        previous?.(info);
+        cb(info);
+      };
     },
     onHeaderState: () => undefined,
     onWindowState: () => undefined,
@@ -122,6 +128,76 @@ async function loadMainView(): Promise<Document> {
   await import(pathToFileURL(path.join(webDir, 'mainview.js')).href);
   return window.document;
 }
+
+describe('desktop active-server header state (mainview.js)', () => {
+  it('switches the project selector to the incoming body view’s actual workspace', async (ctx) => {
+    if (!hasGenerated) {
+      ctx.skip('web/index.html missing — run `pnpm run build` first');
+      return;
+    }
+    let config = {
+      hostname: 'ALPHA',
+      workspaces: ['/common', '/alpha'],
+      active_cwd: '/common',
+    };
+    let bodyWorkspace = '/alpha';
+    fakeBridge.fetchServerConfig = vi.fn(async () => config);
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => bodyWorkspace);
+    const doc = await loadMainView();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect((doc.getElementById('workspace-select') as HTMLSelectElement).value).toBe('/alpha');
+
+    config = {
+      hostname: 'BETA',
+      workspaces: ['/common', '/beta'],
+      active_cwd: '/common',
+    };
+    bodyWorkspace = '/beta';
+    recordedActiveServer!({ id: 'beta', origin: 'http://beta/', accent: '' });
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    const select = doc.getElementById('workspace-select') as HTMLSelectElement;
+    expect(select.value).toBe('/beta');
+    expect([...select.options].map((option) => option.value)).toEqual(['/common', '/beta']);
+  });
+
+  it('does not let a late config response from the outgoing server repaint the incoming server', async (ctx) => {
+    if (!hasGenerated) {
+      ctx.skip('web/index.html missing — run `pnpm run build` first');
+      return;
+    }
+    const doc = await loadMainView();
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+
+    let resolveAlpha: ((value: unknown) => void) | null = null;
+    let call = 0;
+    fakeBridge.fetchServerConfig = vi.fn(() => {
+      call += 1;
+      if (call === 1) {
+        return new Promise((resolve) => {
+          resolveAlpha = resolve;
+        });
+      }
+      return Promise.resolve({
+        hostname: 'BETA',
+        workspaces: ['/beta'],
+        active_cwd: '/beta',
+      });
+    });
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/beta');
+
+    recordedActiveServer!({ id: 'alpha', origin: 'http://alpha/', accent: '' });
+    recordedActiveServer!({ id: 'beta', origin: 'http://beta/', accent: '' });
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    expect((doc.getElementById('workspace-select') as HTMLSelectElement).value).toBe('/beta');
+
+    resolveAlpha!({ hostname: 'ALPHA', workspaces: ['/alpha'], active_cwd: '/alpha' });
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    const select = doc.getElementById('workspace-select') as HTMLSelectElement;
+    expect(select.value).toBe('/beta');
+    expect([...select.options].map((option) => option.value)).toEqual(['/beta']);
+  });
+});
 
 describe('desktop auth modal (mainview.js)', () => {
   it('renders the modal markup in the vendored main view', async (ctx) => {
