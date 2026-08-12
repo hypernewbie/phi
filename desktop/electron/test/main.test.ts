@@ -1202,6 +1202,13 @@ describe('electron-builder.json (native branding)', () => {
     };
     expect(builder.win).toEqual({ icon: 'assets/icon.png' });
   });
+
+  it('names release artifacts phi-client without changing the desktop runtime identity', () => {
+    const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
+      artifactName?: string;
+    };
+    expect(builder.artifactName).toBe('phi-client-${version}-${os}-${arch}.${ext}');
+  });
 });
 
 describe('src/desktop.ts (sync board desktop alerts)', () => {
