@@ -123,4 +123,4 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build
           pnpm run typecheck
-          pnpm test -- --exclude test/smoke.test.ts
+          pnpm exec vitest run --exclude test/smoke.test.ts
