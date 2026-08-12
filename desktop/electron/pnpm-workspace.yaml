@@ -1,0 +1,15 @@
+# desktop/electron is its own pnpm project with an independent lockfile —
+# it is NOT a member of the repo-root workspace (the root workspace has no
+# packages list, so only the root is a member; this file simply makes the
+# boundary explicit and carries this project's build-approval settings).
+#
+# pnpm blocks dependency build scripts by default. The electron postinstall
+# downloads the prebuilt binary (the package is useless without it), so it
+# is approved here. The app's own renderer security defaults
+# (webPreferences.sandbox etc., set in src/main.ts) are unaffected.
+allowBuilds:
+  electron: true
+  # electron-builder's Windows-installer helper has a build script this
+  # package does not need (real packaging is a later slice); declaring it
+  # explicitly keeps `pnpm install` / `pnpm run` from failing on it.
+  electron-winstaller: false

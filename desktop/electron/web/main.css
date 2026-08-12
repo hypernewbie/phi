@@ -1,0 +1,211 @@
+/* Desktop main view page chrome — only desktop-local elements and
+   additive `-webkit-app-region` rules. The vendored `.app-header`
+   itself is owned byte-for-byte by the browser Phi's `web/style.css`;
+   deleting this file and re-vendoring would produce the same TBAR
+   rendering, minus the caption controls (which the vendor script
+   appends) and the desktop's drag/no-drag regions (which only make
+   sense for a frameless Electron window). */
+
+:root {
+  /* Mirrors desktop.ts HEADER_HEIGHT; the vendored .app-header height. */
+  --header-height: 48px;
+}
+
+html, body {
+  background: var(--bg-base);
+}
+
+/* The vendor stylesheet ships `.app-header { display: flex; ... }` and
+   makes the browser Phi's header a flex row. The frameless Electron
+   window needs the same header element to BE the native drag region,
+   so we add `app-region: drag` here. This is additive — it does not
+   override any vendor property; without it, the header still renders
+   identically but the window cannot be moved by dragging it. */
+.app-header {
+  -webkit-app-region: drag;
+}
+
+/* Interactive children of the header must NOT swallow drag gestures. */
+.app-header button,
+.app-header select,
+.app-header input,
+.app-header a,
+.app-header #hostname-display,
+.app-header .hostname-tabs-dropdown,
+.app-header .self-hud {
+  -webkit-app-region: no-drag;
+}
+
+/* The vendored `.app-header-drag-gap` is a flex spacer. The vendor's
+   stylesheet doesn't size it (it's empty), so without this rule it
+   collapses to a 0px line. Give it flex-grow so the layout fills the
+   header, and mark it as a drag region like the rest of the header. */
+.app-header-drag-gap {
+  flex: 1 1 auto;
+  align-self: stretch;
+  -webkit-app-region: drag;
+}
+
+/* Local window controls: minimize, maximize/restore, close. The main
+   process validates that only this page may drive the window. The row
+   is a fixed 138px lane (3 × 46px hit targets) at the right edge of
+   the desktop's native drag row. Setting flex-basis: 138px directly
+   pins the lane; with shrink:0 the contents (the three buttons) cannot
+   squeeze it narrower. */
+.caption-controls {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  flex: 0 0 138px;
+  width: 138px;
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.caption-controls button {
+  flex: 0 0 46px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+
+.caption-controls button:hover {
+  background: var(--bg-elevated);
+}
+
+body:not(.focused) .caption-controls button {
+  color: var(--text-muted);
+}
+
+#caption-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+/* Empty body anchor for the retained WebContentsView children (rail +
+   Phi body). The div itself never intercepts input; the host positions
+   the WebContentsView children over it. */
+.desktop-body-area {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--header-height);
+  bottom: 0;
+  pointer-events: none;
+}
+
+/* The browser Phi's `bootstrapAccessAuth` (vendored from web/auth.js)
+   injects `.access-auth-overlay` into <body> when the initial
+   /api/auth/status fetch fails. The desktop main view runs at file://
+   so every fetch fails; without this rule the overlay (position:
+   fixed; inset: 0; z-index: 10000; backdrop-filter: blur(8px)) would
+   cover the entire main view page and make the TBAR look blurred.
+   The desktop is the trusted host, not a remote Phi page; it has its
+   own auth modal (`#desktop-auth-modal`) that opens on demand. Scoped
+   to `data-phi-desktop-root` so the browser Phi's own auth overlay
+   (which lives on `data-phi-desktop` for the body when ?desktop=1)
+   is untouched. */
+html[data-phi-desktop-root] .access-auth-overlay {
+  display: none !important;
+}
+
+/* Access-auth modal: shown when the active server returns 401 on
+   /api/config AND /api/auth/status reports enabled. The modal lives
+   in the desktop main view (parent webContents). It cannot paint above
+   a child WebContentsView, so the body is hidden via
+   `phi:body-obscuring` while the modal is open (see ProfileViewManager
+   contract); this CSS just styles the in-flow desktop chrome. */
+.desktop-auth-modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(8, 8, 10, 0.78);
+  z-index: 1000;
+}
+.desktop-auth-modal[hidden] {
+  display: none;
+}
+.desktop-auth-card {
+  width: min(420px, 100%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+.desktop-auth-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.desktop-auth-origin {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+.desktop-auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.desktop-auth-field input {
+  background: var(--bg-base);
+  border: 1px solid var(--bg-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 8px;
+  outline: none;
+}
+.desktop-auth-field input:focus {
+  border-color: var(--accent);
+}
+.desktop-auth-error {
+  margin: 0;
+  font-size: 12px;
+  color: #ff7070;
+  min-height: 16px;
+}
+.desktop-auth-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.desktop-auth-btn {
+  border: 1px solid var(--bg-border);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px;
+  border-radius: 4px;
+  padding: 6px 14px;
+  cursor: default;
+}
+.desktop-auth-btn:hover {
+  background: var(--bg-elevated);
+}
+.desktop-auth-btn-primary {
+  border-color: var(--accent-trace);
+  color: var(--accent);
+}
+.desktop-auth-btn-primary:hover {
+  background: rgba(124, 106, 247, 0.12);
+}
+.desktop-auth-btn[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}

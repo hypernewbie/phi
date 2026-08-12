@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phi title bar</title>
+    <link rel="stylesheet" href="./title.css" />
+  </head>
+  <body>
+    <!-- Local title/drag island. The body is the window's drag region; the
+         title text is a no-drag element. The observed remote title arrives
+         on 'phi:window-title' (window.electron.onWindowTitle). -->
+    <div class="title">
+      <span class="title-mark" aria-hidden="true">Φ</span>
+      <span class="title-text" id="title-text">phi</span>
+    </div>
+    <script>
+      const text = document.getElementById('title-text');
+      window.electron.onWindowTitle((title) => {
+        text.textContent = title === '' ? 'phi' : `phi — ${title}`;
+      });
+    </script>
+  </body>
+</html>
