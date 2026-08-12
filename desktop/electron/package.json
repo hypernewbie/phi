@@ -1,6 +1,6 @@
 {
   "name": "phi-desktop-electron",
-  "version": "0.1.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Electron desktop shell for Phi (migration from the Wails v2.13 shell). Phase 5: profile controller + global hotkey on the phase-4 tray + phase-3 protocol-registration + phase-2 gate/argv-routing scaffold.",
   "type": "module",

@@ -2,6 +2,30 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.19.0 — 2026-08-12
+
+### Added
+- **Electron desktop client for Phi** (`2240b34`). A native Windows, macOS,
+  and Linux client with a Discord-style server rail, retained per-server
+  views, native window controls, tray integration, deep-link routing, protocol
+  registration, global shortcuts, taskbar state, notifications, and the same
+  vendored Phi header as the browser.
+- **Protected-server desktop login** (`00ee611`). The desktop unlocks an
+  access-protected body view with a one-time challenge/proof flow. The
+  password and verifier stay in the host process; the body receives only its
+  own same-origin session, with persisted credentials protected by the OS
+  keychain.
+- **Desktop release packages** (`6136bff`). Release CI builds separate
+  Windows, Linux, and macOS installers and attaches them to the GitHub Release
+  as `phi-client` artifacts.
+- **Desktop interaction parity** (`14c7f7f`, `da688ff`). Plain F11 works on
+  every desktop-owned surface, and the main header follows the selected
+  server's workspace without stale cross-server repaints.
+
+### Fixed
+- **Server rail accent feedback** (`e65f02a`). Hover now gives every saved
+  server its own faint accent treatment while the add button remains neutral.
+
 ## v0.18.1 — 2026-08-06
 
 ### Added
