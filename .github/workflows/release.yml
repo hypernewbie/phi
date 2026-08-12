@@ -131,7 +131,7 @@ jobs:
         run: |
           uploaded=0
           while IFS= read -r -d '' file; do
-            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+            gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$file" --clobber
             uploaded=1
           done < <(find desktop-release -type f -print0)
           if [ "$uploaded" -eq 0 ]; then
