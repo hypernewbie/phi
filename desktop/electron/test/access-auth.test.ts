@@ -210,19 +210,6 @@ describe('AccessAuth.tryUnlock', () => {
     challenge: 'sample-challenge',
   };
 
-  function fetchSpy(opts: {
-    status?: (path: string) => number;
-    body?: (path: string) => string | unknown;
-  }): typeof fetch {
-    return (async (url: URL | string, init?: RequestInit) => {
-      const u = url.toString();
-      const status = opts.status?.(u) ?? 200;
-      const body = opts.body?.(u);
-      const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
-      return new Response(bodyStr, { status, headers: { 'content-type': 'application/json' } });
-    }) as unknown as typeof fetch;
-  }
-
   it('validates status, captures the cookie, and retries config', async () => {
     let calls = 0;
     const status = { ...goodStatus };
@@ -484,7 +471,6 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
     const salt = Buffer.from('AQID', 'base64url');
     const verifier = pbkdf2Sync(password, salt, 600_000, 32, 'sha256');
 
-    let loginBody: unknown = null;
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
@@ -531,7 +517,7 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   });
 
   it('getLastVerifier returns the cached verifier after a successful password unlock', async () => {
-    const crypto = await import('node:crypto');
+
     const password = 'whatever-password';
     const doFetch = (async (url: URL) => {
       const path = url.toString();
@@ -558,7 +544,7 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   });
 
   it('getLastVerifier returns null after cancel', async () => {
-    const crypto = await import('node:crypto');
+
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {

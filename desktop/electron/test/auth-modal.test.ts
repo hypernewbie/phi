@@ -50,7 +50,7 @@ interface FakeBridge {
 let recordedAuthRequired: ((info: { requestId: string; profileId: string; origin: string; label?: string }) => void) | null = null;
 let recordedBodyObscuring: ((obscured: boolean) => void) | null = null;
 let recordedActiveServer: ((info: { id: string; origin: string; accent: string }) => void) | null = null;
-let recordedHeaderState: ((state: { cpuPercent: number | null; terminalActivity: boolean }) => void) | null = null;
+
 let submitCalls: Array<{ requestId: string; password: string | null }> = [];
 
 let fakeBridge: FakeBridge;
@@ -59,7 +59,7 @@ beforeEach(() => {
   recordedAuthRequired = null;
   recordedBodyObscuring = null;
   recordedActiveServer = null;
-  recordedHeaderState = null;
+
   submitCalls = [];
   fakeBridge = {
     fetchServerConfig: vi.fn(async () => null),
@@ -80,9 +80,7 @@ beforeEach(() => {
     onActiveServer: (cb) => {
       recordedActiveServer = cb;
     },
-    onHeaderState: (cb) => {
-      recordedHeaderState = cb;
-    },
+    onHeaderState: () => undefined,
     onWindowState: () => undefined,
     onWindowTitle: () => undefined,
   };
@@ -110,7 +108,8 @@ async function loadMainView(): Promise<Document> {
   const { window } = dom;
   // The vendored modules and mainview.js read DOM globals from the
   // jsdom window. Repoint the host's globals at it.
-  (globalThis as unknown as { window: typeof window }).window = window as unknown as Window & typeof globalThis;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as unknown as { window: any }).window = window;
   (window as unknown as { electron: FakeBridge }).electron = fakeBridge;
   Object.defineProperty(globalThis, 'document', { value: window.document, configurable: true, writable: true });
   Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true, writable: true });

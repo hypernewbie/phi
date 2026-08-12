@@ -55,14 +55,14 @@ function pathToFileURLLocal(p: string): URL {
 describe('applyBrandCpuTier', () => {
   it('applies cpu-idle at 0%', () => {
     applyBrandCpuTier(0);
-    const logo = document.querySelector('.brand .logo');
+    const logo = document.querySelector<HTMLElement>('.brand .logo');
     expect(logo?.classList.contains('cpu-idle')).toBe(true);
     expect(logo?.dataset.cpuLevel).toBe('cpu-idle');
   });
 
   it('applies cpu-moderate at 50%', () => {
     applyBrandCpuTier(50);
-    const logo = document.querySelector('.brand .logo');
+    const logo = document.querySelector<HTMLElement>('.brand .logo');
     expect(logo?.classList.contains('cpu-moderate')).toBe(true);
     expect(logo?.classList.contains('cpu-idle')).toBe(false);
   });
@@ -81,7 +81,7 @@ describe('applyBrandCpuTier', () => {
 
   it('clamps out-of-range values to 0..100', () => {
     applyBrandCpuTier(150);
-    const logo = document.querySelector('.brand .logo');
+    const logo = document.querySelector<HTMLElement>('.brand .logo');
     expect(logo?.dataset.cpuPct).toBe('100');
     expect(logo?.classList.contains('cpu-critical')).toBe(true);
 
@@ -94,7 +94,7 @@ describe('applyBrandCpuTier', () => {
     applyBrandCpuTier(15);
     applyBrandCpuTier(45);
     applyBrandCpuTier(75);
-    const logo = document.querySelector('.brand .logo');
+    const logo = document.querySelector<HTMLElement>('.brand .logo');
     expect(logo?.dataset.cpuPct).toBe('75');
   });
 
