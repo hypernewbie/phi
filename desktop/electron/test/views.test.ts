@@ -16,7 +16,7 @@
  *   - resize applies fresh bounds to the active view only;
  *   - viewsCreated accounting, same-host acceptance, unknown-id no-op.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContentsView } from 'electron';
 import { ProfileViewManager } from '../src/views.js';
 
@@ -37,6 +37,7 @@ interface RecordingView {
   destroyCalls: number;
   focusCalls: number;
   loadHandlers: Array<() => void>;
+  beforeInputHandlers: Array<(event: unknown, input: unknown) => void>;
   webContentsDestroyed: boolean;
 }
 
@@ -45,6 +46,7 @@ function makeFakeView(): RecordingView {
   const setVisibleCalls: boolean[] = [];
   const loadURLCalls: string[] = [];
   const loadHandlers: Array<() => void> = [];
+  const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> = [];
   let webContentsDestroyed = false;
   const rec: RecordingView = {
     view: {
@@ -56,6 +58,7 @@ function makeFakeView(): RecordingView {
       webContents: {
         on: (event: string, cb: () => void) => {
           if (event === 'did-finish-load') loadHandlers.push(cb);
+          if (event === 'before-input-event') beforeInputHandlers.push(cb);
         },
         loadURL: (url: string) => {
           loadURLCalls.push(url);
@@ -77,22 +80,27 @@ function makeFakeView(): RecordingView {
     destroyCalls: 0,
     focusCalls: 0,
     loadHandlers,
+    beforeInputHandlers,
     webContentsDestroyed: webContentsDestroyed,
   };
   rec.webContentsDestroyed = webContentsDestroyed;
   return rec;
 }
 
-/** A recording fake BrowserWindow (records contentView.add/removeChildView). */
+/** A recording fake BrowserWindow (records contentView.add/removeChildView
+ *  plus the fullscreen surface the F11 toggle drives). */
 interface RecordingWindow {
   win: BrowserWindow;
   added: unknown[];
   removed: unknown[];
+  fullscreenStates: boolean[];
 }
 
 function makeFakeWindow(): RecordingWindow {
   const added: unknown[] = [];
   const removed: unknown[] = [];
+  const fullscreenStates: boolean[] = [];
+  let fullscreen = false;
   return {
     win: {
       contentView: {
@@ -103,9 +111,16 @@ function makeFakeWindow(): RecordingWindow {
           removed.push(v);
         },
       },
+      isDestroyed: () => false,
+      isFullScreen: () => fullscreen,
+      setFullScreen: (v: boolean) => {
+        fullscreen = v;
+        fullscreenStates.push(v);
+      },
     } as unknown as BrowserWindow,
     added,
     removed,
+    fullscreenStates,
   };
 }
 
@@ -334,5 +349,36 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     manager.setActive('ghost'); // must not disturb the active view
     expect(manager.getActive()).toBe('p1');
     expect(views).toHaveLength(1);
+  });
+
+  it('installs the plain-F11 fullscreen toggle on every retained body view', () => {
+    const { manager, views, win } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    for (const v of views) expect(v.beforeInputHandlers).toHaveLength(1);
+    // Plain F11 from the focused body view toggles the BrowserWindow.
+    const ev = { preventDefault: vi.fn() };
+    views[1].beforeInputHandlers[0](ev as never, {
+      type: 'keyDown',
+      key: 'F11',
+      control: false,
+      alt: false,
+      meta: false,
+    });
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.fullscreenStates).toEqual([true]);
+    // Modified F11 is left to the page (no preventDefault, no toggle).
+    const ev2 = { preventDefault: vi.fn() };
+    views[1].beforeInputHandlers[0](ev2 as never, {
+      type: 'keyDown',
+      key: 'F11',
+      control: true,
+      alt: false,
+      meta: false,
+    });
+    expect(ev2.preventDefault).not.toHaveBeenCalled();
+    expect(win.fullscreenStates).toEqual([true]);
   });
 });
