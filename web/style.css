@@ -99,6 +99,13 @@ html[data-phi-desktop] body {
     height: 100vh;
 }
 
+/* Desktop main view (the BrowserWindow's own webContents) reserves
+   138px on the right of `.app-header` for the desktop's local
+   caption lane (-/square/x). */
+html[data-phi-desktop-root] .app-header {
+    padding-right: 138px;
+}
+
 .brand {
     display: flex;
     align-items: center;
@@ -609,6 +616,14 @@ html[data-phi-desktop] body {
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     position: relative;
     overflow: hidden;
+}
+
+.header-btn.icon-only {
+    padding: 6px 8px;
+    gap: 0;
+}
+.header-btn.icon-only span {
+    display: none;
 }
 
 .header-btn::before {

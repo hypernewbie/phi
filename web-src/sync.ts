@@ -3,6 +3,13 @@
 import type { AppLike, ToastOptions } from './types.js';
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
 
+// Sync Board desktop-alert markers: a message whose key or value carries
+// one of these signals the desktop shell via a transient page title
+// (see signalDesktopAlert). Display data only — never a remote action.
+const SYNC_NOTIF_MARKER = 'PHI_NOTIF';
+const SYNC_ALARM_MARKER = 'PHI_ALARM';
+const SYNC_TITLE_MAX = 120;
+
 export class SyncManager {
     app: AppLike;
     panelEl: HTMLElement | null;
@@ -148,6 +155,7 @@ export class SyncManager {
             const messages = await res.json();
 
             this.renderMessages(messages);
+            this.signalDesktopAlert(messages);
         } catch (e) {
             console.error('[sync] Failed to refresh:', e);
             this.messagesList.innerHTML = `<div class="sync-error-state">Error: ${this.escapeHtml((e as Error).message)}</div>`;
@@ -240,6 +248,37 @@ export class SyncManager {
 
     escapeHtml(str: string): string {
         return escapeHtmlUtil(str);
+    }
+
+    // Desktop-gated transient title signal: when a message's key or value
+    // carries PHI_NOTIF / PHI_ALARM, write 'PHI_NOTIF <key>' (or
+    // 'PHI_ALARM <key>') into document.title for the desktop shell to
+    // observe through its existing page-title-updated event. The
+    // terminal-activity title updater overwrites it on the next tick, so
+    // the marker is transient by design; plain browser pages never set it
+    // and the marker never leaves the page.
+    signalDesktopAlert(messages: any[]): void {
+        if (!navigator.userAgent.includes('Electron') && new URLSearchParams(location.search).get('desktop') !== '1') {
+            return;
+        }
+        let marker = '';
+        let key = '';
+        for (const msg of messages) {
+            const k = String(msg && msg.key !== undefined ? msg.key : '');
+            const v = String(msg && msg.value !== undefined ? msg.value : '');
+            if (k.includes(SYNC_ALARM_MARKER) || v.includes(SYNC_ALARM_MARKER)) {
+                marker = SYNC_ALARM_MARKER;
+                key = k;
+                break;
+            }
+            if (marker === '' && (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))) {
+                marker = SYNC_NOTIF_MARKER;
+                key = k;
+            }
+        }
+        if (marker !== '') {
+            document.title = `${marker} ${key}`.slice(0, SYNC_TITLE_MAX);
+        }
     }
 
     // clearAllMessages DELETEs every entry on the current coordinator.

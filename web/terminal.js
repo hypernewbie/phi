@@ -14,6 +14,7 @@ import {
     formatDurationMin,
     escapeHtml,
 } from './util.js';
+import { applyBrandCpuTier, applyTerminalActivityIndicator } from './header-state.js';
 import {
     formatAttachment,
     extractImageItems,
@@ -142,29 +143,21 @@ export class TabManager {
     }
 
     applyCPUIndicator(cpuPercent) {
-        const logo = document.querySelector('.brand .logo');
-        const brandName = document.querySelector('.brand .brand-name');
-        if (!logo) return;
         // Cache for the self-state HUD so hovering doesn't trigger a fetch.
         // The HUD reads this on every render — polling keeps it fresh.
         this.lastCpuPercent = cpuPercent;
-        // Thresholds: idle < 30, moderate 30–70, high 70-90, critical > 90
-        const level = cpuLevel(cpuPercent);
-        // Don't churn the DOM if the level hasn't changed
-        if (logo.dataset.cpuLevel === level) return;
-        const first = logo.dataset.cpuLevel === undefined;
-        for (const el of [logo, brandName]) {
-            if (!el) continue;
-            el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical');
-            el.classList.add(level);
-            el.dataset.cpuLevel = level;
+        const status = applyBrandCpuTier(cpuPercent);
+        // The tiers are static now, so the change itself has to be what
+        // moves. A finite burst costs ~2.4ms/frame for its duration and
+        // then nothing, where the old per-tier loops cost that forever
+        // (cpu-critical was +87% of a core -- worst exactly when the
+        // machine was already loaded). Skipped on the first
+        // classification so the page doesn't pop on load.
+        if (status === 'changed') {
+            const logo = document.querySelector('.brand .logo');
+            const brandName = document.querySelector('.brand .brand-name');
+            if (logo && brandName) this._flourishBrand([logo, brandName]);
         }
-        // The tiers are static now, so the change itself has to be what moves.
-        // A finite burst costs ~2.4ms/frame for its duration and then nothing,
-        // where the old per-tier loops cost that forever (cpu-critical was
-        // +87% of a core -- worst exactly when the machine was already loaded).
-        // Skipped on the first classification so the page doesn't pop on load.
-        if (!first) this._flourishBrand([logo, brandName]);
     }
 
     // Play the one-shot tier-change animation and clean up after itself, so
@@ -868,14 +861,7 @@ export class TabManager {
         const indicator = document.getElementById('terminal-activity-indicator');
         if (indicator) {
             const hostnameKnown = Boolean(this.app.hostname);
-            indicator.classList.toggle('hidden', !hostnameKnown);
-            indicator.classList.toggle('is-active', state.hasActivity);
-            indicator.textContent = state.hasActivity ? '▍' : '—';
-            const label = state.hasActivity
-                ? 'Terminal output on one or more tabs'
-                : 'All terminal tabs are quiet';
-            indicator.setAttribute('aria-label', label);
-            indicator.title = label;
+            applyTerminalActivityIndicator(state.hasActivity, hostnameKnown);
         }
 
         // App owns favicon generation; guard keeps TabManager independently
