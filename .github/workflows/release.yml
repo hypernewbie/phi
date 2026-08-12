@@ -60,8 +60,87 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  desktop-package:
+    name: Desktop package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: desktop/electron/pnpm-lock.yaml
+
+      - name: Install Electron dependencies
+        working-directory: desktop/electron
+        run: pnpm install --frozen-lockfile
+
+      # Packaging is intentionally the only desktop validation here. The
+      # hosted runners produce the native installers, but cannot replace the
+      # real-machine smoke pass for the retained WebContentsView shell.
+      - name: Set release version
+        shell: bash
+        working-directory: desktop/electron
+        run: pnpm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+
+      - name: Build desktop app
+        working-directory: desktop/electron
+        run: pnpm run build
+
+      - name: Package desktop app
+        working-directory: desktop/electron
+        run: pnpm exec electron-builder --config electron-builder.json --publish never
+
+      - name: Upload desktop package
+        uses: actions/upload-artifact@v4
+        with:
+          name: phi-client-desktop-${{ matrix.os }}
+          path: |
+            desktop/electron/out/*
+            !desktop/electron/out/builder-effective-config.yaml
+          if-no-files-found: error
+
+  desktop-release:
+    name: Attach desktop packages to release
+    needs: [goreleaser, desktop-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download desktop packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: phi-client-desktop-*
+          path: desktop-release
+          merge-multiple: true
+
+      - name: Upload desktop packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          uploaded=0
+          while IFS= read -r -d '' file; do
+            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+            uploaded=1
+          done < <(find desktop-release -type f -print0)
+          if [ "$uploaded" -eq 0 ]; then
+            echo 'No desktop package files were downloaded.' >&2
+            exit 1
+          fi
+
   npm-publish:
-    needs: goreleaser
+    needs: [goreleaser, desktop-release]
     runs-on: ubuntu-latest
     # actions/setup-node's built-in registry-url auth uses NODE_AUTH_TOKEN
     # when set, but with `registry-url` + OIDC it picks up the auto-minted
