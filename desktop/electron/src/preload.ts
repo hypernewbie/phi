@@ -142,6 +142,10 @@ contextBridge.exposeInMainWorld('electron', {
   postHeaderAction: (action: HeaderAction): void => {
     void ipcRenderer.invoke('phi:header-action', action);
   },
+  // Read the active body view's own workspace selector. Each retained
+  // server view has independent local state, so the main header must
+  // not reuse the previous server's selection.
+  fetchActiveWorkspace: (): Promise<string | null> => ipcRenderer.invoke('phi:active-workspace'),
   onActiveServer: (cb: (info: ActiveServer) => void): (() => void) =>
     subscribe('phi:active-server', cb),
   // Dynamic brand-state push: the active server's CPU percent and

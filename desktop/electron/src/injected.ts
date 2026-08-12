@@ -153,6 +153,13 @@ export const READ_DIVIDERS_SCRIPT = `(() => {
   };
 })()`;
 
+/** Reads the active workspace from a retained remote body view. */
+export const READ_WORKSPACE_SCRIPT = `(() => {
+  const select = document.getElementById('workspace-select');
+  if (!select || typeof select.value !== 'string') return null;
+  return select.value;
+})()`;
+
 /** Builds a same-origin, one-time body-login script. Only the public
  *  challenge and its single-use HMAC proof cross into the remote renderer;
  *  the raw password, verifier, and native-fetch cookie never do. A successful
