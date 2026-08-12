@@ -1196,6 +1196,13 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
 });
 
 describe('electron-builder.json (native branding)', () => {
+  it('packages the runtime assets used by the desktop host', () => {
+    const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
+      files?: string[];
+    };
+    expect(builder.files).toContain('assets/**');
+  });
+
   it('points win.icon at the generated 256px icon asset without adding build targets', () => {
     const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
       win?: { icon?: string };

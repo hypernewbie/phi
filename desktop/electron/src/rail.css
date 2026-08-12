@@ -200,11 +200,13 @@ body {
 }
 
 /* Rail all-entries subtle accent: when the cursor is over the rail
-   itself, every saved entry reads as a quiet shadow of its own accent
-   (--entry-accent). This lets the user eye-glance which colour each
-   server carries without committing to a hover. The resting state
-   stays neutral; only entries with an observed accent glow. */
-#rail:hover .rail-item {
+   itself, every NON-ACTIVE entry reads as a quiet shadow of its own
+   accent (--entry-accent). This lets the user eye-glance which colour
+   each server carries without committing to a hover. The selected
+   server is excluded: rail hover must never demote its active treatment.
+   The resting state stays neutral; only entries with an observed accent
+   glow. */
+#rail:hover .rail-item:not(.active) {
   border-color: color-mix(in srgb, var(--entry-accent, transparent) 35%, transparent);
   box-shadow:
     0 0 calc(4px + 4px * var(--cpu-strength))
@@ -212,9 +214,10 @@ body {
     0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
 }
 
-/* The hovered entry keeps the brighter hover treatment; the others
-   fade back to the resting state on its own hover. */
-#rail .rail-item:hover {
+/* Only a NON-ACTIVE entry takes the brighter hover treatment. The
+   selected server keeps its active ring and glow even while the cursor
+   is over it or another rail entry. */
+#rail .rail-item:not(.active):hover {
   background-color: var(--bg-border);
   border-color: var(--entry-accent, var(--accent));
   color: var(--entry-accent, var(--accent));

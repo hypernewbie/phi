@@ -159,6 +159,13 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(cssSource).not.toMatch(/#38bdf8/i);
     expect(cssSource).not.toMatch(/#ef4444/i);
   });
+
+  it('never lets rail hover selectors demote the active server', () => {
+    expect(cssSource).toMatch(/#rail:hover\s+\.rail-item:not\(\.active\)/);
+    expect(cssSource).toMatch(/#rail\s+\.rail-item:not\(\.active\):hover/);
+    expect(cssSource).not.toMatch(/#rail:hover\s+\.rail-item\s*\{/);
+    expect(cssSource).not.toMatch(/#rail\s+\.rail-item:hover\s*\{/);
+  });
 });
 
 describe('renderer module (src/renderer.ts)', () => {
