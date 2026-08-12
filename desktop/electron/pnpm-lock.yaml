@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      electron:
-        specifier: 33.4.11
-        version: 33.4.11(supports-color@7.2.0)
     devDependencies:
       '@types/jsdom':
         specifier: ^21.1.7
@@ -18,6 +14,9 @@ importers:
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
+      electron:
+        specifier: 33.4.11
+        version: 33.4.11(supports-color@7.2.0)
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@7.2.0)
