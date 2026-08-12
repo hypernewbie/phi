@@ -4,7 +4,7 @@
  * view runs the same `web/header-state.js` helpers the browser Phi
  * page calls from `web/terminal.js`, so the dynamic brand-state
  * (CPU tier glow on the Φ glyph, terminal-activity `▍`/`—` toggle)
- * works identically in both contexts (PLAN5 single source of truth).
+ * works identically in both contexts (shared source of truth).
  *
  * This file pins the helpers' behavior directly. The vendored copy at
  * `desktop/electron/web/vendor/header-state.js` is exercised by the
@@ -153,8 +153,8 @@ describe('TBAR pipeline: header-state module', () => {
     // The desktop main view imports the helpers from the vendored copy
     // and applies them on every `phi:header-state` push from the host.
     // The browser Phi page calls the same helpers from web/terminal.js,
-    // so both contexts run the same code (PLAN5 single source of
-    // truth). The desktop TBAR's brand cluster reads the same DOM
+    // so both contexts run the same code (shared source of truth).
+    // The desktop TBAR's brand cluster reads the same DOM
     // mutations as the browser Phi header.
     const mainviewSource = readFileSync(
       path.join(desktopElectronRoot, 'web', 'mainview.js'),

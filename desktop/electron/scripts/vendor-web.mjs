@@ -105,11 +105,11 @@ function buildIndexPage(headerFragment) {
   }
   // Decorate the vendored header with ONLY the desktop-local caption
   // controls (just before </header>). The header DOM and its styling
-  // stay byte-identical to the browser Phi's source — see
-  // DESKTOP_PLAN5 "single source of truth via vendoring". Any visual
-  // change to the header (centering the workspace, hiding the brand
-  // name, etc.) must land in web/index.html first and get re-vendored
-  // through this script; it does NOT belong here as a mutation.
+  // stay byte-identical to the browser Phi's source — single source
+  // of truth via vendoring. Any visual change to the header
+  // (centering the workspace, hiding the brand name, etc.) must land
+  // in web/index.html first and get re-vendored through this script;
+  // it does NOT belong here as a mutation.
   const decorated = `${headerFragment.slice(0, -'</header>'.length)}${CAPTION_CONTROLS}\n  </header>`;
   return template.replace(HEADER_PLACEHOLDER, decorated);
 }
