@@ -923,6 +923,13 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).toContain("'phi:auth-unlock'");
     expect(desktopSource).toContain("'phi:body-obscuring'");
     expect(desktopSource).toContain('sendAuthRequired(');
+    // The native-fetch cookie stays isolated. The body receives only a
+    // fresh one-time challenge/proof and obtains its own cookie by making
+    // its same-origin login request before reload.
+    expect(desktopSource).toContain('accessAuth.createLoginProof(');
+    expect(desktopSource).toContain('bodyAuthLoginScript(');
+    expect(desktopSource).not.toContain('sharedSession.cookies.set(');
+    expect(desktopSource).not.toContain('session.defaultSession.cookies');
   });
 
   it('relays header actions to the ACTIVE body view with a fixed button whitelist', () => {

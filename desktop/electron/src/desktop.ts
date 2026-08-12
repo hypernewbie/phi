@@ -64,6 +64,7 @@ import {
   PLAY_ALARM_CHIME_SCRIPT,
   headerActionClickScript,
   setWorkspaceScript,
+  bodyAuthLoginScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
@@ -467,7 +468,7 @@ export class DesktopHost {
    *     `phi:header-state` IPC push (CPU + activity). The main view's
    *     mainview.js calls the same `web/header-state.js` helpers the
    *     browser Phi page calls, so the desktop TBAR runs the same
-   *     code path as the browser Phi header (PLAN5 single source of
+   *     code path as the browser Phi header (vendored web single source of
    *     truth).
    *
    * Each saved server keeps its own readings (never aggregated); the
@@ -1370,8 +1371,8 @@ export class DesktopHost {
       | { requestId: string; profileId: string; origin: string; abort: AbortController }
       | null = null;
     let unlockInFlight = false;
-    let lastPromptedOrigin: string | null = null;
     let promptSuppressedFor: string | null = null;
+    const accessAuth = new AccessAuth();
     // Tray receiver wiring: active-changed -> setActiveProfile,
     // unread-changed -> setUnread, profiles-changed -> rebuildMenu;
     // syncTrayFromController() then pushes the store's pre-existing state
@@ -1396,17 +1397,13 @@ export class DesktopHost {
         // Cancels any in-flight access-auth prompt: the active origin
         // changed and the pending requestId is no longer for this
         // server. The renderer also closes any modal it had open.
-        if (typeof pendingUnlock !== 'undefined' && pendingUnlock !== null) {
-          const stale = pendingUnlock;
-          stale.abort.abort();
+        if (pendingUnlock !== null) {
+          pendingUnlock.abort.abort();
           pendingUnlock = null;
-          if (typeof lastPromptedOrigin !== 'undefined') lastPromptedOrigin = null;
-          if (typeof promptSuppressedFor !== 'undefined') promptSuppressedFor = null;
           if (typeof sendBodyObscuring === 'function') sendBodyObscuring(false);
-          if (typeof sendAuthRequired === 'function') {
-            sendAuthRequired({ requestId: stale.requestId, profileId: stale.profileId, origin: stale.origin, label: '' });
-          }
         }
+        // A rail switch is the explicit retry gesture after dismissal.
+        promptSuppressedFor = null;
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||
@@ -1742,7 +1739,12 @@ export class DesktopHost {
       this.observedIdentity.delete(id);
       this.observedCpu.delete(id);
       this.firedSyncKeys.delete(id);
-      if (origin !== '') this.viewByOrigin.delete(origin);
+      if (origin !== '') {
+        this.viewByOrigin.delete(origin);
+        const authOrigin = new URL(origin).origin;
+        accessAuth.cancel(authOrigin);
+        this.clearStoredCredential(authOrigin);
+      }
     });
     ipcMain.on('phi:reorder-profile', (_event, id: unknown, beforeId: unknown) => {
       const ctrl = this.controller;
@@ -1827,7 +1829,6 @@ export class DesktopHost {
     // The renderer is responsible for hiding the active body view via
     // the `phi:body-obscuring` channel — a parent-page DOM modal
     // cannot paint above a child WebContentsView on its own.
-    const accessAuth = new AccessAuth();
     // Re-authenticate every saved origin from the on-disk credential
     // store (if one exists) BEFORE the first config poll. A returning
     // user with valid persisted credentials never sees the unlock
@@ -1843,6 +1844,83 @@ export class DesktopHost {
       if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
       win.webContents.send('phi:body-obscuring', obscured);
       this.profileViews?.setObscured(obscured);
+    };
+
+    /** Waits for one main-frame load without exposing a timer or callback to
+     *  the remote page. Used both before the one-time login and after reload. */
+    const waitForBodyLoad = (view: WebContentsView, reload: boolean): Promise<boolean> =>
+      new Promise((resolve) => {
+        const contents = view.webContents;
+        if (contents.isDestroyed()) {
+          resolve(false);
+          return;
+        }
+        let settled = false;
+        const finish = (loaded: boolean): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          contents.removeListener('did-finish-load', onLoaded);
+          resolve(loaded);
+        };
+        const onLoaded = (): void => finish(true);
+        const timer = setTimeout(() => finish(false), 10_000);
+        contents.once('did-finish-load', onLoaded);
+        if (reload) contents.reload();
+      });
+
+    /** Gives the active remote body its own independently-issued session
+     *  after the user has unlocked the desktop header. Only a fresh,
+     *  single-use challenge/proof pair enters that renderer; the password,
+     *  verifier, and native-fetch cookie stay in the main process. Reloading
+     *  then lets the browser's unchanged auth bootstrap observe its cookie,
+     *  so it never asks the user for the same password a second time. */
+    const authenticateBodyView = async (
+      pending: { requestId: string; profileId: string; origin: string; abort: AbortController },
+    ): Promise<{ ok: true } | { ok: false; code: 'stale' | 'unavailable'; message: string }> => {
+      const ctrl = this.controller;
+      if (!ctrl || ctrl.state().activeId !== pending.profileId || pending.abort.signal.aborted) {
+        return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      }
+      const profile = ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
+      const view = profile ? this.viewByOrigin.get(profile.origin) : null;
+      if (!view || view.webContents.isDestroyed()) {
+        return { ok: false, code: 'unavailable', message: 'The server view is unavailable.' };
+      }
+      if (!this.loadedViews.has(view) && !await waitForBodyLoad(view, false)) {
+        return { ok: false, code: 'unavailable', message: 'The server view did not finish loading.' };
+      }
+      const login = await accessAuth.createLoginProof(pending.origin, pending.abort.signal);
+      if (login.kind === 'stale') return { ok: false, code: 'stale', message: login.message };
+      if (login.kind === 'unavailable') {
+        return { ok: false, code: 'unavailable', message: login.message };
+      }
+      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+        return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      }
+      if (login.kind === 'ok') {
+        let status: unknown;
+        try {
+          status = await view.webContents.executeJavaScript(
+            bodyAuthLoginScript(login.challenge, login.proof),
+          );
+        } catch {
+          return { ok: false, code: 'unavailable', message: 'Unable to authenticate the server view.' };
+        }
+        if (status !== 200) {
+          return { ok: false, code: 'unavailable', message: 'The server view did not accept the session.' };
+        }
+      }
+      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+        return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      }
+      if (!await waitForBodyLoad(view, true)) {
+        return { ok: false, code: 'unavailable', message: 'The authenticated server view did not reload.' };
+      }
+      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+        return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      }
+      return { ok: true };
     };
 
     ipcMain.handle('phi:server-config', async (event) => {
@@ -1881,7 +1959,6 @@ export class DesktopHost {
         origin: capture.origin,
         abort: new AbortController(),
       };
-      lastPromptedOrigin = origin;
       sendBodyObscuring(true);
       sendAuthRequired({
         requestId: pendingUnlock.requestId,
@@ -1924,9 +2001,11 @@ export class DesktopHost {
         if (pendingUnlock !== pending) {
           return { ok: false, code: 'stale', message: 'replaced' };
         }
-        pendingUnlock = null;
-        sendBodyObscuring(false);
         if (result.kind === 'ok') {
+          const bodyResult = await authenticateBodyView(pending);
+          if (!bodyResult.ok) return bodyResult;
+          pendingUnlock = null;
+          sendBodyObscuring(false);
           // Persist the verifier for next launch's auto-reauth (the
           // password is never stored — only the PBKDF2 verifier, which
           // the browser itself stores in `localStorage` under the same
@@ -1935,6 +2014,9 @@ export class DesktopHost {
           this.persistVerifierAfterUnlock(pending.origin, accessAuth);
           return { ok: true, config: result.config };
         }
+        // Wrong-password, rate-limit, and transient failures keep the same
+        // prompt and child-view obstruction in place. Clearing either here
+        // would reveal the body's browser prompt and force a second entry.
         if (result.kind === 'stale') return { ok: false, code: 'stale', message: result.message };
         return { ok: false, code: result.kind, message: result.message };
       } finally {

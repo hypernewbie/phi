@@ -173,6 +173,33 @@ export class AccessAuth {
     return this.cookies.has(origin);
   }
 
+  /** Creates a fresh one-time login proof from the verifier retained after
+   *  a successful desktop unlock. The proof may be handed to that origin's
+   *  body view: it is bound to a server-issued single-use challenge and
+   *  cannot reveal or replace the password/verifier. */
+  async createLoginProof(
+    origin: string,
+    signal?: AbortSignal,
+  ): Promise<
+    | { kind: 'ok'; challenge: string; proof: string }
+    | { kind: 'no-auth' }
+    | { kind: 'unavailable'; message: string }
+    | { kind: 'stale'; message: string }
+  > {
+    if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
+    const status = await this.fetchStatus(origin, signal);
+    if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
+    if (status.kind === 'unavailable') return status;
+    if (status.kind === 'no-auth') return status;
+    const verifier = this.lastVerifier.get(origin);
+    if (!verifier) return { kind: 'unavailable', message: 'No authenticated credential is available.' };
+    return {
+      kind: 'ok',
+      challenge: status.challenge,
+      proof: makeProof(verifier, status.challenge),
+    };
+  }
+
   /**
    * Fetches `/api/config` for `origin` with the captured session cookie
    * (if any). 401 is a discriminated `unauthorized` (the caller decides
@@ -189,7 +216,10 @@ export class AccessAuth {
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
-      if (res.status === 401) return { kind: 'unauthorized' };
+      if (res.status === 401) {
+        this.cookies.delete(origin);
+        return { kind: 'unauthorized' };
+      }
       if (!res.ok) return { kind: 'unavailable', reason: `http ${res.status}` };
       // Parse defensively: a non-JSON body should not crash the main view.
       const text = await res.text();

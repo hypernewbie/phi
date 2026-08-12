@@ -18,6 +18,7 @@ import {
   PLAY_ALARM_CHIME_SCRIPT,
   headerActionClickScript,
   setWorkspaceScript,
+  bodyAuthLoginScript,
 } from '../src/injected.js';
 
 /** The injected scripts' recording surface (window.__phiFileAction / guard). */
@@ -348,6 +349,21 @@ describe('PLAY_ALARM_CHIME_SCRIPT (the Sync Board alarm chime)', () => {
     } finally {
       window.Audio = OrigAudio;
     }
+  });
+});
+
+describe('retained body state scripts', () => {
+  it('builds a same-origin body login with JSON-escaped one-time proof data', async () => {
+    const fetchSpy = vi.fn(async () => ({ status: 200 }));
+    Object.defineProperty(window, 'fetch', { value: fetchSpy, configurable: true });
+    const challenge = 'challenge"</script>';
+    const proof = 'proof\\value';
+    await expect(window.eval(bodyAuthLoginScript(challenge, proof))).resolves.toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challenge, proof }),
+    });
   });
 });
 
