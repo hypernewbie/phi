@@ -1,0 +1,54 @@
+/* Phi design tokens mirrored from shell.css (same names, same values). */
+:root {
+  --bg-panel: #0d0d10;
+  --bg-border: #1f1f26;
+  --accent: #7c6af7;
+  --text-primary: #e4e3e9;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  -webkit-user-select: none;
+}
+
+/* The whole island is a drag region for the frameless window; the text
+   element opts out so it never swallows a drag gesture. */
+body {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-app-region: drag;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.title-mark {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.title-text {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-app-region: no-drag;
+}

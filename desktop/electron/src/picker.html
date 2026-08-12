@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Add Phi server</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #08080a;
+        color: #e6e6e6;
+        overflow-y: auto;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      #server-url {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        font-size: 13px;
+        color: #e6e6e6;
+        background: #141416;
+        border: 1px solid #333;
+        border-radius: 4px;
+        outline: none;
+      }
+      #server-url:focus {
+        border-color: #4f46e5;
+      }
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      button {
+        padding: 6px 16px;
+        font-size: 13px;
+        color: #e6e6e6;
+        background: #1c1c1f;
+        border: 1px solid #333;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #add {
+        background: #4f46e5;
+        border-color: #4f46e5;
+      }
+      #error {
+        margin: 8px 0 0;
+        font-size: 12px;
+        color: #f87171;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Add Phi server</h1>
+    <input
+      id="server-url"
+      type="url"
+      placeholder="https://server.example.com"
+      autocomplete="off"
+      spellcheck="false"
+      autofocus
+    />
+    <p id="error" role="alert" hidden></p>
+    <div class="actions">
+      <button id="cancel" type="button">Cancel</button>
+      <button id="add" type="button">Add</button>
+    </div>
+    <script>
+      const input = document.getElementById('server-url');
+      const error = document.getElementById('error');
+      const submit = () => {
+        let url = input.value.trim();
+        if (url === '') return;
+        error.textContent = '';
+        error.hidden = true;
+        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+          url = 'http://' + url;
+        }
+        const parsed = new URL(url);
+        if (parsed.port === '') {
+          parsed.port = '7070';
+        }
+        window.electron.postAddServer(parsed.toString());
+      };
+      window.electron.onAddServerResult((result) => {
+        if (result.ok) {
+          window.close();
+        } else {
+          error.textContent = result.message ?? 'Failed to add server';
+          error.hidden = false;
+        }
+      });
+      document.getElementById('add').addEventListener('click', submit);
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          submit();
+        } else if (event.key === 'Escape') {
+          window.close();
+        }
+      });
+      document.getElementById('cancel').addEventListener('click', () => window.close());
+    </script>
+  </body>
+</html>

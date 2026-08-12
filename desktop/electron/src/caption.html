@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Window controls</title>
+    <link rel="stylesheet" href="./caption.css" />
+  </head>
+  <body>
+    <!-- Local caption-controls island: minimize, maximize/restore, close.
+         The buttons drive the window through the preload bridge; the
+         maximize glyph and the focused dimming follow 'phi:window-state'
+         (window.electron.onWindowState). -->
+    <div class="caption">
+      <button id="caption-minimize" type="button" aria-label="Minimize" title="Minimize">─</button>
+      <button id="caption-maximize" type="button" aria-label="Maximize" title="Maximize">□</button>
+      <button id="caption-close" type="button" aria-label="Close" title="Close">✕</button>
+    </div>
+    <script>
+      const minimize = document.getElementById('caption-minimize');
+      const maximize = document.getElementById('caption-maximize');
+      const close = document.getElementById('caption-close');
+      minimize.addEventListener('click', () => window.electron.postWindowMinimize());
+      maximize.addEventListener('click', () => window.electron.postWindowToggleMaximize());
+      close.addEventListener('click', () => window.electron.postWindowClose());
+      window.electron.onWindowState((state) => {
+        maximize.textContent = state.isMaximized ? '❐' : '□';
+        maximize.setAttribute('aria-label', state.isMaximized ? 'Restore' : 'Maximize');
+        document.body.classList.toggle('focused', state.focused);
+      });
+    </script>
+  </body>
+</html>

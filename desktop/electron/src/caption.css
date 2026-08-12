@@ -1,0 +1,61 @@
+/* Phi design tokens mirrored from shell.css (same names, same values). */
+:root {
+  --bg-panel: #0d0d10;
+  --bg-elevated: #141418;
+  --bg-border: #1f1f26;
+  --accent: #7c6af7;
+  --text-primary: #e4e3e9;
+  --text-muted: #78768a;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  -webkit-user-select: none;
+}
+
+body {
+  background: var(--bg-panel);
+  font-family: var(--font-ui);
+}
+
+.caption {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+
+button {
+  flex: 0 0 46px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+
+button:hover {
+  background: var(--bg-elevated);
+}
+
+/* Native dim-when-unfocused: the controls mute until the window regains focus. */
+body:not(.focused) button {
+  color: var(--text-muted);
+}
+
+#caption-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}

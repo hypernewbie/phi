@@ -1,0 +1,104 @@
+/* Phi design tokens mirrored from web/style.css (same names, same values):
+   the desktop shell must reuse the server UI's palette so the rail reads
+   as part of Phi. Only the tokens this phase-1 page needs are declared;
+   later slices may add the rest. */
+:root {
+  --bg-base: #08080a;
+  --bg-panel: #0d0d10;
+  --bg-elevated: #141418;
+  --bg-border: #1f1f26;
+  --accent: #7c6af7;
+  --accent-glow: rgba(124, 106, 247, 0.15);
+  --text-primary: #e4e3e9;
+  --text-muted: #78768a;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', Courier, monospace;
+  /* Rail geometry: the plan's 64px server rail. */
+  --rail-width: 64px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+.shell {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Server rail (phase-1 placeholder). The sidebar background mirrors the
+   Phi panel token (--bg-panel) with the Phi border token, and the Φ mark
+   uses the Phi accent token. */
+.rail {
+  flex: 0 0 var(--rail-width);
+  width: var(--rail-width);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 12px;
+  gap: 8px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--bg-border);
+}
+
+.rail-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  text-shadow: 0 0 10px var(--accent-glow);
+}
+
+.rail-caption {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Right pane placeholder. */
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+  background: var(--bg-base);
+}
+
+.pane-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pane-note {
+  max-width: 520px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
