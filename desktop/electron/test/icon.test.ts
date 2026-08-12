@@ -80,4 +80,10 @@ describe('scripts/gen-icon.mjs (the committed generator)', () => {
     expect(source).toContain("'tray.png'");
     expect(source).toContain("'tray.ico'");
   });
+
+  it('uses the committed generated assets on non-Windows packaging hosts', () => {
+    const source = readFileSync(path.join(here, '..', 'scripts', 'gen-icon.mjs'), 'utf8');
+    expect(source).toContain("process.platform !== 'win32'");
+    expect(source).toContain('using committed icon assets');
+  });
 });
