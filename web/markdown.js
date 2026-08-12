@@ -3,6 +3,7 @@ import { relativeToCwd, escapeHtml } from './util.js';
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn } from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment } from './attachments.js';
+import { tryNative } from './desktop.js';
 export class MarkdownManager {
     app;
     fileListEl;
@@ -75,7 +76,11 @@ export class MarkdownManager {
         });
         const helpBtn = document.getElementById('phi-help-btn');
         if (helpBtn) {
-            helpBtn.addEventListener('click', () => this.openHelpModal());
+            helpBtn.addEventListener('click', () => {
+                if (tryNative('help', {}))
+                    return;
+                void this.openHelpModal();
+            });
         }
         if (this.modalCopyBtn) {
             this.modalCopyBtn.addEventListener('click', () => {
@@ -90,7 +95,11 @@ export class MarkdownManager {
         // Sidebar version text doubles as a changelog trigger.
         const changelogBtn = document.getElementById('phi-changelog-btn');
         if (changelogBtn) {
-            changelogBtn.addEventListener('click', () => this.openChangelogModal());
+            changelogBtn.addEventListener('click', () => {
+                if (tryNative('changelog', {}))
+                    return;
+                void this.openChangelogModal();
+            });
         }
         // Manual restart button (sidebar footer ↻). Always available for
         // every install method - just calls /api/restart. The user is
@@ -103,8 +112,14 @@ export class MarkdownManager {
         this.restartModalCancel = document.getElementById('restart-modal-cancel');
         this.restartModalConfirm = document.getElementById('restart-modal-confirm');
         const restartBtn = document.getElementById('phi-restart-btn');
-        if (restartBtn) {
+        // The desktop shell hosts this page with ?desktop=1 and owns the
+        // process lifecycle, so the in-page restart affordance is hidden there.
+        const desktopView = new URLSearchParams(location.search).get('desktop') === '1';
+        if (restartBtn && !desktopView) {
             restartBtn.addEventListener('click', () => this._openRestartModal());
+        }
+        else if (restartBtn) {
+            restartBtn.style.display = 'none';
         }
         if (this.restartModalClose) {
             this.restartModalClose.addEventListener('click', () => this._closeRestartModal());
@@ -841,6 +856,11 @@ export class MarkdownManager {
     }
     _openInNewWindow(f) {
         const cwd = this.app.sessionsManager.activeCWD || '';
+        // Desktop host claim (Tier 1): phi-desktop opens a real native
+        // window for the same path/cwd; in a plain browser tryNative is a
+        // no-op returning false and the window.open fallback below runs.
+        if (tryNative('markdown', { path: f.path, cwd }))
+            return;
         const url = `/md.html?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`;
         // No 'noopener' in features: the spec makes window.open return null
         // when noopener is set, which would defeat popup-blocked detection.

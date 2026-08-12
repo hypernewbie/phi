@@ -24,13 +24,42 @@ export function mdEventMatchesPath(dir: string | null | undefined, path: string)
     return path.replace(/\\/g, '/').startsWith(d);
 }
 
-// initMdView boots the viewer: renders the file named by the ?path/?cwd
-// query params and live-refreshes on /ws/md-events 0x07 broadcasts.
+// Static pages are whitelisted; query values never select arbitrary URLs.
+const STATIC_PAGES: Record<string, { file: string; title: string }> = {
+    help: { file: 'help.md', title: 'Phi Documentation' },
+    changelog: { file: 'changelog.md', title: 'Changelog' },
+};
+
+async function initStaticPage(container: HTMLElement, page: string): Promise<void> {
+    const spec = STATIC_PAGES[page];
+    if (!spec) {
+        container.innerHTML = '<div class="md-list-error">Unknown "page" query parameter.</div>';
+        return;
+    }
+    document.title = spec.title;
+    try {
+        const res = await fetch(spec.file);
+        if (!res.ok) throw new Error(await res.text() || `Failed to load ${spec.file}`);
+        const raw = await res.text();
+        container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(raw)}</div>`;
+        highlightCodeIn(container);
+    } catch (e) {
+        container.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
+    }
+}
+
+// initMdView renders a workspace file or whitelisted static page.
 export function initMdView(): void {
     const container = document.getElementById('md-view-body');
     if (!container) return;
 
     const params = new URL(location.href).searchParams;
+    const page = params.get('page') || '';
+    if (page) {
+        void initStaticPage(container, page);
+        return;
+    }
+
     const path = params.get('path') || '';
     const cwd = params.get('cwd') || '';
     if (!path) {
