@@ -41,6 +41,7 @@
  * job). The manager only owns the view lifecycle.
  */
 import type { BrowserWindow, WebContentsView } from 'electron';
+import { installFullscreenToggle } from './fullscreen.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -291,6 +292,11 @@ export class ProfileViewManager {
         if (!view.webContents.isDestroyed()) view.webContents.focus();
       }
     });
+    // Plain F11 toggles fullscreen on the BrowserWindow from any retained
+    // body view (the main-view listener in desktop.ts does not catch keys
+    // that fire while a body view has focus). Modified F11 chords stay
+    // untouched; xterm.js leaves plain F11 unbound.
+    installFullscreenToggle(view.webContents, this.win);
     const rootUrl = new URL(origin);
     rootUrl.searchParams.set('desktop', '1');
     view.webContents.loadURL(rootUrl.toString());

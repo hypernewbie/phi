@@ -66,6 +66,7 @@ import {
   setWorkspaceScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
+import { installFullscreenToggle } from './fullscreen.js';
 import { ALWAYS_SAFE_RAIL_CHORDS, TERMINAL_FOCUS_SCRIPT, resolveRailChord } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 
@@ -1232,6 +1233,13 @@ export class DesktopHost {
         win.hide();
       }
     });
+    // Plain F11 toggles fullscreen on the BrowserWindow (any view — main
+    // view, body views, picker). before-input-event fires per webContents,
+    // so the toggle is installed on every desktop-owned surface (the
+    // retained bodies install it via ProfileViewManager; the picker and
+    // popups below install it on their own contents). Modified F11 chords
+    // stay untouched; xterm.js does not claim plain F11.
+    installFullscreenToggle(win.webContents, win);
     // A sync-alert taskbar flash clears when the window regains focus; the
     // main view page also reflects the focus state (native dim-when-unfocused).
     win.on('focus', () => {
@@ -1480,6 +1488,7 @@ export class DesktopHost {
                   if (!child.isDestroyed()) child.show();
                 });
                 attachNavGuard(child.webContents);
+                installFullscreenToggle(child.webContents, child);
                 return child.webContents;
               },
             };
@@ -1673,6 +1682,7 @@ export class DesktopHost {
         },
       });
       void picker.loadFile(path.join(here, 'picker.html'));
+      installFullscreenToggle(picker.webContents, win);
       picker.once('ready-to-show', () => {
         if (!picker.isDestroyed()) picker.show();
       });
