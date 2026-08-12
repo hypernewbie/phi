@@ -18,6 +18,7 @@ import {
   PLAY_ALARM_CHIME_SCRIPT,
   headerActionClickScript,
   setWorkspaceScript,
+  READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
 } from '../src/injected.js';
 
@@ -353,6 +354,13 @@ describe('PLAY_ALARM_CHIME_SCRIPT (the Sync Board alarm chime)', () => {
 });
 
 describe('retained body state scripts', () => {
+  it('reads the body workspace selector value', () => {
+    document.body.innerHTML = '<select id="workspace-select"><option value="/a">a</option><option value="/b">b</option></select>';
+    const select = document.getElementById('workspace-select') as HTMLSelectElement;
+    select.value = '/b';
+    expect(window.eval(READ_WORKSPACE_SCRIPT)).toBe('/b');
+  });
+
   it('builds a same-origin body login with JSON-escaped one-time proof data', async () => {
     const fetchSpy = vi.fn(async () => ({ status: 200 }));
     Object.defineProperty(window, 'fetch', { value: fetchSpy, configurable: true });

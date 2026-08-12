@@ -932,6 +932,17 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).not.toContain('session.defaultSession.cookies');
   });
 
+  it('rejects stale config/workspace reads after an active-server switch', () => {
+    const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
+    expect(configIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf('ctrl.state().activeId !== capture.profileId', configIdx)).toBeGreaterThan(configIdx);
+    const workspaceIdx = desktopSource.indexOf("ipcMain.handle('phi:active-workspace'");
+    expect(workspaceIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf('isMainViewSender(event)', workspaceIdx)).toBeGreaterThan(workspaceIdx);
+    expect(desktopSource.indexOf('executeJavaScript(READ_WORKSPACE_SCRIPT)', workspaceIdx)).toBeGreaterThan(workspaceIdx);
+    expect(desktopSource.indexOf('ctrl.state().activeId !== active.id', workspaceIdx)).toBeGreaterThan(workspaceIdx);
+  });
+
   it('relays header actions to the ACTIVE body view with a fixed button whitelist', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.handle('phi:header-action'");
     expect(handlerIdx).toBeGreaterThan(-1);
@@ -977,6 +988,8 @@ describe('src/preload.ts (main-view-page window-control + server bridge)', () =>
     expect(preloadSource).toContain("'phi:header-action'");
     expect(preloadSource).toContain("'phi:active-server'");
     expect(preloadSource).toContain('fetchServerConfig');
+    expect(preloadSource).toContain('fetchActiveWorkspace');
+    expect(preloadSource).toContain("'phi:active-workspace'");
     expect(preloadSource).toContain('postHeaderAction');
     expect(preloadSource).toContain('onActiveServer');
   });

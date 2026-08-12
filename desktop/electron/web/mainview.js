@@ -60,20 +60,44 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     App.prototype.applyAccentTheme.call(shim, colorKey);
   }
 
+  let activeServerId = null;
+  let refreshSerial = 0;
+  let workspaceChangeSerial = 0;
+
   /** Populate the header from the ACTIVE server's /api/config. */
   async function refreshConfig() {
+    const serial = ++refreshSerial;
+    const requestedServerId = activeServerId;
     let config;
     try {
       config = await window.electron.fetchServerConfig();
     } catch {
       return; // server unreachable; keep the last rendered state
     }
-    if (!config || typeof config !== 'object') return;
+    if (
+      serial !== refreshSerial ||
+      requestedServerId !== activeServerId ||
+      !config ||
+      typeof config !== 'object'
+    ) return;
+    const revision = workspaceChangeSerial;
+    let bodyWorkspace = null;
+    if (workspaceSelect && Array.isArray(config.workspaces)) {
+      try {
+        bodyWorkspace = await window.electron.fetchActiveWorkspace?.() ?? null;
+      } catch {
+        // The body may still be loading; use the server config fallback.
+      }
+    }
+    // Apply the config atomically only after both reads still belong to
+    // the selected server. An outgoing response never partially repaints
+    // hostname, theme, or project while the incoming read is in flight.
+    if (serial !== refreshSerial || requestedServerId !== activeServerId) return;
     if (hostnameDisplay) {
       hostnameDisplay.innerText = displayHostname(config.hostname);
     }
     if (workspaceSelect && Array.isArray(config.workspaces)) {
-      const previous = workspaceSelect.value;
+      const userSelection = workspaceSelect.value;
       workspaceSelect.textContent = '';
       for (const ws of config.workspaces) {
         const opt = document.createElement('option');
@@ -82,12 +106,13 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
         opt.title = ws;
         workspaceSelect.appendChild(opt);
       }
+      const current = revision !== workspaceChangeSerial ? userSelection : bodyWorkspace;
       const active = typeof config.active_cwd === 'string' ? config.active_cwd : '';
       workspaceSelect.value =
-        active !== '' && config.workspaces.includes(active)
-          ? active
-          : previous !== '' && config.workspaces.includes(previous)
-            ? previous
+        typeof current === 'string' && config.workspaces.includes(current)
+          ? current
+          : active !== '' && config.workspaces.includes(active)
+            ? active
             : config.workspaces[0] ?? '';
       updateWorkspaceSelectWidth();
     }
@@ -117,6 +142,7 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   // --- workspace-change handler re-renders the body's sessions) ---
   if (workspaceSelect) {
     workspaceSelect.addEventListener('change', () => {
+      workspaceChangeSerial += 1;
       updateWorkspaceSelectWidth();
       window.electron.postHeaderAction({ kind: 'workspace', value: workspaceSelect.value });
     });
@@ -156,7 +182,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
 
   // --- Server sync: refresh on profile activation and on a light cadence
   // --- (the server exposes no push channel for config) ---
-  window.electron.onActiveServer(() => {
+  window.electron.onActiveServer((info) => {
+    activeServerId = info?.id ?? null;
     void refreshConfig();
   });
   void refreshConfig();
@@ -285,8 +312,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   // percent and terminal-activity flag are polled by the host (every
   // ~2s via `pollCpu`) and forwarded here. The main view's brand
   // cluster runs the same `web/header-state.js` helpers the browser
-  // Phi page calls from `web/terminal.js` — same code path, same
-  // DOM mutations, PLAN5 single source of truth. The `hostnameKnown`
+  // Phi page calls from `web/terminal.js` — same code path and same
+  // DOM mutations. The `hostnameKnown`
   // argument is `true` on the desktop because the active server's
   // hostname is always known by the time the main view is up (the
   // unlock modal flow uses it).

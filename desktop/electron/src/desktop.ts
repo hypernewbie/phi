@@ -64,6 +64,7 @@ import {
   PLAY_ALARM_CHIME_SCRIPT,
   headerActionClickScript,
   setWorkspaceScript,
+  READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
@@ -1578,6 +1579,12 @@ export class DesktopHost {
         this.loadedViews.add(view);
         this.pushRailState();
         void view.webContents.executeJavaScript(INSTALL_FILE_ACTION_SCRIPT).catch(() => {});
+        // A first activation can request header config before this body has
+        // populated its workspace selector. Re-push the active server after
+        // load so the main header reads this server's actual selected project.
+        const state = this.controller?.state();
+        const active = state?.profiles.find((profile) => profile.id === state.activeId);
+        if (active?.origin === origin) this.pushActiveServer();
       });
       return view;
     };
@@ -1933,6 +1940,9 @@ export class DesktopHost {
       const origin = new URL(active.origin).origin;
       const capture = { profileId: active.id, origin, ts: Date.now() };
       const result = await accessAuth.fetchConfig(origin);
+      // A config response for the outgoing server must never repaint the
+      // header after the rail has switched to another profile.
+      if (ctrl.state().activeId !== capture.profileId) return null;
       if (result.kind === 'ok') return result.config;
       if (result.kind === 'unavailable') return null;
       // result.kind === 'unauthorized': the server requires access.
@@ -1946,6 +1956,7 @@ export class DesktopHost {
       if (status.kind === 'no-auth') {
         // Server reports no auth protection — the unlock is moot.
         const cfg = await accessAuth.fetchConfig(origin).catch(() => null);
+        if (ctrl.state().activeId !== capture.profileId) return null;
         return cfg?.kind === 'ok' ? cfg.config : null;
       }
       if (status.kind === 'unavailable') return null;
@@ -1967,6 +1978,24 @@ export class DesktopHost {
         label: active.name !== '' ? active.name : pendingUnlock.origin,
       });
       return null; // caller will retry once phi:auth-unlock resolves
+    });
+
+    ipcMain.handle('phi:active-workspace', async (event) => {
+      if (!isMainViewSender(event)) return null;
+      const ctrl = this.controller;
+      if (!ctrl) return null;
+      const st = ctrl.state();
+      const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
+      if (!active) return null;
+      const view = this.viewByOrigin.get(active.origin);
+      if (!view || view.webContents.isDestroyed()) return null;
+      try {
+        const raw = await view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT);
+        if (ctrl.state().activeId !== active.id) return null;
+        return typeof raw === 'string' && raw !== '' ? raw : null;
+      } catch {
+        return null;
+      }
     });
 
     ipcMain.handle('phi:auth-unlock', async (event, payload) => {

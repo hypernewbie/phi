@@ -149,6 +149,8 @@ export interface ElectronApi {
   fetchServerConfig(): Promise<unknown>;
   /** Relay a header interaction to the active body view (channel 'phi:header-action'). */
   postHeaderAction(action: HeaderAction): void;
+  /** Read the active retained body's own workspace selector (channel 'phi:active-workspace'). */
+  fetchActiveWorkspace(): Promise<string | null>;
   /** Subscribe to active-server changes (channel 'phi:active-server'); returns an unsubscribe function. */
   onActiveServer(cb: (info: ActiveServer) => void): () => void;
   /** Subscribe to access-auth prompts (channel 'phi:auth-required');
