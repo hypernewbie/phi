@@ -153,6 +153,25 @@ export const READ_DIVIDERS_SCRIPT = `(() => {
   };
 })()`;
 
+/** Builds a same-origin, one-time body-login script. Only the public
+ *  challenge and its single-use HMAC proof cross into the remote renderer;
+ *  the raw password, verifier, and native-fetch cookie never do. A successful
+ *  response lets Chromium store a separate HttpOnly cookie for that body
+ *  view's shared Electron session. */
+export function bodyAuthLoginScript(challenge: string, proof: string): string {
+  return `(async () => {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challenge: ${JSON.stringify(challenge)},
+        proof: ${JSON.stringify(proof)},
+      }),
+    });
+    return response.status;
+  })()`;
+}
+
 /**
  * Builds the fixed script that applies a divider snapshot to the page:
  * persists each set key in the view's own localStorage, sets the panel

@@ -197,6 +197,19 @@ describe('AccessAuth.fetchConfig', () => {
     await auth.fetchConfig(origin);
     expect(seen.cookie).toBe('phi_access_session=token-xyz');
   });
+
+  it('drops a stale native-fetch cookie when config returns 401', async () => {
+    const auth = new AccessAuth(async () => new Response('', { status: 401 }));
+    (auth as unknown as { cookies: Map<string, { cookieName: string; cookieValue: string; path: string; httpOnly: true }> }).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'expired-token',
+      path: '/',
+      httpOnly: true,
+    });
+    expect(auth.hasCookie(origin)).toBe(true);
+    expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
+    expect(auth.hasCookie(origin)).toBe(false);
+  });
 });
 
 // -- tryUnlock happy / sad paths --
@@ -327,6 +340,41 @@ describe('AccessAuth.tryUnlock', () => {
     expect(result.kind).toBe('ok');
     if (result.kind === 'ok') expect(result.config).toBe(null);
     expect(auth.hasCookie(origin)).toBe(true);
+  });
+
+  it('creates a fresh single-use proof for the remote body after one password unlock', async () => {
+    const password = 'whatever-password';
+    let statusCalls = 0;
+    const doFetch = (async (url: URL) => {
+      const path = url.toString();
+      if (path.endsWith('/api/auth/status')) {
+        statusCalls += 1;
+        return new Response(JSON.stringify({
+          ...goodStatus,
+          challenge: statusCalls === 1 ? 'native-challenge' : 'body-challenge',
+        }), { status: 200 });
+      }
+      if (path.endsWith('/api/auth/login')) {
+        return new Response('', {
+          status: 200,
+          headers: { 'set-cookie': 'phi_access_session=native-token; Path=/; HttpOnly' },
+        });
+      }
+      if (path.endsWith('/api/config')) return new Response('{}', { status: 200 });
+      throw new Error(`unexpected fetch ${path}`);
+    }) as unknown as typeof fetch;
+    const auth = new AccessAuth(doFetch);
+    expect((await auth.tryUnlock(origin, password)).kind).toBe('ok');
+
+    const bodyLogin = await auth.createLoginProof(origin);
+    expect(bodyLogin.kind).toBe('ok');
+    if (bodyLogin.kind === 'ok') {
+      expect(bodyLogin.challenge).toBe('body-challenge');
+      const verifier = await deriveVerifier(password, Buffer.from(goodStatus.salt, 'base64url'), goodStatus.iterations);
+      expect(bodyLogin.proof).toBe(makeProof(verifier, 'body-challenge'));
+      verifier.fill(0);
+    }
+    expect(statusCalls).toBe(2);
   });
 
   it('rejects passwords shorter than 8 characters without a fetch', async () => {
