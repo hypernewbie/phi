@@ -95,10 +95,10 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(cssValue(railBody!, 'border')).toBe(cssValue(btnBody!, 'border'));
   });
 
-  it(':hover transform matches .header-btn:hover', () => {
-    // Hover rule is scoped under `#rail` so it can sit next to the
-    // rail-hover-all-entries subtle accent rule without competing.
-    const railHover = ruleBody(railCss, '#rail .rail-item:hover');
+  it(':hover transform matches .header-btn:hover for non-active entries', () => {
+    // Hover rule is scoped under `#rail` and excludes the active entry so
+    // hovering any other server never demotes the selected server.
+    const railHover = ruleBody(railCss, '#rail .rail-item:not(.active):hover');
     expect(railHover).not.toBeNull();
     const btnHover = ruleBody(webCss, '.header-btn:hover');
     expect(btnHover).not.toBeNull();
@@ -133,13 +133,11 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(btnActive!).toMatch(/--accent-glow/);
   });
 
-  it('#rail:hover surfaces every entry’s own accent as a quiet preview glow', () => {
-    // When the cursor is over the rail, every .rail-item shows a faint
-    // shadow of its own observed accent (--entry-accent). The user
-    // eye-glances the colour of every server without committing to
-    // a hover; the active hover still wins because of higher
-    // specificity (#rail .rail-item:hover > #rail:hover .rail-item).
-    const rule = ruleBody(railCss, '#rail:hover .rail-item');
+  it('#rail:hover surfaces every non-active entry’s own accent as a quiet preview glow', () => {
+    // When the cursor is over the rail, every non-active .rail-item shows
+    // a faint shadow of its own observed accent (--entry-accent). The
+    // selected entry is excluded so rail hover cannot demote it.
+    const rule = ruleBody(railCss, '#rail:hover .rail-item:not(.active)');
     expect(rule).not.toBeNull();
     expect(rule!).toMatch(/--entry-accent/);
     expect(rule!).toMatch(/border-color/);

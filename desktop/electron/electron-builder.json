@@ -5,7 +5,7 @@
   "directories": {
     "output": "out"
   },
-  "files": ["dist/**", "src/**", "web/**", "package.json"],
+  "files": ["dist/**", "src/**", "web/**", "assets/**", "package.json"],
   "electronVersion": "33.4.11",
   "win": {
     "icon": "assets/icon.png"
