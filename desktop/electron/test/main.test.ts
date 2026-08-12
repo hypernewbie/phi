@@ -847,6 +847,26 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     ).toBeGreaterThan(guardIdx);
   });
 
+  it('installs the plain-F11 fullscreen toggle on the main view, picker, and popups', () => {
+    // The main window's own page (the vendored header).
+    expect(desktopSource).toContain('installFullscreenToggle(win.webContents, win)');
+    // The local add-server picker (modal child of the main window).
+    const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
+    expect(pickerIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installFullscreenToggle(picker.webContents, win)', pickerIdx),
+    ).toBeGreaterThan(pickerIdx);
+    // Same-origin popup children each toggle their own window.
+    const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
+    expect(popupIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installFullscreenToggle(child.webContents, child)', popupIdx),
+    ).toBeGreaterThan(popupIdx);
+    // The retained body views install the same contract via the shared
+    // module (behavioural coverage in test/views.test.ts + fullscreen.test.ts).
+    expect(desktopSource).toContain("import { installFullscreenToggle } from './fullscreen.js'");
+  });
+
   it('pushes maximize/focus state and the active server to the main view page on maximize, unmaximize, focus and blur', () => {
     expect(desktopSource).toContain("'phi:window-state'");
     const pushIdx = desktopSource.indexOf('pushWindowState(): void');
@@ -1305,7 +1325,8 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
   });
 
   it('preventDefaults the always-safe digits synchronously and switches through controller.setActive', () => {
-    const listenerIdx = desktopSource.indexOf("'before-input-event'");
+    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const listenerIdx = desktopSource.indexOf("'before-input-event'", makeViewIdx);
     expect(listenerIdx).toBeGreaterThan(-1);
     const listenerRegion = desktopSource.slice(listenerIdx, desktopSource.indexOf('return view;', listenerIdx));
     expect(listenerRegion).toContain("input.type !== 'keyDown'");
@@ -1323,7 +1344,8 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
   });
 
   it('never preventDefaults the conditional chords and gates them on the terminal-focus probe', () => {
-    const listenerIdx = desktopSource.indexOf("'before-input-event'");
+    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const listenerIdx = desktopSource.indexOf("'before-input-event'", makeViewIdx);
     const listenerRegion = desktopSource.slice(listenerIdx, desktopSource.indexOf('return view;', listenerIdx));
     expect(listenerRegion).toContain("void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(");
     expect(listenerRegion).toContain('if (raw === true) return;');
