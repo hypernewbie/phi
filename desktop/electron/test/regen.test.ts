@@ -207,9 +207,7 @@ describe('TBAR pipeline: regen + diff', () => {
     try {
       const tmpHeader = path.join(tmp, 'header.html');
       const tmpIndex = path.join(tmp, 'index.html');
-      const tmpVendorDir = path.join(tmp, 'vendor');
-      const tmpFontsDir = path.join(tmp, 'vendor', 'fonts');
-      const tmpStyle = path.join(tmp, 'style.css');
+
 
       // Mirror the vendor script's behaviour into the temp dir.
       writeFileSync(tmpHeader, browserHeaderBlock());
