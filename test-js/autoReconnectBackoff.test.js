@@ -38,4 +38,10 @@ describe('source guards', () => {
         expect(src).toContain('AUTO_RECONNECT_GRACE_MS + Math.random() * backoff');
         expect(src).toMatch(/const AUTO_RECONNECT_GRACE_MS = 1000;/);
     });
+
+    it('revives dead active tab on window focus alongside online and pageshow', () => {
+        expect(src).toContain("window.addEventListener('focus', () => this._reviveActiveTabIfDead());");
+        expect(src).toContain("window.addEventListener('online', () => this._reviveActiveTabIfDead());");
+        expect(src).toContain("window.addEventListener('pageshow', () => this._reviveActiveTabIfDead());");
+    });
 });

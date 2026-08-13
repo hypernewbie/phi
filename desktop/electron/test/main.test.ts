@@ -1257,10 +1257,11 @@ describe('src/desktop.ts (sync board desktop alerts)', () => {
     expect(desktopSource.indexOf('flashFrame(true)', alertIdx)).toBeGreaterThan(alertIdx);
   });
 
-  it('clears the taskbar flash when the main window regains focus', () => {
+  it('clears the taskbar flash and focuses the active view when the main window regains focus', () => {
     const focusIdx = desktopSource.indexOf("win.on('focus'");
     expect(focusIdx).toBeGreaterThan(-1);
     expect(desktopSource.indexOf('flashFrame(false)', focusIdx)).toBeGreaterThan(focusIdx);
+    expect(desktopSource.indexOf('view.webContents.focus()', focusIdx)).toBeGreaterThan(focusIdx);
   });
 
   it('routes the notification click to focusProfile (restore+show+focus, then setActive)', () => {
