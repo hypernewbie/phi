@@ -52,6 +52,10 @@ if (process.argv.slice(1).includes('--register-protocol')) {
   }
 }
 
+if (process.env.PHI_DESKTOP_SMOKE === '1') {
+  app.setPath('userData', path.join(app.getPath('temp'), `phi-desktop-smoke-${Date.now()}-${process.pid}`));
+}
+
 const host = new DesktopHost();
 
 // --- Single-instance gate ---

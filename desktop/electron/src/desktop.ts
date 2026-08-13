@@ -1155,9 +1155,9 @@ export class DesktopHost {
         result.activeViewId === '127-0-0-1-7070' &&
         result.railWidth === 72 &&
         result.bodyLeftOffset === 72 &&
-        result.bodyTopOffset === 36 &&
-        result.railTopOffset === 36 &&
-        result.headerHeight === 36;
+        result.bodyTopOffset === 48 &&
+        result.railTopOffset === 48 &&
+        result.headerHeight === 48;
       console.log(`PHI_SMOKE_RESULT ${JSON.stringify(result)}`);
       app.exit(ok ? 0 : 1);
     } catch (err) {
@@ -1247,6 +1247,13 @@ export class DesktopHost {
     win.on('focus', () => {
       if (!win.isDestroyed()) win.flashFrame(false);
       this.pushWindowState();
+      const activeId = this.profileViews?.getActive() ?? null;
+      if (activeId !== null) {
+        const view = this.profileViews?.getView(activeId) ?? null;
+        if (view && !view.webContents.isDestroyed()) {
+          view.webContents.focus();
+        }
+      }
     });
     win.on('blur', () => this.pushWindowState());
     // The main view page (the vendored header + local caption controls +
