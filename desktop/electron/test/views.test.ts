@@ -351,13 +351,13 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(views).toHaveLength(1);
   });
 
-  it('installs the plain-F11 fullscreen toggle on every retained body view', () => {
+  it('installs the plain-F11 fullscreen toggle and F5 reload shortcut on every retained body view', () => {
     const { manager, views, win } = makeManager();
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
     manager.setActive('p1');
     manager.setActive('p2');
-    for (const v of views) expect(v.beforeInputHandlers).toHaveLength(1);
+    for (const v of views) expect(v.beforeInputHandlers).toHaveLength(2);
     // Plain F11 from the focused body view toggles the BrowserWindow.
     const ev = { preventDefault: vi.fn() };
     views[1].beforeInputHandlers[0](ev as never, {
