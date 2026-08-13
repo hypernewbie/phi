@@ -69,6 +69,7 @@ import {
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
+import { installReloadShortcut } from './reload.js';
 import { ALWAYS_SAFE_RAIL_CHORDS, TERMINAL_FOCUS_SCRIPT, resolveRailChord } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 
@@ -1242,6 +1243,14 @@ export class DesktopHost {
     // popups below install it on their own contents). Modified F11 chords
     // stay untouched; xterm.js does not claim plain F11.
     installFullscreenToggle(win.webContents, win);
+    installReloadShortcut(win.webContents, () => {
+      const activeId = this.profileViews?.getActive() ?? null;
+      if (activeId !== null) {
+        const view = this.profileViews?.getView(activeId) ?? null;
+        if (view && !view.webContents.isDestroyed()) return view.webContents;
+      }
+      return win.webContents;
+    });
     // A sync-alert taskbar flash clears when the window regains focus; the
     // main view page also reflects the focus state (native dim-when-unfocused).
     win.on('focus', () => {
@@ -1494,6 +1503,7 @@ export class DesktopHost {
                 });
                 attachNavGuard(child.webContents);
                 installFullscreenToggle(child.webContents, child);
+                installReloadShortcut(child.webContents);
                 return child.webContents;
               },
             };
@@ -1694,6 +1704,7 @@ export class DesktopHost {
       });
       void picker.loadFile(path.join(here, 'picker.html'));
       installFullscreenToggle(picker.webContents, win);
+      installReloadShortcut(picker.webContents);
       picker.once('ready-to-show', () => {
         if (!picker.isDestroyed()) picker.show();
       });

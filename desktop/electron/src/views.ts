@@ -42,6 +42,7 @@
  */
 import type { BrowserWindow, WebContentsView } from 'electron';
 import { installFullscreenToggle } from './fullscreen.js';
+import { installReloadShortcut } from './reload.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -297,6 +298,7 @@ export class ProfileViewManager {
     // that fire while a body view has focus). Modified F11 chords stay
     // untouched; xterm.js leaves plain F11 unbound.
     installFullscreenToggle(view.webContents, this.win);
+    installReloadShortcut(view.webContents);
     const rootUrl = new URL(origin);
     rootUrl.searchParams.set('desktop', '1');
     view.webContents.loadURL(rootUrl.toString());

@@ -867,6 +867,21 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).toContain("import { installFullscreenToggle } from './fullscreen.js'");
   });
 
+  it('installs the F5 reload shortcut on the main view, picker, and popups', () => {
+    expect(desktopSource).toContain('installReloadShortcut(win.webContents');
+    const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
+    expect(pickerIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installReloadShortcut(picker.webContents)', pickerIdx),
+    ).toBeGreaterThan(pickerIdx);
+    const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
+    expect(popupIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installReloadShortcut(child.webContents)', popupIdx),
+    ).toBeGreaterThan(popupIdx);
+    expect(desktopSource).toContain("import { installReloadShortcut } from './reload.js'");
+  });
+
   it('pushes maximize/focus state and the active server to the main view page on maximize, unmaximize, focus and blur', () => {
     expect(desktopSource).toContain("'phi:window-state'");
     const pushIdx = desktopSource.indexOf('pushWindowState(): void');
