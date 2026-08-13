@@ -106,11 +106,12 @@ export class TabManager {
                 this._reviveActiveTabIfDead();
             }
         });
-        // Network restore and bfcache restore are the other two "we may have
+        // Network restore, bfcache restore and window focus are the "we may have
         // silently lost the socket" signals. The helper is idempotent (config
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
         window.addEventListener('online', () => this._reviveActiveTabIfDead());
         window.addEventListener('pageshow', () => this._reviveActiveTabIfDead());
+        window.addEventListener('focus', () => this._reviveActiveTabIfDead());
 
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
