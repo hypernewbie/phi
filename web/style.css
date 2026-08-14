@@ -5524,15 +5524,29 @@ html[data-phi-config-page] .settings-modal {
 /* Toggle row for the "reuse existing terminal tab" preference.
    Lives below the toolbar so it doesn't compete with primary actions
    and can be hidden on mobile where there are no tabs to reuse. */
+.cmd-toggles-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 4px;
+}
+
 .cmd-reuse-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 4px 4px;
+    padding: 6px 4px 2px;
     font-size: 12px;
     color: var(--text-muted);
     cursor: pointer;
     user-select: none;
+    transition: opacity 0.15s ease;
+}
+
+.cmd-reuse-row.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .cmd-reuse-row input[type="checkbox"] {
@@ -5592,8 +5606,15 @@ html[data-phi-config-page] .settings-modal {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
+}
+
+.cmd-item-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
 }
 
 .cmd-run-btn {
@@ -5611,6 +5632,37 @@ html[data-phi-config-page] .settings-modal {
 .cmd-run-btn:hover {
     color: var(--accent-bright);
     text-decoration: underline;
+}
+
+.cmd-batch-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--bg-border);
+    color: var(--text-muted);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: var(--font-ui);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    user-select: none;
+}
+
+.cmd-batch-btn:hover {
+    color: var(--accent-bright);
+    background-color: var(--accent-trace);
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.cmd-batch-btn.cmd-dirty-btn:hover {
+    color: var(--amber, #f59e0b);
+    border-color: rgba(245, 158, 11, 0.4);
+    background-color: rgba(245, 158, 11, 0.08);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
 }
 
 .cmd-val {
@@ -5659,6 +5711,102 @@ html[data-phi-config-page] .settings-modal {
     color: var(--red);
     background-color: rgba(239, 68, 68, 0.1);
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.18);
+}
+
+/* Batch execution progress & results in cmd panel */
+.cmd-batch-results {
+    margin-top: 4px;
+    background: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cmd-batch-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--bg-border);
+    padding-bottom: 6px;
+}
+
+.cmd-batch-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cmd-batch-item {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.cmd-batch-item:hover {
+    border-color: var(--accent-dim);
+}
+
+.cmd-batch-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.cmd-batch-item-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.cmd-batch-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+.cmd-batch-badge.running {
+    color: var(--accent-bright);
+    background: var(--accent-trace);
+}
+
+.cmd-batch-badge.success {
+    color: var(--green, #10b981);
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.cmd-batch-badge.error {
+    color: var(--red, #ef4444);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.cmd-batch-output {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: var(--bg-base);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
 }
 
 /* GLOBAL MOBILE HELPER CLASS */

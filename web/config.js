@@ -21,6 +21,7 @@ async function bootConfigPage() {
         app.config = data;
         app.hostname = data.hostname;
         app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
+        app.useHiddenTerminal = !!data.use_hidden_terminal;
         app.sessionsManager.workspaces = data.workspaces || [];
 
         if (data.theme_color) {

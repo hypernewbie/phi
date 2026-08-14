@@ -211,6 +211,7 @@ export class SessionsManager {
             this.app.terminalCommands = data.terminal_commands || [];
             this.app.markdownDirs = data.markdown_dirs || [];
             this.app.useExistingTerminalTab = !!data.use_existing_terminal_tab;
+            this.app.useHiddenTerminal = !!data.use_hidden_terminal;
             this.app.applyFastMode?.();
             // Ingest appearance settings and apply so the Settings
             // modal opens with the persisted values + the body shows

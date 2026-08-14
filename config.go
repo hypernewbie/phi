@@ -63,6 +63,11 @@ type Config struct {
 	// Backwards compatible: missing in old config files means false.
 	UseExistingTerminalTab bool `json:"use_existing_terminal_tab"`
 
+	// UseHiddenTerminal, when true, runs terminal commands in a separate
+	// hidden background terminal instead of creating or reusing visible
+	// interactive tabs. When enabled, it overrides UseExistingTerminalTab.
+	UseHiddenTerminal bool `json:"use_hidden_terminal"`
+
 	// FastMode, when true, disables the expensive idle animations and
 	// backdrop blurs (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
 	FastMode bool `json:"fast_mode"`

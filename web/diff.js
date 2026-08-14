@@ -1,6 +1,6 @@
 /* Φ phi — Git Diff & Git Log Controller */
 import { PTYWebSocket } from './ws.js';
-import { escapeHtml } from './util.js';
+import { escapeHtml, getLastFolderName, worktreeGlyph } from './util.js';
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
 //   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
@@ -63,6 +63,7 @@ export class DiffController {
     currentContextLines;
     currentLayout;
     lastRawDiffText;
+    activeBatchResults = null;
     constructor(app) {
         this.app = app;
         this.activeTab = 'markdown'; // 'diff' | 'log'
@@ -468,8 +469,18 @@ export class DiffController {
         pasteListBtn.addEventListener('click', () => this.pasteCommands(pasteListBtn));
         toolbar.appendChild(pasteListBtn);
         cmdEl.appendChild(toolbar);
-        // 1b. Reuse-existing-terminal-tab toggle (sits in its own row so
-        // it doesn't get squeezed off-screen on narrow widths).
+        // 1b. Routing toggles container
+        const togglesContainer = document.createElement('div');
+        togglesContainer.className = 'cmd-toggles-container';
+        // Use-separate-hidden-terminal toggle
+        const hiddenRow = document.createElement('label');
+        hiddenRow.className = 'cmd-reuse-row';
+        hiddenRow.title = 'When on, terminal commands run in a background hidden terminal without creating or switching tabs.';
+        const hiddenCheckbox = document.createElement('input');
+        hiddenCheckbox.type = 'checkbox';
+        hiddenCheckbox.id = 'use-hidden-terminal-toggle';
+        hiddenCheckbox.checked = !!this.app.useHiddenTerminal;
+        // Reuse-existing-terminal-tab toggle
         const reuseRow = document.createElement('label');
         reuseRow.className = 'cmd-reuse-row';
         reuseRow.title = 'When on, terminal commands route to the first alive shell tab instead of always spawning a new one.';
@@ -477,6 +488,36 @@ export class DiffController {
         reuseCheckbox.type = 'checkbox';
         reuseCheckbox.id = 'use-existing-terminal-tab-toggle';
         reuseCheckbox.checked = !!this.app.useExistingTerminalTab;
+        const updateReuseState = () => {
+            const isHidden = hiddenCheckbox.checked;
+            reuseCheckbox.disabled = isHidden;
+            if (isHidden) {
+                reuseRow.classList.add('disabled');
+            }
+            else {
+                reuseRow.classList.remove('disabled');
+            }
+        };
+        updateReuseState();
+        hiddenCheckbox.addEventListener('change', async (e) => {
+            const target = e.target;
+            const enabled = target.checked;
+            updateReuseState();
+            try {
+                await fetch('/api/config/use-hidden-terminal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                this.app.useHiddenTerminal = enabled;
+                this.app.showToast(enabled ? 'Will use separate hidden terminal' : 'Will use visible terminal tabs', { type: 'info', title: 'Terminal routing' });
+            }
+            catch (err) {
+                this.app.showToast('Failed to save preference', { type: 'error', title: 'Terminal routing' });
+                target.checked = !enabled;
+                updateReuseState();
+            }
+        });
         reuseCheckbox.addEventListener('change', async (e) => {
             const target = e.target;
             const enabled = target.checked;
@@ -494,11 +535,17 @@ export class DiffController {
                 target.checked = !enabled;
             }
         });
+        const hiddenText = document.createElement('span');
+        hiddenText.textContent = 'Use separate hidden terminal';
+        hiddenRow.appendChild(hiddenCheckbox);
+        hiddenRow.appendChild(hiddenText);
+        togglesContainer.appendChild(hiddenRow);
         const reuseText = document.createElement('span');
-        reuseText.innerText = 'Reuse existing terminal tab';
+        reuseText.textContent = 'Reuse existing terminal tab';
         reuseRow.appendChild(reuseCheckbox);
         reuseRow.appendChild(reuseText);
-        cmdEl.appendChild(reuseRow);
+        togglesContainer.appendChild(reuseRow);
+        cmdEl.appendChild(togglesContainer);
         // 2. Create list
         const listContainer = document.createElement('div');
         listContainer.className = 'cmd-list';
@@ -508,7 +555,7 @@ export class DiffController {
             emptyHint.style.color = 'var(--text-muted)';
             emptyHint.style.fontSize = '12px';
             emptyHint.style.padding = '12px 4px';
-            emptyHint.innerText = 'No terminal commands configured.';
+            emptyHint.textContent = 'No terminal commands configured.';
             listContainer.appendChild(emptyHint);
         }
         else {
@@ -517,15 +564,30 @@ export class DiffController {
                 item.className = 'cmd-item';
                 const left = document.createElement('div');
                 left.className = 'cmd-item-left';
+                const buttonsGroup = document.createElement('div');
+                buttonsGroup.className = 'cmd-item-buttons';
                 const runBtn = document.createElement('button');
                 runBtn.className = 'cmd-run-btn';
-                runBtn.innerText = cmd.name;
-                runBtn.title = `Click to run: ${cmd.command}`;
-                runBtn.addEventListener('click', () => this.runCommand(cmd));
-                left.appendChild(runBtn);
+                runBtn.textContent = `▶ ${cmd.name}`;
+                runBtn.title = `Click to run on current worktree: ${cmd.command}`;
+                runBtn.addEventListener('click', () => this.runCommand(cmd, 'current'));
+                buttonsGroup.appendChild(runBtn);
+                const dirtyBtn = document.createElement('button');
+                dirtyBtn.className = 'cmd-batch-btn cmd-dirty-btn';
+                dirtyBtn.innerHTML = `⚡ Dirty`;
+                dirtyBtn.title = `Run on all dirty worktrees: ${cmd.command}`;
+                dirtyBtn.addEventListener('click', () => this.runCommand(cmd, 'dirty'));
+                buttonsGroup.appendChild(dirtyBtn);
+                const allBtn = document.createElement('button');
+                allBtn.className = 'cmd-batch-btn cmd-all-btn';
+                allBtn.innerHTML = `⇉ All`;
+                allBtn.title = `Run on all worktrees in workspace: ${cmd.command}`;
+                allBtn.addEventListener('click', () => this.runCommand(cmd, 'all'));
+                buttonsGroup.appendChild(allBtn);
+                left.appendChild(buttonsGroup);
                 const val = document.createElement('div');
                 val.className = 'cmd-val';
-                val.innerText = cmd.command;
+                val.textContent = cmd.command;
                 val.title = cmd.command;
                 left.appendChild(val);
                 item.appendChild(left);
@@ -558,6 +620,66 @@ export class DiffController {
             });
         }
         cmdEl.appendChild(listContainer);
+        // 3. Batch / hidden execution results container
+        if (this.activeBatchResults) {
+            const batchResults = document.createElement('div');
+            batchResults.className = 'cmd-batch-results';
+            const batchHeader = document.createElement('div');
+            batchHeader.className = 'cmd-batch-header';
+            batchHeader.innerHTML = `
+                <span>⚡ "${escapeHtml(this.activeBatchResults.commandName)}" · ${escapeHtml(this.activeBatchResults.scopeLabel)}</span>
+            `;
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'cmd-action-btn';
+            clearBtn.title = 'Dismiss results';
+            clearBtn.textContent = '✕';
+            clearBtn.style.minWidth = '20px';
+            clearBtn.style.height = '20px';
+            clearBtn.style.padding = '0 4px';
+            clearBtn.addEventListener('click', () => {
+                this.activeBatchResults = null;
+                this.renderCmdPanel();
+            });
+            batchHeader.appendChild(clearBtn);
+            batchResults.appendChild(batchHeader);
+            const batchList = document.createElement('div');
+            batchList.className = 'cmd-batch-list';
+            this.activeBatchResults.worktrees.forEach((item) => {
+                const itemEl = document.createElement('div');
+                itemEl.className = 'cmd-batch-item';
+                const rowEl = document.createElement('div');
+                rowEl.className = 'cmd-batch-item-row';
+                const titleEl = document.createElement('div');
+                titleEl.className = 'cmd-batch-item-title';
+                titleEl.innerHTML = `<span class="worktree-glyph" style="color: var(--accent-bright); font-size: 11px;">${escapeHtml(item.glyph)}</span> <span>${escapeHtml(item.name)}</span>`;
+                rowEl.appendChild(titleEl);
+                const badgeEl = document.createElement('span');
+                badgeEl.className = `cmd-batch-badge ${item.status}`;
+                if (item.status === 'running') {
+                    badgeEl.textContent = '⏳ running...';
+                }
+                else if (item.status === 'success') {
+                    badgeEl.textContent = `✓ ${item.durationMs ?? 0}ms`;
+                }
+                else {
+                    badgeEl.textContent = `✖ exit ${item.exitCode ?? 1}`;
+                }
+                rowEl.appendChild(badgeEl);
+                itemEl.appendChild(rowEl);
+                if (item.output || item.error) {
+                    const outputEl = document.createElement('pre');
+                    outputEl.className = 'cmd-batch-output hidden';
+                    outputEl.textContent = item.output || item.error || '';
+                    itemEl.appendChild(outputEl);
+                    itemEl.addEventListener('click', () => {
+                        outputEl.classList.toggle('hidden');
+                    });
+                }
+                batchList.appendChild(itemEl);
+            });
+            batchResults.appendChild(batchList);
+            cmdEl.appendChild(batchResults);
+        }
     }
     async addCommand() {
         const values = await this.app.openConfigEditor({
@@ -645,7 +767,47 @@ export class DiffController {
         const jsonStr = JSON.stringify(cmd, null, 2);
         this.app.tabManager.copyTextRobustly(jsonStr);
     }
-    async runCommand(cmd) {
+    async runCommand(cmd, scope = 'current') {
+        if (scope === 'dirty') {
+            try {
+                const ws = this.app.sessionsManager?.activeWorkspace || '';
+                const wtRes = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(ws)}`);
+                const allWts = await wtRes.json();
+                const dirtyRes = await fetch(`/api/git/worktree-dirty?cwd=${encodeURIComponent(ws)}`);
+                const dirtyMap = await dirtyRes.json();
+                const targetWts = (Array.isArray(allWts) ? allWts : []).filter(wt => dirtyMap && dirtyMap[wt.path]);
+                if (targetWts.length === 0) {
+                    this.app.showToast('No dirty worktrees found', { type: 'info', title: 'Batch Command' });
+                    return;
+                }
+                await this.executeHiddenBatch(cmd, targetWts.map(wt => wt.path), `Dirty Worktrees (${targetWts.length})`);
+            }
+            catch (e) {
+                this.app.showToast(`Failed to scan dirty worktrees: ${e.message}`, { type: 'error', title: 'Batch Command' });
+            }
+            return;
+        }
+        if (scope === 'all') {
+            try {
+                const ws = this.app.sessionsManager?.activeWorkspace || '';
+                const wtRes = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(ws)}`);
+                const allWts = await wtRes.json();
+                const targetWts = Array.isArray(allWts) && allWts.length > 0
+                    ? allWts.map(wt => wt.path)
+                    : [this.app.sessionsManager?.activeCWD || ''];
+                await this.executeHiddenBatch(cmd, targetWts, `All Worktrees (${targetWts.length})`);
+            }
+            catch (e) {
+                this.app.showToast(`Failed to scan worktrees: ${e.message}`, { type: 'error', title: 'Batch Command' });
+            }
+            return;
+        }
+        // scope === 'current'
+        if (this.app.useHiddenTerminal) {
+            const cwd = this.app.sessionsManager?.activeCWD || '';
+            await this.executeHiddenBatch(cmd, [cwd], 'Hidden Terminal');
+            return;
+        }
         const activeTab = this.app.tabManager.getActiveTab();
         const prefix = this.app.tabManager.inputTextArea.value.trim();
         const combined = prefix && cmd.command.includes('{}')
@@ -723,6 +885,78 @@ export class DiffController {
             catch (e) {
                 this.app.showToast(e.message, { type: 'error', title: 'Launch Shell' });
             }
+        }
+    }
+    async executeHiddenBatch(cmd, worktreePaths, scopeLabel) {
+        const prefix = this.app.tabManager.inputTextArea.value.trim();
+        const combined = prefix && cmd.command.includes('{}')
+            ? cmd.command.replace('{}', prefix)
+            : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+        this.app.tabManager.inputTextArea.value = '';
+        this.app.tabManager.lastInputValue = '';
+        this.app.tabManager.adjustInputHeight();
+        this.activeBatchResults = {
+            commandName: cmd.name,
+            scopeLabel: scopeLabel,
+            worktrees: worktreePaths.map(wt => ({
+                path: wt,
+                name: getLastFolderName(wt) || wt,
+                glyph: worktreeGlyph(wt),
+                status: 'running',
+            }))
+        };
+        this.renderCmdPanel();
+        try {
+            const res = await fetch('/api/cmd/batch-run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    command: combined,
+                    worktrees: worktreePaths,
+                })
+            });
+            if (!res.ok) {
+                throw new Error(await res.text() || 'Batch command execution failed');
+            }
+            const data = await res.json();
+            const results = data.results || [];
+            if (this.activeBatchResults) {
+                results.forEach(r => {
+                    const wtItem = this.activeBatchResults.worktrees.find((w) => w.path === r.worktree);
+                    if (wtItem) {
+                        wtItem.status = r.success ? 'success' : 'error';
+                        wtItem.exitCode = r.exit_code;
+                        wtItem.durationMs = r.duration_ms;
+                        wtItem.output = r.output;
+                        wtItem.error = r.error;
+                    }
+                });
+            }
+            const successCount = results.filter(r => r.success).length;
+            const failCount = results.length - successCount;
+            if (failCount === 0) {
+                this.app.showToast(`✓ Completed "${cmd.name}" across ${results.length} worktree(s)`, { type: 'success', title: 'Batch Command' });
+            }
+            else {
+                this.app.showToast(`Completed "${cmd.name}": ${successCount} passed, ${failCount} failed`, { type: 'error', title: 'Batch Command' });
+            }
+        }
+        catch (err) {
+            if (this.activeBatchResults) {
+                this.activeBatchResults.worktrees.forEach((w) => {
+                    if (w.status === 'running') {
+                        w.status = 'error';
+                        w.error = err.message || 'Execution error';
+                    }
+                });
+            }
+            this.app.showToast(`Batch execution failed: ${err.message}`, { type: 'error', title: 'Batch Command' });
+        }
+        finally {
+            if (this.app.sessionsManager?.loadWorktrees) {
+                this.app.sessionsManager.loadWorktrees();
+            }
+            this.renderCmdPanel();
         }
     }
     async pasteCommands(btnElement) {
