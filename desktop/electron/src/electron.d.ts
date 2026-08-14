@@ -52,6 +52,8 @@ export type HeaderActionId =
   | 'header-btop-btn'
   | 'header-ntfy-btn'
   | 'header-config-pill'
+  | 'header-export-btn'
+  | 'header-import-btn'
   | 'add-workspace-btn'
   | 'remove-workspace-btn';
 

@@ -176,6 +176,7 @@ describe('main view page chrome (web/main.css)', () => {
   it('marks interactive header children and the caption controls no-drag', () => {
     expect(mainCssSource).toMatch(/\.app-header\s+button[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
     expect(mainCssSource).toMatch(/\.app-header\s+select[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
+    expect(mainCssSource).toMatch(/\.app-header\s+\.header-config-pill[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
     expect(mainCssSource).toMatch(/\.caption-controls\s*\{[\s\S]*?-webkit-app-region: no-drag/);
   });
 
@@ -251,6 +252,8 @@ describe('main view page behaviors (web/mainview.js)', () => {
       'header-kanban-btn',
       'header-diff-toggle-btn',
       'header-config-pill',
+      'header-export-btn',
+      'header-import-btn',
       'add-workspace-btn',
       'remove-workspace-btn',
     ]) {
