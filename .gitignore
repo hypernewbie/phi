@@ -13,6 +13,7 @@ node_modules/
 
 # TypeScript build cache (one per tsconfig.build.json invocation).
 *.tsbuildinfo
+*.vsix
 
 # pi-subagents scratch/artifacts
 .pi-subagents/
