@@ -30,6 +30,7 @@ html, body {
 .app-header select,
 .app-header input,
 .app-header a,
+.app-header .header-config-pill,
 .app-header #hostname-display,
 .app-header .hostname-tabs-dropdown,
 .app-header .self-hud {
