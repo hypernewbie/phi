@@ -4,24 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Φ phi</title>
-    <script>
-        // Prepaint appearance (subset of index.html's boot script):
-        // localStorage is origin-shared, so the pop-out inherits the user's
-        // font settings without any wiring.
-        (function() {
-            try {
-                const a = JSON.parse(localStorage.getItem('phi_appearance') || 'null');
-                if (a && (a.ui_font_family || a.ui_font_size >= 10)) {
-                    const s = document.createElement('style');
-                    s.id = 'phi-prepaint-appearance';
-                    s.textContent = 'body{' +
-                        (a.ui_font_family ? 'font-family:' + a.ui_font_family + ';' : '') +
-                        (a.ui_font_size >= 10 ? 'font-size:' + a.ui_font_size + 'px;' : '') + '}';
-                    document.head.appendChild(s);
-                }
-            } catch (e) { /* ignore */ }
-        })();
-    </script>
+    <script type="module" src="prepaint.js"></script>
+    <link rel="stylesheet" href="vendor/fonts/fonts.css">
     <link rel="stylesheet" href="vendor/highlight-github-dark.min.css">
     <link rel="stylesheet" href="style.css">
     <script src="vendor/marked.min.js"></script>

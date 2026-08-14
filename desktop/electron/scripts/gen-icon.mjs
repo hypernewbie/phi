@@ -48,7 +48,7 @@ if (process.platform !== 'win32') {
   process.exit(0);
 }
 
-const WEB_APP_JS = path.join(here, '..', '..', '..', 'web', 'app.js');
+const WEB_THEME_JS = path.join(here, '..', '..', '..', 'web', 'theme.js');
 const WEB_FONTS_DIR = path.join(here, '..', '..', '..', 'web', 'vendor', 'fonts');
 
 const SIZE = 256;
@@ -91,9 +91,9 @@ async function ensureJetBrainsMonoTtf() {
 }
 
 function loadAccentPalette() {
-  const src = readFileSync(WEB_APP_JS, 'utf8');
+  const src = readFileSync(WEB_THEME_JS, 'utf8');
   const match = src.match(/(?:export\s+)?const ACCENT_COLORS\s*=\s*\{([\s\S]*?)\n\};/);
-  if (!match) throw new Error('gen-icon: ACCENT_COLORS not found in web/app.js');
+  if (!match) throw new Error('gen-icon: ACCENT_COLORS not found in web/theme.js');
   const body = match[1];
   const entries = [];
   const re = /(\w+):\s*\{\s*accent:\s*['"]#([0-9a-fA-F]{6})['"]/g;
