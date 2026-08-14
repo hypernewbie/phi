@@ -274,8 +274,8 @@ describe('vendored browser JS (web/vendor/*)', () => {
     }
   });
 
-  it('ships every ACCENT_COLORS theme (22) in the vendored app.js', (ctx) => {
-    const vendored = path.join(webDir, 'vendor', 'app.js');
+  it('ships every ACCENT_COLORS theme (22) in the vendored theme.js', (ctx) => {
+    const vendored = path.join(webDir, 'vendor', 'theme.js');
     if (!existsSync(vendored)) {
       ctx.skip('web/vendor missing — run `pnpm run build` first');
       return;
