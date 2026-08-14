@@ -141,7 +141,10 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(cssSource).not.toMatch(/data:image\/svg\+xml/);
   });
 
-  it('marks health diegetically: offline entries mute the chip; attention keeps the accent lozenge', () => {
+  it('marks health diegetically: offline entries mute the chip; attention keeps the entry-accent lozenge without clipping', () => {
+    const item = /\.rail-item\s*\{([^}]*)\}/s.exec(cssSource);
+    expect(item).not.toBeNull();
+    expect(item![1]).not.toMatch(/overflow:\s*hidden/);
     const offline = /\.rail-item\.offline\s*\{([^}]*)\}/s.exec(cssSource);
     expect(offline).not.toBeNull();
     expect(offline![1]).toMatch(/opacity:\s*0\.55/);
@@ -150,7 +153,8 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(cssSource).not.toMatch(/\.rail-item\s+\.dot/);
     const attention = /\.rail-item\s+\.attention\s*\{([^}]*)\}/s.exec(cssSource);
     expect(attention![1]).toMatch(/transform:\s*rotate\(45deg\)/);
-    expect(attention![1]).toMatch(/var\(--accent\)/);
+    expect(attention![1]).toMatch(/var\(--entry-accent/);
+    expect(attention![1]).toMatch(/var\(--accent/);
   });
 
   it('keeps no green/red health palette in the rail stylesheet', () => {
