@@ -124,11 +124,22 @@ export function openSettingsModal(app, accentColors, opts = {}) {
 
     const behGroup = _buildSettingsGroup('Behavior');
     body.appendChild(behGroup);
+    const hiddenRow = _buildCheckboxRow(
+        'Use separate hidden terminal for commands',
+        'settings-use-hidden-terminal',
+        !!app.useHiddenTerminal,
+    );
+    behGroup.appendChild(hiddenRow);
     const reuseRow = _buildCheckboxRow(
         'Reuse shell tab for terminal commands',
         'settings-reuse-shell-tab',
         !!app.useExistingTerminalTab,
     );
+    if (app.useHiddenTerminal) {
+        reuseRow.classList.add('disabled');
+        const rInput = reuseRow.querySelector('input');
+        if (rInput) rInput.disabled = true;
+    }
     behGroup.appendChild(reuseRow);
     const autoReconnectRow = _buildCheckboxRow(
         'Auto-reconnect disconnected terminals (active tab)',
@@ -329,6 +340,26 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         document.getElementById('settings-ui-font-size').value = '14';
         document.getElementById('settings-term-font').value = '';
         document.getElementById('settings-term-font-size').value = '14';
+    });
+    hiddenRow.querySelector('input')?.addEventListener('change', async (e) => {
+        app.useHiddenTerminal = !!e.target.checked;
+        const rInput = reuseRow.querySelector('input');
+        if (app.useHiddenTerminal) {
+            reuseRow.classList.add('disabled');
+            if (rInput) rInput.disabled = true;
+        } else {
+            reuseRow.classList.remove('disabled');
+            if (rInput) rInput.disabled = false;
+        }
+        try {
+            await fetch('/api/config/use-hidden-terminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: app.useHiddenTerminal }),
+            });
+        } catch (err) {
+            console.warn('[settings] failed to persist hidden-terminal toggle', err);
+        }
     });
     reuseRow.querySelector('input')?.addEventListener('change', async (e) => {
         app.useExistingTerminalTab = !!e.target.checked;
