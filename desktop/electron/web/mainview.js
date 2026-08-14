@@ -321,6 +321,16 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     if (!state) return;
     applyBrandCpuTier(state.cpuPercent ?? 0);
     applyTerminalActivityIndicator(Boolean(state.terminalActivity), true);
+    if (typeof state.workspace === 'string' && state.workspace !== '' && workspaceSelect) {
+      if (workspaceSelect.value !== state.workspace) {
+        workspaceSelect.value = state.workspace;
+        if (workspaceSelect.value !== state.workspace) {
+          void refreshConfig();
+        } else {
+          updateWorkspaceSelectWidth();
+        }
+      }
+    }
   });
 })();
 

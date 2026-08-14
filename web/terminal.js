@@ -1807,6 +1807,7 @@ export class TabManager {
         }
 
         this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
+        this.updateDocumentTitle();
     }
     
     togglePinTab(paneId) {

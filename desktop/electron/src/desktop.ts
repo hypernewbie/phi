@@ -248,9 +248,9 @@ export class DesktopHost {
     string,
     { verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256' }
   >();
-  /** Last CPU+activity push sent to the main view, for change-only
+  /** Last CPU+activity+workspace push sent to the main view, for change-only
    *  emission. Null until the first push. */
-  lastHeaderState: { cpuPercent: number | null; terminalActivity: boolean } | null = null;
+  lastHeaderState: HeaderState | null = null;
   /** Last alarm-chime fire time (the burst rate-limit). */
   lastAlarmChimeAt = 0;
 
@@ -500,7 +500,8 @@ export class DesktopHost {
       void Promise.all([
         view.webContents.executeJavaScript(REMOTE_CPU_SCRIPT).catch(() => null),
         view.webContents.executeJavaScript(REMOTE_ACTIVITY_SCRIPT).catch(() => false),
-      ]).then(([rawCpu, rawActivity]) => {
+        view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT).catch(() => null),
+      ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
         const cpu = typeof rawCpu === 'number' && Number.isFinite(rawCpu) ? Math.min(100, Math.max(0, rawCpu)) : NaN;
         const next = Number.isFinite(cpu) ? cpu : null;
         const prev = this.observedCpu.get(profileId) ?? null;
@@ -522,7 +523,8 @@ export class DesktopHost {
           return;
         }
         win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
-        this.pushHeaderState(next, activity);
+        const workspace = typeof rawWorkspace === 'string' && rawWorkspace !== '' ? rawWorkspace : null;
+        this.pushHeaderState(next, activity, workspace);
       });
     }
   }
@@ -538,17 +540,19 @@ export class DesktopHost {
    *  its own (no terminals there); without this push the brand
    *  glow stays at idle and the activity indicator stays in its
    *  initial state regardless of what the body is doing. */
-  pushHeaderState(cpuPercent: number | null, terminalActivity: boolean): void {
+  pushHeaderState(cpuPercent: number | null, terminalActivity: boolean, workspace?: string | null): void {
     const win = this.mainWindow;
     if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
     const state: HeaderState = {
       cpuPercent,
       terminalActivity,
+      workspace: workspace ?? null,
     };
     if (
       this.lastHeaderState !== null &&
       this.lastHeaderState.cpuPercent === state.cpuPercent &&
-      this.lastHeaderState.terminalActivity === state.terminalActivity
+      this.lastHeaderState.terminalActivity === state.terminalActivity &&
+      this.lastHeaderState.workspace === state.workspace
     ) {
       return;
     }
@@ -1607,6 +1611,7 @@ export class DesktopHost {
       });
       view.webContents.on('page-title-updated', (_event, title) => {
         this.onProfileTitleUpdated(view, origin, title);
+        this.pollCpu();
         // The remote app titles its page only once the hostname/accent are
         // live, so identity observation rides this event; the rail snapshot
         // is repushed only after a real result.
