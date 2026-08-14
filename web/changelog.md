@@ -2,6 +2,15 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.19.2 — 2026-08-13
+
+### Added
+- **Desktop F5 page refresh** (`7d81bb7`). Pressing F5 (or Ctrl+F5 / Shift+F5 for force reload) now reloads the active desktop view, popups, and main window.
+- **Window-focus auto-reconnect** (`7f4db12`). Focusing the Phi window or clicking into Phi Desktop immediately revives dead terminal sessions without waiting for retry timers.
+
+### Fixed
+- **Popout theme & typography fidelity** (`87a1dea`). Unified `ACCENT_COLORS` into `web/theme.js` and extracted `web/prepaint.js` across `index.html`, `md.html`, and `config.html`, fixing font loading and purple color flashes in markdown popout windows.
+
 ## v0.19.1 — 2026-08-12
 
 ### Fixed
