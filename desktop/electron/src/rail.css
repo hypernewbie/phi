@@ -80,7 +80,6 @@ body {
   border-radius: 6px;
   cursor: pointer;
   position: relative;
-  overflow: hidden;
   /* CPU intensity: the renderer sets --entry-cpu (0-100) from the
      server's own reading; the entry's accent/glow strengthen as it
      rises, and the resting material is unchanged at zero. No animation:
@@ -130,7 +129,7 @@ body {
   text-shadow: none;
 }
 
-/* Attention marker: a geometric lozenge in the active accent. */
+/* Attention marker: a geometric lozenge in that server's own accent. */
 .rail-item .attention {
   position: absolute;
   top: -2px;
@@ -139,8 +138,10 @@ body {
   height: 8px;
   transform: rotate(45deg);
   border-radius: 1px;
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent-glow);
+  background: var(--entry-accent, var(--accent, #7c6af7));
+  box-shadow: 0 0 6px color-mix(in srgb, var(--entry-accent, var(--accent, #7c6af7)) 60%, transparent);
+  pointer-events: none;
+  z-index: 2;
 }
 
 /* Drag-and-drop affordance: the dragged tile dims and the insertion
