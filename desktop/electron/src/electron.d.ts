@@ -80,6 +80,8 @@ export interface HeaderState {
   cpuPercent: number | null;
   /** True when any terminal tab on the body is producing output. */
   terminalActivity: boolean;
+  /** Active server's active workspace path, or null if unknown. */
+  workspace?: string | null;
 }
 
 /** The main view page receives this when the active server returns 401

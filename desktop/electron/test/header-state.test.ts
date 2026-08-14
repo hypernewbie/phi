@@ -164,5 +164,7 @@ describe('TBAR pipeline: header-state module', () => {
     expect(mainviewSource).toContain('applyBrandCpuTier');
     expect(mainviewSource).toContain('applyTerminalActivityIndicator');
     expect(mainviewSource).toContain('onHeaderState');
+    expect(mainviewSource).toContain('state.workspace');
+    expect(mainviewSource).toContain('workspaceSelect.value = state.workspace');
   });
 });
