@@ -166,6 +166,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     'header-btop-btn',
     'header-kanban-btn',
     'header-diff-toggle-btn',
+    'header-export-btn',
+    'header-import-btn',
   ];
   for (const id of ACTION_BUTTONS) {
     const btn = document.getElementById(id);
@@ -175,9 +177,10 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   }
   const configPill = document.getElementById('header-config-pill');
   if (configPill) {
-    configPill.addEventListener('click', () =>
-      window.electron.postHeaderAction({ kind: 'click', id: 'header-config-pill' }),
-    );
+    configPill.addEventListener('click', (e) => {
+      if (e.target.closest('.pill-btn')) return;
+      window.electron.postHeaderAction({ kind: 'click', id: 'header-config-pill' });
+    });
   }
 
   // --- Server sync: refresh on profile activation and on a light cadence
