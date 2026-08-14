@@ -9,151 +9,10 @@ import { SyncManager } from './sync.js';
 import { bootstrapAccessAuth } from './auth.js';
 import { openSettingsModal } from './settings.js';
 import { markDesktopView } from './desktop.js';
+import { ACCENT_COLORS, applyThemeTokens } from './theme.js';
+export { ACCENT_COLORS };
 
 markDesktopView();
-
-// NOTE: When adding a new theme color, you must update:
-// 1. web/app.js: Add properties in ACCENT_COLORS
-// 2. web/index.html: Add <option> in #accent-color-select
-// 3. main.go: Add entry in printWelcomeBanner colors map
-// 4. bonus/: Add matching theme profiles to bonus/vim_themes/, bonus/pi_themes/, bonus/opencode_themes/, and bonus/btop_themes/
-export const ACCENT_COLORS = {
-    purple: {
-        accent: '#7c6af7',
-        accentGlow: 'rgba(124, 106, 247, 0.15)',
-        accentDim: '#5b4ec2',
-        accentBright: '#9a8dfa'
-    },
-    blue: {
-        accent: '#38bdf8',
-        accentGlow: 'rgba(56, 189, 248, 0.15)',
-        accentDim: '#0284c7',
-        accentBright: '#7dd3fc'
-    },
-    green: {
-        accent: '#10b981',
-        accentGlow: 'rgba(16, 185, 129, 0.15)',
-        accentDim: '#047857',
-        accentBright: '#34d399'
-    },
-    amber: {
-        accent: '#fbbf24',
-        accentGlow: 'rgba(251, 191, 36, 0.15)',
-        accentDim: '#b45309',
-        accentBright: '#fcd34d'
-    },
-    red: {
-        accent: '#f87171',
-        accentGlow: 'rgba(248, 113, 113, 0.15)',
-        accentDim: '#b91c1c',
-        accentBright: '#fca5a5'
-    },
-    pink: {
-        accent: '#ec4899',
-        accentGlow: 'rgba(236, 72, 153, 0.15)',
-        accentDim: '#be185d',
-        accentBright: '#f472b6'
-    },
-    teal: {
-        accent: '#14b8a6',
-        accentGlow: 'rgba(20, 184, 166, 0.15)',
-        accentDim: '#0f766e',
-        accentBright: '#5eead4'
-    },
-    indigo: {
-        accent: '#6366f1',
-        accentGlow: 'rgba(99, 102, 241, 0.15)',
-        accentDim: '#4338ca',
-        accentBright: '#818cf8'
-    },
-    orange: {
-        accent: '#f97316',
-        accentGlow: 'rgba(249, 115, 22, 0.15)',
-        accentDim: '#c2410c',
-        accentBright: '#fdba74'
-    },
-    cyan: {
-        accent: '#06b6d4',
-        accentGlow: 'rgba(6, 182, 212, 0.15)',
-        accentDim: '#0e7490',
-        accentBright: '#67e8f9'
-    },
-    rose: {
-        accent: '#f43f5e',
-        accentGlow: 'rgba(244, 63, 94, 0.15)',
-        accentDim: '#be123c',
-        accentBright: '#fb7185'
-    },
-    lime: {
-        accent: '#84cc16',
-        accentGlow: 'rgba(132, 204, 22, 0.15)',
-        accentDim: '#4d7c0f',
-        accentBright: '#a3e635'
-    },
-    white: {
-        accent: '#ffffff',
-        accentGlow: 'rgba(255, 255, 255, 0.15)',
-        accentDim: '#94a3b8',
-        accentBright: '#ffffff'
-    },
-    gold: {
-        accent: '#d4af37',
-        accentGlow: 'rgba(212, 175, 55, 0.15)',
-        accentDim: '#997a15',
-        accentBright: '#f3e5ab'
-    },
-    violet: {
-        accent: '#a78bfa',
-        accentGlow: 'rgba(167, 139, 250, 0.15)',
-        accentDim: '#6d28d9',
-        accentBright: '#ddd6fe'
-    },
-    emerald: {
-        accent: '#059669',
-        accentGlow: 'rgba(5, 150, 105, 0.15)',
-        accentDim: '#065f46',
-        accentBright: '#34d399'
-    },
-    neon: {
-        accent: '#00f0ff',
-        accentGlow: 'rgba(0, 240, 255, 0.15)',
-        accentDim: '#008b99',
-        accentBright: '#70f8ff'
-    },
-    coral: {
-        accent: '#e07a5f',
-        accentGlow: 'rgba(224, 122, 95, 0.15)',
-        accentDim: '#9e4731',
-        accentBright: '#f4a261'
-    },
-    fuchsia: {
-        accent: '#d946ef',
-        accentGlow: 'rgba(217, 70, 239, 0.15)',
-        accentDim: '#86198f',
-        accentBright: '#f0abfc'
-    },
-    // Bonus themes — must match the names in bonus/{btop,opencode,pi,vim}_themes/.
-    // If you add a bonus theme, add it here too. If you add it here without
-    // a bonus counterpart, it'll diverge from the bonus theme profile set.
-    canary: {
-        accent: '#ffee10',
-        accentGlow: 'rgba(255, 238, 16, 0.18)',
-        accentDim: '#b8ad00',
-        accentBright: '#ffff66'
-    },
-    copper: {
-        accent: '#d35400',
-        accentGlow: 'rgba(211, 84, 0, 0.18)',
-        accentDim: '#8a3700',
-        accentBright: '#e59866'
-    },
-    mint: {
-        accent: '#2ed573',
-        accentGlow: 'rgba(46, 213, 115, 0.18)',
-        accentDim: '#1a8a4a',
-        accentBright: '#7bed9f'
-    }
-};
 
 export class App {
     constructor() {
@@ -750,12 +609,7 @@ export class App {
     }
 
     applyAccentTheme(colorKey) {
-        const theme = ACCENT_COLORS[colorKey] || ACCENT_COLORS.purple;
-        document.documentElement.style.setProperty('--accent', theme.accent);
-        document.documentElement.style.setProperty('--accent-glow', theme.accentGlow);
-        document.documentElement.style.setProperty('--accent-dim', theme.accentDim);
-        document.documentElement.style.setProperty('--accent-bright', theme.accentBright);
-        document.documentElement.setAttribute('data-theme-color', colorKey);
+        const theme = applyThemeTokens(colorKey);
         localStorage.setItem('phi_theme_color', colorKey);
 
         if (this.tabManager) {

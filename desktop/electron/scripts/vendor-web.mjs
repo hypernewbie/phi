@@ -46,6 +46,8 @@ const WEB_JS_MODULES = [
   'desktop.js',
   'config.js',
   'header-state.js',
+  'theme.js',
+  'prepaint.js',
 ];
 
 /** Browser vendor subdirectory the module graph imports (auth.js imports
