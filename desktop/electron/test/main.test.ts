@@ -1025,6 +1025,26 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).toContain('(pendingUnlock !== null && pendingUnlock !== pending)');
   });
 
+  it('invalidates in-flight body logins across an A→B→A rail switch via an active-selection epoch', () => {
+    // The activeId check alone is an ABA race: A→B→A returns A again
+    // but the proof has already been injected into the B view. The
+    // epoch counter, bumped on every active-changed event and checked
+    // at every await boundary inside authenticateBodyView, is the
+    // cross-await guarantee.
+    expect(desktopSource).toContain('let activeEpoch = 0');
+    // Bumped on active-changed (next to the existing pendingUnlock
+    // abort block — a future refactor that moves the abort without
+    // also moving the epoch bump would silently reintroduce the race).
+    const activeChangedIdx = desktopSource.indexOf("event.kind === 'active-changed'");
+    expect(activeChangedIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf('activeEpoch++;', activeChangedIdx)).toBeGreaterThan(activeChangedIdx);
+    // Captured into both pending types so a synthetic silent path
+    // pending can't outlive a rail switch.
+    expect(desktopSource).toContain('epoch: activeEpoch');
+    // Checked at every await boundary inside authenticateBodyView.
+    expect(desktopSource).toContain('pending.epoch !== activeEpoch');
+  });
+
   it('rejects stale config/workspace reads after an active-server switch', () => {
     const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
     expect(configIdx).toBeGreaterThan(-1);
