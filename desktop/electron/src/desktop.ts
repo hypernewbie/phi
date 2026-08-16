@@ -1425,8 +1425,16 @@ export class DesktopHost {
     // can fire) so a synchronously-emitted active-changed event during
     // initial state doesn't trigger a ReferenceError trying to read
     // these bindings while they are still in the temporal dead zone.
+    /** Monotonic counter incremented on every active-changed event.
+     *  Captured into each pending (typed-unlock AND silent-body) at
+     *  creation; checked at every await boundary inside
+     *  `authenticateBodyView`. Without the epoch, an A→B→A rail
+     *  switch during an in-flight body login would pass every
+     *  activeId check (activeId returns A again) but the proof has
+     *  already been injected into the B view — an ABA race. */
+    let activeEpoch = 0;
     let pendingUnlock:
-      | { requestId: string; profileId: string; origin: string; abort: AbortController }
+      | { requestId: string; profileId: string; origin: string; abort: AbortController; epoch: number }
       | null = null;
     let unlockInFlight = false;
     let promptSuppressedFor: string | null = null;
@@ -1462,6 +1470,14 @@ export class DesktopHost {
         }
         // A rail switch is the explicit retry gesture after dismissal.
         promptSuppressedFor = null;
+        // Bump the epoch so any pending body-login (typed or silent) is
+        // invalidated at its next await boundary. The active-changed
+        // event above already ran setActive which fires the rail, but
+        // the epoch is the cross-await guarantee against A→B→A races
+        // (the activeId check alone is insufficient: it returns A
+        // again after B, and the proof has already been injected into
+        // the B view).
+        activeEpoch++;
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||
@@ -1952,7 +1968,7 @@ export class DesktopHost {
      *  then lets the browser's unchanged auth bootstrap observe its cookie,
      *  so it never asks the user for the same password a second time. */
     const authenticateBodyView = async (
-      pending: { requestId: string; profileId: string; origin: string; abort: AbortController },
+      pending: { requestId: string; profileId: string; origin: string; abort: AbortController; epoch: number },
     ): Promise<{ ok: true } | { ok: false; code: 'stale' | 'unavailable'; message: string }> => {
       const ctrl = this.controller;
       if (!ctrl || ctrl.state().activeId !== pending.profileId || pending.abort.signal.aborted) {
@@ -1975,8 +1991,15 @@ export class DesktopHost {
       // is active). The active-id check below still aborts on a rail switch
       // (the active-changed handler nulls pendingUnlock and clears state),
       // so the only behaviour change vs the typed-unlock path is that the
-      // silent path passes through when no prompt is in flight.
-      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
+      // silent path passes through when no prompt is in flight. The
+      // epoch check is the cross-await guarantee against A→B→A ABA
+      // races (activeId returns A again after B but the proof has
+      // already been injected into the B view).
+      if (
+        (pendingUnlock !== null && pendingUnlock !== pending) ||
+        pending.epoch !== activeEpoch ||
+        ctrl.state().activeId !== pending.profileId
+      ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       if (login.kind === 'ok') {
@@ -1992,13 +2015,21 @@ export class DesktopHost {
           return { ok: false, code: 'unavailable', message: 'The server view did not accept the session.' };
         }
       }
-      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
+      if (
+        (pendingUnlock !== null && pendingUnlock !== pending) ||
+        pending.epoch !== activeEpoch ||
+        ctrl.state().activeId !== pending.profileId
+      ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       if (!await waitForBodyLoad(view, true)) {
         return { ok: false, code: 'unavailable', message: 'The authenticated server view did not reload.' };
       }
-      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
+      if (
+        (pendingUnlock !== null && pendingUnlock !== pending) ||
+        pending.epoch !== activeEpoch ||
+        ctrl.state().activeId !== pending.profileId
+      ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       return { ok: true };
@@ -2024,6 +2055,7 @@ export class DesktopHost {
         profileId,
         origin,
         abort: new AbortController(),
+        epoch: activeEpoch,
       });
 
     /** Per-origin coalescing for the full config fetch + reauth +
@@ -2193,6 +2225,7 @@ export class DesktopHost {
           profileId: capture.profileId,
           origin: capture.origin,
           abort: new AbortController(),
+          epoch: activeEpoch,
         };
         sendBodyObscuring(true);
         sendAuthRequired({
