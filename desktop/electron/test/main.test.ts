@@ -962,6 +962,69 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).not.toContain('session.defaultSession.cookies');
   });
 
+  it('re-authenticates silently from the persisted verifier on a mid-session 401 (no prompt for backend restarts)', () => {
+    // Backend restarts wipe the server's in-memory session map
+    // (auth.go). The desktop must consult the on-disk PBKDF2 verifier
+    // before falling through to the password modal — otherwise every
+    // returning user re-prompts after every server bounce.
+    const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
+    expect(configIdx).toBeGreaterThan(-1);
+    // Per-origin coalescing prevents two concurrent stale-cookie
+    // fetchConfig calls from both deleting a freshly-installed
+    // cookie (one would delete the other's S1, the loser poll's
+    // outer retry would then 401, the outer code would clear a
+    // valid stored credential and prompt). The gate has to start
+    // BEFORE the racy fetchConfig, not inside the unauthorized
+    // branch (that was the original regression).
+    expect(desktopSource).toContain('configOpInFlight');
+    expect(desktopSource).toContain('configOpInFlight.get(origin)');
+    expect(desktopSource).toContain('configOpInFlight.set(origin, promise)');
+    expect(desktopSource).toContain('configOpInFlight.delete(origin)');
+    // The silent re-auth block lives between the 'trusted' status check
+    // and the `pendingUnlock = {` prompt-creation. Anchor on both ends
+    // so a future refactor cannot silently remove the re-auth path.
+    const trustedIdx = desktopSource.indexOf("status.kind === 'trusted'", configIdx);
+    expect(trustedIdx).toBeGreaterThan(configIdx);
+    const promptIdx = desktopSource.indexOf('pendingUnlock = {', trustedIdx);
+    expect(promptIdx).toBeGreaterThan(trustedIdx);
+    expect(desktopSource.indexOf('this.storedCredentials.has(origin)', trustedIdx)).toBeLessThan(promptIdx);
+    expect(desktopSource.indexOf('accessAuth.tryUnlockWithVerifier', trustedIdx)).toBeLessThan(promptIdx);
+    // Conservative clearing: ONLY on a server-evaluated proof rejection
+    // (invalid-password) or a confirmed salt/iteration rotation.
+    // rate-limited is NOT a proof rejection (auth.go returns 429 before
+    // consuming the challenge, keyed by client IP — clearing on it
+    // would destroy a valid credential from a prior unrelated failure
+    // and re-introduce the prompt bug). The old test had a permissive
+    // assertion that would have accepted the regression; this asserts
+    // the fix.
+    const clearIdx = desktopSource.indexOf('this.clearStoredCredential(origin)', trustedIdx);
+    expect(clearIdx).toBeGreaterThan(trustedIdx);
+    expect(desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx)).toBeGreaterThan(clearIdx);
+    expect(desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx)).toBeLessThan(promptIdx);
+    // Between the invalid-password check and the prompt creation,
+    // rate-limited must NOT appear as a clear trigger.
+    const rateLimitedBetween = desktopSource.lastIndexOf("unlock.kind === 'rate-limited'", promptIdx);
+    expect(rateLimitedBetween).toBeLessThan(clearIdx);
+    // Body reauth failure must not leave the body stuck on its own
+    // auth UI: schedule an independent retry with backoff (the next
+    // config poll uses the fresh main cookie and never re-enters the
+    // 401 branch, so the body needs its own retry chain).
+    expect(desktopSource).toContain('scheduleBodyReauthRetry(origin, active.id)');
+    expect(desktopSource).toContain('const bodyReauthInFlight = new Map');
+    expect(desktopSource).toContain('const scheduleBodyReauthRetry');
+    // After a successful silent re-auth the body view is also re-logged-
+    // in and reloaded via the cached verifier (B2): the body's Chromium
+    // shared-session cookie is stale even when the main-process jar is
+    // fresh.
+    expect(desktopSource).toContain('silentBodyReauth(origin, active.id)');
+    // The helper itself wraps authenticateBodyView with a synthetic
+    // pending; the relaxed pendingUnlock check inside
+    // authenticateBodyView is the contract tweak that lets the silent
+    // path through without disturbing the typed-unlock prompt flow.
+    expect(desktopSource).toContain('const silentBodyReauth');
+    expect(desktopSource).toContain('(pendingUnlock !== null && pendingUnlock !== pending)');
+  });
+
   it('rejects stale config/workspace reads after an active-server switch', () => {
     const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
     expect(configIdx).toBeGreaterThan(-1);

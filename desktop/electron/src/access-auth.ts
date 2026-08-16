@@ -140,10 +140,14 @@ export class AccessAuth {
    *  loaded from the host's persistent credential store on startup).
    *  Skips the password length check and PBKDF2 derivation — the
    *  verifier is the input. Fetches the current `/api/auth/status`,
-   *  verifies the server's trust settings still match the credential's
-   *  algorithm/salt/iterations (a mismatch means the server rotated
-   *  the credential and the host should fall back to a prompt), and
-   *  on a match computes the proof from the supplied verifier. */
+   *  computes the proof against its challenge, and POSTs the login.
+   *  The trust-settings comparison (algorithm/salt/iterations vs the
+   *  stored credential) is the CALLER's responsibility — this method
+   *  has no view of the stored credential's salt/iterations. A
+   *  mismatch on the caller's side should skip the call entirely
+   *  (the server's HMAC check will reject the verifier anyway); the
+   *  pre-check belongs in the host's `tryReauthWithStoredCredential`
+   *  so a salt rotation invalidates the credential cleanly. */
   async tryUnlockWithVerifier(
     origin: string,
     verifier: Buffer,

@@ -675,11 +675,15 @@ export class DesktopHost {
     if (!verifier) return;
     // /api/auth/status holds the salt + iterations that produced this
     // verifier; we re-fetch it so the on-disk record matches what
-    // we'd send on the next launch (and so a server rotation is
-    // detectable by comparison). Best-effort: if the status fetch
-    // fails we still write the verifier with stale salt/iterations,
-    // which `tryUnlockWithVerifier` will reject on next launch and
-    // we'll fall back to prompting.
+    // we'd send on the next launch. The HOST's
+    // `tryReauthWithStoredCredential` compares the stored
+    // salt/iterations against the server's CURRENT salt/iterations
+    // to detect a rotation before invoking `tryUnlockWithVerifier`
+    // (the access-auth module has no view of the stored credential).
+    // Best-effort: if the status fetch fails we still write the
+    // verifier with stale salt/iterations, which the host's pre-check
+    // will reject on the next launch (salt mismatch →
+    // clearStoredCredential → prompt).
     void this.fetchAuthStatusForPersistence(origin).then((status) => {
       const salt = status?.salt ?? Buffer.alloc(0);
       const iterations = status?.iterations ?? 0;
@@ -696,7 +700,10 @@ export class DesktopHost {
 
   /** Best-effort status read for credential persistence. Mirrors
    *  the validation AccessAuth does internally; the salt+iterations
-   *  pair is what `tryUnlockWithVerifier` later compares against. */
+   *  pair is what the HOST compares against (in
+   *  `tryReauthWithStoredCredential`) before invoking
+   *  `tryUnlockWithVerifier` — the access-auth module has no view
+   *  of the stored credential's salt/iterations. */
   private async fetchAuthStatusForPersistence(
     origin: string,
   ): Promise<{ salt: Buffer; iterations: number } | null> {
@@ -1964,7 +1971,12 @@ export class DesktopHost {
       if (login.kind === 'unavailable') {
         return { ok: false, code: 'unavailable', message: login.message };
       }
-      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+      // `pendingUnlock` is null on the silent re-auth path (no user prompt
+      // is active). The active-id check below still aborts on a rail switch
+      // (the active-changed handler nulls pendingUnlock and clears state),
+      // so the only behaviour change vs the typed-unlock path is that the
+      // silent path passes through when no prompt is in flight.
+      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       if (login.kind === 'ok') {
@@ -1980,16 +1992,78 @@ export class DesktopHost {
           return { ok: false, code: 'unavailable', message: 'The server view did not accept the session.' };
         }
       }
-      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       if (!await waitForBodyLoad(view, true)) {
         return { ok: false, code: 'unavailable', message: 'The authenticated server view did not reload.' };
       }
-      if (pendingUnlock !== pending || ctrl.state().activeId !== pending.profileId) {
+      if ((pendingUnlock !== null && pendingUnlock !== pending) || ctrl.state().activeId !== pending.profileId) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
       return { ok: true };
+    };
+
+    /** Silently re-login + reload the active body view using the verifier
+     *  cached by AccessAuth after a successful main-process re-auth. The
+     *  body's Chromium shared-session cookie is stale after a backend
+     *  restart even though the main-process jar was just refreshed; this
+     *  re-runs the same one-time challenge/proof handshake the typed-
+     *  unlock path uses, without ever opening a modal. Reuses
+     *  authenticateBodyView with a synthetic pending (no requestId,
+     *  fresh abort controller) — the relaxed `pendingUnlock !== null &&
+     *  pendingUnlock !== pending` check inside authenticateBodyView lets
+     *  the silent path through while the active-id check still aborts on
+     *  a rail switch. */
+    const silentBodyReauth = async (
+      origin: string,
+      profileId: string,
+    ): Promise<{ ok: true } | { ok: false; code: 'stale' | 'unavailable'; message: string }> =>
+      authenticateBodyView({
+        requestId: '',
+        profileId,
+        origin,
+        abort: new AbortController(),
+      });
+
+    /** Per-origin coalescing for the full config fetch + reauth +
+     *  retry sequence. Two concurrent 10s polls for the same origin
+     *  would otherwise race: both send the stale cookie, both get
+     *  401, both call `fetchConfig`'s `this.cookies.delete(origin)`
+     *  — the second poll deletes the FIRST poll's freshly-installed
+     *  cookie S1. The outer retry then sees no cookie, gets 401, and
+     *  the silent re-auth's outer code clears a valid stored
+     *  credential and prompts. Joining the in-flight Promise prevents
+     *  the second fetchConfig from issuing until the first finishes.
+     *  Cleared when the operation resolves. */
+    const configOpInFlight = new Map<string, Promise<unknown>>();
+    /** Independent body-reauth retry chain. silentBodyReauth can fail
+     *  for transient reasons (the body view tearing down from a
+     *  server restart); the next config poll uses the fresh main
+     *  cookie so it never re-enters the 401 branch and the body
+     *  would otherwise stay stuck on its own auth UI. Up to 3
+     *  attempts with 2s/4s/6s backoff. Per-origin dedup; cleared when
+     *  the chain resolves. */
+    const bodyReauthInFlight = new Map<string, Promise<void>>();
+    /** Fire-and-forget body-reauth retry with backoff. Coalesces
+     *  concurrent requests for the same origin. Stops early when
+     *  the active profile switches away from this origin. */
+    const scheduleBodyReauthRetry = (origin: string, profileId: string): void => {
+      const existing = bodyReauthInFlight.get(origin);
+      if (existing) return;
+      const p = (async (): Promise<void> => {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          if (attempt > 1) {
+            await new Promise((r) => setTimeout(r, 2000 * (attempt - 1)));
+          }
+          if (this.controller?.state().activeId !== profileId) return;
+          const result = await silentBodyReauth(origin, profileId);
+          if (result.ok) return;
+          console.log(`phi-desktop: silent body reauth retry ${attempt}/3 ${origin}: ${result.message}`);
+        }
+      })();
+      bodyReauthInFlight.set(origin, p);
+      p.finally(() => bodyReauthInFlight.delete(origin));
     };
 
     ipcMain.handle('phi:server-config', async (event) => {
@@ -2000,46 +2074,138 @@ export class DesktopHost {
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return null;
       const origin = new URL(active.origin).origin;
-      const capture = { profileId: active.id, origin, ts: Date.now() };
-      const result = await accessAuth.fetchConfig(origin);
-      // A config response for the outgoing server must never repaint the
-      // header after the rail has switched to another profile.
-      if (ctrl.state().activeId !== capture.profileId) return null;
-      if (result.kind === 'ok') return result.config;
-      if (result.kind === 'unavailable') return null;
-      // result.kind === 'unauthorized': the server requires access.
-      // Validate the status before prompting. Re-check active profile at
-      // every await point to avoid A-response-after-switch races.
-      if (ctrl.state().activeId !== active.id) return null;
-      const status = await accessAuth
-        .fetchStatus(origin, pendingUnlock === null ? undefined : pendingUnlock.abort.signal)
-        .catch(() => null);
-      if (status === null) return null;
-      if (status.kind === 'no-auth') {
-        // Server reports no auth protection — the unlock is moot.
-        const cfg = await accessAuth.fetchConfig(origin).catch(() => null);
+      // Coalesce concurrent calls for the same origin. The handler
+      // does a racy fetchConfig (which deletes the cookie on 401)
+      // before any per-call gate could run; the outer coalescing
+      // prevents two stale fetches from both clobbering a
+      // freshly-installed cookie.
+      const cached = configOpInFlight.get(origin);
+      if (cached !== undefined) return cached;
+      const promise = (async (): Promise<unknown> => {
+        const capture = { profileId: active.id, origin, ts: Date.now() };
+        const result = await accessAuth.fetchConfig(origin);
+        // A config response for the outgoing server must never repaint the
+        // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
-        return cfg?.kind === 'ok' ? cfg.config : null;
-      }
-      if (status.kind === 'unavailable') return null;
-      // status.kind === 'trusted': server asks for a password. Prompt.
-      if (pendingUnlock !== null) return null; // one prompt at a time
-      if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
-      if (unlockInFlight) return null;
-      pendingUnlock = {
-        requestId: randomRequestId(),
-        profileId: capture.profileId,
-        origin: capture.origin,
-        abort: new AbortController(),
-      };
-      sendBodyObscuring(true);
-      sendAuthRequired({
-        requestId: pendingUnlock.requestId,
-        profileId: pendingUnlock.profileId,
-        origin: pendingUnlock.origin,
-        label: active.name !== '' ? active.name : pendingUnlock.origin,
-      });
-      return null; // caller will retry once phi:auth-unlock resolves
+        if (result.kind === 'ok') return result.config;
+        if (result.kind === 'unavailable') return null;
+        // result.kind === 'unauthorized': the server requires access.
+        // Validate the status before prompting. Re-check active profile at
+        // every await point to avoid A-response-after-switch races.
+        if (ctrl.state().activeId !== active.id) return null;
+        const status = await accessAuth
+          .fetchStatus(origin, pendingUnlock === null ? undefined : pendingUnlock.abort.signal)
+          .catch(() => null);
+        if (status === null) return null;
+        if (status.kind === 'no-auth') {
+          // Server reports no auth protection — the unlock is moot.
+          const cfg = await accessAuth.fetchConfig(origin).catch(() => null);
+          if (ctrl.state().activeId !== capture.profileId) return null;
+          return cfg?.kind === 'ok' ? cfg.config : null;
+        }
+        if (status.kind === 'unavailable') return null;
+        // status.kind === 'trusted': server asks for a password. Attempt a
+        // silent re-auth from the persisted verifier first — a backend
+        // restart wipes in-memory sessions server-side (auth.go keeps the
+        // session map in process memory, so any returning client must
+        // re-authenticate), and the verifier on disk is exactly the secret
+        // that lets us do that without a prompt. Only when no valid
+        // credential exists (or the server rotated the salt) do we fall
+        // through to the modal below.
+        if (pendingUnlock !== null) return null; // one prompt at a time
+        if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
+        if (unlockInFlight) return null;
+        if (this.storedCredentials.has(origin)) {
+          const cred = this.storedCredentials.get(origin);
+          if (cred !== undefined) {
+            // Conservative: compare the server's CURRENT salt/iterations
+            // against the stored credential so a confirmed rotation
+            // clears it, but a transient network blip (status fetch
+            // throws, retry needed) keeps it intact for the next
+            // attempt. The outer handler already established `status`
+            // is `trusted`, so we can compare against it directly
+            // instead of re-fetching.
+            const trustMatches =
+              status.iterations === cred.iterations && status.salt.equals(cred.salt);
+            let unlock: Awaited<ReturnType<typeof accessAuth.tryUnlockWithVerifier>> | null = null;
+            if (trustMatches) {
+              const verifierCopy = Buffer.from(cred.verifier);
+              try {
+                unlock = await accessAuth.tryUnlockWithVerifier(origin, verifierCopy);
+              } finally {
+                verifierCopy.fill(0);
+              }
+            }
+            if (unlock?.kind === 'ok' && ctrl.state().activeId === active.id) {
+              // Main-process cookie is fresh; the body's Chromium cookie
+              // is still stale, so silently re-login + reload it via the
+              // verifier cached in AccessAuth.lastVerifier (the typed
+              // password never enters the renderer — the trust model is
+              // unchanged).
+              const bodyResult = await silentBodyReauth(origin, active.id);
+              if (!bodyResult.ok) {
+                console.log(`phi-desktop: silent body reauth ${origin}: ${bodyResult.message}`);
+                // The next config poll uses the fresh main cookie and
+                // never re-enters the 401 branch, so the body would
+                // otherwise stay stuck on its own auth UI. Schedule an
+                // independent retry with backoff (coalesced per origin).
+                scheduleBodyReauthRetry(origin, active.id);
+              }
+              const retry = await accessAuth.fetchConfig(origin);
+              if (ctrl.state().activeId === active.id) {
+                if (retry.kind === 'ok') return retry.config;
+                if (retry.kind === 'unauthorized') {
+                  // Re-auth said ok but the server still rejects — the
+                  // stored credential is bad. Clear so the prompt that
+                  // follows re-seeds with a fresh verifier.
+                  this.clearStoredCredential(origin);
+                } else {
+                  return null; // unavailable
+                }
+              } else {
+                return null;
+              }
+            } else if (!trustMatches) {
+              // Confirmed salt/iteration rotation — the stored verifier
+              // is for an old password. Clear so the prompt that
+              // follows re-seeds with the current trust settings.
+              this.clearStoredCredential(origin);
+            } else if (unlock && unlock.kind === 'invalid-password') {
+              // The server EVALUATED the HMAC and rejected it: the
+              // stored verifier is bad. (rate-limited is NOT a proof
+              // rejection — auth.go returns 429 before consuming the
+              // challenge, keyed by client IP, so a prior unrelated
+              // failed attempt can cause it. Clearing on rate-limit
+              // would destroy a valid credential; the next poll or the
+              // outer modal will re-evaluate.)
+              this.clearStoredCredential(origin);
+            }
+            // else: trustMatches && (unlock null because the verifier
+            // path threw / returned a transient unavailable/stale) —
+            // keep the credential and fall through to the modal. The
+            // prompt path will retry; if the server is actually
+            // unreachable it surfaces 'unavailable' which the renderer
+            // never paints as a real prompt.
+          }
+        }
+        pendingUnlock = {
+          requestId: randomRequestId(),
+          profileId: capture.profileId,
+          origin: capture.origin,
+          abort: new AbortController(),
+        };
+        sendBodyObscuring(true);
+        sendAuthRequired({
+          requestId: pendingUnlock.requestId,
+          profileId: pendingUnlock.profileId,
+          origin: pendingUnlock.origin,
+          label: active.name !== '' ? active.name : pendingUnlock.origin,
+        });
+        return null; // caller will retry once phi:auth-unlock resolves
+      })();
+      configOpInFlight.set(origin, promise);
+      promise.finally(() => configOpInFlight.delete(origin));
+      return promise;
     });
 
     ipcMain.handle('phi:active-workspace', async (event) => {
