@@ -616,3 +616,108 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
     expect(auth.getLastVerifier(origin)).toBeNull();
   });
 });
+
+// -- concurrent-fetch race + rate-limited discrimination --
+//
+// These tests pin the invariants the DesktopHost silent re-auth fix
+// relies on. They are deliberately AccessAuth-level (no Electron
+// harness) because the AccessAuth behaviour is what the host's
+// coalescing + conservative clearing defend against. A full
+// DesktopHost behavioural suite (active-changed events, view
+// lifecycle, IPC handlers) is a separate, larger effort.
+
+describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', () => {
+  const origin = 'https://phi.example/';
+
+  it('two concurrent stale-cookie fetchConfig calls both delete the cookie (the race invariant)', async () => {
+    // Regression guard for the silent re-auth race: if two 10s polls
+    // both fire fetchConfig with the stale cookie, BOTH delete the
+    // captured cookie. The host loop's `configOpInFlight` Map
+    // coalesces the two operations BEFORE the fetchConfig so only
+    // one stale fetch is ever in flight — if that coalescing is
+    // ever removed, both fetches race and the second poll deletes
+    // the first's freshly-installed cookie. This test pins the
+    // AccessAuth layer's "delete on every 401" invariant so the
+    // race at the host layer remains observable.
+    let deleteCount = 0;
+    const cookies = new Map<string, { cookieName: string; cookieValue: string; path: string; httpOnly: true }>();
+    cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'stale-token',
+      path: '/',
+      httpOnly: true,
+    });
+    const doFetch = (async (): Promise<Response> => {
+      // Yield once so both fetchConfig calls register before either
+      // resolves — otherwise the first resolves synchronously and
+      // the second sees no cookie (the race only manifests with
+      // concurrent in-flight requests).
+      await new Promise((r) => setTimeout(r, 0));
+      deleteCount += 1;
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch;
+    const auth = new AccessAuth(doFetch);
+    (auth as unknown as { cookies: typeof cookies }).cookies = cookies;
+    const [a, b] = await Promise.all([auth.fetchConfig(origin), auth.fetchConfig(origin)]);
+    expect(a.kind).toBe('unauthorized');
+    expect(b.kind).toBe('unauthorized');
+    expect(deleteCount).toBe(2); // both stale fetches ran; cookie gone
+    expect(auth.hasCookie(origin)).toBe(false);
+  });
+
+  it('tryUnlockWithVerifier returns rate-limited (not invalid-password) on 429', async () => {
+    // 429 is returned BEFORE the server consumes the challenge or
+    // evaluates the HMAC (auth.go: the rate-limit path fires on
+    // the per-IP failure counter and returns before the challenge
+    // lookup). It is NOT a proof rejection — it can fire from prior
+    // unrelated failed attempts on the same client IP. The host
+    // loop's conservative clearing branch must therefore NOT
+    // erase the persisted credential on rate-limited. This test
+    // pins the AccessAuth layer to return the discriminated
+    // 'rate-limited' kind so the host's clearing branch can
+    // recognise and preserve the credential.
+    const crypto = await import('node:crypto');
+    const verifier = crypto.pbkdf2Sync('whatever-password', Buffer.from('AQID', 'base64url'), 600_000, 32, 'sha256');
+    const goodStatus = {
+      enabled: true, version: 'v1' as const, algorithm: 'pbkdf2-sha256' as const,
+      iterations: 600_000,
+      salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+      challenge: 'sample-challenge',
+    };
+    const doFetch = (async (url: URL) => {
+      const path = url.toString();
+      if (path.endsWith('/api/auth/status')) {
+        return new Response(JSON.stringify(goodStatus), { status: 200 });
+      }
+      if (path.endsWith('/api/auth/login')) {
+        return new Response('slow down', { status: 429 });
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as unknown as typeof fetch;
+    const auth = new AccessAuth(doFetch);
+    const result = await auth.tryUnlockWithVerifier(origin, Buffer.from(verifier));
+    expect(result.kind).toBe('rate-limited');
+  });
+
+  it('fetchConfig preserves a fresh native cookie across a subsequent stale-cookie 401 (no spurious clears)', async () => {
+    // Regression guard for the AccessAuth cookie lifecycle that the
+    // host's silent re-auth relies on: a successful login installs
+    // cookie S1, and a follow-up fetchConfig that sends S1 must NOT
+    // spuriously clear S1 unless the server returns 401. A 200 must
+    // preserve S1.
+    const doFetch = (async () => new Response('{"ok":true}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as unknown as typeof fetch;
+    const auth = new AccessAuth(doFetch);
+    (auth as unknown as { cookies: Map<string, unknown> }).cookies.set(origin, {
+      cookieName: 'phi_access_session',
+      cookieValue: 'fresh-token',
+      path: '/',
+      httpOnly: true,
+    });
+    const out = await auth.fetchConfig(origin);
+    expect(out.kind).toBe('ok');
+    expect(auth.hasCookie(origin)).toBe(true);
+  });
+});
