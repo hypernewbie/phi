@@ -1265,12 +1265,14 @@ export class DesktopHost {
     installFullscreenToggle(win.webContents, win);
     installReloadShortcut(win.webContents, () => {
       const activeId = this.profileViews?.getActive() ?? null;
-      if (activeId !== null) {
-        const view = this.profileViews?.getView(activeId) ?? null;
-        if (view && !view.webContents.isDestroyed()) return view.webContents;
-      }
-      return win.webContents;
-    });
+        if (activeId !== null) {
+          const view = this.profileViews?.getView(activeId) ?? null;
+          if (view && !view.webContents.isDestroyed()) return view.webContents;
+        }
+        return win.webContents;
+      },
+      (ignoringCache) => this.profileViews?.reloadAll(ignoringCache),
+    );
     installZoomShortcuts(win.webContents, () => {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
@@ -1810,6 +1812,13 @@ export class DesktopHost {
       } catch (err) {
         console.log(`phi-desktop: phi:reorder-profile ${id}: ${String(err)}`);
       }
+    });
+    ipcMain.on('phi:reload-profile', (_event, id: unknown) => {
+      const targetId = typeof id === 'string' && id !== '' ? id : undefined;
+      this.profileViews?.reloadActive(targetId);
+    });
+    ipcMain.on('phi:reload-all-servers', () => {
+      this.profileViews?.reloadAll();
     });
     // Rail renderer: a never-hidden child view spanning the left rail
     // gutter (RAIL_WIDTH px), loading the local rail page

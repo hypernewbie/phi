@@ -225,6 +225,46 @@ export class ProfileViewManager {
   }
 
   /**
+   * Reloads all retained profile views (Idea E).
+   * Used on Alt+F5 / Cmd+Alt+R or rail "Reload all servers".
+   */
+  reloadAll(ignoringCache = false): void {
+    for (const [id, entry] of this.views.entries()) {
+      if (!entry.view.webContents.isDestroyed()) {
+        if (ignoringCache) {
+          entry.view.webContents.reloadIgnoringCache();
+        } else {
+          entry.view.webContents.reload();
+        }
+        this.log(`views: reloadAll — reloaded profile ${id} (ignoringCache=${ignoringCache})`);
+      }
+    }
+  }
+
+  /**
+   * Reloads the active profile view, or a specific profile view by id.
+   */
+  reloadActive(targetId?: string, ignoringCache = false): void {
+    const id = targetId ?? this.activeId;
+    if (!id) return;
+    const entry = this.views.get(id);
+    if (entry && !entry.view.webContents.isDestroyed()) {
+      if (ignoringCache) {
+        entry.view.webContents.reloadIgnoringCache();
+      } else {
+        entry.view.webContents.reload();
+      }
+      this.log(`views: reloaded profile ${id} (ignoringCache=${ignoringCache})`);
+    }
+  }
+
+  /** The active retained view's webContents, or null when none. */
+  getActiveView(): WebContentsView | null {
+    if (!this.activeId) return null;
+    return this.views.get(this.activeId)?.view ?? null;
+  }
+
+  /**
    * Closes + destroys every retained view and clears the manager
    * (before-quit teardown). Never throws: per-view failures are logged
    * and the teardown continues.
@@ -299,7 +339,7 @@ export class ProfileViewManager {
     // that fire while a body view has focus). Modified F11 chords stay
     // untouched; xterm.js leaves plain F11 unbound.
     installFullscreenToggle(view.webContents, this.win);
-    installReloadShortcut(view.webContents);
+    installReloadShortcut(view.webContents, undefined, (ignoringCache) => this.reloadAll(ignoringCache));
     installZoomShortcuts(view.webContents);
     const rootUrl = new URL(origin);
     rootUrl.searchParams.set('desktop', '1');
