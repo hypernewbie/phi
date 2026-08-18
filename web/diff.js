@@ -261,6 +261,13 @@ export class DiffController {
                         return false;
                     }
                 }
+                // Allow zoom shortcuts (Ctrl/Cmd +, -, 0, =) to pass through
+                if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+                    const k = e.key;
+                    if (k === '+' || k === '=' || k === '-' || k === '_' || k === '0' || k === 'Add' || k === 'Subtract') {
+                        return false;
+                    }
+                }
             }
             return true;
         });

@@ -16,6 +16,7 @@
  *     sandboxed WebContentsView children with no preload bridge.
  */
 import { app, ipcMain } from 'electron';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopHost } from './desktop.js';
@@ -24,6 +25,37 @@ import { parseDeepLink, dispatchDeepLink, DEEPLINK_CHANNEL } from './deeplink.js
 import { installProtocol, uninstallProtocol, realPlatform } from './protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+app.name = 'phi-client';
+
+/**
+ * Migrates legacy userData settings (profiles.json, access-credentials.bin)
+ * from previous directory names (phi-desktop-electron, Phi) if the current
+ * userData directory does not have them.
+ */
+export function migrateUserData(targetDir: string, appDataDir: string): void {
+  const legacyDirs = [
+    path.join(appDataDir, 'phi-desktop-electron'),
+    path.join(appDataDir, 'Phi'),
+  ];
+  const filesToMigrate = ['profiles.json', 'access-credentials.bin'];
+
+  for (const legacyDir of legacyDirs) {
+    if (legacyDir === targetDir || !existsSync(legacyDir)) continue;
+    for (const file of filesToMigrate) {
+      const src = path.join(legacyDir, file);
+      const dst = path.join(targetDir, file);
+      if (existsSync(src) && !existsSync(dst)) {
+        try {
+          mkdirSync(targetDir, { recursive: true });
+          copyFileSync(src, dst);
+        } catch (err) {
+          console.warn(`phi-desktop: failed to migrate ${file} from ${legacyDir}: ${String(err)}`);
+        }
+      }
+    }
+  }
+}
 
 // --- CLI one-shot flags: --register-protocol / --unregister-protocol ---
 // Both are parsed before the single-instance gate and exit 0 (1 on
@@ -54,6 +86,12 @@ if (process.argv.slice(1).includes('--register-protocol')) {
 
 if (process.env.PHI_DESKTOP_SMOKE === '1') {
   app.setPath('userData', path.join(app.getPath('temp'), `phi-desktop-smoke-${Date.now()}-${process.pid}`));
+} else {
+  try {
+    migrateUserData(app.getPath('userData'), app.getPath('appData'));
+  } catch {
+    // Non-fatal
+  }
 }
 
 const host = new DesktopHost();

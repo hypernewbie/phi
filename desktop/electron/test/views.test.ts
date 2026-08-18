@@ -48,6 +48,7 @@ function makeFakeView(): RecordingView {
   const loadHandlers: Array<() => void> = [];
   const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> = [];
   let webContentsDestroyed = false;
+  let zoomLevel = 0;
   const rec: RecordingView = {
     view: {
       setBounds: (b: ViewBounds) => setBoundsCalls.push({ ...b }),
@@ -69,6 +70,10 @@ function makeFakeView(): RecordingView {
         },
         focus: () => {
           rec.focusCalls += 1;
+        },
+        getZoomLevel: () => zoomLevel,
+        setZoomLevel: (l: number) => {
+          zoomLevel = l;
         },
         isDestroyed: () => rec.webContentsDestroyed,
       },
@@ -351,13 +356,13 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(views).toHaveLength(1);
   });
 
-  it('installs the plain-F11 fullscreen toggle and F5 reload shortcut on every retained body view', () => {
+  it('installs the plain-F11 fullscreen toggle, F5 reload, and zoom shortcuts on every retained body view', () => {
     const { manager, views, win } = makeManager();
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
     manager.setActive('p1');
     manager.setActive('p2');
-    for (const v of views) expect(v.beforeInputHandlers).toHaveLength(2);
+    for (const v of views) expect(v.beforeInputHandlers).toHaveLength(3);
     // Plain F11 from the focused body view toggles the BrowserWindow.
     const ev = { preventDefault: vi.fn() };
     views[1].beforeInputHandlers[0](ev as never, {
@@ -380,5 +385,19 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     });
     expect(ev2.preventDefault).not.toHaveBeenCalled();
     expect(win.fullscreenStates).toEqual([true]);
+
+    // Zoom shortcut on the focused body view zooms the webContents.
+    const ev3 = { preventDefault: vi.fn() };
+    views[1].beforeInputHandlers[2](ev3 as never, {
+      type: 'keyDown',
+      key: '=',
+      control: true,
+      alt: false,
+      meta: false,
+    });
+    expect(ev3.preventDefault).toHaveBeenCalled();
+    expect(
+      (views[1].view.webContents as unknown as { getZoomLevel: () => number }).getZoomLevel(),
+    ).toBeCloseTo(0.5);
   });
 });

@@ -289,7 +289,16 @@ export function setupTray(deps: TrayDeps): TrayHandle {
     // Windows ICO only: other platforms fall back to the sibling PNG.
     icon = nativeImage.createFromPath(iconPath.replace(/\.ico$/, '.png'));
   }
-  if (icon.isEmpty()) {
+  if (!icon.isEmpty()) {
+    if (process.platform === 'darwin') {
+      if (typeof icon.resize === 'function') {
+        icon = icon.resize({ width: 16, height: 16 });
+      }
+      if (typeof icon.setTemplateImage === 'function') {
+        icon.setTemplateImage(true);
+      }
+    }
+  } else {
     deps.log(`phi-desktop: tray icon missing at ${iconPath}; continuing with the default empty icon`);
   }
   const tray = new Tray(icon);

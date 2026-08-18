@@ -882,6 +882,21 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).toContain("import { installReloadShortcut } from './reload.js'");
   });
 
+  it('installs the zoom shortcuts on the main view, picker, and popups', () => {
+    expect(desktopSource).toContain('installZoomShortcuts(win.webContents');
+    const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
+    expect(pickerIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installZoomShortcuts(picker.webContents)', pickerIdx),
+    ).toBeGreaterThan(pickerIdx);
+    const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
+    expect(popupIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('installZoomShortcuts(child.webContents)', popupIdx),
+    ).toBeGreaterThan(popupIdx);
+    expect(desktopSource).toContain("import { installZoomShortcuts } from './zoom.js'");
+  });
+
   it('pushes maximize/focus state and the active server to the main view page on maximize, unmaximize, focus and blur', () => {
     expect(desktopSource).toContain("'phi:window-state'");
     const pushIdx = desktopSource.indexOf('pushWindowState(): void');
@@ -1170,15 +1185,15 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
     expect(menuIdx).toBeGreaterThan(-1);
     expect(desktopSource).toContain('Menu.setApplicationMenu(null)');
     expect(desktopSource).toContain("process.platform !== 'darwin'");
-    // The darwin template carries no generic File/Edit/View boilerplate.
+    // The darwin template carries no generic File/View boilerplate.
     const menuRegion = desktopSource.slice(
       menuIdx,
       desktopSource.indexOf('createMainWindow(): BrowserWindow', menuIdx),
     );
     expect(menuRegion).not.toContain("role: 'fileMenu'");
-    expect(menuRegion).not.toContain("role: 'editMenu'");
     expect(menuRegion).not.toContain("role: 'viewMenu'");
-    // macOS keeps the system menu bar functional (app menu + window menu).
+    // macOS keeps the system menu bar functional (app menu + edit menu for clipboard + window menu).
+    expect(menuRegion).toContain("{ role: 'editMenu' }");
     expect(menuRegion).toContain("{ role: 'windowMenu' }");
     expect(menuRegion).toContain("role: 'about'");
     expect(menuRegion).toContain("role: 'quit'");

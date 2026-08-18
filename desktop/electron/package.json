@@ -1,8 +1,10 @@
 {
   "name": "phi-desktop-electron",
+  "productName": "phi-client",
   "version": "0.19.2",
   "private": true,
-  "description": "Electron desktop shell for Phi (migration from the Wails v2.13 shell). Phase 5: profile controller + global hotkey on the phase-4 tray + phase-3 protocol-registration + phase-2 gate/argv-routing scaffold.",
+  "description": "Terminal multiplexer and browser-based control center for AI coding assistants.",
+  "author": "hypernewbie",
   "type": "module",
   "main": "dist/main.js",
   "packageManager": "pnpm@11.18.0",

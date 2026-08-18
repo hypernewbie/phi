@@ -254,6 +254,23 @@ describe('DiffController._wireCopyHandlers', () => {
         expect(copy).not.toHaveBeenCalled();
         expect(result).toBe(true);
     });
+
+    it('passes Ctrl/Cmd zoom shortcuts (+, -, 0, =) through to browser/desktop', async () => {
+        const { _wireCopyHandlers } = await loadDiffControllerPrototype();
+        const term = makeStubTerm();
+        const container = makeStubContainer();
+        const copy = vi.fn();
+        const ctx = ctrlCtx({ copyTextRobustly: copy, term, container });
+        _wireCopyHandlers.call(ctx, term, container);
+
+        const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
+        for (const key of ['+', '=', '-', '_', '0', 'Add', 'Subtract']) {
+            expect(keyHandler({ type: 'keydown', key, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
+            expect(keyHandler({ type: 'keydown', key, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);
+        }
+        // Alt-modified chords are not zoom chords and return true
+        expect(keyHandler({ type: 'keydown', key: '+', ctrlKey: true, altKey: true, metaKey: false })).toBe(true);
+    });
 });
 
 // ---- copyDiffBuffer ----------------------------------------------------

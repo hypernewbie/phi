@@ -70,6 +70,7 @@ import {
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
 import { installReloadShortcut } from './reload.js';
+import { installZoomShortcuts } from './zoom.js';
 import { ALWAYS_SAFE_RAIL_CHORDS, TERMINAL_FOCUS_SCRIPT, resolveRailChord } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 
@@ -83,7 +84,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  *  128/256 entries rendered through GDI+ at native resolution, with
  *  proper antialiasing at each size. The 256x256 PNG is retained
  *  as the fallback for surfaces that don't accept .ico. */
-const APP_ICON_PATH = path.join(here, '..', 'assets', 'icon.ico');
+const APP_ICON_PATH =
+  process.platform === 'win32'
+    ? path.join(here, '..', 'assets', 'icon.ico')
+    : path.join(here, '..', 'assets', 'icon.png');
 
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';
@@ -1170,17 +1174,29 @@ export class DesktopHost {
 
   /**
    * Phi-native application menu. Windows/Linux get no menu bar (the tray
-   * and rail own those actions); macOS keeps a minimal Phi menu so the
-   * system menu bar stays functional.
+   * and rail own those actions); macOS keeps a minimal Phi menu with Edit
+   * and Window menus so standard clipboard (Cmd+C/V/X/A/Z) and system window
+   * actions stay functional.
    */
   installAppMenu(): void {
     if (process.platform !== 'darwin') {
       Menu.setApplicationMenu(null);
       return;
     }
+    if (typeof app.setAboutPanelOptions === 'function') {
+      app.setAboutPanelOptions({
+        applicationName: 'phi-client',
+        applicationVersion: app.getVersion(),
+        copyright: 'Copyright © 2025-2026 Phi Contributors',
+        credits: 'Terminal multiplexer and browser-based control center for AI coding assistants.',
+        authors: ['hypernewbie'],
+        website: 'https://github.com/hypernewbie/phi',
+        iconPath: path.join(here, '..', 'assets', 'icon.png'),
+      });
+    }
     const template: MenuItemConstructorOptions[] = [
       {
-        label: 'Phi',
+        label: 'phi-client',
         submenu: [
           { role: 'about' },
           { type: 'separator' },
@@ -1191,12 +1207,16 @@ export class DesktopHost {
           { role: 'quit' },
         ],
       },
+      { role: 'editMenu' },
       { role: 'windowMenu' },
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   }
 
   createMainWindow(): BrowserWindow {
+    if (process.platform === 'darwin' && app.dock && typeof app.dock.setIcon === 'function') {
+      app.dock.setIcon(APP_ICON_PATH);
+    }
     const win = new BrowserWindow({
       title: 'Phi',
       // The generated Phi icon; the tray keeps its own 16px asset (tray sizes differ).
@@ -1244,6 +1264,14 @@ export class DesktopHost {
     // stay untouched; xterm.js does not claim plain F11.
     installFullscreenToggle(win.webContents, win);
     installReloadShortcut(win.webContents, () => {
+      const activeId = this.profileViews?.getActive() ?? null;
+      if (activeId !== null) {
+        const view = this.profileViews?.getView(activeId) ?? null;
+        if (view && !view.webContents.isDestroyed()) return view.webContents;
+      }
+      return win.webContents;
+    });
+    installZoomShortcuts(win.webContents, () => {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
@@ -1504,6 +1532,7 @@ export class DesktopHost {
                 attachNavGuard(child.webContents);
                 installFullscreenToggle(child.webContents, child);
                 installReloadShortcut(child.webContents);
+                installZoomShortcuts(child.webContents);
                 return child.webContents;
               },
             };
@@ -1705,6 +1734,7 @@ export class DesktopHost {
       void picker.loadFile(path.join(here, 'picker.html'));
       installFullscreenToggle(picker.webContents, win);
       installReloadShortcut(picker.webContents);
+      installZoomShortcuts(picker.webContents);
       picker.once('ready-to-show', () => {
         if (!picker.isDestroyed()) picker.show();
       });
