@@ -415,19 +415,25 @@ describe('rail CPU intensity (src/renderer.ts + src/rail.css)', () => {
 });
 
 describe('rail entry context menu (src/renderer.ts)', () => {
-  /** Boots the full rail page with a recording-fake bridge and pushes one
-   * snapshot; returns the page document, the recorded IPC calls and the
-   * snapshot callback (for re-render tests). */
   function bootPage(): {
     doc: Document;
     stateCbs: Array<(state: RailState) => void>;
-    calls: { select: string[]; sessions: string[]; rename: Array<[string, string]>; remove: string[] };
+    calls: {
+      select: string[];
+      sessions: string[];
+      rename: Array<[string, string]>;
+      remove: string[];
+      reloadServer: string[];
+      reloadAll: number;
+    };
   } {
     const calls = {
       select: [] as string[],
       sessions: [] as string[],
       rename: [] as Array<[string, string]>,
       remove: [] as string[],
+      reloadServer: [] as string[],
+      reloadAll: 0,
     };
     const stateCbs: Array<(state: RailState) => void> = [];
     (window as { electron?: unknown }).electron = {
@@ -440,6 +446,8 @@ describe('rail entry context menu (src/renderer.ts)', () => {
       postOpenPicker: () => {},
       postRenameProfile: (id: string, name: string) => calls.rename.push([id, name]),
       postRemoveProfile: (id: string) => calls.remove.push(id),
+      postReloadServer: (id?: string) => calls.reloadServer.push(id ?? ''),
+      postReloadAllServers: () => calls.reloadAll++,
     };
     const doc = withPage(htmlSource, (d) => {
       boot();
@@ -455,7 +463,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     );
   }
 
-  it('right-clicking a rail entry opens Rename/Remove for exactly that profile and blocks the default menu', () => {
+  it('right-clicking a rail entry opens Reload/Rename/Remove for exactly that profile and blocks the default menu', () => {
     const { doc, calls } = bootPage();
     const items = doc.querySelectorAll('li.rail-item');
     const evt = new doc.defaultView!.MouseEvent('contextmenu', {
@@ -468,6 +476,8 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     const menu = doc.getElementById('rail-menu') as HTMLElement;
     expect(menu.hidden).toBe(false);
     expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Reload server',
+      'Reload all servers',
       'Open sessions',
       'Rename',
       'Remove',
@@ -475,12 +485,32 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     expect(calls.select).toEqual([]);
   });
 
+  it('Reload server posts phi:reload-profile for that profile and closes the menu', () => {
+    const { doc, calls } = bootPage();
+    const items = doc.querySelectorAll('li.rail-item');
+    contextMenu(doc, items[0] as HTMLElement);
+    const menu = doc.getElementById('rail-menu') as HTMLElement;
+    (menu.querySelectorAll('button')[0] as HTMLButtonElement).click(); // Reload server
+    expect(calls.reloadServer).toEqual(['a']);
+    expect(menu.hidden).toBe(true);
+  });
+
+  it('Reload all servers posts phi:reload-all-servers and closes the menu', () => {
+    const { doc, calls } = bootPage();
+    const items = doc.querySelectorAll('li.rail-item');
+    contextMenu(doc, items[0] as HTMLElement);
+    const menu = doc.getElementById('rail-menu') as HTMLElement;
+    (menu.querySelectorAll('button')[1] as HTMLButtonElement).click(); // Reload all servers
+    expect(calls.reloadAll).toBe(1);
+    expect(menu.hidden).toBe(true);
+  });
+
   it('Open sessions posts phi:open-server-sessions for exactly that profile and closes the menu', () => {
     const { doc, calls } = bootPage();
     const items = doc.querySelectorAll('li.rail-item');
     contextMenu(doc, items[0] as HTMLElement);
     const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelector('button') as HTMLButtonElement).click(); // Open sessions
+    (menu.querySelectorAll('button')[2] as HTMLButtonElement).click(); // Open sessions
     expect(calls.sessions).toEqual(['a']);
     expect(menu.hidden).toBe(true);
   });
@@ -490,7 +520,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     const items = doc.querySelectorAll('li.rail-item');
     contextMenu(doc, items[0] as HTMLElement);
     const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[1] as HTMLButtonElement).click(); // Rename
+    (menu.querySelectorAll('button')[3] as HTMLButtonElement).click(); // Rename
     const input = menu.querySelector('input') as HTMLInputElement;
     // The rename input is seeded with the targeted profile's current name.
     expect(input.value).toBe('Alpha Phi');
@@ -505,7 +535,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     const items = doc.querySelectorAll('li.rail-item');
     contextMenu(doc, items[0] as HTMLElement);
     const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[2] as HTMLButtonElement).click(); // Remove
+    (menu.querySelectorAll('button')[4] as HTMLButtonElement).click(); // Remove
     const title = menu.querySelector('.menu-title');
     expect(title?.textContent).toContain('Alpha Phi');
     expect(title?.textContent).toContain('http://127.0.0.1:7070/');
@@ -520,7 +550,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     const items = doc.querySelectorAll('li.rail-item');
     contextMenu(doc, items[1] as HTMLElement);
     const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[2] as HTMLButtonElement).click(); // Remove
+    (menu.querySelectorAll('button')[4] as HTMLButtonElement).click(); // Remove
     (menu.querySelectorAll('button')[0] as HTMLButtonElement).click(); // confirm Remove
     expect(calls.remove).toEqual(['b']);
     expect(menu.hidden).toBe(true);
@@ -661,5 +691,9 @@ describe('rail IPC contract (channel strings)', () => {
     expect(preloadSource).toContain('postOpenServerSessions');
     expect(preloadSource).toContain("'phi:reorder-profile'");
     expect(preloadSource).toContain('postReorderProfile');
+    expect(preloadSource).toContain("'phi:reload-profile'");
+    expect(preloadSource).toContain('postReloadServer');
+    expect(preloadSource).toContain("'phi:reload-all-servers'");
+    expect(preloadSource).toContain('postReloadAllServers');
   });
 });

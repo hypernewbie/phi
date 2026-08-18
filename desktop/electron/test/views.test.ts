@@ -39,6 +39,8 @@ interface RecordingView {
   loadHandlers: Array<() => void>;
   beforeInputHandlers: Array<(event: unknown, input: unknown) => void>;
   webContentsDestroyed: boolean;
+  reloadCalls: number;
+  reloadIgnoringCacheCalls: number;
 }
 
 function makeFakeView(): RecordingView {
@@ -65,6 +67,12 @@ function makeFakeView(): RecordingView {
           loadURLCalls.push(url);
           return Promise.resolve();
         },
+        reload: () => {
+          rec.reloadCalls += 1;
+        },
+        reloadIgnoringCache: () => {
+          rec.reloadIgnoringCacheCalls += 1;
+        },
         close: () => {
           rec.closeCalls += 1;
         },
@@ -86,9 +94,10 @@ function makeFakeView(): RecordingView {
     focusCalls: 0,
     loadHandlers,
     beforeInputHandlers,
-    webContentsDestroyed: webContentsDestroyed,
+    webContentsDestroyed,
+    reloadCalls: 0,
+    reloadIgnoringCacheCalls: 0,
   };
-  rec.webContentsDestroyed = webContentsDestroyed;
   return rec;
 }
 
@@ -399,5 +408,34 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(
       (views[1].view.webContents as unknown as { getZoomLevel: () => number }).getZoomLevel(),
     ).toBeCloseTo(0.5);
+  });
+
+  it('reloadAll reloads every created retained view (Idea E)', () => {
+    const { manager, views } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    manager.reloadAll();
+    expect(views[0].reloadCalls).toBe(1);
+    expect(views[1].reloadCalls).toBe(1);
+
+    manager.reloadAll(true);
+    expect(views[0].reloadIgnoringCacheCalls).toBe(1);
+    expect(views[1].reloadIgnoringCacheCalls).toBe(1);
+  });
+
+  it('reloadActive reloads only the active (or target) retained view', () => {
+    const { manager, views } = makeManager();
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    manager.reloadActive(); // p2 is active
+    expect(views[0].reloadCalls).toBe(0);
+    expect(views[1].reloadCalls).toBe(1);
+
+    manager.reloadActive('p1', true);
+    expect(views[0].reloadIgnoringCacheCalls).toBe(1);
   });
 });

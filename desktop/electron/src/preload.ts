@@ -118,6 +118,12 @@ contextBridge.exposeInMainWorld('electron', {
   postReorderProfile: (id: string, beforeId: string | null): void => {
     ipcRenderer.send('phi:reorder-profile', id, beforeId);
   },
+  postReloadServer: (id?: string): void => {
+    ipcRenderer.send('phi:reload-profile', id);
+  },
+  postReloadAllServers: (): void => {
+    ipcRenderer.send('phi:reload-all-servers');
+  },
   // Main-view-page window controls: invoke channels handled in desktop.ts
   // (the main process rejects any other sender).
   postWindowMinimize: (): void => {

@@ -259,6 +259,20 @@ function showRailMenuActions(menu: HTMLElement): void {
   const profile = railMenuProfile;
   if (profile === null) return;
   menu.textContent = '';
+  const reloadServer = document.createElement('button');
+  reloadServer.type = 'button';
+  reloadServer.textContent = 'Reload server';
+  reloadServer.addEventListener('click', () => {
+    window.electron.postReloadServer(profile.id);
+    closeRailMenu();
+  });
+  const reloadAll = document.createElement('button');
+  reloadAll.type = 'button';
+  reloadAll.textContent = 'Reload all servers';
+  reloadAll.addEventListener('click', () => {
+    window.electron.postReloadAllServers();
+    closeRailMenu();
+  });
   const sessions = document.createElement('button');
   sessions.type = 'button';
   sessions.textContent = 'Open sessions';
@@ -275,7 +289,7 @@ function showRailMenuActions(menu: HTMLElement): void {
   remove.className = 'remove';
   remove.textContent = 'Remove';
   remove.addEventListener('click', () => showRailMenuRemoveConfirm(menu));
-  menu.append(sessions, rename, remove);
+  menu.append(reloadServer, reloadAll, sessions, rename, remove);
   positionRailMenu(menu);
   rename.focus();
 }

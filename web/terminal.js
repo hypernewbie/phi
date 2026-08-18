@@ -1214,6 +1214,11 @@ export class TabManager {
                     return false;
                 }
             }
+            // Support Shift+F5 or Ctrl/Cmd+Shift+R inside xterm (Reconnect all tabs)
+            if (e.type === 'keydown' && ((e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'F5') || ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R')))) {
+                this.handleGlobalTabShortcuts(e);
+                return false;
+            }
             // Support Ctrl+Shift+F inside xterm
             if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
                 if (e.type === 'keydown') {
@@ -3623,9 +3628,11 @@ export class TabManager {
     }
 
     reconnectAllDead() {
+        let count = 0;
         for (const tabInfo of this.tabs.values()) {
             if (tabInfo.isDead && (tabInfo.exitCode === undefined || tabInfo.exitCode === null) && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban') {
                 this.reconnectTab(tabInfo, { auto: false });
+                count++;
             }
         }
         const activeTab = this.getActiveTab();
@@ -3633,6 +3640,22 @@ export class TabManager {
             this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: false });
         }
         this.updateDisconnectBanner();
+        return count;
+    }
+
+    reconnectAllTabsWithToast() {
+        const deadCount = this.reconnectAllDead();
+        const total = this.tabs.size;
+        if (this.app && this.app.sessionsManager) {
+            this.app.sessionsManager.loadSessions();
+        }
+        if (this.app && typeof this.app.showToast === 'function') {
+            if (deadCount > 0) {
+                this.app.showToast('info', `Reconnected ${deadCount} disconnected tab${deadCount > 1 ? 's' : ''}`);
+            } else {
+                this.app.showToast('info', `Refreshed ${total} tab${total !== 1 ? 's' : ''}`);
+            }
+        }
     }
 
     // Revive the active tab after a wake-style signal (visibility return,
@@ -3755,6 +3778,14 @@ export class TabManager {
     }
 
     handleGlobalTabShortcuts(e) {
+        // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
+        if ((e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'F5') ||
+            ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R'))) {
+            e.preventDefault();
+            this.reconnectAllTabsWithToast();
+            return;
+        }
+
         if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'f') {
             const activeTab = this.getActiveTab();
             if (activeTab && activeTab.term) {

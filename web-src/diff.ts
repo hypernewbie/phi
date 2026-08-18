@@ -284,6 +284,10 @@ export class DiffController {
                         return false;
                     }
                 }
+                // Allow reload / reconnect shortcuts to pass through
+                if ((e.shiftKey && e.key === 'F5') || ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))) {
+                    return false;
+                }
             }
             return true;
         });
