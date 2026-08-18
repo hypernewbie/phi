@@ -237,7 +237,7 @@ func TestSmartGracePeriodRescheduling(t *testing.T) {
 		select {
 		case <-instAfterIdle.Pty.Closed:
 			// Terminated
-		default:
+		case <-time.After(2 * time.Second):
 			t.Error("Expected PTY process to be terminated after grace period expired")
 		}
 	}
