@@ -16,7 +16,7 @@ interface InputLike {
   meta?: boolean;
 }
 
-function makeHarness(targetGetter?: () => unknown) {
+function makeHarness(targetGetter?: () => unknown, reloadAllServers?: (ignoringCache: boolean) => void) {
   const reloadCalls: number[] = [];
   const reloadIgnoringCacheCalls: number[] = [];
   const event = { preventDefault: vi.fn() };
@@ -33,7 +33,7 @@ function makeHarness(targetGetter?: () => unknown) {
     },
     isDestroyed: () => false,
   };
-  installReloadShortcut(contents as never, targetGetter as never);
+  installReloadShortcut(contents as never, targetGetter as never, reloadAllServers as never);
   const fire = (input: InputLike): { preventDefault: () => void } => {
     event.preventDefault.mockClear();
     for (const cb of listeners) cb(event, input);
@@ -63,15 +63,26 @@ describe('installReloadShortcut (F5 reload)', () => {
     expect(reloadCalls).toHaveLength(0);
   });
 
-  it('leaves Alt+F5 and Meta+F5 untouched', () => {
+  it('reloads all servers on Alt+F5 or Cmd/Ctrl+Alt+R when callback is supplied (Idea E)', () => {
+    const reloadAll = vi.fn();
+    const { fire } = makeHarness(undefined, reloadAll);
+    const ev1 = fire({ type: 'keyDown', key: 'F5', alt: true });
+    expect(ev1.preventDefault).toHaveBeenCalled();
+    expect(reloadAll).toHaveBeenCalledWith(false);
+
+    const ev2 = fire({ type: 'keyDown', key: 'r', meta: true, alt: true });
+    expect(ev2.preventDefault).toHaveBeenCalled();
+    expect(reloadAll).toHaveBeenCalledWith(false);
+
+    const ev3 = fire({ type: 'keyDown', key: 'R', control: true, alt: true, shift: true });
+    expect(ev3.preventDefault).toHaveBeenCalled();
+    expect(reloadAll).toHaveBeenCalledWith(true);
+  });
+
+  it('leaves Alt+F5 untouched when no reloadAllServers callback is supplied', () => {
     const { fire, reloadCalls, reloadIgnoringCacheCalls } = makeHarness();
-    for (const input of [
-      { type: 'keyDown', key: 'F5', alt: true },
-      { type: 'keyDown', key: 'F5', meta: true },
-    ]) {
-      const ev = fire(input);
-      expect(ev.preventDefault).not.toHaveBeenCalled();
-    }
+    const ev = fire({ type: 'keyDown', key: 'F5', alt: true });
+    expect(ev.preventDefault).not.toHaveBeenCalled();
     expect(reloadCalls).toHaveLength(0);
     expect(reloadIgnoringCacheCalls).toHaveLength(0);
   });

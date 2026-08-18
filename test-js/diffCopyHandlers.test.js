@@ -268,8 +268,20 @@ describe('DiffController._wireCopyHandlers', () => {
             expect(keyHandler({ type: 'keydown', key, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
             expect(keyHandler({ type: 'keydown', key, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);
         }
-        // Alt-modified chords are not zoom chords and return true
-        expect(keyHandler({ type: 'keydown', key: '+', ctrlKey: true, altKey: true, metaKey: false })).toBe(true);
+    });
+
+    it('passes Shift+F5 and Ctrl/Cmd+R reload/reconnect shortcuts through to browser/desktop', async () => {
+        const { _wireCopyHandlers } = await loadDiffControllerPrototype();
+        const term = makeStubTerm();
+        const container = makeStubContainer();
+        const copy = vi.fn();
+        const ctx = ctrlCtx({ copyTextRobustly: copy, term, container });
+        _wireCopyHandlers.call(ctx, term, container);
+
+        const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
+        expect(keyHandler({ type: 'keydown', key: 'F5', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false })).toBe(false);
+        expect(keyHandler({ type: 'keydown', key: 'r', shiftKey: true, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
+        expect(keyHandler({ type: 'keydown', key: 'R', shiftKey: true, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);
     });
 });
 

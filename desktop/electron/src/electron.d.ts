@@ -135,6 +135,10 @@ export interface ElectronApi {
   postRemoveProfile(id: string): void;
   /** Ask the main process to move a saved profile before another in rail order; null moves it to the end (channel 'phi:reorder-profile'). */
   postReorderProfile(id: string, beforeId: string | null): void;
+  /** Ask the main process to reload a saved server view (channel 'phi:reload-profile'). */
+  postReloadServer(id?: string): void;
+  /** Ask the main process to reload all retained server views (channel 'phi:reload-all-servers'). */
+  postReloadAllServers(): void;
   /** Ask the main process to minimize the window (channel 'phi:window-minimize'). */
   postWindowMinimize(): void;
   /** Ask the main process to toggle the window between maximized and restored (channel 'phi:window-toggle-maximize'). */
