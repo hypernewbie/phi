@@ -1207,6 +1207,13 @@ export class TabManager {
                     }
                 }
             }
+            // Support Ctrl/Cmd + (+/- / 0) zoom shortcuts inside xterm (pass through to browser/desktop)
+            if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+                const k = e.key;
+                if (k === '+' || k === '=' || k === '-' || k === '_' || k === '0' || k === 'Add' || k === 'Subtract') {
+                    return false;
+                }
+            }
             // Support Ctrl+Shift+F inside xterm
             if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
                 if (e.type === 'keydown') {

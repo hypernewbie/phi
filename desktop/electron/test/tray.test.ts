@@ -48,7 +48,13 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
   return {
     fakeApp: { quit: vi.fn() },
     fakeMenu: { buildFromTemplate: vi.fn((template: unknown[]) => ({ template })) },
-    fakeNativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => true })) },
+    fakeNativeImage: {
+      createFromPath: vi.fn(() => ({
+        isEmpty: () => true,
+        resize: vi.fn((_opts?: unknown) => ({})),
+        setTemplateImage: vi.fn(),
+      })),
+    },
     FakeTray,
   };
 });
@@ -232,6 +238,20 @@ describe('setupTray (wiring, recording fakes)', () => {
       TRAY_ICON_PATH,
       TRAY_ICON_PATH.replace(/\.ico$/, '.png'),
     ]);
+  });
+
+  it('resizes the icon to 16x16 and marks as template image on macOS', () => {
+    const fakeImage = {
+      isEmpty: () => false,
+      resize: vi.fn((_opts?: unknown) => fakeImage),
+      setTemplateImage: vi.fn(),
+    };
+    (fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>).mockReturnValueOnce(fakeImage);
+    setupTrayForTest();
+    if (process.platform === 'darwin') {
+      expect(fakeImage.resize).toHaveBeenCalledWith({ width: 16, height: 16 });
+      expect(fakeImage.setTemplateImage).toHaveBeenCalledWith(true);
+    }
   });
 
   it('builds the context menu from the profile list (Show Phi / Profiles / Close to tray / Quit)', () => {
