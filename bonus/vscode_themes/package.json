@@ -1,0 +1,138 @@
+{
+  "name": "phi-themes",
+  "displayName": "Phi Themes",
+  "description": "Official Phi dark color themes for VS Code matching all 22 Phi accent palettes.",
+  "version": "1.0.0",
+  "publisher": "hypernewbie",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "keywords": [
+    "phi",
+    "theme",
+    "dark",
+    "purple",
+    "cyan",
+    "emerald",
+    "neon",
+    "amber",
+    "rose"
+  ],
+  "contributes": {
+    "themes": [
+      {
+        "label": "Phi Amber",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_amber.json"
+      },
+      {
+        "label": "Phi Blue",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_blue.json"
+      },
+      {
+        "label": "Phi Canary",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_canary.json"
+      },
+      {
+        "label": "Phi Copper",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_copper.json"
+      },
+      {
+        "label": "Phi Coral",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_coral.json"
+      },
+      {
+        "label": "Phi Cyan",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_cyan.json"
+      },
+      {
+        "label": "Phi Emerald",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_emerald.json"
+      },
+      {
+        "label": "Phi Fuchsia",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_fuchsia.json"
+      },
+      {
+        "label": "Phi Gold",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_gold.json"
+      },
+      {
+        "label": "Phi Green",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_green.json"
+      },
+      {
+        "label": "Phi Indigo",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_indigo.json"
+      },
+      {
+        "label": "Phi Lime",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_lime.json"
+      },
+      {
+        "label": "Phi Mint",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_mint.json"
+      },
+      {
+        "label": "Phi Neon",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_neon.json"
+      },
+      {
+        "label": "Phi Orange",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_orange.json"
+      },
+      {
+        "label": "Phi Pink",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_pink.json"
+      },
+      {
+        "label": "Phi Purple",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_purple.json"
+      },
+      {
+        "label": "Phi Red",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_red.json"
+      },
+      {
+        "label": "Phi Rose",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_rose.json"
+      },
+      {
+        "label": "Phi Teal",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_teal.json"
+      },
+      {
+        "label": "Phi Violet",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_violet.json"
+      },
+      {
+        "label": "Phi White",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_white.json"
+      }
+    ]
+  }
+}
