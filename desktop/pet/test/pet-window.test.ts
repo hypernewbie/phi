@@ -10,6 +10,7 @@ const { fakeScreen, FakeBrowserWindow } = vi.hoisted(() => {
     setAlwaysOnTop(): void {} setVisibleOnAllWorkspaces(): void {} setIgnoreMouseEvents(): void {}
     loadFile(...args: unknown[]): Promise<void> { this.loadArgs = args; return Promise.resolve(); }
     isDestroyed(): boolean { return this.destroyed; }
+    destroy(): void { this.destroyed = true; }
   }
   return { fakeScreen: { getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } })) }, FakeBrowserWindow };
 });
@@ -48,5 +49,16 @@ describe('createPetWindow', () => {
     expect(win.opts.show).toBe(false);
     expect((win.opts.webPreferences as Record<string, unknown>).preload).toBe(path.join('/tmp/pet', 'dist', 'pet-preload.js'));
     expect(win.loadArgs[0]).toBe(path.join('/tmp/pet', 'dist', 'pet.html'));
+  });
+
+  it('destroys a newly-created window after load failure', async () => {
+    const log = vi.fn();
+    const load = vi.spyOn(FakeBrowserWindow.prototype, 'loadFile').mockRejectedValueOnce(new Error('bad pet html'));
+    createPetWindow({ root: '/tmp/pet', log });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeBrowserWindow.instances[0].destroyed).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('loadFile failed'));
+    load.mockRestore();
   });
 });

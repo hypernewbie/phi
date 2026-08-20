@@ -137,6 +137,8 @@ function setupTrayForTest(
     getSyncAlerts: () => false,
     getPetAvailable: () => false,
     getPetEnabled: () => false,
+    getPetScaleTick: () => 2,
+    getPetRunning: () => false,
     ipcSend,
     log,
     ...opts.deps,
@@ -160,6 +162,10 @@ describe('buildTrayMenu (pure menu builder)', () => {
     toggleCloseToTray: () => {},
     toggleSyncAlerts: () => {},
     togglePet: () => {},
+    petZoomIn: () => {},
+    petZoomOut: () => {},
+    petResetZoom: () => {},
+    petResetPosition: () => {},
     quit: () => {},
     ...over,
   });
@@ -186,6 +192,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       'Close to tray',
       'Sync board alerts',
       'Show pet',
+      'Pet',
       'Quit',
     ]);
     const profiles = menu[1].submenu;
@@ -204,6 +211,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       'Close to tray',
       'Sync board alerts',
       'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(menu.some((e) => e.label === 'Profiles')).toBe(false);
@@ -308,6 +316,112 @@ describe('buildTrayMenu (pure menu builder)', () => {
     expect(togglePet).toHaveBeenCalledTimes(1);
   });
 
+  it('builds Pet zoom commands in order with scale and running-state enablement', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      2,
+      true,
+    );
+    const pet = menu.find((entry) => entry.label === 'Pet');
+    expect(pet?.enabled).toBe(true);
+    expect(pet?.submenu?.map((entry) => entry.label)).toEqual([
+      'Zoom in',
+      'Zoom out',
+      'Reset zoom',
+      'Reset position',
+    ]);
+    expect(pet?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      true,
+      false,
+      true,
+    ]);
+    const minimum = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      0,
+      false,
+    ).find((entry) => entry.label === 'Pet');
+    expect(minimum?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it('disables the Pet parent and every child when unavailable', () => {
+    const pet = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      3,
+      true,
+    ).find((entry) => entry.label === 'Pet');
+    expect(pet?.enabled).toBe(false);
+    expect(pet?.submenu?.every((entry) => entry.enabled === false)).toBe(true);
+  });
+
+  it('calls each Pet command handler', () => {
+    const handlers = mkHandlers({
+      petZoomIn: vi.fn(),
+      petZoomOut: vi.fn(),
+      petResetZoom: vi.fn(),
+      petResetPosition: vi.fn(),
+    });
+    const pet = buildTrayMenu(
+      [],
+      handlers,
+      true,
+      false,
+      true,
+      false,
+      3,
+      true,
+    ).find((entry) => entry.label === 'Pet');
+    pet?.submenu?.forEach((entry) => clickEntry(entry));
+    expect(handlers.petZoomIn).toHaveBeenCalledTimes(1);
+    expect(handlers.petZoomOut).toHaveBeenCalledTimes(1);
+    expect(handlers.petResetZoom).toHaveBeenCalledTimes(1);
+    expect(handlers.petResetPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts Pet commands through setupTray', () => {
+    const { ipcSend } = setupTrayForTest({
+      deps: {
+        getPetAvailable: () => true,
+        getPetScaleTick: () => 3,
+        getPetRunning: () => true,
+      },
+    });
+    const pet = lastTemplate().find((entry) => entry.label === 'Pet');
+    pet?.submenu?.forEach((entry) => clickEntry(entry));
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-zoom-in',
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-zoom-out',
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-reset-zoom',
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-reset-position',
+    });
+  });
+
   it('posts the select-profile intent with the profile id from a submenu click', () => {
     const selectProfile = vi.fn();
     const menu = buildTrayMenu(
@@ -378,6 +492,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Close to tray',
       'Sync board alerts',
       'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -423,6 +538,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Close to tray',
       'Sync board alerts',
       'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -456,6 +572,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Close to tray',
       'Sync board alerts',
       'Show pet',
+      'Pet',
       'Quit',
     ]);
   });

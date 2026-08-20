@@ -21,17 +21,35 @@ export interface PetAppLike {
  isPackaged: boolean;
 }
 
+/** Result returned by a controller-backed scale request. */
+export type ScaleResult = { tick: number; accepted: boolean };
+
+/** Scale configuration passed to the renderer through the pet factory. */
+export type PetScaleConfig = {
+ minTick: number;
+ maxTick: number;
+ defaultTick: number;
+ minFactor: number;
+ stepFactor: number;
+};
+
 /** The pet window surface the dynamically-imported factory returns. */
 export interface PetHandle {
  start(): void;
  stop(): void;
  isRunning(): boolean;
+ setScaleTick(tick: number): void;
+ resetPosition(): void;
+ onRunningChanged(listener: (running: boolean) => void): () => void;
 }
 
 /** The deps the pet factory receives (discovered root + logger). */
 export interface PetDeps {
  root: string;
  log: (msg: string) => void;
+ scale: PetScaleConfig;
+ getScaleTick(): number;
+ requestScaleTick(tick: number): ScaleResult;
 }
 
 /**

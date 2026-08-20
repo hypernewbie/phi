@@ -13,7 +13,7 @@
  * pet resets to its pre-drag in-window position — net effect: the pet
  * stays under the cursor while the window follows home.
  */
-import type { PetApi } from "./pet-bridge.js";
+import type { PetApi, PetScaleState, PetStageLayout } from "./pet-bridge.js";
 
 /** The thumb canvas height and the feet baseline (dsh-pet client.js). */
 export const CANVAS_H = 360;
@@ -92,6 +92,64 @@ export const MOVE_TAIL_SEC = 2;
 export const DRAG_THRESHOLD = 5;
 /** Default bottom-right margin (upstream .dsh-pet-root[data-corner] CSS). */
 export const DEFAULT_RIGHT_MARGIN = 24;
+
+export const PET_SCALE_MIN_TICK = 0;
+export const PET_SCALE_MAX_TICK = 7;
+export const PET_SCALE_DEFAULT_TICK = 2;
+export const PET_SCALE_MIN_FACTOR = 0.4;
+export const PET_SCALE_STEP_FACTOR = 0.05;
+
+const strictDecimal = (value: string | null): number | null => {
+  if (value === null || !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value))
+    return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+function queryScaleConfig(): {
+  tick: number;
+  minTick: number;
+  maxTick: number;
+  defaultTick: number;
+  minFactor: number;
+  stepFactor: number;
+} {
+  const fallback = {
+    tick: PET_SCALE_DEFAULT_TICK,
+    minTick: PET_SCALE_MIN_TICK,
+    maxTick: PET_SCALE_MAX_TICK,
+    defaultTick: PET_SCALE_DEFAULT_TICK,
+    minFactor: PET_SCALE_MIN_FACTOR,
+    stepFactor: PET_SCALE_STEP_FACTOR,
+  };
+  const query = new URLSearchParams(window.location.search);
+  const values = [
+    strictDecimal(query.get("petScaleTick")),
+    strictDecimal(query.get("petScaleMinTick")),
+    strictDecimal(query.get("petScaleMaxTick")),
+    strictDecimal(query.get("petScaleDefaultTick")),
+    strictDecimal(query.get("petScaleMinFactor")),
+    strictDecimal(query.get("petScaleStepFactor")),
+  ];
+  if (values.some((value) => value === null)) return fallback;
+  const [tick, minTick, maxTick, defaultTick, minFactor, stepFactor] =
+    values as number[];
+  if (
+    !Number.isInteger(tick) ||
+    !Number.isInteger(minTick) ||
+    !Number.isInteger(maxTick) ||
+    !Number.isInteger(defaultTick) ||
+    minTick > maxTick ||
+    defaultTick < minTick ||
+    defaultTick > maxTick ||
+    tick < minTick ||
+    tick > maxTick ||
+    minFactor <= 0 ||
+    stepFactor <= 0
+  )
+    return fallback;
+  return { tick, minTick, maxTick, defaultTick, minFactor, stepFactor };
+}
 
 /** The media directory under the package root (dist/ → ../assets/thumb/). */
 const MEDIA_PREFIX = "../assets/thumb/";
@@ -194,16 +252,29 @@ export function initPet(opts: PetInitOptions): PetController {
   const raf =
     opts.raf ?? ((cb: FrameRequestCallback) => requestAnimationFrame(cb));
   const caf = opts.caf ?? ((id: number) => cancelAnimationFrame(id));
+  const scaleConfig = queryScaleConfig();
+  let scaleTick = scaleConfig.tick;
+  let desiredScaleTick = scaleTick;
+  let scaleRequestInFlight: number | null = null;
+  let wheelRemainder = 0;
 
   let size = 0;
   let halfW = 0;
   let stageH = 0;
   let halfH = 0;
   let bottomPad = 0;
-  let territory: { minStageX: number; maxStageX: number; minStageY: number; maxStageY: number } | null = null;
+  let territory: {
+    minStageX: number;
+    maxStageX: number;
+    minStageY: number;
+    maxStageY: number;
+  } | null = null;
 
   const layout = (): void => {
-    size = Math.floor(window.innerWidth / 2);
+    size = Math.floor(
+      window.innerWidth *
+        (scaleConfig.minFactor + scaleTick * scaleConfig.stepFactor),
+    );
     halfW = size / 2;
     stageH = (size * 9) / 16;
     halfH = stageH / 2;
@@ -237,19 +308,36 @@ export function initPet(opts: PetInitOptions): PetController {
 
   let lastHitInside: boolean | null = null;
 
-  const rootBounds = (): { minX: number; maxX: number; minY: number; maxY: number } => {
+  const rootBounds = (): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } => {
     const cellMaxX = Math.max(0, window.innerWidth - size);
     const cellMaxY = Math.max(0, window.innerHeight - stageH);
     if (!territory) return { minX: 0, maxX: cellMaxX, minY: 0, maxY: cellMaxY };
-    const intersectAxis = (territoryMin: number, territoryMax: number, cellMax: number): [number, number] => {
+    const intersectAxis = (
+      territoryMin: number,
+      territoryMax: number,
+      cellMax: number,
+    ): [number, number] => {
       const min = Math.max(0, territoryMin);
       const max = Math.min(cellMax, territoryMax);
       if (min <= max) return [min, max];
       const edge = min > cellMax ? cellMax : 0;
       return [edge, edge];
     };
-    const [minX, maxX] = intersectAxis(territory.minStageX, territory.maxStageX, cellMaxX);
-    const [minY, maxY] = intersectAxis(territory.minStageY - bottomPad, territory.maxStageY - bottomPad, cellMaxY);
+    const [minX, maxX] = intersectAxis(
+      territory.minStageX,
+      territory.maxStageX,
+      cellMaxX,
+    );
+    const [minY, maxY] = intersectAxis(
+      territory.minStageY - bottomPad,
+      territory.maxStageY - bottomPad,
+      cellMaxY,
+    );
     return { minX, maxX, minY, maxY };
   };
 
@@ -261,9 +349,26 @@ export function initPet(opts: PetInitOptions): PetController {
   const renderPosition = (): void => {
     const W = window.innerWidth;
     const H = window.innerHeight;
-    const left = customPos ? customPos.rx * W - halfW : W - size - DEFAULT_RIGHT_MARGIN;
+    const left = customPos
+      ? customPos.rx * W - halfW
+      : W - size - DEFAULT_RIGHT_MARGIN;
     const top = customPos ? customPos.ry * H - halfH : H - stageH;
     setRootPosition(left, top);
+  };
+
+  const captureBottomCenter = (): { x: number; y: number } => {
+    const rect = stage.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+  };
+
+  const restoreBottomCenter = (anchor: { x: number; y: number }): void => {
+    const left = anchor.x - size / 2;
+    const top = anchor.y - bottomPad - stageH;
+    customPos = {
+      rx: (left + halfW) / Math.max(window.innerWidth, 1),
+      ry: (top + halfH) / Math.max(window.innerHeight, 1),
+    };
+    renderPosition();
   };
 
   const setAnim = (next: string, nextOnce: boolean): void => {
@@ -476,9 +581,17 @@ export function initPet(opts: PetInitOptions): PetController {
     reportHit(isInHitRect(e.clientX, e.clientY), true);
     if (!wasDragging) return;
     justDragged = true;
-    setTimeout(() => { justDragged = false; }, 100);
+    setTimeout(() => {
+      justDragged = false;
+    }, 100);
     const rect = stage.getBoundingClientRect();
-    bridge.sendMove({ dx: e.clientX - drag.sx, dy: e.clientY - drag.sy, screenX: e.screenX, screenY: e.screenY, stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+    bridge.sendMove({
+      dx: e.clientX - drag.sx,
+      dy: e.clientY - drag.sy,
+      screenX: e.screenX,
+      screenY: e.screenY,
+      stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    });
     setAnim(IDLE, true);
   };
 
@@ -523,11 +636,94 @@ export function initPet(opts: PetInitOptions): PetController {
     videoB.addEventListener("playing", () => onPlaying(videoB));
   }
 
-  const reportLayout = (): void => {
+  const reportLayout = (resetPosition = false): void => {
     const rect = stage.getBoundingClientRect();
-    bridge.reportStageLayout({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+    const payload: PetStageLayout = {
+      stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      ...(resetPosition ? { resetPosition: true } : {}),
+    };
+    bridge.reportStageLayout(payload);
   };
-  const applyTerritory = (bounds: { minStageX: number; maxStageX: number; minStageY: number; maxStageY: number }): void => {
+
+  const requestScale = (): void => {
+    if (scaleRequestInFlight !== null || desiredScaleTick === scaleTick) return;
+    scaleRequestInFlight = desiredScaleTick;
+    bridge.requestScaleTick({ tick: desiredScaleTick });
+  };
+
+  const applyScaleState = (state: PetScaleState): void => {
+    if (
+      !Number.isInteger(state.tick) ||
+      state.tick < scaleConfig.minTick ||
+      state.tick > scaleConfig.maxTick ||
+      typeof state.accepted !== "boolean"
+    )
+      return;
+    const responseMatchesWheelRequest =
+      scaleRequestInFlight !== null && state.tick === scaleRequestInFlight;
+    scaleRequestInFlight = null;
+    if (!state.accepted || !responseMatchesWheelRequest) {
+      desiredScaleTick = state.tick;
+      wheelRemainder = 0;
+    }
+    stopMove();
+    const anchor = captureBottomCenter();
+    scaleTick = state.tick;
+    layout();
+    restoreBottomCenter(anchor);
+    reportLayout();
+    if (
+      state.accepted &&
+      responseMatchesWheelRequest &&
+      desiredScaleTick !== scaleTick
+    )
+      requestScale();
+  };
+
+  const applyResetPosition = (): void => {
+    stopMove();
+    customPos = null;
+    stage.style.transform = `translateY(${bottomPad}px)`;
+    renderPosition();
+    reportLayout(true);
+  };
+
+  const handleWheel = (event: WheelEvent): void => {
+    if (
+      drag.active ||
+      dragging ||
+      !Number.isFinite(event.deltaY) ||
+      event.deltaY === 0
+    )
+      return;
+    const delta =
+      event.deltaMode === 1
+        ? event.deltaY * 16
+        : event.deltaMode === 2
+          ? event.deltaY * window.innerHeight
+          : event.deltaY;
+    if (!Number.isFinite(delta) || delta === 0) return;
+    event.preventDefault();
+    wheelRemainder += delta;
+    const steps =
+      wheelRemainder > 0
+        ? Math.floor(wheelRemainder / 100)
+        : Math.ceil(wheelRemainder / 100);
+    wheelRemainder -= steps * 100;
+    if (steps === 0) return;
+    desiredScaleTick = Math.min(
+      Math.max(desiredScaleTick - steps, scaleConfig.minTick),
+      scaleConfig.maxTick,
+    );
+    requestScale();
+  };
+
+  const applyTerritory = (bounds: {
+    minStageX: number;
+    maxStageX: number;
+    minStageY: number;
+    maxStageY: number;
+  }): void => {
     if (!Object.values(bounds).every(Number.isFinite)) return;
     territory = bounds;
     renderPosition();
@@ -535,7 +731,14 @@ export function initPet(opts: PetInitOptions): PetController {
   // Subscribe before reporting the first layout so the hidden-first main
   // process reply cannot be missed.
   const removeTerritoryListener = bridge.onTerritoryBounds(applyTerritory);
-  const onResize = (): void => { layout(); renderPosition(); reportLayout(); };
+  const removeScaleListener = bridge.onScaleState(applyScaleState);
+  const removeResetListener = bridge.onResetPosition(applyResetPosition);
+  hit.addEventListener("wheel", handleWheel, { passive: false });
+  const onResize = (): void => {
+    layout();
+    renderPosition();
+    reportLayout();
+  };
   window.addEventListener("resize", onResize);
   layout();
   renderPosition();
@@ -548,9 +751,12 @@ export function initPet(opts: PetInitOptions): PetController {
     hit.removeEventListener("pointerup", handlePointerUp);
     hit.removeEventListener("pointercancel", handlePointerCancel);
     hit.removeEventListener("click", handleClick);
+    hit.removeEventListener("wheel", handleWheel);
     document.removeEventListener("mousemove", onDocMouseMove);
     window.removeEventListener("resize", onResize);
     removeTerritoryListener();
+    removeScaleListener();
+    removeResetListener();
     stopMove();
   };
 

@@ -216,6 +216,12 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
     expect(desktopSource).toContain('TRAY_COMMAND_CHANNEL');
     expect(desktopSource).toContain("case 'show'");
     expect(desktopSource).toContain("case 'select-profile'");
+    expect(desktopSource).toContain("case 'pet-zoom-in'");
+    expect(desktopSource).toContain("case 'pet-zoom-out'");
+    expect(desktopSource).toContain("case 'pet-reset-zoom'");
+    expect(desktopSource).toContain("case 'pet-reset-position'");
+    expect(desktopSource).toContain('setPetScaleFromTray');
+    expect(desktopSource).toContain('setScaleTick(savedTick)');
     expect(desktopSource).toContain("case 'quit'");
     // Show Phi foregrounds the main window via restore()+focus() (Wails
     // single.ForegroundMainWindow parity).
@@ -246,6 +252,15 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
       "health: state.health.get(p.id) ?? 'unknown'",
     );
     expect(desktopSource).toContain('unread: state.unread.get(p.id) ?? 0');
+  });
+
+  it('rebuilds the persisted pet snapshot before restored-pet startup', () => {
+    const controllerIdx = desktopSource.indexOf('this.controller = new Controller');
+    const rebuildIdx = desktopSource.indexOf('this.trayHandle?.rebuildMenu()', controllerIdx);
+    const restoreIdx = desktopSource.indexOf('if (this.controller.state().petEnabled) void this.startPet()');
+    expect(controllerIdx).toBeGreaterThan(-1);
+    expect(rebuildIdx).toBeGreaterThan(controllerIdx);
+    expect(restoreIdx).toBeGreaterThan(rebuildIdx);
   });
 
   it('closes the tray on before-quit (and on non-macOS window-all-closed)', () => {

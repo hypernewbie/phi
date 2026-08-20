@@ -56,6 +56,11 @@ import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
 import {
   Controller,
   parseEndpoint,
+  PET_SCALE_DEFAULT_TICK,
+  PET_SCALE_MAX_TICK,
+  PET_SCALE_MIN_FACTOR,
+  PET_SCALE_MIN_TICK,
+  PET_SCALE_STEP_FACTOR,
   type HealthChecker,
   type ProfileMeta,
 } from './controller.js';
@@ -229,6 +234,7 @@ export class DesktopHost {
   petRoot: string | null = null;
   // The retained pet handle (null until the user first enables it).
   petHandle: PetHandle | null = null;
+  private petRunningUnsubscribe: (() => void) | null = null;
   /** Invalidates an outstanding optional-package import on every toggle/quit. */
   petGeneration = 0;
   private petUnavailableLogged = false;
@@ -328,6 +334,9 @@ export class DesktopHost {
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getPetAvailable: () => isPetAvailable(this.petRoot),
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
+      getPetScaleTick: () =>
+        this.controller?.state().petScaleTick ?? PET_SCALE_DEFAULT_TICK,
+      getPetRunning: () => this.petHandle?.isRunning() ?? false,
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
       // (log, notify the main window's renderer, then app.quit()).
@@ -393,6 +402,24 @@ export class DesktopHost {
             this.togglePet();
             break;
           }
+          case 'pet-zoom-in':
+            this.setPetScaleFromTray(
+              (this.controller?.getPetScaleTick() ?? PET_SCALE_DEFAULT_TICK) +
+                1,
+            );
+            break;
+          case 'pet-zoom-out':
+            this.setPetScaleFromTray(
+              (this.controller?.getPetScaleTick() ?? PET_SCALE_DEFAULT_TICK) -
+                1,
+            );
+            break;
+          case 'pet-reset-zoom':
+            this.setPetScaleFromTray(PET_SCALE_DEFAULT_TICK);
+            break;
+          case 'pet-reset-position':
+            this.resetPetPositionFromTray();
+            break;
           case 'quit':
             // Log, notify the main window's renderer on the tray channel,
             // then quit.
@@ -412,6 +439,22 @@ export class DesktopHost {
     return tray;
   }
 
+  private setPetScaleFromTray(nextTick: number): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    try {
+      if (!ctrl.setPetScaleTick(nextTick)) return;
+      const savedTick = ctrl.getPetScaleTick();
+      this.petHandle?.setScaleTick(savedTick);
+    } catch (err) {
+      console.log(`phi-desktop: tray pet scale: ${String(err)}`);
+    }
+  }
+
+  private resetPetPositionFromTray(): void {
+    if (this.petHandle?.isRunning()) this.petHandle.resetPosition();
+  }
+
   /**
    * Starts the pet overlay from the discovered package root (no-op when
    * absent, already running, or mid-creation). The factory is imported
@@ -420,7 +463,9 @@ export class DesktopHost {
    */
   /** Narrow, mockable seam around the optional named pet factory import. */
   async loadPetFactory(root: string): Promise<(deps: PetDeps) => PetHandle> {
-    const mod = (await import(pathToFileURL(path.join(root, 'dist', 'pet-main.js')).href)) as {
+    const mod = (await import(
+      pathToFileURL(path.join(root, 'dist', 'pet-main.js')).href
+    )) as {
       createPet: (deps: PetDeps) => PetHandle;
     };
     return mod.createPet;
@@ -435,23 +480,72 @@ export class DesktopHost {
 
   async startPet(): Promise<void> {
     const root = this.petRoot;
-    if (!isPetAvailable(root) || root === null) { this.logPetUnavailable(); return; }
+    if (!isPetAvailable(root) || root === null) {
+      this.logPetUnavailable();
+      return;
+    }
     if (this.petHandle) {
       if (this.petHandle.isRunning()) return;
-      if (!isPetAvailable(this.petRoot) || !this.controller?.state().petEnabled || this.quitting) return;
+      if (
+        !isPetAvailable(this.petRoot) ||
+        !this.controller?.state().petEnabled ||
+        this.quitting
+      )
+        return;
       this.petHandle.start();
       return;
     }
     const generation = ++this.petGeneration;
     try {
       const createPet = await this.loadPetFactory(root);
-      if (generation !== this.petGeneration || !isPetAvailable(this.petRoot) || !this.controller?.state().petEnabled || this.quitting || this.petHandle) return;
-      const handle = createPet({ root, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
-      if (generation !== this.petGeneration || !this.controller?.state().petEnabled || this.quitting || this.petHandle) { handle.stop(); return; }
+      if (
+        generation !== this.petGeneration ||
+        !isPetAvailable(this.petRoot) ||
+        !this.controller?.state().petEnabled ||
+        this.quitting ||
+        this.petHandle
+      )
+        return;
+      const ctrl = this.controller;
+      if (!ctrl) return;
+      const handle = createPet({
+        root,
+        log: (msg) => console.log(`phi-desktop: pet: ${msg}`),
+        scale: {
+          minTick: PET_SCALE_MIN_TICK,
+          maxTick: PET_SCALE_MAX_TICK,
+          defaultTick: PET_SCALE_DEFAULT_TICK,
+          minFactor: PET_SCALE_MIN_FACTOR,
+          stepFactor: PET_SCALE_STEP_FACTOR,
+        },
+        getScaleTick: () => ctrl.getPetScaleTick(),
+        requestScaleTick: (tick) => {
+          try {
+            const accepted = ctrl.setPetScaleTick(tick);
+            return { tick: ctrl.getPetScaleTick(), accepted };
+          } catch (err) {
+            console.log(`phi-desktop: pet scale request: ${String(err)}`);
+            return { tick: ctrl.getPetScaleTick(), accepted: false };
+          }
+        },
+      });
+      if (
+        generation !== this.petGeneration ||
+        !ctrl.state().petEnabled ||
+        this.quitting ||
+        this.petHandle
+      ) {
+        handle.stop();
+        return;
+      }
       this.petHandle = handle;
+      this.petRunningUnsubscribe = handle.onRunningChanged(() =>
+        this.trayHandle?.rebuildMenu(),
+      );
       handle.start();
     } catch (err) {
-      if (generation === this.petGeneration) console.log(`phi-desktop: pet load failed: ${String(err)}`);
+      if (generation === this.petGeneration)
+        console.log(`phi-desktop: pet load failed: ${String(err)}`);
     }
   }
 
@@ -1642,6 +1736,8 @@ export class DesktopHost {
       this.hotkeyRegistrations.length = 0;
       this.trayHandle?.close();
       this.trayHandle = null;
+      this.petRunningUnsubscribe?.();
+      this.petRunningUnsubscribe = null;
       this.petHandle?.stop();
       // Tear every retained view down before the app quits. The first
       // before-quit defers the quit until destroyAll() (and the rail view
@@ -1728,6 +1824,9 @@ export class DesktopHost {
       persistPath: app.getPath('userData') + '/profiles.json',
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
+    // The first tray was constructed before the controller for boot ordering;
+    // rebuild it now so persisted pet state and scale are in the first usable snapshot.
+    this.trayHandle?.rebuildMenu();
     // Access-auth state — declared here (before any subscribe callback
     // can fire) so a synchronously-emitted active-changed event during
     // initial state doesn't trigger a ReferenceError trying to read
@@ -1794,6 +1893,12 @@ export class DesktopHost {
         this.trayHandle?.rebuildMenu();
         if (this.controller?.state().petEnabled) void this.startPet();
         else this.stopPet();
+      } else if (event.kind === 'pet-scale-changed') {
+        // Renderer-originated scale requests already receive their exact
+        // controller result in pet-main; this subscription only refreshes
+        // the tray snapshot and never echoes the event back to the renderer.
+        this.trayHandle?.rebuildMenu();
+        return;
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||

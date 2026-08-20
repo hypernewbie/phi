@@ -26,6 +26,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Controller,
   ControllerError,
+  PET_SCALE_DEFAULT_TICK,
+  PET_SCALE_MAX_TICK,
+  PET_SCALE_MIN_TICK,
   InvalidNameError,
   InvalidUrlError,
   UnknownProfileError,
@@ -760,6 +763,64 @@ describe('Controller: sync-alerts preference', () => {
     const st = c.state();
     st.syncAlerts = false;
     expect(c.state().syncAlerts).toBe(true);
+  });
+});
+
+describe('Controller: pet-scale preference', () => {
+  it('defaults legacy, malformed, fractional, and out-of-range values to tick 2', () => {
+    for (const value of [undefined, null, '2', 2.5, -1, PET_SCALE_MAX_TICK + 1]) {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({ profiles: [], ...(value === undefined ? {} : { petScaleTick: value }) }),
+        'utf8',
+      );
+      expect(makeController().getPetScaleTick()).toBe(PET_SCALE_DEFAULT_TICK);
+    }
+    expect(makeController().state().petScaleTick).toBe(PET_SCALE_DEFAULT_TICK);
+  });
+
+  it('round trips a valid integer tick and emits only for a changed tick', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    expect(c.setPetScaleTick(PET_SCALE_DEFAULT_TICK)).toBe(true);
+    expect(events).toEqual([]);
+    expect(c.setPetScaleTick(PET_SCALE_MAX_TICK)).toBe(true);
+    expect(events).toEqual([{ kind: 'pet-scale-changed' }]);
+    expect(new Controller({ persistPath: persistPath() }).getPetScaleTick()).toBe(PET_SCALE_MAX_TICK);
+    expect(c.setPetScaleTick(PET_SCALE_MIN_TICK - 1)).toBe(false);
+    expect(c.getPetScaleTick()).toBe(PET_SCALE_MAX_TICK);
+    expect(events).toHaveLength(1);
+  });
+
+  it('rolls back a changed tick when persistence fails without emitting an event', () => {
+    const c = makeController();
+    c.setPetScaleTick(3);
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    rmSync(persistPath());
+    mkdirSync(persistPath());
+    expect(() => c.setPetScaleTick(4)).toThrowError(ControllerError);
+    expect(c.getPetScaleTick()).toBe(3);
+    expect(events).toEqual([]);
+  });
+
+  it('preserves the tick through every unrelated preference and profile save path', () => {
+    const c = makeController();
+    c.setPetScaleTick(5);
+    const p = c.add('http://127.0.0.1:7070/');
+    const q = c.add('http://10.0.0.5:7070/');
+    c.reorder(q.id, p.id);
+    c.rename(p.id, 'Home');
+    c.setLastUsed(p.id);
+    c.setActive(p.id);
+    c.setCloseToTray(false);
+    c.setSyncAlerts(false);
+    c.setPetEnabled(true);
+    c.remove(q.id);
+    const reloaded = new Controller({ persistPath: persistPath() });
+    expect(reloaded.getPetScaleTick()).toBe(5);
+    expect(reloaded.state().petScaleTick).toBe(5);
   });
 });
 

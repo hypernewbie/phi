@@ -41,8 +41,11 @@ function makeBridge() {
   return {
     sendHit: vi.fn(),
     sendMove: vi.fn(),
+    requestScaleTick: vi.fn(),
     reportStageLayout: vi.fn(),
     onTerritoryBounds: vi.fn((_listener: (bounds: TerritoryBounds) => void) => () => {}),
+    onScaleState: vi.fn((_listener: (state: { tick: number; accepted: boolean }) => void) => () => {}),
+    onResetPosition: vi.fn((_listener: () => void) => () => {}),
   };
 }
 
@@ -58,10 +61,44 @@ function mockHitRect(hit: HTMLElement, rect = { x: 0, y: 0, width: 100, height: 
   vi.spyOn(hit, 'getBoundingClientRect').mockReturnValue({ ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) } as DOMRect);
 }
 
+function mockDynamicStageRect(stage: HTMLElement, root: HTMLElement): void {
+  vi.spyOn(stage, 'getBoundingClientRect').mockImplementation(() => {
+    const rootTransform = root.style.transform.match(/^translate\((-?[\d.]+)px, (-?[\d.]+)px\)$/);
+    const stageTransform = stage.style.transform.match(/^translateY\((-?[\d.]+)px\)$/);
+    const x = Number(rootTransform?.[1] ?? 0);
+    const rootY = Number(rootTransform?.[2] ?? 0);
+    const y = rootY + Number(stageTransform?.[1] ?? 0);
+    const width = Number.parseFloat(root.style.width) || 0;
+    const height = Number.parseFloat(root.style.height) || 0;
+    return {
+      x,
+      y,
+      width,
+      height,
+      left: x,
+      top: y,
+      right: x + width,
+      bottom: y + height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
 const fixedRng = (value: number) => () => value;
+
+function setScaleQuery(tick: number): void {
+  window.history.replaceState(
+    {},
+    '',
+    `?petScaleTick=${tick}&petScaleMinTick=0&petScaleMaxTick=7&petScaleDefaultTick=2&petScaleMinFactor=0.4&petScaleStepFactor=0.05`,
+  );
+}
 
 beforeEach(() => {
   document.body.replaceChildren();
+  window.history.replaceState({}, '', '/');
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
 });
 
 describe('pickNextKind (chain distribution thresholds)', () => {
@@ -252,8 +289,156 @@ describe('initPet state machine', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
     window.dispatchEvent(new Event('resize'));
     expect(dom.root.style.width).toBe('400px');
-    expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({ x: 20, y: 40, width: 400, height: 225 });
+    expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({ stage: { x: 20, y: 40, width: 400, height: 225 } });
     dom.videoA.dispatchEvent(new Event('ended'));
     expect(pet.getState().anim).toBe(IDLE);
+  });
+
+  it('uses all supplied query scale values and falls back when one is invalid', () => {
+    window.history.replaceState({}, '', '?petScaleTick=4&petScaleMinTick=1&petScaleMaxTick=5&petScaleDefaultTick=3&petScaleMinFactor=0.3&petScaleStepFactor=0.1');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+    const custom = buildDom();
+    initPet({ ...custom, bridge: makeBridge(), rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    expect(custom.root.style.width).toBe('560px');
+
+    window.history.replaceState({}, '', '?petScaleTick=4&petScaleMinTick=bad&petScaleMaxTick=5&petScaleDefaultTick=3&petScaleMinFactor=0.3&petScaleStepFactor=0.1');
+    const fallback = buildDom();
+    initPet({ ...fallback, bridge: makeBridge(), rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    expect(fallback.root.style.width).toBe('400px');
+  });
+
+  it('normalizes wheel thresholds, coalesces requests, and applies approved up-increase direction', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let scaleListener: ((state: { tick: number; accepted: boolean }) => void) | undefined;
+    bridge.onScaleState.mockImplementation((listener) => { scaleListener = listener; return () => {}; });
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const first = new WheelEvent('wheel', { deltaY: -50, deltaMode: 0, cancelable: true });
+    dom.hit.dispatchEvent(first);
+    expect(bridge.requestScaleTick).not.toHaveBeenCalled();
+    expect(first.defaultPrevented).toBe(true);
+    const second = new WheelEvent('wheel', { deltaY: -50, deltaMode: 0, cancelable: true });
+    dom.hit.dispatchEvent(second);
+    expect(bridge.requestScaleTick).toHaveBeenCalledWith({ tick: 3 });
+    const third = new WheelEvent('wheel', { deltaY: -100, deltaMode: 0, cancelable: true });
+    dom.hit.dispatchEvent(third);
+    expect(bridge.requestScaleTick).toHaveBeenCalledTimes(1);
+    scaleListener?.({ tick: 3, accepted: true });
+    expect(bridge.requestScaleTick).toHaveBeenCalledWith({ tick: 4 });
+  });
+
+  it('decreases scale for a positive DOM wheel delta', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    dom.hit.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, deltaMode: 0, cancelable: true }));
+    expect(bridge.requestScaleTick).toHaveBeenCalledWith({ tick: 1 });
+  });
+
+  it('normalizes line and page wheel deltas into signed CSS-pixel thresholds', () => {
+    const lineDom = buildDom();
+    const lineBridge = makeBridge();
+    initPet({ ...lineDom, bridge: lineBridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const lineSubthreshold = new WheelEvent('wheel', { deltaY: -6, deltaMode: 1, cancelable: true });
+    lineDom.hit.dispatchEvent(lineSubthreshold); // -6 × 16 = -96 CSS px
+    expect(lineBridge.requestScaleTick).not.toHaveBeenCalled();
+    const lineThreshold = new WheelEvent('wheel', { deltaY: -1, deltaMode: 1, cancelable: true });
+    lineDom.hit.dispatchEvent(lineThreshold); // remainder reaches -112 CSS px
+    expect(lineBridge.requestScaleTick).toHaveBeenCalledWith({ tick: 3 });
+
+    const pageDom = buildDom();
+    const pageBridge = makeBridge();
+    initPet({ ...pageDom, bridge: pageBridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const page = new WheelEvent('wheel', { deltaY: -0.14, deltaMode: 2, cancelable: true });
+    pageDom.hit.dispatchEvent(page); // -0.14 × 768 = -107.52 CSS px
+    expect(pageBridge.requestScaleTick).toHaveBeenCalledWith({ tick: 3 });
+    expect(page.defaultPrevented).toBe(true);
+  });
+
+  it('bounds scale requests and prevents default at both scale limits', () => {
+    setScaleQuery(7);
+    const maxDom = buildDom();
+    const maxBridge = makeBridge();
+    initPet({ ...maxDom, bridge: maxBridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const maxWheel = new WheelEvent('wheel', { deltaY: -100, deltaMode: 0, cancelable: true });
+    maxDom.hit.dispatchEvent(maxWheel);
+    expect(maxWheel.defaultPrevented).toBe(true);
+    expect(maxBridge.requestScaleTick).not.toHaveBeenCalled();
+
+    setScaleQuery(0);
+    const minDom = buildDom();
+    const minBridge = makeBridge();
+    initPet({ ...minDom, bridge: minBridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const minWheel = new WheelEvent('wheel', { deltaY: 100, deltaMode: 0, cancelable: true });
+    minDom.hit.dispatchEvent(minWheel);
+    expect(minWheel.defaultPrevented).toBe(true);
+    expect(minBridge.requestScaleTick).not.toHaveBeenCalled();
+  });
+
+  it('adopts a rejected returned tick and clears queued wheel intent', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let scaleListener: ((state: { tick: number; accepted: boolean }) => void) | undefined;
+    bridge.onScaleState.mockImplementation((listener) => { scaleListener = listener; return () => {}; });
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const initialReports = bridge.reportStageLayout.mock.calls.length;
+    dom.hit.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, deltaMode: 0, cancelable: true }));
+    expect(bridge.requestScaleTick).toHaveBeenCalledWith({ tick: 3 });
+
+    scaleListener?.({ tick: 1, accepted: false });
+
+    expect(dom.root.style.width).toBe('460px');
+    expect(bridge.reportStageLayout).toHaveBeenCalledTimes(initialReports + 1);
+    dom.hit.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, deltaMode: 0, cancelable: true }));
+    expect(bridge.requestScaleTick).toHaveBeenLastCalledWith({ tick: 2 });
+  });
+
+  it('ignores wheel input while a drag is active', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    const pet = initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
+    const wheel = new WheelEvent('wheel', { deltaY: -100, deltaMode: 0, cancelable: true });
+    dom.hit.dispatchEvent(wheel);
+    expect(bridge.requestScaleTick).not.toHaveBeenCalled();
+    expect(wheel.defaultPrevented).toBe(false);
+    dom.hit.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
+    pet.destroy();
+  });
+
+  it('preserves the stage bottom-center anchor across an accepted scale state', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let scaleListener: ((state: { tick: number; accepted: boolean }) => void) | undefined;
+    bridge.onScaleState.mockImplementation((listener) => { scaleListener = listener; return () => {}; });
+    mockDynamicStageRect(dom.stage, dom.root);
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    const before = bridge.reportStageLayout.mock.calls[0][0].stage as { x: number; y: number; width: number; height: number };
+    scaleListener?.({ tick: 3, accepted: true });
+    const after = bridge.reportStageLayout.mock.calls.at(-1)?.[0].stage as { x: number; y: number; width: number; height: number };
+
+    expect(after.x + after.width / 2).toBeCloseTo(before.x + before.width / 2);
+    expect(after.y + after.height).toBeCloseTo(before.y + before.height);
+    expect(dom.root.style.width).toBe('440px');
+  });
+
+  it('reports reset layout once and removes every renderer listener on destroy', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let resetListener: (() => void) | undefined;
+    const removeTerritory = vi.fn();
+    const removeScale = vi.fn();
+    const removeReset = vi.fn();
+    bridge.onTerritoryBounds.mockImplementation(() => removeTerritory);
+    bridge.onScaleState.mockImplementation(() => removeScale);
+    bridge.onResetPosition.mockImplementation((listener) => { resetListener = listener; return removeReset; });
+    const pet = initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    resetListener?.();
+    expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({ stage: expect.any(Object), resetPosition: true });
+    pet.destroy();
+    expect(removeTerritory).toHaveBeenCalledTimes(1);
+    expect(removeScale).toHaveBeenCalledTimes(1);
+    expect(removeReset).toHaveBeenCalledTimes(1);
   });
 });

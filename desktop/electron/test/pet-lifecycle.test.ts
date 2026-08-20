@@ -1,27 +1,47 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { fakeApp } = vi.hoisted(() => ({
-  fakeApp: {
-    getPath: vi.fn(() => '/tmp/phi-user-data'),
-    on: vi.fn(),
-    quit: vi.fn(),
-  },
-}));
+const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
+  class FakeTray {
+    static instances: FakeTray[] = [];
+    listeners = new Map<string, () => void>();
+    constructor() { FakeTray.instances.push(this); }
+    setToolTip(): void {}
+    on(event: string, listener: () => void): void { this.listeners.set(event, listener); }
+    destroy(): void {}
+  }
+  return {
+    fakeApp: {
+      getPath: vi.fn(() => '/tmp/phi-user-data'),
+      on: vi.fn(),
+      quit: vi.fn(),
+    },
+    fakeMenu: { buildFromTemplate: vi.fn((template: unknown[]) => ({ template })) },
+    fakeNativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => false })) },
+    FakeTray,
+  };
+});
 
 vi.mock('electron', () => ({
   app: fakeApp,
   BrowserWindow: class {},
   ipcMain: {},
-  Menu: {},
+  Menu: fakeMenu,
+  nativeImage: fakeNativeImage,
   Notification: class {},
   safeStorage: {},
   session: {},
   shell: {},
+  Tray: FakeTray,
   WebContentsView: class {},
 }));
 
+import { Controller } from '../src/controller.js';
 import { DesktopHost } from '../src/desktop.js';
+import type { PetDeps, PetHandle } from '../src/petLoader.js';
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void };
 const deferred = <T>(): Deferred<T> => {
@@ -29,19 +49,64 @@ const deferred = <T>(): Deferred<T> => {
   return { promise: new Promise<T>((next) => { resolve = next; }), resolve };
 };
 const flush = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); };
-const handle = () => ({ start: vi.fn(), stop: vi.fn(), isRunning: vi.fn(() => false) });
+const handle = (): PetHandle => ({
+  start: vi.fn(),
+  stop: vi.fn(),
+  isRunning: vi.fn(() => false),
+  setScaleTick: vi.fn(),
+  resetPosition: vi.fn(),
+  onRunningChanged: vi.fn(() => () => {}),
+});
 
 const enable = (host: DesktopHost, value: boolean): void => {
   host.controller = { state: () => ({ petEnabled: value }) } as never;
 };
 
+beforeEach(() => {
+  fakeMenu.buildFromTemplate.mockClear();
+  fakeNativeImage.createFromPath.mockClear();
+  FakeTray.instances.length = 0;
+});
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('DesktopHost optional pet lifecycle', () => {
+  it('routes one tray zoom through Controller to the live handle without duplicate delivery', () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-pet-tray-test-'));
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
+    try {
+      const controller = new Controller({ persistPath: path.join(dir, 'profiles.json') });
+      const retained = handle();
+      retained.isRunning = vi.fn(() => true);
+      const host = new DesktopHost();
+      host.petRoot = '/pet';
+      host.controller = controller;
+      host.petHandle = retained;
+      host.startTray();
+
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{
+        label: string;
+        enabled?: boolean;
+        submenu?: Array<{ label: string; enabled?: boolean; click?: () => void }>;
+      }>;
+      const zoomIn = template.find((entry) => entry.label === 'Pet')?.submenu?.find((entry) => entry.label === 'Zoom in');
+      expect(zoomIn?.enabled).toBe(true);
+      zoomIn?.click?.();
+
+      expect(controller.getPetScaleTick()).toBe(3);
+      expect(retained.setScaleTick).toHaveBeenCalledTimes(1);
+      expect(retained.setScaleTick).toHaveBeenCalledWith(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      Object.defineProperty(process, 'platform', { configurable: true, value: priorPlatform });
+    }
+  });
+
   it('keeps only the final deferred factory handle across enable, disable, enable', async () => {
     const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
-    const first = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();
-    const second = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();
+    const first = deferred<(deps: PetDeps) => PetHandle>();
+    const second = deferred<(deps: PetDeps) => PetHandle>();
     const load = vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
     void host.startPet();
@@ -104,7 +169,7 @@ describe('DesktopHost optional pet lifecycle', () => {
 
   it('creates no handle when disable or quit invalidates a pending factory', async () => {
     const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
-    const disabled = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();
+    const disabled = deferred<(deps: PetDeps) => PetHandle>();
     vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(disabled.promise);
     void host.startPet();
     host.stopPet();
@@ -114,7 +179,7 @@ describe('DesktopHost optional pet lifecycle', () => {
     expect(disabledFactory).not.toHaveBeenCalled();
     expect(host.petHandle).toBeNull();
 
-    const quitting = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();
+    const quitting = deferred<(deps: PetDeps) => PetHandle>();
     enable(host, true);
     vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(quitting.promise);
     void host.startPet();

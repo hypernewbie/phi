@@ -78,6 +78,9 @@ export function createPetWindow(opts: PetWindowOptions): BrowserWindow {
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true);
   win.setIgnoreMouseEvents(true, { forward: true });
-  void win.loadFile(path.join(opts.root, "dist", PET_HTML_FILE), opts.query ? { query: opts.query } : undefined).catch((err: unknown) => opts.log(`loadFile failed: ${String(err)}`));
+  void win.loadFile(path.join(opts.root, "dist", PET_HTML_FILE), opts.query ? { query: opts.query } : undefined).catch((err: unknown) => {
+    opts.log(`loadFile failed: ${String(err)}`);
+    if (!win.isDestroyed()) win.destroy();
+  });
   return win;
 }

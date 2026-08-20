@@ -21,11 +21,18 @@ export interface TerritoryBounds {
   maxStageY: number;
 }
 
+export type PetScaleRequest = { tick: number };
+export type PetScaleState = { tick: number; accepted: boolean };
+export type PetStageLayout = { stage: StageRect; resetPosition?: boolean };
+
 export interface PetApi {
   sendHit(inside: boolean): void;
   sendMove(move: PetMove): void;
-  reportStageLayout(stage: StageRect): void;
+  requestScaleTick(request: PetScaleRequest): void;
+  reportStageLayout(layout: PetStageLayout): void;
   onTerritoryBounds(listener: (bounds: TerritoryBounds) => void): () => void;
+  onScaleState(listener: (state: PetScaleState) => void): () => void;
+  onResetPosition(listener: () => void): () => void;
 }
 
 declare global {
