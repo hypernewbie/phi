@@ -148,11 +148,44 @@ func (m *accessAuthManager) authenticated(r *http.Request) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.record == nil {
+		return false
+	}
+	now := time.Now()
 	expiresAt, ok := m.sessions[cookie.Value]
-	if !ok || !expiresAt.After(time.Now()) {
+	if ok {
+		if expiresAt.After(now) {
+			return true
+		}
 		delete(m.sessions, cookie.Value)
 		return false
 	}
+	// Stateless token verification across server restarts. The token is
+	// signed with the current verifier, so it remains valid across restarts
+	// until expiry whilst any password change automatically invalidates it.
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	expiresUnix, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	tokenExpiry := time.Unix(expiresUnix, 0)
+	if !tokenExpiry.After(now) {
+		return false
+	}
+	gotSig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(gotSig) != sha256.Size {
+		return false
+	}
+	mac := hmac.New(sha256.New, m.record.Verifier)
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	wantSig := mac.Sum(nil)
+	if subtle.ConstantTimeCompare(gotSig, wantSig) != 1 {
+		return false
+	}
+	m.sessions[cookie.Value] = tokenExpiry
 	return true
 }
 
@@ -220,11 +253,22 @@ func (m *accessAuthManager) updatePassword(encoded string, authorized bool) (tok
 
 func (m *accessAuthManager) newSessionLocked(now time.Time) (string, error) {
 	m.cleanExpiredLocked(now)
-	token, err := randomAccessToken()
-	if err != nil {
+	if m.record == nil {
+		return "", nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	m.sessions[token] = now.Add(accessSessionTTL)
+	nonce := base64.RawURLEncoding.EncodeToString(buf)
+	expiresAt := now.Add(accessSessionTTL)
+	expiresStr := strconv.FormatInt(expiresAt.Unix(), 10)
+	payload := nonce + "." + expiresStr
+	mac := hmac.New(sha256.New, m.record.Verifier)
+	_, _ = mac.Write([]byte(payload))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	token := payload + "." + sig
+	m.sessions[token] = expiresAt
 	return token, nil
 }
 
