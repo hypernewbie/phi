@@ -48,7 +48,8 @@ function makeTm() {
 
 function jsonResp(obj, ok = true, status = 200) {
     return {
-        ok, status,
+        ok,
+        status,
         headers: { get: () => null },
         json: async () => obj,
         text: async () => '',
@@ -70,9 +71,36 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
     it('calls createTab once per server-side terminal entry, in order', async () => {
         const { tm } = makeTm();
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: 'pi:tab',  coder: 'pi',     workspace: '/w', cwd: '/w', pinned: false, marked: false },
-            { id: 'p2', session_id: 's2', title: 'claude',  coder: 'claude', workspace: '/w', cwd: '/w', pinned: false, marked: false },
-            { id: 'p3', session_id: 's3', title: 'shell',   coder: 'bash',   workspace: '/w', cwd: '/w', pinned: false, marked: false },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'pi:tab',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+                pinned: false,
+                marked: false,
+            },
+            {
+                id: 'p2',
+                session_id: 's2',
+                title: 'claude',
+                coder: 'claude',
+                workspace: '/w',
+                cwd: '/w',
+                pinned: false,
+                marked: false,
+            },
+            {
+                id: 'p3',
+                session_id: 's3',
+                title: 'shell',
+                coder: 'bash',
+                workspace: '/w',
+                cwd: '/w',
+                pinned: false,
+                marked: false,
+            },
         ]);
         await tm.restoreTabsState();
 
@@ -86,7 +114,16 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
     it('forwards pinned and marked flags so the tab UI renders them', async () => {
         const { tm } = makeTm();
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: 'x', coder: 'pi', workspace: '/w', cwd: '/w', pinned: true, marked: true },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'x',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+                pinned: true,
+                marked: true,
+            },
         ]);
         await tm.restoreTabsState();
         expect(tm.createTab.mock.calls[0].slice(6, 8)).toEqual([true, true]);
@@ -111,12 +148,26 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
         expect(localStorage.getItem('phi_tabs')).toBeNull();
     });
 
-    it('calls applySavedTabOrder so the user\'s drag-reorder is restored', async () => {
+    it("calls applySavedTabOrder so the user's drag-reorder is restored", async () => {
         const { tm } = makeTm();
         const applySpy = vi.spyOn(tm, 'applySavedTabOrder');
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: 'a', coder: 'pi',   workspace: '/w', cwd: '/w' },
-            { id: 'p2', session_id: 's2', title: 'b', coder: 'bash', workspace: '/w', cwd: '/w' },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'a',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+            },
+            {
+                id: 'p2',
+                session_id: 's2',
+                title: 'b',
+                coder: 'bash',
+                workspace: '/w',
+                cwd: '/w',
+            },
         ]);
         await tm.restoreTabsState();
         expect(applySpy).toHaveBeenCalledTimes(1);
@@ -126,8 +177,22 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
         const { tm } = makeTm();
         localStorage.setItem('phi_active_pane', 'p2');
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: 'a', coder: 'pi',   workspace: '/w', cwd: '/w' },
-            { id: 'p2', session_id: 's2', title: 'b', coder: 'bash', workspace: '/w', cwd: '/w' },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'a',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+            },
+            {
+                id: 'p2',
+                session_id: 's2',
+                title: 'b',
+                coder: 'bash',
+                workspace: '/w',
+                cwd: '/w',
+            },
         ]);
         await tm.restoreTabsState();
         // switchTab('p2') should be called last to focus the saved pane.
@@ -139,8 +204,22 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
         const { tm } = makeTm();
         localStorage.removeItem('phi_active_pane');
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: 'a', coder: 'pi',   workspace: '/w', cwd: '/w' },
-            { id: 'p2', session_id: 's2', title: 'b', coder: 'bash', workspace: '/w', cwd: '/w' },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: 'a',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+            },
+            {
+                id: 'p2',
+                session_id: 's2',
+                title: 'b',
+                coder: 'bash',
+                workspace: '/w',
+                cwd: '/w',
+            },
         ]);
         await tm.restoreTabsState();
         expect(tm.switchTab).toHaveBeenCalledWith('p1');
@@ -166,7 +245,14 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
     it('handles titled-as-coder fallback: t.title || t.coder', async () => {
         const { tm } = makeTm();
         mockFetch(() => [
-            { id: 'p1', session_id: 's1', title: '',  coder: 'pi', workspace: '/w', cwd: '/w' },
+            {
+                id: 'p1',
+                session_id: 's1',
+                title: '',
+                coder: 'pi',
+                workspace: '/w',
+                cwd: '/w',
+            },
         ]);
         await tm.restoreTabsState();
         // Title falls back to the coder name.

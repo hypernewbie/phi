@@ -107,7 +107,9 @@ describe('attachment wiring — drop', () => {
         terminalPane.dispatchEvent(event);
 
         await vi.waitFor(() => {
-            expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(1);
+            expect(
+                tm.attachmentStrip.querySelectorAll('.attachment-chip'),
+            ).toHaveLength(1);
         });
 
         expect(lastUrl).toBe('/api/attachments');
@@ -117,11 +119,15 @@ describe('attachment wiring — drop', () => {
         const chip = tm.attachmentStrip.querySelector('.attachment-chip');
         expect(chip.getAttribute('data-id')).toMatch(/^att-/);
         expect(tm.stagedAttachments).toHaveLength(1);
-        expect(tm.stagedAttachments[0].path).toBe('/home/u/.phi/clipboard/clip-1-aaaa.png');
+        expect(tm.stagedAttachments[0].path).toBe(
+            '/home/u/.phi/clipboard/clip-1-aaaa.png',
+        );
         expect(tm.stagedAttachments[0].source).toBe('drop');
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(false);
         // Visual feedback was toggled and reset.
-        expect(tm.inputBarContainer.classList.contains('is-drop-target')).toBe(false);
+        expect(tm.inputBarContainer.classList.contains('is-drop-target')).toBe(
+            false,
+        );
     });
 
     it('skips drops that land inside a .tab element (tab reorder wins)', async () => {
@@ -152,9 +158,13 @@ describe('attachment wiring — drop', () => {
     it('skips non-image files in the drop', async () => {
         serverResponse = { path: '/x.png', name: 'x.png' };
         const tm = makeTm();
-        const textFile = new File([new Uint8Array(8)], 'note.txt', { type: 'text/plain' });
+        const textFile = new File([new Uint8Array(8)], 'note.txt', {
+            type: 'text/plain',
+        });
         const event = new Event('drop', { bubbles: true, cancelable: true });
-        Object.defineProperty(event, 'dataTransfer', { value: { files: [textFile] } });
+        Object.defineProperty(event, 'dataTransfer', {
+            value: { files: [textFile] },
+        });
         tm.inputBarContainer.dispatchEvent(event);
 
         // Give async handlers a tick; nothing should happen.
@@ -175,13 +185,17 @@ describe('attachment wiring — paste', () => {
         const tm = makeTm();
 
         const blob = new Blob([new Uint8Array(8)], { type: 'image/png' });
-        const items = [{ kind: 'file', type: 'image/png', getAsFile: () => blob }];
+        const items = [
+            { kind: 'file', type: 'image/png', getAsFile: () => blob },
+        ];
         const event = new Event('paste', { bubbles: true, cancelable: true });
         Object.defineProperty(event, 'clipboardData', { value: { items } });
         tm.inputTextArea.dispatchEvent(event);
 
         await vi.waitFor(() => {
-            expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(1);
+            expect(
+                tm.attachmentStrip.querySelectorAll('.attachment-chip'),
+            ).toHaveLength(1);
         });
 
         expect(lastUrl).toBe('/api/attachments');
@@ -206,26 +220,44 @@ describe('attachment wiring — chip management', () => {
         serverResponse = { path: '/a.png', name: 'a.png', sizeBytes: 8 };
         const tm = makeTm();
         await tm._addAttachmentChip({
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
+            id: 'x',
+            name: 'a.png',
+            path: '/a.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
         });
         await tm._addAttachmentChip({
-            id: 'y', name: 'b.png', path: '/b.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
+            id: 'y',
+            name: 'b.png',
+            path: '/b.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
         });
-        expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(2);
+        expect(
+            tm.attachmentStrip.querySelectorAll('.attachment-chip'),
+        ).toHaveLength(2);
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(false);
     });
 
     it('removes a chip via the remove button', async () => {
         const tm = makeTm();
         await tm._addAttachmentChip({
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
+            id: 'x',
+            name: 'a.png',
+            path: '/a.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
         });
-        expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(1);
+        expect(
+            tm.attachmentStrip.querySelectorAll('.attachment-chip'),
+        ).toHaveLength(1);
         tm._removeAttachmentChip('x');
-        expect(tm.attachmentStrip.querySelectorAll('.attachment-chip')).toHaveLength(0);
+        expect(
+            tm.attachmentStrip.querySelectorAll('.attachment-chip'),
+        ).toHaveLength(0);
         expect(tm.stagedAttachments).toHaveLength(0);
         // Strip hides itself when empty.
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(true);
@@ -234,12 +266,20 @@ describe('attachment wiring — chip management', () => {
     it('de-dupes attachments with the same path', async () => {
         const tm = makeTm();
         await tm._addAttachmentChip({
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
+            id: 'x',
+            name: 'a.png',
+            path: '/a.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
         });
         await tm._addAttachmentChip({
-            id: 'y', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
+            id: 'y',
+            name: 'a.png',
+            path: '/a.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
         });
         expect(tm.stagedAttachments).toHaveLength(1);
     });
@@ -249,13 +289,24 @@ describe('attachment wiring — send integration', () => {
     it('sends attachment paths after text, one per line', () => {
         const tm = makeTm({ coder: 'claude' });
         tm.inputTextArea.value = 'Look at this';
-        tm.stagedAttachments = [{
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
-        }, {
-            id: 'y', name: 'b.png', path: '/b.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
-        }];
+        tm.stagedAttachments = [
+            {
+                id: 'x',
+                name: 'a.png',
+                path: '/a.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+            {
+                id: 'y',
+                name: 'b.png',
+                path: '/b.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+        ];
 
         tm.sendStagedInput();
 
@@ -270,10 +321,16 @@ describe('attachment wiring — send integration', () => {
     it('uses raw path for bash coder', () => {
         const tm = makeTm({ coder: 'bash' });
         tm.inputTextArea.value = 'cat this';
-        tm.stagedAttachments = [{
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
-        }];
+        tm.stagedAttachments = [
+            {
+                id: 'x',
+                name: 'a.png',
+                path: '/a.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+        ];
 
         tm.sendStagedInput();
 
@@ -285,10 +342,16 @@ describe('attachment wiring — send integration', () => {
     it('sends attachments-only when textarea is empty (no early-return)', () => {
         const tm = makeTm({ coder: 'claude' });
         tm.inputTextArea.value = '';
-        tm.stagedAttachments = [{
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
-        }];
+        tm.stagedAttachments = [
+            {
+                id: 'x',
+                name: 'a.png',
+                path: '/a.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+        ];
 
         tm.sendStagedInput();
 
@@ -299,10 +362,16 @@ describe('attachment wiring — send integration', () => {
     it('clears stagedAttachments after send', () => {
         const tm = makeTm({ coder: 'claude' });
         tm.inputTextArea.value = 'hi';
-        tm.stagedAttachments = [{
-            id: 'x', name: 'a.png', path: '/a.png', type: 'image/png',
-            sizeBytes: 8, source: 'paste',
-        }];
+        tm.stagedAttachments = [
+            {
+                id: 'x',
+                name: 'a.png',
+                path: '/a.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+        ];
         tm.sendStagedInput();
         expect(tm.stagedAttachments).toHaveLength(0);
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(true);

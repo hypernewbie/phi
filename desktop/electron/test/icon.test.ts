@@ -58,7 +58,9 @@ describe('assets/tray.ico (generated Phi tray icon set)', () => {
       expect(h).toBe(w); // square entries
       const len = ico.readUInt32LE(o + 8);
       const off = ico.readUInt32LE(o + 12);
-      expect([...ico.subarray(off, off + 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      expect([...ico.subarray(off, off + 8)]).toEqual([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ]);
       expect(len).toBeGreaterThan(0);
     }
     expect(sizes).toEqual([16, 24, 32, 48, 64, 128, 256]);
@@ -75,14 +77,20 @@ describe('TRAY_ICON_PATH (the production tray asset resolution)', () => {
 
 describe('scripts/gen-icon.mjs (the committed generator)', () => {
   it('emits the window icon, the tray PNG and the tray ICO', () => {
-    const source = readFileSync(path.join(here, '..', 'scripts', 'gen-icon.mjs'), 'utf8');
+    const source = readFileSync(
+      path.join(here, '..', 'scripts', 'gen-icon.mjs'),
+      'utf8',
+    );
     expect(source).toContain("'icon.png'");
     expect(source).toContain("'tray.png'");
     expect(source).toContain("'tray.ico'");
   });
 
   it('uses the committed generated assets on non-Windows packaging hosts', () => {
-    const source = readFileSync(path.join(here, '..', 'scripts', 'gen-icon.mjs'), 'utf8');
+    const source = readFileSync(
+      path.join(here, '..', 'scripts', 'gen-icon.mjs'),
+      'utf8',
+    );
     expect(source).toContain("process.platform !== 'win32'");
     expect(source).toContain('using committed icon assets');
   });

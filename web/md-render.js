@@ -4,7 +4,14 @@ import { escapeHtml } from './util.js';
 export function sanitizeHtml(html) {
     return String(window.DOMPurify.sanitize(html, {
         USE_PROFILES: { html: true },
-        FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
+        FORBID_TAGS: [
+            'script',
+            'style',
+            'iframe',
+            'object',
+            'embed',
+            'form',
+        ],
         FORBID_ATTR: ['style'],
     }));
 }

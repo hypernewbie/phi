@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { displayHostname, formatTerminalActivityTitle, buildSelfHud } from '../web/util.js';
+import {
+    displayHostname,
+    formatTerminalActivityTitle,
+    buildSelfHud,
+} from '../web/util.js';
 
 // macOS reports its hostname with the mDNS/Bonjour suffix attached
 // ("studio.local"), which showed up verbatim in the header, the empty state,
@@ -49,9 +53,15 @@ describe('displayHostname', () => {
 describe('surfaces that render a hostname', () => {
     it('keeps it out of the browser title', () => {
         const quiet = { hasActivity: false, hasAttention: false };
-        expect(formatTerminalActivityTitle('studio.local', quiet)).toBe('Φ studio');
-        expect(formatTerminalActivityTitle('studio.local', { hasActivity: true, hasAttention: true }))
-            .toBe('● ϕ studio');
+        expect(formatTerminalActivityTitle('studio.local', quiet)).toBe(
+            'Φ studio',
+        );
+        expect(
+            formatTerminalActivityTitle('studio.local', {
+                hasActivity: true,
+                hasAttention: true,
+            }),
+        ).toBe('● ϕ studio');
     });
 
     it('falls back to phi when there is no hostname', () => {
@@ -63,7 +73,12 @@ describe('surfaces that render a hostname', () => {
     });
 
     it('keeps it out of the self HUD', () => {
-        const hud = buildSelfHud({ hostname: 'studio.local', version: '0.15.3', cpuPercent: null, tabs: [] });
+        const hud = buildSelfHud({
+            hostname: 'studio.local',
+            version: '0.15.3',
+            cpuPercent: null,
+            tabs: [],
+        });
         expect(hud.hostname).toBe('studio');
     });
 });

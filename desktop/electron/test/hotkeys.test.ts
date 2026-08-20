@@ -41,9 +41,14 @@ describe('registerHotkey (recording fake globalShortcut)', () => {
     const action = vi.fn();
     const reg = registerHotkey('CommandOrControl+Shift+L', action);
     expect(reg.status).toBe('registered');
-    expect(fakeGlobalShortcut.register).toHaveBeenCalledWith('CommandOrControl+Shift+L', action);
+    expect(fakeGlobalShortcut.register).toHaveBeenCalledWith(
+      'CommandOrControl+Shift+L',
+      action,
+    );
     reg.unregister();
-    expect(fakeGlobalShortcut.unregister).toHaveBeenCalledWith('CommandOrControl+Shift+L');
+    expect(fakeGlobalShortcut.unregister).toHaveBeenCalledWith(
+      'CommandOrControl+Shift+L',
+    );
   });
 
   it('invokes the action when the registered callback fires', () => {
@@ -92,10 +97,14 @@ describe('resolveAccelerator (PHI_DESKTOP_HOTKEY override)', () => {
   });
 
   it('honors the PHI_DESKTOP_HOTKEY environment override', () => {
-    expect(resolveAccelerator({ [HOTKEY_ENV_VAR]: 'Alt+Shift+P' })).toBe('Alt+Shift+P');
+    expect(resolveAccelerator({ [HOTKEY_ENV_VAR]: 'Alt+Shift+P' })).toBe(
+      'Alt+Shift+P',
+    );
   });
 
   it('falls back to the default for a blank override', () => {
-    expect(resolveAccelerator({ [HOTKEY_ENV_VAR]: '   ' })).toBe(DEFAULT_HOTKEY_ACCELERATOR);
+    expect(resolveAccelerator({ [HOTKEY_ENV_VAR]: '   ' })).toBe(
+      DEFAULT_HOTKEY_ACCELERATOR,
+    );
   });
 });

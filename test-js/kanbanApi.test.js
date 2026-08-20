@@ -16,7 +16,7 @@ function ctxWithSession({ token = 'tok', url = 'http://vik.local' } = {}) {
     const c = Object.create(KanbanManager.prototype);
     c.buckets = [{ id: 1, title: 'Doing' }];
     c.taskCache = {
-        42: { id: 42, title: 'hello', bucket_id: 1, labels: [], assignees: [] }
+        42: { id: 42, title: 'hello', bucket_id: 1, labels: [], assignees: [] },
     };
     c.app = { showToast: vi.fn() };
     return c;
@@ -41,26 +41,42 @@ describe('KanbanManager.apiRequest', () => {
         const c = ctxWithSession({ url: 'http://vik.local' });
         mockFetch(() => ({ ok: true, json: { id: 1 } }));
         await c.apiPost('/projects/1/tasks', { title: 'x' });
-        const decoded = decodeURIComponent(fetch.mock.calls[0][0].split('url=')[1]);
+        const decoded = decodeURIComponent(
+            fetch.mock.calls[0][0].split('url=')[1],
+        );
         expect(decoded).toBe('http://vik.local/api/v1/projects/1/tasks');
     });
 
     it('drops the token and throws on 401', async () => {
         const c = ctxWithSession();
-        mockFetch(() => ({ ok: false, status: 401, text: '{"message":"unauthorized"}' }));
+        mockFetch(() => ({
+            ok: false,
+            status: 401,
+            text: '{"message":"unauthorized"}',
+        }));
         await expect(c.apiGet('/x')).rejects.toThrow(/Session expired/);
         expect(sessionStorage.getItem('vikunja_token')).toBeNull();
     });
 
     it('normalizes Vikunja error envelopes via extractVikunjaError', async () => {
         const c = ctxWithSession();
-        mockFetch(() => ({ ok: false, status: 405, text: '{"message":"method not allowed error"}' }));
-        await expect(c.apiPut('/tasks/42', {})).rejects.toThrow('method not allowed error');
+        mockFetch(() => ({
+            ok: false,
+            status: 405,
+            text: '{"message":"method not allowed error"}',
+        }));
+        await expect(c.apiPut('/tasks/42', {})).rejects.toThrow(
+            'method not allowed error',
+        );
     });
 
     it('truncates raw HTML error pages instead of dumping them', async () => {
         const c = ctxWithSession();
-        mockFetch(() => ({ ok: false, status: 502, text: '<html><body>502 Bad Gateway</body></html>' }));
+        mockFetch(() => ({
+            ok: false,
+            status: 502,
+            text: '<html><body>502 Bad Gateway</body></html>',
+        }));
         await expect(c.apiGet('/x')).rejects.toThrow(/502 Bad Gateway/);
         const msg = await c.apiGet('/x').catch((e) => e.message);
         expect(msg).not.toMatch(/<html/);
@@ -97,7 +113,9 @@ describe('KanbanManager.moveTask (uses Vikunja dedicated bucket-move endpoint)',
         await c.moveTask(42, 1);
         const [callUrl, callOpts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(callUrl.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/projects/9/views/5/buckets/1/tasks');
+        expect(decoded).toBe(
+            'http://vik.local/api/v1/projects/9/views/5/buckets/1/tasks',
+        );
         expect(callOpts.method).toBe('POST');
         expect(JSON.parse(callOpts.body)).toEqual({ task_id: 42 });
     });
@@ -114,7 +132,9 @@ describe('KanbanManager.moveTask (uses Vikunja dedicated bucket-move endpoint)',
     it('throws if project/view not loaded yet (no cached ids)', async () => {
         const c = ctxWithSession();
         mockFetch(() => ({ ok: true, json: null }));
-        await expect(c.moveTask(42, 1)).rejects.toThrow(/project or view not loaded/);
+        await expect(c.moveTask(42, 1)).rejects.toThrow(
+            /project or view not loaded/,
+        );
     });
 
     it('throws if the task is not in cache', async () => {
@@ -133,9 +153,22 @@ describe('KanbanManager.saveTaskDetail (UPDATE uses POST)', () => {
         const container = document.createElement('div');
         c.loadAndRenderBoard = vi.fn(async () => {});
         mockFetch(() => ({ ok: true, json: null }));
-        await c.saveTaskDetail({ id: 42 }, { title: 'new', priority: 2, due_date: null, done: false, description: '' }, card, container);
+        await c.saveTaskDetail(
+            { id: 42 },
+            {
+                title: 'new',
+                priority: 2,
+                due_date: null,
+                done: false,
+                description: '',
+            },
+            card,
+            container,
+        );
         const [callUrl, callOpts] = fetch.mock.calls[0];
-        expect(decodeURIComponent(callUrl.split('url=')[1])).toBe('http://vik.local/api/v1/tasks/42');
+        expect(decodeURIComponent(callUrl.split('url=')[1])).toBe(
+            'http://vik.local/api/v1/tasks/42',
+        );
         expect(callOpts.method).toBe('POST');
         expect(JSON.parse(callOpts.body).title).toBe('new');
     });

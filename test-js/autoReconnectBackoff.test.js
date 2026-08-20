@@ -13,7 +13,10 @@ import { fileURLToPath } from 'node:url';
 // delay), and AUTO_RECONNECT_MAX_ATTEMPTS was unreachable, so a flapping
 // pane redialled forever instead of giving up.
 
-const src = readFileSync(fileURLToPath(new URL('../web/terminal.js', import.meta.url)), 'utf8');
+const src = readFileSync(
+    fileURLToPath(new URL('../web/terminal.js', import.meta.url)),
+    'utf8',
+);
 
 describe('source guards', () => {
     // maybeAutoReconnect is entangled with app.config, document.visibilityState,
@@ -30,18 +33,27 @@ describe('source guards', () => {
         const openIdx = src.indexOf('opened = true;');
         expect(openIdx).toBeGreaterThan(-1);
         const afterOpen = src.slice(openIdx, openIdx + 400);
-        const inlineReset = /opened = true;(?:(?!setTimeout)[\s\S])*?tabInfo\.reconnectAttempts = 0;/;
+        const inlineReset =
+            /opened = true;(?:(?!setTimeout)[\s\S])*?tabInfo\.reconnectAttempts = 0;/;
         expect(afterOpen).not.toMatch(inlineReset);
     });
 
     it('floors every redial with the grace constant', () => {
-        expect(src).toContain('AUTO_RECONNECT_GRACE_MS + Math.random() * backoff');
+        expect(src).toContain(
+            'AUTO_RECONNECT_GRACE_MS + Math.random() * backoff',
+        );
         expect(src).toMatch(/const AUTO_RECONNECT_GRACE_MS = 1000;/);
     });
 
     it('revives dead active tab on window focus alongside online and pageshow', () => {
-        expect(src).toContain("window.addEventListener('focus', () => this._reviveActiveTabIfDead());");
-        expect(src).toContain("window.addEventListener('online', () => this._reviveActiveTabIfDead());");
-        expect(src).toContain("window.addEventListener('pageshow', () => this._reviveActiveTabIfDead());");
+        expect(src).toContain(
+            "window.addEventListener('focus', () => this._reviveActiveTabIfDead());",
+        );
+        expect(src).toContain(
+            "window.addEventListener('online', () => this._reviveActiveTabIfDead());",
+        );
+        expect(src).toMatch(
+            /window\.addEventListener\(\s*'pageshow',\s*\(\) =>\s*this\._reviveActiveTabIfDead\(\),?\s*\)/,
+        );
     });
 });

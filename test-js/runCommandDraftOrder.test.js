@@ -15,15 +15,32 @@ function makeHarness({ prefix = 'my prefix' } = {}) {
     inputTextArea.focus = vi.fn();
     // Alive shell target in the same cwd; non-shell active tab forces the
     // reuse-switch path (rules in findReusableShellTab, diff.ts:33).
-    const activeTab = { paneId: 'A', coder: 'claude', isDead: false, cwd: '/ws', ws: {} };
-    const shellTab = { paneId: 'S', coder: 'bash', isDead: false, cwd: '/ws', ws: {} };
+    const activeTab = {
+        paneId: 'A',
+        coder: 'claude',
+        isDead: false,
+        cwd: '/ws',
+        ws: {},
+    };
+    const shellTab = {
+        paneId: 'S',
+        coder: 'bash',
+        isDead: false,
+        cwd: '/ws',
+        ws: {},
+    };
     const valueAtSwitch = { seen: null };
     const tabManager = {
         inputTextArea,
         lastInputValue: prefix,
-        tabs: new Map([['A', activeTab], ['S', shellTab]]),
+        tabs: new Map([
+            ['A', activeTab],
+            ['S', shellTab],
+        ]),
         getActiveTab: () => activeTab,
-        switchTab: vi.fn(() => { valueAtSwitch.seen = inputTextArea.value; }),
+        switchTab: vi.fn(() => {
+            valueAtSwitch.seen = inputTextArea.value;
+        }),
         sendInput: vi.fn(),
         adjustInputHeight: vi.fn(),
         _spamScrollToBottom: vi.fn(),
@@ -42,7 +59,9 @@ describe('runCommand consume-before-switch ordering', () => {
     it('clears the draft before switching tabs', async () => {
         const { fakeThis, tabManager, valueAtSwitch } = makeHarness();
         const mod = await import('../web/diff.js');
-        await mod.DiffController.prototype.runCommand.call(fakeThis, { command: 'git status' });
+        await mod.DiffController.prototype.runCommand.call(fakeThis, {
+            command: 'git status',
+        });
 
         expect(tabManager.switchTab).toHaveBeenCalledWith('S');
         expect(valueAtSwitch.seen).toBe('');
@@ -52,7 +71,9 @@ describe('runCommand consume-before-switch ordering', () => {
     it('sends the combined command containing the consumed prefix', async () => {
         const { fakeThis, tabManager, shellTab } = makeHarness();
         const mod = await import('../web/diff.js');
-        await mod.DiffController.prototype.runCommand.call(fakeThis, { command: 'git status' });
+        await mod.DiffController.prototype.runCommand.call(fakeThis, {
+            command: 'git status',
+        });
 
         expect(tabManager.sendInput).toHaveBeenCalled();
         const [sentTab, payload] = tabManager.sendInput.mock.calls[0];
@@ -65,10 +86,12 @@ describe('runCommand consume-before-switch ordering', () => {
         const inputTextArea = tabManager.inputTextArea;
         tabManager.switchTab = vi.fn(() => {
             valueAtSwitch.seen = inputTextArea.value;
-            inputTextArea.value = 'restored draft of S';   // simulate M1's restore
+            inputTextArea.value = 'restored draft of S'; // simulate M1's restore
         });
         const mod = await import('../web/diff.js');
-        await mod.DiffController.prototype.runCommand.call(fakeThis, { command: 'git status' });
+        await mod.DiffController.prototype.runCommand.call(fakeThis, {
+            command: 'git status',
+        });
         expect(valueAtSwitch.seen).toBe('');
         expect(inputTextArea.value).toBe('restored draft of S');
     });

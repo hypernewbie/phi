@@ -15,7 +15,8 @@ async function bootConfigPage() {
         app.sessionsManager = { workspaces: [] };
 
         const res = await fetch('/api/config');
-        if (!res.ok) throw new Error(`Failed to load config (HTTP ${res.status})`);
+        if (!res.ok)
+            throw new Error(`Failed to load config (HTTP ${res.status})`);
         const data = await res.json();
 
         app.config = data;
@@ -30,11 +31,15 @@ async function bootConfigPage() {
         app.applyFastMode();
 
         let ls = null;
-        try { ls = JSON.parse(localStorage.getItem('phi_appearance') || 'null'); } catch {}
+        try {
+            ls = JSON.parse(localStorage.getItem('phi_appearance') || 'null');
+        } catch {}
         app.uiFontFamily = (ls?.ui_font_family ?? data.ui_font_family) || '';
         app.uiFontSize = Number(ls?.ui_font_size ?? data.ui_font_size) || 0;
-        app.terminalFontFamily = (ls?.terminal_font_family ?? data.terminal_font_family) || '';
-        app.terminalFontSize = Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
+        app.terminalFontFamily =
+            (ls?.terminal_font_family ?? data.terminal_font_family) || '';
+        app.terminalFontSize =
+            Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
         app.customFontName = ls?.custom_font_name || '';
         app.applyUIFont();
         await app.loadCustomFont();
@@ -54,7 +59,8 @@ async function bootConfigPage() {
         const title = document.createElement('h1');
         title.textContent = 'Unable to open Settings';
         const detail = document.createElement('p');
-        detail.textContent = err instanceof Error ? err.message : 'Settings could not be loaded';
+        detail.textContent =
+            err instanceof Error ? err.message : 'Settings could not be loaded';
         dialog.append(title, detail);
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);

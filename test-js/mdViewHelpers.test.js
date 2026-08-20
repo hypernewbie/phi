@@ -8,7 +8,10 @@ import { decodeEventFrame, mdEventMatchesPath } from '../web/md-view.js';
 describe('decodeEventFrame', () => {
     it('splits a 0x07 frame into type and JSON payload (round-trip)', () => {
         const payload = JSON.stringify({ dir: '/tmp/docs' });
-        const bytes = new Uint8Array([0x07, ...new TextEncoder().encode(payload)]);
+        const bytes = new Uint8Array([
+            0x07,
+            ...new TextEncoder().encode(payload),
+        ]);
         const frame = decodeEventFrame(bytes);
         expect(frame.type).toBe(0x07);
         expect(JSON.parse(frame.payload)).toEqual({ dir: '/tmp/docs' });

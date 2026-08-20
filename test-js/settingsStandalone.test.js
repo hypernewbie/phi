@@ -10,7 +10,12 @@ const ACCENTS = { purple: { accent: '#7c6af7' } };
 
 function buildApp() {
     return {
-        versionInfo: { version: '0.12.1', commit: 'deadbeef1234567', date: '2026-07-19T16:00:00Z', buildSource: 'npm' },
+        versionInfo: {
+            version: '0.12.1',
+            commit: 'deadbeef1234567',
+            date: '2026-07-19T16:00:00Z',
+            buildSource: 'npm',
+        },
         hostname: 'hammond',
         accessAuthEnabled: false,
         useExistingTerminalTab: false,
@@ -51,7 +56,11 @@ describe('standalone Config surface routing', () => {
         openSettingsModal(buildApp(), ACCENTS, {});
 
         expect(open).toHaveBeenCalledTimes(1);
-        expect(open).toHaveBeenCalledWith('/config.html', 'phi-config', 'width=860,height=1000');
+        expect(open).toHaveBeenCalledWith(
+            '/config.html',
+            'phi-config',
+            'width=860,height=1000',
+        );
         expect(document.querySelector('.settings-overlay')).toBeNull();
     });
 
@@ -67,20 +76,45 @@ describe('standalone Config surface routing', () => {
     });
 
     it('scopes window-filling styles to html[data-phi-config-page]', () => {
-        const css = readFileSync('web/style.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+        const css = readFileSync('web/style.css', 'utf8').replace(
+            /\/\*[\s\S]*?\*\//g,
+            '',
+        );
 
-        const scopedOverlay = css.match(/html\[data-phi-config-page\]\s*\.settings-overlay\s*\{([\s\S]*?)\}/);
-        const scopedModal = css.match(/html\[data-phi-config-page\]\s*\.settings-modal\s*\{([\s\S]*?)\}/);
-        expect(scopedOverlay, 'scoped .settings-overlay rule missing').toBeTruthy();
+        const scopedOverlay = css.match(
+            /html\[data-phi-config-page\]\s*\.settings-overlay\s*\{([\s\S]*?)\}/,
+        );
+        const scopedModal = css.match(
+            /html\[data-phi-config-page\]\s*\.settings-modal\s*\{([\s\S]*?)\}/,
+        );
+        expect(
+            scopedOverlay,
+            'scoped .settings-overlay rule missing',
+        ).toBeTruthy();
         expect(scopedOverlay[1]).toContain('align-items: stretch');
         expect(scopedModal, 'scoped .settings-modal rule missing').toBeTruthy();
-        for (const decl of ['width: 100%', 'height: 100%', 'max-width: none', 'max-height: none']) {
+        for (const decl of [
+            'width: 100%',
+            'height: 100%',
+            'max-width: none',
+            'max-height: none',
+        ]) {
             expect(scopedModal[1]).toContain(decl);
         }
 
-        const unscopedModal = css.match(/(?:^|\})\s*\.settings-modal\s*\{([\s\S]*?)\}/);
-        expect(unscopedModal, 'unscoped .settings-modal rule missing').toBeTruthy();
-        for (const decl of ['width: 100%', 'height: 100%', 'max-width: none', 'max-height: none']) {
+        const unscopedModal = css.match(
+            /(?:^|\})\s*\.settings-modal\s*\{([\s\S]*?)\}/,
+        );
+        expect(
+            unscopedModal,
+            'unscoped .settings-modal rule missing',
+        ).toBeTruthy();
+        for (const decl of [
+            'width: 100%',
+            'height: 100%',
+            'max-width: none',
+            'max-height: none',
+        ]) {
             expect(unscopedModal[1]).not.toContain(decl);
         }
     });

@@ -19,8 +19,12 @@ setupDomHarness();
 // working .value/.selectionStart, not a placeholder <div>.
 function stubDom() {
     const ids = [
-        'markdown-file-list', 'md-modal', 'md-modal-title',
-        'md-modal-body', 'md-modal-close', 'md-modal-copy-btn',
+        'markdown-file-list',
+        'md-modal',
+        'md-modal-title',
+        'md-modal-body',
+        'md-modal-close',
+        'md-modal-copy-btn',
     ];
     for (const id of ids) {
         if (!document.getElementById(id)) {
@@ -54,20 +58,29 @@ function makeMm(coder = 'claude') {
 describe('_insertRelativePath mention formatting', () => {
     it('mention insert formats @path for the claude coder', () => {
         const { mm, textarea } = makeMm('claude');
-        mm._insertRelativePath({ path: '/ws/docs/notes.md' }, { mention: true });
+        mm._insertRelativePath(
+            { path: '/ws/docs/notes.md' },
+            { mention: true },
+        );
         expect(textarea.value).toBe('@docs/notes.md');
         expect(textarea.selectionStart).toBe(textarea.value.length);
     });
 
     it('mention insert falls back to the raw path for the bash coder', () => {
         const { mm, textarea } = makeMm('bash');
-        mm._insertRelativePath({ path: '/ws/docs/notes.md' }, { mention: true });
+        mm._insertRelativePath(
+            { path: '/ws/docs/notes.md' },
+            { mention: true },
+        );
         expect(textarea.value).toBe('docs/notes.md');
     });
 
     it('mention insert falls back to the raw path for the pseudo-coder review', () => {
         const { mm, textarea } = makeMm('review');
-        mm._insertRelativePath({ path: '/ws/docs/notes.md' }, { mention: true });
+        mm._insertRelativePath(
+            { path: '/ws/docs/notes.md' },
+            { mention: true },
+        );
         expect(textarea.value).toBe('docs/notes.md');
     });
 
@@ -81,7 +94,10 @@ describe('_insertRelativePath mention formatting', () => {
         const { mm, textarea } = makeMm('claude');
         textarea.value = 'fix';
         textarea.setSelectionRange(3, 3);
-        mm._insertRelativePath({ path: '/ws/docs/notes.md' }, { mention: true });
+        mm._insertRelativePath(
+            { path: '/ws/docs/notes.md' },
+            { mention: true },
+        );
         expect(textarea.value).toBe('fix @docs/notes.md');
     });
 });
@@ -92,13 +108,18 @@ describe('_showContextMenu "Insert @path" action', () => {
         const anchor = document.createElement('button');
         document.body.appendChild(anchor);
 
-        mm._showContextMenu({ path: '/ws/docs/notes.md', name: 'notes.md', dir: '.' }, anchor);
+        mm._showContextMenu(
+            { path: '/ws/docs/notes.md', name: 'notes.md', dir: '.' },
+            anchor,
+        );
 
         const buttons = mm.contextMenuEl.querySelectorAll('.md-context-action');
         expect(buttons.length).toBeGreaterThan(0);
         const first = buttons[0];
         expect(first.classList.contains('insert-path')).toBe(true);
-        expect(first.querySelector('.md-context-label').textContent).toBe('Insert @path');
+        expect(first.querySelector('.md-context-label').textContent).toBe(
+            'Insert @path',
+        );
 
         first.click();
 

@@ -62,18 +62,36 @@ export class SyncManager {
             </div>
         `;
 
-        this.coordinatorInput = document.getElementById('sync-coordinator-input') as HTMLInputElement;
+        this.coordinatorInput = document.getElementById(
+            'sync-coordinator-input',
+        ) as HTMLInputElement;
         this.addBtn = document.getElementById('sync-add-btn') as HTMLElement;
-        this.formContainer = document.getElementById('sync-form-container') as HTMLElement;
-        this.formKey = document.getElementById('sync-form-key') as HTMLInputElement;
-        this.formValue = document.getElementById('sync-form-value') as HTMLTextAreaElement;
-        this.formCancel = document.getElementById('sync-form-cancel') as HTMLElement;
-        this.formSubmit = document.getElementById('sync-form-submit') as HTMLElement;
-        this.messagesList = document.getElementById('sync-messages-list') as HTMLElement;
-        this.clearBtn = document.getElementById('sync-clear-btn') as HTMLElement;
+        this.formContainer = document.getElementById(
+            'sync-form-container',
+        ) as HTMLElement;
+        this.formKey = document.getElementById(
+            'sync-form-key',
+        ) as HTMLInputElement;
+        this.formValue = document.getElementById(
+            'sync-form-value',
+        ) as HTMLTextAreaElement;
+        this.formCancel = document.getElementById(
+            'sync-form-cancel',
+        ) as HTMLElement;
+        this.formSubmit = document.getElementById(
+            'sync-form-submit',
+        ) as HTMLElement;
+        this.messagesList = document.getElementById(
+            'sync-messages-list',
+        ) as HTMLElement;
+        this.clearBtn = document.getElementById(
+            'sync-clear-btn',
+        ) as HTMLElement;
 
         // Event listeners
-        this.coordinatorInput.addEventListener('blur', () => this.saveCoordinator());
+        this.coordinatorInput.addEventListener('blur', () =>
+            this.saveCoordinator(),
+        );
         this.coordinatorInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 this.coordinatorInput.blur();
@@ -105,13 +123,16 @@ export class SyncManager {
             await fetch('/api/config/sync-coordinator', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sync_coordinator: url })
+                body: JSON.stringify({ sync_coordinator: url }),
             });
             await this.app.sessionsManager.loadConfig(); // reload global config
             this.refreshMessages();
         } catch (e) {
             console.error('Failed to save sync coordinator:', e);
-            this.app.showToast('Failed to save coordinator: ' + (e as Error).message, { type: 'error' });
+            this.app.showToast(
+                'Failed to save coordinator: ' + (e as Error).message,
+                { type: 'error' },
+            );
         }
     }
 
@@ -122,7 +143,11 @@ export class SyncManager {
 
         this.pollInterval = setInterval(() => {
             const diffCtrl = this.app.diffController;
-            if (diffCtrl && diffCtrl.isPanelOpen && diffCtrl.activeTab === 'sync') {
+            if (
+                diffCtrl &&
+                diffCtrl.isPanelOpen &&
+                diffCtrl.activeTab === 'sync'
+            ) {
                 this.refreshMessages();
             }
         }, 15000);
@@ -133,7 +158,10 @@ export class SyncManager {
         return (config && config.sync_coordinator) || 'http://localhost:7070';
     }
 
-    async fetchWithProxy(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    async fetchWithProxy(
+        endpoint: string,
+        options: RequestInit = {},
+    ): Promise<Response> {
         const coordinator = await this.getCoordinatorUrl();
         const proxyUrl = buildProxyUrl(coordinator, endpoint);
 
@@ -164,14 +192,19 @@ export class SyncManager {
 
     renderMessages(messages: any[]): void {
         if (!messages || messages.length === 0) {
-            this.messagesList.innerHTML = '<div class="sync-empty-state">No messages synced.</div>';
+            this.messagesList.innerHTML =
+                '<div class="sync-empty-state">No messages synced.</div>';
             return;
         }
 
-        messages.sort((a, b) => (new Date(b.updated_at) as any) - (new Date(a.updated_at) as any));
+        messages.sort(
+            (a, b) =>
+                (new Date(b.updated_at) as any) -
+                (new Date(a.updated_at) as any),
+        );
 
         this.messagesList.innerHTML = '';
-        messages.forEach(msg => {
+        messages.forEach((msg) => {
             const card = document.createElement('div');
             card.className = 'sync-card';
 
@@ -198,28 +231,40 @@ export class SyncManager {
                 valEl.classList.toggle('collapsed');
             });
 
-            card.querySelector('.sync-edit-btn')!.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.formContainer.classList.remove('hidden');
-                this.formKey.value = msg.key;
-                this.formKey.disabled = true;
-                this.formValue.value = msg.value;
-                this.formValue.focus({ preventScroll: true });
-            });
+            card.querySelector('.sync-edit-btn')!.addEventListener(
+                'click',
+                (e) => {
+                    e.stopPropagation();
+                    this.formContainer.classList.remove('hidden');
+                    this.formKey.value = msg.key;
+                    this.formKey.disabled = true;
+                    this.formValue.value = msg.value;
+                    this.formValue.focus({ preventScroll: true });
+                },
+            );
 
-            card.querySelector('.sync-del-btn')!.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (confirm(`Delete sync key "${msg.key}"?`)) {
-                    try {
-                        await this.fetchWithProxy(`/api/sync/messages/${encodeURIComponent(msg.key)}`, {
-                            method: 'DELETE'
-                        });
-                        this.refreshMessages();
-                    } catch (err) {
-                        this.app.showToast('Failed to delete: ' + (err as Error).message, { type: 'error' });
+            card.querySelector('.sync-del-btn')!.addEventListener(
+                'click',
+                async (e) => {
+                    e.stopPropagation();
+                    if (confirm(`Delete sync key "${msg.key}"?`)) {
+                        try {
+                            await this.fetchWithProxy(
+                                `/api/sync/messages/${encodeURIComponent(msg.key)}`,
+                                {
+                                    method: 'DELETE',
+                                },
+                            );
+                            this.refreshMessages();
+                        } catch (err) {
+                            this.app.showToast(
+                                'Failed to delete: ' + (err as Error).message,
+                                { type: 'error' },
+                            );
+                        }
                     }
-                }
-            });
+                },
+            );
 
             this.messagesList.appendChild(card);
         });
@@ -237,12 +282,15 @@ export class SyncManager {
             await this.fetchWithProxy('/api/sync/messages', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value })
+                body: JSON.stringify({ key, value }),
             });
             this.formContainer.classList.add('hidden');
             this.refreshMessages();
         } catch (e) {
-            this.app.showToast('Failed to save message: ' + (e as Error).message, { type: 'error' });
+            this.app.showToast(
+                'Failed to save message: ' + (e as Error).message,
+                { type: 'error' },
+            );
         }
     }
 
@@ -258,7 +306,10 @@ export class SyncManager {
     // the marker is transient by design; plain browser pages never set it
     // and the marker never leaves the page.
     signalDesktopAlert(messages: any[]): void {
-        if (!navigator.userAgent.includes('Electron') && new URLSearchParams(location.search).get('desktop') !== '1') {
+        if (
+            !navigator.userAgent.includes('Electron') &&
+            new URLSearchParams(location.search).get('desktop') !== '1'
+        ) {
             return;
         }
         let marker = '';
@@ -266,12 +317,18 @@ export class SyncManager {
         for (const msg of messages) {
             const k = String(msg && msg.key !== undefined ? msg.key : '');
             const v = String(msg && msg.value !== undefined ? msg.value : '');
-            if (k.includes(SYNC_ALARM_MARKER) || v.includes(SYNC_ALARM_MARKER)) {
+            if (
+                k.includes(SYNC_ALARM_MARKER) ||
+                v.includes(SYNC_ALARM_MARKER)
+            ) {
                 marker = SYNC_ALARM_MARKER;
                 key = k;
                 break;
             }
-            if (marker === '' && (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))) {
+            if (
+                marker === '' &&
+                (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))
+            ) {
                 marker = SYNC_NOTIF_MARKER;
                 key = k;
             }
@@ -293,9 +350,13 @@ export class SyncManager {
         try {
             const res = await this.fetchWithProxy('/api/sync/messages');
             const list = await res.json();
-            if (Array.isArray(list)) keys = list.map((m: any) => m.key).filter(Boolean);
+            if (Array.isArray(list))
+                keys = list.map((m: any) => m.key).filter(Boolean);
         } catch (e) {
-            this.app.showToast('Failed to read messages: ' + (e as Error).message, { type: 'error' });
+            this.app.showToast(
+                'Failed to read messages: ' + (e as Error).message,
+                { type: 'error' },
+            );
             return;
         }
 
@@ -304,7 +365,11 @@ export class SyncManager {
             return;
         }
 
-        if (!confirm(`Delete all ${keys.length} sync message${keys.length === 1 ? '' : 's'} from this coordinator?`)) {
+        if (
+            !confirm(
+                `Delete all ${keys.length} sync message${keys.length === 1 ? '' : 's'} from this coordinator?`,
+            )
+        ) {
             return;
         }
 
@@ -315,9 +380,12 @@ export class SyncManager {
         let failed = 0;
         for (const k of keys) {
             try {
-                await this.fetchWithProxy(`/api/sync/messages/${encodeURIComponent(k)}`, {
-                    method: 'DELETE',
-                });
+                await this.fetchWithProxy(
+                    `/api/sync/messages/${encodeURIComponent(k)}`,
+                    {
+                        method: 'DELETE',
+                    },
+                );
             } catch (e) {
                 console.error('[sync] clear delete failed for', k, e);
                 failed += 1;
@@ -325,9 +393,15 @@ export class SyncManager {
         }
         await this.refreshMessages();
         if (failed > 0) {
-            this.app.showToast(`Cleared; ${failed} delete${failed === 1 ? '' : 's'} failed (see console)`, { type: 'error' });
+            this.app.showToast(
+                `Cleared; ${failed} delete${failed === 1 ? '' : 's'} failed (see console)`,
+                { type: 'error' },
+            );
         } else {
-            this.app.showToast(`Cleared ${keys.length} message${keys.length === 1 ? '' : 's'}`, { type: 'success' });
+            this.app.showToast(
+                `Cleared ${keys.length} message${keys.length === 1 ? '' : 's'}`,
+                { type: 'success' },
+            );
         }
     }
 }

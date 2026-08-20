@@ -95,11 +95,23 @@ export interface Platform {
   /** Resolves the app config at call time (production: app.getPath('exe') + app.getAppPath()). */
   getConfig: () => ElectronAppConfig;
   /** Production: app.setAsDefaultProtocolClient. */
-  setAsDefaultProtocolClient(protocol: string, execPath: string, args: string[]): boolean;
+  setAsDefaultProtocolClient(
+    protocol: string,
+    execPath: string,
+    args: string[],
+  ): boolean;
   /** Production: app.isDefaultProtocolClient. */
-  isDefaultProtocolClient(protocol: string, execPath: string, args: string[]): boolean;
+  isDefaultProtocolClient(
+    protocol: string,
+    execPath: string,
+    args: string[],
+  ): boolean;
   /** Production: app.removeAsDefaultProtocolClient. */
-  removeAsDefaultProtocolClient(protocol: string, execPath: string, args: string[]): boolean;
+  removeAsDefaultProtocolClient(
+    protocol: string,
+    execPath: string,
+    args: string[],
+  ): boolean;
 }
 
 /**
@@ -214,7 +226,11 @@ export async function installProtocol(
     // electron-builder mac.extendInfo) is the registration; the runtime
     // writes nothing. alreadyRegistered is false because no runtime
     // action happened — the bundle responsibility is documented.
-    return { alreadyRegistered: false, path: macBundlePath(config.exe), exe: 'app' };
+    return {
+      alreadyRegistered: false,
+      path: macBundlePath(config.exe),
+      exe: 'app',
+    };
   }
   const args = extraArgs ?? protocolArgs(config.appPath);
   if (platform.isLinux) {
@@ -222,13 +238,21 @@ export async function installProtocol(
     // setAsDefaultProtocolClient call then asks xdg to make it the
     // default handler.
     const filePath = linuxDesktopFilePath();
-    writeLinuxDesktopFile(true, filePath, linuxDesktopFileContents(platform.execPath, args[0]));
+    writeLinuxDesktopFile(
+      true,
+      filePath,
+      linuxDesktopFileContents(platform.execPath, args[0]),
+    );
     platform.setAsDefaultProtocolClient(PROTOCOL, platform.execPath, args);
     return { alreadyRegistered: false, path: filePath, exe: platform.execPath };
   }
   // Windows (the documented Electron path). The platform booleans are
   // mutually exclusive; anything non-mac/non-linux behaves like Windows.
-  const alreadyRegistered = platform.isDefaultProtocolClient(PROTOCOL, platform.execPath, args);
+  const alreadyRegistered = platform.isDefaultProtocolClient(
+    PROTOCOL,
+    platform.execPath,
+    args,
+  );
   platform.setAsDefaultProtocolClient(PROTOCOL, platform.execPath, args);
   return { alreadyRegistered, path: platform.execPath, exe: platform.execPath };
 }
@@ -254,6 +278,10 @@ export async function uninstallProtocol(
     writeLinuxDesktopFile(false, filePath);
     return { removed: existed, path: filePath, exe: platform.execPath };
   }
-  const removed = platform.removeAsDefaultProtocolClient(PROTOCOL, platform.execPath, args);
+  const removed = platform.removeAsDefaultProtocolClient(
+    PROTOCOL,
+    platform.execPath,
+    args,
+  );
   return { removed, path: platform.execPath, exe: platform.execPath };
 }

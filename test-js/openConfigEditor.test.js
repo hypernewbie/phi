@@ -12,20 +12,26 @@ import { App } from '../web/app.js';
 setupDomHarness();
 
 const openEditor = (over = {}) =>
-    App.prototype.openConfigEditor.call({}, {
-        title: 'Add Terminal Command',
-        fields: [
-            { id: 'name', label: 'Label' },
-            { id: 'command', label: 'Command', multiline: true },
-        ],
-        submitLabel: 'Add Command',
-        ...over,
-    });
+    App.prototype.openConfigEditor.call(
+        {},
+        {
+            title: 'Add Terminal Command',
+            fields: [
+                { id: 'name', label: 'Label' },
+                { id: 'command', label: 'Command', multiline: true },
+            ],
+            submitLabel: 'Add Command',
+            ...over,
+        },
+    );
 
 // Resolve to a sentinel if the promise doesn't settle promptly, so a broken
 // (never-resolving) submit shows up as a failed assertion instead of a hang.
 const settleOr = (p, ms = 150) =>
-    Promise.race([p, new Promise((r) => setTimeout(() => r('__timeout__'), ms))]);
+    Promise.race([
+        p,
+        new Promise((r) => setTimeout(() => r('__timeout__'), ms)),
+    ]);
 
 describe('openConfigEditor', () => {
     it('resolves with field values when the submit button is clicked', async () => {
@@ -33,7 +39,9 @@ describe('openConfigEditor', () => {
         document.getElementById('config-editor-name').value = 'tests';
         document.getElementById('config-editor-command').value = 'npm test';
 
-        const submitBtn = document.querySelector('.config-editor-footer .btn-accent');
+        const submitBtn = document.querySelector(
+            '.config-editor-footer .btn-accent',
+        );
         expect(submitBtn).toBeTruthy();
         submitBtn.click();
 
@@ -43,7 +51,9 @@ describe('openConfigEditor', () => {
 
     it('resolves null when cancelled', async () => {
         const promise = openEditor();
-        const cancelBtn = document.querySelector('.config-editor-footer .btn:not(.btn-accent)');
+        const cancelBtn = document.querySelector(
+            '.config-editor-footer .btn:not(.btn-accent)',
+        );
         cancelBtn.click();
         const result = await settleOr(promise);
         expect(result).toBeNull();

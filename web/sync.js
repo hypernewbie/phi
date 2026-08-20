@@ -91,7 +91,7 @@ export class SyncManager {
             await fetch('/api/config/sync-coordinator', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sync_coordinator: url })
+                body: JSON.stringify({ sync_coordinator: url }),
             });
             await this.app.sessionsManager.loadConfig(); // reload global config
             this.refreshMessages();
@@ -107,7 +107,9 @@ export class SyncManager {
         this.refreshMessages();
         this.pollInterval = setInterval(() => {
             const diffCtrl = this.app.diffController;
-            if (diffCtrl && diffCtrl.isPanelOpen && diffCtrl.activeTab === 'sync') {
+            if (diffCtrl &&
+                diffCtrl.isPanelOpen &&
+                diffCtrl.activeTab === 'sync') {
                 this.refreshMessages();
             }
         }, 15000);
@@ -143,12 +145,14 @@ export class SyncManager {
     }
     renderMessages(messages) {
         if (!messages || messages.length === 0) {
-            this.messagesList.innerHTML = '<div class="sync-empty-state">No messages synced.</div>';
+            this.messagesList.innerHTML =
+                '<div class="sync-empty-state">No messages synced.</div>';
             return;
         }
-        messages.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+        messages.sort((a, b) => new Date(b.updated_at) -
+            new Date(a.updated_at));
         this.messagesList.innerHTML = '';
-        messages.forEach(msg => {
+        messages.forEach((msg) => {
             const card = document.createElement('div');
             card.className = 'sync-card';
             const localTime = new Date(msg.updated_at).toLocaleTimeString();
@@ -184,7 +188,7 @@ export class SyncManager {
                 if (confirm(`Delete sync key "${msg.key}"?`)) {
                     try {
                         await this.fetchWithProxy(`/api/sync/messages/${encodeURIComponent(msg.key)}`, {
-                            method: 'DELETE'
+                            method: 'DELETE',
                         });
                         this.refreshMessages();
                     }
@@ -207,7 +211,7 @@ export class SyncManager {
             await this.fetchWithProxy('/api/sync/messages', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value })
+                body: JSON.stringify({ key, value }),
             });
             this.formContainer.classList.add('hidden');
             this.refreshMessages();
@@ -227,7 +231,8 @@ export class SyncManager {
     // the marker is transient by design; plain browser pages never set it
     // and the marker never leaves the page.
     signalDesktopAlert(messages) {
-        if (!navigator.userAgent.includes('Electron') && new URLSearchParams(location.search).get('desktop') !== '1') {
+        if (!navigator.userAgent.includes('Electron') &&
+            new URLSearchParams(location.search).get('desktop') !== '1') {
             return;
         }
         let marker = '';
@@ -235,12 +240,14 @@ export class SyncManager {
         for (const msg of messages) {
             const k = String(msg && msg.key !== undefined ? msg.key : '');
             const v = String(msg && msg.value !== undefined ? msg.value : '');
-            if (k.includes(SYNC_ALARM_MARKER) || v.includes(SYNC_ALARM_MARKER)) {
+            if (k.includes(SYNC_ALARM_MARKER) ||
+                v.includes(SYNC_ALARM_MARKER)) {
                 marker = SYNC_ALARM_MARKER;
                 key = k;
                 break;
             }
-            if (marker === '' && (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))) {
+            if (marker === '' &&
+                (k.includes(SYNC_NOTIF_MARKER) || v.includes(SYNC_NOTIF_MARKER))) {
                 marker = SYNC_NOTIF_MARKER;
                 key = k;
             }

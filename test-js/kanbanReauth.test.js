@@ -36,7 +36,8 @@ function expiringToken({ freshToken = 'fresh-token' } = {}) {
     mockFetch((url, opts) => {
         const auth = opts?.headers?.Authorization || '';
         calls.push({ url: String(url), auth });
-        if (auth !== `Bearer ${freshToken}`) return { ok: false, status: 401, text: 'expired' };
+        if (auth !== `Bearer ${freshToken}`)
+            return { ok: false, status: 401, text: 'expired' };
         return { ok: true, json: { id: 1, title: 'Recovered' } };
     });
     return calls;
@@ -57,17 +58,26 @@ describe('an expired Vikunja session recovers itself', () => {
         const task = await c.apiGet('/tasks/1');
 
         expect(task).toEqual({ id: 1, title: 'Recovered' });
-        expect(c.attemptLogin).toHaveBeenCalledWith('http://vik.local', 'me', 'hunter2');
+        expect(c.attemptLogin).toHaveBeenCalledWith(
+            'http://vik.local',
+            'me',
+            'hunter2',
+        );
         expect(sessionStorage.getItem('vikunja_token')).toBe('fresh-token');
         // Original attempt with the stale token, then the replay.
-        expect(calls.map(c => c.auth)).toEqual(['Bearer stale', 'Bearer fresh-token']);
+        expect(calls.map((c) => c.auth)).toEqual([
+            'Bearer stale',
+            'Bearer fresh-token',
+        ]);
     });
 
     it('recovers a write, not just a read', async () => {
         const c = manager();
         expiringToken();
 
-        await expect(c.apiPost('/tasks/1', { title: 'x' })).resolves.toBeTruthy();
+        await expect(
+            c.apiPost('/tasks/1', { title: 'x' }),
+        ).resolves.toBeTruthy();
         expect(c.attemptLogin).toHaveBeenCalledTimes(1);
     });
 
@@ -76,7 +86,11 @@ describe('an expired Vikunja session recovers itself', () => {
         const c = manager();
         expiringToken();
 
-        await Promise.all([c.apiGet('/projects'), c.apiGet('/tasks/1'), c.apiGet('/tasks/2')]);
+        await Promise.all([
+            c.apiGet('/projects'),
+            c.apiGet('/tasks/1'),
+            c.apiGet('/tasks/2'),
+        ]);
 
         expect(c.attemptLogin).toHaveBeenCalledTimes(1);
     });
@@ -103,7 +117,9 @@ describe('an expired Vikunja session recovers itself', () => {
 
     it('does not retry when the login itself throws', async () => {
         const c = manager();
-        c.attemptLogin = vi.fn(async () => { throw new Error('vikunja down'); });
+        c.attemptLogin = vi.fn(async () => {
+            throw new Error('vikunja down');
+        });
         expiringToken();
 
         await expect(c.apiGet('/tasks/1')).rejects.toThrow(/Session expired/);

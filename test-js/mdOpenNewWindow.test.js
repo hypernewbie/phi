@@ -13,8 +13,12 @@ setupDomHarness();
 // mdInsertMention.test.js).
 function stubDom() {
     const ids = [
-        'markdown-file-list', 'md-modal', 'md-modal-title',
-        'md-modal-body', 'md-modal-close', 'md-modal-copy-btn',
+        'markdown-file-list',
+        'md-modal',
+        'md-modal-title',
+        'md-modal-body',
+        'md-modal-close',
+        'md-modal-copy-btn',
     ];
     for (const id of ids) {
         if (!document.getElementById(id)) {
@@ -51,7 +55,9 @@ describe('_openInNewWindow', () => {
 
         expect(openSpy).toHaveBeenCalledTimes(1);
         const [url, target, features] = openSpy.mock.calls[0];
-        expect(url).toContain(`md.html?path=${encodeURIComponent('/ws/docs/notes.md')}&cwd=${encodeURIComponent('/ws')}`);
+        expect(url).toContain(
+            `md.html?path=${encodeURIComponent('/ws/docs/notes.md')}&cwd=${encodeURIComponent('/ws')}`,
+        );
         expect(target).toBe('_blank');
         expect(features).toBe('width=860,height=1000');
         expect(fakeWin.opener).toBe(null);
@@ -60,7 +66,10 @@ describe('_openInNewWindow', () => {
 
     it('shows a toast when the popup is blocked (window.open returns null)', () => {
         const { mm, app } = makeMm();
-        vi.stubGlobal('open', vi.fn(() => null));
+        vi.stubGlobal(
+            'open',
+            vi.fn(() => null),
+        );
 
         mm._openInNewWindow({ path: '/ws/docs/notes.md', name: 'notes.md' });
 
@@ -78,13 +87,18 @@ describe('_showContextMenu "Open in new window" action', () => {
         const anchor = document.createElement('button');
         document.body.appendChild(anchor);
 
-        mm._showContextMenu({ path: '/ws/docs/notes.md', name: 'notes.md', dir: '.' }, anchor);
+        mm._showContextMenu(
+            { path: '/ws/docs/notes.md', name: 'notes.md', dir: '.' },
+            anchor,
+        );
 
         const buttons = mm.contextMenuEl.querySelectorAll('.md-context-action');
         expect(buttons[0].classList.contains('insert-path')).toBe(true);
         const second = buttons[1];
         expect(second.classList.contains('open-window')).toBe(true);
-        expect(second.querySelector('.md-context-label').textContent).toBe('Open in new window');
+        expect(second.querySelector('.md-context-label').textContent).toBe(
+            'Open in new window',
+        );
 
         second.click();
 

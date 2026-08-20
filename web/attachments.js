@@ -39,7 +39,10 @@ export function extractImageItems(dt) {
     const len = raw.length;
     for (let i = 0; i < len; i++) {
         const it = raw[i];
-        if (it && it.kind === 'file' && typeof it.type === 'string' && it.type.startsWith('image/')) {
+        if (it &&
+            it.kind === 'file' &&
+            typeof it.type === 'string' &&
+            it.type.startsWith('image/')) {
             items.push(it);
         }
     }

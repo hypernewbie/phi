@@ -19,7 +19,13 @@
  * CSS files are copied, and the exact decoration the script applies.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,9 +50,13 @@ function browserHeaderBlock(): string {
   const html = readFileSync(webIndex, 'utf8');
   const openTag = '<header class="app-header"';
   const start = html.indexOf(openTag);
-  if (start < 0) throw new Error('test: <header class="app-header"> not found in web/index.html');
+  if (start < 0)
+    throw new Error(
+      'test: <header class="app-header"> not found in web/index.html',
+    );
   const tagEnd = html.indexOf('>', start);
-  if (tagEnd < 0) throw new Error('test: unterminated <header class="app-header"> tag');
+  if (tagEnd < 0)
+    throw new Error('test: unterminated <header class="app-header"> tag');
   let depth = 1;
   let i = tagEnd + 1;
   while (i < html.length && depth > 0) {
@@ -71,7 +81,9 @@ describe('TBAR pipeline: regen + diff', () => {
     // edit (a mutation in the vendor script, or a hand-edit of
     // header.html) and must fail this test.
     if (!existsSync(desktopHeader)) {
-      throw new Error(`test: ${desktopHeader} missing — run \`pnpm run build\` first`);
+      throw new Error(
+        `test: ${desktopHeader} missing — run \`pnpm run build\` first`,
+      );
     }
     const headerOnDisk = readFileSync(desktopHeader, 'utf8');
     expect(headerOnDisk).toBe(browserHeaderBlock());
@@ -83,7 +95,9 @@ describe('TBAR pipeline: regen + diff', () => {
     // content inside the .app-header block is a vendor-script mutation
     // or a template edit that diverges from the browser source.
     if (!existsSync(desktopIndex)) {
-      throw new Error(`test: ${desktopIndex} missing — run \`pnpm run build\` first`);
+      throw new Error(
+        `test: ${desktopIndex} missing — run \`pnpm run build\` first`,
+      );
     }
     const indexHtml = readFileSync(desktopIndex, 'utf8');
     // The browser's header block appears verbatim in the desktop page
@@ -118,7 +132,9 @@ describe('TBAR pipeline: regen + diff', () => {
     // no-op there). The regen pipeline copies this file into the
     // desktop's vendored stylesheet byte-identically.
     if (!existsSync(vendoredWebCss)) {
-      throw new Error('test: vendored style.css missing — run `pnpm run build` first');
+      throw new Error(
+        'test: vendored style.css missing — run `pnpm run build` first',
+      );
     }
     const vendoredWebCssSource = readFileSync(vendoredWebCss, 'utf8');
     const webCssSource = readFileSync(webCss, 'utf8');
@@ -147,7 +163,9 @@ describe('TBAR pipeline: regen + diff', () => {
     }
     const headerHtml = readFileSync(desktopHeader, 'utf8');
     expect(headerHtml).toContain('id="terminal-activity-indicator"');
-    expect(headerHtml).not.toMatch(/id="terminal-activity-indicator"[^>]*\bhidden\b/);
+    expect(headerHtml).not.toMatch(
+      /id="terminal-activity-indicator"[^>]*\bhidden\b/,
+    );
     // The em-dash glyph is preserved.
     expect(headerHtml).toMatch(/terminal-activity-indicator[^>]*>—</);
   });
@@ -164,7 +182,8 @@ describe('TBAR pipeline: regen + diff', () => {
       throw new Error('test: header.html missing — run `pnpm run build` first');
     }
     const headerHtml = readFileSync(desktopHeader, 'utf8');
-    const dragGaps = [...headerHtml.matchAll(/class="app-header-drag-gap"/g)].length;
+    const dragGaps = [...headerHtml.matchAll(/class="app-header-drag-gap"/g)]
+      .length;
     expect(dragGaps).toBe(2);
     // The first drag-gap is before .workspace-area; the second is after.
     const workspaceIdx = headerHtml.indexOf('class="workspace-area"');
@@ -208,13 +227,18 @@ describe('TBAR pipeline: regen + diff', () => {
       const tmpHeader = path.join(tmp, 'header.html');
       const tmpIndex = path.join(tmp, 'index.html');
 
-
       // Mirror the vendor script's behaviour into the temp dir.
       writeFileSync(tmpHeader, browserHeaderBlock());
-      const template = readFileSync(path.join(desktopWeb, 'index.template.html'), 'utf8');
+      const template = readFileSync(
+        path.join(desktopWeb, 'index.template.html'),
+        'utf8',
+      );
       const CAPTION_CONTROLS = `\n    <div class="caption-controls">\n      <button id="caption-minimize" type="button" aria-label="Minimize" title="Minimize">─</button>\n      <button id="caption-maximize" type="button" aria-label="Maximize" title="Maximize">□</button>\n      <button id="caption-close" type="button" aria-label="Close" title="Close">✕</button>\n    </div>`;
       const decorated = `${browserHeaderBlock().slice(0, -'</header>'.length)}${CAPTION_CONTROLS}\n  </header>`;
-      const generatedIndex = template.replace('<!--VENDORED_HEADER-->', decorated);
+      const generatedIndex = template.replace(
+        '<!--VENDORED_HEADER-->',
+        decorated,
+      );
       writeFileSync(tmpIndex, generatedIndex);
 
       // Byte-for-byte equality of header.html (the script's only
@@ -250,10 +274,7 @@ describe('TBAR pipeline: regen + diff', () => {
       'src/injected.ts',
       'scripts/copy-assets.mjs',
     ];
-    const bannedWrites = [
-      'header.html',
-      'web/index.html',
-    ];
+    const bannedWrites = ['header.html', 'web/index.html'];
     for (const rel of desktopSources) {
       const full = path.join(electronRoot, rel);
       if (!existsSync(full)) continue;
@@ -263,14 +284,20 @@ describe('TBAR pipeline: regen + diff', () => {
         // should never call writeFileSync on header.html or
         // web/index.html. Match `writeFileSync('...header.html')` or
         // `writeFileSync('...web/index.html')` only.
-        const re = new RegExp(`writeFileSync\\(['"][^'"]*${banned.replace('.', '\\.')}['"]`);
+        const re = new RegExp(
+          `writeFileSync\\(['"][^'"]*${banned.replace('.', '\\.')}['"]`,
+        );
         expect(src, `${rel} writes ${banned}`).not.toMatch(re);
       }
     }
     // Positive assertion: the vendor script itself DOES write both.
     const vendorSource = readFileSync(vendorScript, 'utf8');
-    expect(vendorSource).toMatch(/writeFileSync\(\s*[^,]+,\s*['"]header\.html['"]/);
-    expect(vendorSource).toMatch(/writeFileSync\(\s*[^,]+,\s*['"]index\.html['"]/);
+    expect(vendorSource).toMatch(
+      /writeFileSync\(\s*[^,]+,\s*['"]header\.html['"]/,
+    );
+    expect(vendorSource).toMatch(
+      /writeFileSync\(\s*[^,]+,\s*['"]index\.html['"]/,
+    );
   });
 
   it('vendor-web.mjs produces the same bytes when invoked as a real subprocess', () => {

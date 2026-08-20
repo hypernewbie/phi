@@ -10,7 +10,10 @@ import { SessionsManager } from '../web/sessions.js';
 
 setupDomHarness();
 
-function addSection(path, { containerHtml = '', active = false, expanded = false } = {}) {
+function addSection(
+    path,
+    { containerHtml = '', active = false, expanded = false } = {},
+) {
     const sec = document.createElement('div');
     sec.className = 'worktree-section';
     if (active) sec.classList.add('active');
@@ -25,7 +28,8 @@ function addSection(path, { containerHtml = '', active = false, expanded = false
 }
 
 const ctx = () => ({ loadWorktreeSessions: vi.fn() });
-const call = (c, cwdPath) => SessionsManager.prototype.highlightActiveWorktree.call(c, cwdPath);
+const call = (c, cwdPath) =>
+    SessionsManager.prototype.highlightActiveWorktree.call(c, cwdPath);
 const hasActive = (sec) => sec.classList.contains('active');
 const hasExpanded = (sec) => sec.classList.contains('expanded');
 
@@ -75,7 +79,9 @@ describe('highlightActiveWorktree', () => {
     });
 
     it('does NOT reload sessions when the container already has content', () => {
-        addSection('/a', { containerHtml: '<div class="session-item">real</div>' });
+        addSection('/a', {
+            containerHtml: '<div class="session-item">real</div>',
+        });
         const c = ctx();
         call(c, '/a');
         expect(c.loadWorktreeSessions).not.toHaveBeenCalled();

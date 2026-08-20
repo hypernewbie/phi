@@ -13,7 +13,13 @@
 // identical files.
 //
 // Run as part of the desktop build (pnpm run build), before tsc.
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -75,9 +81,13 @@ const CAPTION_CONTROLS = `
 function extractHeader(html) {
   const openTag = '<header class="app-header"';
   const start = html.indexOf(openTag);
-  if (start < 0) throw new Error('vendor-web: <header class="app-header"> not found in web/index.html');
+  if (start < 0)
+    throw new Error(
+      'vendor-web: <header class="app-header"> not found in web/index.html',
+    );
   const tagEnd = html.indexOf('>', start);
-  if (tagEnd < 0) throw new Error('vendor-web: unterminated <header class="app-header"> tag');
+  if (tagEnd < 0)
+    throw new Error('vendor-web: unterminated <header class="app-header"> tag');
   let depth = 1;
   let i = tagEnd + 1;
   while (i < html.length && depth > 0) {
@@ -98,9 +108,14 @@ function extractHeader(html) {
 /** Builds the main view page by inlining the vendored header fragment,
  *  decorated with the local caption controls at its right end. */
 function buildIndexPage(headerFragment) {
-  const template = readFileSync(path.join(outDir, 'index.template.html'), 'utf8');
+  const template = readFileSync(
+    path.join(outDir, 'index.template.html'),
+    'utf8',
+  );
   if (!template.includes(HEADER_PLACEHOLDER)) {
-    throw new Error(`vendor-web: ${HEADER_PLACEHOLDER} placeholder missing from web/index.template.html`);
+    throw new Error(
+      `vendor-web: ${HEADER_PLACEHOLDER} placeholder missing from web/index.template.html`,
+    );
   }
   if (!headerFragment.endsWith('</header>')) {
     throw new Error('vendor-web: extracted header does not end with </header>');
@@ -116,7 +131,9 @@ function buildIndexPage(headerFragment) {
   return template.replace(HEADER_PLACEHOLDER, decorated);
 }
 
-const header = extractHeader(readFileSync(path.join(webRoot, 'index.html'), 'utf8'));
+const header = extractHeader(
+  readFileSync(path.join(webRoot, 'index.html'), 'utf8'),
+);
 
 mkdirSync(outDir, { recursive: true });
 writeFileSync(path.join(outDir, 'header.html'), header);
@@ -140,7 +157,9 @@ for (const dir of WEB_JS_VENDOR_DIRS) {
     copyFileSync(path.join(src, entry), path.join(dest, entry));
   }
 }
-console.log('vendored web header + style.css + fonts + JS modules -> desktop/electron/web/');
+console.log(
+  'vendored web header + style.css + fonts + JS modules -> desktop/electron/web/',
+);
 
 // The header renders with the same stylesheet and font faces as the
 // browser page. Copying the whole stylesheet (rather than a hand-picked
@@ -155,6 +174,9 @@ copyFileSync(
 );
 for (const entry of readdirSync(path.join(webRoot, 'vendor', 'fonts'))) {
   if (entry.endsWith('.woff2')) {
-    copyFileSync(path.join(webRoot, 'vendor', 'fonts', entry), path.join(fontsDir, entry));
+    copyFileSync(
+      path.join(webRoot, 'vendor', 'fonts', entry),
+      path.join(fontsDir, entry),
+    );
   }
 }

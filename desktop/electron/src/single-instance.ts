@@ -57,7 +57,10 @@ export interface SingleInstanceWindow {
 }
 
 /** A live window or a lazy accessor (the main window is created after the gate). */
-export type WindowProvider = SingleInstanceWindow | (() => SingleInstanceWindow | null) | null;
+export type WindowProvider =
+  | SingleInstanceWindow
+  | (() => SingleInstanceWindow | null)
+  | null;
 
 export interface AcquireResult {
   /** True when this process lost the single-instance lock. */

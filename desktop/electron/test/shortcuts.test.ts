@@ -19,22 +19,57 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, '..', '..', '..');
-const terminalSource = readFileSync(path.join(repoRoot, 'web', 'terminal.js'), 'utf8');
-const xtermSource = readFileSync(path.join(repoRoot, 'web', 'vendor', 'xterm.js'), 'utf8');
+const terminalSource = readFileSync(
+  path.join(repoRoot, 'web', 'terminal.js'),
+  'utf8',
+);
+const xtermSource = readFileSync(
+  path.join(repoRoot, 'web', 'vendor', 'xterm.js'),
+  'utf8',
+);
 
 function chord(overrides: Partial<RailChordInput>): RailChordInput {
-  return { type: 'keyDown', key: '1', shift: false, control: true, alt: false, meta: false, ...overrides };
+  return {
+    type: 'keyDown',
+    key: '1',
+    shift: false,
+    control: true,
+    alt: false,
+    meta: false,
+    ...overrides,
+  };
 }
 
 describe('chord split', () => {
   it('splits the digits into always-safe and conditional sets, with Tab conditional', () => {
     expect([...ALWAYS_SAFE_RAIL_CHORDS].sort()).toEqual(['1', '2', '9']);
-    expect([...CONDITIONAL_RAIL_CHORDS].sort()).toEqual(['3', '4', '5', '6', '7', '8', 'Tab']);
+    expect([...CONDITIONAL_RAIL_CHORDS].sort()).toEqual([
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      'Tab',
+    ]);
   });
 
   it('covers exactly Ctrl+1..9 plus Tab, disjoint', () => {
-    const digits = [...ALWAYS_SAFE_RAIL_CHORDS, ...CONDITIONAL_RAIL_CHORDS].filter((k) => k !== 'Tab');
-    expect([...digits].sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    const digits = [
+      ...ALWAYS_SAFE_RAIL_CHORDS,
+      ...CONDITIONAL_RAIL_CHORDS,
+    ].filter((k) => k !== 'Tab');
+    expect([...digits].sort()).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+    ]);
     for (const key of ALWAYS_SAFE_RAIL_CHORDS) {
       expect(CONDITIONAL_RAIL_CHORDS.has(key)).toBe(false);
     }
@@ -44,7 +79,10 @@ describe('chord split', () => {
 describe('resolveRailChord (digit selection)', () => {
   it('maps every Ctrl+1..9 to the 0-based rail index', () => {
     for (let d = 1; d <= 9; d++) {
-      expect(resolveRailChord(chord({ key: String(d) }), 9)).toEqual({ kind: 'index', index: d - 1 });
+      expect(resolveRailChord(chord({ key: String(d) }), 9)).toEqual({
+        kind: 'index',
+        index: d - 1,
+      });
     }
   });
 
@@ -66,8 +104,12 @@ describe('resolveRailChord (digit selection)', () => {
 
 describe('resolveRailChord (next/prev cycling)', () => {
   it('maps Ctrl+Tab to next and Ctrl+Shift+Tab to prev', () => {
-    expect(resolveRailChord(chord({ key: 'Tab' }), 3)).toEqual({ kind: 'next' });
-    expect(resolveRailChord(chord({ key: 'Tab', shift: true }), 3)).toEqual({ kind: 'prev' });
+    expect(resolveRailChord(chord({ key: 'Tab' }), 3)).toEqual({
+      kind: 'next',
+    });
+    expect(resolveRailChord(chord({ key: 'Tab', shift: true }), 3)).toEqual({
+      kind: 'prev',
+    });
   });
 
   it('resolves null for cycling with no profiles', () => {
@@ -101,7 +143,7 @@ describe('terminal-safety evidence guard (the mandatory gate)', () => {
   it('pins the live-terminal mappings that make Ctrl+3..8 and Tab conditional', () => {
     const forwardIdx = terminalSource.indexOf('_forwardKeyToPty(e, tab)');
     const region = terminalSource.slice(forwardIdx, forwardIdx + 1800);
-    expect(region).toContain("'Tab': '\\t'");
+    expect(region).toMatch(/["']?Tab["']?\s*:\s*'\\t'/);
     expect(region).toContain("'\\x1b[Z'");
     // evaluateKeyboardEvent's ctrl-only branch: keyCode 51-55 ->
     // ESC..US and keyCode 56 -> DEL. A focused terminal therefore
@@ -121,7 +163,21 @@ describe('terminal-safety evidence guard (the mandatory gate)', () => {
   });
 
   it('keeps Ctrl+L, zoom, reload, close, reopen, Escape and typing out of both sets', () => {
-    for (const key of ['+', '-', '0', 'r', 'R', 'F5', 'w', 'W', 't', 'T', 'Escape', 'l', 'L']) {
+    for (const key of [
+      '+',
+      '-',
+      '0',
+      'r',
+      'R',
+      'F5',
+      'w',
+      'W',
+      't',
+      'T',
+      'Escape',
+      'l',
+      'L',
+    ]) {
       expect(ALWAYS_SAFE_RAIL_CHORDS.has(key)).toBe(false);
       expect(CONDITIONAL_RAIL_CHORDS.has(key)).toBe(false);
     }
@@ -129,6 +185,8 @@ describe('terminal-safety evidence guard (the mandatory gate)', () => {
     // keyCode 76 (ctrl) to '\x0c' (form feed).
     const evIdx = xtermSource.indexOf('evaluateKeyboardEvent=function');
     const region = xtermSource.slice(evIdx, evIdx + 6000);
-    expect(region).toContain('e.keyCode>=65&&e.keyCode<=90?o.key=String.fromCharCode(e.keyCode-64)');
+    expect(region).toContain(
+      'e.keyCode>=65&&e.keyCode<=90?o.key=String.fromCharCode(e.keyCode-64)',
+    );
   });
 });

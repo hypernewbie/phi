@@ -1,5 +1,5 @@
-import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId } from './util.js';
-import { buildFeatures, featureProgress, featureStats, featureTimeline, cumulativeTimeline, taskStats } from './kanban-features.js';
+import { escapeHtml as escapeHtmlUtil, priorityMeta, isDoneBucket as bucketIsDone, extractVikunjaError, safeHexColor, toVikunjaId, } from './util.js';
+import { buildFeatures, featureProgress, featureStats, featureTimeline, cumulativeTimeline, taskStats, } from './kanban-features.js';
 import { sanitizeHtml } from './md-render.js';
 export class KanbanManager {
     app;
@@ -48,7 +48,8 @@ export class KanbanManager {
         if (existing) {
             // BUG-4 fix: if the panel container was wiped (e.g. hot reload that
             // rebuilt the DOM but kept the tabs map), re-init it before showing.
-            if (existing.termContainer && !existing.termContainer.querySelector('.kanban-toolbar, .kanban-login-form')) {
+            if (existing.termContainer &&
+                !existing.termContainer.querySelector('.kanban-toolbar, .kanban-login-form')) {
                 this.initTabContainer(existing.termContainer);
             }
             this.app.tabManager.switchTab(paneId);
@@ -114,7 +115,7 @@ export class KanbanManager {
                 return;
             }
             catch (err) {
-                console.error("Headless autologin failed:", err);
+                console.error('Headless autologin failed:', err);
                 autologinError = err;
             }
         }
@@ -153,7 +154,7 @@ export class KanbanManager {
             return data.password || null;
         }
         catch (e) {
-            console.error("Failed to check kanban vault:", e);
+            console.error('Failed to check kanban vault:', e);
             return null;
         }
     }
@@ -162,7 +163,7 @@ export class KanbanManager {
         const res = await fetch(proxyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify({ username, password }),
         });
         if (!res.ok) {
             const errText = await res.text();
@@ -206,7 +207,9 @@ export class KanbanManager {
         `;
         const loginBtn = container.querySelector('#kanban-login-btn');
         loginBtn.addEventListener('click', async () => {
-            const urlInput = container.querySelector('#kanban-url-input').value.trim().replace(/\/$/, '');
+            const urlInput = container.querySelector('#kanban-url-input').value
+                .trim()
+                .replace(/\/$/, '');
             const usernameInput = container.querySelector('#kanban-username-input').value.trim();
             const passwordInput = container.querySelector('#kanban-password-input').value;
             const rememberInput = container.querySelector('#kanban-remember-input')?.checked;
@@ -229,11 +232,13 @@ export class KanbanManager {
                     fetch('/api/config/kanban-vault', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ password: passwordInput })
-                    }).catch(e => console.error("Vault save error:", e));
+                        body: JSON.stringify({ password: passwordInput }),
+                    }).catch((e) => console.error('Vault save error:', e));
                 }
                 else {
-                    fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(e => console.error("Vault delete error:", e));
+                    fetch('/api/config/kanban-vault', {
+                        method: 'DELETE',
+                    }).catch((e) => console.error('Vault delete error:', e));
                 }
                 await this.loadAndRenderBoard(container);
             }
@@ -251,7 +256,7 @@ export class KanbanManager {
     async loadAndRenderBoard(container, isAutoRetry = false) {
         return this.loadBoard(container, { showSpinner: true, isAutoRetry });
     }
-    async loadBoard(container, { showSpinner = true, isAutoRetry = false } = {}) {
+    async loadBoard(container, { showSpinner = true, isAutoRetry = false, } = {}) {
         this.boardContainer = container;
         // Only the first paint blanks the board. A refresh keeps the current
         // board visible and marks the toolbar instead, so an edit does not
@@ -279,11 +284,13 @@ export class KanbanManager {
                         <button id="kanban-retry-btn" class="btn btn-accent">Retry</button>
                     </div>
                 `;
-                container.querySelector('#kanban-retry-btn').addEventListener('click', () => this.initTabContainer(container));
+                container
+                    .querySelector('#kanban-retry-btn')
+                    .addEventListener('click', () => this.initTabContainer(container));
                 return;
             }
             let selectedProjectId = localStorage.getItem('vikunja_selected_project');
-            let currentProject = projects.find((p) => p.id == selectedProjectId);
+            let currentProject = projects.find((p) => String(p.id) === String(selectedProjectId));
             if (!currentProject) {
                 currentProject = projects[0];
                 selectedProjectId = currentProject.id;
@@ -295,7 +302,9 @@ export class KanbanManager {
             }
             // Fetch views for project
             const views = await this.apiGet(`/projects/${selectedProjectId}/views?per_page=500`);
-            const kanbanView = views ? views.find((v) => v.view_kind === 'kanban') : null;
+            const kanbanView = views
+                ? views.find((v) => v.view_kind === 'kanban')
+                : null;
             if (!kanbanView) {
                 this.renderBoardLayout(container, projects, currentProject, null, []);
                 return;
@@ -308,14 +317,15 @@ export class KanbanManager {
             const bucketsWithTasks = await this.apiGet(`/projects/${selectedProjectId}/views/${kanbanView.id}/tasks?per_page=500`);
             let projectTasks = [];
             try {
-                projectTasks = await this.apiGet(`/projects/${selectedProjectId}/tasks?per_page=500&expand=subtasks`) || [];
+                projectTasks =
+                    (await this.apiGet(`/projects/${selectedProjectId}/tasks?per_page=500&expand=subtasks`)) || [];
             }
             catch (err) {
                 // Features are additive. A hierarchy fetch must never make the
                 // regular board unavailable when an older Vikunja lacks it.
                 console.warn('Failed to load Kanban subtask hierarchy:', err);
             }
-            const projectTasksById = new Map(projectTasks.map(task => [String(task.id), task]));
+            const projectTasksById = new Map(projectTasks.map((task) => [String(task.id), task]));
             // Rebuild taskCache
             this.taskCache = {};
             // Cache the active view id and project id on the manager so later
@@ -331,7 +341,10 @@ export class KanbanManager {
                         bucket.tasks = bucket.tasks.map((boardTask) => {
                             const hierarchyTask = projectTasksById.get(String(boardTask.id));
                             const task = hierarchyTask?.related_tasks
-                                ? { ...boardTask, related_tasks: hierarchyTask.related_tasks }
+                                ? {
+                                    ...boardTask,
+                                    related_tasks: hierarchyTask.related_tasks,
+                                }
                                 : boardTask;
                             this.taskCache[task.id] = task;
                             return task;
@@ -341,7 +354,7 @@ export class KanbanManager {
             }
             // A feature parent may not itself be in a bucket. Retain it for
             // the Features view without changing what the board renders.
-            projectTasks.forEach(task => {
+            projectTasks.forEach((task) => {
                 if (task?.id != null && !this.taskCache[task.id])
                     this.taskCache[task.id] = task;
             });
@@ -350,8 +363,9 @@ export class KanbanManager {
         }
         catch (err) {
             console.error('Kanban Load Error:', err);
-            if (err.message.includes('Session expired') && !isAutoRetry) {
-                console.log("Session expired. Attempting automatic headless reconnect...");
+            if (err.message.includes('Session expired') &&
+                !isAutoRetry) {
+                console.log('Session expired. Attempting automatic headless reconnect...');
                 sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container, true);
                 return;
@@ -366,8 +380,12 @@ export class KanbanManager {
                     </div>
                 </div>
             `;
-            container.querySelector('#kanban-retry-btn').addEventListener('click', () => this.loadAndRenderBoard(container, isAutoRetry));
-            container.querySelector('#kanban-reconnect-btn').addEventListener('click', () => {
+            container
+                .querySelector('#kanban-retry-btn')
+                .addEventListener('click', () => this.loadAndRenderBoard(container, isAutoRetry));
+            container
+                .querySelector('#kanban-reconnect-btn')
+                .addEventListener('click', () => {
                 sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container);
             });
@@ -404,7 +422,7 @@ export class KanbanManager {
         else {
             boardContentHtml = `
                 <div class="kanban-columns-wrapper">
-                    ${bucketsWithTasks.map(bucket => this.renderColumn(bucket)).join('')}
+                    ${bucketsWithTasks.map((bucket) => this.renderColumn(bucket)).join('')}
                 </div>
             `;
         }
@@ -415,25 +433,28 @@ export class KanbanManager {
                         <span class="toolbar-label">Project:</span>
                         <span id="kanban-sync-indicator" class="kanban-sync-indicator" aria-hidden="true"></span>
                         <select id="kanban-project-select" class="kanban-select">
-                            ${projects.map((p) => `<option value="${p.id}" ${p.id == currentProject.id ? 'selected' : ''}>${this.escapeHtml(p.title)}</option>`).join('')}
+                            ${projects.map((p) => `<option value="${p.id}" ${String(p.id) === String(currentProject.id) ? 'selected' : ''}>${this.escapeHtml(p.title)}</option>`).join('')}
                         </select>
                         <div class="kanban-view-switch" role="group" aria-label="Kanban view">
                             <button class="kanban-view-btn ${this.boardMode === 'board' ? 'active' : ''}" data-kanban-mode="board">Board</button>
                             <button class="kanban-view-btn ${this.boardMode === 'features' ? 'active' : ''}" data-kanban-mode="features">Features</button>
                             <button class="kanban-view-btn ${this.boardMode === 'stats' ? 'active' : ''}" data-kanban-mode="stats">Stats</button>
                         </div>
-                        ${this.boardMode !== 'stats' ? `
+                        ${this.boardMode !== 'stats'
+            ? `
                             <div class="kanban-search-wrapper" style="margin-left: 8px;">
                                 <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}..." />
                             </div>
-                        ` : ''}
+                        `
+            : ''}
                         <button id="kanban-refresh-btn" class="toolbar-btn" title="Refresh Board">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="23 4 23 10 17 10"></polyline>
                                 <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                             </svg>
                         </button>
-                        ${this.boardMode === 'board' ? `
+                        ${this.boardMode === 'board'
+            ? `
                             <button id="kanban-add-column-btn" class="toolbar-btn" title="Add Column">
                                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <rect x="3" y="4" width="18" height="16" rx="2"></rect>
@@ -442,7 +463,8 @@ export class KanbanManager {
                                 </svg>
                                 <span>Column</span>
                             </button>
-                        ` : ''}
+                        `
+            : ''}
                     </div>
                     <div class="toolbar-right">
                         <button id="kanban-disconnect-btn" class="toolbar-btn text-danger" title="Disconnect Server">
@@ -460,10 +482,15 @@ export class KanbanManager {
             </div>
         `;
         // Attach listeners
-        container.querySelectorAll('.kanban-view-btn').forEach((button) => {
+        container
+            .querySelectorAll('.kanban-view-btn')
+            .forEach((button) => {
             button.addEventListener('click', () => {
                 const mode = button.dataset.kanbanMode;
-                this.boardMode = mode === 'features' || mode === 'stats' ? mode : 'board';
+                this.boardMode =
+                    mode === 'features' || mode === 'stats'
+                        ? mode
+                        : 'board';
                 this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
             });
         });
@@ -472,7 +499,9 @@ export class KanbanManager {
             localStorage.setItem('vikunja_selected_project', projectSelect.value);
             this.loadAndRenderBoard(container);
         });
-        container.querySelector('#kanban-refresh-btn').addEventListener('click', () => {
+        container
+            .querySelector('#kanban-refresh-btn')
+            .addEventListener('click', () => {
             // Refresh in place. Blanking the board the user is looking at is
             // worse feedback than the toolbar indicator.
             this.refreshBoard(container);
@@ -495,7 +524,9 @@ export class KanbanManager {
         // Column rename: click the title to edit inline. Blur or Enter saves,
         // Escape cancels. Reverts to the original text if the input is empty
         // or unchanged.
-        container.querySelectorAll('.column-title').forEach((titleEl) => {
+        container
+            .querySelectorAll('.column-title')
+            .forEach((titleEl) => {
             titleEl.addEventListener('click', () => {
                 const id = titleEl.dataset.bucketId;
                 const current = titleEl.textContent;
@@ -550,7 +581,9 @@ export class KanbanManager {
             });
         });
         // Column edit + delete icons next to each column header.
-        container.querySelectorAll('.column-edit-btn').forEach((btn) => {
+        container
+            .querySelectorAll('.column-edit-btn')
+            .forEach((btn) => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = btn.dataset.bucketId;
@@ -559,7 +592,9 @@ export class KanbanManager {
                     titleEl.click();
             });
         });
-        container.querySelectorAll('.column-delete-btn').forEach((btn) => {
+        container
+            .querySelectorAll('.column-delete-btn')
+            .forEach((btn) => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = btn.dataset.bucketId;
@@ -579,9 +614,11 @@ export class KanbanManager {
         // bindBoardDelegates) so that a card re-rendered by an incremental
         // patch keeps working. A per-card listener dies with the old node.
         this.bindBoardDelegates(container);
-        container.querySelector('#kanban-disconnect-btn').addEventListener('click', () => {
+        container
+            .querySelector('#kanban-disconnect-btn')
+            .addEventListener('click', () => {
             sessionStorage.removeItem('vikunja_token');
-            fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(e => console.error("Vault delete error:", e));
+            fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch((e) => console.error('Vault delete error:', e));
             this.initTabContainer(container);
         });
         // Fuzzy Search Filter Listener
@@ -603,7 +640,7 @@ export class KanbanManager {
         // Add Task Button Listeners
         const addWrapperSetup = () => {
             const addBtns = container.querySelectorAll('.kanban-add-task-btn');
-            addBtns.forEach(btn => {
+            addBtns.forEach((btn) => {
                 btn.onclick = (e) => {
                     const wrapper = e.target.closest('.kanban-add-task-wrapper');
                     const bucketId = wrapper.dataset.bucketId;
@@ -649,7 +686,8 @@ export class KanbanManager {
                     });
                     input.addEventListener('blur', () => {
                         setTimeout(() => {
-                            if (document.activeElement !== input && !input.value.trim())
+                            if (document.activeElement !== input &&
+                                !input.value.trim())
                                 reset();
                         }, 150);
                     });
@@ -673,16 +711,19 @@ export class KanbanManager {
             this.initStatsCharts(container);
         }
         // Initialize Sortable if buckets are rendered
-        if (this.boardMode === 'board' && kanbanView && bucketsWithTasks && bucketsWithTasks.length > 0) {
+        if (this.boardMode === 'board' &&
+            kanbanView &&
+            bucketsWithTasks &&
+            bucketsWithTasks.length > 0) {
             this.initSortable(container, bucketsWithTasks);
         }
     }
     renderFeaturesView() {
         const allFeatures = buildFeatures(Object.values(this.taskCache));
-        const completedFeatures = allFeatures.filter(feature => feature.task.done);
+        const completedFeatures = allFeatures.filter((feature) => feature.task.done);
         const features = this.showDoneFeatures
             ? allFeatures
-            : allFeatures.filter(feature => !feature.task.done);
+            : allFeatures.filter((feature) => !feature.task.done);
         if (allFeatures.length === 0) {
             return `
                 <div class="kanban-no-view-wrapper">
@@ -703,11 +744,13 @@ export class KanbanManager {
                         <span class="column-count">${features.length}${this.showDoneFeatures ? '' : `/${allFeatures.length}`}</span>
                     </div>
                 </div>
-                ${features.length > 0 ? `
+                ${features.length > 0
+            ? `
                     <div class="kanban-features-list">
-                        ${features.map(feature => this.renderFeatureRow(feature)).join('')}
+                        ${features.map((feature) => this.renderFeatureRow(feature)).join('')}
                     </div>
-                ` : `
+                `
+            : `
                     <div class="kanban-features-empty">
                         <strong>All ${allFeatures.length} feature${allFeatures.length === 1 ? ' is' : 's are'} done.</strong>
                         <span>Use Show done to review them.</span>
@@ -730,7 +773,12 @@ export class KanbanManager {
         // Features are a subset of the board, so they stay on the page as one
         // secondary card rather than defining the whole view.
         const features = featureStats(buildFeatures(tasks));
-        const formatDate = (date) => new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+        const formatDate = (date) => new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            timeZone: 'UTC',
+        });
         const forecast = stats.openTasks === 0
             ? '<strong>All tasks are done.</strong><span>Nothing open on this board.</span>'
             : stats.estimatedDaysRemaining == null
@@ -769,13 +817,15 @@ export class KanbanManager {
                         <strong>${stats.createdInWindow}<small> filed</small> / ${stats.completedInWindow}<small> done</small></strong>
                         <em>${flowLabel}</em>
                     </section>
-                    ${features.totalFeatures > 0 ? `
+                    ${features.totalFeatures > 0
+            ? `
                         <section class="kanban-stat-card">
                             <span>Features</span>
                             <strong>${features.completedFeatures}/${features.totalFeatures}</strong>
                             <em>${features.completedSubtasks}/${features.totalSubtasks} subtasks done</em>
                         </section>
-                    ` : ''}
+                    `
+            : ''}
                 </div>
                 <div class="kanban-stats-charts">
                     <section class="kanban-stats-chart-card kanban-stats-chart-card--health">
@@ -808,7 +858,7 @@ export class KanbanManager {
         `;
     }
     destroyStatsCharts() {
-        (this.statsCharts || []).forEach(chart => {
+        (this.statsCharts || []).forEach((chart) => {
             try {
                 chart.destroy();
             }
@@ -819,12 +869,16 @@ export class KanbanManager {
         this.statsCharts = [];
     }
     chartColor(name, fallback) {
-        return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+        return (getComputedStyle(document.documentElement)
+            .getPropertyValue(name)
+            .trim() || fallback);
     }
     chartColorWithAlpha(color, alpha) {
         const hex = color.replace('#', '').trim();
         if (/^[0-9a-f]{3}$/i.test(hex)) {
-            const [r, g, b] = hex.split('').map(component => parseInt(component + component, 16));
+            const [r, g, b] = hex
+                .split('')
+                .map((component) => parseInt(component + component, 16));
             return `rgba(${r}, ${g}, ${b}, ${alpha})`;
         }
         if (/^[0-9a-f]{6}$/i.test(hex)) {
@@ -836,15 +890,19 @@ export class KanbanManager {
         return color;
     }
     chartDateLabel(date) {
-        return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+        return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            timeZone: 'UTC',
+        });
     }
     bucketFlow() {
-        const buckets = (this.buckets || []).filter(bucket => Array.isArray(bucket.tasks));
+        const buckets = (this.buckets || []).filter((bucket) => Array.isArray(bucket.tasks));
         if (buckets.length === 0)
             return { labels: ['No bucketed tasks'], values: [1] };
         return {
-            labels: buckets.map(bucket => bucket.title || 'Untitled'),
-            values: buckets.map(bucket => bucket.tasks.length)
+            labels: buckets.map((bucket) => bucket.title || 'Untitled'),
+            values: buckets.map((bucket) => bucket.tasks.length),
         };
     }
     initStatsCharts(container) {
@@ -872,7 +930,13 @@ export class KanbanManager {
             animation: { duration: 360 },
             plugins: {
                 legend: {
-                    labels: { color: muted, boxWidth: 8, boxHeight: 8, usePointStyle: true, font: { family: uiFont, size: 11 } }
+                    labels: {
+                        color: muted,
+                        boxWidth: 8,
+                        boxHeight: 8,
+                        usePointStyle: true,
+                        font: { family: uiFont, size: 11 },
+                    },
                 },
                 tooltip: {
                     backgroundColor: panel,
@@ -880,9 +944,9 @@ export class KanbanManager {
                     borderWidth: 1,
                     titleColor: text,
                     bodyColor: muted,
-                    padding: 10
-                }
-            }
+                    padding: 10,
+                },
+            },
         };
         const push = (canvasId, config) => {
             const canvas = container.querySelector(`#${canvasId}`);
@@ -893,62 +957,141 @@ export class KanbanManager {
             type: 'doughnut',
             data: {
                 labels: ['Done', 'Open'],
-                datasets: [{
+                datasets: [
+                    {
                         data: [stats.completedTasks, stats.openTasks],
                         backgroundColor: [accent, quiet],
                         borderColor: [panel, panel],
                         borderWidth: 3,
-                        hoverOffset: 5
-                    }]
+                        hoverOffset: 5,
+                    },
+                ],
             },
             options: {
                 ...baseOptions,
                 cutout: '72%',
                 plugins: {
                     ...baseOptions.plugins,
-                    title: { display: true, text: `${stats.taskPercent}% complete`, color: text, font: { family: uiFont, size: 15, weight: '600' } }
-                }
-            }
+                    title: {
+                        display: true,
+                        text: `${stats.taskPercent}% complete`,
+                        color: text,
+                        font: { family: uiFont, size: 15, weight: '600' },
+                    },
+                },
+            },
         });
         const burnup = cumulativeTimeline(tasks);
-        const burnupLabels = burnup.length > 0 ? burnup.map(point => this.chartDateLabel(point.date)) : ['Today'];
-        const filed = burnup.length > 0 ? burnup.map(point => point.filed) : [stats.totalTasks];
-        const completed = burnup.length > 0 ? burnup.map(point => point.completed) : [stats.completedTasks];
+        const burnupLabels = burnup.length > 0
+            ? burnup.map((point) => this.chartDateLabel(point.date))
+            : ['Today'];
+        const filed = burnup.length > 0
+            ? burnup.map((point) => point.filed)
+            : [stats.totalTasks];
+        const completed = burnup.length > 0
+            ? burnup.map((point) => point.completed)
+            : [stats.completedTasks];
         push('kanban-task-burnup-chart', {
             type: 'line',
             data: {
                 labels: burnupLabels,
                 datasets: [
-                    { label: 'Filed', data: filed, borderColor: muted, backgroundColor: quiet, borderDash: [5, 4], tension: 0.25, pointRadius: 2, fill: true },
-                    { label: 'Completed', data: completed, borderColor: accent, backgroundColor: accentFill, tension: 0.25, pointRadius: 2, fill: true }
-                ]
+                    {
+                        label: 'Filed',
+                        data: filed,
+                        borderColor: muted,
+                        backgroundColor: quiet,
+                        borderDash: [5, 4],
+                        tension: 0.25,
+                        pointRadius: 2,
+                        fill: true,
+                    },
+                    {
+                        label: 'Completed',
+                        data: completed,
+                        borderColor: accent,
+                        backgroundColor: accentFill,
+                        tension: 0.25,
+                        pointRadius: 2,
+                        fill: true,
+                    },
+                ],
             },
             options: {
                 ...baseOptions,
                 interaction: { intersect: false, mode: 'index' },
                 scales: {
-                    x: { grid: { display: false }, border: { color: border }, ticks: { color: muted, maxTicksLimit: 6, font: { family: monoFont, size: 10 } } },
-                    y: { beginAtZero: true, grid: { color: this.chartColorWithAlpha(border, 0.65) }, border: { color: border }, ticks: { color: muted, precision: 0, font: { family: monoFont, size: 10 } } }
-                }
-            }
+                    x: {
+                        grid: { display: false },
+                        border: { color: border },
+                        ticks: {
+                            color: muted,
+                            maxTicksLimit: 6,
+                            font: { family: monoFont, size: 10 },
+                        },
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: this.chartColorWithAlpha(border, 0.65) },
+                        border: { color: border },
+                        ticks: {
+                            color: muted,
+                            precision: 0,
+                            font: { family: monoFont, size: 10 },
+                        },
+                    },
+                },
+            },
         });
         push('kanban-task-velocity-chart', {
             type: 'bar',
             data: {
-                labels: stats.dailyCompletions.map(day => this.chartDateLabel(day.date)),
+                labels: stats.dailyCompletions.map((day) => this.chartDateLabel(day.date)),
                 datasets: [
-                    { type: 'bar', label: 'Completed', data: stats.dailyCompletions.map(day => day.completed), backgroundColor: accentMid, borderRadius: 3, borderSkipped: false },
-                    { type: 'line', label: '28-day average', data: stats.dailyCompletions.map(() => stats.velocityPerDay), borderColor: accent, borderDash: [4, 3], pointRadius: 0, borderWidth: 1.5 }
-                ]
+                    {
+                        type: 'bar',
+                        label: 'Completed',
+                        data: stats.dailyCompletions.map((day) => day.completed),
+                        backgroundColor: accentMid,
+                        borderRadius: 3,
+                        borderSkipped: false,
+                    },
+                    {
+                        type: 'line',
+                        label: '28-day average',
+                        data: stats.dailyCompletions.map(() => stats.velocityPerDay),
+                        borderColor: accent,
+                        borderDash: [4, 3],
+                        pointRadius: 0,
+                        borderWidth: 1.5,
+                    },
+                ],
             },
             options: {
                 ...baseOptions,
                 interaction: { intersect: false, mode: 'index' },
                 scales: {
-                    x: { grid: { display: false }, border: { color: border }, ticks: { color: muted, maxTicksLimit: 7, font: { family: monoFont, size: 9 } } },
-                    y: { beginAtZero: true, grid: { color: this.chartColorWithAlpha(border, 0.65) }, border: { color: border }, ticks: { color: muted, precision: 0, font: { family: monoFont, size: 10 } } }
-                }
-            }
+                    x: {
+                        grid: { display: false },
+                        border: { color: border },
+                        ticks: {
+                            color: muted,
+                            maxTicksLimit: 7,
+                            font: { family: monoFont, size: 9 },
+                        },
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: this.chartColorWithAlpha(border, 0.65) },
+                        border: { color: border },
+                        ticks: {
+                            color: muted,
+                            precision: 0,
+                            font: { family: monoFont, size: 10 },
+                        },
+                    },
+                },
+            },
         });
         const flow = this.bucketFlow();
         const flowColors = flow.labels.map((_, index) => [accent, accentMid, accentSoft, quiet][index % 4]);
@@ -956,9 +1099,17 @@ export class KanbanManager {
             type: 'doughnut',
             data: {
                 labels: flow.labels,
-                datasets: [{ data: flow.values, backgroundColor: flowColors, borderColor: [panel], borderWidth: 3, hoverOffset: 5 }]
+                datasets: [
+                    {
+                        data: flow.values,
+                        backgroundColor: flowColors,
+                        borderColor: [panel],
+                        borderWidth: 3,
+                        hoverOffset: 5,
+                    },
+                ],
             },
-            options: { ...baseOptions, cutout: '62%' }
+            options: { ...baseOptions, cutout: '62%' },
         });
     }
     renderFeatureProgress(progress) {
@@ -990,10 +1141,14 @@ export class KanbanManager {
         }
         const width = 260;
         const height = 54;
-        const maximum = Math.max(1, ...timeline.map(point => Math.max(point.filed, point.completed)));
-        const x = (index) => timeline.length === 1 ? width : (index / (timeline.length - 1)) * width;
-        const y = (value) => height - ((value / maximum) * height);
-        const points = (field) => timeline.map((point, index) => `${x(index).toFixed(1)},${y(point[field]).toFixed(1)}`).join(' ');
+        const maximum = Math.max(1, ...timeline.map((point) => Math.max(point.filed, point.completed)));
+        const x = (index) => timeline.length === 1
+            ? width
+            : (index / (timeline.length - 1)) * width;
+        const y = (value) => height - (value / maximum) * height;
+        const points = (field) => timeline
+            .map((point, index) => `${x(index).toFixed(1)},${y(point[field]).toFixed(1)}`)
+            .join(' ');
         const firstDate = new Date(`${timeline[0].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         const lastDate = new Date(`${timeline[timeline.length - 1].date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         const last = timeline[timeline.length - 1];
@@ -1014,12 +1169,14 @@ export class KanbanManager {
         const progress = featureProgress(task);
         const subtaskRows = progress.subtasks.length === 0
             ? '<div class="kdp-subtasks-empty">Add a subtask to turn this task into a feature.</div>'
-            : progress.subtasks.map(subtask => `
+            : progress.subtasks
+                .map((subtask) => `
                 <div class="kdp-subtask-row ${subtask.done ? 'done' : ''}">
                     <input type="checkbox" class="kdp-subtask-done" data-subtask-id="${subtask.id}" aria-label="Mark ${this.escapeHtml(subtask.title || 'subtask')} done" ${subtask.done ? 'checked' : ''}>
                     <button class="kdp-subtask-open" data-subtask-id="${subtask.id}" title="Open subtask">${this.escapeHtml(subtask.title || '')}</button>
                 </div>
-            `).join('');
+            `)
+                .join('');
         return `
             <section class="kdp-feature-section">
                 <div class="kdp-feature-section-heading">
@@ -1038,18 +1195,24 @@ export class KanbanManager {
     }
     withSubtask(parent, subtask) {
         const children = featureProgress(parent).subtasks;
-        const existing = children.findIndex(child => String(child.id) === String(subtask.id));
+        const existing = children.findIndex((child) => String(child.id) === String(subtask.id));
         const nextChildren = existing >= 0
             ? children.map((child, index) => index === existing ? { ...child, ...subtask } : child)
             : [...children, subtask];
         const nextParent = {
             ...parent,
-            related_tasks: { ...(parent.related_tasks || {}), subtask: nextChildren }
+            related_tasks: {
+                ...(parent.related_tasks || {}),
+                subtask: nextChildren,
+            },
         };
         // Through upsertTaskState so buckets[].tasks and the cache stay in
         // agreement; a bare cache write would leave the board rendering stale.
         this.upsertTaskState(nextParent);
-        this.upsertTaskState({ ...(this.taskCache[subtask.id] || {}), ...subtask });
+        this.upsertTaskState({
+            ...(this.taskCache[subtask.id] || {}),
+            ...subtask,
+        });
         return nextParent;
     }
     replaceFeatureDetailSection(panel, task, cardEl, container) {
@@ -1060,10 +1223,12 @@ export class KanbanManager {
         this.wireFeatureDetailSection(panel, task, cardEl, container);
     }
     wireFeatureDetailSection(panel, task, cardEl, container) {
-        panel.querySelectorAll('.kdp-subtask-done').forEach((input) => {
+        panel
+            .querySelectorAll('.kdp-subtask-done')
+            .forEach((input) => {
             input.addEventListener('change', async () => {
                 const checkbox = input;
-                const child = featureProgress(task).subtasks.find(item => String(item.id) === checkbox.dataset.subtaskId);
+                const child = featureProgress(task).subtasks.find((item) => String(item.id) === checkbox.dataset.subtaskId);
                 if (!child)
                     return;
                 checkbox.disabled = true;
@@ -1082,7 +1247,9 @@ export class KanbanManager {
                 }
             });
         });
-        panel.querySelectorAll('.kdp-subtask-open').forEach((button) => {
+        panel
+            .querySelectorAll('.kdp-subtask-open')
+            .forEach((button) => {
             button.addEventListener('click', () => {
                 const childId = button.dataset.subtaskId;
                 this.openTaskDetail(childId, button, container);
@@ -1104,7 +1271,10 @@ export class KanbanManager {
                 this.replaceFeatureDetailSection(panel, parent, cardEl, container);
                 this.patchFeatureRow(parent.id);
                 this.patchCard(parent.id);
-                this.app.showToast('Subtask added.', { type: 'success', title: 'Kanban' });
+                this.app.showToast('Subtask added.', {
+                    type: 'success',
+                    title: 'Kanban',
+                });
             }
             catch (err) {
                 this.app.showToast(`Failed to add subtask: ${err.message}`, { type: 'error', title: 'Kanban' });
@@ -1113,7 +1283,7 @@ export class KanbanManager {
             }
         };
         addButton.addEventListener('click', create);
-        input.addEventListener('keydown', event => {
+        input.addEventListener('keydown', (event) => {
             if (event.key === 'Enter') {
                 event.preventDefault();
                 void create();
@@ -1166,11 +1336,15 @@ export class KanbanManager {
         if (task.labels && task.labels.length > 0) {
             labelsHtml = `
                 <div class="kanban-card-labels">
-                    ${task.labels.map((lbl) => {
+                    ${task.labels
+                .map((lbl) => {
                 const hex = safeHexColor(lbl.hex_color);
-                const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                const style = hex
+                    ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"`
+                    : '';
                 return `<span class="kanban-label-pill" ${style} title="${this.escapeHtml(lbl.title || '')}">${this.escapeHtml(lbl.title)}</span>`;
-            }).join('')}
+            })
+                .join('')}
                 </div>
             `;
         }
@@ -1180,7 +1354,10 @@ export class KanbanManager {
         let dueHtml = '';
         if (task.due_date && !task.due_date.startsWith('0001-01-01')) {
             const date = new Date(task.due_date);
-            const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            const dateStr = date.toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+            });
             const isOverdue = date < new Date() && !task.done;
             const dueClass = isOverdue ? 'due-overdue' : '';
             dueHtml = `
@@ -1224,7 +1401,7 @@ export class KanbanManager {
     }
     initSortable(container, buckets) {
         const lists = container.querySelectorAll('.kanban-cards-list');
-        lists.forEach(list => {
+        lists.forEach((list) => {
             if (typeof window.Sortable === 'undefined') {
                 console.error('SortableJS not loaded!');
                 return;
@@ -1242,12 +1419,14 @@ export class KanbanManager {
                         this._dragActive = false;
                     }, 100);
                     const taskId = evt.item.dataset.taskId;
-                    const oldBucketId = evt.from.dataset.bucketId;
-                    const newBucketId = evt.to.dataset.bucketId;
+                    const oldBucketId = evt.from.dataset
+                        .bucketId;
+                    const newBucketId = evt.to.dataset
+                        .bucketId;
                     if (oldBucketId === newBucketId)
                         return;
                     // Optimistically update card done styling
-                    const targetBucket = (this.buckets || []).find((b) => b.id == newBucketId);
+                    const targetBucket = (this.buckets || []).find((b) => String(b.id) === String(newBucketId));
                     const isDoneBucket = bucketIsDone(targetBucket);
                     if (isDoneBucket) {
                         evt.item.classList.add('kanban-card--done');
@@ -1258,7 +1437,9 @@ export class KanbanManager {
                     this.updateColumnCounts(container);
                     try {
                         await this.moveTask(taskId, newBucketId);
-                        this.app.showToast('Task updated successfully.', { type: 'success' });
+                        this.app.showToast('Task updated successfully.', {
+                            type: 'success',
+                        });
                     }
                     catch (err) {
                         console.error('Failed to move task:', err);
@@ -1266,7 +1447,7 @@ export class KanbanManager {
                         // Revert drag
                         evt.from.appendChild(evt.item);
                         // Revert done styling
-                        const originalBucket = (this.buckets || []).find((b) => b.id == oldBucketId);
+                        const originalBucket = (this.buckets || []).find((b) => String(b.id) === String(oldBucketId));
                         const isOriginalDone = bucketIsDone(originalBucket);
                         if (isOriginalDone) {
                             evt.item.classList.add('kanban-card--done');
@@ -1276,7 +1457,7 @@ export class KanbanManager {
                         }
                         this.updateColumnCounts(container);
                     }
-                }
+                },
             });
             // Register card click to open details
             list.addEventListener('click', (evt) => {
@@ -1310,7 +1491,9 @@ export class KanbanManager {
                 <div class="loader-text">Fetching task details...</div>
             </div>
         `;
-        panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
+        panel
+            .querySelector('.kdp-close-btn')
+            .addEventListener('click', () => this.closeDetailPanel());
         document.body.appendChild(panel);
         this.activeDetailPanel = panel;
         // Escape key to close
@@ -1329,7 +1512,9 @@ export class KanbanManager {
             const task = {
                 ...cachedTask,
                 ...fetchedTask,
-                related_tasks: fetchedTask?.related_tasks?.subtask ? fetchedTask.related_tasks : cachedTask?.related_tasks
+                related_tasks: fetchedTask?.related_tasks?.subtask
+                    ? fetchedTask.related_tasks
+                    : cachedTask?.related_tasks,
             };
             this.taskCache[task.id] = task;
             this.renderDetailPanelContent(panel, task, cardEl, container);
@@ -1348,7 +1533,9 @@ export class KanbanManager {
                     </div>
                 </div>
             `;
-            panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
+            panel
+                .querySelector('.kdp-close-btn')
+                .addEventListener('click', () => this.closeDetailPanel());
         }
     }
     sanitizeTaskDescription(description) {
@@ -1365,7 +1552,8 @@ export class KanbanManager {
         return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>';
     }
     taskDescriptionPreview(description) {
-        return this.sanitizeTaskDescription(description) || '<span class="kanban-desc-empty">No description provided</span>';
+        return (this.sanitizeTaskDescription(description) ||
+            '<span class="kanban-desc-empty">No description provided</span>');
     }
     // One description component serves every task detail surface. Board cards,
     // feature parents, and subtasks all open the same detail panel and therefore
@@ -1409,7 +1597,7 @@ export class KanbanManager {
         });
     }
     taskDescriptionValue(scope) {
-        return scope.querySelector('.kdp-description-input')?.value || '';
+        return (scope.querySelector('.kdp-description-input')?.value || '');
     }
     renderDetailPanelContent(panel, task, cardEl, container) {
         const idLabel = task.identifier || `#${task.index || task.id}`;
@@ -1421,19 +1609,28 @@ export class KanbanManager {
         if (task.labels && task.labels.length > 0) {
             labelsHtml = `
                 <div class="kdp-labels-current">
-                    ${task.labels.map((lbl) => {
+                    ${task.labels
+                .map((lbl) => {
                 const hex = safeHexColor(lbl.hex_color);
-                const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                const style = hex
+                    ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"`
+                    : '';
                 return `<span class="kanban-label-pill kdp-label-removable" data-label-id="${lbl.id}" ${style}>${this.escapeHtml(lbl.title)}<button class="kdp-label-remove-btn" data-label-id="${lbl.id}" title="Remove label" aria-label="Remove label">×</button></span>`;
-            }).join('')}
+            })
+                .join('')}
                 </div>
             `;
         }
         else {
-            labelsHtml = '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
+            labelsHtml =
+                '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
         }
-        const createdDate = task.created ? new Date(task.created).toLocaleString() : 'N/A';
-        const updatedDate = task.updated ? new Date(task.updated).toLocaleString() : 'N/A';
+        const createdDate = task.created
+            ? new Date(task.created).toLocaleString()
+            : 'N/A';
+        const updatedDate = task.updated
+            ? new Date(task.updated).toLocaleString()
+            : 'N/A';
         panel.innerHTML = `
             <div class="kdp-header">
                 <span class="kdp-identifier">${this.escapeHtml(idLabel)}</span>
@@ -1508,8 +1705,12 @@ export class KanbanManager {
         // wire remove-X on each existing label pill.
         this._wireLabelPicker(panel, task, container);
         this.wireFeatureDetailSection(panel, task, cardEl, container);
-        panel.querySelector('.kdp-close-btn').addEventListener('click', () => this.closeDetailPanel());
-        panel.querySelector('.kdp-cancel-btn').addEventListener('click', () => this.closeDetailPanel());
+        panel
+            .querySelector('.kdp-close-btn')
+            .addEventListener('click', () => this.closeDetailPanel());
+        panel
+            .querySelector('.kdp-cancel-btn')
+            .addEventListener('click', () => this.closeDetailPanel());
         // Detail-panel Delete button. Confirms, then deletes the task and closes
         // the panel. The container ref is captured so the board reloads.
         const deleteBtn = panel.querySelector('.kdp-delete-btn');
@@ -1528,7 +1729,9 @@ export class KanbanManager {
                 }
             });
         }
-        panel.querySelector('.kdp-save-btn').addEventListener('click', async () => {
+        panel
+            .querySelector('.kdp-save-btn')
+            .addEventListener('click', async () => {
             const saveBtn = panel.querySelector('.kdp-save-btn');
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving...';
@@ -1547,7 +1750,7 @@ export class KanbanManager {
                     priority: newPriority,
                     due_date: newDueDate,
                     done: newDone,
-                    description: newDescription
+                    description: newDescription,
                 }, cardEl, container);
                 this.closeDetailPanel();
             }
@@ -1567,9 +1770,13 @@ export class KanbanManager {
         return {
             ...task,
             ...updates,
-            due_date: updates.due_date === undefined ? task.due_date : (updates.due_date || '0001-01-01T00:00:00Z'),
+            due_date: updates.due_date === undefined
+                ? task.due_date
+                : updates.due_date || '0001-01-01T00:00:00Z',
             labels: (task.labels || []).map((label) => ({ id: label.id })),
-            assignees: (task.assignees || []).map((assignee) => ({ id: assignee.id }))
+            assignees: (task.assignees || []).map((assignee) => ({
+                id: assignee.id,
+            })),
         };
     }
     async setTaskDone(task, done) {
@@ -1633,7 +1840,7 @@ export class KanbanManager {
         try {
             await this.apiPut(`/tasks/${parent.id}/relations`, {
                 other_task_id: child.id,
-                relation_kind: 'subtask'
+                relation_kind: 'subtask',
             });
         }
         catch (err) {
@@ -1683,7 +1890,7 @@ export class KanbanManager {
         }
     }
     updateColumnCounts(container) {
-        container.querySelectorAll('.kanban-column').forEach(col => {
+        container.querySelectorAll('.kanban-column').forEach((col) => {
             const count = col.querySelectorAll('.kanban-card').length;
             col.querySelector('.column-count').textContent = count;
         });
@@ -1761,7 +1968,8 @@ export class KanbanManager {
             return;
         const progress = featureProgress(task);
         const remaining = progress.total - progress.completed;
-        if (!task.done && remaining > 0 &&
+        if (!task.done &&
+            remaining > 0 &&
             !confirm(`Mark "${task.title}" done with ${remaining} unfinished subtask${remaining === 1 ? '' : 's'}?`))
             return;
         button.disabled = true;
@@ -1922,7 +2130,9 @@ export class KanbanManager {
         card.classList.toggle('hidden-by-filter', !this.matchesFilter(task, this.filterQuery));
     }
     applyFilter(container) {
-        container.querySelectorAll('.kanban-card, .kanban-feature-row').forEach(card => {
+        container
+            .querySelectorAll('.kanban-card, .kanban-feature-row')
+            .forEach((card) => {
             this.applyFilterToCard(card);
         });
     }
@@ -2000,12 +2210,16 @@ export class KanbanManager {
     // ---- board-level refresh -------------------------------------------
     captureBoardUi(container) {
         const scrolls = {};
-        container.querySelectorAll('.kanban-cards-list').forEach(list => {
+        container.querySelectorAll('.kanban-cards-list').forEach((list) => {
             scrolls[list.dataset.bucketId] = list.scrollTop;
         });
         const wrapper = container.querySelector('.kanban-columns-wrapper');
         const input = container.querySelector('#kanban-search-input');
-        return { scrolls, wrapperScrollLeft: wrapper ? wrapper.scrollLeft : 0, filter: input ? input.value : '' };
+        return {
+            scrolls,
+            wrapperScrollLeft: wrapper ? wrapper.scrollLeft : 0,
+            filter: input ? input.value : '',
+        };
     }
     restoreBoardUi(container, snapshot) {
         if (!snapshot)
@@ -2097,10 +2311,10 @@ export class KanbanManager {
         }
         await this.apiDelete(`/projects/${this.currentProjectId}/views/${this.currentViewId}/buckets/${bucketId}`);
         for (const [id, t] of Object.entries(this.taskCache)) {
-            if (t.bucket_id == bucketId)
+            if (String(t.bucket_id) === String(bucketId))
                 delete this.taskCache[id];
         }
-        this.buckets = (this.buckets || []).filter((b) => b.id != bucketId);
+        this.buckets = (this.buckets || []).filter((b) => String(b.id) !== String(bucketId));
         if (container)
             await this.refreshBoard(container);
     }
@@ -2126,8 +2340,8 @@ export class KanbanManager {
         try {
             const all = (await this.fetchAllLabels()) || [];
             const have = new Set((task.labels || []).map((l) => l.id));
-            const opts = ['<option value="">Add label…</option>']
-                .concat(all.filter((l) => !have.has(l.id))
+            const opts = ['<option value="">Add label…</option>'].concat(all
+                .filter((l) => !have.has(l.id))
                 .map((l) => `<option value="${l.id}">${this.escapeHtml(l.title || '(unnamed)')}</option>`));
             picker.innerHTML = opts.join('');
         }
@@ -2154,7 +2368,9 @@ export class KanbanManager {
             }
         });
         // Remove buttons on each existing label pill.
-        panel.querySelectorAll('.kdp-label-remove-btn').forEach((btn) => {
+        panel
+            .querySelectorAll('.kdp-label-remove-btn')
+            .forEach((btn) => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = parseInt(btn.dataset.labelId, 10);
@@ -2181,23 +2397,30 @@ export class KanbanManager {
             if (task.labels && task.labels.length > 0) {
                 containerEl.innerHTML = `
                     <div class="kdp-labels-current">
-                        ${task.labels.map((lbl) => {
+                        ${task.labels
+                    .map((lbl) => {
                     const hex = safeHexColor(lbl.hex_color);
-                    const style = hex ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"` : '';
+                    const style = hex
+                        ? `style="background-color: #${hex}25; color: #${hex}; border: 1px solid #${hex}40;"`
+                        : '';
                     return `<span class="kanban-label-pill kdp-label-removable" data-label-id="${lbl.id}" ${style}>${this.escapeHtml(lbl.title)}<button class="kdp-label-remove-btn" data-label-id="${lbl.id}" title="Remove label" aria-label="Remove label">×</button></span>`;
-                }).join('')}
+                })
+                    .join('')}
                     </div>
                 `;
             }
             else {
-                containerEl.innerHTML = '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
+                containerEl.innerHTML =
+                    '<span style="color: var(--text-muted); font-size: 12px; font-style: italic;">No labels</span>';
             }
         }
         await this._wireLabelPicker(panel, task, container);
     }
     // addLabelToTask puts a label on a task via PUT /tasks/{task}/labels.
     async addLabelToTask(taskId, labelId) {
-        const updated = await this.apiPut(`/tasks/${taskId}/labels`, { label_id: labelId });
+        const updated = await this.apiPut(`/tasks/${taskId}/labels`, {
+            label_id: labelId,
+        });
         if (this.taskCache[taskId]) {
             this.taskCache[taskId].labels = updated || [];
         }
@@ -2206,8 +2429,9 @@ export class KanbanManager {
     // removeLabelFromTask strips a label via DELETE /tasks/{task}/labels/{label}.
     async removeLabelFromTask(taskId, labelId) {
         await this.apiDelete(`/tasks/${taskId}/labels/${labelId}`);
-        if (this.taskCache[taskId] && Array.isArray(this.taskCache[taskId].labels)) {
-            this.taskCache[taskId].labels = this.taskCache[taskId].labels.filter((l) => l.id != labelId);
+        if (this.taskCache[taskId] &&
+            Array.isArray(this.taskCache[taskId].labels)) {
+            this.taskCache[taskId].labels = this.taskCache[taskId].labels.filter((l) => String(l.id) !== String(labelId));
         }
     }
     async moveTask(taskId, newBucketId) {
@@ -2286,8 +2510,10 @@ export class KanbanManager {
     // which tells the user nothing about the id that was never resolved. Fail
     // locally instead, with the offending path in the message.
     assertAddressable(path, body) {
-        const bad = path.split('?')[0].split('/')
-            .find(seg => seg === 'NaN' || seg === 'undefined' || seg === 'null');
+        const bad = path
+            .split('?')[0]
+            .split('/')
+            .find((seg) => seg === 'NaN' || seg === 'undefined' || seg === 'null');
         if (bad) {
             throw new Error(`Unresolved id "${bad}" in Vikunja request path ${path}`);
         }
@@ -2305,7 +2531,7 @@ export class KanbanManager {
         const url = localStorage.getItem('vikunja_url');
         const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;
         const headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
         };
         if (token && token !== 'null' && token !== 'undefined') {
             headers['Authorization'] = `Bearer ${token}`;
@@ -2313,13 +2539,13 @@ export class KanbanManager {
         const res = await fetch(proxyUrl, {
             method,
             headers,
-            body: body == null ? undefined : JSON.stringify(body)
+            body: body == null ? undefined : JSON.stringify(body),
         });
         if (res.status === 401) {
             sessionStorage.removeItem('vikunja_token');
             // One retry only: if the fresh token also 401s, the credentials
             // are genuinely bad and looping would just hammer the server.
-            if (allowRetry && await this.reauthenticate()) {
+            if (allowRetry && (await this.reauthenticate())) {
                 return this.apiRequest(path, method, body, false);
             }
             throw new Error('Session expired. Please reconnect.');

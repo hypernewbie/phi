@@ -81,16 +81,26 @@ describe('phase-1 e2e smoke (spawns the real Electron binary)', () => {
     // (ctx.skip returns void in vitest's types, so an explicit `return`
     // is needed for narrowing; at runtime skip throws and aborts.)
     if (!existsSync(distMain)) {
-      ctx.skip('dist/main.js missing — run `pnpm run build` first (CI and the README order build before test)');
+      ctx.skip(
+        'dist/main.js missing — run `pnpm run build` first (CI and the README order build before test)',
+      );
       return;
     }
-    if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-      ctx.skip('headless Linux with no DISPLAY/WAYLAND_DISPLAY (no X server; use xvfb-run to provide one)');
+    if (
+      process.platform === 'linux' &&
+      !process.env.DISPLAY &&
+      !process.env.WAYLAND_DISPLAY
+    ) {
+      ctx.skip(
+        'headless Linux with no DISPLAY/WAYLAND_DISPLAY (no X server; use xvfb-run to provide one)',
+      );
       return;
     }
     const bin = electronBinary();
     if (!bin) {
-      ctx.skip('electron binary not installed (node_modules/electron/path.txt or dist/ missing) — run `pnpm install`');
+      ctx.skip(
+        'electron binary not installed (node_modules/electron/path.txt or dist/ missing) — run `pnpm install`',
+      );
       return;
     }
 
@@ -121,25 +131,32 @@ describe('phase-1 e2e smoke (spawns the real Electron binary)', () => {
       stderr += String(chunk);
     });
 
-    const outcome = await new Promise<{ code: number | null; error?: Error }>((resolve) => {
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const done = (value: { code: number | null; error?: Error }) => {
-        if (!settled) {
-          settled = true;
-          if (timer) clearTimeout(timer);
-          resolve(value);
-        }
-      };
-      timer = setTimeout(() => {
-        child.kill();
-        done({ code: null, error: new Error(`smoke run timed out after ${SMOKE_TIMEOUT_MS}ms`) });
-      }, SMOKE_TIMEOUT_MS);
-      child.on('close', (exitCode) => done({ code: exitCode }));
-      child.on('error', (err) => done({ code: null, error: err }));
-    });
+    const outcome = await new Promise<{ code: number | null; error?: Error }>(
+      (resolve) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const done = (value: { code: number | null; error?: Error }) => {
+          if (!settled) {
+            settled = true;
+            if (timer) clearTimeout(timer);
+            resolve(value);
+          }
+        };
+        timer = setTimeout(() => {
+          child.kill();
+          done({
+            code: null,
+            error: new Error(`smoke run timed out after ${SMOKE_TIMEOUT_MS}ms`),
+          });
+        }, SMOKE_TIMEOUT_MS);
+        child.on('close', (exitCode) => done({ code: exitCode }));
+        child.on('error', (err) => done({ code: null, error: err }));
+      },
+    );
 
-    const resultLine = stdout.split('\n').find((line) => line.startsWith('PHI_SMOKE_RESULT '));
+    const resultLine = stdout
+      .split('\n')
+      .find((line) => line.startsWith('PHI_SMOKE_RESULT '));
     if (outcome.error || outcome.code !== 0 || !resultLine) {
       const reason = environmentalReason(stderr);
       if (reason) {
@@ -155,7 +172,9 @@ describe('phase-1 e2e smoke (spawns the real Electron binary)', () => {
       );
     }
 
-    const payload = JSON.parse(resultLine.slice('PHI_SMOKE_RESULT '.length)) as Record<string, unknown>;
+    const payload = JSON.parse(
+      resultLine.slice('PHI_SMOKE_RESULT '.length),
+    ) as Record<string, unknown>;
     expect(payload.isBrowserWindow).toBe(true);
     expect(payload.title).toBe('Phi');
     expect(payload.header).toBe(true);

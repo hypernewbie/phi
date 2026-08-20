@@ -3,16 +3,37 @@ import { priorityMeta, isDoneBucket } from '../web/util.js';
 
 describe('priorityMeta', () => {
     it('maps priorities 1..5 to labels', () => {
-        expect(priorityMeta(1)).toEqual({ label: 'Low', className: 'priority-1' });
-        expect(priorityMeta(2)).toEqual({ label: 'Medium', className: 'priority-2' });
-        expect(priorityMeta(3)).toEqual({ label: 'High', className: 'priority-3' });
-        expect(priorityMeta(4)).toEqual({ label: 'Urgent', className: 'priority-4' });
-        expect(priorityMeta(5)).toEqual({ label: 'DOOM', className: 'priority-5' });
+        expect(priorityMeta(1)).toEqual({
+            label: 'Low',
+            className: 'priority-1',
+        });
+        expect(priorityMeta(2)).toEqual({
+            label: 'Medium',
+            className: 'priority-2',
+        });
+        expect(priorityMeta(3)).toEqual({
+            label: 'High',
+            className: 'priority-3',
+        });
+        expect(priorityMeta(4)).toEqual({
+            label: 'Urgent',
+            className: 'priority-4',
+        });
+        expect(priorityMeta(5)).toEqual({
+            label: 'DOOM',
+            className: 'priority-5',
+        });
     });
 
     it('falls back to P0 label for out-of-range priorities, keeping raw className', () => {
-        expect(priorityMeta(6)).toEqual({ label: 'P0', className: 'priority-6' });
-        expect(priorityMeta(0)).toEqual({ label: 'P0', className: 'priority-0' });
+        expect(priorityMeta(6)).toEqual({
+            label: 'P0',
+            className: 'priority-6',
+        });
+        expect(priorityMeta(0)).toEqual({
+            label: 'P0',
+            className: 'priority-0',
+        });
     });
 });
 
@@ -38,6 +59,8 @@ describe('isDoneBucket', () => {
     });
 
     it('returns false for non-done buckets', () => {
-        expect(isDoneBucket({ is_done: false, title: 'In Progress' })).toBe(false);
+        expect(isDoneBucket({ is_done: false, title: 'In Progress' })).toBe(
+            false,
+        );
     });
 });

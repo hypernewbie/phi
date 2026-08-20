@@ -27,24 +27,53 @@ export function mockFetch(handler) {
         const raw = handler ? handler(String(url), options) : undefined;
         const val = raw instanceof Promise ? await raw : raw;
         // Explicit Response shape
-        if (val && typeof val === 'object' && ('ok' in val || 'status' in val || 'json' in val || 'text' in val)) {
-            const body = val.json !== undefined ? val.json : (val.text !== undefined ? val.text : '');
-            const ctype = val.json !== undefined ? 'application/json' : 'text/plain';
+        if (
+            val &&
+            typeof val === 'object' &&
+            ('ok' in val || 'status' in val || 'json' in val || 'text' in val)
+        ) {
+            const body =
+                val.json !== undefined
+                    ? val.json
+                    : val.text !== undefined
+                      ? val.text
+                      : '';
+            const ctype =
+                val.json !== undefined ? 'application/json' : 'text/plain';
             return {
                 ok: val.ok !== false,
                 status: val.status ?? 200,
-                headers: { get: (k) => (k && k.toLowerCase() === 'content-type' ? ctype : null) },
-                json: async () => val.json !== undefined ? val.json : (typeof body === 'string' ? JSON.parse(body || 'null') : body),
-                text: async () => val.text !== undefined ? val.text : (typeof body === 'string' ? body : JSON.stringify(body)),
+                headers: {
+                    get: (k) =>
+                        k && k.toLowerCase() === 'content-type' ? ctype : null,
+                },
+                json: async () =>
+                    val.json !== undefined
+                        ? val.json
+                        : typeof body === 'string'
+                          ? JSON.parse(body || 'null')
+                          : body,
+                text: async () =>
+                    val.text !== undefined
+                        ? val.text
+                        : typeof body === 'string'
+                          ? body
+                          : JSON.stringify(body),
             };
         }
         // Bare value -> ok JSON body
         return {
             ok: true,
             status: 200,
-            headers: { get: (k) => (k && k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+            headers: {
+                get: (k) =>
+                    k && k.toLowerCase() === 'content-type'
+                        ? 'application/json'
+                        : null,
+            },
             json: async () => val,
-            text: async () => (typeof val === 'string' ? val : JSON.stringify(val ?? null)),
+            text: async () =>
+                typeof val === 'string' ? val : JSON.stringify(val ?? null),
         };
     });
     vi.stubGlobal('fetch', fn);

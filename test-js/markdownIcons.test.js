@@ -40,7 +40,9 @@ function makeMm() {
 describe('markdown file-list icon', () => {
     it('uses an SVG document icon (no hieroglyph character glyph)', () => {
         const mm = makeMm();
-        mm._renderFileList([{ name: 'NOTES.md', path: '/w/NOTES.md', dir: '.' }]);
+        mm._renderFileList([
+            { name: 'NOTES.md', path: '/w/NOTES.md', dir: '.' },
+        ]);
 
         const item = mm.fileListEl.querySelector('.md-file-item');
         const icon = item.querySelector('.md-file-icon');
@@ -86,8 +88,12 @@ describe('markdown viewer modal header (stylized scroll)', () => {
         const titleEl = mm.modalTitle;
         // The scroll element must come before the text element in DOM order.
         const children = Array.from(titleEl.children);
-        const scrollIdx = children.findIndex((c) => c.classList.contains('md-modal-scroll'));
-        const textIdx = children.findIndex((c) => c.classList.contains('md-modal-title-text'));
+        const scrollIdx = children.findIndex((c) =>
+            c.classList.contains('md-modal-scroll'),
+        );
+        const textIdx = children.findIndex((c) =>
+            c.classList.contains('md-modal-title-text'),
+        );
         expect(scrollIdx).toBeGreaterThanOrEqual(0);
         expect(textIdx).toBeGreaterThanOrEqual(0);
         expect(scrollIdx).toBeLessThan(textIdx);

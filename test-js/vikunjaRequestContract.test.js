@@ -24,7 +24,10 @@ setupDomHarness();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const swagger = JSON.parse(
-    readFileSync(resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'), 'utf8')
+    readFileSync(
+        resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'),
+        'utf8',
+    ),
 );
 
 // ---------------------------------------------------------------------------
@@ -39,7 +42,9 @@ function matchSwaggerPath(concrete) {
     return Object.keys(swagger.paths).find((template) => {
         const parts = template.split('/').filter(Boolean);
         if (parts.length !== actual.length) return false;
-        return parts.every((p, i) => (p.startsWith('{') && p.endsWith('}')) || p === actual[i]);
+        return parts.every(
+            (p, i) => (p.startsWith('{') && p.endsWith('}')) || p === actual[i],
+        );
     });
 }
 
@@ -48,13 +53,20 @@ function swaggerTypeOk(schema, value) {
     // break on its own; assertNoUnresolvedIds covers the ids that matter.
     if (value === null) return true;
     switch (schema.type) {
-        case 'integer': return Number.isInteger(value);
-        case 'number': return typeof value === 'number' && Number.isFinite(value);
-        case 'string': return typeof value === 'string';
-        case 'boolean': return typeof value === 'boolean';
-        case 'array': return Array.isArray(value);
-        case 'object': return typeof value === 'object';
-        default: return true;
+        case 'integer':
+            return Number.isInteger(value);
+        case 'number':
+            return typeof value === 'number' && Number.isFinite(value);
+        case 'string':
+            return typeof value === 'string';
+        case 'boolean':
+            return typeof value === 'boolean';
+        case 'array':
+            return Array.isArray(value);
+        case 'object':
+            return typeof value === 'object';
+        default:
+            return true;
     }
 }
 
@@ -84,8 +96,9 @@ function decodeRequest([url, opts]) {
 function assertNoUnresolvedIds(req) {
     for (const segment of req.path.split('/')) {
         expect(
-            ['NaN', 'undefined', 'null', ''].includes(segment) && segment !== '',
-            `unresolved id "${segment}" in ${req.method} ${req.path}`
+            ['NaN', 'undefined', 'null', ''].includes(segment) &&
+                segment !== '',
+            `unresolved id "${segment}" in ${req.method} ${req.path}`,
         ).toBe(false);
     }
 }
@@ -94,23 +107,34 @@ function assertMatchesSwagger(req) {
     assertNoUnresolvedIds(req);
 
     const template = matchSwaggerPath(req.path);
-    expect(template, `no Vikunja endpoint matches ${req.method} ${req.path}`).toBeTruthy();
+    expect(
+        template,
+        `no Vikunja endpoint matches ${req.method} ${req.path}`,
+    ).toBeTruthy();
 
     const op = swagger.paths[template][req.method.toLowerCase()];
-    expect(op, `Vikunja does not accept ${req.method} on ${template}`).toBeTruthy();
+    expect(
+        op,
+        `Vikunja does not accept ${req.method} on ${template}`,
+    ).toBeTruthy();
 
     if (!req.body) return;
 
     const schema = resolveBodySchema(op);
-    expect(schema, `${req.method} ${template} takes no body but phi sent one`).toBeTruthy();
+    expect(
+        schema,
+        `${req.method} ${template} takes no body but phi sent one`,
+    ).toBeTruthy();
 
     for (const [key, value] of Object.entries(req.body)) {
         const prop = schema.properties[key];
-        expect(prop, `"${key}" is not a field of the body model for ${req.method} ${template}`)
-            .toBeTruthy();
+        expect(
+            prop,
+            `"${key}" is not a field of the body model for ${req.method} ${template}`,
+        ).toBeTruthy();
         expect(
             swaggerTypeOk(prop, value),
-            `"${key}" should be ${prop.type} for ${req.method} ${template}, got ${JSON.stringify(value)}`
+            `"${key}" should be ${prop.type} for ${req.method} ${template}, got ${JSON.stringify(value)}`,
         ).toBe(true);
     }
 }
@@ -126,9 +150,19 @@ function manager({ projectId = 9, viewId = 5 } = {}) {
     c.app = { showToast: vi.fn() };
     c.currentProjectId = projectId;
     c.currentViewId = viewId;
-    c.buckets = [{ id: 10, title: 'Todo' }, { id: 20, title: 'Done' }];
+    c.buckets = [
+        { id: 10, title: 'Todo' },
+        { id: 20, title: 'Done' },
+    ];
     c.taskCache = {
-        1: { id: 1, title: 'A', project_id: projectId, bucket_id: 10, labels: [], assignees: [] },
+        1: {
+            id: 1,
+            title: 'A',
+            project_id: projectId,
+            bucket_id: 10,
+            labels: [],
+            assignees: [],
+        },
     };
     c.loadAndRenderBoard = vi.fn(async () => {});
     return c;
@@ -156,7 +190,8 @@ const MUTATIONS = [
     },
     {
         name: 'createSubtask',
-        run: (c) => c.createSubtask({ id: 1, project_id: 9, bucket_id: 10 }, 'Child'),
+        run: (c) =>
+            c.createSubtask({ id: 1, project_id: 9, bucket_id: 10 }, 'Child'),
         reply: { ok: true, json: { id: 78 } },
     },
     {
@@ -166,12 +201,19 @@ const MUTATIONS = [
     },
     {
         name: 'saveTaskDetail',
-        run: (c) => c.saveTaskDetail(
-            c.taskCache[1],
-            { title: 'Renamed', priority: 3, done: false, description: '<p>hi</p>', due_date: null },
-            document.createElement('div'),
-            document.createElement('div')
-        ),
+        run: (c) =>
+            c.saveTaskDetail(
+                c.taskCache[1],
+                {
+                    title: 'Renamed',
+                    priority: 3,
+                    done: false,
+                    description: '<p>hi</p>',
+                    due_date: null,
+                },
+                document.createElement('div'),
+                document.createElement('div'),
+            ),
         reply: { ok: true, json: { id: 1 } },
     },
     {
@@ -231,20 +273,31 @@ describe('every phi -> Vikunja mutation matches the vendored swagger', () => {
         // trusting the list above to stay complete. Any method whose body
         // reaches apiPut/apiPost/apiDelete mutates upstream state and needs a
         // case here; apiGet is excluded because reads carry no body.
-        const mutating = Object.getOwnPropertyNames(KanbanManager.prototype).filter((name) => {
+        const mutating = Object.getOwnPropertyNames(
+            KanbanManager.prototype,
+        ).filter((name) => {
             const fn = KanbanManager.prototype[name];
             // The constructor stringifies to the whole class body, so it
             // matches every call site in the file rather than its own.
-            if (typeof fn !== 'function' || name === 'constructor' || name.startsWith('api')) {
+            if (
+                typeof fn !== 'function' ||
+                name === 'constructor' ||
+                name.startsWith('api')
+            ) {
                 return false;
             }
-            return /this\.api(Put|Post|Delete)\(/.test(Function.prototype.toString.call(fn));
+            return /this\.api(Put|Post|Delete)\(/.test(
+                Function.prototype.toString.call(fn),
+            );
         });
         expect(mutating.length).toBeGreaterThan(0);
 
         const covered = new Set(MUTATIONS.map((m) => m.name));
         const uncovered = mutating.filter((name) => !covered.has(name));
-        expect(uncovered, `add a MUTATIONS case for: ${uncovered.join(', ')}`).toEqual([]);
+        expect(
+            uncovered,
+            `add a MUTATIONS case for: ${uncovered.join(', ')}`,
+        ).toEqual([]);
     });
 });
 
@@ -268,7 +321,11 @@ describe('unresolved ids never reach the network', () => {
         const [req] = requests();
         expect(req.path).toBe('/projects/9/tasks');
         expect(req.method).toBe('PUT');
-        expect(req.body).toEqual({ title: 'Task on a fresh origin', project_id: 9, bucket_id: 10 });
+        expect(req.body).toEqual({
+            title: 'Task on a fresh origin',
+            project_id: 9,
+            bucket_id: 10,
+        });
         assertMatchesSwagger(req);
     });
 
@@ -277,7 +334,9 @@ describe('unresolved ids never reach the network', () => {
         c.currentProjectId = null;
         mockFetch(() => ({ ok: true, json: {} }));
 
-        await expect(c.createTask(10, 'Too early')).rejects.toThrow(/project not loaded/i);
+        await expect(c.createTask(10, 'Too early')).rejects.toThrow(
+            /project not loaded/i,
+        );
         expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -285,8 +344,9 @@ describe('unresolved ids never reach the network', () => {
         const c = manager();
         mockFetch(() => ({ ok: true, json: {} }));
 
-        await expect(c.apiPut(`/projects/${parseInt(null, 10)}/tasks`, { title: 'x' }))
-            .rejects.toThrow(/Unresolved id "NaN"/);
+        await expect(
+            c.apiPut(`/projects/${parseInt(null, 10)}/tasks`, { title: 'x' }),
+        ).rejects.toThrow(/Unresolved id "NaN"/);
         expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -294,8 +354,9 @@ describe('unresolved ids never reach the network', () => {
         const c = manager();
         mockFetch(() => ({ ok: true, json: {} }));
 
-        await expect(c.apiPut('/projects/9/tasks', { title: 'x', bucket_id: NaN }))
-            .rejects.toThrow(/Unresolved id in Vikunja payload field "bucket_id"/);
+        await expect(
+            c.apiPut('/projects/9/tasks', { title: 'x', bucket_id: NaN }),
+        ).rejects.toThrow(/Unresolved id in Vikunja payload field "bucket_id"/);
         expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -317,31 +378,53 @@ describe('unresolved ids never reach the network', () => {
 
 describe('the contract validator itself', () => {
     it('rejects an unknown endpoint', () => {
-        expect(() => assertMatchesSwagger({ method: 'PUT', path: '/projects/9/taskz', body: null }))
-            .toThrow();
+        expect(() =>
+            assertMatchesSwagger({
+                method: 'PUT',
+                path: '/projects/9/taskz',
+                body: null,
+            }),
+        ).toThrow();
     });
 
     it('rejects the wrong method on a real endpoint', () => {
         // POST-for-create is the original bug this repo already fixed once.
-        expect(() => assertMatchesSwagger({ method: 'POST', path: '/projects/9/tasks', body: null }))
-            .toThrow();
+        expect(() =>
+            assertMatchesSwagger({
+                method: 'POST',
+                path: '/projects/9/tasks',
+                body: null,
+            }),
+        ).toThrow();
     });
 
     it('rejects a body field that is not on the model', () => {
-        expect(() => assertMatchesSwagger({
-            method: 'PUT', path: '/projects/9/tasks', body: { titel: 'typo' },
-        })).toThrow();
+        expect(() =>
+            assertMatchesSwagger({
+                method: 'PUT',
+                path: '/projects/9/tasks',
+                body: { titel: 'typo' },
+            }),
+        ).toThrow();
     });
 
     it('rejects a body field with the wrong type', () => {
-        expect(() => assertMatchesSwagger({
-            method: 'PUT', path: '/projects/9/tasks', body: { title: 'ok', bucket_id: 'ten' },
-        })).toThrow();
+        expect(() =>
+            assertMatchesSwagger({
+                method: 'PUT',
+                path: '/projects/9/tasks',
+                body: { title: 'ok', bucket_id: 'ten' },
+            }),
+        ).toThrow();
     });
 
     it('rejects an unresolved id in the path', () => {
-        expect(() => assertMatchesSwagger({
-            method: 'PUT', path: '/projects/NaN/tasks', body: { title: 'ok' },
-        })).toThrow();
+        expect(() =>
+            assertMatchesSwagger({
+                method: 'PUT',
+                path: '/projects/NaN/tasks',
+                body: { title: 'ok' },
+            }),
+        ).toThrow();
     });
 });

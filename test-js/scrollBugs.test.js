@@ -73,7 +73,9 @@ describe('switchTab on the already-active tab', () => {
         // ...but with scrollToBottom: false so the user's scroll position is preserved.
         // activateTabViewport(tabInfo, options) - options is the 2nd arg.
         const optionsArg = activateSpy.mock.calls[0][1];
-        expect(optionsArg).toEqual(expect.objectContaining({ scrollToBottom: false }));
+        expect(optionsArg).toEqual(
+            expect.objectContaining({ scrollToBottom: false }),
+        );
         expect(spamToBottomSpy).not.toHaveBeenCalled();
     });
 
@@ -111,7 +113,8 @@ describe('scroll-related source contracts', () => {
             'web/terminal.js',
         ];
         const offenders = [];
-        const NON_INPUT_FOCUS_RE = /(term|xterm|window|self|document|activeTab\.term|tabInfo\.term)\.focus\b/;
+        const NON_INPUT_FOCUS_RE =
+            /(term|xterm|window|self|document|activeTab\.term|tabInfo\.term)\.focus\b/;
         for (const f of files) {
             const src = fs.readFileSync(f, 'utf8');
             const lines = src.split('\n');
@@ -124,9 +127,10 @@ describe('scroll-related source contracts', () => {
                 }
             }
         }
-        const msg = offenders.length === 0
-            ? 'all input focus() calls pass { preventScroll: true }'
-            : `offending calls (missing preventScroll:true):\n  ${offenders.join('\n  ')}`;
+        const msg =
+            offenders.length === 0
+                ? 'all input focus() calls pass { preventScroll: true }'
+                : `offending calls (missing preventScroll:true):\n  ${offenders.join('\n  ')}`;
         expect(offenders.length, msg).toBe(0);
     });
 
@@ -135,10 +139,20 @@ describe('scroll-related source contracts', () => {
         const src = fs.readFileSync('web/terminal.js', 'utf8');
 
         // Slice from the focus listener to (just before) the input listener.
-        const focusStart = src.indexOf("inputTextArea.addEventListener('focus'");
-        const inputStart = src.indexOf("inputTextArea.addEventListener('input'");
-        expect(focusStart, 'inputTextArea focus listener not found').toBeGreaterThan(-1);
-        expect(inputStart, 'inputTextArea input listener (boundary) not found').toBeGreaterThan(-1);
+        const focusStart = src.indexOf(
+            "inputTextArea.addEventListener('focus'",
+        );
+        const inputStart = src.indexOf(
+            "inputTextArea.addEventListener('input'",
+        );
+        expect(
+            focusStart,
+            'inputTextArea focus listener not found',
+        ).toBeGreaterThan(-1);
+        expect(
+            inputStart,
+            'inputTextArea input listener (boundary) not found',
+        ).toBeGreaterThan(-1);
 
         const rawBlock = src.slice(focusStart, inputStart);
 
@@ -197,8 +211,12 @@ describe('bottom and document-scroll contracts', () => {
         const fs = await import('node:fs');
         const src = fs.readFileSync('web/app.js', 'utf8');
         expect(src).not.toContain("window.addEventListener('scroll'");
-        expect(src).toContain("window.visualViewport.addEventListener('resize', () => this.updateLayoutPosition(true, true))");
-        expect(src).toContain("window.visualViewport.addEventListener('scroll', () => this.updateLayoutPosition(false))");
+        expect(src).toMatch(
+            /window\.visualViewport\.addEventListener\(\s*'resize',\s*\(\) =>\s*this\.updateLayoutPosition\(true, true\),?\s*\)/,
+        );
+        expect(src).toMatch(
+            /window\.visualViewport\.addEventListener\(\s*'scroll',\s*\(\) =>\s*this\.updateLayoutPosition\(false\),?\s*\)/,
+        );
     });
 });
 
@@ -211,7 +229,10 @@ describe('document scroll invariant on desktop', () => {
         const fs = await import('node:fs');
         const css = fs.readFileSync('web/style.css', 'utf8');
         const m = css.match(/^html,\s*body\s*\{[\s\S]*?\}/m);
-        expect(m, 'top-level html, body rule not found in style.css').toBeTruthy();
+        expect(
+            m,
+            'top-level html, body rule not found in style.css',
+        ).toBeTruthy();
         expect(m[0]).toMatch(/overflow:\s*hidden/);
         expect(m[0]).toMatch(/height:\s*100%/);
     });

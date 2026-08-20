@@ -113,7 +113,10 @@ export class AccessAuth {
    *  persistence) or a new login overwrites it. Cleared on `cancel`
    *  so a stale verifier doesn't outlive its origin. */
   private readonly lastVerifier = new Map<string, Buffer>();
-  private readonly lastCredential = new Map<string, { verifier: Buffer; salt: Buffer; iterations: number }>();
+  private readonly lastCredential = new Map<
+    string,
+    { verifier: Buffer; salt: Buffer; iterations: number }
+  >();
   private readonly _doFetch: FetchLike;
 
   constructor(doFetch: FetchLike = fetch) {
@@ -140,7 +143,9 @@ export class AccessAuth {
 
   /** Returns the full validated credential (verifier, salt, iterations)
    *  cached for `origin` from the most recent successful login. */
-  getLastCredential(origin: string): { verifier: Buffer; salt: Buffer; iterations: number } | null {
+  getLastCredential(
+    origin: string,
+  ): { verifier: Buffer; salt: Buffer; iterations: number } | null {
     return this.lastCredential.get(origin) ?? null;
   }
 
@@ -162,7 +167,10 @@ export class AccessAuth {
     signal?: AbortSignal,
   ): Promise<UnlockResult> {
     if (verifier.length !== 32) {
-      return { kind: 'invalid-password', message: 'Stored credential is corrupted.' };
+      return {
+        kind: 'invalid-password',
+        message: 'Stored credential is corrupted.',
+      };
     }
     const status = await this.fetchStatus(origin, signal);
     if (status.kind === 'unavailable') {
@@ -175,7 +183,10 @@ export class AccessAuth {
       const cfg = await this.fetchConfig(origin);
       return cfg.kind === 'ok'
         ? { kind: 'ok', config: cfg.config }
-        : { kind: 'unavailable', message: 'auth disabled but config still failed' };
+        : {
+            kind: 'unavailable',
+            message: 'auth disabled but config still failed',
+          };
     }
     return this.completeUnlock(origin, verifier, status, signal);
   }
@@ -205,7 +216,11 @@ export class AccessAuth {
     if (status.kind === 'no-auth') return status;
     const cred = this.lastCredential.get(origin);
     const verifier = cred ? cred.verifier : this.lastVerifier.get(origin);
-    if (!verifier) return { kind: 'unavailable', message: 'No authenticated credential is available.' };
+    if (!verifier)
+      return {
+        kind: 'unavailable',
+        message: 'No authenticated credential is available.',
+      };
     return {
       kind: 'ok',
       challenge: status.challenge,
@@ -222,7 +237,8 @@ export class AccessAuth {
   async fetchConfig(origin: string): Promise<FetchConfigResult> {
     const cookie = this.cookies.get(origin);
     const headers: Record<string, string> = {};
-    if (cookie) headers['Cookie'] = `${cookie.cookieName}=${cookie.cookieValue}`;
+    if (cookie)
+      headers['Cookie'] = `${cookie.cookieName}=${cookie.cookieValue}`;
     try {
       const res = await this._doFetch(new URL(CONFIG_PATH, origin), {
         headers,
@@ -242,7 +258,10 @@ export class AccessAuth {
         return { kind: 'unavailable', reason: 'bad json' };
       }
     } catch (err) {
-      return { kind: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
+      return {
+        kind: 'unavailable',
+        reason: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -260,8 +279,14 @@ export class AccessAuth {
     password: string,
     signal?: AbortSignal,
   ): Promise<UnlockResult> {
-    if (password.length < MIN_PASSWORD_LEN || password.length > MAX_PASSWORD_LEN) {
-      return { kind: 'invalid-password', message: 'Password length is out of range.' };
+    if (
+      password.length < MIN_PASSWORD_LEN ||
+      password.length > MAX_PASSWORD_LEN
+    ) {
+      return {
+        kind: 'invalid-password',
+        message: 'Password length is out of range.',
+      };
     }
     const status = await this.fetchStatus(origin, signal);
     if (status.kind === 'unavailable') {
@@ -272,10 +297,17 @@ export class AccessAuth {
       const cfg = await this.fetchConfig(origin);
       return cfg.kind === 'ok'
         ? { kind: 'ok', config: cfg.config }
-        : { kind: 'unavailable', message: 'auth disabled but config still failed' };
+        : {
+            kind: 'unavailable',
+            message: 'auth disabled but config still failed',
+          };
     }
     // status.kind === 'trusted' — server-controlled values are validated.
-    const verifier = await deriveVerifier(password, status.salt, status.iterations);
+    const verifier = await deriveVerifier(
+      password,
+      status.salt,
+      status.iterations,
+    );
     return this.completeUnlock(origin, verifier, status, signal);
   }
 
@@ -291,8 +323,13 @@ export class AccessAuth {
   private async completeUnlock(
     origin: string,
     verifier: Buffer,
-    status:
-      | { kind: 'trusted'; salt: Buffer; iterations: number; challenge: string; authenticated: boolean },
+    status: {
+      kind: 'trusted';
+      salt: Buffer;
+      iterations: number;
+      challenge: string;
+      authenticated: boolean;
+    },
     signal: AbortSignal | undefined,
   ): Promise<UnlockResult> {
     const proof = makeProof(verifier, status.challenge);
@@ -350,7 +387,13 @@ export class AccessAuth {
     signal?: AbortSignal,
   ): Promise<
     | { kind: 'no-auth' }
-    | { kind: 'trusted'; salt: Buffer; iterations: number; challenge: string; authenticated: boolean }
+    | {
+        kind: 'trusted';
+        salt: Buffer;
+        iterations: number;
+        challenge: string;
+        authenticated: boolean;
+      }
     | { kind: 'unavailable'; message: string }
   > {
     try {
@@ -358,10 +401,15 @@ export class AccessAuth {
         signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
-      if (!res.ok) return { kind: 'unavailable', message: `status http ${res.status}` };
+      if (!res.ok)
+        return { kind: 'unavailable', message: `status http ${res.status}` };
       const status = (await res.json()) as unknown;
       const v = validateStatus(status);
-      if (v === null) return { kind: 'unavailable', message: 'Phi returned unexpected auth settings' };
+      if (v === null)
+        return {
+          kind: 'unavailable',
+          message: 'Phi returned unexpected auth settings',
+        };
       if (v.kind === 'disabled') return { kind: 'no-auth' };
       return {
         kind: 'trusted',
@@ -371,7 +419,10 @@ export class AccessAuth {
         authenticated: v.status.authenticated,
       };
     } catch (err) {
-      return { kind: 'unavailable', message: err instanceof Error ? err.message : String(err) };
+      return {
+        kind: 'unavailable',
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -395,19 +446,32 @@ export class AccessAuth {
         redirect: 'error',
       });
       if (res.status === 429) {
-        return { kind: 'rate-limited', message: await extractError(res, 'rate-limited') };
+        return {
+          kind: 'rate-limited',
+          message: await extractError(res, 'rate-limited'),
+        };
       }
       if (res.status === 401) {
-        return { kind: 'invalid-password', message: await extractError(res, 'Password not accepted') };
+        return {
+          kind: 'invalid-password',
+          message: await extractError(res, 'Password not accepted'),
+        };
       }
       if (!res.ok) {
         return { kind: 'unavailable', message: `login http ${res.status}` };
       }
       const cookie = parseSessionCookie(res);
-      if (cookie === null) return { kind: 'unavailable', message: 'missing or insecure session cookie' };
+      if (cookie === null)
+        return {
+          kind: 'unavailable',
+          message: 'missing or insecure session cookie',
+        };
       return { kind: 'ok', cookie };
     } catch (err) {
-      return { kind: 'unavailable', message: err instanceof Error ? err.message : String(err) };
+      return {
+        kind: 'unavailable',
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 }
@@ -421,14 +485,18 @@ export async function deriveVerifier(
   iterations: number,
 ): Promise<Buffer> {
   if (iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
-    throw new Error(`iterations ${iterations} outside [${MIN_ITERATIONS}, ${MAX_ITERATIONS}]`);
+    throw new Error(
+      `iterations ${iterations} outside [${MIN_ITERATIONS}, ${MAX_ITERATIONS}]`,
+    );
   }
   return pbkdf2Async(password, salt, iterations, 32, 'sha256');
 }
 
 /** Public for tests. HMAC-SHA256 proof encoded unpadded base64URL. */
 export function makeProof(verifier: Buffer, challenge: string): string {
-  return createHmac('sha256', verifier).update(challenge, 'utf8').digest('base64url');
+  return createHmac('sha256', verifier)
+    .update(challenge, 'utf8')
+    .digest('base64url');
 }
 
 /** Validate `/api/auth/status` JSON. Returns either the trusted status,
@@ -445,7 +513,12 @@ export function validateStatus(raw: unknown): ValidateStatusOutcome | null {
   if (r.version !== 'v1') return null;
   if (r.algorithm !== 'pbkdf2-sha256') return null;
   if (typeof r.iterations !== 'number') return null;
-  if (!Number.isInteger(r.iterations) || r.iterations < MIN_ITERATIONS || r.iterations > MAX_ITERATIONS) return null;
+  if (
+    !Number.isInteger(r.iterations) ||
+    r.iterations < MIN_ITERATIONS ||
+    r.iterations > MAX_ITERATIONS
+  )
+    return null;
   if (typeof r.salt !== 'string') return null;
   let salt: Buffer;
   try {
@@ -494,7 +567,12 @@ export function parseSessionCookie(res: Response): CookieJarEntry | null {
     }
     if (!httpOnly) return null;
     if (value.length === 0) continue;
-    return { cookieName: name, cookieValue: value, path, httpOnly: true as const };
+    return {
+      cookieName: name,
+      cookieValue: value,
+      path,
+      httpOnly: true as const,
+    };
   }
   return null;
 }

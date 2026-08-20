@@ -30,7 +30,104 @@ export function projectWorktreeLabel(cwd: string | null | undefined): string {
 // after seeing a few of them. Collision rate at typical workloads
 // (4-10 worktrees): <5%, vs the old 12-entry geometric pool where it
 // was ~30%+.
-export const WORKTREE_GLYPHS: readonly string[] = ['𓀀', '𓀊', '𓀔', '𓀞', '𓀨', '𓀲', '𓀼', '𓁇', '𓁑', '𓁛', '𓁥', '𓁯', '𓁹', '𓂃', '𓂎', '𓂘', '𓂢', '𓂬', '𓂹', '𓃃', '𓃏', '𓃙', '𓃣', '𓃭', '𓃷', '𓄁', '𓄋', '𓄕', '𓄡', '𓄫', '𓄵', '𓅀', '𓅊', '𓅖', '𓅠', '𓅫', '𓅵', '𓆀', '𓆋', '𓆕', '𓆟', '𓆩', '𓆵', '𓇃', '𓇏', '𓇚', '𓇫', '𓇵', '𓈀', '𓈊', '𓈕', '𓈟', '𓈩', '𓈳', '𓈽', '𓉇', '𓉑', '𓉛', '𓉦', '𓉰', '𓉿', '𓊉', '𓊓', '𓊝', '𓊪', '𓊴', '𓊾', '𓋉', '𓋓', '𓋝', '𓋧', '𓋱', '𓋼', '𓌍', '𓌛', '𓌪', '𓌶', '𓍀', '𓍎', '𓍞', '𓍬', '𓍶', '𓎀', '𓎏', '𓎞', '𓎨', '𓎳', '𓎽', '𓏈', '𓏔', '𓏟', '𓏱', '𓏾', '𓐌', '𓐖', '𓐠'];
+export const WORKTREE_GLYPHS: readonly string[] = [
+    '𓀀',
+    '𓀊',
+    '𓀔',
+    '𓀞',
+    '𓀨',
+    '𓀲',
+    '𓀼',
+    '𓁇',
+    '𓁑',
+    '𓁛',
+    '𓁥',
+    '𓁯',
+    '𓁹',
+    '𓂃',
+    '𓂎',
+    '𓂘',
+    '𓂢',
+    '𓂬',
+    '𓂹',
+    '𓃃',
+    '𓃏',
+    '𓃙',
+    '𓃣',
+    '𓃭',
+    '𓃷',
+    '𓄁',
+    '𓄋',
+    '𓄕',
+    '𓄡',
+    '𓄫',
+    '𓄵',
+    '𓅀',
+    '𓅊',
+    '𓅖',
+    '𓅠',
+    '𓅫',
+    '𓅵',
+    '𓆀',
+    '𓆋',
+    '𓆕',
+    '𓆟',
+    '𓆩',
+    '𓆵',
+    '𓇃',
+    '𓇏',
+    '𓇚',
+    '𓇫',
+    '𓇵',
+    '𓈀',
+    '𓈊',
+    '𓈕',
+    '𓈟',
+    '𓈩',
+    '𓈳',
+    '𓈽',
+    '𓉇',
+    '𓉑',
+    '𓉛',
+    '𓉦',
+    '𓉰',
+    '𓉿',
+    '𓊉',
+    '𓊓',
+    '𓊝',
+    '𓊪',
+    '𓊴',
+    '𓊾',
+    '𓋉',
+    '𓋓',
+    '𓋝',
+    '𓋧',
+    '𓋱',
+    '𓋼',
+    '𓌍',
+    '𓌛',
+    '𓌪',
+    '𓌶',
+    '𓍀',
+    '𓍎',
+    '𓍞',
+    '𓍬',
+    '𓍶',
+    '𓎀',
+    '𓎏',
+    '𓎞',
+    '𓎨',
+    '𓎳',
+    '𓎽',
+    '𓏈',
+    '𓏔',
+    '𓏟',
+    '𓏱',
+    '𓏾',
+    '𓐌',
+    '𓐖',
+    '𓐠',
+];
 
 // worktreeGlyph returns one of WORKTREE_GLYPHS deterministically from
 // cwd. FNV-1a 32-bit hash, mod pool length. Pure, no DOM. Same cwd
@@ -102,8 +199,13 @@ export function priorityMeta(priority: number): PriorityMeta {
 // isDoneBucket reports whether a Vikunja bucket represents "done". Pure and
 // null-safe: returns false for a nullish bucket WITHOUT touching .title (the
 // `bucket &&` short-circuit is load-bearing). Uses strict is_done === true.
-export function isDoneBucket(bucket: VikunjaBucketLike | null | undefined): boolean {
-    return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
+export function isDoneBucket(
+    bucket: VikunjaBucketLike | null | undefined,
+): boolean {
+    return !!(
+        bucket &&
+        (bucket.is_done === true || bucket.title.toLowerCase() === 'done')
+    );
 }
 
 // safeHexColor validates a 3/6-character hex color string from an external
@@ -127,7 +229,10 @@ export function safeHexColor(c: unknown): string {
 //   { "code": 4, "message": "..." }                     // same, reordered
 //   { "messages": { "field": ["msg1", "msg2"] } }       // per-field map
 // Falls back to the raw text (truncated) if none parse. Pure.
-export function extractVikunjaError(text: string | null | undefined, status: number): string {
+export function extractVikunjaError(
+    text: string | null | undefined,
+    status: number,
+): string {
     if (!text) return `Request failed with status ${status}`;
     let s = text;
     try {
@@ -138,15 +243,20 @@ export function extractVikunjaError(text: string | null | undefined, status: num
             } else if (obj.messages && typeof obj.messages === 'object') {
                 const parts: string[] = [];
                 for (const [field, val] of Object.entries(obj.messages)) {
-                    if (Array.isArray(val)) parts.push(`${field}: ${val.join(', ')}`);
-                    else if (typeof val === 'string') parts.push(`${field}: ${val}`);
+                    if (Array.isArray(val))
+                        parts.push(`${field}: ${val.join(', ')}`);
+                    else if (typeof val === 'string')
+                        parts.push(`${field}: ${val}`);
                 }
                 if (parts.length) s = parts.join('; ');
             }
         }
     } catch (_) {
         // Not JSON — keep the raw text, but trim obvious HTML pages.
-        s = s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        s = s
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
     if (s.length > 240) s = s.slice(0, 240) + '...';
     return s || `Request failed with status ${status}`;
@@ -175,11 +285,16 @@ export function getLastFolderName(path: string): string {
 // formatWorkspaceLabel renders a workspace's display label: normally the last
 // folder name, but disambiguated as "folder (parent)" when another workspace
 // in allWorkspaces shares the same last-folder name. Pure.
-export function formatWorkspaceLabel(ws: string, allWorkspaces?: readonly string[] | null): string {
+export function formatWorkspaceLabel(
+    ws: string,
+    allWorkspaces?: readonly string[] | null,
+): string {
     if (!ws) return '';
     const folderName = getLastFolderName(ws);
     if (!allWorkspaces || !Array.isArray(allWorkspaces)) return folderName;
-    const duplicates = allWorkspaces.filter(w => getLastFolderName(w) === folderName);
+    const duplicates = allWorkspaces.filter(
+        (w) => getLastFolderName(w) === folderName,
+    );
     if (duplicates.length > 1) {
         const parts = ws.split(/[/\\]/);
         if (parts.length >= 2) {
@@ -234,13 +349,16 @@ function isTerminalActivityEligible(tab: TerminalActivityTabLike): boolean {
 // cannot pin the global "working" indicator on. "Attention" deliberately
 // survives a dead tab, matching the existing completion-notification
 // contract until the user clears it.
-export function getTerminalActivityState(tabs: Iterable<TerminalActivityTabLike | null | undefined>): TerminalActivityState {
+export function getTerminalActivityState(
+    tabs: Iterable<TerminalActivityTabLike | null | undefined>,
+): TerminalActivityState {
     let hasActivity = false;
     let hasAttention = false;
     for (const tab of tabs) {
         if (!tab) continue;
         if (tab.isAttention) hasAttention = true;
-        if (!tab.isDead && tab.isBusy && isTerminalActivityEligible(tab)) hasActivity = true;
+        if (!tab.isDead && tab.isBusy && isTerminalActivityEligible(tab))
+            hasActivity = true;
         if (hasActivity && hasAttention) break;
     }
     return { hasActivity, hasAttention };
@@ -283,7 +401,11 @@ export function formatTerminalActivityTitle(
 // buildPhiFaviconSvg produces the dynamic data-URI payload used by App.
 // The favicon follows the title's Φ ↔ ϕ state but stays static between real
 // quiet/output transitions; browser tabs should not become a spinner.
-export function buildPhiFaviconSvg(accent: string, accentDim: string, hasActivity: boolean): string {
+export function buildPhiFaviconSvg(
+    accent: string,
+    accentDim: string,
+    hasActivity: boolean,
+): string {
     const glyph = phiActivityGlyph(hasActivity);
     return `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
@@ -316,7 +438,7 @@ export interface SelfHud {
     sessions: number;
     busy: number;
     attention: number;
-    cpuPercent: number | null;     // null = unknown / not yet sampled
+    cpuPercent: number | null; // null = unknown / not yet sampled
     lastActivityMin: number | null; // minutes since most recent tab output, null if no tabs ever emitted
 }
 
@@ -367,7 +489,10 @@ export function buildSelfHud(args: {
         if (t.isAttention) attention += 1;
         if (typeof t.lastOutputAt === 'number') {
             const age = now - t.lastOutputAt;
-            if (age >= 0 && (mostRecentOutputMs === null || age < mostRecentOutputMs)) {
+            if (
+                age >= 0 &&
+                (mostRecentOutputMs === null || age < mostRecentOutputMs)
+            ) {
                 mostRecentOutputMs = age;
             }
         }

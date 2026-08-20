@@ -17,7 +17,10 @@ const tab = (overrides = {}) => ({
 
 describe('terminal activity browser-chrome grammar', () => {
     it('uses capital Phi while every live terminal is quiet', () => {
-        const state = getTerminalActivityState([tab(), tab({ isBusy: true, isDead: true })]);
+        const state = getTerminalActivityState([
+            tab(),
+            tab({ isBusy: true, isDead: true }),
+        ]);
         expect(state).toEqual({ hasActivity: false, hasAttention: false });
         expect(phiActivityGlyph(state.hasActivity)).toBe('Φ');
         expect(formatTerminalActivityTitle('atlas', state)).toBe('Φ atlas');
@@ -46,13 +49,17 @@ describe('terminal activity browser-chrome grammar', () => {
     });
 
     it('keeps attention on a dead tab until the user clears it', () => {
-        const state = getTerminalActivityState([tab({ isDead: true, isAttention: true, isBusy: true })]);
+        const state = getTerminalActivityState([
+            tab({ isDead: true, isAttention: true, isBusy: true }),
+        ]);
         expect(state).toEqual({ hasActivity: false, hasAttention: true });
         expect(formatTerminalActivityTitle('', state)).toBe('● Φ phi');
     });
 
     it('keeps the favicon in lockstep with the title glyph', () => {
-        expect(buildPhiFaviconSvg('#abc', '#123', false)).toContain('>Φ</text>');
+        expect(buildPhiFaviconSvg('#abc', '#123', false)).toContain(
+            '>Φ</text>',
+        );
         expect(buildPhiFaviconSvg('#abc', '#123', true)).toContain('>ϕ</text>');
     });
 
@@ -98,16 +105,25 @@ describe('terminal activity browser-chrome grammar', () => {
             // should still set hasAttention even though it's not driving
             // hasActivity.
             const state = getTerminalActivityState([
-                tab({ coder: 'bash', isBtop: true, isBusy: true, isAttention: true }),
+                tab({
+                    coder: 'bash',
+                    isBtop: true,
+                    isBusy: true,
+                    isAttention: true,
+                }),
             ]);
             expect(state.hasActivity).toBe(false);
             expect(state.hasAttention).toBe(true);
-            expect(formatTerminalActivityTitle('atlas', state)).toBe('● Φ atlas');
+            expect(formatTerminalActivityTitle('atlas', state)).toBe(
+                '● Φ atlas',
+            );
         });
 
         it('excludes review and kanban coders (UI-only, not PTY-backed)', () => {
             for (const coder of ['review', 'kanban']) {
-                const state = getTerminalActivityState([tab({ coder, isBusy: true })]);
+                const state = getTerminalActivityState([
+                    tab({ coder, isBusy: true }),
+                ]);
                 expect(state.hasActivity).toBe(false);
             }
         });

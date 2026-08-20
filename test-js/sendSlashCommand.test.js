@@ -42,27 +42,33 @@ function makeTm() {
 
     // DOM containers these render methods touch
     if (!document.getElementById('tabs-container')) {
-        const tabs = document.createElement('div'); tabs.id = 'tabs-container';
+        const tabs = document.createElement('div');
+        tabs.id = 'tabs-container';
         document.body.appendChild(tabs);
     }
     if (!document.getElementById('terminals-wrapper')) {
-        const w = document.createElement('div'); w.id = 'terminals-wrapper';
+        const w = document.createElement('div');
+        w.id = 'terminals-wrapper';
         document.body.appendChild(w);
     }
     if (!document.getElementById('input-bar-container')) {
-        const i = document.createElement('div'); i.id = 'input-bar-container';
+        const i = document.createElement('div');
+        i.id = 'input-bar-container';
         document.body.appendChild(i);
     }
     if (!document.getElementById('presets-container')) {
-        const p = document.createElement('div'); p.id = 'presets-container';
+        const p = document.createElement('div');
+        p.id = 'presets-container';
         document.body.appendChild(p);
     }
     if (!document.getElementById('empty-state')) {
-        const e = document.createElement('div'); e.id = 'empty-state';
+        const e = document.createElement('div');
+        e.id = 'empty-state';
         document.body.appendChild(e);
     }
     if (!document.getElementById('model-presets-dropup')) {
-        const m = document.createElement('div'); m.id = 'model-presets-dropup';
+        const m = document.createElement('div');
+        m.id = 'model-presets-dropup';
         document.body.appendChild(m);
     }
 
@@ -74,25 +80,38 @@ function makeTm() {
     // Boundary mocks (NOT the methods under test)
     tm._spamScrollToBottom = vi.fn();
     tm.focusActiveTerminal = vi.fn();
-    tm.inputTextArea = null;  // desktop path → focusActiveTerminal is called
+    tm.inputTextArea = null; // desktop path → focusActiveTerminal is called
     tm._showReconnectOverlay = vi.fn();
     tm.app = {
         showToast: vi.fn(),
         syncRemoteClipboard: vi.fn(),
         modelPresets: {
-            pi:      ['m3/MiniMax-M3', 'k2p7/foo'],
-            opencode:['claude-sonnet-5'],
-            claude:  ['claude-haiku-4'],
+            pi: ['m3/MiniMax-M3', 'k2p7/foo'],
+            opencode: ['claude-sonnet-5'],
+            claude: ['claude-haiku-4'],
         },
         codersPresetRegistry: {
-            pi:     { presets: [{ name: '/quit', value: '/quit\r' }, { name: '/model', value: '/model\r' }] },
+            pi: {
+                presets: [
+                    { name: '/quit', value: '/quit\r' },
+                    { name: '/model', value: '/model\r' },
+                ],
+            },
             claude: { presets: [{ name: '/compact', value: '/compact\r' }] },
         },
-        sessionsManager: { activeWorkspace: '/wsA', activeCWD: '/wsA/work', activeCoder: 'pi',
-                           loadConfig: vi.fn(), switchCoder: vi.fn(), loadWorktrees: vi.fn(async () => {}),
-                           highlightActiveSession: vi.fn(), highlightActiveWorktree: vi.fn(),
-                           updateWorkspaceSelectWidth: vi.fn(), workspaceSelect: { value: '' },
-                           spawnNewSession: vi.fn(async () => {}) },
+        sessionsManager: {
+            activeWorkspace: '/wsA',
+            activeCWD: '/wsA/work',
+            activeCoder: 'pi',
+            loadConfig: vi.fn(),
+            switchCoder: vi.fn(),
+            loadWorktrees: vi.fn(async () => {}),
+            highlightActiveSession: vi.fn(),
+            highlightActiveWorktree: vi.fn(),
+            updateWorkspaceSelectWidth: vi.fn(),
+            workspaceSelect: { value: '' },
+            spawnNewSession: vi.fn(async () => {}),
+        },
     };
     return tm;
 }
@@ -103,7 +122,11 @@ function makeTab(paneId, coder = 'pi', { dead = false, wsReady = true } = {}) {
     const wsSendInput = vi.fn();
     if (!wsReady) wsSendInput.mockReturnValue(false);
     return {
-        paneId, coder, isDead: dead, isKanban: false, isReview: false,
+        paneId,
+        coder,
+        isDead: dead,
+        isKanban: false,
+        isReview: false,
         tabEl: document.createElement('div'),
         termContainer: document.createElement('div'),
         ws: { sendInput: wsSendInput },
@@ -112,15 +135,22 @@ function makeTab(paneId, coder = 'pi', { dead = false, wsReady = true } = {}) {
 }
 
 beforeEach(() => {
-    document.body.innerHTML = `
-        <button id="send-input-btn" class="btn btn-accent">Send ↵</button>
-        <div id="tabs-container"></div>
-        <div id="terminals-wrapper"></div>
-        <div id="input-bar-container"></div>
-        <div id="presets-container"></div>
-        <div id="empty-state"></div>
-        <div id="model-presets-dropup"></div>
-    `;
+    const makeElement = (tag, id, className = '', textContent = '') => {
+        const element = document.createElement(tag);
+        element.id = id;
+        element.className = className;
+        element.textContent = textContent;
+        return element;
+    };
+    document.body.replaceChildren(
+        makeElement('button', 'send-input-btn', 'btn btn-accent', 'Send ↵'),
+        makeElement('div', 'tabs-container'),
+        makeElement('div', 'terminals-wrapper'),
+        makeElement('div', 'input-bar-container'),
+        makeElement('div', 'presets-container'),
+        makeElement('div', 'empty-state'),
+        makeElement('div', 'model-presets-dropup'),
+    );
     vi.useFakeTimers();
 });
 
@@ -145,7 +175,9 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.renderModelDropup();
 
         // Click the first model in the dropup.
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        const btn = document.querySelector(
+            '#model-presets-dropup .dropup-model-btn',
+        );
         expect(btn).not.toBeNull();
         btn.click();
 
@@ -185,18 +217,20 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
-        btn.click();  // targets tabA
+        const btn = document.querySelector(
+            '#model-presets-dropup .dropup-model-btn',
+        );
+        btn.click(); // targets tabA
 
         // User switches tabs mid-chain (between send 1 and send 2).
         tm.activePaneId = tabB.paneId;
-        vi.advanceTimersByTime(350);   // send 2 should still hit tabA
-        vi.advanceTimersByTime(350);   // send 3
-        vi.advanceTimersByTime(350);   // send 4
-        vi.advanceTimersByTime(2000);  // nothing further
+        vi.advanceTimersByTime(350); // send 2 should still hit tabA
+        vi.advanceTimersByTime(350); // send 3
+        vi.advanceTimersByTime(350); // send 4
+        vi.advanceTimersByTime(2000); // nothing further
 
         expect(tabA.sendInputCalls.length).toBe(4);
-        expect(tabB.sendInputCalls.length).toBe(0);  // ← the bug fix
+        expect(tabB.sendInputCalls.length).toBe(0); // ← the bug fix
     });
 
     // /model <id> [PAUSE] Esc [PAUSE] Enter.
@@ -214,7 +248,9 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
+        document
+            .querySelector('#model-presets-dropup .dropup-model-btn')
+            .click();
 
         // Send 1 is the whole typed line: command, space, identifier.
         expect(tabA.sendInputCalls).toHaveLength(1);
@@ -241,7 +277,9 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
+        document
+            .querySelector('#model-presets-dropup .dropup-model-btn')
+            .click();
 
         tm.activePaneId = tabB.paneId;
         vi.advanceTimersByTime(5000);
@@ -262,18 +300,24 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
+        document
+            .querySelector('#model-presets-dropup .dropup-model-btn')
+            .click();
         vi.advanceTimersByTime(400);
 
         expect(tabA.sendInputCalls).toHaveLength(3);
         // The typed line carries no commit or escape bytes of its own.
-        expect(tabA.sendInputCalls[0][0]).not.toMatch(/[\r\x1b]/);
+        expect(tabA.sendInputCalls[0][0]).not.toContain('\r');
+        expect(tabA.sendInputCalls[0][0]).not.toContain(
+            String.fromCharCode(27),
+        );
         expect(tabA.sendInputCalls[0][0]).not.toContain('\x1b[200~'); // not bracketed paste
         expect(tabA.sendInputCalls[1][0]).toBe('\x1b');
         expect(tabA.sendInputCalls[2][0]).toBe('\r');
         // Esc must precede Enter; the reverse order commits the dropdown pick.
-        expect(tabA.sendInputCalls.findIndex(c => c[0] === '\x1b'))
-            .toBeLessThan(tabA.sendInputCalls.findIndex(c => c[0] === '\r'));
+        expect(
+            tabA.sendInputCalls.findIndex((c) => c[0] === '\x1b'),
+        ).toBeLessThan(tabA.sendInputCalls.findIndex((c) => c[0] === '\r'));
     });
 
     it('claude model flow confirms a delayed cache-warning prompt on the click-time tab', () => {
@@ -285,7 +329,9 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        document.querySelector('#model-presets-dropup .dropup-model-btn').click();
+        document
+            .querySelector('#model-presets-dropup .dropup-model-btn')
+            .click();
 
         // The command itself retains Claude's normal `/model <name>` form.
         expect(tabA.sendInputCalls).toHaveLength(1);
@@ -312,7 +358,9 @@ describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
         tm.activePaneId = tabA.paneId;
 
         tm.renderPresets('pi');
-        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
+        const chips = Array.from(
+            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        );
         const modelChip = chips.find((b) => b.innerText === '/model');
         expect(modelChip).toBeDefined();
         modelChip.click();
@@ -335,19 +383,22 @@ describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
         tm.activePaneId = tabA.paneId;
 
         tm.renderPresets('pi');
-        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
         // /quit: value='/quit\r', starts with /, ends with \r → paste branch.
         // Force the non-paste branch by using a non-/-prefixed value.
         // Easiest: add a custom coder preset that doesn't match the predicate.
-        tm.app.codersPresetRegistry.pi.presets.push({ name: 'esc', value: '\x1b' });
+        tm.app.codersPresetRegistry.pi.presets.push({
+            name: 'esc',
+            value: '\x1b',
+        });
         tm.renderPresets('pi');
-        const escChip = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'))
-            .find((b) => b.innerText === 'esc');
+        const escChip = Array.from(
+            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        ).find((b) => b.innerText === 'esc');
         expect(escChip).toBeDefined();
         escChip.click();
 
         expect(tabA.sendInputCalls.length).toBe(1);
-        expect(tabA.sendInputCalls[0][0]).toBe('\x1b');  // raw send, no bracketing
+        expect(tabA.sendInputCalls[0][0]).toBe('\x1b'); // raw send, no bracketing
     });
 });
 
@@ -361,13 +412,15 @@ describe('WS drop mid-chain: toast + no cross-tab fallback', () => {
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        const btn = document.querySelector(
+            '#model-presets-dropup .dropup-model-btn',
+        );
         expect(() => btn.click()).not.toThrow();
 
         // First send failed → toast fired → reconnect overlay shown.
         expect(tm.app.showToast).toHaveBeenCalledWith(
             'Tab is disconnected — input not sent',
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
         expect(tm._showReconnectOverlay).toHaveBeenCalledWith(tabA);
 
@@ -400,7 +453,9 @@ describe('pi /model picker sequence', () => {
         tm.activePaneId = tabA.paneId;
 
         tm.renderModelDropup();
-        const btn = document.querySelector('#model-presets-dropup .dropup-model-btn');
+        const btn = document.querySelector(
+            '#model-presets-dropup .dropup-model-btn',
+        );
         btn.click();
 
         expect(tabA.sendInputCalls).toHaveLength(1);
@@ -424,7 +479,9 @@ describe('pi /model picker sequence', () => {
         tm.activePaneId = tabA.paneId;
 
         tm.renderPresets('pi');
-        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
+        const chips = Array.from(
+            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        );
         const modelChip = chips.find((b) => b.innerText === '/model');
         modelChip.click();
 
@@ -444,10 +501,14 @@ describe('pi /model picker sequence', () => {
         tm.tabs.set(tabA.paneId, tabA);
         tm.activePaneId = tabA.paneId;
 
-        tm.app.codersPresetRegistry.pi.presets.push({ name: 'esc', value: '\x1b' });
+        tm.app.codersPresetRegistry.pi.presets.push({
+            name: 'esc',
+            value: '\x1b',
+        });
         tm.renderPresets('pi');
-        const escChip = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'))
-            .find((b) => b.innerText === 'esc');
+        const escChip = Array.from(
+            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        ).find((b) => b.innerText === 'esc');
         escChip.click();
 
         expect(tabA.sendInputCalls.length).toBe(1);
@@ -465,7 +526,9 @@ describe('pi /model picker sequence', () => {
         // (it's the same code path; the architectural difference is
         // mobile-vs-desktop styling). Drive via renderPresets.
         tm.renderPresets('pi');
-        const chips = Array.from(tm.presetsContainer.querySelectorAll('.preset-btn'));
+        const chips = Array.from(
+            tm.presetsContainer.querySelectorAll('.preset-btn'),
+        );
         const modelChip = chips.find((b) => b.innerText === '/model');
         modelChip.click();
 

@@ -78,7 +78,7 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
         // "Scroll tabs bar to active tab" call doesn't throw.
         tabEl.scrollIntoView = vi.fn();
         tm.tabsContainer.appendChild(tabEl);
-        const meta = (typeof id === 'string') ? { paneId: id } : id;
+        const meta = typeof id === 'string' ? { paneId: id } : id;
         const fullMeta = {
             paneId: meta.paneId,
             sessionId: meta.paneId,
@@ -102,7 +102,8 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
                 refresh: vi.fn(),
                 buffer: { active: { viewportY: 0, baseY: 0 } },
                 options: { fontSize: 14 },
-                cols: 80, rows: 24,
+                cols: 80,
+                rows: 24,
             },
             fitAddon: { fit: vi.fn() },
         };
@@ -147,7 +148,9 @@ describe('softCloseTab - grace period behavior', () => {
     });
 
     it('shows an undo toast with the tab title', () => {
-        const tm = makeTm({ withTabs: [{ paneId: 'a', title: 'My Cool Shell' }] });
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a', title: 'My Cool Shell' }],
+        });
         tm.softCloseTab('a');
         expect(tm.app.showToast).toHaveBeenCalledTimes(1);
         const [message, opts] = tm.app.showToast.mock.calls[0];
@@ -173,7 +176,7 @@ describe('softCloseTab - grace period behavior', () => {
         const tm = makeTm({ withTabs: ['a'] });
         const finalizeSpy = vi.spyOn(tm, 'finalizeCloseTab');
         tm.softCloseTab('a'); // first ×
-        tm.closeTab('a');      // second × = finalize now
+        tm.closeTab('a'); // second × = finalize now
         expect(finalizeSpy).toHaveBeenCalledWith('a');
         // Tab should be gone.
         expect(tm.tabs.has('a')).toBe(false);
@@ -191,7 +194,9 @@ describe('undoCloseTab - reverse a soft-close', () => {
         tm.undoCloseTab('a');
 
         expect(tm.tabs.get('a').softClosing).toBe(false);
-        expect(tm.tabs.get('a').tabEl.classList.contains('soft-closed')).toBe(false);
+        expect(tm.tabs.get('a').tabEl.classList.contains('soft-closed')).toBe(
+            false,
+        );
         // Advance past the grace - finalize should NOT fire because we undid.
         vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS + 1000);
         expect(finalizeSpy).not.toHaveBeenCalled();
@@ -340,7 +345,9 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         expect(tab.softCloseOverlay).toBeTruthy();
         // Overlay is appended to the tab's termContainer.
         expect(tab.termContainer.contains(tab.softCloseOverlay)).toBe(true);
-        expect(tab.softCloseOverlay.classList.contains('tab-soft-close-overlay')).toBe(true);
+        expect(
+            tab.softCloseOverlay.classList.contains('tab-soft-close-overlay'),
+        ).toBe(true);
         // Overlay shows a countdown + an undo hint.
         const text = tab.softCloseOverlay.textContent;
         expect(text).toMatch(/Closing in/);
@@ -369,12 +376,18 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         const tab = tm.tabs.get('b');
         expect(tab.softClosePill).toBeTruthy();
         expect(tab.tabEl.contains(tab.softClosePill)).toBe(true);
-        expect(tab.softClosePill.classList.contains('tab-soft-close-pill')).toBe(true);
+        expect(
+            tab.softClosePill.classList.contains('tab-soft-close-pill'),
+        ).toBe(true);
         // v0.8.5: pill now shows glyph + text. Glyph = the tab's
         // worktree hieroglyph (or fallback '◆'), text = the countdown
         // seconds. Both live in dedicated spans.
-        const text = tab.softClosePill.querySelector('.tab-soft-close-pill-text');
-        const glyph = tab.softClosePill.querySelector('.tab-soft-close-pill-glyph');
+        const text = tab.softClosePill.querySelector(
+            '.tab-soft-close-pill-text',
+        );
+        const glyph = tab.softClosePill.querySelector(
+            '.tab-soft-close-pill-glyph',
+        );
         expect(text).toBeTruthy();
         expect(glyph).toBeTruthy();
         expect(text.textContent).toMatch(/^\d+s$/);
@@ -387,7 +400,9 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         });
         tm.softCloseTab('b');
         const tab = tm.tabs.get('b');
-        const text = () => tab.softClosePill.querySelector('.tab-soft-close-pill-text').textContent;
+        const text = () =>
+            tab.softClosePill.querySelector('.tab-soft-close-pill-text')
+                .textContent;
         const initial = text();
         vi.advanceTimersByTime(2500); // 2.5s in
         const later = text();
@@ -413,7 +428,9 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         // Strip comments so a "/* ... strikethrough ... */" in the comment
         // doesn't trigger a false positive on the literal string.
         const cssStripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
-        const ruleMatch = cssStripped.match(/\.tab\.soft-closed\s+\.tab-title\s*\{[^}]*\}/);
+        const ruleMatch = cssStripped.match(
+            /\.tab\.soft-closed\s+\.tab-title\s*\{[^}]*\}/,
+        );
         expect(ruleMatch).toBeTruthy();
         expect(ruleMatch[0]).not.toMatch(/line-through/);
     });
@@ -425,8 +442,12 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
         const fs = require('fs');
         const css = fs.readFileSync('web/style.css', 'utf8');
         expect(css).toMatch(/\.tab \.tab-reopen\s*\{\s*display:\s*none/);
-        expect(css).toMatch(/\.tab\.soft-closed \.tab-close\s*\{\s*display:\s*none/);
-        expect(css).toMatch(/\.tab\.soft-closed \.tab-reopen\s*\{\s*display:\s*flex/);
+        expect(css).toMatch(
+            /\.tab\.soft-closed \.tab-close\s*\{\s*display:\s*none/,
+        );
+        expect(css).toMatch(
+            /\.tab\.soft-closed \.tab-reopen\s*\{\s*display:\s*flex/,
+        );
     });
 });
 
@@ -472,7 +493,7 @@ describe('close lifecycle - load-bearing contracts', () => {
     // Helper: count how many DELETEs landed for which pane. mockFetch
     // is registered globally in beforeEach.
     function deleteCalls() {
-        return globalThis.fetch.mock.calls.filter(c => {
+        return globalThis.fetch.mock.calls.filter((c) => {
             const url = typeof c[0] === 'string' ? c[0] : c[0]?.url;
             return url && url.includes('/api/terminals/');
         });
@@ -503,15 +524,17 @@ describe('close lifecycle - load-bearing contracts', () => {
         tm.softCloseTab('a');
         vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
         // Allow the fetch promise + .then to settle.
-        return Promise.resolve().then(() => Promise.resolve()).then(() => {
-            // Find any error toast with the right kind of message.
-            const errorToasts = showToast.mock.calls.filter(c =>
-                c[1] && c[1].type === 'error'
-            );
-            expect(errorToasts.length).toBeGreaterThanOrEqual(1);
-            const msg = errorToasts[0][0];
-            expect(msg.toLowerCase()).toMatch(/process|running|server/);
-        });
+        return Promise.resolve()
+            .then(() => Promise.resolve())
+            .then(() => {
+                // Find any error toast with the right kind of message.
+                const errorToasts = showToast.mock.calls.filter(
+                    (c) => c[1] && c[1].type === 'error',
+                );
+                expect(errorToasts.length).toBeGreaterThanOrEqual(1);
+                const msg = errorToasts[0][0];
+                expect(msg.toLowerCase()).toMatch(/process|running|server/);
+            });
     });
 
     it('3. concurrent finalizeCloseTab calls fire DELETE exactly once', () => {
@@ -526,8 +549,9 @@ describe('close lifecycle - load-bearing contracts', () => {
         tm.finalizeCloseTab('a');
         tm.finalizeCloseTab('a');
         // Even after all three attempted, DELETE fires exactly once.
-        expect(deleteCalls().filter(c => c[0] === '/api/terminals/a'))
-            .toHaveLength(1);
+        expect(
+            deleteCalls().filter((c) => c[0] === '/api/terminals/a'),
+        ).toHaveLength(1);
     });
 
     it('4. cap-forced finalize fires DELETE for the cap-d tab too', () => {
@@ -546,7 +570,9 @@ describe('close lifecycle - load-bearing contracts', () => {
         tm.softCloseTab('d'); // cap exceeded, 'a' force-finalized
         // 'a' should have received its DELETE (the cap path uses the
         // same finalizeCloseTab which fires the fetch).
-        const calls = deleteCalls().map(c => c[0]).sort();
+        const calls = deleteCalls()
+            .map((c) => c[0])
+            .sort();
         expect(calls).toContain('/api/terminals/a');
     });
 
@@ -620,18 +646,21 @@ describe('close lifecycle - load-bearing contracts', () => {
         });
         const keys = Array.from(tm.tabs.keys());
         // Mirror the production closeAll wiring.
-        keys.forEach(paneId => tm.closeTab(paneId));
+        keys.forEach((paneId) => {
+            tm.closeTab(paneId);
+        });
         // Advance past ALL grace periods (cap=3 means oldest gets
         // force-finalized, but the 3 younger ones run timers).
         vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS + 100);
-        const deleted = new Set(deleteCalls().map(c => c[0]));
-        expect(deleted).toContain('/api/terminals/a')
-;
+        const deleted = new Set(deleteCalls().map((c) => c[0]));
+        expect(deleted).toContain('/api/terminals/a');
         // 'a' was force-finalized by the cap path.
         // The 3 survivors should also have their DELETEs.
-        expect(deleted.has('/api/terminals/b') ||
-               deleted.has('/api/terminals/c') ||
-               deleted.has('/api/terminals/d')).toBe(true);
+        expect(
+            deleted.has('/api/terminals/b') ||
+                deleted.has('/api/terminals/c') ||
+                deleted.has('/api/terminals/d'),
+        ).toBe(true);
     });
 
     it('9. DELETE 404 does NOT break the rest of finalize (graceful)', () => {
@@ -643,12 +672,16 @@ describe('close lifecycle - load-bearing contracts', () => {
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
         vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
-        return Promise.resolve().then(() => Promise.resolve()).then(() => {
-            // Tab was removed from the Map even though DELETE 404'd.
-            expect(tm.tabs.has('a')).toBe(false);
-            // DOM was cleaned.
-            expect(document.body.contains(document.getElementById('term-a'))).toBe(false);
-        });
+        return Promise.resolve()
+            .then(() => Promise.resolve())
+            .then(() => {
+                // Tab was removed from the Map even though DELETE 404'd.
+                expect(tm.tabs.has('a')).toBe(false);
+                // DOM was cleaned.
+                expect(
+                    document.body.contains(document.getElementById('term-a')),
+                ).toBe(false);
+            });
     });
 
     it('10. undo prevents the stale grace timer from finalizing the tab', () => {
@@ -664,7 +697,7 @@ describe('close lifecycle - load-bearing contracts', () => {
         // Tab is still alive, NOT soft-closing, NO DELETE fired.
         expect(tm.tabs.has('a')).toBe(true);
         expect(tm.tabs.get('a').softClosing).toBe(false);
-        const deletedUrls = deleteCalls().map(c => c[0]);
+        const deletedUrls = deleteCalls().map((c) => c[0]);
         expect(deletedUrls).not.toContain('/api/terminals/a');
     });
 });

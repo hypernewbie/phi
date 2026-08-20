@@ -4,8 +4,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const terminalJsSrc = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'terminal.js'),
-    'utf8'
+    path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'web',
+        'terminal.js',
+    ),
+    'utf8',
 );
 
 // Source-level wiring assertions for _forwardKeyToPty's callers. jsdom can't
@@ -15,25 +20,37 @@ const terminalJsSrc = readFileSync(
 describe('non-direct control-key forwarding (terminal focused)', () => {
     it('forwards via _forwardKeyToPty upstream of the printable redirect', () => {
         const fwd = terminalJsSrc.indexOf('this._forwardKeyToPty(e, tabInfo)');
-        const redirect = terminalJsSrc.indexOf('// In non-direct mode: redirect printable keystrokes');
+        const redirect = terminalJsSrc.indexOf(
+            '// In non-direct mode: redirect printable keystrokes',
+        );
         expect(fwd).toBeGreaterThan(-1);
         expect(redirect).toBeGreaterThan(-1);
         expect(fwd).toBeLessThan(redirect);
     });
 
     it('gates on keydown and non-direct mode only — no emptiness gate', () => {
-        const start = terminalJsSrc.indexOf('this._forwardKeyToPty(e, tabInfo)');
-        const line = terminalJsSrc.slice(terminalJsSrc.lastIndexOf('\n', start), start);
-        expect(line).toContain('!tabInfo.directMode');
-        expect(line).toContain("e.type === 'keydown'");
-        expect(line).not.toContain('value');
+        const start = terminalJsSrc.indexOf(
+            'this._forwardKeyToPty(e, tabInfo)',
+        );
+        const branch = terminalJsSrc.slice(
+            terminalJsSrc.lastIndexOf('if (', start),
+            start,
+        );
+        expect(branch).toContain('!tabInfo.directMode');
+        expect(branch).toContain("e.type === 'keydown'");
+        expect(branch).not.toContain('value');
     });
 });
 
 describe('mobile key fallback wiring', () => {
     function mobileBlock() {
-        const start = terminalJsSrc.indexOf('// Mobile arrow-key capture fallback.');
-        expect(start, 'mobile fallback marker comment not found').toBeGreaterThan(-1);
+        const start = terminalJsSrc.indexOf(
+            '// Mobile arrow-key capture fallback.',
+        );
+        expect(
+            start,
+            'mobile fallback marker comment not found',
+        ).toBeGreaterThan(-1);
         const end = terminalJsSrc.indexOf('});', start);
         return terminalJsSrc.slice(start, end);
     }

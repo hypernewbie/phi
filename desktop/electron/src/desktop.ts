@@ -41,11 +41,29 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
 import { AccessAuth } from './access-auth.js';
-import type { ActiveServer, HeaderAction, HeaderState, RailState } from './electron.js';
-import { classifyArgv, FORWARD_CHANNEL, type SingleInstanceHandle } from './single-instance.js';
+import type {
+  ActiveServer,
+  HeaderAction,
+  HeaderState,
+  RailState,
+} from './electron.js';
+import {
+  classifyArgv,
+  FORWARD_CHANNEL,
+  type SingleInstanceHandle,
+} from './single-instance.js';
 import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
-import { Controller, parseEndpoint, type HealthChecker, type ProfileMeta } from './controller.js';
-import { registerHotkey, resolveAccelerator, type HotkeyRegistration } from './hotkeys.js';
+import {
+  Controller,
+  parseEndpoint,
+  type HealthChecker,
+  type ProfileMeta,
+} from './controller.js';
+import {
+  registerHotkey,
+  resolveAccelerator,
+  type HotkeyRegistration,
+} from './hotkeys.js';
 import {
   setupTray,
   TRAY_COMMAND_CHANNEL,
@@ -72,7 +90,11 @@ import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
 import { installReloadShortcut } from './reload.js';
 import { installZoomShortcuts } from './zoom.js';
-import { ALWAYS_SAFE_RAIL_CHORDS, TERMINAL_FOCUS_SCRIPT, resolveRailChord } from './shortcuts.js';
+import {
+  ALWAYS_SAFE_RAIL_CHORDS,
+  TERMINAL_FOCUS_SCRIPT,
+  resolveRailChord,
+} from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -119,7 +141,6 @@ interface AuthRequired {
   label: string;
 }
 
-
 /** Fixed page-observation expression for remote Phi pages (never interpolated). */
 const REMOTE_IDENTITY_SCRIPT = `(() => {
   const host = document.getElementById('hostname-display');
@@ -159,7 +180,9 @@ const OPEN_SESSIONS_SCRIPT = `(() => {
 })()`;
 
 /** Absolute file:// URL of the alarm bell asset (the local rail page plays it; the desktop package has no web/). */
-const ALARM_CHIME_URL = pathToFileURL(path.join(here, '..', 'assets', 'bell.wav')).href;
+const ALARM_CHIME_URL = pathToFileURL(
+  path.join(here, '..', 'assets', 'bell.wav'),
+).href;
 
 /** The full alarm burst window: a re-fire inside it is dropped so bursts never stack on the shared audio element. */
 const ALARM_CHIME_BURST_MS = 3_000;
@@ -241,13 +264,22 @@ export class DesktopHost {
    *  is `safeStorage`-encrypted (DPAPI on Windows, Keychain on macOS,
    *  libsecret on Linux); the on-disk bytes are never usable without
    *  the host process. */
-  readonly credentialsPath: string = path.join(app.getPath('userData'), 'access-credentials.bin');
+  readonly credentialsPath: string = path.join(
+    app.getPath('userData'),
+    'access-credentials.bin',
+  );
   /** Per-origin verifier persistence (in-memory mirror of the
    *  decrypted file). Cleared when the corresponding origin is removed
    *  or the stored credential fails a server-side rotation check. */
   private readonly storedCredentials = new Map<
     string,
-    { verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256' }
+    {
+      verifier: Buffer;
+      salt: Buffer;
+      iterations: number;
+      version: 'v1';
+      algorithm: 'pbkdf2-sha256';
+    }
   >();
   /** Last CPU+activity+workspace push sent to the main view, for change-only
    *  emission. Null until the first push. */
@@ -306,7 +338,9 @@ export class DesktopHost {
             try {
               ctrl.setActive(cmd.id);
             } catch (err) {
-              console.log(`phi-desktop: tray select-profile ${cmd.id}: ${String(err)}`);
+              console.log(
+                `phi-desktop: tray select-profile ${cmd.id}: ${String(err)}`,
+              );
             }
             break;
           }
@@ -318,7 +352,9 @@ export class DesktopHost {
             try {
               ctrl.setCloseToTray(!ctrl.getCloseToTray());
             } catch (err) {
-              console.log(`phi-desktop: tray toggle-close-to-tray: ${String(err)}`);
+              console.log(
+                `phi-desktop: tray toggle-close-to-tray: ${String(err)}`,
+              );
             }
             break;
           }
@@ -330,7 +366,9 @@ export class DesktopHost {
             try {
               ctrl.setSyncAlerts(!ctrl.getSyncAlerts());
             } catch (err) {
-              console.log(`phi-desktop: tray toggle-sync-alerts: ${String(err)}`);
+              console.log(
+                `phi-desktop: tray toggle-sync-alerts: ${String(err)}`,
+              );
             }
             break;
           }
@@ -380,16 +418,22 @@ export class DesktopHost {
   activateServerUrl(raw: string): void {
     const ctrl = this.controller;
     if (!ctrl) {
-      console.log(`phi-desktop: activateServerUrl ${raw}: controller not ready`);
+      console.log(
+        `phi-desktop: activateServerUrl ${raw}: controller not ready`,
+      );
       return;
     }
     if (!this.profileViews) {
-      console.log(`phi-desktop: activateServerUrl ${raw}: profile views not ready`);
+      console.log(
+        `phi-desktop: activateServerUrl ${raw}: profile views not ready`,
+      );
       return;
     }
     try {
       const normalized = parseEndpoint(raw);
-      let profile = ctrl.state().profiles.find((p) => p.origin === normalized.origin) ?? null;
+      let profile =
+        ctrl.state().profiles.find((p) => p.origin === normalized.origin) ??
+        null;
       if (!profile) {
         profile = ctrl.add(raw);
         this.profileViews.addProfile(profile.id, profile.origin);
@@ -442,14 +486,18 @@ export class DesktopHost {
     const ctrl = this.controller;
     if (!ctrl || view.webContents.isDestroyed()) return null;
     try {
-      const observed = (await view.webContents.executeJavaScript(REMOTE_IDENTITY_SCRIPT)) as {
+      const observed = (await view.webContents.executeJavaScript(
+        REMOTE_IDENTITY_SCRIPT,
+      )) as {
         hostname?: unknown;
         accent?: unknown;
       };
-      const profile = ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
+      const profile =
+        ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
       if (!profile) return null;
       const identity = {
-        hostname: typeof observed.hostname === 'string' ? observed.hostname : '',
+        hostname:
+          typeof observed.hostname === 'string' ? observed.hostname : '',
         accent: typeof observed.accent === 'string' ? observed.accent : '',
       };
       if (identity.hostname === '' && identity.accent === '') return null;
@@ -500,10 +548,17 @@ export class DesktopHost {
       const profileId = profile.id;
       void Promise.all([
         view.webContents.executeJavaScript(REMOTE_CPU_SCRIPT).catch(() => null),
-        view.webContents.executeJavaScript(REMOTE_ACTIVITY_SCRIPT).catch(() => false),
-        view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT).catch(() => null),
+        view.webContents
+          .executeJavaScript(REMOTE_ACTIVITY_SCRIPT)
+          .catch(() => false),
+        view.webContents
+          .executeJavaScript(READ_WORKSPACE_SCRIPT)
+          .catch(() => null),
       ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
-        const cpu = typeof rawCpu === 'number' && Number.isFinite(rawCpu) ? Math.min(100, Math.max(0, rawCpu)) : NaN;
+        const cpu =
+          typeof rawCpu === 'number' && Number.isFinite(rawCpu)
+            ? Math.min(100, Math.max(0, rawCpu))
+            : NaN;
         const next = Number.isFinite(cpu) ? cpu : null;
         const prev = this.observedCpu.get(profileId) ?? null;
         if (next === null) this.observedCpu.delete(profileId);
@@ -524,7 +579,10 @@ export class DesktopHost {
           return;
         }
         win.setProgressBar(next !== null && next > 50 ? next / 100 : -1);
-        const workspace = typeof rawWorkspace === 'string' && rawWorkspace !== '' ? rawWorkspace : null;
+        const workspace =
+          typeof rawWorkspace === 'string' && rawWorkspace !== ''
+            ? rawWorkspace
+            : null;
         this.pushHeaderState(next, activity, workspace);
       });
     }
@@ -541,7 +599,11 @@ export class DesktopHost {
    *  its own (no terminals there); without this push the brand
    *  glow stays at idle and the activity indicator stays in its
    *  initial state regardless of what the body is doing. */
-  pushHeaderState(cpuPercent: number | null, terminalActivity: boolean, workspace?: string | null): void {
+  pushHeaderState(
+    cpuPercent: number | null,
+    terminalActivity: boolean,
+    workspace?: string | null,
+  ): void {
     const win = this.mainWindow;
     if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
     const state: HeaderState = {
@@ -615,13 +677,22 @@ export class DesktopHost {
    *  against partial / tampered files: a malformed entry is dropped
    *  silently rather than crashing the host. */
   private parseStoredCredential(raw: unknown): {
-    verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256';
+    verifier: Buffer;
+    salt: Buffer;
+    iterations: number;
+    version: 'v1';
+    algorithm: 'pbkdf2-sha256';
   } | null {
     if (!raw || typeof raw !== 'object') return null;
     const r = raw as Record<string, unknown>;
     if (r.version !== 'v1' || r.algorithm !== 'pbkdf2-sha256') return null;
-    if (typeof r.iterations !== 'number' || !Number.isFinite(r.iterations)) return null;
-    if (typeof r.saltBase64 !== 'string' || typeof r.verifierBase64 !== 'string') return null;
+    if (typeof r.iterations !== 'number' || !Number.isFinite(r.iterations))
+      return null;
+    if (
+      typeof r.saltBase64 !== 'string' ||
+      typeof r.verifierBase64 !== 'string'
+    )
+      return null;
     const salt = Buffer.from(r.saltBase64, 'base64url');
     const verifier = Buffer.from(r.verifierBase64, 'base64url');
     if (salt.length === 0 || verifier.length !== 32) return null;
@@ -674,12 +745,20 @@ export class DesktopHost {
   /** Attempts to recover a credential for a local server origin from ~/.phi/config.json.
    *  Allows silent authentication on fresh installs or after app data clears. */
   private tryRecoverLocalCredential(origin: string): {
-    verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256';
+    verifier: Buffer;
+    salt: Buffer;
+    iterations: number;
+    version: 'v1';
+    algorithm: 'pbkdf2-sha256';
   } | null {
     try {
       const url = new URL(origin);
       const host = url.hostname.toLowerCase();
-      const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+      const isLocal =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '::1' ||
+        host === '0.0.0.0';
       if (!isLocal) return null;
 
       const phiConfigPath = path.join(os.homedir(), '.phi', 'config.json');
@@ -687,10 +766,16 @@ export class DesktopHost {
 
       const content = readFileSync(phiConfigPath, 'utf8');
       const cfg = JSON.parse(content) as { password_hash?: string };
-      if (!cfg.password_hash || typeof cfg.password_hash !== 'string') return null;
+      if (!cfg.password_hash || typeof cfg.password_hash !== 'string')
+        return null;
 
       const parts = cfg.password_hash.split('.');
-      if (parts.length !== 5 || parts[0] !== 'v1' || parts[1] !== 'pbkdf2-sha256') return null;
+      if (
+        parts.length !== 5 ||
+        parts[0] !== 'v1' ||
+        parts[1] !== 'pbkdf2-sha256'
+      )
+        return null;
 
       const iterations = Number(parts[2]);
       if (!Number.isFinite(iterations) || iterations < 1) return null;
@@ -716,7 +801,11 @@ export class DesktopHost {
 
   /** Resolves a stored credential from memory, loading from disk or local config fallback. */
   private getOrRecoverCredential(origin: string): {
-    verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256';
+    verifier: Buffer;
+    salt: Buffer;
+    iterations: number;
+    version: 'v1';
+    algorithm: 'pbkdf2-sha256';
   } | null {
     let cred = this.storedCredentials.get(origin);
     if (!cred) {
@@ -732,7 +821,10 @@ export class DesktopHost {
   /** Captures the verifier and trust parameters AccessAuth cached after a successful
    *  unlock, and flushes the encrypted credentials file. Called by the unlock
    *  IPC handler right after a `tryUnlock` returns `ok`. */
-  private persistVerifierAfterUnlock(origin: string, accessAuth: AccessAuth): void {
+  private persistVerifierAfterUnlock(
+    origin: string,
+    accessAuth: AccessAuth,
+  ): void {
     const cred = accessAuth.getLastCredential(origin);
     if (cred) {
       this.storedCredentials.set(origin, {
@@ -771,13 +863,20 @@ export class DesktopHost {
       });
       if (!res.ok) return null;
       const status = (await res.json()) as {
-        enabled?: boolean; algorithm?: string; iterations?: number; salt?: string;
+        enabled?: boolean;
+        algorithm?: string;
+        iterations?: number;
+        salt?: string;
       };
       if (!status.enabled) return null;
       if (status.algorithm !== 'pbkdf2-sha256') return null;
-      if (typeof status.iterations !== 'number' || status.iterations < 1) return null;
+      if (typeof status.iterations !== 'number' || status.iterations < 1)
+        return null;
       if (typeof status.salt !== 'string' || status.salt === '') return null;
-      return { salt: Buffer.from(status.salt, 'base64url'), iterations: status.iterations };
+      return {
+        salt: Buffer.from(status.salt, 'base64url'),
+        iterations: status.iterations,
+      };
     } catch {
       return null;
     }
@@ -816,7 +915,10 @@ export class DesktopHost {
     }
     const verifierCopy = Buffer.from(cred.verifier);
     try {
-      const result = await accessAuth.tryUnlockWithVerifier(origin, verifierCopy);
+      const result = await accessAuth.tryUnlockWithVerifier(
+        origin,
+        verifierCopy,
+      );
       if (result.kind === 'invalid-password') {
         this.clearStoredCredential(origin);
         return false;
@@ -847,7 +949,11 @@ export class DesktopHost {
   }
 
   /** Injects Phi's error toast into the view for a failed local file action. */
-  toastFileActionFailure(view: WebContentsView, action: FileAction, reason: string): void {
+  toastFileActionFailure(
+    view: WebContentsView,
+    action: FileAction,
+    reason: string,
+  ): void {
     if (view.webContents.isDestroyed()) return;
     void view.webContents
       .executeJavaScript(toastErrorScript(`"${action.rel}" — ${reason}`))
@@ -859,7 +965,10 @@ export class DesktopHost {
    * path is resolved from the recorded cwd and gated on a local exists
    * check — a missing local path only toasts in the page.
    */
-  async runFileAction(action: FileAction, view: WebContentsView): Promise<void> {
+  async runFileAction(
+    action: FileAction,
+    view: WebContentsView,
+  ): Promise<void> {
     const localPath = path.resolve(action.cwd, action.rel);
     if (!existsSync(localPath)) {
       this.toastFileActionFailure(view, action, 'not found on this machine');
@@ -896,7 +1005,9 @@ export class DesktopHost {
         const action = parseFileAction(raw);
         if (action) void this.runFileAction(action, view);
       },
-      () => { /* the view navigated away mid-read */ },
+      () => {
+        /* the view navigated away mid-read */
+      },
     );
   }
 
@@ -928,7 +1039,9 @@ export class DesktopHost {
     if (!view || view.webContents.isDestroyed()) return;
     const open = (): void => {
       if (view.webContents.isDestroyed()) return;
-      void view.webContents.executeJavaScript(OPEN_SESSIONS_SCRIPT).catch(() => {});
+      void view.webContents
+        .executeJavaScript(OPEN_SESSIONS_SCRIPT)
+        .catch(() => {});
     };
     if (this.loadedViews.has(view)) open();
     else view.webContents.once('did-finish-load', open);
@@ -940,7 +1053,10 @@ export class DesktopHost {
   syncDividersOnSwitch(incomingId: string): void {
     this.pendingDividers = null;
     const outgoingId = this.profileViews?.getActive() ?? null;
-    const outgoing = outgoingId === null ? null : (this.profileViews?.getView(outgoingId) ?? null);
+    const outgoing =
+      outgoingId === null
+        ? null
+        : (this.profileViews?.getView(outgoingId) ?? null);
     if (!outgoing || outgoing.webContents.isDestroyed()) return;
     void outgoing.webContents.executeJavaScript(READ_DIVIDERS_SCRIPT).then(
       (raw) => {
@@ -971,12 +1087,17 @@ export class DesktopHost {
     try {
       ctrl.setActive(profile.id);
     } catch (err) {
-      console.log(`phi-desktop: notification click ${profile.id}: ${String(err)}`);
+      console.log(
+        `phi-desktop: notification click ${profile.id}: ${String(err)}`,
+      );
     }
   }
 
   showTerminalDone(profile: ProfileMeta): void {
-    const notification = new Notification({ title: `Phi · ${profile.name}`, body: 'Terminal done' });
+    const notification = new Notification({
+      title: `Phi · ${profile.name}`,
+      body: 'Terminal done',
+    });
     notification.on('click', () => this.focusProfile(profile));
     notification.show();
   }
@@ -988,7 +1109,9 @@ export class DesktopHost {
     const now = Date.now();
     if (now - this.lastAlarmChimeAt < ALARM_CHIME_BURST_MS) return;
     this.lastAlarmChimeAt = now;
-    void rail.webContents.executeJavaScript(PLAY_ALARM_CHIME_SCRIPT(ALARM_CHIME_URL)).catch(() => {});
+    void rail.webContents
+      .executeJavaScript(PLAY_ALARM_CHIME_SCRIPT(ALARM_CHIME_URL))
+      .catch(() => {});
   }
 
   /**
@@ -1016,15 +1139,21 @@ export class DesktopHost {
     });
     notification.on('click', () => this.focusProfile(profile));
     notification.show();
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) this.mainWindow.flashFrame(true);
+    if (this.mainWindow && !this.mainWindow.isDestroyed())
+      this.mainWindow.flashFrame(true);
     this.controller?.setUnread(profile.id, 1);
     if (alarm) this.playAlarmChime();
   }
 
-  onProfileTitleUpdated(view: WebContentsView, origin: string, title: string): void {
+  onProfileTitleUpdated(
+    view: WebContentsView,
+    origin: string,
+    title: string,
+  ): void {
     const ctrl = this.controller;
     if (!ctrl) return;
-    const profile = ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
+    const profile =
+      ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
     if (!profile) return;
     this.observedTitle.set(profile.id, title);
     this.refreshWindowTitle();
@@ -1033,11 +1162,19 @@ export class DesktopHost {
     // the first observation and skip the attention path so a marker never
     // clears an existing unread state.
     if (title.startsWith(SYNC_NOTIF_MARKER)) {
-      this.onSyncAlert(profile, SYNC_NOTIF_MARKER, title.slice(SYNC_NOTIF_MARKER.length));
+      this.onSyncAlert(
+        profile,
+        SYNC_NOTIF_MARKER,
+        title.slice(SYNC_NOTIF_MARKER.length),
+      );
       return;
     }
     if (title.startsWith(SYNC_ALARM_MARKER)) {
-      this.onSyncAlert(profile, SYNC_ALARM_MARKER, title.slice(SYNC_ALARM_MARKER.length));
+      this.onSyncAlert(
+        profile,
+        SYNC_ALARM_MARKER,
+        title.slice(SYNC_ALARM_MARKER.length),
+      );
       return;
     }
     const marked = title.startsWith(TITLE_MARKER);
@@ -1046,7 +1183,8 @@ export class DesktopHost {
     this.markerPresent.set(view, marked);
     if (marked) {
       ctrl.setUnread(profile.id, 1);
-      if (!this.isFocusedVisibleProfile(profile.id)) this.showTerminalDone(profile);
+      if (!this.isFocusedVisibleProfile(profile.id))
+        this.showTerminalDone(profile);
     } else {
       ctrl.setUnread(profile.id, 0);
     }
@@ -1067,7 +1205,9 @@ export class DesktopHost {
     const marked = title.startsWith(TITLE_MARKER);
     const rest = marked ? title.slice(TITLE_MARKER.length) : title;
     const glyph = rest.startsWith('ϕ') ? 'ϕ' : 'Φ';
-    win.setTitle(`${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`);
+    win.setTitle(
+      `${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`,
+    );
     // The main view page renders the marker-stripped remote title.
     this.pushMainViewTitle(rest);
   }
@@ -1093,7 +1233,8 @@ export class DesktopHost {
   pushActiveServer(): void {
     const win = this.mainWindow;
     const ctrl = this.controller;
-    if (!win || win.isDestroyed() || win.webContents.isDestroyed() || !ctrl) return;
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed() || !ctrl)
+      return;
     const st = ctrl.state();
     const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
     if (!active) return;
@@ -1166,7 +1307,8 @@ export class DesktopHost {
       result.headerDrag = dom.headerDrag;
       result.captionControls = dom.captionControls;
       result.bodyArea = dom.bodyArea;
-      result.bodyAreaHasDesktopClass = dom.bodyAreaClass.includes('desktop-body-area');
+      result.bodyAreaHasDesktopClass =
+        dom.bodyAreaClass.includes('desktop-body-area');
       // The smoke run uses the normal argv (no --register-protocol /
       // --unregister-protocol); the CLI flags exit before any window.
       result.registrationNotExercised =
@@ -1183,8 +1325,14 @@ export class DesktopHost {
       // whether the JSON file exists on disk afterwards.
       result.controllerPersisted = false;
       try {
-        const scratch = path.join(app.getPath('temp'), `phi-desktop-smoke-${Date.now()}-profiles.json`);
-        const smokeController = new Controller({ persistPath: scratch, log: console.log });
+        const scratch = path.join(
+          app.getPath('temp'),
+          `phi-desktop-smoke-${Date.now()}-profiles.json`,
+        );
+        const smokeController = new Controller({
+          persistPath: scratch,
+          log: console.log,
+        });
         smokeController.add('http://127.0.0.1:7070/');
         result.controllerPersisted = existsSync(scratch);
       } catch (err) {
@@ -1259,7 +1407,8 @@ export class DesktopHost {
         applicationName: 'phi-client',
         applicationVersion: app.getVersion(),
         copyright: 'Copyright © 2025-2026 Phi Contributors',
-        credits: 'Terminal multiplexer and browser-based control center for AI coding assistants.',
+        credits:
+          'Terminal multiplexer and browser-based control center for AI coding assistants.',
         authors: ['hypernewbie'],
         website: 'https://github.com/hypernewbie/phi',
         iconPath: path.join(here, '..', 'assets', 'icon.png'),
@@ -1285,7 +1434,11 @@ export class DesktopHost {
   }
 
   createMainWindow(): BrowserWindow {
-    if (process.platform === 'darwin' && app.dock && typeof app.dock.setIcon === 'function') {
+    if (
+      process.platform === 'darwin' &&
+      app.dock &&
+      typeof app.dock.setIcon === 'function'
+    ) {
       app.dock.setIcon(APP_ICON_PATH);
     }
     const win = new BrowserWindow({
@@ -1334,8 +1487,10 @@ export class DesktopHost {
     // popups below install it on their own contents). Modified F11 chords
     // stay untouched; xterm.js does not claim plain F11.
     installFullscreenToggle(win.webContents, win);
-    installReloadShortcut(win.webContents, () => {
-      const activeId = this.profileViews?.getActive() ?? null;
+    installReloadShortcut(
+      win.webContents,
+      () => {
+        const activeId = this.profileViews?.getActive() ?? null;
         if (activeId !== null) {
           const view = this.profileViews?.getView(activeId) ?? null;
           if (view && !view.webContents.isDestroyed()) return view.webContents;
@@ -1418,12 +1573,17 @@ export class DesktopHost {
           // Guard for mainWindow/contentView being torn down concurrently.
           if (this.railView) {
             try {
-              if (!this.railView.webContents.isDestroyed()) this.railView.webContents.close();
+              if (!this.railView.webContents.isDestroyed())
+                this.railView.webContents.close();
             } catch (err) {
               console.log(`phi-desktop: rail view close: ${String(err)}`);
             }
             try {
-              if (this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.contentView) {
+              if (
+                this.mainWindow &&
+                !this.mainWindow.isDestroyed() &&
+                this.mainWindow.contentView
+              ) {
                 this.mainWindow.contentView.removeChildView(this.railView);
               }
             } catch (err) {
@@ -1493,9 +1653,13 @@ export class DesktopHost {
      *  activeId check (activeId returns A again) but the proof has
      *  already been injected into the B view — an ABA race. */
     let activeEpoch = 0;
-    let pendingUnlock:
-      | { requestId: string; profileId: string; origin: string; abort: AbortController; epoch: number }
-      | null = null;
+    let pendingUnlock: {
+      requestId: string;
+      profileId: string;
+      origin: string;
+      abort: AbortController;
+      epoch: number;
+    } | null = null;
     let unlockInFlight = false;
     let promptSuppressedFor: string | null = null;
     const accessAuth = new AccessAuth();
@@ -1507,7 +1671,8 @@ export class DesktopHost {
       const ctrl = this.controller;
       if (!ctrl) return;
       if (event.kind === 'active-changed') {
-        const profile = ctrl.state().profiles.find((p) => p.id === event.id) ?? null;
+        const profile =
+          ctrl.state().profiles.find((p) => p.id === event.id) ?? null;
         if (profile) this.trayHandle?.setActiveProfile(profile);
         this.syncDividersOnSwitch(event.id);
         // The retained-view switch follows the controller's active id (the
@@ -1586,12 +1751,19 @@ export class DesktopHost {
       // guard paths (window-open and will-navigate) compare the same
       // canonical origin string.
       const allowedOrigin = new URL(origin).origin;
-      const popupSize = (features: string): { width: number; height: number } => {
+      const popupSize = (
+        features: string,
+      ): { width: number; height: number } => {
         const token = (name: string): number | null => {
-          const m = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*(\\d+)`, 'i').exec(features);
+          const m = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*(\\d+)`, 'i').exec(
+            features,
+          );
           return m ? Number(m[1]) : null;
         };
-        return { width: token('width') ?? 860, height: token('height') ?? 1000 };
+        return {
+          width: token('width') ?? 860,
+          height: token('height') ?? 1000,
+        };
       };
       view.webContents.setWindowOpenHandler(({ url, features }) => {
         try {
@@ -1626,8 +1798,11 @@ export class DesktopHost {
               },
             };
           }
-          if (target.protocol === 'http:' || target.protocol === 'https:') void shell.openExternal(url);
-        } catch { /* deny malformed URLs */ }
+          if (target.protocol === 'http:' || target.protocol === 'https:')
+            void shell.openExternal(url);
+        } catch {
+          /* deny malformed URLs */
+        }
         return { action: 'deny' };
       });
       // Navigation guard (security): a retained profile view may only
@@ -1645,7 +1820,9 @@ export class DesktopHost {
             if (target.protocol === 'http:' || target.protocol === 'https:') {
               void shell.openExternal(url);
             }
-          } catch { /* malformed URL: deny below */ }
+          } catch {
+            /* malformed URL: deny below */
+          }
           event.preventDefault();
         });
       };
@@ -1671,12 +1848,18 @@ export class DesktopHost {
               ctrl.setActive(profiles[target.index].id);
               return;
             }
-            const activeIdx = profiles.findIndex((p) => p.id === ctrl.state().activeId);
+            const activeIdx = profiles.findIndex(
+              (p) => p.id === ctrl.state().activeId,
+            );
             const step = target.kind === 'next' ? 1 : -1;
             const base = activeIdx < 0 ? (step === 1 ? -1 : 0) : activeIdx;
-            ctrl.setActive(profiles[(base + step + profiles.length) % profiles.length].id);
+            ctrl.setActive(
+              profiles[(base + step + profiles.length) % profiles.length].id,
+            );
           } catch (err) {
-            console.log(`phi-desktop: rail select ${input.key}: ${String(err)}`);
+            console.log(
+              `phi-desktop: rail select ${input.key}: ${String(err)}`,
+            );
           }
         };
         if (target.kind === 'index' && ALWAYS_SAFE_RAIL_CHORDS.has(input.key)) {
@@ -1714,24 +1897,38 @@ export class DesktopHost {
       view.webContents.on('did-finish-load', () => {
         this.loadedViews.add(view);
         this.pushRailState();
-        void view.webContents.executeJavaScript(INSTALL_FILE_ACTION_SCRIPT).catch(() => {});
+        void view.webContents
+          .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
+          .catch(() => {});
         // A first activation can request header config before this body has
         // populated its workspace selector. Re-push the active server after
         // load so the main header reads this server's actual selected project.
         const state = this.controller?.state();
-        const active = state?.profiles.find((profile) => profile.id === state.activeId);
+        const active = state?.profiles.find(
+          (profile) => profile.id === state.activeId,
+        );
         if (active?.origin === origin) this.pushActiveServer();
       });
       return view;
     };
-    const defaultBounds = (): { x: number; y: number; width: number; height: number } => {
+    const defaultBounds = (): {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } => {
       // WebContentsView bounds are relative to the window's CONTENT area,
       // so the content bounds drive the active view's size — never the
       // outer frame bounds. The retained bodies start below the main view
       // page's vendored header row (HEADER_HEIGHT) and sit right of the
       // rail gutter; the header is never covered.
       const b = win.getContentBounds();
-      return { x: RAIL_WIDTH, y: HEADER_HEIGHT, width: b.width - RAIL_WIDTH, height: b.height - HEADER_HEIGHT };
+      return {
+        x: RAIL_WIDTH,
+        y: HEADER_HEIGHT,
+        width: b.width - RAIL_WIDTH,
+        height: b.height - HEADER_HEIGHT,
+      };
     };
     this.profileViews = new ProfileViewManager({
       win,
@@ -1798,7 +1995,9 @@ export class DesktopHost {
       try {
         ctrl.setActive(id);
       } catch (err) {
-        console.log(`phi-desktop: phi:open-server-sessions ${id}: ${String(err)}`);
+        console.log(
+          `phi-desktop: phi:open-server-sessions ${id}: ${String(err)}`,
+        );
         return;
       }
       this.openServerSessions(id);
@@ -1847,7 +2046,10 @@ export class DesktopHost {
       } catch (err) {
         console.log(`phi-desktop: phi:add-server ${url}: ${String(err)}`);
         if (!event.sender.isDestroyed()) {
-          event.sender.send('phi:add-server-result', { ok: false, message: String(err) });
+          event.sender.send('phi:add-server-result', {
+            ok: false,
+            message: String(err),
+          });
         }
       }
     });
@@ -1855,7 +2057,14 @@ export class DesktopHost {
     // throws on unknown ids — logged, no reply channel.
     ipcMain.on('phi:rename-profile', (_event, id: unknown, name: unknown) => {
       const ctrl = this.controller;
-      if (!ctrl || typeof id !== 'string' || id === '' || typeof name !== 'string' || name === '') return;
+      if (
+        !ctrl ||
+        typeof id !== 'string' ||
+        id === '' ||
+        typeof name !== 'string' ||
+        name === ''
+      )
+        return;
       try {
         ctrl.rename(id, name);
       } catch (err) {
@@ -1871,7 +2080,8 @@ export class DesktopHost {
     ipcMain.on('phi:remove-profile', (_event, id: unknown) => {
       const ctrl = this.controller;
       if (!ctrl || typeof id !== 'string' || id === '') return;
-      const origin = ctrl.state().profiles.find((p) => p.id === id)?.origin ?? '';
+      const origin =
+        ctrl.state().profiles.find((p) => p.id === id)?.origin ?? '';
       try {
         ctrl.remove(id);
       } catch (err) {
@@ -1891,16 +2101,23 @@ export class DesktopHost {
         this.clearStoredCredential(authOrigin);
       }
     });
-    ipcMain.on('phi:reorder-profile', (_event, id: unknown, beforeId: unknown) => {
-      const ctrl = this.controller;
-      if (!ctrl || typeof id !== 'string' || id === '') return;
-      if (beforeId !== null && (typeof beforeId !== 'string' || beforeId === '')) return;
-      try {
-        ctrl.reorder(id, beforeId);
-      } catch (err) {
-        console.log(`phi-desktop: phi:reorder-profile ${id}: ${String(err)}`);
-      }
-    });
+    ipcMain.on(
+      'phi:reorder-profile',
+      (_event, id: unknown, beforeId: unknown) => {
+        const ctrl = this.controller;
+        if (!ctrl || typeof id !== 'string' || id === '') return;
+        if (
+          beforeId !== null &&
+          (typeof beforeId !== 'string' || beforeId === '')
+        )
+          return;
+        try {
+          ctrl.reorder(id, beforeId);
+        } catch (err) {
+          console.log(`phi-desktop: phi:reorder-profile ${id}: ${String(err)}`);
+        }
+      },
+    );
     ipcMain.on('phi:reload-profile', (_event, id: unknown) => {
       const targetId = typeof id === 'string' && id !== '' ? id : undefined;
       this.profileViews?.reloadActive(targetId);
@@ -1935,7 +2152,9 @@ export class DesktopHost {
     });
     layoutRail();
     try {
-      await rail.webContents.loadFile(path.join(app.getAppPath(), 'dist', 'renderer.html'));
+      await rail.webContents.loadFile(
+        path.join(app.getAppPath(), 'dist', 'renderer.html'),
+      );
     } catch (err) {
       console.log(`phi-desktop: rail loadFile failed: ${String(err)}`);
     }
@@ -1951,7 +2170,8 @@ export class DesktopHost {
     // Window-control IPC: only the main view page may drive the window;
     // any other sender (a remote profile origin, the rail, the picker) is
     // rejected.
-    const isMainViewSender = (event: IpcMainInvokeEvent): boolean => event.sender === win.webContents;
+    const isMainViewSender = (event: IpcMainInvokeEvent): boolean =>
+      event.sender === win.webContents;
     ipcMain.handle('phi:window-minimize', (event) => {
       if (!isMainViewSender(event)) return;
       win.minimize();
@@ -2000,7 +2220,10 @@ export class DesktopHost {
 
     /** Waits for one main-frame load without exposing a timer or callback to
      *  the remote page. Used both before the one-time login and after reload. */
-    const waitForBodyLoad = (view: WebContentsView, reload: boolean): Promise<boolean> =>
+    const waitForBodyLoad = (
+      view: WebContentsView,
+      reload: boolean,
+    ): Promise<boolean> =>
       new Promise((resolve) => {
         const contents = view.webContents;
         if (contents.isDestroyed()) {
@@ -2027,23 +2250,50 @@ export class DesktopHost {
      *  verifier, and native-fetch cookie stay in the main process. Reloading
      *  then lets the browser's unchanged auth bootstrap observe its cookie,
      *  so it never asks the user for the same password a second time. */
-    const authenticateBodyView = async (
-      pending: { requestId: string; profileId: string; origin: string; abort: AbortController; epoch: number },
-    ): Promise<{ ok: true } | { ok: false; code: 'stale' | 'unavailable'; message: string }> => {
+    const authenticateBodyView = async (pending: {
+      requestId: string;
+      profileId: string;
+      origin: string;
+      abort: AbortController;
+      epoch: number;
+    }): Promise<
+      | { ok: true }
+      | { ok: false; code: 'stale' | 'unavailable'; message: string }
+    > => {
       const ctrl = this.controller;
-      if (!ctrl || ctrl.state().activeId !== pending.profileId || pending.abort.signal.aborted) {
+      if (
+        !ctrl ||
+        ctrl.state().activeId !== pending.profileId ||
+        pending.abort.signal.aborted
+      ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
-      const profile = ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
+      const profile =
+        ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
       const view = profile ? this.viewByOrigin.get(profile.origin) : null;
       if (!view || view.webContents.isDestroyed()) {
-        return { ok: false, code: 'unavailable', message: 'The server view is unavailable.' };
+        return {
+          ok: false,
+          code: 'unavailable',
+          message: 'The server view is unavailable.',
+        };
       }
-      if (!this.loadedViews.has(view) && !await waitForBodyLoad(view, false)) {
-        return { ok: false, code: 'unavailable', message: 'The server view did not finish loading.' };
+      if (
+        !this.loadedViews.has(view) &&
+        !(await waitForBodyLoad(view, false))
+      ) {
+        return {
+          ok: false,
+          code: 'unavailable',
+          message: 'The server view did not finish loading.',
+        };
       }
-      const login = await accessAuth.createLoginProof(pending.origin, pending.abort.signal);
-      if (login.kind === 'stale') return { ok: false, code: 'stale', message: login.message };
+      const login = await accessAuth.createLoginProof(
+        pending.origin,
+        pending.abort.signal,
+      );
+      if (login.kind === 'stale')
+        return { ok: false, code: 'stale', message: login.message };
       if (login.kind === 'unavailable') {
         return { ok: false, code: 'unavailable', message: login.message };
       }
@@ -2069,10 +2319,18 @@ export class DesktopHost {
             bodyAuthLoginScript(login.challenge, login.proof),
           );
         } catch {
-          return { ok: false, code: 'unavailable', message: 'Unable to authenticate the server view.' };
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'Unable to authenticate the server view.',
+          };
         }
         if (status !== 200) {
-          return { ok: false, code: 'unavailable', message: 'The server view did not accept the session.' };
+          return {
+            ok: false,
+            code: 'unavailable',
+            message: 'The server view did not accept the session.',
+          };
         }
       }
       if (
@@ -2082,8 +2340,12 @@ export class DesktopHost {
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
-      if (!await waitForBodyLoad(view, true)) {
-        return { ok: false, code: 'unavailable', message: 'The authenticated server view did not reload.' };
+      if (!(await waitForBodyLoad(view, true))) {
+        return {
+          ok: false,
+          code: 'unavailable',
+          message: 'The authenticated server view did not reload.',
+        };
       }
       if (
         (pendingUnlock !== null && pendingUnlock !== pending) ||
@@ -2109,7 +2371,10 @@ export class DesktopHost {
     const silentBodyReauth = async (
       origin: string,
       profileId: string,
-    ): Promise<{ ok: true } | { ok: false; code: 'stale' | 'unavailable'; message: string }> =>
+    ): Promise<
+      | { ok: true }
+      | { ok: false; code: 'stale' | 'unavailable'; message: string }
+    > =>
       authenticateBodyView({
         requestId: '',
         profileId,
@@ -2140,7 +2405,10 @@ export class DesktopHost {
     /** Fire-and-forget body-reauth retry with backoff. Coalesces
      *  concurrent requests for the same origin. Stops early when
      *  the active profile switches away from this origin. */
-    const scheduleBodyReauthRetry = (origin: string, profileId: string): void => {
+    const scheduleBodyReauthRetry = (
+      origin: string,
+      profileId: string,
+    ): void => {
       const existing = bodyReauthInFlight.get(origin);
       if (existing) return;
       const p = (async (): Promise<void> => {
@@ -2151,7 +2419,9 @@ export class DesktopHost {
           if (this.controller?.state().activeId !== profileId) return;
           const result = await silentBodyReauth(origin, profileId);
           if (result.ok) return;
-          console.log(`phi-desktop: silent body reauth retry ${attempt}/3 ${origin}: ${result.message}`);
+          console.log(
+            `phi-desktop: silent body reauth retry ${attempt}/3 ${origin}: ${result.message}`,
+          );
         }
       })();
       bodyReauthInFlight.set(origin, p);
@@ -2186,7 +2456,10 @@ export class DesktopHost {
         // every await point to avoid A-response-after-switch races.
         if (ctrl.state().activeId !== active.id) return null;
         const status = await accessAuth
-          .fetchStatus(origin, pendingUnlock === null ? undefined : pendingUnlock.abort.signal)
+          .fetchStatus(
+            origin,
+            pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
+          )
           .catch(() => null);
         if (status === null) return null;
         if (status.kind === 'no-auth') {
@@ -2210,74 +2483,82 @@ export class DesktopHost {
         const cred = this.getOrRecoverCredential(origin);
         if (cred !== null) {
           // Conservative: compare the server's CURRENT salt/iterations
-            // against the stored credential so a confirmed rotation
-            // clears it, but a transient network blip (status fetch
-            // throws, retry needed) keeps it intact for the next
-            // attempt. The outer handler already established `status`
-            // is `trusted`, so we can compare against it directly
-            // instead of re-fetching.
-            const trustMatches =
-              status.iterations === cred.iterations && status.salt.equals(cred.salt);
-            let unlock: Awaited<ReturnType<typeof accessAuth.tryUnlockWithVerifier>> | null = null;
-            if (trustMatches) {
-              const verifierCopy = Buffer.from(cred.verifier);
-              try {
-                unlock = await accessAuth.tryUnlockWithVerifier(origin, verifierCopy);
-              } finally {
-                verifierCopy.fill(0);
-              }
+          // against the stored credential so a confirmed rotation
+          // clears it, but a transient network blip (status fetch
+          // throws, retry needed) keeps it intact for the next
+          // attempt. The outer handler already established `status`
+          // is `trusted`, so we can compare against it directly
+          // instead of re-fetching.
+          const trustMatches =
+            status.iterations === cred.iterations &&
+            status.salt.equals(cred.salt);
+          let unlock: Awaited<
+            ReturnType<typeof accessAuth.tryUnlockWithVerifier>
+          > | null = null;
+          if (trustMatches) {
+            const verifierCopy = Buffer.from(cred.verifier);
+            try {
+              unlock = await accessAuth.tryUnlockWithVerifier(
+                origin,
+                verifierCopy,
+              );
+            } finally {
+              verifierCopy.fill(0);
             }
-            if (unlock?.kind === 'ok' && ctrl.state().activeId === active.id) {
-              // Main-process cookie is fresh; the body's Chromium cookie
-              // is still stale, so silently re-login + reload it via the
-              // verifier cached in AccessAuth.lastVerifier (the typed
-              // password never enters the renderer — the trust model is
-              // unchanged).
-              const bodyResult = await silentBodyReauth(origin, active.id);
-              if (!bodyResult.ok) {
-                console.log(`phi-desktop: silent body reauth ${origin}: ${bodyResult.message}`);
-                // The next config poll uses the fresh main cookie and
-                // never re-enters the 401 branch, so the body would
-                // otherwise stay stuck on its own auth UI. Schedule an
-                // independent retry with backoff (coalesced per origin).
-                scheduleBodyReauthRetry(origin, active.id);
-              }
-              const retry = await accessAuth.fetchConfig(origin);
-              if (ctrl.state().activeId === active.id) {
-                if (retry.kind === 'ok') return retry.config;
-                if (retry.kind === 'unauthorized') {
-                  // Re-auth said ok but the server still rejects — the
-                  // stored credential is bad. Clear so the prompt that
-                  // follows re-seeds with a fresh verifier.
-                  this.clearStoredCredential(origin);
-                } else {
-                  return null; // unavailable
-                }
-              } else {
-                return null;
-              }
-            } else if (!trustMatches) {
-              // Confirmed salt/iteration rotation — the stored verifier
-              // is for an old password. Clear so the prompt that
-              // follows re-seeds with the current trust settings.
-              this.clearStoredCredential(origin);
-            } else if (unlock && unlock.kind === 'invalid-password') {
-              // The server EVALUATED the HMAC and rejected it: the
-              // stored verifier is bad. (rate-limited is NOT a proof
-              // rejection — auth.go returns 429 before consuming the
-              // challenge, keyed by client IP, so a prior unrelated
-              // failed attempt can cause it. Clearing on rate-limit
-              // would destroy a valid credential; the next poll or the
-              // outer modal will re-evaluate.)
-              this.clearStoredCredential(origin);
-            }
-            // else: trustMatches && (unlock null because the verifier
-            // path threw / returned a transient unavailable/stale) —
-            // keep the credential and fall through to the modal. The
-            // prompt path will retry; if the server is actually
-            // unreachable it surfaces 'unavailable' which the renderer
-            // never paints as a real prompt.
           }
+          if (unlock?.kind === 'ok' && ctrl.state().activeId === active.id) {
+            // Main-process cookie is fresh; the body's Chromium cookie
+            // is still stale, so silently re-login + reload it via the
+            // verifier cached in AccessAuth.lastVerifier (the typed
+            // password never enters the renderer — the trust model is
+            // unchanged).
+            const bodyResult = await silentBodyReauth(origin, active.id);
+            if (!bodyResult.ok) {
+              console.log(
+                `phi-desktop: silent body reauth ${origin}: ${bodyResult.message}`,
+              );
+              // The next config poll uses the fresh main cookie and
+              // never re-enters the 401 branch, so the body would
+              // otherwise stay stuck on its own auth UI. Schedule an
+              // independent retry with backoff (coalesced per origin).
+              scheduleBodyReauthRetry(origin, active.id);
+            }
+            const retry = await accessAuth.fetchConfig(origin);
+            if (ctrl.state().activeId === active.id) {
+              if (retry.kind === 'ok') return retry.config;
+              if (retry.kind === 'unauthorized') {
+                // Re-auth said ok but the server still rejects — the
+                // stored credential is bad. Clear so the prompt that
+                // follows re-seeds with a fresh verifier.
+                this.clearStoredCredential(origin);
+              } else {
+                return null; // unavailable
+              }
+            } else {
+              return null;
+            }
+          } else if (!trustMatches) {
+            // Confirmed salt/iteration rotation — the stored verifier
+            // is for an old password. Clear so the prompt that
+            // follows re-seeds with the current trust settings.
+            this.clearStoredCredential(origin);
+          } else if (unlock && unlock.kind === 'invalid-password') {
+            // The server EVALUATED the HMAC and rejected it: the
+            // stored verifier is bad. (rate-limited is NOT a proof
+            // rejection — auth.go returns 429 before consuming the
+            // challenge, keyed by client IP, so a prior unrelated
+            // failed attempt can cause it. Clearing on rate-limit
+            // would destroy a valid credential; the next poll or the
+            // outer modal will re-evaluate.)
+            this.clearStoredCredential(origin);
+          }
+          // else: trustMatches && (unlock null because the verifier
+          // path threw / returned a transient unavailable/stale) —
+          // keep the credential and fall through to the modal. The
+          // prompt path will retry; if the server is actually
+          // unreachable it surfaces 'unavailable' which the renderer
+          // never paints as a real prompt.
+        }
         pendingUnlock = {
           requestId: randomRequestId(),
           profileId: capture.profileId,
@@ -2309,7 +2590,9 @@ export class DesktopHost {
       const view = this.viewByOrigin.get(active.origin);
       if (!view || view.webContents.isDestroyed()) return null;
       try {
-        const raw = await view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT);
+        const raw = await view.webContents.executeJavaScript(
+          READ_WORKSPACE_SCRIPT,
+        );
         if (ctrl.state().activeId !== active.id) return null;
         return typeof raw === 'string' && raw !== '' ? raw : null;
       } catch {
@@ -2318,12 +2601,19 @@ export class DesktopHost {
     });
 
     ipcMain.handle('phi:auth-unlock', async (event, payload) => {
-      if (!isMainViewSender(event)) return { ok: false, code: 'stale', message: 'forbidden' };
+      if (!isMainViewSender(event))
+        return { ok: false, code: 'stale', message: 'forbidden' };
       if (!payload || typeof payload !== 'object') {
         return { ok: false, code: 'unavailable', message: 'missing payload' };
       }
-      const { requestId, password } = payload as { requestId?: unknown; password?: unknown };
-      if (typeof requestId !== 'string' || (typeof password !== 'string' && password !== null)) {
+      const { requestId, password } = payload as {
+        requestId?: unknown;
+        password?: unknown;
+      };
+      if (
+        typeof requestId !== 'string' ||
+        (typeof password !== 'string' && password !== null)
+      ) {
         return { ok: false, code: 'unavailable', message: 'bad payload' };
       }
       const pending = pendingUnlock;
@@ -2342,7 +2632,11 @@ export class DesktopHost {
       if (unlockInFlight) return { ok: false, code: 'stale', message: 'busy' };
       unlockInFlight = true;
       try {
-        const result = await accessAuth.tryUnlock(pending.origin, password, pending.abort.signal);
+        const result = await accessAuth.tryUnlock(
+          pending.origin,
+          password,
+          pending.abort.signal,
+        );
         // Drop the password reference immediately — Node strings aren't
         // guaranteed to zero but we at least release the local binding.
         void password;
@@ -2365,7 +2659,8 @@ export class DesktopHost {
         // Wrong-password, rate-limit, and transient failures keep the same
         // prompt and child-view obstruction in place. Clearing either here
         // would reveal the body's browser prompt and force a second entry.
-        if (result.kind === 'stale') return { ok: false, code: 'stale', message: result.message };
+        if (result.kind === 'stale')
+          return { ok: false, code: 'stale', message: result.message };
         return { ok: false, code: result.kind, message: result.message };
       } finally {
         unlockInFlight = false;
@@ -2404,14 +2699,18 @@ export class DesktopHost {
         typeof action.id === 'string' &&
         HEADER_ACTION_BUTTONS.has(action.id)
       ) {
-        void view.webContents.executeJavaScript(headerActionClickScript(action.id)).catch(() => {});
+        void view.webContents
+          .executeJavaScript(headerActionClickScript(action.id))
+          .catch(() => {});
       } else if (
         action.kind === 'workspace' &&
         typeof action.value === 'string' &&
         action.value.length > 0 &&
         action.value.length <= 4096
       ) {
-        void view.webContents.executeJavaScript(setWorkspaceScript(action.value)).catch(() => {});
+        void view.webContents
+          .executeJavaScript(setWorkspaceScript(action.value))
+          .catch(() => {});
       }
     });
     // --server <url>: ensure the server exists as a profile — added only
@@ -2426,7 +2725,10 @@ export class DesktopHost {
     if (serverArg !== undefined) this.activateServerUrl(serverArg);
     // Startup restore: when the store already has profiles and no explicit
     // selection (--server) activated one, the MRU profile becomes active.
-    if (this.controller.state().activeId === '' && this.controller.state().profiles.length > 0) {
+    if (
+      this.controller.state().activeId === '' &&
+      this.controller.state().profiles.length > 0
+    ) {
       const mru = this.controller.mostRecent();
       if (mru) this.controller.setActive(mru.id);
     }
@@ -2453,7 +2755,10 @@ export class DesktopHost {
     // cadence (never reached in smoke mode — the smoke gate returns before
     // this line).
     if (this.fileActionInterval === null) {
-      this.fileActionInterval = setInterval(() => this.pollFileAction(), FILE_ACTION_POLL_MS);
+      this.fileActionInterval = setInterval(
+        () => this.pollFileAction(),
+        FILE_ACTION_POLL_MS,
+      );
     }
     // Global hotkey: Ctrl/Cmd+Shift+L brings the main window to the
     // foreground. Registered after the tray; unregistered on before-quit.

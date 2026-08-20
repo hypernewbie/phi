@@ -63,6 +63,9 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint and Format JS/TS
+        run: pnpm run check:code
+
       - name: Lint CSS/HTML
         run: pnpm run lint:web
 

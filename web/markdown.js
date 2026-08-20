@@ -1,6 +1,6 @@
 /* Φ phi — Markdown Docs Viewer */
 import { relativeToCwd, escapeHtml } from './util.js';
-import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn } from './md-render.js';
+import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment } from './attachments.js';
 import { tryNative } from './desktop.js';
@@ -174,17 +174,21 @@ export class MarkdownManager {
                 if (!this.modal.classList.contains('hidden')) {
                     this.closeModal();
                 }
-                else if (this.restartModal && !this.restartModal.classList.contains('hidden')) {
+                else if (this.restartModal &&
+                    !this.restartModal.classList.contains('hidden')) {
                     this._closeRestartModal();
                 }
-                else if (this.pasteModal && !this.pasteModal.classList.contains('hidden')) {
+                else if (this.pasteModal &&
+                    !this.pasteModal.classList.contains('hidden')) {
                     this._closePasteModal();
                 }
                 this._hideContextMenu();
             }
         });
         document.addEventListener('click', (e) => {
-            if (this.contextMenuEl && !e.target.closest('.md-context-menu') && !e.target.closest('.md-file-action-btn')) {
+            if (this.contextMenuEl &&
+                !e.target.closest('.md-context-menu') &&
+                !e.target.closest('.md-file-action-btn')) {
                 this._hideContextMenu();
             }
         });
@@ -199,13 +203,16 @@ export class MarkdownManager {
         const force = options.force !== false;
         const silent = options.silent === true;
         const diffCtrl = this.app.diffController;
-        if (!force && diffCtrl && (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
+        if (!force &&
+            diffCtrl &&
+            (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
             return;
         }
         const cwd = this.app.sessionsManager.activeCWD || '';
         const requestId = ++this.refreshRequestId;
         if (!silent) {
-            this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
+            this.fileListEl.innerHTML =
+                '<div class="md-list-loading">Scanning...</div>';
         }
         try {
             const res = await fetch(`/api/markdown/files?cwd=${encodeURIComponent(cwd)}`);
@@ -259,14 +266,15 @@ export class MarkdownManager {
             byDir[d] = [];
         });
         if (files && files.length > 0) {
-            files.forEach(f => {
+            files.forEach((f) => {
                 if (!byDir[f.dir])
                     byDir[f.dir] = [];
                 byDir[f.dir].push(f);
             });
         }
         if (Object.keys(byDir).length === 0) {
-            this.fileListEl.innerHTML = '<div class="md-list-empty">No markdown directories configured.</div>';
+            this.fileListEl.innerHTML =
+                '<div class="md-list-empty">No markdown directories configured.</div>';
         }
         else {
             for (const [dir, dirFiles] of Object.entries(byDir)) {
@@ -288,13 +296,13 @@ export class MarkdownManager {
                             await fetch('/api/config/markdown-dirs', {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ dir })
+                                body: JSON.stringify({ dir }),
                             });
                             await this.app.sessionsManager.loadConfig(); // Refresh cache!
                             this.refreshFiles();
                         }
                         catch (err) {
-                            console.error("Failed to delete markdown dir:", err);
+                            console.error('Failed to delete markdown dir:', err);
                         }
                     }
                 });
@@ -307,7 +315,7 @@ export class MarkdownManager {
                     group.appendChild(emptyHint);
                 }
                 else {
-                    dirFiles.forEach(f => {
+                    dirFiles.forEach((f) => {
                         const row = document.createElement('div');
                         row.className = 'md-file-row';
                         const item = document.createElement('button');
@@ -359,7 +367,8 @@ export class MarkdownManager {
         const exportBtn = document.createElement('button');
         exportBtn.className = 'md-manage-btn';
         exportBtn.innerText = '⤓  Export';
-        exportBtn.title = 'Copy all markdown files to clipboard (gzip + clipboard)';
+        exportBtn.title =
+            'Copy all markdown files to clipboard (gzip + clipboard)';
         exportBtn.addEventListener('click', () => this._exportMarkdownBundle());
         manageRow.appendChild(exportBtn);
         // Clipboard import: reads a PHIMD blob (from clipboard or paste),
@@ -410,13 +419,13 @@ export class MarkdownManager {
             <line x1="11" y1="16" x2="20" y2="16" stroke-width="0.9" opacity="0.55"/>
             <line x1="11" y1="19" x2="21" y2="19" stroke-width="0.9" opacity="0.55"/>
         </svg>`;
-        this.modalTitle.innerHTML =
-            `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
+        this.modalTitle.innerHTML = `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
     }
     async openFile(f) {
         const cwd = this.app.sessionsManager.activeCWD || '';
         this._setModalTitle(f.name);
-        this.modalBody.innerHTML = '<div class="md-rendering">Rendering...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Rendering...</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
         try {
@@ -464,9 +473,12 @@ export class MarkdownManager {
             // which shows its own toast and reloads the page. Nothing to do here.
         }
         catch (err) {
-            this.app.showToast(`Restart failed: ${err.message}`, { type: 'error' });
+            this.app.showToast(`Restart failed: ${err.message}`, {
+                type: 'error',
+            });
             if (this.restartModalConfirm) {
-                this.restartModalConfirm.disabled = false;
+                this.restartModalConfirm.disabled =
+                    false;
                 this.restartModalConfirm.textContent = 'Restart';
             }
             if (this.restartModalCancel)
@@ -483,19 +495,23 @@ export class MarkdownManager {
     }
     async openHelpModal() {
         this.modalTitle.innerText = 'Phi Documentation';
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading help...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading help...</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
         try {
             const res = await fetch('help.md');
             if (!res.ok)
-                throw new Error(await res.text() || 'Failed to load help.md');
+                throw new Error((await res.text()) || 'Failed to load help.md');
             const raw = await res.text();
             this.openRawMarkdown('Phi Documentation', raw);
         }
         catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${escapeHtml(e.message)}</div>`;
-            this.app.showToast(`Failed to open help: ${e.message}`, { type: 'error', title: 'Help' });
+            this.app.showToast(`Failed to open help: ${e.message}`, {
+                type: 'error',
+                title: 'Help',
+            });
         }
     }
     // openDiagModal — Phase 10: server diagnostics panel. Hits /api/diag
@@ -505,7 +521,8 @@ export class MarkdownManager {
     // every 2s while open.
     async openDiagModal() {
         this.modalTitle.innerText = 'Phi Diagnostics';
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading diagnostics…</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
         const render = (d) => {
@@ -521,9 +538,14 @@ export class MarkdownManager {
                 ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
                 ['PTYs', d.pty_count],
             ];
-            const body = rows.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join('');
-            const panes = (d.panes || []).map((p) => {
-                const pct = p.ring_capacity > 0 ? Math.round(p.ring_bytes * 100 / p.ring_capacity) : 0;
+            const body = rows
+                .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`)
+                .join('');
+            const panes = (d.panes || [])
+                .map((p) => {
+                const pct = p.ring_capacity > 0
+                    ? Math.round((p.ring_bytes * 100) / p.ring_capacity)
+                    : 0;
                 return `<tr>
                     <td>${escapeHtml(p.title || p.id.slice(0, 8))}</td>
                     <td>${escapeHtml(p.coder || '—')}</td>
@@ -531,7 +553,8 @@ export class MarkdownManager {
                     <td>${p.ring_bytes}/${p.ring_capacity} (${pct}%)</td>
                     <td>${p.busy ? 'busy' : 'idle'}</td>
                 </tr>`;
-            }).join('');
+            })
+                .join('');
             this.modalBody.innerHTML = `
                 <div class="diag-panel">
                     <table class="diag-table"><tbody>${body}</tbody></table>
@@ -574,10 +597,11 @@ export class MarkdownManager {
     // which release they're reading the changelog for.
     async openChangelogModal() {
         const versionEl = document.getElementById('phi-changelog-btn');
-        const version = (versionEl && versionEl.textContent || '').trim();
+        const version = ((versionEl && versionEl.textContent) || '').trim();
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading changelog...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
         // Build the update banner up front so it can render alongside
@@ -595,7 +619,7 @@ export class MarkdownManager {
         try {
             const res = await fetch('changelog.md');
             if (!res.ok)
-                throw new Error(await res.text() || 'Failed to load changelog.md');
+                throw new Error((await res.text()) || 'Failed to load changelog.md');
             const raw = await res.text();
             this.openRawMarkdown(title, raw);
         }
@@ -626,13 +650,15 @@ export class MarkdownManager {
         banner.appendChild(body);
         // Show Apply button only for eligible install methods (npm / standalone).
         // Server-side enforce too: POST /api/update/apply returns 403 otherwise.
-        if (status.install_method === 'npm' || status.install_method === 'standalone') {
+        if (status.install_method === 'npm' ||
+            status.install_method === 'standalone') {
             const actions = document.createElement('div');
             actions.className = 'update-banner-actions';
             const applyBtn = document.createElement('button');
             applyBtn.className = 'update-banner-btn';
             applyBtn.textContent = `Apply & restart next time`;
-            applyBtn.title = 'Stage the binary. phi restarts into it next time it restarts (manual: Ctrl+C + relaunch).';
+            applyBtn.title =
+                'Stage the binary. phi restarts into it next time it restarts (manual: Ctrl+C + relaunch).';
             applyBtn.addEventListener('click', () => this._startUpdateApply(status.latest, applyBtn, banner));
             actions.appendChild(applyBtn);
             // Phase 9 T3: 'Apply & restart now' chains the staged swap
@@ -642,9 +668,11 @@ export class MarkdownManager {
             // §3.5 'npm-shim consideration'.
             if (status.install_method === 'standalone') {
                 const restartBtn = document.createElement('button');
-                restartBtn.className = 'update-banner-btn update-banner-btn-restart';
+                restartBtn.className =
+                    'update-banner-btn update-banner-btn-restart';
                 restartBtn.textContent = 'Apply & restart now';
-                restartBtn.title = 'Stage the binary and immediately restart phi. Browser will reload.';
+                restartBtn.title =
+                    'Stage the binary and immediately restart phi. Browser will reload.';
                 restartBtn.addEventListener('click', () => this._startUpdateApplyAndRestart(status.latest, restartBtn, applyBtn, banner));
                 actions.appendChild(restartBtn);
             }
@@ -663,7 +691,7 @@ export class MarkdownManager {
             const res = await fetch('/api/update/apply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version })
+                body: JSON.stringify({ version }),
             });
             if (!res.ok) {
                 const errText = await res.text();
@@ -710,13 +738,20 @@ export class MarkdownManager {
         if (!p || !p.phase)
             return '';
         switch (p.phase) {
-            case 'downloading': return `Downloading… ${p.pct}%`;
-            case 'verifying': return 'Verifying checksum…';
-            case 'extracting': return 'Extracting binary…';
-            case 'staging': return 'Staging swap…';
-            case 'done': return `Staged. Old binary kept at ${p.old_path || 'phi.old'}.`;
-            case 'error': return `Error: ${p.error || 'unknown'}`;
-            default: return p.phase;
+            case 'downloading':
+                return `Downloading… ${p.pct}%`;
+            case 'verifying':
+                return 'Verifying checksum…';
+            case 'extracting':
+                return 'Extracting binary…';
+            case 'staging':
+                return 'Staging swap…';
+            case 'done':
+                return `Staged. Old binary kept at ${p.old_path || 'phi.old'}.`;
+            case 'error':
+                return `Error: ${p.error || 'unknown'}`;
+            default:
+                return p.phase;
         }
     }
     // _startUpdateApplyAndRestart chains Phase 8 apply + Phase 9 restart.
@@ -736,10 +771,10 @@ export class MarkdownManager {
             const res = await fetch('/api/update/apply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version })
+                body: JSON.stringify({ version }),
             });
             if (!res.ok)
-                throw new Error(await res.text() || `HTTP ${res.status}`);
+                throw new Error((await res.text()) || `HTTP ${res.status}`);
         }
         catch (err) {
             restartBtn.disabled = false;
@@ -770,7 +805,7 @@ export class MarkdownManager {
             for (;;) {
                 if (await waitForStaged())
                     break;
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise((r) => setTimeout(r, 500));
             }
         }
         catch (err) {
@@ -796,20 +831,20 @@ export class MarkdownManager {
         setTimeout(() => window.location.reload(), 2500);
     }
     async _promptAddDir() {
-        const dir = prompt("Add markdown directory (relative to workspace, e.g. ./docs):");
+        const dir = prompt('Add markdown directory (relative to workspace, e.g. ./docs):');
         if (!dir || !dir.trim())
             return;
         try {
             await fetch('/api/config/markdown-dirs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dir: dir.trim() })
+                body: JSON.stringify({ dir: dir.trim() }),
             });
             await this.app.sessionsManager.loadConfig(); // Refresh cache!
             this.refreshFiles();
         }
         catch (e) {
-            console.error("Failed to add markdown dir:", e);
+            console.error('Failed to add markdown dir:', e);
         }
     }
     _createContextMenu() {
@@ -823,14 +858,44 @@ export class MarkdownManager {
             return;
         this.contextMenuEl.innerHTML = '';
         const actions = [
-            { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertRelativePath(file, { mention: true }) },
-            { icon: '↗', label: 'Open in new window', className: 'open-window', handler: () => this._openInNewWindow(file) },
-            { icon: '⧉', label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
-            { icon: '⇉', label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
-            { icon: '⇩', label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
-            { icon: '🗑', label: 'Delete…', className: 'delete', handler: () => this._deleteMarkdownFile(file) },
+            {
+                icon: '@',
+                label: 'Insert @path',
+                className: 'insert-path',
+                handler: () => this._insertRelativePath(file, { mention: true }),
+            },
+            {
+                icon: '↗',
+                label: 'Open in new window',
+                className: 'open-window',
+                handler: () => this._openInNewWindow(file),
+            },
+            {
+                icon: '⧉',
+                label: 'Copy',
+                className: 'copy',
+                handler: () => this._copyMarkdownFile(file),
+            },
+            {
+                icon: '⇉',
+                label: 'Copy to all worktrees',
+                className: 'copy-all',
+                handler: () => this._copyMarkdownFileToAllWorktrees(file),
+            },
+            {
+                icon: '⇩',
+                label: 'Paste…',
+                className: 'paste',
+                handler: () => this._pasteMarkdownFile(file),
+            },
+            {
+                icon: '🗑',
+                label: 'Delete…',
+                className: 'delete',
+                handler: () => this._deleteMarkdownFile(file),
+            },
         ];
-        actions.forEach(action => {
+        actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
             btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;
@@ -870,7 +935,9 @@ export class MarkdownManager {
             win.opener = null;
         }
         else
-            this.app.showToast('Popup blocked — allow popups for this site.', { type: 'error' });
+            this.app.showToast('Popup blocked — allow popups for this site.', {
+                type: 'error',
+            });
     }
     async _copyMarkdownFile(file) {
         try {
@@ -879,11 +946,21 @@ export class MarkdownManager {
             if (!res.ok)
                 throw new Error(await res.text());
             const content = await res.text();
-            this.markdownClipboard = { name: file.name, dir: file.dir, content };
-            this.app.showToast(`Copied "${file.name}"`, { type: 'info', title: 'Markdown Clipboard' });
+            this.markdownClipboard = {
+                name: file.name,
+                dir: file.dir,
+                content,
+            };
+            this.app.showToast(`Copied "${file.name}"`, {
+                type: 'info',
+                title: 'Markdown Clipboard',
+            });
         }
         catch (e) {
-            this.app.showToast(`Failed to copy file: ${e.message}`, { type: 'error', title: 'Markdown Clipboard' });
+            this.app.showToast(`Failed to copy file: ${e.message}`, {
+                type: 'error',
+                title: 'Markdown Clipboard',
+            });
         }
     }
     async _copyMarkdownFileToAllWorktrees(file) {
@@ -892,7 +969,7 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/copy-all-worktrees', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, dir: file.dir, path: file.path })
+                body: JSON.stringify({ cwd, dir: file.dir, path: file.path }),
             });
             if (!res.ok)
                 throw new Error(await res.text());
@@ -905,7 +982,10 @@ export class MarkdownManager {
     }
     async _pasteMarkdownFile(file) {
         if (!this.markdownClipboard) {
-            this.app.showToast('Nothing copied yet', { type: 'error', title: 'Markdown Clipboard' });
+            this.app.showToast('Nothing copied yet', {
+                type: 'error',
+                title: 'Markdown Clipboard',
+            });
             return;
         }
         const suggested = this.markdownClipboard.name;
@@ -918,7 +998,13 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/paste', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, dir: file.dir, name, content: this.markdownClipboard.content, overwrite })
+                body: JSON.stringify({
+                    cwd,
+                    dir: file.dir,
+                    name,
+                    content: this.markdownClipboard.content,
+                    overwrite,
+                }),
             });
             if (res.status === 409 && !overwrite) {
                 if (confirm(`"${name}" already exists. Overwrite it?`)) {
@@ -928,7 +1014,10 @@ export class MarkdownManager {
             }
             if (!res.ok)
                 throw new Error(await res.text());
-            this.app.showToast(`Pasted as "${name}"`, { type: 'info', title: 'Markdown Clipboard' });
+            this.app.showToast(`Pasted as "${name}"`, {
+                type: 'info',
+                title: 'Markdown Clipboard',
+            });
             await this.refreshFiles();
         };
         try {
@@ -958,7 +1047,9 @@ export class MarkdownManager {
         let content = '';
         let clipboardAvailable = false;
         try {
-            if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+            if (typeof navigator !== 'undefined' &&
+                navigator.clipboard &&
+                navigator.clipboard.readText) {
                 content = await navigator.clipboard.readText();
                 clipboardAvailable = true;
             }
@@ -994,7 +1085,10 @@ export class MarkdownManager {
         const dirs = this.app.markdownDirs || [];
         if (dirs.length === 0) {
             // Race: directories cleared between button click and modal open.
-            this.app.showToast('No markdown directory configured', { type: 'error', title: 'Markdown' });
+            this.app.showToast('No markdown directory configured', {
+                type: 'error',
+                title: 'Markdown',
+            });
             return;
         }
         this._pastePending = false;
@@ -1062,7 +1156,7 @@ export class MarkdownManager {
         if (dirs.length === 1)
             return dirs[0];
         const select = this.pasteModalDir.querySelector('select');
-        return (select && select.value) ? select.value : (dirs[0] || '');
+        return select && select.value ? select.value : dirs[0] || '';
     }
     _setPasteError(msg) {
         this.pasteModalError.textContent = msg;
@@ -1134,7 +1228,10 @@ export class MarkdownManager {
             // past the request.
             this._pastePending = false;
             this._closePasteModal();
-            this.app.showToast(`Pasted as "${savedName}"`, { type: 'info', title: 'Markdown' });
+            this.app.showToast(`Pasted as "${savedName}"`, {
+                type: 'info',
+                title: 'Markdown',
+            });
             await this.refreshFiles();
         }
         catch (e) {
@@ -1159,11 +1256,14 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/delete', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, path: file.path })
+                body: JSON.stringify({ cwd, path: file.path }),
             });
             if (!res.ok)
                 throw new Error(await res.text());
-            this.app.showToast(`Deleted "${file.name}"`, { type: 'info', title: 'Markdown' });
+            this.app.showToast(`Deleted "${file.name}"`, {
+                type: 'info',
+                title: 'Markdown',
+            });
             await this.refreshFiles();
         }
         catch (e) {
@@ -1181,7 +1281,9 @@ export class MarkdownManager {
         let insertText = relPath;
         if (opts.mention) {
             const coder = this.app.tabManager?.getActiveTab?.()?.coder || '';
-            insertText = formatAttachment(coder, { path: relPath });
+            insertText = formatAttachment(coder, {
+                path: relPath,
+            });
         }
         const textarea = document.getElementById('input-textarea');
         if (textarea) {
@@ -1190,8 +1292,8 @@ export class MarkdownManager {
             const text = textarea.value;
             const before = text.substring(0, start);
             const after = text.substring(end, text.length);
-            const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
-            const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
+            const padBefore = start > 0 && !before.endsWith(' ') ? ' ' : '';
+            const padAfter = !after.startsWith(' ') && after.length > 0 ? ' ' : '';
             textarea.value = before + padBefore + insertText + padAfter + after;
             const newPos = start + padBefore.length + insertText.length;
             textarea.setSelectionRange(newPos, newPos);
@@ -1207,7 +1309,9 @@ export class MarkdownManager {
                 await navigator.clipboard.writeText(text);
             }
             else {
-                const ta = Object.assign(document.createElement('textarea'), { value: text });
+                const ta = Object.assign(document.createElement('textarea'), {
+                    value: text,
+                });
                 ta.style.cssText = 'position:fixed;opacity:0';
                 document.body.appendChild(ta);
                 ta.select();
@@ -1236,13 +1340,17 @@ export class MarkdownManager {
                 throw new Error(`export failed: ${res.status}`);
             const data = (await res.json());
             if (!data.blob) {
-                this.app.showToast('No markdown files to export', { type: 'info' });
+                this.app.showToast('No markdown files to export', {
+                    type: 'info',
+                });
                 return;
             }
             await this._copyToClipboard(data.blob, `Exported ${data.count} markdown file${data.count === 1 ? '' : 's'} to clipboard`);
         }
         catch (err) {
-            this.app.showToast(`Export failed: ${err.message}`, { type: 'error' });
+            this.app.showToast(`Export failed: ${err.message}`, {
+                type: 'error',
+            });
         }
     }
     // _importMarkdownBundle reads a PHIMD: blob from the clipboard (or a
@@ -1261,9 +1369,10 @@ export class MarkdownManager {
             console.warn('[md] clipboard read blocked', err);
         }
         if (!blob || !blob.trim()) {
-            blob = (typeof prompt === 'function')
-                ? (prompt('Paste your markdown bundle here (starts with PHIMD:):') || '')
-                : '';
+            blob =
+                typeof prompt === 'function'
+                    ? prompt('Paste your markdown bundle here (starts with PHIMD:):') || ''
+                    : '';
         }
         if (!blob || !blob.trim()) {
             this.app.showToast('No bundle text to import', { type: 'info' });
@@ -1296,7 +1405,9 @@ export class MarkdownManager {
             await this.refreshFiles({ force: true });
         }
         catch (err) {
-            this.app.showToast(`Import failed: ${err.message}`, { type: 'error' });
+            this.app.showToast(`Import failed: ${err.message}`, {
+                type: 'error',
+            });
         }
     }
 }

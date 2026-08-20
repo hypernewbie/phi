@@ -13,7 +13,10 @@ const ORIGINAL_HREF = window.location.href;
 
 // Minimal fixture mirroring what MarkdownManager touches: the #md-modal
 // shell, its close button, and the version/changelog trigger in the sidebar.
-function fixture({ version = 'v0.7.14', changelogBody = '# Phi\n\n## v0.7.14\n**Added**\n- thing' } = {}) {
+function fixture({
+    version = 'v0.7.14',
+    changelogBody = '# Phi\n\n## v0.7.14\n**Added**\n- thing',
+} = {}) {
     document.body.innerHTML = `
         <div id="md-modal" class="hidden">
             <span id="md-modal-title"></span>
@@ -57,9 +60,15 @@ describe('openChangelogModal', () => {
         const m = makeManager();
         await m.openChangelogModal();
 
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
-        expect(document.getElementById('md-modal-title').innerText).toBe('Changelog — v0.7.14');
-        expect(document.getElementById('md-modal-body').innerHTML).toContain('v0.7.14');
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(false);
+        expect(document.getElementById('md-modal-title').innerText).toBe(
+            'Changelog — v0.7.14',
+        );
+        expect(document.getElementById('md-modal-body').innerHTML).toContain(
+            'v0.7.14',
+        );
     });
 
     it('uses the current version text from the sidebar button in the title', async () => {
@@ -67,7 +76,9 @@ describe('openChangelogModal', () => {
         mockFetch(() => '# placeholder');
         const m = makeManager();
         await m.openChangelogModal();
-        expect(document.getElementById('md-modal-title').innerText).toBe('Changelog — v9.9.9-beta');
+        expect(document.getElementById('md-modal-title').innerText).toBe(
+            'Changelog — v9.9.9-beta',
+        );
     });
 
     it('falls back to "Changelog" title if the version button is missing', async () => {
@@ -76,7 +87,9 @@ describe('openChangelogModal', () => {
         mockFetch(() => '# placeholder');
         const m = makeManager();
         await m.openChangelogModal();
-        expect(document.getElementById('md-modal-title').innerText).toBe('Changelog');
+        expect(document.getElementById('md-modal-title').innerText).toBe(
+            'Changelog',
+        );
     });
 
     it('surfaces a readable error and a toast when the fetch fails', async () => {
@@ -84,10 +97,12 @@ describe('openChangelogModal', () => {
         mockFetch(() => ({ ok: false, status: 404, text: 'Not Found' }));
         const m = makeManager();
         await m.openChangelogModal();
-        expect(document.getElementById('md-modal-body').innerHTML).toMatch(/Failed to load changelog/);
+        expect(document.getElementById('md-modal-body').innerHTML).toMatch(
+            /Failed to load changelog/,
+        );
         expect(m.app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Failed to open changelog/),
-            expect.objectContaining({ title: 'Changelog' })
+            expect.objectContaining({ title: 'Changelog' }),
         );
     });
 
@@ -96,7 +111,9 @@ describe('openChangelogModal', () => {
         mockFetch(() => ({ ok: false, status: 500, text: 'boom' }));
         const m = makeManager();
         await m.openChangelogModal();
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(false);
     });
 
     it('wires the sidebar version button to openChangelogModal on init', async () => {
@@ -121,8 +138,14 @@ describe('Help/Changelog actions at the real click seam (?desktop=1 vs browser)'
         document.getElementById('phi-help-btn').click();
 
         expect(open).toHaveBeenCalledTimes(1);
-        expect(open).toHaveBeenCalledWith('/md.html?page=help', 'phi-help', 'width=860,height=1000');
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(true);
+        expect(open).toHaveBeenCalledWith(
+            '/md.html?page=help',
+            'phi-help',
+            'width=860,height=1000',
+        );
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(true);
     });
 
     it('desktop view: Changelog click opens the named phi-changelog child window, not the overlay', () => {
@@ -134,8 +157,14 @@ describe('Help/Changelog actions at the real click seam (?desktop=1 vs browser)'
         document.getElementById('phi-changelog-btn').click();
 
         expect(open).toHaveBeenCalledTimes(1);
-        expect(open).toHaveBeenCalledWith('/md.html?page=changelog', 'phi-changelog', 'width=860,height=1000');
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(true);
+        expect(open).toHaveBeenCalledWith(
+            '/md.html?page=changelog',
+            'phi-changelog',
+            'width=860,height=1000',
+        );
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(true);
     });
 
     it('plain browser: Help click keeps the in-page help overlay', async () => {
@@ -148,8 +177,12 @@ describe('Help/Changelog actions at the real click seam (?desktop=1 vs browser)'
         await new Promise((r) => setTimeout(r, 0));
 
         expect(open).not.toHaveBeenCalled();
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
-        expect(document.getElementById('md-modal-body').innerHTML).toContain('Hello');
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(false);
+        expect(document.getElementById('md-modal-body').innerHTML).toContain(
+            'Hello',
+        );
     });
 
     it('plain browser: Changelog click keeps the in-page changelog overlay', async () => {
@@ -162,7 +195,11 @@ describe('Help/Changelog actions at the real click seam (?desktop=1 vs browser)'
         await new Promise((r) => setTimeout(r, 0));
 
         expect(open).not.toHaveBeenCalled();
-        expect(document.getElementById('md-modal').classList.contains('hidden')).toBe(false);
-        expect(document.getElementById('md-modal-body').innerHTML).toContain('v0.7.14');
+        expect(
+            document.getElementById('md-modal').classList.contains('hidden'),
+        ).toBe(false);
+        expect(document.getElementById('md-modal-body').innerHTML).toContain(
+            'v0.7.14',
+        );
     });
 });

@@ -17,11 +17,16 @@ interface InputLike {
   meta?: boolean;
 }
 
-function makeHarness(targetGetter?: () => unknown, reloadAllServers?: (ignoringCache: boolean) => void) {
+function makeHarness(
+  targetGetter?: () => unknown,
+  reloadAllServers?: (ignoringCache: boolean) => void,
+) {
   const reloadCalls: number[] = [];
   const reloadIgnoringCacheCalls: number[] = [];
   const event = { preventDefault: vi.fn() };
-  const listeners: Array<(event: { preventDefault: () => void }, input: InputLike) => void> = [];
+  const listeners: Array<
+    (event: { preventDefault: () => void }, input: InputLike) => void
+  > = [];
   const contents = {
     on: (name: string, cb: (event: unknown, input: InputLike) => void) => {
       if (name === 'before-input-event') listeners.push(cb);
@@ -34,7 +39,11 @@ function makeHarness(targetGetter?: () => unknown, reloadAllServers?: (ignoringC
     },
     isDestroyed: () => false,
   };
-  installReloadShortcut(contents as never, targetGetter as never, reloadAllServers as never);
+  installReloadShortcut(
+    contents as never,
+    targetGetter as never,
+    reloadAllServers as never,
+  );
   const fire = (input: InputLike): { preventDefault: () => void } => {
     event.preventDefault.mockClear();
     for (const cb of listeners) cb(event, input);
@@ -78,7 +87,10 @@ describe('installReloadShortcut (F5 reload)', () => {
 
   it('leaves Ctrl+R, Cmd+R, and other keys untouched so terminal reverse-search works', () => {
     const reloadAll = vi.fn();
-    const { fire, reloadCalls, reloadIgnoringCacheCalls } = makeHarness(undefined, reloadAll);
+    const { fire, reloadCalls, reloadIgnoringCacheCalls } = makeHarness(
+      undefined,
+      reloadAll,
+    );
     const ev1 = fire({ type: 'keyDown', key: 'r', control: true });
     expect(ev1.preventDefault).not.toHaveBeenCalled();
     const ev2 = fire({ type: 'keyDown', key: 'R', control: true, shift: true });

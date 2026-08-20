@@ -167,7 +167,10 @@ export interface TrayLike {
 export function formatCanonicalHostname(origin: string): string {
   if (!origin) return '';
   try {
-    return new URL(origin).hostname.replace(/\.local\.?$/i, '').toUpperCase() || origin;
+    return (
+      new URL(origin).hostname.replace(/\.local\.?$/i, '').toUpperCase() ||
+      origin
+    );
   } catch {
     return origin;
   }
@@ -196,12 +199,20 @@ function canonicalHostnameLabel(name: string): string {
  * N > 0. When the name is empty the canonical hostname stands in for it,
  * so a name-less active profile still reads `Phi — CHARON (2 unread)`.
  */
-export function buildTooltip(opts: { name?: string; origin?: string; unread?: number }): string {
+export function buildTooltip(opts: {
+  name?: string;
+  origin?: string;
+  unread?: number;
+}): string {
   const originText = opts.origin ? formatCanonicalHostname(opts.origin) : '';
-  const display = opts.name && opts.name.trim() !== '' ? canonicalHostnameLabel(opts.name) : originText;
+  const display =
+    opts.name && opts.name.trim() !== ''
+      ? canonicalHostnameLabel(opts.name)
+      : originText;
   let tip = display ? `Phi — ${display}` : 'Phi';
   if (originText && originText !== display) tip += ` (${originText})`;
-  if (opts.unread !== undefined && opts.unread > 0) tip += ` (${opts.unread} unread)`;
+  if (opts.unread !== undefined && opts.unread > 0)
+    tip += ` (${opts.unread} unread)`;
   return tip;
 }
 
@@ -212,9 +223,18 @@ export function buildTooltip(opts: { name?: string; origin?: string; unread?: nu
  * (the canonical hostname, never the port). Appends ` (N)` when
  * N unread > 0.
  */
-export function formatProfileLabel(name: string, health: 'up' | 'down' | 'unknown', unread: number): string {
+export function formatProfileLabel(
+  name: string,
+  health: 'up' | 'down' | 'unknown',
+  unread: number,
+): string {
   const display = canonicalHostnameLabel(name);
-  const status = health === 'up' ? `${display} — up` : health === 'down' ? `${display} — down` : display;
+  const status =
+    health === 'up'
+      ? `${display} — up`
+      : health === 'down'
+        ? `${display} — down`
+        : display;
   return unread > 0 ? `${status} (${unread})` : status;
 }
 
@@ -234,7 +254,9 @@ export function buildTrayMenu(
   closeToTray: boolean,
   syncAlerts: boolean,
 ): TrayMenuEntry[] {
-  const entries: TrayMenuEntry[] = [{ label: 'Show Phi', click: handlers.show }];
+  const entries: TrayMenuEntry[] = [
+    { label: 'Show Phi', click: handlers.show },
+  ];
   if (profiles.length > 0) {
     entries.push({
       label: 'Profiles',
@@ -269,7 +291,11 @@ export function buildTrayMenu(
  * popup time, so a rebuildMenu() swap is picked up by the next popup
  * (the events are wired once, against the mutable current menu).
  */
-export function wireTrayEvents(tray: TrayLike, getMenu: () => Menu, platform: NodeJS.Platform): void {
+export function wireTrayEvents(
+  tray: TrayLike,
+  getMenu: () => Menu,
+  platform: NodeJS.Platform,
+): void {
   tray.on('right-click', () => tray.popUpContextMenu(getMenu()));
   if (platform === 'darwin') {
     tray.on('click', () => tray.popUpContextMenu(getMenu()));
@@ -299,7 +325,9 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       }
     }
   } else {
-    deps.log(`phi-desktop: tray icon missing at ${iconPath}; continuing with the default empty icon`);
+    deps.log(
+      `phi-desktop: tray icon missing at ${iconPath}; continuing with the default empty icon`,
+    );
   }
   const tray = new Tray(icon);
   tray.setToolTip('Phi');
@@ -314,9 +342,12 @@ export function setupTray(deps: TrayDeps): TrayHandle {
   // always route through the same deps.ipcSend bridge.
   const handlers: TrayMenuHandlers = {
     show: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'show' }),
-    selectProfile: (id: string) => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'select-profile', id }),
-    toggleCloseToTray: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
-    toggleSyncAlerts: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
+    selectProfile: (id: string) =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'select-profile', id }),
+    toggleCloseToTray: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
+    toggleSyncAlerts: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
     quit: () => {
       // The host-loop receiver owns app.quit() since step 5: this
       // handler only posts the intent; main.ts logs, notifies the main
@@ -328,7 +359,12 @@ export function setupTray(deps: TrayDeps): TrayHandle {
   // list and preference (the same handlers); the tray itself is never
   // recreated.
   let menu = Menu.buildFromTemplate(
-    buildTrayMenu(deps.getProfiles(), handlers, deps.getCloseToTray(), deps.getSyncAlerts()),
+    buildTrayMenu(
+      deps.getProfiles(),
+      handlers,
+      deps.getCloseToTray(),
+      deps.getSyncAlerts(),
+    ),
   );
   wireTrayEvents(tray, () => menu, process.platform);
   // Plain left-click restores+focuses the main window (the Show Phi intent).
@@ -336,7 +372,12 @@ export function setupTray(deps: TrayDeps): TrayHandle {
 
   const rebuildMenu = (): void => {
     menu = Menu.buildFromTemplate(
-      buildTrayMenu(deps.getProfiles(), handlers, deps.getCloseToTray(), deps.getSyncAlerts()),
+      buildTrayMenu(
+        deps.getProfiles(),
+        handlers,
+        deps.getCloseToTray(),
+        deps.getSyncAlerts(),
+      ),
     );
   };
 

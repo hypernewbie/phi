@@ -70,7 +70,9 @@ describe('KanbanManager.deleteTask', () => {
 
         // Optimistic removal must not survive a failed call.
         expect(c.taskCache[1]).toBeTruthy();
-        expect(c.buckets.find(b => b.id === 10).tasks.map(t => t.id)).toContain(1);
+        expect(
+            c.buckets.find((b) => b.id === 10).tasks.map((t) => t.id),
+        ).toContain(1);
     });
 });
 
@@ -81,7 +83,9 @@ describe('KanbanManager.createBucket', () => {
         await c.createBucket('In Review');
         const [url, opts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/projects/9/views/5/buckets');
+        expect(decoded).toBe(
+            'http://vik.local/api/v1/projects/9/views/5/buckets',
+        );
         expect(opts.method).toBe('PUT');
         expect(JSON.parse(opts.body)).toEqual({ title: 'In Review' });
     });
@@ -106,7 +110,9 @@ describe('KanbanManager.updateBucket', () => {
         await c.updateBucket(10, 'Renamed');
         const [url, opts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/projects/9/views/5/buckets/10');
+        expect(decoded).toBe(
+            'http://vik.local/api/v1/projects/9/views/5/buckets/10',
+        );
         expect(opts.method).toBe('POST');
         expect(JSON.parse(opts.body)).toEqual({ title: 'Renamed' });
     });
@@ -124,13 +130,15 @@ describe('KanbanManager.deleteBucket', () => {
         await c.deleteBucket(10);
         const [url, opts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(url.split('url=')[1]);
-        expect(decoded).toBe('http://vik.local/api/v1/projects/9/views/5/buckets/10');
+        expect(decoded).toBe(
+            'http://vik.local/api/v1/projects/9/views/5/buckets/10',
+        );
         expect(opts.method).toBe('DELETE');
         expect(c.taskCache[1]).toBeUndefined();
         expect(c.taskCache[2]).toBeUndefined();
         expect(c.taskCache[3]).toBeTruthy();
-        expect(c.buckets.find(b => b.id === 10)).toBeUndefined();
-        expect(c.buckets.find(b => b.id === 20)).toBeTruthy();
+        expect(c.buckets.find((b) => b.id === 10)).toBeUndefined();
+        expect(c.buckets.find((b) => b.id === 20)).toBeTruthy();
     });
 
     it('rejects when project/view not cached', async () => {
@@ -143,7 +151,10 @@ describe('KanbanManager.deleteBucket', () => {
 describe('KanbanManager label management', () => {
     it('fetchAllLabels calls GET /labels', async () => {
         const c = ctxWithSession();
-        mockFetch(() => [{ id: 1, title: 'bug' }, { id: 2, title: 'wip' }]);
+        mockFetch(() => [
+            { id: 1, title: 'bug' },
+            { id: 2, title: 'wip' },
+        ]);
         const labels = await c.fetchAllLabels();
         const [url, opts] = fetch.mock.calls[0];
         const decoded = decodeURIComponent(url.split('url=')[1]);
@@ -168,7 +179,10 @@ describe('KanbanManager label management', () => {
 
     it('removeLabelFromTask DELETEs /tasks/<id>/labels/<l> and prunes the cache', async () => {
         const c = ctxWithSession();
-        c.taskCache[1].labels = [{ id: 7, title: 'a' }, { id: 8, title: 'b' }];
+        c.taskCache[1].labels = [
+            { id: 7, title: 'a' },
+            { id: 8, title: 'b' },
+        ];
         mockFetch(() => ({ ok: true, status: 204 }));
         await c.removeLabelFromTask(1, 7);
         const [url, opts] = fetch.mock.calls[0];

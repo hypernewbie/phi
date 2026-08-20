@@ -26,7 +26,9 @@ async function loadManager() {
     const app = { showToast: vi.fn() };
     // MarkdownManager's constructor wires a bunch of unrelated DOM listeners.
     // Provide the bare minimum it touches in _setupEventListeners.
-    document.body.insertAdjacentHTML('beforeend', `
+    document.body.insertAdjacentHTML(
+        'beforeend',
+        `
         <div id="md-modal" class="hidden">
             <div id="md-modal-title"></div>
             <div id="md-modal-body"></div>
@@ -35,7 +37,8 @@ async function loadManager() {
         </div>
         <button id="phi-help-btn">?</button>
         <button id="phi-changelog-btn">v0.8.1</button>
-    `);
+    `,
+    );
     return { mgr: new MarkdownManager(app), app };
 }
 
@@ -107,7 +110,7 @@ describe('Restart phi button', () => {
         document.getElementById('phi-restart-btn').click();
         await document.getElementById('restart-modal-confirm').click();
         // Microtask flush so the awaited fetch resolves.
-        await new Promise(r => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
         expect(fetch).toHaveBeenCalledTimes(1);
         const [url, opts] = fetch.mock.calls[0];
         expect(url).toBe('/api/restart');
@@ -118,14 +121,18 @@ describe('Restart phi button', () => {
     });
 
     it('on HTTP error, toasts and re-enables the confirm button', async () => {
-        const fetch = mockFetch(() => ({ ok: false, status: 500, text: 'boom' }));
+        const fetch = mockFetch(() => ({
+            ok: false,
+            status: 500,
+            text: 'boom',
+        }));
         const { mgr, app } = await loadManager();
         document.getElementById('phi-restart-btn').click();
         await document.getElementById('restart-modal-confirm').click();
-        await new Promise(r => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringContaining('Restart failed'),
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
         const btn = document.getElementById('restart-modal-confirm');
         expect(btn.disabled).toBe(false);
@@ -134,15 +141,17 @@ describe('Restart phi button', () => {
 
     it('on network error, toasts and re-enables the confirm button', async () => {
         // Mock fetch to reject so we exercise the catch path.
-        const fn = vi.fn(async () => { throw new Error('network down'); });
+        const fn = vi.fn(async () => {
+            throw new Error('network down');
+        });
         vi.stubGlobal('fetch', fn);
         const { mgr, app } = await loadManager();
         document.getElementById('phi-restart-btn').click();
         await document.getElementById('restart-modal-confirm').click();
-        await new Promise(r => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
         expect(app.showToast).toHaveBeenCalledWith(
             'Restart failed: network down',
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
         const btn = document.getElementById('restart-modal-confirm');
         expect(btn.disabled).toBe(false);
@@ -155,7 +164,11 @@ describe('Restart phi button', () => {
         const btn = document.getElementById('phi-restart-btn');
         expect(btn.style.display).toBe('none');
         btn.click();
-        expect(document.getElementById('restart-modal').classList.contains('hidden')).toBe(true);
+        expect(
+            document
+                .getElementById('restart-modal')
+                .classList.contains('hidden'),
+        ).toBe(true);
         window.history.replaceState({}, '', original);
     });
 });

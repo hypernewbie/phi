@@ -25,9 +25,11 @@ const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
 function ruleBody(selector) {
     const bodies = [];
     const re = /([^{}]+)\{([^{}]*)\}/g;
-    let m;
-    while ((m = re.exec(stripped)) !== null) {
-        if (m[1].split(',').some((s) => s.trim() === selector)) bodies.push(m[2]);
+    let m = re.exec(stripped);
+    while (m !== null) {
+        if (m[1].split(',').some((s) => s.trim() === selector))
+            bodies.push(m[2]);
+        m = re.exec(stripped);
     }
     return bodies.join('\n');
 }
@@ -88,7 +90,9 @@ describe('the look is preserved statically', () => {
     });
 
     it('critical shows a standing ring instead of a repeating shockwave', () => {
-        const body = ruleBody('.brand:has(.cpu-critical) .logo-glow-wrapper::after');
+        const body = ruleBody(
+            '.brand:has(.cpu-critical) .logo-glow-wrapper::after',
+        );
         expect(body).toMatch(/opacity:\s*0?\.\d/);
         expect(body).not.toMatch(/animation:[^;]*infinite/);
     });
@@ -143,6 +147,8 @@ describe('compositor promotion is scoped to what actually animates', () => {
 
     it('promotes the flourish, which does animate transform', () => {
         expect(ruleBody('.brand .logo.cpu-flourish')).toBeDefined();
-        expect(stripped).toMatch(/\.brand \.logo\.cpu-flourish[\s\S]{0,200}will-change:\s*transform/);
+        expect(stripped).toMatch(
+            /\.brand \.logo\.cpu-flourish[\s\S]{0,200}will-change:\s*transform/,
+        );
     });
 });

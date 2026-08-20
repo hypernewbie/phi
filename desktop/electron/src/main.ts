@@ -21,8 +21,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopHost } from './desktop.js';
 import { setupSingleInstance, FORWARD_CHANNEL } from './single-instance.js';
-import { parseDeepLink, dispatchDeepLink, DEEPLINK_CHANNEL } from './deeplink.js';
-import { installProtocol, uninstallProtocol, realPlatform } from './protocol.js';
+import {
+  parseDeepLink,
+  dispatchDeepLink,
+  DEEPLINK_CHANNEL,
+} from './deeplink.js';
+import {
+  installProtocol,
+  uninstallProtocol,
+  realPlatform,
+} from './protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,7 +58,9 @@ export function migrateUserData(targetDir: string, appDataDir: string): void {
           mkdirSync(targetDir, { recursive: true });
           copyFileSync(src, dst);
         } catch (err) {
-          console.warn(`phi-desktop: failed to migrate ${file} from ${legacyDir}: ${String(err)}`);
+          console.warn(
+            `phi-desktop: failed to migrate ${file} from ${legacyDir}: ${String(err)}`,
+          );
         }
       }
     }
@@ -66,7 +76,10 @@ export function migrateUserData(targetDir: string, appDataDir: string): void {
 // second launch carrying these flags is never forwarded.
 if (process.argv.slice(1).includes('--register-protocol')) {
   try {
-    const reg = await installProtocol(realPlatform, [path.join(here, 'main.js'), '--']);
+    const reg = await installProtocol(realPlatform, [
+      path.join(here, 'main.js'),
+      '--',
+    ]);
     console.log(`installed at ${reg.path}, exe ${reg.exe}`);
     app.exit(0);
   } catch (err) {
@@ -79,13 +92,21 @@ if (process.argv.slice(1).includes('--register-protocol')) {
     console.log(`uninstalled at ${unreg.path}, exe ${unreg.exe}`);
     app.exit(0);
   } catch (err) {
-    console.error(`phi-desktop: protocol unregistration failed: ${String(err)}`);
+    console.error(
+      `phi-desktop: protocol unregistration failed: ${String(err)}`,
+    );
     app.exit(1);
   }
 }
 
 if (process.env.PHI_DESKTOP_SMOKE === '1') {
-  app.setPath('userData', path.join(app.getPath('temp'), `phi-desktop-smoke-${Date.now()}-${process.pid}`));
+  app.setPath(
+    'userData',
+    path.join(
+      app.getPath('temp'),
+      `phi-desktop-smoke-${Date.now()}-${process.pid}`,
+    ),
+  );
 } else {
   try {
     migrateUserData(app.getPath('userData'), app.getPath('appData'));

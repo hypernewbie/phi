@@ -4,8 +4,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const terminalJsSrc = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'terminal.js'),
-    'utf8'
+    path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'web',
+        'terminal.js',
+    ),
+    'utf8',
 );
 
 // Non-direct mode: clicking the terminal focuses xterm's hidden helper
@@ -21,8 +26,12 @@ const terminalJsSrc = readFileSync(
 // check in f7InputBypass.test.js we assert on the handler's source instead.
 
 function redirectBranch() {
-    const start = terminalJsSrc.indexOf('// In non-direct mode: redirect printable keystrokes');
-    expect(start, 'redirect branch marker comment not found').toBeGreaterThan(-1);
+    const start = terminalJsSrc.indexOf(
+        '// In non-direct mode: redirect printable keystrokes',
+    );
+    expect(start, 'redirect branch marker comment not found').toBeGreaterThan(
+        -1,
+    );
     const end = terminalJsSrc.indexOf('return false;', start);
     expect(end, 'redirect branch has no return false').toBeGreaterThan(start);
     return terminalJsSrc.slice(start, end);
@@ -38,7 +47,7 @@ describe('non-direct-mode printable key redirect (terminal → input textarea)',
         // bar's listeners (spam-scroll, lastInputValue, autosize, prompt-
         // history cursor reset) must keep firing on redirected keystrokes.
         const branch = redirectBranch();
-        expect(branch).toContain("dispatchEvent(new Event('input'");
+        expect(branch).toMatch(/dispatchEvent\(\s*new Event\(\s*'input'/);
         expect(branch).toContain('bubbles: true');
     });
 });

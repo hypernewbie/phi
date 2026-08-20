@@ -26,8 +26,8 @@ const CSS = readFileSync('web/style.css', 'utf8');
 function extractMobileBlocks(css) {
     const blocks = [];
     const re = /@media\s*\(max-width:\s*768px\)\s*\{/g;
-    let m;
-    while ((m = re.exec(css)) !== null) {
+    let m = re.exec(css);
+    while (m !== null) {
         const start = m.index + m[0].length;
         let depth = 1;
         let i = start;
@@ -38,6 +38,7 @@ function extractMobileBlocks(css) {
             i++;
         }
         blocks.push(css.slice(start, i - 1));
+        m = re.exec(css);
     }
     return blocks.join('\n');
 }
@@ -68,7 +69,9 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // equals 80% of the full document height including the keyboard
         // area. The modal would extend under the keyboard, hiding the
         // Save button. The fix replaces 80vh with var(--vv-height, 100dvh).
-        const rule = MOBILE.match(/\.modal-content,\s*\.md-modal-content\s*\{[\s\S]*?\n\s*\}/);
+        const rule = MOBILE.match(
+            /\.modal-content,\s*\.md-modal-content\s*\{[\s\S]*?\n\s*\}/,
+        );
         expect(rule, 'mobile .modal-content rule block not found').toBeTruthy();
         // Strip CSS comments before checking (the rule has an explanatory
         // comment that mentions "overflow-y: auto" — must not match itself).
@@ -85,7 +88,9 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // The base overlay uses height: 100vh which on iOS = full window
         // including under the keyboard. Mobile override pins to --vv-height
         // so the overlay doesn't extend under the keyboard.
-        const rule = MOBILE.match(/\.modal-overlay,\s*\.md-modal-overlay\s*\{[\s\S]*?\n\s*\}/);
+        const rule = MOBILE.match(
+            /\.modal-overlay,\s*\.md-modal-overlay\s*\{[\s\S]*?\n\s*\}/,
+        );
         expect(rule, 'mobile .modal-overlay rule block not found').toBeTruthy();
         expect(rule[0]).toMatch(/var\(--vv-height/);
     });
@@ -95,12 +100,20 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // modal-content itself was the scroller, and (b) the footer lived
         // inside that scroller. Fix: body is the scroller, footer is
         // flex-shrink: 0 (pinned to the visible bottom of the modal).
-        const bodyRule = MOBILE.match(/\.modal-body,\s*\.md-modal-body\s*\{[\s\S]*?\n\s*\}/);
-        expect(bodyRule, 'mobile .modal-body rule block not found').toBeTruthy();
+        const bodyRule = MOBILE.match(
+            /\.modal-body,\s*\.md-modal-body\s*\{[\s\S]*?\n\s*\}/,
+        );
+        expect(
+            bodyRule,
+            'mobile .modal-body rule block not found',
+        ).toBeTruthy();
         expect(bodyRule[0]).toMatch(/flex:\s*1 1 auto/);
         expect(bodyRule[0]).toMatch(/overflow-y:\s*auto/);
         const footerRule = MOBILE.match(/\.modal-footer\s*\{[\s\S]*?\n\s*\}/);
-        expect(footerRule, 'mobile .modal-footer rule block not found').toBeTruthy();
+        expect(
+            footerRule,
+            'mobile .modal-footer rule block not found',
+        ).toBeTruthy();
         expect(footerRule[0]).toMatch(/flex-shrink:\s*0/);
     });
 
@@ -109,7 +122,10 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // editor grows past the visible viewport on iOS, hiding the
         // "Save Model" button under the keyboard.
         const rule = MOBILE.match(/\.config-editor-modal\s*\{[\s\S]*?\n\s*\}/);
-        expect(rule, 'mobile .config-editor-modal rule block not found').toBeTruthy();
+        expect(
+            rule,
+            'mobile .config-editor-modal rule block not found',
+        ).toBeTruthy();
         expect(rule[0]).toMatch(/var\(--vv-height/);
     });
 
@@ -119,7 +135,10 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // (in .kdp-footer) sits behind the keyboard. Architect caught
         // this in review.
         const rule = MOBILE.match(/\.kanban-detail-panel\s*\{[\s\S]*?\n\s*\}/);
-        expect(rule, 'mobile .kanban-detail-panel rule block not found').toBeTruthy();
+        expect(
+            rule,
+            'mobile .kanban-detail-panel rule block not found',
+        ).toBeTruthy();
         expect(rule[0]).toMatch(/var\(--vv-height/);
     });
 
@@ -129,7 +148,10 @@ describe('mobile keyboard — modal shapes use --vv-height, not 80vh', () => {
         // the keyboard area. vv-height re-centers the dialog within the
         // visible strip above the keyboard.
         const rule = MOBILE.match(/\.access-auth-overlay\s*\{[\s\S]*?\n\s*\}/);
-        expect(rule, 'mobile .access-auth-overlay rule block not found').toBeTruthy();
+        expect(
+            rule,
+            'mobile .access-auth-overlay rule block not found',
+        ).toBeTruthy();
         expect(rule[0]).toMatch(/var\(--vv-height/);
     });
 });
