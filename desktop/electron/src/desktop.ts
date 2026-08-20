@@ -96,7 +96,7 @@ import {
   resolveRailChord,
 } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
-import { discoverPetRoot } from './petLoader.js';
+import { discoverPetRoot, type PetDeps, type PetHandle } from './petLoader.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -222,6 +222,8 @@ export class DesktopHost {
   controller: Controller | null = null;
   // Optional desktop/pet overlay package root (null when absent or smoke).
   petRoot: string | null = null;
+  // The live pet window handle (null until the user first enables it).
+  petHandle: PetHandle | null = null;
   // Interval handles (cleared in before-quit so no pending probe outlives
   // the retained views).
   healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -316,6 +318,8 @@ export class DesktopHost {
       getUnread: (id) => this.controller?.state().unread.get(id) ?? 0,
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
+      getPetAvailable: () => this.petRoot !== null,
+      getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
       // (log, notify the main window's renderer, then app.quit()).
@@ -375,6 +379,12 @@ export class DesktopHost {
             }
             break;
           }
+          case 'toggle-pet': {
+            // Flip the persisted preference; pet-enabled-changed rebuilds
+            // the menu and mirrors the window (start/stop).
+            this.togglePet();
+            break;
+          }
           case 'quit':
             // Log, notify the main window's renderer on the tray channel,
             // then quit.
@@ -392,6 +402,48 @@ export class DesktopHost {
     const tray = setupTray(deps);
     this.trayHandle = tray;
     return tray;
+  }
+
+  /**
+   * Starts the pet overlay from the discovered package root (no-op when
+   * absent, already running, or mid-creation). The factory is imported
+   * once per enable via a file:// URL so the optional package is never a
+   * static dependency of the shell (avoids Node ESM double-instantiation).
+   */
+  async startPet(): Promise<void> {
+    if (!this.petRoot) return;
+    if (this.petHandle) {
+      if (this.petHandle.isRunning()) return;
+      this.petHandle.start();
+      return;
+    }
+    try {
+      const mod = (await import(pathToFileURL(path.join(this.petRoot, 'dist', 'pet-main.js')).href)) as {
+        default: (deps: PetDeps) => PetHandle;
+      };
+      const handle = mod.default({ root: this.petRoot, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
+      this.petHandle = handle;
+      handle.start();
+    } catch (err) {
+      console.log(`phi-desktop: pet load failed: ${String(err)}`);
+    }
+  }
+
+  /** Destroys the pet window (toggle-off frees the decode surface). */
+  stopPet(): void {
+    this.petHandle?.stop();
+  }
+
+  /** Toggles the persisted pet preference; pet-enabled-changed mirrors the
+   *  window state (start/stop) and rebuilds the tray checkbox. */
+  togglePet(): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    try {
+      ctrl.setPetEnabled(!ctrl.getPetEnabled());
+    } catch (err) {
+      console.log(`phi-desktop: tray toggle-pet: ${String(err)}`);
+    }
   }
 
   /**
@@ -1562,6 +1614,7 @@ export class DesktopHost {
       this.hotkeyRegistrations.length = 0;
       this.trayHandle?.close();
       this.trayHandle = null;
+      this.petHandle?.stop();
       // Tear every retained view down before the app quits. The first
       // before-quit defers the quit until destroyAll() (and the rail view
       // teardown) completes, then re-quits; the guard flag keeps the
@@ -1709,6 +1762,10 @@ export class DesktopHost {
         // again after B, and the proof has already been injected into
         // the B view).
         activeEpoch++;
+      } else if (event.kind === 'pet-enabled-changed') {
+        this.trayHandle?.rebuildMenu();
+        if (this.controller?.state().petEnabled) void this.startPet();
+        else this.stopPet();
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||
@@ -1732,6 +1789,9 @@ export class DesktopHost {
       layoutChildren();
     });
     this.syncTrayFromController();
+    // Restore a previously-enabled pet (destroy-on-toggle-off means the
+    // window is recreated on the next launch when the preference is on).
+    if (this.controller.state().petEnabled) void this.startPet();
     // Retained per-profile views + rail renderer. The manager (src/views.ts)
     // owns the per-profile WebContentsView lifecycle (lazy creation,
     // retain-on-switch, hide-when-inactive, single shared persistent

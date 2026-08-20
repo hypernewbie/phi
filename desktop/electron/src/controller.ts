@@ -87,6 +87,8 @@ export interface ControllerState {
   closeToTray: boolean;
   /** The persisted sync-board desktop-alert preference (default true). */
   syncAlerts: boolean;
+  /** The persisted desktop-pet preference (default false). */
+  petEnabled: boolean;
 }
 
 /** One controller event (posted to subscribers after every mutation). */
@@ -96,7 +98,8 @@ export type ControllerEvent =
   | { kind: 'profiles-changed' }
   | { kind: 'health-changed' }
   | { kind: 'close-to-tray-changed' }
-  | { kind: 'sync-alerts-changed' };
+  | { kind: 'sync-alerts-changed' }
+  | { kind: 'pet-enabled-changed' };
 
 /** A subscription callback (fire-and-forget; never awaited by the controller). */
 export type ControllerListener = (event: ControllerEvent) => void;
@@ -383,6 +386,7 @@ interface LoadedStore {
   profiles: InternalProfile[];
   closeToTray: boolean;
   syncAlerts: boolean;
+  petEnabled: boolean;
 }
 
 /**
@@ -403,7 +407,12 @@ function readStore(
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       log(`controller: cannot read ${filePath}: ${String(err)}`);
     }
-    return { profiles: [], closeToTray: true, syncAlerts: true };
+    return {
+      profiles: [],
+      closeToTray: true,
+      syncAlerts: true,
+      petEnabled: false,
+    };
   }
   let parsed: unknown;
   try {
@@ -414,7 +423,12 @@ function readStore(
         `controller: ${filePath} is corrupt (${String(err)}); starting with an empty store`,
       );
       setAsideCorrupt(filePath, log);
-      return { profiles: [], closeToTray: true, syncAlerts: true };
+      return {
+        profiles: [],
+        closeToTray: true,
+        syncAlerts: true,
+        petEnabled: false,
+      };
     }
     log(
       `controller: ${filePath} is corrupt (${String(err)}); trying ${filePath}.bak`,
@@ -426,6 +440,7 @@ function readStore(
     profiles?: unknown;
     closeToTray?: unknown;
     syncAlerts?: unknown;
+    petEnabled?: unknown;
   } | null;
   if (obj === null || typeof obj !== 'object' || !Array.isArray(obj.profiles)) {
     if (isBackup) {
@@ -433,7 +448,12 @@ function readStore(
         `controller: ${filePath} has an unusable schema; starting with an empty store`,
       );
       setAsideCorrupt(filePath, log);
-      return { profiles: [], closeToTray: true, syncAlerts: true };
+      return {
+        profiles: [],
+        closeToTray: true,
+        syncAlerts: true,
+        petEnabled: false,
+      };
     }
     log(
       `controller: ${filePath} has an unusable schema; trying ${filePath}.bak`,
@@ -443,6 +463,8 @@ function readStore(
   }
   const syncAlerts =
     typeof obj.syncAlerts === 'boolean' ? obj.syncAlerts : true;
+  const petEnabled =
+    typeof obj.petEnabled === 'boolean' ? obj.petEnabled : false;
   const profiles: InternalProfile[] = [];
   const seen = new Set<string>();
   for (const entry of obj.profiles) {
@@ -483,6 +505,7 @@ function readStore(
     profiles,
     closeToTray: typeof obj.closeToTray === 'boolean' ? obj.closeToTray : true,
     syncAlerts,
+    petEnabled,
   };
 }
 
@@ -497,6 +520,7 @@ function saveStore(
   profiles: InternalProfile[],
   closeToTray: boolean,
   syncAlerts: boolean,
+  petEnabled: boolean,
 ): void {
   const dir = path.dirname(persistPath);
   mkdirSync(dir, { recursive: true });
@@ -528,6 +552,7 @@ function saveStore(
           })),
           closeToTray,
           syncAlerts,
+          petEnabled,
         },
         null,
         2,
@@ -600,6 +625,7 @@ export class Controller {
   private unread = new Map<string, number>();
   private closeToTray = true;
   private syncAlerts = true;
+  private petEnabled = false;
   private listeners = new Set<ControllerListener>();
 
   constructor(opts: ControllerOptions) {
@@ -608,6 +634,7 @@ export class Controller {
     const store = readStore(this.persistPath, false, this.log);
     this.closeToTray = store.closeToTray;
     this.syncAlerts = store.syncAlerts;
+    this.petEnabled = store.petEnabled;
     for (const p of store.profiles) {
       this.profiles.push(p);
       this.byID.set(p.id, p);
@@ -648,6 +675,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
       );
     } catch (err) {
       this.profiles.pop();
@@ -684,6 +712,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
       );
     } catch (err) {
       this.profiles.splice(idx, 0, removed);
@@ -715,6 +744,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -753,6 +783,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
       );
     } catch (err) {
       this.profiles.splice(insertAt, 1);
@@ -773,6 +804,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -794,6 +826,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
       );
     } catch (err) {
       this.log(`controller: record last-used: ${String(err)}`);
@@ -838,6 +871,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
     );
     this.emit({ kind: 'close-to-tray-changed' });
   }
@@ -865,8 +899,35 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
     );
     this.emit({ kind: 'sync-alerts-changed' });
+  }
+
+  /**
+   * The persisted desktop-pet preference (default false): whether the
+   * optional pet overlay window is shown.
+   */
+  getPetEnabled(): boolean {
+    return this.petEnabled;
+  }
+
+  /**
+   * Persists the desktop-pet preference and emits
+   * `{kind:'pet-enabled-changed'}` (the host loop rebuilds the tray
+   * checkbox and mirrors the window state). A no-op when unchanged.
+   */
+  setPetEnabled(value: boolean): void {
+    if (value === this.petEnabled) return;
+    this.petEnabled = value;
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+      this.petEnabled,
+    );
+    this.emit({ kind: 'pet-enabled-changed' });
   }
 
   /**
@@ -912,6 +973,7 @@ export class Controller {
       unread: new Map(this.unread),
       closeToTray: this.closeToTray,
       syncAlerts: this.syncAlerts,
+      petEnabled: this.petEnabled,
     };
   }
 

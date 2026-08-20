@@ -18,6 +18,7 @@
     "test": "vitest run",
     "dev": "electron .",
     "package": "electron-builder",
+    "package:pet": "electron-builder -c extra-pet.json",
     "smoke": "vitest run test/smoke.test.ts"
   },
   "devDependencies": {

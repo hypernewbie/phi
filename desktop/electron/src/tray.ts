@@ -66,6 +66,7 @@ export type TrayCommand =
   | { kind: 'select-profile'; id: string }
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
+  | { kind: 'toggle-pet' }
   | { kind: 'quit' };
 
 /** One saved profile (the rail model's tray-relevant slice). */
@@ -98,6 +99,10 @@ export interface TrayDeps {
   getCloseToTray(): boolean;
   /** The persisted sync-board desktop-alert preference (the menu checkbox state). */
   getSyncAlerts(): boolean;
+  /** True when the optional desktop/pet package was discovered (enables the checkbox). */
+  getPetAvailable(): boolean;
+  /** The persisted desktop-pet preference (the menu checkbox state). */
+  getPetEnabled(): boolean;
   /** Posts a TrayCommand on a channel (the host loop bridges intents). */
   ipcSend(channel: string, payload: unknown): void;
   /** Failure/one-time logger (production: console; tests record it). */
@@ -139,6 +144,8 @@ export interface TrayMenuEntry {
   type?: 'checkbox';
   /** The checkbox state — only meaningful when type === 'checkbox'. */
   checked?: boolean;
+  /** Disabled state (the Show pet checkbox is disabled when the package is absent). */
+  enabled?: boolean;
 }
 /** The menu action handlers the pure menu builder calls. */
 export interface TrayMenuHandlers {
@@ -146,6 +153,7 @@ export interface TrayMenuHandlers {
   selectProfile: (id: string) => void;
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
+  togglePet: () => void;
   quit: () => void;
 }
 
@@ -253,6 +261,8 @@ export function buildTrayMenu(
   handlers: TrayMenuHandlers,
   closeToTray: boolean,
   syncAlerts: boolean,
+  petAvailable: boolean,
+  petEnabled: boolean,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -277,6 +287,13 @@ export function buildTrayMenu(
     type: 'checkbox',
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
+  });
+  entries.push({
+    label: 'Show pet',
+    type: 'checkbox',
+    checked: petEnabled,
+    enabled: petAvailable,
+    click: handlers.togglePet,
   });
   entries.push({ label: 'Quit', click: handlers.quit });
   return entries;
@@ -348,6 +365,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
     toggleSyncAlerts: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
+    togglePet: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-pet' }),
     quit: () => {
       // The host-loop receiver owns app.quit() since step 5: this
       // handler only posts the intent; main.ts logs, notifies the main
@@ -364,6 +382,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       handlers,
       deps.getCloseToTray(),
       deps.getSyncAlerts(),
+      deps.getPetAvailable(),
+      deps.getPetEnabled(),
     ),
   );
   wireTrayEvents(tray, () => menu, process.platform);
@@ -377,6 +397,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         handlers,
         deps.getCloseToTray(),
         deps.getSyncAlerts(),
+        deps.getPetAvailable(),
+        deps.getPetEnabled(),
       ),
     );
   };

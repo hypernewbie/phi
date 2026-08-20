@@ -762,3 +762,57 @@ describe('Controller: sync-alerts preference', () => {
     expect(c.state().syncAlerts).toBe(true);
   });
 });
+
+describe('Controller: pet-enabled preference', () => {
+  it('defaults to false (empty store and legacy stores without the field)', () => {
+    const c = makeController();
+    expect(c.getPetEnabled()).toBe(false);
+    expect(c.state().petEnabled).toBe(false);
+    // A legacy store file (profiles only, no petEnabled) loads with the default.
+    writeFileSync(
+      persistPath(),
+      JSON.stringify({ profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }] }),
+      'utf8',
+    );
+    expect(makeController().getPetEnabled()).toBe(false);
+  });
+
+  it('persists a toggle through the store file (a fresh controller reads it back)', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    expect(c.getPetEnabled()).toBe(true);
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as { petEnabled?: boolean };
+    expect(onDisk.petEnabled).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(true);
+    c.setPetEnabled(false);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(false);
+  });
+
+  it('emits pet-enabled-changed on a change and stays silent on a no-op', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((e) => events.push(e));
+    c.setPetEnabled(true);
+    c.setPetEnabled(true); // unchanged: no event, no extra save
+    expect(events).toEqual([{ kind: 'pet-enabled-changed' }]);
+    expect(c.getPetEnabled()).toBe(true);
+  });
+
+  it('survives profile mutations (add/remove/rename do not reset it)', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    const p = c.add('http://127.0.0.1:7070/');
+    c.rename(p.id, 'Home');
+    c.remove(p.id);
+    expect(c.getPetEnabled()).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(true);
+  });
+
+  it('state() carries the preference and the deep copy protects it', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    const st = c.state();
+    st.petEnabled = false;
+    expect(c.state().petEnabled).toBe(true);
+  });
+});

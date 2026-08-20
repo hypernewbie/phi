@@ -1,0 +1,9 @@
+{
+  "extraResources": [
+    {
+      "from": "../pet",
+      "to": "pet",
+      "filter": ["dist/**", "assets/**", "package.json", "LICENSE-dsh-pet.txt"]
+    }
+  ]
+}
