@@ -172,10 +172,10 @@ describe('initPet state machine', () => {
     dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 140, clientY: 100, bubbles: true }));
     expect(dom.stage.style.transform).toBe('none');
-    dom.hit.dispatchEvent(new MouseEvent('pointerup', { clientX: 140, clientY: 100, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointerup', { clientX: 140, clientY: 100, screenX: 1140, screenY: 110, bubbles: true }));
     expect(pet.getState()).toMatchObject({ anim: IDLE, once: true });
     expect(stageTransformAtSend).toMatch(/^translateY\(.+px\)$/);
-    expect(bridge.sendMove).toHaveBeenCalledWith(expect.objectContaining({ dx: 40, dy: 0, stage: { x: 12, y: 34, width: 200, height: 112.5 } }));
+    expect(bridge.sendMove).toHaveBeenCalledWith(expect.objectContaining({ dx: 40, dy: 0, screenX: 1140, screenY: 110, stage: { x: 12, y: 34, width: 200, height: 112.5 } }));
   });
 
   it('subscribes before the first layout report and keeps preview inside returned territory', () => {

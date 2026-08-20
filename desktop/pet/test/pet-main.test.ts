@@ -26,7 +26,7 @@ vi.mock('electron', () => ({ BrowserWindow: FakeBrowserWindow, ipcMain: fakeIpcM
 import { createPet } from '../src/pet-main.js';
 
 const stage = { x: 30, y: 40, width: 100, height: 50 };
-const move = { dx: .6, dy: -2.4, screenX: 2500, screenY: 100, stage };
+const move = { dx: .6, dy: -2.4, screenX: 1950, screenY: 100, stage };
 beforeEach(() => { vi.clearAllMocks(); fakeIpcMain.handlers.clear(); FakeBrowserWindow.instances.length = 0; });
 const started = () => { const pet = createPet({ root: '/tmp/pet', log: () => {} }); pet.start(); return FakeBrowserWindow.instances[0]; };
 
@@ -36,7 +36,7 @@ describe('createPet validated placement', () => {
     pet.start(); expect(pet.isRunning()).toBe(true); pet.stop(); expect(pet.isRunning()).toBe(false);
   });
   it('rejects bad senders and invalid move/layout numbers without native movement', () => {
-    const win = started(); const setPosition = vi.spyOn(win, 'setPosition');
+    const win = started(); const setPosition = vi.spyOn(win, 'setPosition'); const show = vi.spyOn(win, 'show');
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: {} }, move);
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, dx: NaN });
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, screenX: undefined });
@@ -46,6 +46,9 @@ describe('createPet validated placement', () => {
     fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, { stage: { ...stage, x: '30' } });
     fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, { stage: { ...stage, height: Infinity } });
     expect(setPosition).not.toHaveBeenCalled();
+    expect(show).not.toHaveBeenCalled();
+    fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, move);
+    expect(show).not.toHaveBeenCalled();
   });
   it.each([
     {
@@ -53,20 +56,22 @@ describe('createPet validated placement', () => {
       channel: 'phi:pet-stage-layout',
       payload: { stage },
       display: { workArea: { x: -1600, y: -900, width: 500, height: 400 } },
-      point: { x: 90, y: 85 },
-      position: [-1230, -590],
+      initialBounds: { x: -1500, y: -800 },
+      point: { x: -1420, y: -735 },
+      position: [-1500, -800],
     },
     {
       name: 'release point selects a gap display with negative y',
       channel: 'phi:pet-window-move',
       payload: move,
       display: { workArea: { x: 2000, y: -100, width: 500, height: 400 } },
-      point: { x: 2500, y: 100 },
+      point: { x: 1950, y: 100 },
       position: [1970, 18],
     },
-  ])('$name through its IPC handler', ({ channel, payload, display, point, position }) => {
+  ])('$name through its IPC handler', ({ channel, payload, display, initialBounds, point, position }) => {
     fakeScreen.getDisplayNearestPoint.mockReturnValue(display);
     const win = started();
+    if (initialBounds) Object.assign(win.bounds, initialBounds);
     const setPosition = vi.spyOn(win, 'setPosition');
     fakeIpcMain.handlers.get(channel)?.({ sender: win.webContents }, payload);
     expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith(point);
@@ -76,7 +81,7 @@ describe('createPet validated placement', () => {
     fakeScreen.getDisplayNearestPoint.mockReturnValue({ workArea: { x: 2000, y: -100, width: 500, height: 400 } });
     const win = started(); const setPosition = vi.spyOn(win, 'setPosition');
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, move);
-    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith({ x: 2500, y: 100 });
+    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith({ x: 1950, y: 100 });
     expect(setPosition).toHaveBeenCalledWith(1970, 18);
     expect(win.webContents.send).toHaveBeenCalledWith('phi:pet-territory-bounds', expect.objectContaining({ minStageX: 30, maxStageX: 430 }));
   });
