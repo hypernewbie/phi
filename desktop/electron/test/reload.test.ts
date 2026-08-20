@@ -10,6 +10,7 @@ import { installReloadShortcut } from '../src/reload.js';
 interface InputLike {
   type: string;
   key: string;
+  code?: string;
   control?: boolean;
   shift?: boolean;
   alt?: boolean;
