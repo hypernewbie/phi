@@ -36,6 +36,7 @@ import {
 } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
@@ -670,40 +671,96 @@ export class DesktopHost {
    *  password-typed unlock, stores the salt+iterations alongside, and
    *  flushes the encrypted credentials file. Called by the unlock
    *  IPC handler right after a `tryUnlock` returns `ok`. */
+  /** Attempts to recover a credential for a local server origin from ~/.phi/config.json.
+   *  Allows silent authentication on fresh installs or after app data clears. */
+  private tryRecoverLocalCredential(origin: string): {
+    verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256';
+  } | null {
+    try {
+      const url = new URL(origin);
+      const host = url.hostname.toLowerCase();
+      const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+      if (!isLocal) return null;
+
+      const phiConfigPath = path.join(os.homedir(), '.phi', 'config.json');
+      if (!existsSync(phiConfigPath)) return null;
+
+      const content = readFileSync(phiConfigPath, 'utf8');
+      const cfg = JSON.parse(content) as { password_hash?: string };
+      if (!cfg.password_hash || typeof cfg.password_hash !== 'string') return null;
+
+      const parts = cfg.password_hash.split('.');
+      if (parts.length !== 5 || parts[0] !== 'v1' || parts[1] !== 'pbkdf2-sha256') return null;
+
+      const iterations = Number(parts[2]);
+      if (!Number.isFinite(iterations) || iterations < 1) return null;
+
+      const salt = Buffer.from(parts[3], 'base64url');
+      const verifier = Buffer.from(parts[4], 'base64url');
+      if (salt.length === 0 || verifier.length !== 32) return null;
+
+      const cred = {
+        version: 'v1' as const,
+        algorithm: 'pbkdf2-sha256' as const,
+        iterations,
+        salt,
+        verifier,
+      };
+      this.storedCredentials.set(origin, cred);
+      this.saveStoredCredentials();
+      return cred;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Resolves a stored credential from memory, loading from disk or local config fallback. */
+  private getOrRecoverCredential(origin: string): {
+    verifier: Buffer; salt: Buffer; iterations: number; version: 'v1'; algorithm: 'pbkdf2-sha256';
+  } | null {
+    let cred = this.storedCredentials.get(origin);
+    if (!cred) {
+      this.loadStoredCredentials();
+      cred = this.storedCredentials.get(origin);
+    }
+    if (!cred) {
+      cred = this.tryRecoverLocalCredential(origin) ?? undefined;
+    }
+    return cred ?? null;
+  }
+
+  /** Captures the verifier and trust parameters AccessAuth cached after a successful
+   *  unlock, and flushes the encrypted credentials file. Called by the unlock
+   *  IPC handler right after a `tryUnlock` returns `ok`. */
   private persistVerifierAfterUnlock(origin: string, accessAuth: AccessAuth): void {
-    const verifier = accessAuth.getLastVerifier(origin);
-    if (!verifier) return;
-    // /api/auth/status holds the salt + iterations that produced this
-    // verifier; we re-fetch it so the on-disk record matches what
-    // we'd send on the next launch. The HOST's
-    // `tryReauthWithStoredCredential` compares the stored
-    // salt/iterations against the server's CURRENT salt/iterations
-    // to detect a rotation before invoking `tryUnlockWithVerifier`
-    // (the access-auth module has no view of the stored credential).
-    // Best-effort: if the status fetch fails we still write the
-    // verifier with stale salt/iterations, which the host's pre-check
-    // will reject on the next launch (salt mismatch →
-    // clearStoredCredential → prompt).
-    void this.fetchAuthStatusForPersistence(origin).then((status) => {
-      const salt = status?.salt ?? Buffer.alloc(0);
-      const iterations = status?.iterations ?? 0;
+    const cred = accessAuth.getLastCredential(origin);
+    if (cred) {
       this.storedCredentials.set(origin, {
         version: 'v1',
         algorithm: 'pbkdf2-sha256',
-        iterations,
-        salt,
+        iterations: cred.iterations,
+        salt: Buffer.from(cred.salt),
+        verifier: Buffer.from(cred.verifier),
+      });
+      this.saveStoredCredentials();
+      return;
+    }
+    const verifier = accessAuth.getLastVerifier(origin);
+    if (!verifier) return;
+    void this.fetchAuthStatusForPersistence(origin).then((status) => {
+      if (!status) return;
+      this.storedCredentials.set(origin, {
+        version: 'v1',
+        algorithm: 'pbkdf2-sha256',
+        iterations: status.iterations,
+        salt: status.salt,
         verifier: Buffer.from(verifier),
       });
       this.saveStoredCredentials();
     });
   }
 
-  /** Best-effort status read for credential persistence. Mirrors
-   *  the validation AccessAuth does internally; the salt+iterations
-   *  pair is what the HOST compares against (in
-   *  `tryReauthWithStoredCredential`) before invoking
-   *  `tryUnlockWithVerifier` — the access-auth module has no view
-   *  of the stored credential's salt/iterations. */
+  /** Best-effort status read for credential persistence. */
   private async fetchAuthStatusForPersistence(
     origin: string,
   ): Promise<{ salt: Buffer; iterations: number } | null> {
@@ -737,23 +794,20 @@ export class DesktopHost {
   /** Re-authenticates an origin from a persisted verifier. Returns
    *  `true` if the re-auth succeeded (the cookie jar is fresh), `false`
    *  if the user must be prompted (no stored credential, the stored
-   *  credential is stale, or the server rejected the proof). The
-   *  caller invokes this on every saved origin at startup so a
-   *  returning user lands on an unlocked TBAR with no modal. */
+   *  credential is stale, or the server rejected the proof). */
   private async tryReauthWithStoredCredential(
     origin: string,
     accessAuth: AccessAuth,
   ): Promise<boolean> {
-    const cred = this.storedCredentials.get(origin);
+    const cred = this.getOrRecoverCredential(origin);
     if (!cred) return false;
-    // Compare against the server's CURRENT trust settings so a salt
-    // rotation invalidates the stored credential cleanly. We have to
-    // re-validate here because AccessAuth's `tryUnlockWithVerifier`
-    // does not see the algorithm version/salt fields from the host
-    // (it only takes the verifier).
     const status = await this.fetchAuthStatusForPersistence(origin);
+    if (!status) {
+      // Server is offline, starting up, or transient network hiccup.
+      // Do not clear the credential!
+      return false;
+    }
     if (
-      !status ||
       status.iterations !== cred.iterations ||
       !status.salt.equals(cred.salt)
     ) {
@@ -763,11 +817,11 @@ export class DesktopHost {
     const verifierCopy = Buffer.from(cred.verifier);
     try {
       const result = await accessAuth.tryUnlockWithVerifier(origin, verifierCopy);
-      if (result.kind !== 'ok') {
+      if (result.kind === 'invalid-password') {
         this.clearStoredCredential(origin);
         return false;
       }
-      return true;
+      return result.kind === 'ok';
     } finally {
       verifierCopy.fill(0);
     }
@@ -779,6 +833,12 @@ export class DesktopHost {
    *  `/api/config` poll. */
   async bootstrapStoredCredentials(accessAuth: AccessAuth): Promise<void> {
     this.loadStoredCredentials();
+    const profiles = this.controller?.state().profiles ?? [];
+    for (const p of profiles) {
+      if (!this.storedCredentials.has(p.origin)) {
+        this.tryRecoverLocalCredential(p.origin);
+      }
+    }
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
     for (const origin of origins) {
@@ -2147,10 +2207,9 @@ export class DesktopHost {
         if (pendingUnlock !== null) return null; // one prompt at a time
         if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
         if (unlockInFlight) return null;
-        if (this.storedCredentials.has(origin)) {
-          const cred = this.storedCredentials.get(origin);
-          if (cred !== undefined) {
-            // Conservative: compare the server's CURRENT salt/iterations
+        const cred = this.getOrRecoverCredential(origin);
+        if (cred !== null) {
+          // Conservative: compare the server's CURRENT salt/iterations
             // against the stored credential so a confirmed rotation
             // clears it, but a transient network blip (status fetch
             // throws, retry needed) keeps it intact for the next
@@ -2219,7 +2278,6 @@ export class DesktopHost {
             // unreachable it surfaces 'unavailable' which the renderer
             // never paints as a real prompt.
           }
-        }
         pendingUnlock = {
           requestId: randomRequestId(),
           profileId: capture.profileId,

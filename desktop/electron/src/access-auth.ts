@@ -113,6 +113,7 @@ export class AccessAuth {
    *  persistence) or a new login overwrites it. Cleared on `cancel`
    *  so a stale verifier doesn't outlive its origin. */
   private readonly lastVerifier = new Map<string, Buffer>();
+  private readonly lastCredential = new Map<string, { verifier: Buffer; salt: Buffer; iterations: number }>();
   private readonly _doFetch: FetchLike;
 
   constructor(doFetch: FetchLike = fetch) {
@@ -126,6 +127,7 @@ export class AccessAuth {
   cancel(origin: string): void {
     this.cookies.delete(origin);
     this.lastVerifier.delete(origin);
+    this.lastCredential.delete(origin);
   }
 
   /** Returns the verifier cached for `origin` from the most recent
@@ -134,6 +136,12 @@ export class AccessAuth {
    *  after `tryUnlock` to persist the verifier across restarts. */
   getLastVerifier(origin: string): Buffer | null {
     return this.lastVerifier.get(origin) ?? null;
+  }
+
+  /** Returns the full validated credential (verifier, salt, iterations)
+   *  cached for `origin` from the most recent successful login. */
+  getLastCredential(origin: string): { verifier: Buffer; salt: Buffer; iterations: number } | null {
+    return this.lastCredential.get(origin) ?? null;
   }
 
   /** Re-authenticate using a previously-derived verifier (typically
@@ -195,7 +203,8 @@ export class AccessAuth {
     if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
     if (status.kind === 'unavailable') return status;
     if (status.kind === 'no-auth') return status;
-    const verifier = this.lastVerifier.get(origin);
+    const cred = this.lastCredential.get(origin);
+    const verifier = cred ? cred.verifier : this.lastVerifier.get(origin);
     if (!verifier) return { kind: 'unavailable', message: 'No authenticated credential is available.' };
     return {
       kind: 'ok',
@@ -305,12 +314,17 @@ export class AccessAuth {
       return login;
     }
     this.cookies.set(origin, login.cookie);
-    // Cache the verifier so the host can persist it across restarts.
-    // The host reads via `getLastVerifier` after a successful unlock
+    // Cache the verifier and trust settings so the host can persist it across restarts.
+    // The host reads via `getLastCredential` after a successful unlock
     // and stores to disk encrypted via `safeStorage`.
     const cached = Buffer.alloc(verifier.length);
     cached.set(verifier);
     this.lastVerifier.set(origin, cached);
+    this.lastCredential.set(origin, {
+      verifier: Buffer.from(cached),
+      salt: Buffer.from(status.salt),
+      iterations: status.iterations,
+    });
     // Re-fetch config with the captured cookie. A 401 here means the
     // server accepted login but didn't issue a usable session — drop the
     // cookie and report so the modal stays open with a clear message.

@@ -23,7 +23,7 @@ const (
 	accessPasswordSaltBytes      = 16
 	accessPasswordVerifierBytes  = 32
 	accessChallengeTTL           = 5 * time.Minute
-	accessSessionTTL             = 365 * 24 * time.Hour
+	accessSessionTTL             = 100 * 365 * 24 * time.Hour
 	accessSessionCookie          = "phi_access_session"
 	maxAccessChallenges          = 1024
 )
