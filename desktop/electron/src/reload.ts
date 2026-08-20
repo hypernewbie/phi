@@ -15,9 +15,9 @@ import type { WebContents } from 'electron';
 
 /**
  * Installs reload shortcuts on one webContents.
- * - Plain F5 / Cmd+R / Ctrl+R: reload active view
- * - Shift+F5 / Ctrl+F5 / Cmd+Shift+R / Ctrl+Shift+R: reload active view ignoring cache
- * - Alt+F5 / Cmd+Alt+R / Ctrl+Alt+R: reload all servers (Idea E)
+ * - Plain F5: reload active view
+ * - Shift+F5 / Ctrl+F5: reload active view ignoring cache
+ * - Alt+F5: reload all servers
  */
 export function installReloadShortcut(
   contents: WebContents,
@@ -27,10 +27,8 @@ export function installReloadShortcut(
   contents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
 
-    // Alt+F5 or Ctrl+Alt+R / Cmd+Alt+R: reload all servers (Idea E)
-    const isAltReload =
-      (input.key === 'F5' && input.alt && !input.meta) ||
-      ((input.control || input.meta) && input.alt && (input.key === 'r' || input.key === 'R'));
+    // Alt+F5: reload all servers
+    const isAltReload = input.key === 'F5' && input.alt && !input.meta;
 
     if (isAltReload) {
       if (typeof reloadAllServers === 'function') {
@@ -40,10 +38,8 @@ export function installReloadShortcut(
       }
     }
 
-    // F5 or Ctrl+R / Cmd+R: reload active target view
-    const isReloadKey =
-      (input.key === 'F5' && !input.alt && !input.meta) ||
-      ((input.control || input.meta) && !input.alt && (input.key === 'r' || input.key === 'R'));
+    // F5: reload active target view
+    const isReloadKey = input.key === 'F5' && !input.alt && !input.meta;
 
     if (isReloadKey) {
       event.preventDefault();
