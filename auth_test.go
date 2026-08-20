@@ -210,3 +210,82 @@ func TestAccessPasswordHandlerPersistsAndInvalidatesSessions(t *testing.T) {
 		t.Errorf("clear did not disable access password: config=%q enabled=%v", got, accessAuth.enabled())
 	}
 }
+
+func TestAccessSessionSurvivesServerRestart(t *testing.T) {
+	auth := useTestAccessAuth(t)
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := parseAccessPasswordHash(testAccessHash())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, challenge, err := auth.statusAndChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token, err := auth.login(challenge, testAccessProof(t, record.Verifier, challenge), "127.0.0.1:12345")
+	if err != nil || token == "" {
+		t.Fatalf("login failed: token=%q err=%v", token, err)
+	}
+
+	cookie := &http.Cookie{Name: accessSessionCookie, Value: token}
+
+	// Simulate server process restart: re-create manager with empty in-memory sessions
+	restartedAuth := newAccessAuthManager()
+	if err := restartedAuth.configure(testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+	accessAuth = restartedAuth
+
+	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	protected.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("session failed to survive server restart: got %d want 204", w.Code)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	statusReq.AddCookie(cookie)
+	statusW := httptest.NewRecorder()
+	handleAccessAuthStatus(statusW, statusReq)
+	var status map[string]any
+	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil || status["authenticated"] != true {
+		t.Fatalf("status did not recognize session after restart: %v", status)
+	}
+}
+
+func TestAccessSessionRejectsTamperedOrInvalidTokens(t *testing.T) {
+	auth := useTestAccessAuth(t)
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatal(err)
+	}
+
+	protected := accessAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, invalidToken := range []string{
+		"not-a-valid-token",
+		"nonce.invalidexpiry.signature",
+		"nonce.0.signature", // Expired unix timestamp
+		"nonce.9999999999.badsig",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/coders", nil)
+		req.AddCookie(&http.Cookie{Name: accessSessionCookie, Value: invalidToken})
+		w := httptest.NewRecorder()
+		protected.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("token %q unexpectedly succeeded: got %d want 401", invalidToken, w.Code)
+		}
+	}
+}
+
