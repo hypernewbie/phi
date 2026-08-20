@@ -1,4 +1,5 @@
 {
+  "extends": "./electron-builder.json",
   "extraResources": [
     {
       "from": "../pet",
