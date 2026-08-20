@@ -288,4 +288,3 @@ func TestAccessSessionRejectsTamperedOrInvalidTokens(t *testing.T) {
 		}
 	}
 }
-
