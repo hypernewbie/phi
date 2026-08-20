@@ -13,7 +13,12 @@
  * pet resets to its pre-drag in-window position — net effect: the pet
  * stays under the cursor while the window follows home.
  */
-import type { PetApi, PetScaleState, PetStageLayout } from "./pet-bridge.js";
+import type {
+  PetApi,
+  PetDragPosition,
+  PetScaleState,
+  PetStageLayout,
+} from "./pet-bridge.js";
 
 /** The thumb canvas height and the feet baseline (dsh-pet client.js). */
 export const CANVAS_H = 360;
@@ -298,9 +303,28 @@ export function initPet(opts: PetInitOptions): PetController {
   let pending: { anim: string; once: boolean; gen: number } | null = null;
   let gen = 0;
 
-  let drag = { active: false, dragging: false, sx: 0, sy: 0, offX: 0, offY: 0 };
+  let drag = { active: false, dragging: false, sx: 0, sy: 0 };
   let justDragged = false;
   let preDragCustomPos: { rx: number; ry: number } | null = null;
+  let dragAnchor: { x: number; y: number } | null = null;
+  let dragStageRect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null = null;
+  let pendingDragPosition: PetDragPosition | null = null;
+  let pendingDragFrame: number | null = null;
+  let deferredLayout = false;
+  let deferredTerritory: {
+    minStageX: number;
+    maxStageX: number;
+    minStageY: number;
+    maxStageY: number;
+  } | null = null;
+  let deferredScaleState: PetScaleState | null = null;
+  let deferredResetPosition = false;
+  let terminalDrag = false;
 
   let moveId: number | null = null;
   let moveToken = 0;
@@ -519,16 +543,45 @@ export function initPet(opts: PetInitOptions): PetController {
     stopMove();
     if (typeof hit.setPointerCapture === "function")
       hit.setPointerCapture(e.pointerId);
-    const rect = root.getBoundingClientRect();
     drag = {
       active: true,
       dragging: false,
       sx: e.clientX,
       sy: e.clientY,
-      offX: e.clientX - (rect.left + rect.width / 2),
-      offY: e.clientY - (rect.top + rect.height / 2),
     };
     preDragCustomPos = customPos ? { ...customPos } : null;
+  };
+
+  const captureDragAnchor = (e: PointerEvent): void => {
+    stage.style.transform = "none";
+    const rect = stage.getBoundingClientRect();
+    dragStageRect = {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    };
+    dragAnchor = { x: e.clientX - rect.x, y: e.clientY - rect.y };
+  };
+
+  const scheduleDragPosition = (): void => {
+    if (pendingDragFrame !== null) return;
+    pendingDragFrame = raf(() => {
+      pendingDragFrame = null;
+      const position = pendingDragPosition;
+      pendingDragPosition = null;
+      if (position) bridge.sendDragPosition(position);
+    });
+  };
+
+  const flushDragPosition = (): void => {
+    if (pendingDragFrame !== null) {
+      caf(pendingDragFrame);
+      pendingDragFrame = null;
+    }
+    const position = pendingDragPosition;
+    pendingDragPosition = null;
+    if (position) bridge.sendDragPosition(position);
   };
 
   const handlePointerMove = (e: PointerEvent): void => {
@@ -539,13 +592,19 @@ export function initPet(opts: PetInitOptions): PetController {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       drag.dragging = true;
       dragging = true;
+      captureDragAnchor(e);
       setAnim(DRAG, true);
     }
-    setRootPosition(
-      e.clientX - drag.offX - halfW,
-      e.clientY - drag.offY - halfH,
-    );
-    stage.style.transform = "none"; // drop foot alignment while dragging
+    if (!dragAnchor || !dragStageRect) return;
+    pendingDragPosition = {
+      phase: "move",
+      screenX: e.screenX,
+      screenY: e.screenY,
+      anchorX: dragAnchor.x,
+      anchorY: dragAnchor.y,
+      stage: dragStageRect,
+    };
+    scheduleDragPosition();
   };
 
   const restoreDrag = (): void => {
@@ -554,6 +613,8 @@ export function initPet(opts: PetInitOptions): PetController {
     hit.classList.remove("dragging");
     dragging = false;
     customPos = preDragCustomPos;
+    dragAnchor = null;
+    dragStageRect = null;
     stage.style.transform = `translateY(${bottomPad}px)`;
     renderPosition();
   };
@@ -575,8 +636,39 @@ export function initPet(opts: PetInitOptions): PetController {
     }
   };
 
+  const applyDeferredLayout = (): void => {
+    if (!deferredLayout) return;
+    deferredLayout = false;
+    layout();
+    renderPosition();
+    reportLayout();
+  };
+
+  const applyDeferredInbound = (): void => {
+    const nextTerritory = deferredTerritory;
+    const nextScaleState = deferredScaleState;
+    const resetPosition = deferredResetPosition;
+    deferredTerritory = null;
+    deferredScaleState = null;
+    deferredResetPosition = false;
+    if (nextTerritory) applyTerritory(nextTerritory);
+    if (nextScaleState) applyScaleState(nextScaleState);
+    if (resetPosition) applyResetPosition();
+  };
+
   const handlePointerUp = (e: PointerEvent): void => {
     const wasDragging = drag.dragging;
+    if (wasDragging && dragAnchor && dragStageRect) {
+      pendingDragPosition = {
+        phase: "move",
+        screenX: e.screenX,
+        screenY: e.screenY,
+        anchorX: dragAnchor.x,
+        anchorY: dragAnchor.y,
+        stage: dragStageRect,
+      };
+      flushDragPosition();
+    }
     restoreDrag();
     reportHit(isInHitRect(e.clientX, e.clientY), true);
     if (!wasDragging) return;
@@ -585,21 +677,57 @@ export function initPet(opts: PetInitOptions): PetController {
       justDragged = false;
     }, 100);
     const rect = stage.getBoundingClientRect();
-    bridge.sendMove({
-      dx: e.clientX - drag.sx,
-      dy: e.clientY - drag.sy,
-      screenX: e.screenX,
-      screenY: e.screenY,
-      stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-    });
+    terminalDrag = true;
+    try {
+      bridge.sendMove({
+        dx: e.clientX - drag.sx,
+        dy: e.clientY - drag.sy,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        heldDrag: true,
+      });
+    } finally {
+      terminalDrag = false;
+    }
     setAnim(IDLE, true);
+    applyDeferredInbound();
+    applyDeferredLayout();
   };
 
   const handlePointerCancel = (): void => {
     const wasDragging = drag.dragging;
+    if (pendingDragFrame !== null) {
+      caf(pendingDragFrame);
+      pendingDragFrame = null;
+    }
+    pendingDragPosition = null;
     restoreDrag();
     reportHit(false, true);
-    if (wasDragging) setAnim(IDLE, true);
+    if (wasDragging) {
+      const rect = stage.getBoundingClientRect();
+      terminalDrag = true;
+      try {
+        bridge.sendDragPosition({
+          phase: "cancel",
+          screenX: 0,
+          screenY: 0,
+          anchorX: 0,
+          anchorY: 0,
+          stage: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+        });
+      } finally {
+        terminalDrag = false;
+      }
+      setAnim(IDLE, true);
+    }
+    applyDeferredInbound();
+    applyDeferredLayout();
   };
 
   const handleClick = (): void => {
@@ -728,13 +856,43 @@ export function initPet(opts: PetInitOptions): PetController {
     territory = bounds;
     renderPosition();
   };
+  const receiveTerritory = (bounds: {
+    minStageX: number;
+    maxStageX: number;
+    minStageY: number;
+    maxStageY: number;
+  }): void => {
+    if (terminalDrag || (drag.active && drag.dragging)) {
+      deferredTerritory = bounds;
+      return;
+    }
+    applyTerritory(bounds);
+  };
+  const receiveScaleState = (state: PetScaleState): void => {
+    if (terminalDrag || (drag.active && drag.dragging)) {
+      deferredScaleState = state;
+      return;
+    }
+    applyScaleState(state);
+  };
+  const receiveResetPosition = (): void => {
+    if (terminalDrag || (drag.active && drag.dragging)) {
+      deferredResetPosition = true;
+      return;
+    }
+    applyResetPosition();
+  };
   // Subscribe before reporting the first layout so the hidden-first main
   // process reply cannot be missed.
-  const removeTerritoryListener = bridge.onTerritoryBounds(applyTerritory);
-  const removeScaleListener = bridge.onScaleState(applyScaleState);
-  const removeResetListener = bridge.onResetPosition(applyResetPosition);
+  const removeTerritoryListener = bridge.onTerritoryBounds(receiveTerritory);
+  const removeScaleListener = bridge.onScaleState(receiveScaleState);
+  const removeResetListener = bridge.onResetPosition(receiveResetPosition);
   hit.addEventListener("wheel", handleWheel, { passive: false });
   const onResize = (): void => {
+    if (drag.active && drag.dragging) {
+      deferredLayout = true;
+      return;
+    }
     layout();
     renderPosition();
     reportLayout();
@@ -757,6 +915,9 @@ export function initPet(opts: PetInitOptions): PetController {
     removeTerritoryListener();
     removeScaleListener();
     removeResetListener();
+    if (pendingDragFrame !== null) caf(pendingDragFrame);
+    pendingDragFrame = null;
+    pendingDragPosition = null;
     stopMove();
   };
 

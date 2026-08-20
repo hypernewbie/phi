@@ -12,6 +12,16 @@ export interface PetMove {
   screenX: number;
   screenY: number;
   stage: StageRect;
+  heldDrag: boolean;
+}
+
+export interface PetDragPosition {
+  phase: "move" | "cancel";
+  screenX: number;
+  screenY: number;
+  anchorX: number;
+  anchorY: number;
+  stage: StageRect;
 }
 
 export interface TerritoryBounds {
@@ -28,6 +38,7 @@ export type PetStageLayout = { stage: StageRect; resetPosition?: boolean };
 export interface PetApi {
   sendHit(inside: boolean): void;
   sendMove(move: PetMove): void;
+  sendDragPosition(position: PetDragPosition): void;
   requestScaleTick(request: PetScaleRequest): void;
   reportStageLayout(layout: PetStageLayout): void;
   onTerritoryBounds(listener: (bounds: TerritoryBounds) => void): () => void;

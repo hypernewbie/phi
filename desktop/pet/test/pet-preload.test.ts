@@ -14,6 +14,7 @@ vi.mock("electron", () => ({
 import "../src/pet-preload.js";
 
 type PetBridge = {
+  sendDragPosition(position: unknown): void;
   onTerritoryBounds(
     listener: (bounds: {
       minStageX: number;
@@ -32,6 +33,19 @@ const bridge = exposeInMainWorld.mock.calls[0][1] as PetBridge;
 beforeEach(() => vi.clearAllMocks());
 
 describe("pet preload territory bridge", () => {
+  it("sends only the drag-position literal with the supplied payload", () => {
+    const payload = {
+      phase: "move",
+      screenX: 20,
+      screenY: 30,
+      anchorX: 4,
+      anchorY: 5,
+      stage: { x: 1, y: 2, width: 3, height: 4 },
+    };
+    bridge.sendDragPosition(payload);
+    expect(ipcRenderer.send).toHaveBeenCalledWith("phi:pet-drag-position", payload);
+  });
+
   it("removes its wrapped IPC listener when unsubscribed", () => {
     const listener = vi.fn();
     const unsubscribe = bridge.onTerritoryBounds(listener);

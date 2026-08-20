@@ -21,7 +21,7 @@ beforeEach(() => { vi.clearAllMocks(); FakeBrowserWindow.instances.length = 0; }
 
 describe('visible stage geometry', () => {
   it('computes candidate and final cell arithmetic without clamping the transparent cell', () => {
-    const stage = candidateMoveStage({ x: 10, y: 20 }, { dx: .5, dy: -2.5, screenX: 0, screenY: 0, stage: { x: 30, y: 40, width: 100, height: 50 } });
+    const stage = candidateMoveStage({ x: 10, y: 20 }, { dx: .5, dy: -2.5, screenX: 0, screenY: 0, stage: { x: 30, y: 40, width: 100, height: 50 }, heldDrag: false });
     expect(stage).toEqual({ x: 40.5, y: 57.5, width: 100, height: 50 });
     expect(finalCellOrigin({ x: 0, y: 0, width: 100, height: 50 }, { x: 30, y: 40 })).toEqual({ x: -30, y: -40 });
   });

@@ -1,9 +1,10 @@
 /** Sandboxed, context-isolated bridge for the local pet renderer. */
 import { contextBridge, ipcRenderer } from "electron";
-import type { PetMove, PetScaleRequest, PetScaleState, PetStageLayout, TerritoryBounds } from "./pet-bridge.js";
+import type { PetDragPosition, PetMove, PetScaleRequest, PetScaleState, PetStageLayout, TerritoryBounds } from "./pet-bridge.js";
 
 const HIT = "phi:pet-hit";
 const MOVE = "phi:pet-window-move";
+const DRAG_POSITION = "phi:pet-drag-position";
 const SCALE_REQUEST = "phi:pet-scale-request";
 const SCALE_STATE = "phi:pet-scale-state";
 const RESET_POSITION = "phi:pet-reset-position";
@@ -13,6 +14,7 @@ const TERRITORY = "phi:pet-territory-bounds";
 contextBridge.exposeInMainWorld("pet", {
   sendHit: (inside: boolean): void => ipcRenderer.send(HIT, inside),
   sendMove: (move: PetMove): void => ipcRenderer.send(MOVE, move),
+  sendDragPosition: (position: PetDragPosition): void => ipcRenderer.send(DRAG_POSITION, position),
   requestScaleTick: (request: PetScaleRequest): void => ipcRenderer.send(SCALE_REQUEST, request),
   reportStageLayout: (layout: PetStageLayout): void => ipcRenderer.send(LAYOUT, layout),
   onTerritoryBounds: (listener: (bounds: TerritoryBounds) => void): (() => void) => {

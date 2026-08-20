@@ -75,7 +75,32 @@ vi.mock("electron", () => ({
 import { createPet } from "../src/pet-main.js";
 
 const stage = { x: 30, y: 40, width: 100, height: 50 };
-const move = { dx: 0.6, dy: -2.4, screenX: 1950, screenY: -50, stage };
+const move = {
+  dx: 0.6,
+  dy: -2.4,
+  screenX: 1950,
+  screenY: -50,
+  stage,
+  heldDrag: false,
+};
+const dragMove = (overrides: Record<string, unknown> = {}) => ({
+  phase: "move" as const,
+  screenX: 1950,
+  screenY: 600,
+  anchorX: 40,
+  anchorY: 60,
+  stage,
+  ...overrides,
+});
+const dragCancel = (overrides: Record<string, unknown> = {}) => ({
+  phase: "cancel" as const,
+  screenX: 0,
+  screenY: 0,
+  anchorX: 0,
+  anchorY: 0,
+  stage,
+  ...overrides,
+});
 const deps = () => ({
   root: "/tmp/pet",
   log: () => {},
@@ -367,4 +392,139 @@ describe("createPet validated placement", () => {
     pet.stop();
     expect(changes).toEqual([true, false]);
   });
+});
+
+describe("createPet held-drag positioning", () => {
+  it("rejects invalid drag payloads without native movement", () => {
+    const win = started();
+    const setPosition = vi.spyOn(win, "setPosition");
+    const handler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+    handler?.({ sender: {} }, dragMove());
+    handler?.({ sender: win.webContents }, { ...dragMove(), phase: "invalid" });
+    handler?.({ sender: win.webContents }, { ...dragMove(), screenX: NaN });
+    handler?.(
+      { sender: win.webContents },
+      { ...dragMove(), anchorY: Infinity },
+    );
+    handler?.(
+      { sender: win.webContents },
+      { ...dragMove(), stage: { ...stage, width: 0 } },
+    );
+    expect(setPosition).not.toHaveBeenCalled();
+  });
+
+  it("moves from absolute cursor coordinates without clamping and coalesces duplicate cells", () => {
+    const win = started();
+    Object.assign(win.bounds, { x: 100, y: 200 });
+    const setPosition = vi.spyOn(win, "setPosition");
+    const handler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+    handler?.(
+      { sender: win.webContents },
+      dragMove({ screenX: -250, screenY: -300 }),
+    );
+    expect(setPosition).toHaveBeenLastCalledWith(-320, -400);
+    handler?.(
+      { sender: win.webContents },
+      dragMove({ screenX: -249.6, screenY: -299.6 }),
+    );
+    expect(setPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves through negative coordinates, then re-homes held release on the nearest different display", () => {
+    const win = started();
+    Object.assign(win.bounds, { x: 100, y: 200 });
+    const setPosition = vi.spyOn(win, "setPosition");
+    const dragHandler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+    const releaseHandler = fakeIpcMain.handlers.get("phi:pet-window-move");
+    const targetDisplay = {
+      workArea: { x: 2000, y: 100, width: 500, height: 400 },
+    };
+    fakeScreen.getDisplayNearestPoint.mockReturnValue(targetDisplay);
+
+    dragHandler?.(
+      { sender: win.webContents },
+      dragMove({ screenX: -250, screenY: -300 }),
+    );
+    expect(setPosition).toHaveBeenLastCalledWith(-320, -400);
+
+    releaseHandler?.(
+      { sender: win.webContents },
+      { ...move, dx: 2500, dy: 0, heldDrag: true, screenX: 2100, screenY: 200 },
+    );
+    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenLastCalledWith({
+      x: 2100,
+      y: 200,
+    });
+    expect(setPosition).toHaveBeenLastCalledWith(1970, 60);
+
+    const completedCalls = setPosition.mock.calls.length;
+    releaseHandler?.(
+      { sender: win.webContents },
+      { ...move, heldDrag: true, screenX: 2100, screenY: 200 },
+    );
+    expect(setPosition.mock.calls).toHaveLength(completedCalls);
+  });
+
+  it("restores the recorded origin on cancel, publishes territory, and ignores stale cancel", () => {
+    const win = started();
+    Object.assign(win.bounds, { x: 100, y: 200 });
+    const setPosition = vi.spyOn(win, "setPosition");
+    const handler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+    handler?.(
+      { sender: win.webContents },
+      dragMove({ screenX: 800, screenY: 300 }),
+    );
+    handler?.({ sender: win.webContents }, dragCancel());
+    expect(setPosition).toHaveBeenLastCalledWith(100, 200);
+    expect(win.webContents.send).toHaveBeenLastCalledWith(
+      "phi:pet-territory-bounds",
+      { minStageX: -100, maxStageX: 1720, minStageY: -200, maxStageY: 830 },
+    );
+    const calls = setPosition.mock.calls.length;
+    handler?.({ sender: win.webContents }, dragCancel());
+    expect(setPosition.mock.calls).toHaveLength(calls);
+  });
+
+  it("defers stage layout while held and accepts it after release", () => {
+    const win = started();
+    Object.assign(win.bounds, { x: 100, y: 200 });
+    const setPosition = vi.spyOn(win, "setPosition");
+    const dragHandler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+    const layoutHandler = fakeIpcMain.handlers.get("phi:pet-stage-layout");
+    dragHandler?.(
+      { sender: win.webContents },
+      dragMove({ screenX: 800, screenY: 300 }),
+    );
+    const duringDrag = setPosition.mock.calls.length;
+    layoutHandler?.({ sender: win.webContents }, { stage });
+    expect(setPosition.mock.calls).toHaveLength(duringDrag);
+    fakeIpcMain.handlers.get("phi:pet-window-move")?.(
+      { sender: win.webContents },
+      { ...move, heldDrag: true, screenX: 800, screenY: 300 },
+    );
+    const afterRelease = setPosition.mock.calls.length;
+    layoutHandler?.({ sender: win.webContents }, { stage });
+    expect(setPosition.mock.calls.length).toBeGreaterThan(afterRelease);
+  });
+
+  it.each(["stop", "closed"])(
+    "clears drag origin across %s to start",
+    (end) => {
+      const pet = createPet(deps());
+      pet.start();
+      const first = FakeBrowserWindow.instances[0];
+      Object.assign(first.bounds, { x: 100, y: 200 });
+      const dragHandler = fakeIpcMain.handlers.get("phi:pet-drag-position");
+      dragHandler?.({ sender: first.webContents }, dragMove({ screenX: 800 }));
+      if (end === "stop") pet.stop();
+      else first.destroy();
+      pet.start();
+      const second = FakeBrowserWindow.instances[1];
+      Object.assign(second.bounds, { x: 300, y: 400 });
+      const setPosition = vi.spyOn(second, "setPosition");
+      dragHandler?.({ sender: second.webContents }, dragMove({ screenX: 900 }));
+      dragHandler?.({ sender: second.webContents }, dragCancel());
+      expect(setPosition).toHaveBeenLastCalledWith(300, 400);
+    },
+  );
 });

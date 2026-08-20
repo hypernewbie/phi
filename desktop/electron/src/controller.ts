@@ -372,7 +372,7 @@ export function parseEndpoint(raw: string): ParsedEndpoint {
   const scheme = u.protocol.slice(0, -1) as 'http' | 'https';
   // WHATWG lowercases hostnames; Go keeps the raw casing but the task rule
   // is "lowercase host", so the WHATWG normalization is the desired one.
-  const host = u.hostname + (port === null ? '' : `:${port}`);
+  const host = u.hostname + (port !== null ? `:${port}` : '');
   const hostname = (() => {
     let h = u.hostname.toLowerCase();
     if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
@@ -579,7 +579,7 @@ function saveStore(
             id: p.id,
             name: p.name,
             origin: p.origin,
-            ...(p.lastUsed === null ? {} : { lastUsed: p.lastUsed }),
+            ...(p.lastUsed !== null ? { lastUsed: p.lastUsed } : {}),
           })),
           closeToTray,
           syncAlerts,

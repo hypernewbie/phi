@@ -1,7 +1,19 @@
 /** Main-process pet factory and validated visible-stage placement IPC. */
 import { type BrowserWindow, ipcMain, screen } from "electron";
-import type { PetMove, PetScaleRequest, PetStageLayout, StageRect } from "./pet-bridge.js";
-import { candidateMoveStage, clampStage, createPetWindow, deriveTerritoryBounds, finalCellOrigin } from "./pet-window.js";
+import type {
+  PetDragPosition,
+  PetMove,
+  PetScaleRequest,
+  PetStageLayout,
+  StageRect,
+} from "./pet-bridge.js";
+import {
+  candidateMoveStage,
+  clampStage,
+  createPetWindow,
+  deriveTerritoryBounds,
+  finalCellOrigin,
+} from "./pet-window.js";
 
 export type ScaleResult = { tick: number; accepted: boolean };
 export type PetScaleConfig = {
@@ -29,31 +41,70 @@ export interface PetHandle {
 
 type PetDisplay = { id?: number; workArea: Electron.Rectangle };
 
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const finite = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
 const validTick = (value: unknown, scale: PetScaleConfig): value is number =>
-  typeof value === "number" && Number.isInteger(value) && Number.isFinite(value) && value >= scale.minTick && value <= scale.maxTick;
-const canonicalTick = (value: unknown, scale: PetScaleConfig): number => validTick(value, scale) ? value : scale.defaultTick;
+  typeof value === "number" &&
+  Number.isInteger(value) &&
+  Number.isFinite(value) &&
+  value >= scale.minTick &&
+  value <= scale.maxTick;
+const canonicalTick = (value: unknown, scale: PetScaleConfig): number =>
+  validTick(value, scale) ? value : scale.defaultTick;
 
 const stageRect = (value: unknown): value is StageRect => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const stage = value as Record<string, unknown>;
-  return finite(stage.x) && finite(stage.y) && finite(stage.width) && finite(stage.height) && stage.width > 0 && stage.height > 0;
+  return (
+    finite(stage.x) &&
+    finite(stage.y) &&
+    finite(stage.width) &&
+    finite(stage.height) &&
+    stage.width > 0 &&
+    stage.height > 0
+  );
 };
 
 const stageLayout = (value: unknown): value is PetStageLayout => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   if (!stageRect(payload.stage)) return false;
-  return !Object.hasOwn(payload, "resetPosition") || typeof payload.resetPosition === "boolean";
+  return (
+    !Object.hasOwn(payload, "resetPosition") ||
+    typeof payload.resetPosition === "boolean"
+  );
 };
 
 const movePayload = (value: unknown): value is PetMove => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const move = value as Record<string, unknown>;
-  return finite(move.dx) && finite(move.dy) && finite(move.screenX) && finite(move.screenY) && stageRect(move.stage);
+  return (
+    finite(move.dx) &&
+    finite(move.dy) &&
+    finite(move.screenX) &&
+    finite(move.screenY) &&
+    stageRect(move.stage) &&
+    typeof move.heldDrag === "boolean"
+  );
 };
 
-const scaleRequest = (value: unknown, scale: PetScaleConfig): value is PetScaleRequest => {
+const dragPositionPayload = (value: unknown): value is PetDragPosition => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const position = value as Record<string, unknown>;
+  return (
+    (position.phase === "move" || position.phase === "cancel") &&
+    finite(position.screenX) &&
+    finite(position.screenY) &&
+    finite(position.anchorX) &&
+    finite(position.anchorY) &&
+    stageRect(position.stage)
+  );
+};
+
+const scaleRequest = (
+  value: unknown,
+  scale: PetScaleConfig,
+): value is PetScaleRequest => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return validTick((value as Record<string, unknown>).tick, scale);
 };
@@ -72,6 +123,9 @@ export function createPet(deps: PetDeps): PetHandle {
   let latestGlobalStageCenter = { x: 0, y: 0 };
   let running = false;
   const runningListeners = new Set<(running: boolean) => void>();
+  let activeDrag = false;
+  let dragOrigin: { x: number; y: number } | null = null;
+  let lastRoundedCell: { x: number; y: number } | null = null;
 
   const notifyRunning = (next: boolean): void => {
     if (running === next) return;
@@ -79,13 +133,23 @@ export function createPet(deps: PetDeps): PetHandle {
     for (const listener of [...runningListeners]) listener(next);
   };
 
-  const isPetSender = (sender: unknown): boolean => win !== null && !win.isDestroyed() && sender === win.webContents;
-  const liveWindow = (): BrowserWindow | null => win && !win.isDestroyed() ? win : null;
+  const isPetSender = (sender: unknown): boolean =>
+    win !== null && !win.isDestroyed() && sender === win.webContents;
+  const liveWindow = (): BrowserWindow | null =>
+    win && !win.isDestroyed() ? win : null;
+  const clearDragState = (): void => {
+    activeDrag = false;
+    dragOrigin = null;
+    lastRoundedCell = null;
+  };
 
   const sendScaleState = (state: ScaleResult): void => {
     const current = liveWindow();
     if (!current || !rendererReady) return;
-    current.webContents.send("phi:pet-scale-state", { tick: state.tick, accepted: state.accepted });
+    current.webContents.send("phi:pet-scale-state", {
+      tick: state.tick,
+      accepted: state.accepted,
+    });
   };
 
   const sendReset = (): void => {
@@ -95,14 +159,23 @@ export function createPet(deps: PetDeps): PetHandle {
   };
 
   const displayForRetainedPlacement = (): PetDisplay => {
-    if (latestDisplayId !== null && typeof screen.getAllDisplays === "function") {
-      const retained = screen.getAllDisplays().find((display) => display.id === latestDisplayId);
+    if (
+      latestDisplayId !== null &&
+      typeof screen.getAllDisplays === "function"
+    ) {
+      const retained = screen
+        .getAllDisplays()
+        .find((display) => display.id === latestDisplayId);
       if (retained) return retained;
     }
     return screen.getDisplayNearestPoint(latestGlobalStageCenter);
   };
 
-  const positionStage = (localStage: StageRect, globalStage: StageRect, display: PetDisplay): void => {
+  const positionStage = (
+    localStage: StageRect,
+    globalStage: StageRect,
+    display: PetDisplay,
+  ): void => {
     const current = liveWindow();
     if (!current) return;
     const clamped = clampStage(globalStage, display.workArea);
@@ -115,7 +188,10 @@ export function createPet(deps: PetDeps): PetHandle {
       x: clamped.x + clamped.width / 2,
       y: clamped.y + clamped.height / 2,
     };
-    current.webContents.send("phi:pet-territory-bounds", deriveTerritoryBounds({ x, y }, localStage, display.workArea));
+    current.webContents.send(
+      "phi:pet-territory-bounds",
+      deriveTerritoryBounds({ x, y }, localStage, display.workArea),
+    );
   };
 
   const homeStage = (localStage: StageRect): void => {
@@ -129,13 +205,31 @@ export function createPet(deps: PetDeps): PetHandle {
     positionStage(localStage, target, display);
   };
 
+  const positionHeldDrag = (position: PetDragPosition): void => {
+    const current = liveWindow();
+    if (!current) return;
+    const globalStage = {
+      x: position.screenX - position.anchorX,
+      y: position.screenY - position.anchorY,
+      width: position.stage.width,
+      height: position.stage.height,
+    };
+    const cell = finalCellOrigin(globalStage, position.stage);
+    const x = Math.round(cell.x);
+    const y = Math.round(cell.y);
+    if (lastRoundedCell?.x === x && lastRoundedCell.y === y) return;
+    lastRoundedCell = { x, y };
+    current.setPosition(x, y);
+  };
+
   ipcMain.on("phi:pet-hit", (event, inside: unknown) => {
     if (!isPetSender(event.sender) || typeof inside !== "boolean") return;
     liveWindow()?.setIgnoreMouseEvents(!inside, { forward: !inside });
   });
 
   ipcMain.on("phi:pet-scale-request", (event, payload: unknown) => {
-    if (!isPetSender(event.sender) || !scaleRequest(payload, deps.scale)) return;
+    if (!isPetSender(event.sender) || !scaleRequest(payload, deps.scale))
+      return;
     const result = deps.requestScaleTick(payload.tick);
     const response: ScaleResult = {
       tick: canonicalTick(result.tick, deps.scale),
@@ -150,7 +244,8 @@ export function createPet(deps: PetDeps): PetHandle {
   });
 
   ipcMain.on("phi:pet-stage-layout", (event, payload: unknown) => {
-    if (!isPetSender(event.sender) || !stageLayout(payload)) return;
+    if (!isPetSender(event.sender) || !stageLayout(payload) || activeDrag)
+      return;
     const current = liveWindow();
     if (!current) return;
     const stage = payload.stage;
@@ -161,16 +256,20 @@ export function createPet(deps: PetDeps): PetHandle {
       width: stage.width,
       height: stage.height,
     };
-    const nearestDisplay = (): PetDisplay => screen.getDisplayNearestPoint({
-      x: globalStage.x + globalStage.width / 2,
-      y: globalStage.y + globalStage.height / 2,
-    });
+    const nearestDisplay = (): PetDisplay =>
+      screen.getDisplayNearestPoint({
+        x: globalStage.x + globalStage.width / 2,
+        y: globalStage.y + globalStage.height / 2,
+      });
 
     if (!rendererReady) {
       positionStage(stage, globalStage, nearestDisplay());
       rendererReady = true;
       awaitingInitialScaleLayout = true;
-      const initial = pendingScaleState ?? { tick: desiredTick, accepted: true };
+      const initial = pendingScaleState ?? {
+        tick: desiredTick,
+        accepted: true,
+      };
       pendingScaleState = null;
       sendScaleState(initial);
       return;
@@ -207,13 +306,52 @@ export function createPet(deps: PetDeps): PetHandle {
     positionStage(stage, globalStage, nearestDisplay());
   });
 
+  ipcMain.on("phi:pet-drag-position", (event, payload: unknown) => {
+    const current = liveWindow();
+    if (!isPetSender(event.sender) || !current || !dragPositionPayload(payload))
+      return;
+    if (payload.phase === "cancel") {
+      if (!activeDrag || !dragOrigin) return;
+      current.setPosition(dragOrigin.x, dragOrigin.y);
+      const display = screen.getDisplayNearestPoint({
+        x: dragOrigin.x + payload.stage.x + payload.stage.width / 2,
+        y: dragOrigin.y + payload.stage.y + payload.stage.height / 2,
+      });
+      current.webContents.send(
+        "phi:pet-territory-bounds",
+        deriveTerritoryBounds(dragOrigin, payload.stage, display.workArea),
+      );
+      clearDragState();
+      return;
+    }
+    if (!activeDrag) {
+      const bounds = current.getBounds();
+      activeDrag = true;
+      dragOrigin = { x: bounds.x, y: bounds.y };
+      lastRoundedCell = { x: bounds.x, y: bounds.y };
+    }
+    positionHeldDrag(payload);
+  });
+
   ipcMain.on("phi:pet-window-move", (event, payload: unknown) => {
     const current = liveWindow();
     if (!isPetSender(event.sender) || !current || !movePayload(payload)) return;
+    if (payload.heldDrag && !activeDrag) return;
     const bounds = current.getBounds();
-    const candidate = candidateMoveStage(bounds, payload);
-    const target = screen.getDisplayNearestPoint({ x: payload.screenX, y: payload.screenY });
+    const candidate = payload.heldDrag
+      ? {
+          x: bounds.x + payload.stage.x,
+          y: bounds.y + payload.stage.y,
+          width: payload.stage.width,
+          height: payload.stage.height,
+        }
+      : candidateMoveStage(bounds, payload);
+    const target = screen.getDisplayNearestPoint({
+      x: payload.screenX,
+      y: payload.screenY,
+    });
     positionStage(payload.stage, candidate, target);
+    clearDragState();
   });
 
   return {
@@ -242,6 +380,7 @@ export function createPet(deps: PetDeps): PetHandle {
         awaitingInitialScaleLayout = false;
         pendingReset = false;
         awaitingResetLayout = false;
+        clearDragState();
         created.once("closed", () => {
           if (win !== created) return;
           win = null;
@@ -251,6 +390,7 @@ export function createPet(deps: PetDeps): PetHandle {
           pendingScaleState = null;
           pendingReset = false;
           awaitingResetLayout = false;
+          clearDragState();
           notifyRunning(false);
         });
         notifyRunning(true);
@@ -268,6 +408,7 @@ export function createPet(deps: PetDeps): PetHandle {
       pendingScaleState = null;
       pendingReset = false;
       awaitingResetLayout = false;
+      clearDragState();
       notifyRunning(false);
     },
     isRunning: (): boolean => running && win !== null && !win.isDestroyed(),
