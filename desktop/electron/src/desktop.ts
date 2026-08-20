@@ -419,9 +419,12 @@ export class DesktopHost {
     }
     try {
       const mod = (await import(pathToFileURL(path.join(this.petRoot, 'dist', 'pet-main.js')).href)) as {
-        default: (deps: PetDeps) => PetHandle;
+        createPet: (deps: PetDeps) => PetHandle;
       };
-      const handle = mod.default({ root: this.petRoot, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
+      // Re-check after the await: a toggle-off during the import must not
+      // show the pet while the persisted preference is already false.
+      if (!this.controller?.state().petEnabled) return;
+      const handle = mod.createPet({ root: this.petRoot, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
       this.petHandle = handle;
       handle.start();
     } catch (err) {
