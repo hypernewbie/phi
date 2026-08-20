@@ -26,7 +26,7 @@ vi.mock('electron', () => ({ BrowserWindow: FakeBrowserWindow, ipcMain: fakeIpcM
 import { createPet } from '../src/pet-main.js';
 
 const stage = { x: 30, y: 40, width: 100, height: 50 };
-const move = { dx: .6, dy: -2.4, screenX: 1950, screenY: 100, stage };
+const move = { dx: .6, dy: -2.4, screenX: 1950, screenY: -50, stage };
 beforeEach(() => { vi.clearAllMocks(); fakeIpcMain.handlers.clear(); FakeBrowserWindow.instances.length = 0; });
 const started = () => { const pet = createPet({ root: '/tmp/pet', log: () => {} }); pet.start(); return FakeBrowserWindow.instances[0]; };
 
@@ -65,7 +65,7 @@ describe('createPet validated placement', () => {
       channel: 'phi:pet-window-move',
       payload: move,
       display: { workArea: { x: 2000, y: -100, width: 500, height: 400 } },
-      point: { x: 1950, y: 100 },
+      point: { x: 1950, y: -50 },
       position: [1970, 18],
     },
   ])('$name through its IPC handler', ({ channel, payload, display, initialBounds, point, position }) => {
@@ -81,7 +81,7 @@ describe('createPet validated placement', () => {
     fakeScreen.getDisplayNearestPoint.mockReturnValue({ workArea: { x: 2000, y: -100, width: 500, height: 400 } });
     const win = started(); const setPosition = vi.spyOn(win, 'setPosition');
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, move);
-    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith({ x: 1950, y: 100 });
+    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith({ x: 1950, y: -50 });
     expect(setPosition).toHaveBeenCalledWith(1970, 18);
     expect(win.webContents.send).toHaveBeenCalledWith('phi:pet-territory-bounds', expect.objectContaining({ minStageX: 30, maxStageX: 430 }));
   });
