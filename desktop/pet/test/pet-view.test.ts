@@ -54,6 +54,10 @@ function mockStageRect(stage: HTMLElement, rect = { x: 12, y: 34, width: 200, he
   vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({ ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) } as DOMRect);
 }
 
+function mockHitRect(hit: HTMLElement, rect = { x: 0, y: 0, width: 100, height: 100 }): void {
+  vi.spyOn(hit, 'getBoundingClientRect').mockReturnValue({ ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) } as DOMRect);
+}
+
 const fixedRng = (value: number) => () => value;
 
 beforeEach(() => {
@@ -187,6 +191,18 @@ describe('initPet state machine', () => {
     expect(dom.root.style.transform).toBe('translate(110px, 0px)');
   });
 
+  it('pins preview and automatic positioning to the cell edge for disjoint stale territory', () => {
+    const dom = buildDom(); const bridge = makeBridge();
+    let listener: ((bounds: TerritoryBounds) => void) | undefined;
+    bridge.onTerritoryBounds.mockImplementation((next) => { listener = next; return () => {}; });
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    listener?.({ minStageX: 600, maxStageX: 700, minStageY: 24, maxStageY: 504 });
+    expect(dom.root.style.transform).toBe('translate(512px, 480px)');
+    dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 800, clientY: 500, bubbles: true }));
+    expect(dom.root.style.transform).toMatch(/^translate\(512px, \d+px\)$/);
+  });
+
   it('rejects an automatic walking target outside returned territory bounds', () => {
     const dom = buildDom(); const bridge = makeBridge();
     vi.spyOn(dom.root, 'getBoundingClientRect').mockReturnValue({ x: 400, y: 0, width: 512, height: 288, left: 400, top: 0, right: 912, bottom: 288, toJSON: () => ({}) } as DOMRect);
@@ -200,13 +216,26 @@ describe('initPet state machine', () => {
     expect(MOVES).not.toContain(pet.getState().anim);
   });
 
-  it('cancels a drag without sending a move', () => {
+  it('reports the restored native hit state on pointerup', () => {
     const dom = buildDom(); const bridge = makeBridge();
+    mockHitRect(dom.hit);
     initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 10, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 30, clientY: 10, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointerup', { clientX: 25, clientY: 25, bubbles: true }));
+    expect(bridge.sendHit).toHaveBeenLastCalledWith(true);
+  });
+
+  it('cancels a drag without sending a move and restores click-through', () => {
+    const dom = buildDom(); const bridge = makeBridge();
+    mockHitRect(dom.hit);
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 10, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 30, clientY: 10, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
     expect(bridge.sendMove).not.toHaveBeenCalled();
+    expect(bridge.sendHit).toHaveBeenLastCalledWith(false);
   });
 
   it('reports recomputed stage geometry on resize and ignores ended events from an outgoing buffer', () => {

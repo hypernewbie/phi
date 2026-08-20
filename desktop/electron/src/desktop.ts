@@ -227,7 +227,7 @@ export class DesktopHost {
   controller: Controller | null = null;
   // Optional desktop/pet overlay package root (null when absent or smoke).
   petRoot: string | null = null;
-  // The live pet window handle (null until the user first enables it).
+  // The retained pet handle (null until the user first enables it).
   petHandle: PetHandle | null = null;
   /** Invalidates an outstanding optional-package import on every toggle/quit. */
   petGeneration = 0;
@@ -454,11 +454,10 @@ export class DesktopHost {
     }
   }
 
-  /** Destroys the pet window (toggle-off frees the decode surface). */
+  /** Stops the pet window (toggle-off frees the decode surface but retains its IPC listeners). */
   stopPet(): void {
     this.petGeneration += 1;
     this.petHandle?.stop();
-    this.petHandle = null;
   }
 
   /** Toggles the persisted pet preference; pet-enabled-changed mirrors the
@@ -1817,8 +1816,7 @@ export class DesktopHost {
       layoutChildren();
     });
     this.syncTrayFromController();
-    // Restore a previously-enabled pet (destroy-on-toggle-off means the
-    // window is recreated on the next launch when the preference is on).
+    // Restore a previously-enabled pet on launch.
     if (this.controller.state().petEnabled) void this.startPet();
     // Retained per-profile views + rail renderer. The manager (src/views.ts)
     // owns the per-profile WebContentsView lifecycle (lazy creation,

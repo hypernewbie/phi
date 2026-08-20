@@ -241,11 +241,16 @@ export function initPet(opts: PetInitOptions): PetController {
     const cellMaxX = Math.max(0, window.innerWidth - size);
     const cellMaxY = Math.max(0, window.innerHeight - stageH);
     if (!territory) return { minX: 0, maxX: cellMaxX, minY: 0, maxY: cellMaxY };
-    const minX = Math.max(0, territory.minStageX);
-    const maxX = Math.min(cellMaxX, territory.maxStageX);
-    const minY = Math.max(0, territory.minStageY - bottomPad);
-    const maxY = Math.min(cellMaxY, territory.maxStageY - bottomPad);
-    return { minX: Math.min(minX, maxX), maxX: Math.max(minX, maxX), minY: Math.min(minY, maxY), maxY: Math.max(minY, maxY) };
+    const intersectAxis = (territoryMin: number, territoryMax: number, cellMax: number): [number, number] => {
+      const min = Math.max(0, territoryMin);
+      const max = Math.min(cellMax, territoryMax);
+      if (min <= max) return [min, max];
+      const edge = min > cellMax ? cellMax : 0;
+      return [edge, edge];
+    };
+    const [minX, maxX] = intersectAxis(territory.minStageX, territory.maxStageX, cellMaxX);
+    const [minY, maxY] = intersectAxis(territory.minStageY - bottomPad, territory.maxStageY - bottomPad, cellMaxY);
+    return { minX, maxX, minY, maxY };
   };
 
   const setRootPosition = (x: number, y: number): void => {
@@ -448,9 +453,27 @@ export function initPet(opts: PetInitOptions): PetController {
     renderPosition();
   };
 
+  const isInHitRect = (clientX: number, clientY: number): boolean => {
+    const rect = hit.getBoundingClientRect();
+    return (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    );
+  };
+
+  const reportHit = (inside: boolean, force = false): void => {
+    if (force || inside !== lastHitInside) {
+      lastHitInside = inside;
+      bridge.sendHit(inside);
+    }
+  };
+
   const handlePointerUp = (e: PointerEvent): void => {
     const wasDragging = drag.dragging;
     restoreDrag();
+    reportHit(isInHitRect(e.clientX, e.clientY), true);
     if (!wasDragging) return;
     justDragged = true;
     setTimeout(() => { justDragged = false; }, 100);
@@ -462,6 +485,7 @@ export function initPet(opts: PetInitOptions): PetController {
   const handlePointerCancel = (): void => {
     const wasDragging = drag.dragging;
     restoreDrag();
+    reportHit(false, true);
     if (wasDragging) setAnim(IDLE, true);
   };
 
@@ -474,16 +498,7 @@ export function initPet(opts: PetInitOptions): PetController {
 
   const onDocMouseMove = (e: MouseEvent): void => {
     if (drag.active) return; // keep the window interactive during a drag
-    const rect = hit.getBoundingClientRect();
-    const inside =
-      e.clientX >= rect.left &&
-      e.clientX <= rect.right &&
-      e.clientY >= rect.top &&
-      e.clientY <= rect.bottom;
-    if (inside !== lastHitInside) {
-      lastHitInside = inside;
-      bridge.sendHit(inside);
-    }
+    reportHit(isInHitRect(e.clientX, e.clientY));
   };
 
   hit.addEventListener("pointerdown", handlePointerDown);

@@ -59,6 +59,25 @@ describe('DesktopHost optional pet lifecycle', () => {
     expect(host.petHandle).toBe(final);
   });
 
+  it('reuses one listener-owning handle across repeated disable and enable', async () => {
+    const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
+    const retained = handle();
+    const factory = vi.fn(() => retained);
+    const load = vi.spyOn(host, 'loadPetFactory').mockResolvedValue(factory);
+
+    await host.startPet();
+    host.stopPet();
+    await host.startPet();
+    host.stopPet();
+    await host.startPet();
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(retained.stop).toHaveBeenCalledTimes(2);
+    expect(retained.start).toHaveBeenCalledTimes(3);
+    expect(host.petHandle).toBe(retained);
+  });
+
   it('creates no handle when disable or quit invalidates a pending factory', async () => {
     const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
     const disabled = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();
