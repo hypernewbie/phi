@@ -47,6 +47,31 @@ describe('createPet validated placement', () => {
     fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, { stage: { ...stage, height: Infinity } });
     expect(setPosition).not.toHaveBeenCalled();
   });
+  it.each([
+    {
+      name: 'layout center selects a negative-coordinate work area',
+      channel: 'phi:pet-stage-layout',
+      payload: { stage },
+      display: { workArea: { x: -1600, y: -900, width: 500, height: 400 } },
+      point: { x: 90, y: 85 },
+      position: [-1230, -590],
+    },
+    {
+      name: 'release point selects a gap display with negative y',
+      channel: 'phi:pet-window-move',
+      payload: move,
+      display: { workArea: { x: 2000, y: -100, width: 500, height: 400 } },
+      point: { x: 2500, y: 100 },
+      position: [1970, 18],
+    },
+  ])('$name through its IPC handler', ({ channel, payload, display, point, position }) => {
+    fakeScreen.getDisplayNearestPoint.mockReturnValue(display);
+    const win = started();
+    const setPosition = vi.spyOn(win, 'setPosition');
+    fakeIpcMain.handlers.get(channel)?.({ sender: win.webContents }, payload);
+    expect(fakeScreen.getDisplayNearestPoint).toHaveBeenCalledWith(point);
+    expect(setPosition).toHaveBeenCalledWith(position[0], position[1]);
+  });
   it('uses release display and rounds only final cell coordinates', () => {
     fakeScreen.getDisplayNearestPoint.mockReturnValue({ workArea: { x: 2000, y: -100, width: 500, height: 400 } });
     const win = started(); const setPosition = vi.spyOn(win, 'setPosition');

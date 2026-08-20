@@ -78,6 +78,30 @@ describe('DesktopHost optional pet lifecycle', () => {
     expect(host.petHandle).toBe(retained);
   });
 
+  it.each([
+    ['unavailable', null, true, false],
+    ['disabled', '/pet', false, false],
+    ['quitting', '/pet', true, true],
+  ])('does not restart a retained stopped handle when %s', async (_case, root, petEnabled, quitting) => {
+    const priorPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
+    try {
+      const host = new DesktopHost();
+      host.petRoot = root;
+      enable(host, petEnabled);
+      host.quitting = quitting;
+      const retained = handle();
+      host.petHandle = retained;
+
+      await host.startPet();
+
+      expect(retained.start).not.toHaveBeenCalled();
+      expect(host.petHandle).toBe(retained);
+    } finally {
+      Object.defineProperty(process, 'platform', { configurable: true, value: priorPlatform });
+    }
+  });
+
   it('creates no handle when disable or quit invalidates a pending factory', async () => {
     const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
     const disabled = deferred<(deps: { root: string; log: (msg: string) => void }) => ReturnType<typeof handle>>();

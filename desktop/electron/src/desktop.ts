@@ -438,6 +438,7 @@ export class DesktopHost {
     if (!isPetAvailable(root) || root === null) { this.logPetUnavailable(); return; }
     if (this.petHandle) {
       if (this.petHandle.isRunning()) return;
+      if (!isPetAvailable(this.petRoot) || !this.controller?.state().petEnabled || this.quitting) return;
       this.petHandle.start();
       return;
     }
