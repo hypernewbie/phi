@@ -1,0 +1,27 @@
+{
+  "name": "@phi-desktop/pet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional animated desktop pet overlay for the phi Electron shell (ported from dsh-pet).",
+  "type": "module",
+  "main": "dist/pet-main.js",
+  "exports": {
+    ".": {
+      "import": "./dist/pet-main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.preload.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "verify": "electron scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^20.19.43",
+    "jsdom": "^30.0.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

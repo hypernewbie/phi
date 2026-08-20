@@ -96,6 +96,7 @@ import {
   resolveRailChord,
 } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
+import { discoverPetRoot } from './petLoader.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -219,6 +220,8 @@ export class DesktopHost {
   // Electron.
   trayHandle: TrayHandle | null = null;
   controller: Controller | null = null;
+  // Optional desktop/pet overlay package root (null when absent or smoke).
+  petRoot: string | null = null;
   // Interval handles (cleared in before-quit so no pending probe outlives
   // the retained views).
   healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -1633,6 +1636,9 @@ export class DesktopHost {
     }
     // The tray is built before the second-instance listener, so a second
     // launch that foregrounds the window always finds the tray ready.
+    // Discover the optional desktop/pet package once at host start (the
+    // tray's "Show pet" checkbox is enabled only when the probe succeeds).
+    this.petRoot = discoverPetRoot(app, SMOKE);
     this.startTray();
     singleInstance.installListener();
     // The controller is built after the tray and the listener: a persisted,
