@@ -63,20 +63,32 @@ describe('installReloadShortcut (F5 reload)', () => {
     expect(reloadCalls).toHaveLength(0);
   });
 
-  it('reloads all servers on Alt+F5 or Cmd/Ctrl+Alt+R when callback is supplied (Idea E)', () => {
+  it('reloads all servers on Alt+F5 when callback is supplied', () => {
     const reloadAll = vi.fn();
     const { fire } = makeHarness(undefined, reloadAll);
     const ev1 = fire({ type: 'keyDown', key: 'F5', alt: true });
     expect(ev1.preventDefault).toHaveBeenCalled();
     expect(reloadAll).toHaveBeenCalledWith(false);
 
-    const ev2 = fire({ type: 'keyDown', key: 'r', meta: true, alt: true });
+    const ev2 = fire({ type: 'keyDown', key: 'F5', alt: true, shift: true });
     expect(ev2.preventDefault).toHaveBeenCalled();
-    expect(reloadAll).toHaveBeenCalledWith(false);
-
-    const ev3 = fire({ type: 'keyDown', key: 'R', control: true, alt: true, shift: true });
-    expect(ev3.preventDefault).toHaveBeenCalled();
     expect(reloadAll).toHaveBeenCalledWith(true);
+  });
+
+  it('leaves Ctrl+R, Cmd+R, and other keys untouched so terminal reverse-search works', () => {
+    const reloadAll = vi.fn();
+    const { fire, reloadCalls, reloadIgnoringCacheCalls } = makeHarness(undefined, reloadAll);
+    const ev1 = fire({ type: 'keyDown', key: 'r', control: true });
+    expect(ev1.preventDefault).not.toHaveBeenCalled();
+    const ev2 = fire({ type: 'keyDown', key: 'R', control: true, shift: true });
+    expect(ev2.preventDefault).not.toHaveBeenCalled();
+    const ev3 = fire({ type: 'keyDown', key: 'r', meta: true });
+    expect(ev3.preventDefault).not.toHaveBeenCalled();
+    const ev4 = fire({ type: 'keyDown', key: 'r', control: true, alt: true });
+    expect(ev4.preventDefault).not.toHaveBeenCalled();
+    expect(reloadCalls).toHaveLength(0);
+    expect(reloadIgnoringCacheCalls).toHaveLength(0);
+    expect(reloadAll).not.toHaveBeenCalled();
   });
 
   it('leaves Alt+F5 untouched when no reloadAllServers callback is supplied', () => {
