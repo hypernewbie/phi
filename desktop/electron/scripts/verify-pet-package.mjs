@@ -27,6 +27,7 @@ const pets = resources.map((resource) => path.join(resource, 'pet')).filter((pet
 const complete = pets.filter((pet) =>
   existsSync(path.join(pet, 'dist', 'pet-main.js')) &&
   existsSync(path.join(pet, 'assets')) &&
+  statSync(path.join(pet, 'assets')).isDirectory() &&
   existsSync(path.join(pet, 'package.json')) &&
   existsSync(path.join(pet, 'LICENSE-dsh-pet.txt')),
 );

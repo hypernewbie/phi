@@ -18,6 +18,13 @@ describe('verify-pet-package', () => {
     expect(verify(out, 'present').status).toBe(0);
     expect(verify(out, 'absent').status).toBe(1);
   });
+  it('rejects a present package whose assets path is a file', () => {
+    const out = fixture(); const pet = path.join(out, 'Phi.app', 'Contents', 'Resources', 'pet');
+    mkdirSync(path.join(pet, 'dist'), { recursive: true });
+    for (const file of ['dist/pet-main.js', 'assets', 'package.json', 'LICENSE-dsh-pet.txt']) writeFileSync(path.join(pet, file), 'x');
+    expect(verify(out, 'present').status).toBe(1);
+  });
+
   it('accepts output with no pet resource', () => {
     expect(verify(fixture(), 'absent').status).toBe(0);
   });

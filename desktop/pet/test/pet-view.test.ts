@@ -9,6 +9,7 @@ import {
   ACTS,
   CLICKS,
   IDLE,
+  MOVES,
   TURN,
   initPet,
   pick,
@@ -157,16 +158,19 @@ describe('initPet state machine', () => {
     expect(pet.getState().once).toBe(true);
   });
 
-  it('resumes the chain after drag release with once=true (drag-stall fix) and reports the delta', () => {
+  it('restores the local stage before reporting a drag delta', () => {
     const dom = buildDom();
     const bridge = makeBridge();
     mockStageRect(dom.stage);
+    let stageTransformAtSend = '';
+    bridge.sendMove.mockImplementation(() => { stageTransformAtSend = dom.stage.style.transform; });
     const pet = initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
     dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 140, clientY: 100, bubbles: true }));
+    expect(dom.stage.style.transform).toBe('none');
     dom.hit.dispatchEvent(new MouseEvent('pointerup', { clientX: 140, clientY: 100, bubbles: true }));
-    expect(pet.getState().anim).toBe(IDLE);
-    expect(pet.getState().once).toBe(true); // was false upstream (client.js:577 bug)
+    expect(pet.getState()).toMatchObject({ anim: IDLE, once: true });
+    expect(stageTransformAtSend).toMatch(/^translateY\(.+px\)$/);
     expect(bridge.sendMove).toHaveBeenCalledWith(expect.objectContaining({ dx: 40, dy: 0, stage: { x: 12, y: 34, width: 200, height: 112.5 } }));
   });
 
@@ -183,6 +187,19 @@ describe('initPet state machine', () => {
     expect(dom.root.style.transform).toBe('translate(110px, 0px)');
   });
 
+  it('rejects an automatic walking target outside returned territory bounds', () => {
+    const dom = buildDom(); const bridge = makeBridge();
+    vi.spyOn(dom.root, 'getBoundingClientRect').mockReturnValue({ x: 400, y: 0, width: 512, height: 288, left: 400, top: 0, right: 912, bottom: 288, toJSON: () => ({}) } as DOMRect);
+    let listener: ((bounds: TerritoryBounds) => void) | undefined;
+    bridge.onTerritoryBounds.mockImplementation((next) => { listener = next; return () => {}; });
+    const pet = initPet({ ...dom, bridge, rng: fixedRng(0.9), raf: () => 0, caf: () => {} });
+    listener?.({ minStageX: 0, maxStageX: 100, minStageY: 0, maxStageY: 100 });
+    ready(dom.videoB);
+    dom.videoB.dispatchEvent(new Event('ended'));
+    expect(ACTS).toContain(pet.getState().anim);
+    expect(MOVES).not.toContain(pet.getState().anim);
+  });
+
   it('cancels a drag without sending a move', () => {
     const dom = buildDom(); const bridge = makeBridge();
     initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
@@ -192,18 +209,21 @@ describe('initPet state machine', () => {
     expect(bridge.sendMove).not.toHaveBeenCalled();
   });
 
-  it('reports recomputed layout on resize and ignores ended events from an outgoing buffer', () => {
+  it('reports recomputed stage geometry on resize and ignores ended events from an outgoing buffer', () => {
     const dom = buildDom(); const bridge = makeBridge();
+    const rect = vi.spyOn(dom.stage, 'getBoundingClientRect');
+    rect.mockReturnValue({ x: 12, y: 34, width: 200, height: 112.5, left: 12, top: 34, right: 212, bottom: 146.5, toJSON: () => ({}) } as DOMRect);
     const pet = initPet({ ...dom, bridge, rng: fixedRng(0.35), raf: () => 0, caf: () => {} });
     ready(dom.videoB);
     dom.hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     ready(dom.videoA);
     dom.videoB.dispatchEvent(new Event('ended'));
     expect(CLICKS).toContain(pet.getState().anim);
+    rect.mockReturnValue({ x: 20, y: 40, width: 400, height: 225, left: 20, top: 40, right: 420, bottom: 265, toJSON: () => ({}) } as DOMRect);
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
     window.dispatchEvent(new Event('resize'));
     expect(dom.root.style.width).toBe('400px');
-    expect(bridge.reportStageLayout).toHaveBeenCalledTimes(2);
+    expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({ x: 20, y: 40, width: 400, height: 225 });
     dom.videoA.dispatchEvent(new Event('ended'));
     expect(pet.getState().anim).toBe(IDLE);
   });

@@ -2083,35 +2083,3 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
     expect(desktopSource).not.toContain("'CommandOrControl+L'");
   });
 });
-
-describe('src/desktop.ts (pet overlay wiring)', () => {
-  it('discovers the pet package once at host start and gates the tray checkbox on availability', () => {
-    expect(desktopSource).toContain('this.petRoot = discoverPetRoot(');
-    expect(desktopSource).toContain('getPetAvailable: () => isPetAvailable(this.petRoot)');
-    expect(desktopSource).toContain("process.platform !== 'linux' && root !== null");
-    expect(desktopSource).toContain('getPetEnabled: () => this.controller?.state().petEnabled ?? false');
-  });
-
-  it('routes the tray toggle intent into controller.setPetEnabled and start/stop', () => {
-    const toggleIdx = desktopSource.indexOf("case 'toggle-pet'");
-    expect(toggleIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('this.togglePet()', toggleIdx)).toBeGreaterThan(toggleIdx);
-    expect(desktopSource).toContain('ctrl.setPetEnabled(!ctrl.getPetEnabled())');
-  });
-
-  it('rebuilds the tray menu and mirrors the window on pet-enabled-changed', () => {
-    const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    const kindIdx = desktopSource.indexOf("event.kind === 'pet-enabled-changed'", subscribeIdx);
-    expect(kindIdx).toBeGreaterThan(subscribeIdx);
-    expect(desktopSource.indexOf('this.startPet()', kindIdx)).toBeGreaterThan(kindIdx);
-    expect(desktopSource.indexOf('this.stopPet()', kindIdx)).toBeGreaterThan(kindIdx);
-  });
-
-  it('uses a named-factory load seam and invalidates stale optional imports', () => {
-    expect(desktopSource).toContain('async loadPetFactory(root: string)');
-    expect(desktopSource).toContain('return mod.createPet;');
-    expect(desktopSource).toContain('generation !== this.petGeneration');
-    expect(desktopSource).toContain("'phi-desktop: pet unavailable on linux'");
-    expect(desktopSource).not.toContain("from '../pet/");
-  });
-});

@@ -39,7 +39,11 @@ describe('createPet validated placement', () => {
     const win = started(); const setPosition = vi.spyOn(win, 'setPosition');
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: {} }, move);
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, dx: NaN });
+    fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, screenX: undefined });
+    fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, screenY: Infinity });
     fakeIpcMain.handlers.get('phi:pet-window-move')?.({ sender: win.webContents }, { ...move, stage: { ...stage, width: 0 } });
+    fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, {});
+    fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, { stage: { ...stage, x: '30' } });
     fakeIpcMain.handlers.get('phi:pet-stage-layout')?.({ sender: win.webContents }, { stage: { ...stage, height: Infinity } });
     expect(setPosition).not.toHaveBeenCalled();
   });
@@ -51,8 +55,12 @@ describe('createPet validated placement', () => {
     expect(setPosition).toHaveBeenCalledWith(1970, 18);
     expect(win.webContents.send).toHaveBeenCalledWith('phi:pet-territory-bounds', expect.objectContaining({ minStageX: 30, maxStageX: 430 }));
   });
-  it('initial layout sends bounds then shows once; later layout and move do not re-show', () => {
-    const win = started(); const show = vi.spyOn(win, 'show');
+  it('keeps a pre-layout window hidden across repeated starts, then shows it once after layout', () => {
+    const pet = createPet({ root: '/tmp/pet', log: () => {} });
+    pet.start();
+    const win = FakeBrowserWindow.instances[0]; const show = vi.spyOn(win, 'show');
+    pet.start();
+    expect(show).not.toHaveBeenCalled();
     const layout = fakeIpcMain.handlers.get('phi:pet-stage-layout');
     layout?.({ sender: win.webContents }, { stage });
     expect(win.webContents.send).toHaveBeenCalledWith('phi:pet-territory-bounds', expect.any(Object));

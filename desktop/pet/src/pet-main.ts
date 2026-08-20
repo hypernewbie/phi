@@ -65,7 +65,7 @@ export function createPet(deps: PetDeps): PetHandle {
   return {
     start(): void {
       if (petCreating) return;
-      if (win && !win.isDestroyed()) { win.show(); return; }
+      if (win && !win.isDestroyed()) return;
       petCreating = true;
       try {
         const created = createPetWindow({ root: deps.root, log: deps.log });
