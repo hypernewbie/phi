@@ -2087,7 +2087,8 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
 describe('src/desktop.ts (pet overlay wiring)', () => {
   it('discovers the pet package once at host start and gates the tray checkbox on availability', () => {
     expect(desktopSource).toContain('this.petRoot = discoverPetRoot(');
-    expect(desktopSource).toContain('getPetAvailable: () => this.petRoot !== null');
+    expect(desktopSource).toContain('getPetAvailable: () => isPetAvailable(this.petRoot)');
+    expect(desktopSource).toContain("process.platform !== 'linux' && root !== null");
     expect(desktopSource).toContain('getPetEnabled: () => this.controller?.state().petEnabled ?? false');
   });
 
@@ -2106,8 +2107,11 @@ describe('src/desktop.ts (pet overlay wiring)', () => {
     expect(desktopSource.indexOf('this.stopPet()', kindIdx)).toBeGreaterThan(kindIdx);
   });
 
-  it('never statically imports the pet package (file URL dynamic import only)', () => {
-    expect(desktopSource).toContain('pathToFileURL(path.join(this.petRoot');
+  it('uses a named-factory load seam and invalidates stale optional imports', () => {
+    expect(desktopSource).toContain('async loadPetFactory(root: string)');
+    expect(desktopSource).toContain('return mod.createPet;');
+    expect(desktopSource).toContain('generation !== this.petGeneration');
+    expect(desktopSource).toContain("'phi-desktop: pet unavailable on linux'");
     expect(desktopSource).not.toContain("from '../pet/");
   });
 });

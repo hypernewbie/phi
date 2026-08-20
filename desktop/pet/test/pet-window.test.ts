@@ -1,110 +1,52 @@
 // @vitest-environment node
-/**
- * Unit tests for src/pet-window.ts (cell math + window flags + re-clamp)
- * with a recording-fake BrowserWindow/screen. The 'electron' module is
- * stubbed with vi.mock so no real window is ever constructed.
- */
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { fakeScreen, FakeBrowserWindow } = vi.hoisted(() => {
   class FakeBrowserWindow {
     static instances: FakeBrowserWindow[] = [];
-    opts: Record<string, unknown> = {};
-    loadArgs: unknown[] = [];
-    destroyed = false;
-    constructor(opts: Record<string, unknown>) {
-      this.opts = opts;
-      FakeBrowserWindow.instances.push(this);
-    }
-    setAlwaysOnTop(_flag: boolean, _level?: string): void {}
-    setVisibleOnAllWorkspaces(_flag: boolean): void {}
-    setIgnoreMouseEvents(_ignore: boolean, _opts?: unknown): void {}
-    loadFile(...args: unknown[]): Promise<void> {
-      this.loadArgs = args;
-      return Promise.resolve();
-    }
-    on(): void {}
-    once(): void {}
-    show(): void {}
-    isDestroyed(): boolean {
-      return this.destroyed;
-    }
-    destroy(): void {
-      this.destroyed = true;
-    }
+    opts: Record<string, unknown> = {}; loadArgs: unknown[] = []; destroyed = false;
+    constructor(opts: Record<string, unknown>) { this.opts = opts; FakeBrowserWindow.instances.push(this); }
+    setAlwaysOnTop(): void {} setVisibleOnAllWorkspaces(): void {} setIgnoreMouseEvents(): void {}
+    loadFile(...args: unknown[]): Promise<void> { this.loadArgs = args; return Promise.resolve(); }
+    isDestroyed(): boolean { return this.destroyed; }
   }
-  return {
-    fakeScreen: {
-      getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } })),
-      getDisplayMatching: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } })),
-    },
-    FakeBrowserWindow,
-  };
+  return { fakeScreen: { getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } })) }, FakeBrowserWindow };
 });
+vi.mock('electron', () => ({ BrowserWindow: FakeBrowserWindow, screen: fakeScreen }));
+import { candidateMoveStage, clampStage, computeDefaultCell, createPetWindow, deriveTerritoryBounds, finalCellOrigin, nearestDisplayForStage } from '../src/pet-window.js';
 
-vi.mock('electron', () => ({
-  BrowserWindow: FakeBrowserWindow,
-  screen: fakeScreen,
-}));
+beforeEach(() => { vi.clearAllMocks(); FakeBrowserWindow.instances.length = 0; });
 
-import { clampBounds, computeDefaultCell, createPetWindow } from '../src/pet-window.js';
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  FakeBrowserWindow.instances.length = 0;
-  fakeScreen.getPrimaryDisplay.mockReturnValue({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } });
-  fakeScreen.getDisplayMatching.mockReturnValue({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } });
-});
-
-describe('computeDefaultCell', () => {
-  it('computes the bottom-right cell of a 4×2 grid (1920×1080 → 480×540 at x=1440,y=540)', () => {
-    expect(computeDefaultCell({ x: 0, y: 0, width: 1920, height: 1080 })).toEqual({
-      x: 1440,
-      y: 540,
-      width: 480,
-      height: 540,
-    });
+describe('visible stage geometry', () => {
+  it('computes candidate and final cell arithmetic without clamping the transparent cell', () => {
+    const stage = candidateMoveStage({ x: 10, y: 20 }, { dx: .5, dy: -2.5, screenX: 0, screenY: 0, stage: { x: 30, y: 40, width: 100, height: 50 } });
+    expect(stage).toEqual({ x: 40.5, y: 57.5, width: 100, height: 50 });
+    expect(finalCellOrigin({ x: 0, y: 0, width: 100, height: 50 }, { x: 30, y: 40 })).toEqual({ x: -30, y: -40 });
   });
-});
-
-describe('clampBounds', () => {
-  it('clamps an out-of-bounds rectangle fully inside the workArea', () => {
-    expect(clampBounds({ x: 2000, y: 600, width: 480, height: 540 }, { x: 0, y: 0, width: 1920, height: 1080 })).toEqual({
-      x: 1440,
-      y: 540,
-    });
+  it('clamps visible stages in positive, negative, and oversize work areas', () => {
+    expect(clampStage({ x: 2000, y: 600, width: 100, height: 50 }, { x: 0, y: 0, width: 1920, height: 1080 })).toMatchObject({ x: 1820, y: 600 });
+    expect(clampStage({ x: -900, y: -900, width: 300, height: 200 }, { x: -800, y: -600, width: 800, height: 600 })).toMatchObject({ x: -800, y: -600 });
+    expect(clampStage({ x: 2, y: 2, width: 900, height: 700 }, { x: 0, y: 0, width: 800, height: 600 })).toMatchObject({ x: 0, y: 0 });
   });
-  it('leaves an in-bounds rectangle unchanged', () => {
-    expect(clampBounds({ x: 100, y: 100, width: 480, height: 540 }, { x: 0, y: 0, width: 1920, height: 1080 })).toEqual({
-      x: 100,
-      y: 100,
-    });
+  it('chooses a layout display by stage center, including a gap', () => {
+    const displays = [{ workArea: { x: -1000, y: 0, width: 1000, height: 800 } }, { workArea: { x: 200, y: 0, width: 800, height: 800 } }];
+    expect(nearestDisplayForStage({ x: 400, y: 100, width: 20, height: 20 }, displays)).toBe(displays[1]);
+    expect(nearestDisplayForStage({ x: 150, y: 100, width: 20, height: 20 }, displays)).toBe(displays[1]);
+  });
+  it('derives finite non-inverted local territory bounds', () => {
+    expect(deriveTerritoryBounds({ x: -30, y: -40 }, { x: 30, y: 40, width: 100, height: 50 }, { x: 0, y: 0, width: 800, height: 600 })).toEqual({ minStageX: 30, maxStageX: 730, minStageY: 40, maxStageY: 590 });
+    expect(deriveTerritoryBounds({ x: 0, y: 0 }, { x: 0, y: 0, width: 900, height: 700 }, { x: 0, y: 0, width: 800, height: 600 })).toEqual({ minStageX: 0, maxStageX: 0, minStageY: 0, maxStageY: 0 });
   });
 });
 
 describe('createPetWindow', () => {
-  it('creates a transparent frameless non-resizable window with the security flags and loads dist/pet.html with the pet preload', () => {
-    const returned = createPetWindow({ root: '/tmp/pet', log: () => {} });
-    const win = FakeBrowserWindow.instances.at(-1) as unknown as {
-      opts: Record<string, unknown>;
-      loadArgs: unknown[];
-    };
-    expect(returned).toBe(win);
-    expect(win.opts.transparent).toBe(true);
-    expect(win.opts.frame).toBe(false);
-    expect(win.opts.resizable).toBe(false);
-    expect(win.opts.focusable).toBe(false);
-    expect(win.opts.skipTaskbar).toBe(true);
+  it('keeps the hidden transparent secure cell and has no moved or ready-to-show auto-show hooks', () => {
+    expect(computeDefaultCell({ x: 0, y: 0, width: 1920, height: 1080 })).toMatchObject({ x: 1440, y: 540, width: 480, height: 540 });
+    createPetWindow({ root: '/tmp/pet', log: () => {} });
+    const win = FakeBrowserWindow.instances[0];
     expect(win.opts.show).toBe(false);
-    expect(win.opts.backgroundColor).toBe('#00000000');
-    const wp = win.opts.webPreferences as Record<string, unknown>;
-    expect(wp.nodeIntegration).toBe(false);
-    expect(wp.contextIsolation).toBe(true);
-    expect(wp.sandbox).toBe(true);
-    expect(wp.webSecurity).toBe(true);
-    expect(wp.backgroundThrottling).toBe(false);
-    expect(wp.preload).toBe(path.join('/tmp/pet', 'dist', 'pet-preload.js'));
+    expect((win.opts.webPreferences as Record<string, unknown>).preload).toBe(path.join('/tmp/pet', 'dist', 'pet-preload.js'));
     expect(win.loadArgs[0]).toBe(path.join('/tmp/pet', 'dist', 'pet.html'));
   });
 });

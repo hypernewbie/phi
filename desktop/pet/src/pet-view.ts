@@ -195,11 +195,27 @@ export function initPet(opts: PetInitOptions): PetController {
     opts.raf ?? ((cb: FrameRequestCallback) => requestAnimationFrame(cb));
   const caf = opts.caf ?? ((id: number) => cancelAnimationFrame(id));
 
-  const size = Math.floor(window.innerWidth / 2); // pet ≈ half the cell
-  const halfW = size / 2;
-  const stageH = (size * 9) / 16;
-  const halfH = stageH / 2;
-  const bottomPad = (stageH * (CANVAS_H - FEET_Y)) / CANVAS_H;
+  let size = 0;
+  let halfW = 0;
+  let stageH = 0;
+  let halfH = 0;
+  let bottomPad = 0;
+  let territory: { minStageX: number; maxStageX: number; minStageY: number; maxStageY: number } | null = null;
+
+  const layout = (): void => {
+    size = Math.floor(window.innerWidth / 2);
+    halfW = size / 2;
+    stageH = (size * 9) / 16;
+    halfH = stageH / 2;
+    bottomPad = (stageH * (CANVAS_H - FEET_Y)) / CANVAS_H;
+    root.style.width = `${size}px`;
+    root.style.height = `${stageH}px`;
+    stage.style.transform = `translateY(${bottomPad}px)`;
+    hit.style.left = `${(HIT_BOX.x0 / 640) * 100}%`;
+    hit.style.top = `${(HIT_BOX.y0 / 360) * 100}%`;
+    hit.style.width = `${((HIT_BOX.x1 - HIT_BOX.x0) / 640) * 100}%`;
+    hit.style.height = `${((HIT_BOX.y1 - HIT_BOX.y0) / 360) * 100}%`;
+  };
 
   let anim = IDLE;
   let once = true;
@@ -221,22 +237,27 @@ export function initPet(opts: PetInitOptions): PetController {
 
   let lastHitInside: boolean | null = null;
 
+  const rootBounds = (): { minX: number; maxX: number; minY: number; maxY: number } => {
+    const cellMaxX = Math.max(0, window.innerWidth - size);
+    const cellMaxY = Math.max(0, window.innerHeight - stageH);
+    if (!territory) return { minX: 0, maxX: cellMaxX, minY: 0, maxY: cellMaxY };
+    const minX = Math.max(0, territory.minStageX);
+    const maxX = Math.min(cellMaxX, territory.maxStageX);
+    const minY = Math.max(0, territory.minStageY - bottomPad);
+    const maxY = Math.min(cellMaxY, territory.maxStageY - bottomPad);
+    return { minX: Math.min(minX, maxX), maxX: Math.max(minX, maxX), minY: Math.min(minY, maxY), maxY: Math.max(minY, maxY) };
+  };
+
   const setRootPosition = (x: number, y: number): void => {
-    root.style.transform = `translate(${x}px, ${y}px)`;
+    const bounds = rootBounds();
+    root.style.transform = `translate(${Math.min(Math.max(x, bounds.minX), bounds.maxX)}px, ${Math.min(Math.max(y, bounds.minY), bounds.maxY)}px)`;
   };
 
   const renderPosition = (): void => {
     const W = window.innerWidth;
     const H = window.innerHeight;
-    let left: number;
-    let top: number;
-    if (customPos) {
-      left = Math.min(Math.max(customPos.rx * W - halfW, 0), W - size);
-      top = Math.min(Math.max(customPos.ry * H - halfH, 0), H - stageH);
-    } else {
-      left = W - size - DEFAULT_RIGHT_MARGIN;
-      top = H - stageH;
-    }
+    const left = customPos ? customPos.rx * W - halfW : W - size - DEFAULT_RIGHT_MARGIN;
+    const top = customPos ? customPos.ry * H - halfH : H - stageH;
     setRootPosition(left, top);
   };
 
@@ -286,6 +307,9 @@ export function initPet(opts: PetInitOptions): PetController {
       distance: randomBetween(MOVE_MIN_PX, MOVE_MAX_PX, rng),
     });
     if (plan === null) return false;
+    const bounds = rootBounds();
+    const targetLeft = plan.targetRatio * window.innerWidth - halfW;
+    if (targetLeft < bounds.minX || targetLeft > bounds.maxX) return false;
     pendingMove = plan;
     setAnim(pick(MOVES, null, rng), true);
     return true;
@@ -356,17 +380,22 @@ export function initPet(opts: PetInitOptions): PetController {
     el.muted = true;
     el.autoplay = true;
     el.playsInline = true;
-    el.onended = nextOnce ? handleEnded : null;
+    el.onended = null;
     el.load();
 
     const onReady = (): void => {
       el.removeEventListener("loadeddata", onReady);
       if (pending?.gen !== currentGen) return;
       const old = front === 0 ? videoA : videoB;
+      if (old && old !== el) {
+        old.onended = null;
+        old.pause();
+        old.classList.remove("is-front");
+      }
       el.classList.add("is-front");
-      if (old && old !== el) old.classList.remove("is-front");
       front = front === 0 ? 1 : 0;
       pending = null;
+      el.onended = nextOnce ? handleEnded : null;
       el.style.transform = facing === "right" ? "scaleX(-1)" : "";
       void Promise.resolve(el.play()).catch(() => {});
       if (pendingMove) startMoveDrive(el);
@@ -409,25 +438,31 @@ export function initPet(opts: PetInitOptions): PetController {
     stage.style.transform = "none"; // drop foot alignment while dragging
   };
 
-  const handlePointerUp = (e: PointerEvent): void => {
-    const wasDragging = drag.dragging;
+  const restoreDrag = (): void => {
     drag.active = false;
     drag.dragging = false;
     hit.classList.remove("dragging");
-    if (wasDragging) {
-      justDragged = true;
-      setTimeout(() => {
-        justDragged = false;
-      }, 100);
-      dragging = false;
-      // The WINDOW moves by the accumulated pointer delta; the pet resets
-      // to its pre-drag in-window position so it stays under the cursor.
-      bridge.sendMove(e.clientX - drag.sx, e.clientY - drag.sy);
-      customPos = preDragCustomPos;
-      stage.style.transform = `translateY(${bottomPad}px)`;
-      renderPosition(); // reset the pet to its pre-drag in-window spot
-      setAnim(IDLE, true); // once=true: the chain resumes after this idle (upstream bug fix)
-    }
+    dragging = false;
+    customPos = preDragCustomPos;
+    stage.style.transform = `translateY(${bottomPad}px)`;
+    renderPosition();
+  };
+
+  const handlePointerUp = (e: PointerEvent): void => {
+    const wasDragging = drag.dragging;
+    restoreDrag();
+    if (!wasDragging) return;
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 100);
+    const rect = stage.getBoundingClientRect();
+    bridge.sendMove({ dx: e.clientX - drag.sx, dy: e.clientY - drag.sy, screenX: e.screenX, screenY: e.screenY, stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+    setAnim(IDLE, true);
+  };
+
+  const handlePointerCancel = (): void => {
+    const wasDragging = drag.dragging;
+    restoreDrag();
+    if (wasDragging) setAnim(IDLE, true);
   };
 
   const handleClick = (): void => {
@@ -454,7 +489,7 @@ export function initPet(opts: PetInitOptions): PetController {
   hit.addEventListener("pointerdown", handlePointerDown);
   hit.addEventListener("pointermove", handlePointerMove);
   hit.addEventListener("pointerup", handlePointerUp);
-  hit.addEventListener("pointercancel", handlePointerUp);
+  hit.addEventListener("pointercancel", handlePointerCancel);
   hit.addEventListener("click", handleClick);
   document.addEventListener("mousemove", onDocMouseMove);
 
@@ -473,25 +508,34 @@ export function initPet(opts: PetInitOptions): PetController {
     videoB.addEventListener("playing", () => onPlaying(videoB));
   }
 
-  // Set up sizes and hit-layer geometry.
-  root.style.width = `${size}px`;
-  root.style.height = `${stageH}px`;
-  stage.style.transform = `translateY(${bottomPad}px)`;
-  hit.style.left = `${(HIT_BOX.x0 / 640) * 100}%`;
-  hit.style.top = `${(HIT_BOX.y0 / 360) * 100}%`;
-  hit.style.width = `${((HIT_BOX.x1 - HIT_BOX.x0) / 640) * 100}%`;
-  hit.style.height = `${((HIT_BOX.y1 - HIT_BOX.y0) / 360) * 100}%`;
-
+  const reportLayout = (): void => {
+    const rect = stage.getBoundingClientRect();
+    bridge.reportStageLayout({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+  };
+  const applyTerritory = (bounds: { minStageX: number; maxStageX: number; minStageY: number; maxStageY: number }): void => {
+    if (!Object.values(bounds).every(Number.isFinite)) return;
+    territory = bounds;
+    renderPosition();
+  };
+  // Subscribe before reporting the first layout so the hidden-first main
+  // process reply cannot be missed.
+  const removeTerritoryListener = bridge.onTerritoryBounds(applyTerritory);
+  const onResize = (): void => { layout(); renderPosition(); reportLayout(); };
+  window.addEventListener("resize", onResize);
+  layout();
   renderPosition();
+  reportLayout();
   switchTo(IDLE, true);
 
   const destroy = (): void => {
     hit.removeEventListener("pointerdown", handlePointerDown);
     hit.removeEventListener("pointermove", handlePointerMove);
     hit.removeEventListener("pointerup", handlePointerUp);
-    hit.removeEventListener("pointercancel", handlePointerUp);
+    hit.removeEventListener("pointercancel", handlePointerCancel);
     hit.removeEventListener("click", handleClick);
     document.removeEventListener("mousemove", onDocMouseMove);
+    window.removeEventListener("resize", onResize);
+    removeTerritoryListener();
     stopMove();
   };
 

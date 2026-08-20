@@ -1,9 +1,31 @@
 /** The window.pet surface exposed by src/pet-preload.ts (the two sides must stay in sync). */
+export interface StageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PetMove {
+  dx: number;
+  dy: number;
+  screenX: number;
+  screenY: number;
+  stage: StageRect;
+}
+
+export interface TerritoryBounds {
+  minStageX: number;
+  maxStageX: number;
+  minStageY: number;
+  maxStageY: number;
+}
+
 export interface PetApi {
-  /** Report whether the pointer is over the pet's hit region. */
   sendHit(inside: boolean): void;
-  /** Report the accumulated drag delta (the window follows home). */
-  sendMove(dx: number, dy: number): void;
+  sendMove(move: PetMove): void;
+  reportStageLayout(stage: StageRect): void;
+  onTerritoryBounds(listener: (bounds: TerritoryBounds) => void): () => void;
 }
 
 declare global {

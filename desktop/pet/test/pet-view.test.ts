@@ -16,33 +16,47 @@ import {
   planMove,
   randomBetween,
 } from '../src/pet-view.js';
+import type { TerritoryBounds } from '../src/pet-bridge.js';
 
 function buildDom() {
-  document.body.innerHTML = `
-    <div id="pet-root" class="pet-root">
-      <div id="pet-stage" class="pet-stage">
-        <video id="pet-video-a" class="pet-video is-front"></video>
-        <video id="pet-video-b" class="pet-video"></video>
-        <div id="pet-hit" class="pet-hit"></div>
-      </div>
-    </div>`;
-  return {
-    root: document.getElementById('pet-root') as HTMLElement,
-    stage: document.getElementById('pet-stage') as HTMLElement,
-    videoA: document.getElementById('pet-video-a') as HTMLVideoElement,
-    videoB: document.getElementById('pet-video-b') as HTMLVideoElement,
-    hit: document.getElementById('pet-hit') as HTMLElement,
-  };
+  const root = document.createElement('div');
+  root.id = 'pet-root';
+  const stage = document.createElement('div');
+  stage.id = 'pet-stage';
+  const videoA = document.createElement('video');
+  videoA.id = 'pet-video-a';
+  videoA.className = 'is-front';
+  const videoB = document.createElement('video');
+  videoB.id = 'pet-video-b';
+  const hit = document.createElement('div');
+  hit.id = 'pet-hit';
+  stage.append(videoA, videoB, hit);
+  root.append(stage);
+  document.body.replaceChildren(root);
+  return { root, stage, videoA, videoB, hit };
 }
 
 function makeBridge() {
-  return { sendHit: vi.fn(), sendMove: vi.fn() };
+  return {
+    sendHit: vi.fn(),
+    sendMove: vi.fn(),
+    reportStageLayout: vi.fn(),
+    onTerritoryBounds: vi.fn((_listener: (bounds: TerritoryBounds) => void) => () => {}),
+  };
+}
+
+function ready(video: HTMLVideoElement): void {
+  video.dispatchEvent(new Event('loadeddata'));
+}
+
+function mockStageRect(stage: HTMLElement, rect = { x: 12, y: 34, width: 200, height: 112.5 }): void {
+  vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({ ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, toJSON: () => ({}) } as DOMRect);
 }
 
 const fixedRng = (value: number) => () => value;
 
 beforeEach(() => {
-  document.body.innerHTML = '';
+  document.body.replaceChildren();
 });
 
 describe('pickNextKind (chain distribution thresholds)', () => {
@@ -112,6 +126,7 @@ describe('initPet state machine', () => {
     const dom = buildDom();
     const bridge = makeBridge();
     const pet = initPet({ ...dom, bridge, rng: fixedRng(0.35), raf: () => 0, caf: () => {} });
+    ready(dom.videoB);
     dom.videoB.dispatchEvent(new Event('ended'));
     expect(pet.getState().anim).toBe(TURN);
   });
@@ -121,8 +136,10 @@ describe('initPet state machine', () => {
     const bridge = makeBridge();
     const rng = vi.fn().mockReturnValueOnce(0.35).mockReturnValueOnce(0.0);
     const pet = initPet({ ...dom, bridge, rng, raf: () => 0, caf: () => {} });
+    ready(dom.videoB);
     dom.videoB.dispatchEvent(new Event('ended')); // → TURN
-    dom.videoB.dispatchEvent(new Event('ended')); // TURN ends → flip + next
+    ready(dom.videoA);
+    dom.videoA.dispatchEvent(new Event('ended')); // TURN ends → flip + next
     expect(pet.getState().facing).toBe('right');
     expect(pet.getState().anim).toBe(IDLE);
   });
@@ -131,9 +148,11 @@ describe('initPet state machine', () => {
     const dom = buildDom();
     const bridge = makeBridge();
     const pet = initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    ready(dom.videoB);
     dom.hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(CLICKS).toContain(pet.getState().anim);
-    dom.videoB.dispatchEvent(new Event('ended')); // click ends → IDLE buffer
+    ready(dom.videoA);
+    dom.videoA.dispatchEvent(new Event('ended')); // click ends → IDLE buffer
     expect(pet.getState().anim).toBe(IDLE);
     expect(pet.getState().once).toBe(true);
   });
@@ -141,12 +160,51 @@ describe('initPet state machine', () => {
   it('resumes the chain after drag release with once=true (drag-stall fix) and reports the delta', () => {
     const dom = buildDom();
     const bridge = makeBridge();
+    mockStageRect(dom.stage);
     const pet = initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
     dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 140, clientY: 100, bubbles: true }));
     dom.hit.dispatchEvent(new MouseEvent('pointerup', { clientX: 140, clientY: 100, bubbles: true }));
     expect(pet.getState().anim).toBe(IDLE);
     expect(pet.getState().once).toBe(true); // was false upstream (client.js:577 bug)
-    expect(bridge.sendMove).toHaveBeenCalledWith(40, 0);
+    expect(bridge.sendMove).toHaveBeenCalledWith(expect.objectContaining({ dx: 40, dy: 0, stage: { x: 12, y: 34, width: 200, height: 112.5 } }));
+  });
+
+  it('subscribes before the first layout report and keeps preview inside returned territory', () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let listener: ((bounds: { minStageX: number; maxStageX: number; minStageY: number; maxStageY: number }) => void) | undefined;
+    bridge.onTerritoryBounds.mockImplementation((next) => { listener = next; return () => {}; });
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    expect(bridge.onTerritoryBounds.mock.invocationCallOrder[0]).toBeLessThan(bridge.reportStageLayout.mock.invocationCallOrder[0]);
+    listener?.({ minStageX: 100, maxStageX: 110, minStageY: 24, maxStageY: 24 });
+    dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 600, clientY: 500, bubbles: true }));
+    expect(dom.root.style.transform).toBe('translate(110px, 0px)');
+  });
+
+  it('cancels a drag without sending a move', () => {
+    const dom = buildDom(); const bridge = makeBridge();
+    initPet({ ...dom, bridge, rng: fixedRng(0.5), raf: () => 0, caf: () => {} });
+    dom.hit.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 10, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointermove', { clientX: 30, clientY: 10, bubbles: true }));
+    dom.hit.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
+    expect(bridge.sendMove).not.toHaveBeenCalled();
+  });
+
+  it('reports recomputed layout on resize and ignores ended events from an outgoing buffer', () => {
+    const dom = buildDom(); const bridge = makeBridge();
+    const pet = initPet({ ...dom, bridge, rng: fixedRng(0.35), raf: () => 0, caf: () => {} });
+    ready(dom.videoB);
+    dom.hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    ready(dom.videoA);
+    dom.videoB.dispatchEvent(new Event('ended'));
+    expect(CLICKS).toContain(pet.getState().anim);
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+    window.dispatchEvent(new Event('resize'));
+    expect(dom.root.style.width).toBe('400px');
+    expect(bridge.reportStageLayout).toHaveBeenCalledTimes(2);
+    dom.videoA.dispatchEvent(new Event('ended'));
+    expect(pet.getState().anim).toBe(IDLE);
   });
 });

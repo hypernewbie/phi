@@ -1,19 +1,19 @@
-/**
- * Preload bridge for the pet page (sandboxed, context isolated). Exposes
- * a single window.pet surface with the two renderer→main sends the pet
- * needs. Channel literals are duplicated here on purpose — the CJS
- * preload build must not pull in the ESM src modules (the same convention
- * as the shell's preload.ts).
- */
+/** Sandboxed, context-isolated bridge for the local pet renderer. */
 import { contextBridge, ipcRenderer } from "electron";
+import type { PetMove, StageRect, TerritoryBounds } from "./pet-bridge.js";
+
+const HIT = "phi:pet-hit";
+const MOVE = "phi:pet-window-move";
+const LAYOUT = "phi:pet-stage-layout";
+const TERRITORY = "phi:pet-territory-bounds";
 
 contextBridge.exposeInMainWorld("pet", {
- /** Report whether the pointer is over the pet's hit region. */
- sendHit: (inside: boolean): void => {
-  ipcRenderer.send("phi:pet-hit", inside);
- },
- /** Report the accumulated drag delta (the window follows home). */
- sendMove: (dx: number, dy: number): void => {
-  ipcRenderer.send("phi:pet-window-move", { dx, dy });
- },
+  sendHit: (inside: boolean): void => ipcRenderer.send(HIT, inside),
+  sendMove: (move: PetMove): void => ipcRenderer.send(MOVE, move),
+  reportStageLayout: (stage: StageRect): void => ipcRenderer.send(LAYOUT, { stage }),
+  onTerritoryBounds: (listener: (bounds: TerritoryBounds) => void): (() => void) => {
+    const wrapped = (_event: unknown, bounds: TerritoryBounds): void => listener(bounds);
+    ipcRenderer.on(TERRITORY, wrapped);
+    return () => ipcRenderer.removeListener(TERRITORY, wrapped);
+  },
 });

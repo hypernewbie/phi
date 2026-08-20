@@ -116,6 +116,11 @@ const APP_ICON_PATH =
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';
 
+/** Linux deliberately has no supported click-through pet implementation. */
+export function isPetAvailable(root: string | null): boolean {
+  return process.platform !== 'linux' && root !== null;
+}
+
 /** The rail gutter width (px) — the rail view's width. */
 export const RAIL_WIDTH = 72;
 
@@ -224,6 +229,9 @@ export class DesktopHost {
   petRoot: string | null = null;
   // The live pet window handle (null until the user first enables it).
   petHandle: PetHandle | null = null;
+  /** Invalidates an outstanding optional-package import on every toggle/quit. */
+  petGeneration = 0;
+  private petUnavailableLogged = false;
   // Interval handles (cleared in before-quit so no pending probe outlives
   // the retained views).
   healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -318,7 +326,7 @@ export class DesktopHost {
       getUnread: (id) => this.controller?.state().unread.get(id) ?? 0,
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
-      getPetAvailable: () => this.petRoot !== null,
+      getPetAvailable: () => isPetAvailable(this.petRoot),
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
@@ -410,31 +418,47 @@ export class DesktopHost {
    * once per enable via a file:// URL so the optional package is never a
    * static dependency of the shell (avoids Node ESM double-instantiation).
    */
+  /** Narrow, mockable seam around the optional named pet factory import. */
+  async loadPetFactory(root: string): Promise<(deps: PetDeps) => PetHandle> {
+    const mod = (await import(pathToFileURL(path.join(root, 'dist', 'pet-main.js')).href)) as {
+      createPet: (deps: PetDeps) => PetHandle;
+    };
+    return mod.createPet;
+  }
+
+  private logPetUnavailable(): void {
+    if (process.platform === 'linux' && !this.petUnavailableLogged) {
+      this.petUnavailableLogged = true;
+      console.log('phi-desktop: pet unavailable on linux');
+    }
+  }
+
   async startPet(): Promise<void> {
-    if (!this.petRoot) return;
+    const root = this.petRoot;
+    if (!isPetAvailable(root) || root === null) { this.logPetUnavailable(); return; }
     if (this.petHandle) {
       if (this.petHandle.isRunning()) return;
       this.petHandle.start();
       return;
     }
+    const generation = ++this.petGeneration;
     try {
-      const mod = (await import(pathToFileURL(path.join(this.petRoot, 'dist', 'pet-main.js')).href)) as {
-        createPet: (deps: PetDeps) => PetHandle;
-      };
-      // Re-check after the await: a toggle-off during the import must not
-      // show the pet while the persisted preference is already false.
-      if (!this.controller?.state().petEnabled) return;
-      const handle = mod.createPet({ root: this.petRoot, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
+      const createPet = await this.loadPetFactory(root);
+      if (generation !== this.petGeneration || !isPetAvailable(this.petRoot) || !this.controller?.state().petEnabled || this.quitting || this.petHandle) return;
+      const handle = createPet({ root, log: (msg) => console.log(`phi-desktop: pet: ${msg}`) });
+      if (generation !== this.petGeneration || !this.controller?.state().petEnabled || this.quitting || this.petHandle) { handle.stop(); return; }
       this.petHandle = handle;
       handle.start();
     } catch (err) {
-      console.log(`phi-desktop: pet load failed: ${String(err)}`);
+      if (generation === this.petGeneration) console.log(`phi-desktop: pet load failed: ${String(err)}`);
     }
   }
 
   /** Destroys the pet window (toggle-off frees the decode surface). */
   stopPet(): void {
+    this.petGeneration += 1;
     this.petHandle?.stop();
+    this.petHandle = null;
   }
 
   /** Toggles the persisted pet preference; pet-enabled-changed mirrors the
@@ -1597,6 +1621,7 @@ export class DesktopHost {
       // before-quit fires before windows close, so setting the flag here
       // lets every real quit (tray Quit, Cmd+Q, window-all-closed) through.
       this.quitting = true;
+      this.petGeneration += 1;
       // Stop the polls before the view teardown below (no pending probe or
       // executeJavaScript may outlive the retained views).
       if (this.healthInterval !== null) {
