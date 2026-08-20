@@ -51,7 +51,7 @@ export function createPet(deps: PetDeps): PetHandle {
     const dy =
       typeof delta.dy === "number" && Number.isFinite(delta.dy) ? delta.dy : 0;
     const bounds = win.getBounds();
-    win.setPosition(bounds.x + dx, bounds.y + dy);
+    win.setPosition(Math.round(bounds.x + dx), Math.round(bounds.y + dy));
     reclampPetWindow(win);
   });
 

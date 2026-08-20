@@ -131,6 +131,20 @@ describe('phi:pet-window-move receiver', () => {
     expect(setPosition).toHaveBeenCalledWith(15, 17); // (10+5, 20-3)
   });
 
+  it('rounds fractional deltas to integer window coordinates', () => {
+    const pet = createPet({ root: '/tmp/pet', log: () => {} });
+    pet.start();
+    const win = FakeBrowserWindow.instances.at(-1) as unknown as {
+      setPosition: (x: number, y: number) => void;
+      webContents: unknown;
+    };
+    const setPosition = vi.spyOn(win, 'setPosition');
+    const handler = fakeIpcMain.handlers.get('phi:pet-window-move');
+    handler?.({ sender: win.webContents }, { dx: 0.6, dy: -2.4 });
+    expect(setPosition).toHaveBeenCalledTimes(1);
+    expect(setPosition).toHaveBeenCalledWith(11, 18); // round(10.6, 17.6)
+  });
+
   it('rejects non-pet senders', () => {
     const pet = createPet({ root: '/tmp/pet', log: () => {} });
     pet.start();
