@@ -1214,8 +1214,14 @@ export class TabManager {
                     return false;
                 }
             }
-            // Support Shift+F5 or Ctrl/Cmd+Shift+R inside xterm (Reconnect all tabs)
-            if (e.type === 'keydown' && ((e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'F5') || ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R')))) {
+            // Support F5 reload (pass through to browser/desktop) or Shift+F5 / Ctrl+Shift+R (Reconnect all tabs)
+            if (e.type === 'keydown' && (e.key === 'F5' || e.code === 'F5')) {
+                if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    this.handleGlobalTabShortcuts(e);
+                }
+                return false;
+            }
+            if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R')) {
                 this.handleGlobalTabShortcuts(e);
                 return false;
             }
