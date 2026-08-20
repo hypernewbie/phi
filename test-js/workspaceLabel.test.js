@@ -32,13 +32,19 @@ describe('formatWorkspaceLabel', () => {
     });
 
     it('returns the plain folder name when it is unique', () => {
-        expect(formatWorkspaceLabel('/a/b/proj', ['/a/b/proj', '/x/y/other'])).toBe('proj');
+        expect(
+            formatWorkspaceLabel('/a/b/proj', ['/a/b/proj', '/x/y/other']),
+        ).toBe('proj');
     });
 
     it('disambiguates duplicates with the parent folder', () => {
         const all = ['/work/alpha/proj', '/work/beta/proj'];
-        expect(formatWorkspaceLabel('/work/alpha/proj', all)).toBe('proj (alpha)');
-        expect(formatWorkspaceLabel('/work/beta/proj', all)).toBe('proj (beta)');
+        expect(formatWorkspaceLabel('/work/alpha/proj', all)).toBe(
+            'proj (alpha)',
+        );
+        expect(formatWorkspaceLabel('/work/beta/proj', all)).toBe(
+            'proj (beta)',
+        );
     });
 
     it('falls back to folder name if a duplicate has no parent segment', () => {
@@ -49,6 +55,8 @@ describe('formatWorkspaceLabel', () => {
 
     it('handles Windows separators for duplicate disambiguation', () => {
         const all = ['C:\\work\\alpha\\proj', 'C:\\work\\beta\\proj'];
-        expect(formatWorkspaceLabel('C:\\work\\alpha\\proj', all)).toBe('proj (alpha)');
+        expect(formatWorkspaceLabel('C:\\work\\alpha\\proj', all)).toBe(
+            'proj (alpha)',
+        );
     });
 });

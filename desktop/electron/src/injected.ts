@@ -187,7 +187,10 @@ export function bodyAuthLoginScript(challenge: string, proof: string): string {
  * are embedded as JSON.stringify literals (never raw text); a null side
  * leaves that panel untouched.
  */
-export function applyDividersScript(left: number | null, right: number | null): string {
+export function applyDividersScript(
+  left: number | null,
+  right: number | null,
+): string {
   return `(() => {
     const left = ${JSON.stringify(left)};
     const right = ${JSON.stringify(right)};

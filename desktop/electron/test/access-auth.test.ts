@@ -41,8 +41,12 @@ describe('crypto parity with web/auth.js (Noble)', () => {
 
   it('refuses iterations outside the bounded range', async () => {
     const salt = Buffer.from('AQ', 'base64url');
-    await expect(deriveVerifier('whatever-password', salt, MIN_ITERATIONS - 1)).rejects.toThrow();
-    await expect(deriveVerifier('whatever-password', salt, MAX_ITERATIONS + 1)).rejects.toThrow();
+    await expect(
+      deriveVerifier('whatever-password', salt, MIN_ITERATIONS - 1),
+    ).rejects.toThrow();
+    await expect(
+      deriveVerifier('whatever-password', salt, MAX_ITERATIONS + 1),
+    ).rejects.toThrow();
   });
 });
 
@@ -58,21 +62,33 @@ describe('validateStatus', () => {
 
   it('returns null when iterations is below MIN_ITERATIONS', () => {
     const r = validateStatus({
-      enabled: true, version: 'v1', algorithm: 'pbkdf2-sha256',
-      iterations: 100, salt: 'AQID', challenge: 'x',
+      enabled: true,
+      version: 'v1',
+      algorithm: 'pbkdf2-sha256',
+      iterations: 100,
+      salt: 'AQID',
+      challenge: 'x',
     });
     expect(r).toBe(null);
   });
 
   it('returns null on malformed salt or challenge', () => {
     const r = validateStatus({
-      enabled: true, version: 'v1', algorithm: 'pbkdf2-sha256',
-      iterations: 600_000, salt: '', challenge: 'x',
+      enabled: true,
+      version: 'v1',
+      algorithm: 'pbkdf2-sha256',
+      iterations: 600_000,
+      salt: '',
+      challenge: 'x',
     });
     expect(r).toBe(null);
     const r2 = validateStatus({
-      enabled: true, version: 'v1', algorithm: 'pbkdf2-sha256',
-      iterations: 600_000, salt: 'AQID', challenge: '',
+      enabled: true,
+      version: 'v1',
+      algorithm: 'pbkdf2-sha256',
+      iterations: 600_000,
+      salt: 'AQID',
+      challenge: '',
     });
     expect(r2).toBe(null);
   });
@@ -84,12 +100,18 @@ describe('validateStatus', () => {
 
   it('accepts a well-formed enabled status', () => {
     const r = validateStatus({
-      enabled: true, version: 'v1', algorithm: 'pbkdf2-sha256',
-      iterations: 600_000, salt: 'AQID', challenge: 'x',
+      enabled: true,
+      version: 'v1',
+      algorithm: 'pbkdf2-sha256',
+      iterations: 600_000,
+      salt: 'AQID',
+      challenge: 'x',
     });
     expect(r?.kind).toBe('trusted');
     if (r?.kind === 'trusted') {
-      expect(r.status.salt.toString()).toBe(Buffer.from('AQID', 'base64url').toString());
+      expect(r.status.salt.toString()).toBe(
+        Buffer.from('AQID', 'base64url').toString(),
+      );
       expect(r.status.challenge).toBe('x');
     }
   });
@@ -120,7 +142,9 @@ describe('cookie parser', () => {
   });
 
   it('captures the session cookie with HttpOnly', () => {
-    const res = new FakeResponse(['phi_access_session=abc123; Path=/; HttpOnly']);
+    const res = new FakeResponse([
+      'phi_access_session=abc123; Path=/; HttpOnly',
+    ]);
     const cookie = parseSessionCookie(res as unknown as Response);
     expect(cookie).not.toBe(null);
     expect(cookie?.cookieName).toBe('phi_access_session');
@@ -167,16 +191,22 @@ describe('AccessAuth.fetchConfig', () => {
   });
 
   it('returns unauthorized on 401', async () => {
-    const auth = new AccessAuth(async () => new Response('nope', { status: 401 }));
+    const auth = new AccessAuth(
+      async () => new Response('nope', { status: 401 }),
+    );
     expect((await auth.fetchConfig(origin)).kind).toBe('unauthorized');
   });
 
   it('returns unavailable on 5xx, network failure, and bad JSON', async () => {
     const a = new AccessAuth(async () => new Response('', { status: 500 }));
     expect((await a.fetchConfig(origin)).kind).toBe('unavailable');
-    const b = new AccessAuth(async () => { throw new Error('econnreset'); });
+    const b = new AccessAuth(async () => {
+      throw new Error('econnreset');
+    });
     expect((await b.fetchConfig(origin)).kind).toBe('unavailable');
-    const c = new AccessAuth(async () => new Response('not json', { status: 200 }));
+    const c = new AccessAuth(
+      async () => new Response('not json', { status: 200 }),
+    );
     expect((await c.fetchConfig(origin)).kind).toBe('unavailable');
   });
 
@@ -185,10 +215,25 @@ describe('AccessAuth.fetchConfig', () => {
     const auth = new AccessAuth(async (_url, init) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       seen.cookie = headers['Cookie'] ?? null;
-      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     });
     // Simulate a successful login by populating the cookie via reflection.
-    (auth as unknown as { cookies: Map<string, { cookieName: string; cookieValue: string; path: string; httpOnly: true }> }).cookies.set(origin, {
+    (
+      auth as unknown as {
+        cookies: Map<
+          string,
+          {
+            cookieName: string;
+            cookieValue: string;
+            path: string;
+            httpOnly: true;
+          }
+        >;
+      }
+    ).cookies.set(origin, {
       cookieName: 'phi_access_session',
       cookieValue: 'token-xyz',
       path: '/',
@@ -200,7 +245,19 @@ describe('AccessAuth.fetchConfig', () => {
 
   it('drops a stale native-fetch cookie when config returns 401', async () => {
     const auth = new AccessAuth(async () => new Response('', { status: 401 }));
-    (auth as unknown as { cookies: Map<string, { cookieName: string; cookieValue: string; path: string; httpOnly: true }> }).cookies.set(origin, {
+    (
+      auth as unknown as {
+        cookies: Map<
+          string,
+          {
+            cookieName: string;
+            cookieValue: string;
+            path: string;
+            httpOnly: true;
+          }
+        >;
+      }
+    ).cookies.set(origin, {
       cookieName: 'phi_access_session',
       cookieValue: 'expired-token',
       path: '/',
@@ -217,7 +274,9 @@ describe('AccessAuth.fetchConfig', () => {
 describe('AccessAuth.tryUnlock', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
-    enabled: true, version: 'v1' as const, algorithm: 'pbkdf2-sha256' as const,
+    enabled: true,
+    version: 'v1' as const,
+    algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
     salt: Buffer.from('AQID', 'base64url').toString('base64url'),
     challenge: 'sample-challenge',
@@ -230,16 +289,24 @@ describe('AccessAuth.tryUnlock', () => {
       calls += 1;
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
-        return new Response(JSON.stringify(status), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(status), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('', {
           status: 200,
-          headers: { 'set-cookie': 'phi_access_session=ok-token; Path=/; HttpOnly' },
+          headers: {
+            'set-cookie': 'phi_access_session=ok-token; Path=/; HttpOnly',
+          },
         });
       }
       if (path.endsWith('/api/config')) {
-        return new Response(JSON.stringify({ hostname: 'X' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ hostname: 'X' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       throw new Error(`unexpected fetch ${path}`);
     }) as unknown as typeof fetch;
@@ -254,7 +321,10 @@ describe('AccessAuth.tryUnlock', () => {
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
-        return new Response(JSON.stringify(goodStatus), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(goodStatus), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('bad', { status: 401 });
@@ -270,7 +340,10 @@ describe('AccessAuth.tryUnlock', () => {
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
-        return new Response(JSON.stringify(goodStatus), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(goodStatus), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('', {
@@ -293,7 +366,10 @@ describe('AccessAuth.tryUnlock', () => {
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
-        return new Response(JSON.stringify(goodStatus), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(goodStatus), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('slow down', { status: 429 });
@@ -322,7 +398,10 @@ describe('AccessAuth.tryUnlock', () => {
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
-        return new Response(JSON.stringify(goodStatus), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify(goodStatus), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('', {
@@ -349,18 +428,25 @@ describe('AccessAuth.tryUnlock', () => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
         statusCalls += 1;
-        return new Response(JSON.stringify({
-          ...goodStatus,
-          challenge: statusCalls === 1 ? 'native-challenge' : 'body-challenge',
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            ...goodStatus,
+            challenge:
+              statusCalls === 1 ? 'native-challenge' : 'body-challenge',
+          }),
+          { status: 200 },
+        );
       }
       if (path.endsWith('/api/auth/login')) {
         return new Response('', {
           status: 200,
-          headers: { 'set-cookie': 'phi_access_session=native-token; Path=/; HttpOnly' },
+          headers: {
+            'set-cookie': 'phi_access_session=native-token; Path=/; HttpOnly',
+          },
         });
       }
-      if (path.endsWith('/api/config')) return new Response('{}', { status: 200 });
+      if (path.endsWith('/api/config'))
+        return new Response('{}', { status: 200 });
       throw new Error(`unexpected fetch ${path}`);
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
@@ -370,7 +456,11 @@ describe('AccessAuth.tryUnlock', () => {
     expect(bodyLogin.kind).toBe('ok');
     if (bodyLogin.kind === 'ok') {
       expect(bodyLogin.challenge).toBe('body-challenge');
-      const verifier = await deriveVerifier(password, Buffer.from(goodStatus.salt, 'base64url'), goodStatus.iterations);
+      const verifier = await deriveVerifier(
+        password,
+        Buffer.from(goodStatus.salt, 'base64url'),
+        goodStatus.iterations,
+      );
       expect(bodyLogin.proof).toBe(makeProof(verifier, 'body-challenge'));
       verifier.fill(0);
     }
@@ -395,7 +485,9 @@ describe('AccessAuth.tryUnlock', () => {
 describe('AccessAuth.fetchStatus', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
-    enabled: true, version: 'v1' as const, algorithm: 'pbkdf2-sha256' as const,
+    enabled: true,
+    version: 'v1' as const,
+    algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
     salt: Buffer.from('AQID', 'base64url').toString('base64url'),
     challenge: 'sample-challenge',
@@ -436,14 +528,18 @@ describe('AccessAuth.fetchStatus', () => {
     // case pins that the malformed JSON path returns unavailable, not
     // trusted.
     const doFetch = (async () =>
-      new Response('not-json', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+      new Response('not-json', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
     const result = await auth.fetchStatus(origin);
     expect(result.kind).toBe('unavailable');
   });
 
   it('returns unavailable on a non-2xx status code', async () => {
-    const doFetch = (async () => new Response('forbidden', { status: 403 })) as unknown as typeof fetch;
+    const doFetch = (async () =>
+      new Response('forbidden', { status: 403 })) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
     const result = await auth.fetchStatus(origin);
     expect(result.kind).toBe('unavailable');
@@ -489,7 +585,9 @@ describe('AccessAuth.fetchStatus', () => {
 describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   const origin = 'https://phi.example/';
   const goodStatus = {
-    enabled: true, version: 'v1' as const, algorithm: 'pbkdf2-sha256' as const,
+    enabled: true,
+    version: 'v1' as const,
+    algorithm: 'pbkdf2-sha256' as const,
     iterations: 600_000,
     salt: Buffer.from('AQID', 'base64url').toString('base64url'),
     challenge: 'sample-challenge',
@@ -506,7 +604,10 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
-    const result = await auth.tryUnlockWithVerifier(origin, Buffer.alloc(32, 0xab));
+    const result = await auth.tryUnlockWithVerifier(
+      origin,
+      Buffer.alloc(32, 0xab),
+    );
     expect(result.kind).toBe('unavailable');
   });
 
@@ -536,14 +637,23 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
       throw new Error(`unexpected fetch: ${path}`);
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
-    const result = await auth.tryUnlockWithVerifier(origin, Buffer.from(verifier));
+    const result = await auth.tryUnlockWithVerifier(
+      origin,
+      Buffer.from(verifier),
+    );
     expect(result.kind).toBe('ok');
     expect(auth.hasCookie(origin)).toBe(true);
   });
 
   it('tryUnlockWithVerifier clears the cookie and returns invalid-password on a server-issued 401', async () => {
     const crypto = await import('node:crypto');
-    const verifier = crypto.pbkdf2Sync('whatever-password', Buffer.from('AQID', 'base64url'), 600_000, 32, 'sha256');
+    const verifier = crypto.pbkdf2Sync(
+      'whatever-password',
+      Buffer.from('AQID', 'base64url'),
+      600_000,
+      32,
+      'sha256',
+    );
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
@@ -555,7 +665,10 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
       throw new Error(`unexpected fetch: ${path}`);
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
-    const result = await auth.tryUnlockWithVerifier(origin, Buffer.from(verifier));
+    const result = await auth.tryUnlockWithVerifier(
+      origin,
+      Buffer.from(verifier),
+    );
     expect(result.kind).toBe('invalid-password');
   });
 
@@ -565,7 +678,6 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   });
 
   it('getLastVerifier returns the cached verifier after a successful password unlock', async () => {
-
     const password = 'whatever-password';
     const doFetch = (async (url: URL) => {
       const path = url.toString();
@@ -592,7 +704,6 @@ describe('AccessAuth.tryUnlockWithVerifier + verifier cache', () => {
   });
 
   it('getLastVerifier returns null after cancel', async () => {
-
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
@@ -640,7 +751,10 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     // AccessAuth layer's "delete on every 401" invariant so the
     // race at the host layer remains observable.
     let deleteCount = 0;
-    const cookies = new Map<string, { cookieName: string; cookieValue: string; path: string; httpOnly: true }>();
+    const cookies = new Map<
+      string,
+      { cookieName: string; cookieValue: string; path: string; httpOnly: true }
+    >();
     cookies.set(origin, {
       cookieName: 'phi_access_session',
       cookieValue: 'stale-token',
@@ -658,7 +772,10 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
     (auth as unknown as { cookies: typeof cookies }).cookies = cookies;
-    const [a, b] = await Promise.all([auth.fetchConfig(origin), auth.fetchConfig(origin)]);
+    const [a, b] = await Promise.all([
+      auth.fetchConfig(origin),
+      auth.fetchConfig(origin),
+    ]);
     expect(a.kind).toBe('unauthorized');
     expect(b.kind).toBe('unauthorized');
     expect(deleteCount).toBe(2); // both stale fetches ran; cookie gone
@@ -677,9 +794,17 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     // 'rate-limited' kind so the host's clearing branch can
     // recognise and preserve the credential.
     const crypto = await import('node:crypto');
-    const verifier = crypto.pbkdf2Sync('whatever-password', Buffer.from('AQID', 'base64url'), 600_000, 32, 'sha256');
+    const verifier = crypto.pbkdf2Sync(
+      'whatever-password',
+      Buffer.from('AQID', 'base64url'),
+      600_000,
+      32,
+      'sha256',
+    );
     const goodStatus = {
-      enabled: true, version: 'v1' as const, algorithm: 'pbkdf2-sha256' as const,
+      enabled: true,
+      version: 'v1' as const,
+      algorithm: 'pbkdf2-sha256' as const,
       iterations: 600_000,
       salt: Buffer.from('AQID', 'base64url').toString('base64url'),
       challenge: 'sample-challenge',
@@ -695,7 +820,10 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
       throw new Error(`unexpected fetch: ${path}`);
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
-    const result = await auth.tryUnlockWithVerifier(origin, Buffer.from(verifier));
+    const result = await auth.tryUnlockWithVerifier(
+      origin,
+      Buffer.from(verifier),
+    );
     expect(result.kind).toBe('rate-limited');
   });
 
@@ -705,10 +833,11 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     // cookie S1, and a follow-up fetchConfig that sends S1 must NOT
     // spuriously clear S1 unless the server returns 401. A 200 must
     // preserve S1.
-    const doFetch = (async () => new Response('{"ok":true}', {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })) as unknown as typeof fetch;
+    const doFetch = (async () =>
+      new Response('{"ok":true}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
     (auth as unknown as { cookies: Map<string, unknown> }).cookies.set(origin, {
       cookieName: 'phi_access_session',

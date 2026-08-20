@@ -16,7 +16,10 @@
 import type { BrowserWindow, WebContents } from 'electron';
 
 /** Installs the plain-F11 fullscreen toggle on one webContents. */
-export function installFullscreenToggle(contents: WebContents, win: BrowserWindow): void {
+export function installFullscreenToggle(
+  contents: WebContents,
+  win: BrowserWindow,
+): void {
   contents.on('before-input-event', (event, input) => {
     if (
       input.type === 'keyDown' &&

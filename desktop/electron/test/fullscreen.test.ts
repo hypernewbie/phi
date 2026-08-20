@@ -31,7 +31,9 @@ function makeHarness() {
   const fullscreenStates: boolean[] = [];
   let fullscreen = false;
   const event = { preventDefault: vi.fn() };
-  const listeners: Array<(event: { preventDefault: () => void }, input: InputLike) => void> = [];
+  const listeners: Array<
+    (event: { preventDefault: () => void }, input: InputLike) => void
+  > = [];
   const contents = {
     on: (name: string, cb: (event: unknown, input: InputLike) => void) => {
       if (name === 'before-input-event') listeners.push(cb);

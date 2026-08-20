@@ -32,12 +32,16 @@ describe('terminal activity chrome rendering', () => {
     it('renders the fixed-width quiet dash and settled Phi title', () => {
         renderChrome(manager);
 
-        const indicator = document.getElementById('terminal-activity-indicator');
+        const indicator = document.getElementById(
+            'terminal-activity-indicator',
+        );
         expect(document.title).toBe('Φ atlas');
         expect(indicator.textContent).toBe('—');
         expect(indicator.classList.contains('hidden')).toBe(false);
         expect(indicator.classList.contains('is-active')).toBe(false);
-        expect(indicator.getAttribute('aria-label')).toBe('All terminal tabs are quiet');
+        expect(indicator.getAttribute('aria-label')).toBe(
+            'All terminal tabs are quiet',
+        );
         expect(app.setTerminalActivity).toHaveBeenCalledWith(false);
     });
 
@@ -45,11 +49,15 @@ describe('terminal activity chrome rendering', () => {
         manager.tabs.set('live', tab({ isBusy: true }));
         renderChrome(manager);
 
-        const indicator = document.getElementById('terminal-activity-indicator');
+        const indicator = document.getElementById(
+            'terminal-activity-indicator',
+        );
         expect(document.title).toBe('ϕ atlas');
         expect(indicator.textContent).toBe('▍');
         expect(indicator.classList.contains('is-active')).toBe(true);
-        expect(indicator.getAttribute('aria-label')).toBe('Terminal output on one or more tabs');
+        expect(indicator.getAttribute('aria-label')).toBe(
+            'Terminal output on one or more tabs',
+        );
         expect(app.setTerminalActivity).toHaveBeenCalledWith(true);
     });
 
@@ -139,6 +147,9 @@ describe('terminal activity chrome rendering', () => {
         expect(doneTab.isBusy).toBe(false);
         expect(doneTab.isAttention).toBe(true);
         expect(updateDocumentTitle).toHaveBeenCalledOnce();
-        expect(triggerAttentionNotification).toHaveBeenCalledWith(doneTab, false);
+        expect(triggerAttentionNotification).toHaveBeenCalledWith(
+            doneTab,
+            false,
+        );
     });
 });

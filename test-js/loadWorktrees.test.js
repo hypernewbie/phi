@@ -40,8 +40,10 @@ async function run(ctx, targetCwd, worktrees) {
     await SessionsManager.prototype.loadWorktrees.call(ctx, targetCwd);
 }
 
-const sections = (ctx) => Array.from(ctx.sessionList.querySelectorAll('.worktree-section'));
-const paths = (ctx) => sections(ctx).map((s) => s.getAttribute('data-worktree-path'));
+const sections = (ctx) =>
+    Array.from(ctx.sessionList.querySelectorAll('.worktree-section'));
+const paths = (ctx) =>
+    sections(ctx).map((s) => s.getAttribute('data-worktree-path'));
 const activePath = (ctx) => {
     const s = ctx.sessionList.querySelector('.worktree-section.active');
     return s ? s.getAttribute('data-worktree-path') : null;
@@ -98,7 +100,9 @@ describe('loadWorktrees — produced DOM', () => {
     it('marks exactly the current-CWD section active + expanded', async () => {
         const ctx = makeCtx({ activeCWD: '' });
         await run(ctx, '/b', [{ path: '/a' }, { path: '/b' }, { path: '/c' }]);
-        const active = ctx.sessionList.querySelectorAll('.worktree-section.active');
+        const active = ctx.sessionList.querySelectorAll(
+            '.worktree-section.active',
+        );
         expect(active).toHaveLength(1);
         expect(active[0].getAttribute('data-worktree-path')).toBe('/b');
         expect(active[0].classList.contains('expanded')).toBe(true);
@@ -147,7 +151,10 @@ describe('loadWorktrees — collaborators + side effects', () => {
     });
 
     it('kicks off dirty-state loading with an incremented request id', async () => {
-        const ctx = makeCtx({ activeWorkspace: '/ws', worktreeDirtyRequestId: 0 });
+        const ctx = makeCtx({
+            activeWorkspace: '/ws',
+            worktreeDirtyRequestId: 0,
+        });
         await run(ctx, '/a', [{ path: '/a' }]);
         expect(ctx.loadWorktreeDirtyStates).toHaveBeenCalledWith('/ws', 1);
         expect(ctx.worktreeDirtyRequestId).toBe(1);
@@ -156,7 +163,9 @@ describe('loadWorktrees — collaborators + side effects', () => {
     it('loads sessions for the active (expanded) worktree', async () => {
         const ctx = makeCtx();
         await run(ctx, '/b', [{ path: '/a' }, { path: '/b' }]);
-        const calledPaths = ctx.loadWorktreeSessions.mock.calls.map((c) => c[0]);
+        const calledPaths = ctx.loadWorktreeSessions.mock.calls.map(
+            (c) => c[0],
+        );
         expect(calledPaths).toContain('/b');
         expect(calledPaths).not.toContain('/a');
     });
@@ -171,9 +180,13 @@ describe('loadWorktrees — worktree glyph matches tab glyph', () => {
     it('renders the section-glyph span with the same hash-derived glyph as the tab', async () => {
         const ctx = makeCtx();
         await run(ctx, null, [{ path: '/Users/dev/code/phi/feature-x' }]);
-        const glyphEl = ctx.sessionList.querySelector('.worktree-section .worktree-section-glyph');
+        const glyphEl = ctx.sessionList.querySelector(
+            '.worktree-section .worktree-section-glyph',
+        );
         expect(glyphEl).toBeTruthy();
-        expect(glyphEl.textContent).toBe(worktreeGlyph('/Users/dev/code/phi/feature-x'));
+        expect(glyphEl.textContent).toBe(
+            worktreeGlyph('/Users/dev/code/phi/feature-x'),
+        );
     });
 
     it('different worktree paths get different glyphs in the section header', async () => {
@@ -182,7 +195,9 @@ describe('loadWorktrees — worktree glyph matches tab glyph', () => {
             { path: '/Users/dev/code/phi/feature-x' },
             { path: '/Users/dev/code/otherrepo/main' },
         ]);
-        const glyphEls = ctx.sessionList.querySelectorAll('.worktree-section .worktree-section-glyph');
+        const glyphEls = ctx.sessionList.querySelectorAll(
+            '.worktree-section .worktree-section-glyph',
+        );
         expect(glyphEls.length).toBe(2);
         // Sanity: at least one pair of distinct glyphs (pool size 12,
         // two worktrees should never collide without a contrived case).
@@ -192,7 +207,9 @@ describe('loadWorktrees — worktree glyph matches tab glyph', () => {
     it('aria-hides the glyph so screen readers skip it (text label follows)', async () => {
         const ctx = makeCtx();
         await run(ctx, null, [{ path: '/some/path/here' }]);
-        const glyphEl = ctx.sessionList.querySelector('.worktree-section .worktree-section-glyph');
+        const glyphEl = ctx.sessionList.querySelector(
+            '.worktree-section .worktree-section-glyph',
+        );
         expect(glyphEl.getAttribute('aria-hidden')).toBe('true');
     });
 });

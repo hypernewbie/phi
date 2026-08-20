@@ -53,7 +53,9 @@ function makeTm({ inputText = '' } = {}) {
     tm._historyPreCycleValue = undefined;
 
     tm.getActiveTab = () => ({
-        paneId: 'p1', coder: 'pi', isDead: false,
+        paneId: 'p1',
+        coder: 'pi',
+        isDead: false,
         ws: { sendInput: vi.fn(), sendResize: vi.fn() },
     });
 
@@ -61,7 +63,12 @@ function makeTm({ inputText = '' } = {}) {
 }
 
 function dispatchKey(target, key, modifiers = {}) {
-    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers });
+    const ev = new KeyboardEvent('keydown', {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+    });
     target.dispatchEvent(ev);
     return ev;
 }
@@ -75,9 +82,14 @@ describe('sendStagedInput records to /api/prompt-history/append', () => {
         await new Promise((r) => setTimeout(r, 0));
 
         const appendCall = fetchSpy.mock.calls.find(
-            (c) => typeof c[0] === 'string' && c[0].includes('/api/prompt-history/append')
+            (c) =>
+                typeof c[0] === 'string' &&
+                c[0].includes('/api/prompt-history/append'),
         );
-        expect(appendCall, 'expected fetch to /api/prompt-history/append').toBeTruthy();
+        expect(
+            appendCall,
+            'expected fetch to /api/prompt-history/append',
+        ).toBeTruthy();
         const body = JSON.parse(appendCall[1].body);
         expect(body.text).toBe('fix the bug');
         expect(body.cwd).toBe('/proj/a');
@@ -88,26 +100,42 @@ describe('sendStagedInput records to /api/prompt-history/append', () => {
         // with no text). But there's no "prompt text" to record.
         const fetchSpy = mockFetch(() => ({ ok: true, count: 1 }));
         const tm = makeTm({ inputText: '' });
-        tm.stagedAttachments = [{ name: 'shot.png', path: '/x.png', type: 'image/png', sizeBytes: 1, source: 'drop' }];
+        tm.stagedAttachments = [
+            {
+                name: 'shot.png',
+                path: '/x.png',
+                type: 'image/png',
+                sizeBytes: 1,
+                source: 'drop',
+            },
+        ];
 
         tm.sendStagedInput();
         await new Promise((r) => setTimeout(r, 0));
 
         const appendCall = fetchSpy.mock.calls.find(
-            (c) => typeof c[0] === 'string' && c[0].includes('/api/prompt-history/append')
+            (c) =>
+                typeof c[0] === 'string' &&
+                c[0].includes('/api/prompt-history/append'),
         );
         expect(appendCall).toBeUndefined();
     });
 
     it('records the trimmed text (not the raw textarea value with surrounding whitespace)', async () => {
         const fetchSpy = mockFetch(() => ({ ok: true, count: 1 }));
-        const tm = makeTm({ inputText: '   lots of leading and trailing space   \n  ' });
+        const tm = makeTm({
+            inputText: '   lots of leading and trailing space   \n  ',
+        });
 
         tm.sendStagedInput();
         await new Promise((r) => setTimeout(r, 0));
 
-        const appendCall = fetchSpy.mock.calls.find((c) => c[0].includes('/api/prompt-history/append'));
-        expect(JSON.parse(appendCall[1].body).text).toBe('lots of leading and trailing space');
+        const appendCall = fetchSpy.mock.calls.find((c) =>
+            c[0].includes('/api/prompt-history/append'),
+        );
+        expect(JSON.parse(appendCall[1].body).text).toBe(
+            'lots of leading and trailing space',
+        );
     });
 
     it('resets the history cursor on send (next Alt+Up starts from newest)', async () => {
@@ -128,9 +156,21 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
         mockFetch((url) => {
             if (url.includes('/api/prompt-history/recent')) {
                 return [
-                    { ts: '2026-07-19T12:00:00Z', cwd: '/proj/a', text: 'newest' },
-                    { ts: '2026-07-19T11:00:00Z', cwd: '/proj/a', text: 'middle' },
-                    { ts: '2026-07-19T10:00:00Z', cwd: '/proj/a', text: 'oldest' },
+                    {
+                        ts: '2026-07-19T12:00:00Z',
+                        cwd: '/proj/a',
+                        text: 'newest',
+                    },
+                    {
+                        ts: '2026-07-19T11:00:00Z',
+                        cwd: '/proj/a',
+                        text: 'middle',
+                    },
+                    {
+                        ts: '2026-07-19T10:00:00Z',
+                        cwd: '/proj/a',
+                        text: 'oldest',
+                    },
                 ];
             }
             throw new Error('unexpected: ' + url);
@@ -200,7 +240,9 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
     it('the real keydown listener (_initPromptHistoryKeydown) routes Alt+Up / Alt+Down to the cycle method', async () => {
         mockFetch(() => []);
         const tm = makeTm({ inputText: '' });
-        const spy = vi.spyOn(tm, '_cyclePromptHistory').mockResolvedValue(undefined);
+        const spy = vi
+            .spyOn(tm, '_cyclePromptHistory')
+            .mockResolvedValue(undefined);
         tm._initPromptHistoryKeydown(); // exact production wiring, no re-implementation
 
         dispatchKey(tm.inputTextArea, 'ArrowUp', { altKey: true });
@@ -212,7 +254,9 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
     it('plain ArrowUp (no Alt) does NOT trigger the history cycle via the real listener', async () => {
         mockFetch(() => []);
         const tm = makeTm({ inputText: '' });
-        const spy = vi.spyOn(tm, '_cyclePromptHistory').mockResolvedValue(undefined);
+        const spy = vi
+            .spyOn(tm, '_cyclePromptHistory')
+            .mockResolvedValue(undefined);
         tm._initPromptHistoryKeydown();
 
         dispatchKey(tm.inputTextArea, 'ArrowUp'); // no altKey
@@ -222,12 +266,23 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
     it('Ctrl/Shift/Meta + Up is NOT intercepted (other shortcuts keep working)', async () => {
         mockFetch(() => []);
         const tm = makeTm({ inputText: '' });
-        const spy = vi.spyOn(tm, '_cyclePromptHistory').mockResolvedValue(undefined);
+        const spy = vi
+            .spyOn(tm, '_cyclePromptHistory')
+            .mockResolvedValue(undefined);
         tm._initPromptHistoryKeydown();
 
-        dispatchKey(tm.inputTextArea, 'ArrowUp', { altKey: true, ctrlKey: true });
-        dispatchKey(tm.inputTextArea, 'ArrowUp', { altKey: true, shiftKey: true });
-        dispatchKey(tm.inputTextArea, 'ArrowUp', { altKey: true, metaKey: true });
+        dispatchKey(tm.inputTextArea, 'ArrowUp', {
+            altKey: true,
+            ctrlKey: true,
+        });
+        dispatchKey(tm.inputTextArea, 'ArrowUp', {
+            altKey: true,
+            shiftKey: true,
+        });
+        dispatchKey(tm.inputTextArea, 'ArrowUp', {
+            altKey: true,
+            metaKey: true,
+        });
         expect(spy).not.toHaveBeenCalled();
     });
 

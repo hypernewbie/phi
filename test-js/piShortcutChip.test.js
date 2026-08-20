@@ -30,8 +30,11 @@ setupDomHarness();
 // This locks the contract: no id, no title, no data-* — just another
 // preset-btn in the row.
 function findCtrlShiftXChip(container) {
-    return Array.from(container.querySelectorAll('.preset-btn'))
-        .find((b) => b.innerText === 'ctrl+shift+x') || null;
+    return (
+        Array.from(container.querySelectorAll('.preset-btn')).find(
+            (b) => b.innerText === 'ctrl+shift+x',
+        ) || null
+    );
 }
 
 function makeTm() {
@@ -45,8 +48,8 @@ function makeTm() {
     // Minimal app surface for renderPresets().
     tm.app = {
         codersPresetRegistry: {
-            pi:     { presets: [{ name: '/quit',    value: '/quit\r' }] },
-            bash:   { presets: [{ name: 'Ctrl+C',   value: '\u0003' }] },
+            pi: { presets: [{ name: '/quit', value: '/quit\r' }] },
+            bash: { presets: [{ name: 'Ctrl+C', value: '\u0003' }] },
             claude: { presets: [{ name: '/compact', value: '/compact\r' }] },
         },
     };
@@ -66,7 +69,10 @@ describe('pi shortcut chip placement', () => {
         tm.renderPresets('pi');
 
         const chip = findCtrlShiftXChip(tm.presetsContainer);
-        expect(chip, 'chip should be the preset-btn labeled ctrl+shift+x').not.toBeNull();
+        expect(
+            chip,
+            'chip should be the preset-btn labeled ctrl+shift+x',
+        ).not.toBeNull();
         expect(chip.classList.contains('hidden')).toBe(false);
         // Label uses the lowercase binding convention matching ctrl+c / ctrl+o / esc.
         expect(chip.innerText).toBe('ctrl+shift+x');

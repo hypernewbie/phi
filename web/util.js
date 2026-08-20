@@ -21,7 +21,104 @@ export function projectWorktreeLabel(cwd) {
 // after seeing a few of them. Collision rate at typical workloads
 // (4-10 worktrees): <5%, vs the old 12-entry geometric pool where it
 // was ~30%+.
-export const WORKTREE_GLYPHS = ['𓀀', '𓀊', '𓀔', '𓀞', '𓀨', '𓀲', '𓀼', '𓁇', '𓁑', '𓁛', '𓁥', '𓁯', '𓁹', '𓂃', '𓂎', '𓂘', '𓂢', '𓂬', '𓂹', '𓃃', '𓃏', '𓃙', '𓃣', '𓃭', '𓃷', '𓄁', '𓄋', '𓄕', '𓄡', '𓄫', '𓄵', '𓅀', '𓅊', '𓅖', '𓅠', '𓅫', '𓅵', '𓆀', '𓆋', '𓆕', '𓆟', '𓆩', '𓆵', '𓇃', '𓇏', '𓇚', '𓇫', '𓇵', '𓈀', '𓈊', '𓈕', '𓈟', '𓈩', '𓈳', '𓈽', '𓉇', '𓉑', '𓉛', '𓉦', '𓉰', '𓉿', '𓊉', '𓊓', '𓊝', '𓊪', '𓊴', '𓊾', '𓋉', '𓋓', '𓋝', '𓋧', '𓋱', '𓋼', '𓌍', '𓌛', '𓌪', '𓌶', '𓍀', '𓍎', '𓍞', '𓍬', '𓍶', '𓎀', '𓎏', '𓎞', '𓎨', '𓎳', '𓎽', '𓏈', '𓏔', '𓏟', '𓏱', '𓏾', '𓐌', '𓐖', '𓐠'];
+export const WORKTREE_GLYPHS = [
+    '𓀀',
+    '𓀊',
+    '𓀔',
+    '𓀞',
+    '𓀨',
+    '𓀲',
+    '𓀼',
+    '𓁇',
+    '𓁑',
+    '𓁛',
+    '𓁥',
+    '𓁯',
+    '𓁹',
+    '𓂃',
+    '𓂎',
+    '𓂘',
+    '𓂢',
+    '𓂬',
+    '𓂹',
+    '𓃃',
+    '𓃏',
+    '𓃙',
+    '𓃣',
+    '𓃭',
+    '𓃷',
+    '𓄁',
+    '𓄋',
+    '𓄕',
+    '𓄡',
+    '𓄫',
+    '𓄵',
+    '𓅀',
+    '𓅊',
+    '𓅖',
+    '𓅠',
+    '𓅫',
+    '𓅵',
+    '𓆀',
+    '𓆋',
+    '𓆕',
+    '𓆟',
+    '𓆩',
+    '𓆵',
+    '𓇃',
+    '𓇏',
+    '𓇚',
+    '𓇫',
+    '𓇵',
+    '𓈀',
+    '𓈊',
+    '𓈕',
+    '𓈟',
+    '𓈩',
+    '𓈳',
+    '𓈽',
+    '𓉇',
+    '𓉑',
+    '𓉛',
+    '𓉦',
+    '𓉰',
+    '𓉿',
+    '𓊉',
+    '𓊓',
+    '𓊝',
+    '𓊪',
+    '𓊴',
+    '𓊾',
+    '𓋉',
+    '𓋓',
+    '𓋝',
+    '𓋧',
+    '𓋱',
+    '𓋼',
+    '𓌍',
+    '𓌛',
+    '𓌪',
+    '𓌶',
+    '𓍀',
+    '𓍎',
+    '𓍞',
+    '𓍬',
+    '𓍶',
+    '𓎀',
+    '𓎏',
+    '𓎞',
+    '𓎨',
+    '𓎳',
+    '𓎽',
+    '𓏈',
+    '𓏔',
+    '𓏟',
+    '𓏱',
+    '𓏾',
+    '𓐌',
+    '𓐖',
+    '𓐠',
+];
 // worktreeGlyph returns one of WORKTREE_GLYPHS deterministically from
 // cwd. FNV-1a 32-bit hash, mod pool length. Pure, no DOM. Same cwd
 // always returns the same glyph; different cwds usually return
@@ -90,7 +187,8 @@ export function priorityMeta(priority) {
 // null-safe: returns false for a nullish bucket WITHOUT touching .title (the
 // `bucket &&` short-circuit is load-bearing). Uses strict is_done === true.
 export function isDoneBucket(bucket) {
-    return !!(bucket && (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
+    return !!(bucket &&
+        (bucket.is_done === true || bucket.title.toLowerCase() === 'done'));
 }
 // safeHexColor validates a 3/6-character hex color string from an external
 // source (Vikunja label.hex_color). Returns the cleaned color (no leading #)
@@ -139,7 +237,10 @@ export function extractVikunjaError(text, status) {
     }
     catch (_) {
         // Not JSON — keep the raw text, but trim obvious HTML pages.
-        s = s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        s = s
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
     if (s.length > 240)
         s = s.slice(0, 240) + '...';
@@ -175,7 +276,7 @@ export function formatWorkspaceLabel(ws, allWorkspaces) {
     const folderName = getLastFolderName(ws);
     if (!allWorkspaces || !Array.isArray(allWorkspaces))
         return folderName;
-    const duplicates = allWorkspaces.filter(w => getLastFolderName(w) === folderName);
+    const duplicates = allWorkspaces.filter((w) => getLastFolderName(w) === folderName);
     if (duplicates.length > 1) {
         const parts = ws.split(/[/\\]/);
         if (parts.length >= 2) {
@@ -319,7 +420,8 @@ export function buildSelfHud(args) {
             attention += 1;
         if (typeof t.lastOutputAt === 'number') {
             const age = now - t.lastOutputAt;
-            if (age >= 0 && (mostRecentOutputMs === null || age < mostRecentOutputMs)) {
+            if (age >= 0 &&
+                (mostRecentOutputMs === null || age < mostRecentOutputMs)) {
                 mostRecentOutputMs = age;
             }
         }

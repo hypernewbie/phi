@@ -80,7 +80,7 @@ describe('markdown bundle export', () => {
         expect(clipboard.writeText).toHaveBeenCalledWith(blob);
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Exported 5 markdown files/),
-            expect.objectContaining({ type: 'info' })
+            expect.objectContaining({ type: 'info' }),
         );
     });
 
@@ -93,12 +93,17 @@ describe('markdown bundle export', () => {
         expect(clipboard.writeText).not.toHaveBeenCalled();
         expect(app.showToast).toHaveBeenCalledWith(
             'No markdown files to export',
-            expect.objectContaining({ type: 'info' })
+            expect.objectContaining({ type: 'info' }),
         );
     });
 
     it('exports: surfaces server-side errors via toast (no clipboard call)', async () => {
-        global.fetch.mockResolvedValue(fakeResponse({}, { ok: false, status: 500, text: 'internal error' }));
+        global.fetch.mockResolvedValue(
+            fakeResponse(
+                {},
+                { ok: false, status: 500, text: 'internal error' },
+            ),
+        );
 
         const { mm, app } = makeMm();
         await mm._exportMarkdownBundle();
@@ -106,7 +111,7 @@ describe('markdown bundle export', () => {
         expect(clipboard.writeText).not.toHaveBeenCalled();
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Export failed.*500/),
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
     });
 });
@@ -117,7 +122,9 @@ describe('markdown bundle import', () => {
 
     beforeEach(() => {
         clipboard = stubClipboard();
-        clipboard.readText.mockResolvedValue('PHIMD:abcdef1234567890:ZmFrZS1iNjQ=');
+        clipboard.readText.mockResolvedValue(
+            'PHIMD:abcdef1234567890:ZmFrZS1iNjQ=',
+        );
         global.fetch = vi.fn();
     });
 
@@ -137,7 +144,9 @@ describe('markdown bundle import', () => {
         clipboard.readText.mockResolvedValue(blob);
         global.confirm = () => false; // user says: skip existing (safe default)
 
-        global.fetch.mockResolvedValue(fakeResponse({ written: ['alpha.md', 'beta.md'], skipped: [] }));
+        global.fetch.mockResolvedValue(
+            fakeResponse({ written: ['alpha.md', 'beta.md'], skipped: [] }),
+        );
 
         const { mm, app } = makeMmWith(() => false);
         await mm._importMarkdownBundle();
@@ -153,18 +162,22 @@ describe('markdown bundle import', () => {
         expect(refreshSpy).toHaveBeenCalledWith({ force: true });
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Imported 2/),
-            expect.any(Object)
+            expect.any(Object),
         );
     });
 
     it('imports: overwrite flag mirrors confirm() callback result', async () => {
         global.confirm = () => true; // user says: overwrite
-        global.fetch.mockResolvedValue(fakeResponse({ written: ['x.md'], skipped: [] }));
+        global.fetch.mockResolvedValue(
+            fakeResponse({ written: ['x.md'], skipped: [] }),
+        );
 
         const { mm } = makeMmWith(() => true);
         await mm._importMarkdownBundle();
 
-        expect(JSON.parse(global.fetch.mock.calls[0][1].body).overwrite).toBe(true);
+        expect(JSON.parse(global.fetch.mock.calls[0][1].body).overwrite).toBe(
+            true,
+        );
     });
 
     it('imports: rejects non-PHIMD clipboard text without hitting the server', async () => {
@@ -176,7 +189,7 @@ describe('markdown bundle import', () => {
         expect(global.fetch).not.toHaveBeenCalled();
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/does not contain a markdown bundle/),
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
     });
 
@@ -190,13 +203,17 @@ describe('markdown bundle import', () => {
             return 'PHIMD:fromprompt:aGVsbG8=';
         };
 
-        global.fetch.mockResolvedValue(fakeResponse({ written: ['a.md'], skipped: [] }));
+        global.fetch.mockResolvedValue(
+            fakeResponse({ written: ['a.md'], skipped: [] }),
+        );
 
         const { mm } = makeMmWith(() => false);
         await mm._importMarkdownBundle();
 
         expect(prompted).toBe(true);
-        expect(JSON.parse(global.fetch.mock.calls[0][1].body).blob).toMatch(/^PHIMD:fromprompt:/);
+        expect(JSON.parse(global.fetch.mock.calls[0][1].body).blob).toMatch(
+            /^PHIMD:fromprompt:/,
+        );
         global.prompt = origPrompt;
     });
 
@@ -210,38 +227,45 @@ describe('markdown bundle import', () => {
         expect(global.fetch).not.toHaveBeenCalled();
         expect(app.showToast).toHaveBeenCalledWith(
             'No bundle text to import',
-            expect.objectContaining({ type: 'info' })
+            expect.objectContaining({ type: 'info' }),
         );
     });
 
     it('imports: surfaces server-side decode errors as an error toast', async () => {
-        global.fetch.mockResolvedValue(fakeResponse({}, {
-            ok: false,
-            status: 400,
-            text: 'bundle signature verification failed',
-        }));
+        global.fetch.mockResolvedValue(
+            fakeResponse(
+                {},
+                {
+                    ok: false,
+                    status: 400,
+                    text: 'bundle signature verification failed',
+                },
+            ),
+        );
 
         const { mm, app } = makeMmWith(() => false);
         await mm._importMarkdownBundle();
 
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Import failed.*signature/),
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
     });
 
     it('imports: reports skipped count in the toast when server skips files', async () => {
-        global.fetch.mockResolvedValue(fakeResponse({
-            written: ['a.md'],
-            skipped: ['b.md: already exists', 'c.md: invalid name'],
-        }));
+        global.fetch.mockResolvedValue(
+            fakeResponse({
+                written: ['a.md'],
+                skipped: ['b.md: already exists', 'c.md: invalid name'],
+            }),
+        );
 
         const { mm, app } = makeMmWith(() => false);
         await mm._importMarkdownBundle();
 
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/Imported 1.*skipped 2/),
-            expect.any(Object)
+            expect.any(Object),
         );
     });
 });

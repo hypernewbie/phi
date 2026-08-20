@@ -38,7 +38,12 @@ export function resolveZoomAction(input: ZoomChordInput): ZoomAction | null {
   if (key === '+' || key === '=' || key === 'Add' || key === 'NumpadAdd') {
     return 'in';
   }
-  if (key === '-' || key === '_' || key === 'Subtract' || key === 'NumpadSubtract') {
+  if (
+    key === '-' ||
+    key === '_' ||
+    key === 'Subtract' ||
+    key === 'NumpadSubtract'
+  ) {
     return 'out';
   }
   if (key === '0' || key === 'Numpad0') {
@@ -50,7 +55,8 @@ export function resolveZoomAction(input: ZoomChordInput): ZoomAction | null {
 /** Applies a zoom action to the target WebContents. */
 export function applyZoomAction(target: WebContents, action: ZoomAction): void {
   if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
-  const current = typeof target.getZoomLevel === 'function' ? target.getZoomLevel() : 0;
+  const current =
+    typeof target.getZoomLevel === 'function' ? target.getZoomLevel() : 0;
   if (action === 'in') {
     target.setZoomLevel(Math.min(current + 0.5, 9.0));
   } else if (action === 'out') {
@@ -69,7 +75,7 @@ export function installZoomShortcuts(
     const action = resolveZoomAction(input);
     if (action !== null) {
       event.preventDefault();
-      const target = targetGetter ? targetGetter() ?? contents : contents;
+      const target = targetGetter ? (targetGetter() ?? contents) : contents;
       applyZoomAction(target, action);
     }
   });

@@ -19,7 +19,10 @@ const builder = JSON.parse(
   directories: { output: string };
   mac?: {
     extendInfo?: {
-      CFBundleURLTypes?: Array<{ CFBundleURLName?: string; CFBundleURLSchemes?: string[] }>;
+      CFBundleURLTypes?: Array<{
+        CFBundleURLName?: string;
+        CFBundleURLSchemes?: string[];
+      }>;
     };
   };
 };
@@ -29,7 +32,9 @@ describe('electron-builder.json (macOS protocol bundle config)', () => {
     const types = builder.mac?.extendInfo?.CFBundleURLTypes;
     expect(types).toBeDefined();
     expect(Array.isArray(types)).toBe(true);
-    expect(types!.some((t) => t.CFBundleURLSchemes?.includes('phi'))).toBe(true);
+    expect(types!.some((t) => t.CFBundleURLSchemes?.includes('phi'))).toBe(
+      true,
+    );
   });
 
   it('keeps the existing packaging fields intact', () => {

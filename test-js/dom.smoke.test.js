@@ -14,7 +14,9 @@ describe('jsdom harness', () => {
         div.setAttribute('data-worktree-path', '/proj');
         document.body.appendChild(div);
         expect(document.querySelector('.x')).toBe(div);
-        expect(document.querySelector('.x').getAttribute('data-worktree-path')).toBe('/proj');
+        expect(
+            document.querySelector('.x').getAttribute('data-worktree-path'),
+        ).toBe('/proj');
     });
 
     it('provides localStorage', () => {

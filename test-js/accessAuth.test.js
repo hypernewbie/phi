@@ -20,7 +20,9 @@ describe('access-password bootstrap', () => {
             expect(url).toBe('/api/auth/status');
             return { enabled: false };
         });
-        await expect(bootstrapAccessAuth()).resolves.toEqual({ enabled: false });
+        await expect(bootstrapAccessAuth()).resolves.toEqual({
+            enabled: false,
+        });
         expect(document.querySelector('.access-auth-overlay')).toBeNull();
     });
 
@@ -33,13 +35,16 @@ describe('access-password bootstrap', () => {
 
     it('silently unlocks with the remembered derived verifier', async () => {
         const verifier = new Uint8Array(32).fill(7);
-        localStorage.setItem('phi_access_credential_v1', JSON.stringify({
-            version: STATUS.version,
-            algorithm: STATUS.algorithm,
-            iterations: STATUS.iterations,
-            salt: STATUS.salt,
-            verifier: __test__.bytesToBase64URL(verifier),
-        }));
+        localStorage.setItem(
+            'phi_access_credential_v1',
+            JSON.stringify({
+                version: STATUS.version,
+                algorithm: STATUS.algorithm,
+                iterations: STATUS.iterations,
+                salt: STATUS.salt,
+                verifier: __test__.bytesToBase64URL(verifier),
+            }),
+        );
         const fetchSpy = mockFetch((url, options) => {
             if (url === '/api/auth/status') return STATUS;
             if (url === '/api/auth/login') {
@@ -70,7 +75,9 @@ describe('access-password bootstrap', () => {
         expect(parts).toHaveLength(5);
         expect(record.passwordHash).not.toContain(password);
         __test__.storeCredential(record.status, record.verifier);
-        const saved = JSON.parse(localStorage.getItem('phi_access_credential_v1'));
+        const saved = JSON.parse(
+            localStorage.getItem('phi_access_credential_v1'),
+        );
         expect(saved.verifier).toMatch(/^[A-Za-z0-9_-]+$/);
         expect(JSON.stringify(saved)).not.toContain(password);
     });
@@ -82,8 +89,12 @@ describe('access-password bootstrap', () => {
         const overlay = document.querySelector('.access-auth-overlay');
         expect(overlay).toBeTruthy();
         expect(overlay.querySelector('h1').textContent).toBe('Sign in to Phi');
-        expect(overlay.querySelector('.access-auth-subtitle').textContent).toBe('Enter your password to continue.');
+        expect(overlay.querySelector('.access-auth-subtitle').textContent).toBe(
+            'Enter your password to continue.',
+        );
         expect(overlay.querySelector('input[type="password"]')).toBeTruthy();
-        expect(overlay.querySelector('button[type="submit"]').textContent).toBe('Sign in');
+        expect(overlay.querySelector('button[type="submit"]').textContent).toBe(
+            'Sign in',
+        );
     });
 });

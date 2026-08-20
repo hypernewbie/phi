@@ -4,11 +4,11 @@ import { defineConfig } from 'vite';
 const backend = `localhost:${process.env.PHI_PORT ?? 7070}`;
 
 export default defineConfig({
-  root: 'web',
-  server: {
-    proxy: {
-      '/api': `http://${backend}`,
-      '/ws': { target: `ws://${backend}`, ws: true },
+    root: 'web',
+    server: {
+        proxy: {
+            '/api': `http://${backend}`,
+            '/ws': { target: `ws://${backend}`, ws: true },
+        },
     },
-  },
 });

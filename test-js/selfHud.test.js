@@ -2,11 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
-import {
-    buildSelfHud,
-    formatHudLine,
-    formatHudCpu,
-} from '../web/util.js';
+import { buildSelfHud, formatHudLine, formatHudCpu } from '../web/util.js';
 
 setupDomHarness();
 
@@ -95,51 +91,100 @@ describe('buildSelfHud', () => {
 
 describe('formatHudLine', () => {
     it('returns "no recent activity" when null', () => {
-        expect(formatHudLine({
-            hostname: 'x', version: '', sessions: 0, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: null,
-        })).toBe('no recent activity');
+        expect(
+            formatHudLine({
+                hostname: 'x',
+                version: '',
+                sessions: 0,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: null,
+            }),
+        ).toBe('no recent activity');
     });
 
     it('formats minutes', () => {
-        expect(formatHudLine({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: 4 * 60_000,
-        })).toBe('last activity 4m ago');
+        expect(
+            formatHudLine({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: 4 * 60_000,
+            }),
+        ).toBe('last activity 4m ago');
     });
 
     it('formats sub-minute as seconds', () => {
-        expect(formatHudLine({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: 23_000,
-        })).toBe('last activity 23s ago');
+        expect(
+            formatHudLine({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: 23_000,
+            }),
+        ).toBe('last activity 23s ago');
     });
 
     it('formats hours and days', () => {
-        expect(formatHudLine({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: 3 * 60 * 60_000,
-        })).toBe('last activity 3h ago');
-        expect(formatHudLine({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: 2 * 24 * 60 * 60_000,
-        })).toBe('last activity 2d ago');
+        expect(
+            formatHudLine({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: 3 * 60 * 60_000,
+            }),
+        ).toBe('last activity 3h ago');
+        expect(
+            formatHudLine({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: 2 * 24 * 60 * 60_000,
+            }),
+        ).toBe('last activity 2d ago');
     });
 });
 
 describe('formatHudCpu', () => {
     it('rounds to integer percent', () => {
-        expect(formatHudCpu({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: 23.7, lastActivityMin: null,
-        })).toBe('cpu 24%');
+        expect(
+            formatHudCpu({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: 23.7,
+                lastActivityMin: null,
+            }),
+        ).toBe('cpu 24%');
     });
 
     it('returns em-dash when unknown', () => {
-        expect(formatHudCpu({
-            hostname: 'x', version: '', sessions: 1, busy: 0, attention: 0,
-            cpuPercent: null, lastActivityMin: null,
-        })).toBe('cpu —');
+        expect(
+            formatHudCpu({
+                hostname: 'x',
+                version: '',
+                sessions: 1,
+                busy: 0,
+                attention: 0,
+                cpuPercent: null,
+                lastActivityMin: null,
+            }),
+        ).toBe('cpu —');
     });
 });
 
@@ -183,9 +228,27 @@ describe('brand HUD popover', () => {
         tm.selfHudCloseTimer = null;
         tm._initBrandHud();
         // Inject two tabs so the popover has data to render.
-        tm.tabs.set('p1', { paneId: 'p1', coder: 'pi', isDead: false, isBusy: true, isAttention: true, lastOutputAt: Date.now() - 30_000 });
-        tm.tabs.set('p2', { paneId: 'p2', coder: 'bash', isDead: false, isBusy: false, isAttention: false });
-        tm.tabs.set('p3', { paneId: 'p3', coder: 'claude', isDead: true, isBusy: false }); // dead, excluded
+        tm.tabs.set('p1', {
+            paneId: 'p1',
+            coder: 'pi',
+            isDead: false,
+            isBusy: true,
+            isAttention: true,
+            lastOutputAt: Date.now() - 30_000,
+        });
+        tm.tabs.set('p2', {
+            paneId: 'p2',
+            coder: 'bash',
+            isDead: false,
+            isBusy: false,
+            isAttention: false,
+        });
+        tm.tabs.set('p3', {
+            paneId: 'p3',
+            coder: 'claude',
+            isDead: true,
+            isBusy: false,
+        }); // dead, excluded
     });
 
     afterEach(() => {
@@ -196,11 +259,15 @@ describe('brand HUD popover', () => {
         brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
         expect(popover.classList.contains('hidden')).toBe(false);
         expect(popover.classList.contains('is-open')).toBe(true);
-        expect(popover.querySelector('.self-hud-host-name').textContent).toBe('atlas');
-        expect(popover.querySelector('.self-hud-version').textContent).toBe('v0.10.1');
+        expect(popover.querySelector('.self-hud-host-name').textContent).toBe(
+            'atlas',
+        );
+        expect(popover.querySelector('.self-hud-version').textContent).toBe(
+            'v0.10.1',
+        );
         expect(popover.textContent).toContain('attention');
         expect(popover.textContent).toContain('cpu 42%');
-        expect(popover.textContent).toContain('ϕ');   // working glyph
+        expect(popover.textContent).toContain('ϕ'); // working glyph
     });
 
     it('excludes dead tabs from the session count', () => {
@@ -297,7 +364,7 @@ describe('brand HUD popover', () => {
         expect(brand.getAttribute('tabindex')).toBe('0');
     });
 
-    it('reparents the popover to <body> to escape .app-header\'s stacking context', () => {
+    it("reparents the popover to <body> to escape .app-header's stacking context", () => {
         // Regression: the popover was inside .app-header (z-index:100).
         // Sibling surfaces like .diff-panel (z-index:1200) and
         // .modal-overlay (z-index:10000) covered it and stole its
@@ -320,11 +387,12 @@ describe('brand HUD popover', () => {
 
         // Cursor moves onto the hostname area — HUD must close so the
         // hostname tab-selector dropdown doesn't have to coexist with it.
-        hostnameWrapper.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        hostnameWrapper.dispatchEvent(
+            new MouseEvent('mouseenter', { bubbles: false }),
+        );
         // _closeSelfHud removes .is-open synchronously; the .hidden class
         // is added after a 220ms fade-out.
         expect(popover.classList.contains('is-open')).toBe(false);
         expect(tm.selfHudOpen).toBe(false);
     });
-
 });

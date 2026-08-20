@@ -17,14 +17,21 @@ function ctx() {
     c.app = { showToast: vi.fn() };
     return c;
 }
-const call = (c, text) => TabManager.prototype._agentClipboardCopy.call(c, text);
+const call = (c, text) =>
+    TabManager.prototype._agentClipboardCopy.call(c, text);
 
 function setSecureClipboard(writeImpl) {
-    Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+    Object.defineProperty(window, 'isSecureContext', {
+        value: true,
+        configurable: true,
+    });
     vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(writeImpl) } });
 }
 function setInsecureNoClipboard() {
-    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+    Object.defineProperty(window, 'isSecureContext', {
+        value: false,
+        configurable: true,
+    });
     vi.stubGlobal('navigator', {}); // no clipboard, as in an insecure context
 }
 
@@ -34,7 +41,10 @@ beforeEach(() => {
 });
 afterEach(() => {
     delete document.execCommand;
-    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+    Object.defineProperty(window, 'isSecureContext', {
+        value: false,
+        configurable: true,
+    });
 });
 
 describe('_agentClipboardCopy', () => {
@@ -45,7 +55,7 @@ describe('_agentClipboardCopy', () => {
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hello');
         expect(c.app.showToast).toHaveBeenCalledWith(
             'Agent copied 5 characters to clipboard',
-            expect.objectContaining({ title: 'Clipboard Sync' })
+            expect.objectContaining({ title: 'Clipboard Sync' }),
         );
     });
 
@@ -62,7 +72,7 @@ describe('_agentClipboardCopy', () => {
         expect(document.execCommand).toHaveBeenCalledWith('copy');
         expect(c.app.showToast).toHaveBeenCalledWith(
             'Agent copied 14 characters to clipboard',
-            expect.objectContaining({ title: 'Clipboard Sync' })
+            expect.objectContaining({ title: 'Clipboard Sync' }),
         );
     });
 
@@ -79,14 +89,16 @@ describe('_agentClipboardCopy', () => {
     });
 
     it('falls back to execCommand when the async writeText rejects', async () => {
-        setSecureClipboard(async () => { throw new Error('denied'); });
+        setSecureClipboard(async () => {
+            throw new Error('denied');
+        });
         document.execCommand.mockReturnValue(true);
         const c = ctx();
         await call(c, 'abc');
         expect(document.execCommand).toHaveBeenCalledWith('copy');
         expect(c.app.showToast).toHaveBeenCalledWith(
             'Agent copied 3 characters to clipboard',
-            expect.objectContaining({ title: 'Clipboard Sync' })
+            expect.objectContaining({ title: 'Clipboard Sync' }),
         );
     });
 });
@@ -102,7 +114,11 @@ describe('_execCommandCopy', () => {
     });
 
     it('returns false (does not throw) when execCommand throws', () => {
-        document.execCommand.mockImplementation(() => { throw new Error('nope'); });
-        expect(TabManager.prototype._execCommandCopy.call(ctx(), 'data')).toBe(false);
+        document.execCommand.mockImplementation(() => {
+            throw new Error('nope');
+        });
+        expect(TabManager.prototype._execCommandCopy.call(ctx(), 'data')).toBe(
+            false,
+        );
     });
 });

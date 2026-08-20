@@ -20,7 +20,9 @@ describe('escapeHtml', () => {
     });
 
     it('escapes ampersand first so entities are not double-escaped incorrectly', () => {
-        expect(escapeHtml('<a href="x">&')).toBe('&lt;a href=&quot;x&quot;&gt;&amp;');
+        expect(escapeHtml('<a href="x">&')).toBe(
+            '&lt;a href=&quot;x&quot;&gt;&amp;',
+        );
     });
 
     it('escapes every occurrence (global replace)', () => {

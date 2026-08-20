@@ -47,7 +47,9 @@ describe('MarkdownManager silent refresh', () => {
     });
 
     it('silent skip: identical fetch result does not re-render', async () => {
-        const files = [{ path: '/w/research/a.md', name: 'a.md', dir: './research' }];
+        const files = [
+            { path: '/w/research/a.md', name: 'a.md', dir: './research' },
+        ];
         const fetchMock = vi.fn(async () => ({
             ok: true,
             json: async () => files,
@@ -69,7 +71,9 @@ describe('MarkdownManager silent refresh', () => {
     });
 
     it('silent re-render on change: differing fetch result re-renders', async () => {
-        const first = [{ path: '/w/research/a.md', name: 'a.md', dir: './research' }];
+        const first = [
+            { path: '/w/research/a.md', name: 'a.md', dir: './research' },
+        ];
         const second = [
             { path: '/w/research/a.md', name: 'a.md', dir: './research' },
             { path: '/w/research/b.md', name: 'b.md', dir: './research' },
@@ -121,7 +125,10 @@ describe('MarkdownManager silent refresh', () => {
         }));
         vi.stubGlobal('fetch', fetchMock);
 
-        const { mm } = makeMm({ markdownDirs: ['./research'], activeCWD: '/w' });
+        const { mm } = makeMm({
+            markdownDirs: ['./research'],
+            activeCWD: '/w',
+        });
 
         mm.onExternalChange({ dir: '/other/research' });
         await vi.advanceTimersByTimeAsync(300);

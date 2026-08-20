@@ -43,9 +43,13 @@ function makeTabManager({ withTabs = [], width = 800 } = {}) {
         const tabEl = document.createElement('div');
         tabEl.className = 'tab';
         tabEl.setAttribute('data-pane-id', id);
-        tabEl.dataset.worktreeGlyph = id.startsWith('A:') ? '◆'
-            : id.startsWith('B:') ? '◇'
-            : id.startsWith('C:') ? '▣' : '★';
+        tabEl.dataset.worktreeGlyph = id.startsWith('A:')
+            ? '◆'
+            : id.startsWith('B:')
+              ? '◇'
+              : id.startsWith('C:')
+                ? '▣'
+                : '★';
         // Capture layout values at iteration time. Without this, the
         // closure would resolve `cursor` at call time when the loop
         // has already advanced past this tab.
@@ -81,10 +85,14 @@ function makeTabManager({ withTabs = [], width = 800 } = {}) {
     }
     // Container bounding rect: full bar at left=0.
     tm.tabsContainer.getBoundingClientRect = vi.fn(() => ({
-        left: 0, right: tm._layoutWidth,
-        top: 0, bottom: 42,
-        width: tm._layoutWidth, height: 42,
-        x: 0, y: 0,
+        left: 0,
+        right: tm._layoutWidth,
+        top: 0,
+        bottom: 42,
+        width: tm._layoutWidth,
+        height: 42,
+        x: 0,
+        y: 0,
         toJSON: () => ({}),
     }));
     // scrollWidth = total width of all tabs.
@@ -97,7 +105,9 @@ function makeTabManager({ withTabs = [], width = 800 } = {}) {
         get: () => tm._layoutWidth,
     });
     // Stub the worktree-label helper.
-    tm.getProjectWorktreeLabel = vi.fn((cwd) => cwd === 'A:tab1' ? 'A/tab1' : cwd);
+    tm.getProjectWorktreeLabel = vi.fn((cwd) =>
+        cwd === 'A:tab1' ? 'A/tab1' : cwd,
+    );
     return tm;
 }
 
@@ -105,7 +115,10 @@ function makeTabManager({ withTabs = [], width = 800 } = {}) {
 
 describe('updateTabOverflow', () => {
     it('hides the chip when tabs fit in the visible area', () => {
-        const tm = makeTabManager({ withTabs: ['t1', 't2', 't3'], width: 1200 });
+        const tm = makeTabManager({
+            withTabs: ['t1', 't2', 't3'],
+            width: 1200,
+        });
         tm.updateTabOverflow();
         const btn = document.getElementById('tab-overflow-btn');
         expect(btn.classList.contains('hidden')).toBe(true);
@@ -114,7 +127,7 @@ describe('updateTabOverflow', () => {
     it('shows the chip when tabs overflow', () => {
         // 8 tabs × 150 = 1200, clientWidth=800 -> overflow.
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6','t7','t8'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
             width: 800,
         });
         tm.updateTabOverflow();
@@ -127,16 +140,22 @@ describe('updateTabOverflow', () => {
         // visible (0..750). Tabs t6,t7,t8 are at 750..1200 (past 800).
         // So 3 hidden tabs.
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6','t7','t8'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
             width: 800,
         });
         // Debug snapshot to see what the production code is computing.
         const strip = document.getElementById('tabs-container');
         const rect = strip.getBoundingClientRect();
         const tabs = strip.querySelectorAll('.tab');
-        const tabRects = Array.from(tabs).map(t => t.getBoundingClientRect());
-        console.log('stripRect', rect, 'count', tabs.length,
-            'first3Rects', tabRects.slice(0,3));
+        const tabRects = Array.from(tabs).map((t) => t.getBoundingClientRect());
+        console.log(
+            'stripRect',
+            rect,
+            'count',
+            tabs.length,
+            'first3Rects',
+            tabRects.slice(0, 3),
+        );
         tm.updateTabOverflow();
         const label = document.querySelector('.tab-overflow-btn-label');
         expect(label.textContent).toBe('+3 more');
@@ -147,16 +166,27 @@ describe('updateTabOverflow', () => {
 
 describe('_buildOverflowDropdown', () => {
     it('groups tabs by worktree glyph with a per-group header', () => {
-        const tm = makeTabManager({ withTabs: ['A:a', 'A:b', 'B:c'], width: 400 });
+        const tm = makeTabManager({
+            withTabs: ['A:a', 'A:b', 'B:c'],
+            width: 400,
+        });
         tm._buildOverflowDropdown();
         const dropdown = document.getElementById('tab-overflow-dropdown');
-        const groups = dropdown.querySelectorAll('.tab-overflow-dropdown-group');
+        const groups = dropdown.querySelectorAll(
+            '.tab-overflow-dropdown-group',
+        );
         expect(groups.length).toBe(2); // A and B
         // First group (A) should list 2 tabs in count badge.
         expect(groups[0].textContent).toMatch(/2 tab/);
         // Each group header has an icon matching the glyph.
-        expect(groups[0].querySelector('.tab-overflow-dropdown-group-icon').textContent).toBe('◆');
-        expect(groups[1].querySelector('.tab-overflow-dropdown-group-icon').textContent).toBe('◇');
+        expect(
+            groups[0].querySelector('.tab-overflow-dropdown-group-icon')
+                .textContent,
+        ).toBe('◆');
+        expect(
+            groups[1].querySelector('.tab-overflow-dropdown-group-icon')
+                .textContent,
+        ).toBe('◇');
         // Tab rows are interleaved per their group.
         const rows = dropdown.querySelectorAll('.hostname-dropdown-row');
         expect(rows.length).toBe(3);
@@ -173,26 +203,43 @@ describe('_buildOverflowDropdown', () => {
         const tm = makeTabManager({ withTabs: ['A:a'], width: 800 });
         const btn = document.getElementById('tab-overflow-btn');
         // Start hidden.
-        expect(document.getElementById('tab-overflow-dropdown').classList.contains('hidden')).toBe(true);
+        expect(
+            document
+                .getElementById('tab-overflow-dropdown')
+                .classList.contains('hidden'),
+        ).toBe(true);
         tm._toggleOverflowDropdown();
-        expect(document.getElementById('tab-overflow-dropdown').classList.contains('hidden')).toBe(false);
+        expect(
+            document
+                .getElementById('tab-overflow-dropdown')
+                .classList.contains('hidden'),
+        ).toBe(false);
         expect(btn.getAttribute('aria-expanded')).toBe('true');
         tm._toggleOverflowDropdown();
-        expect(document.getElementById('tab-overflow-dropdown').classList.contains('hidden')).toBe(true);
+        expect(
+            document
+                .getElementById('tab-overflow-dropdown')
+                .classList.contains('hidden'),
+        ).toBe(true);
         expect(btn.getAttribute('aria-expanded')).toBe('false');
     });
 
     it('clicking a row closes the dropdown and switches the active tab', () => {
         const tm = makeTabManager({ withTabs: ['A:a', 'A:b'], width: 800 });
         // Spy on switchTab to verify the click handler calls it.
-        const switchSpy = vi.spyOn(tm, 'switchTab').mockImplementation(() => {});
+        const switchSpy = vi
+            .spyOn(tm, 'switchTab')
+            .mockImplementation(() => {});
         tm._buildOverflowDropdown();
         const dd = document.getElementById('tab-overflow-dropdown');
         const row = dd.querySelector('.hostname-dropdown-row');
         // First row's select button should call switchTab and close.
         const selectBtn = row.querySelector('.hostname-dropdown-select-btn');
         selectBtn.click();
-        expect(switchSpy).toHaveBeenCalledWith('A:a', expect.objectContaining({ userInitiated: true }));
+        expect(switchSpy).toHaveBeenCalledWith(
+            'A:a',
+            expect.objectContaining({ userInitiated: true }),
+        );
         expect(dd.classList.contains('hidden')).toBe(true);
     });
 });
@@ -200,9 +247,15 @@ describe('_buildOverflowDropdown', () => {
 // ---- Mouse-wheel horizontal scroll ----------------------------------
 
 describe('wheel -> horizontal scroll', () => {
-    function dispatchWheel(tm, { deltaX = 0, deltaY = 0, cancelable = true } = {}) {
+    function dispatchWheel(
+        tm,
+        { deltaX = 0, deltaY = 0, cancelable = true } = {},
+    ) {
         const ev = new WheelEvent('wheel', {
-            deltaX, deltaY, bubbles: true, cancelable,
+            deltaX,
+            deltaY,
+            bubbles: true,
+            cancelable,
         });
         tm.tabsContainer.dispatchEvent(ev);
         return ev;
@@ -210,7 +263,7 @@ describe('wheel -> horizontal scroll', () => {
 
     it('translates vertical wheel to horizontal scroll when strip overflows', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6','t7','t8'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
             width: 600,
         });
         tm._setupContainerDragHandlers();
@@ -221,7 +274,7 @@ describe('wheel -> horizontal scroll', () => {
     });
 
     it('does NOT preventDefault when the strip has no overflow', () => {
-        const tm = makeTabManager({ withTabs: ['t1','t2'], width: 1200 });
+        const tm = makeTabManager({ withTabs: ['t1', 't2'], width: 1200 });
         tm._setupContainerDragHandlers();
         const ev = dispatchWheel(tm, { deltaY: 100 });
         expect(ev.defaultPrevented).toBe(false);
@@ -229,7 +282,7 @@ describe('wheel -> horizontal scroll', () => {
 
     it('respects the scrollLeft upper bound (does not over-scroll)', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6','t7','t8'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
             width: 600,
         });
         tm._setupContainerDragHandlers();
@@ -241,7 +294,7 @@ describe('wheel -> horizontal scroll', () => {
 
     it('accepts deltaX (trackpad horizontal gesture) directly', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6'],
             width: 600,
         });
         tm._setupContainerDragHandlers();
@@ -266,7 +319,7 @@ describe('edge auto-scroll during drag', () => {
 
     it('sets scroll direction + velocity when cursor is in the right edge zone', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6'],
             width: 800,
         });
         tm.dragSourceId = 't1';
@@ -281,7 +334,7 @@ describe('edge auto-scroll during drag', () => {
 
     it('sets scroll direction -1 when cursor is in the left edge zone', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6'],
             width: 800,
         });
         tm.dragSourceId = 't1';
@@ -295,7 +348,7 @@ describe('edge auto-scroll during drag', () => {
 
     it('sets velocity to zero when cursor is in the middle of the strip', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6'],
             width: 800,
         });
         tm.dragSourceId = 't1';
@@ -308,7 +361,7 @@ describe('edge auto-scroll during drag', () => {
 
     it('does not act when no drag is in progress', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2','t3','t4','t5','t6'],
+            withTabs: ['t1', 't2', 't3', 't4', 't5', 't6'],
             width: 800,
         });
         tm.dragSourceId = null;
@@ -319,7 +372,7 @@ describe('edge auto-scroll during drag', () => {
 
     it('preventDefaults so dragover keeps firing over whitespace', () => {
         const tm = makeTabManager({
-            withTabs: ['t1','t2'],
+            withTabs: ['t1', 't2'],
             width: 1200,
         });
         tm.dragSourceId = 't1';
@@ -430,7 +483,10 @@ describe('overflow refresh timing in createTab', () => {
         const tabsSetIdx = src.indexOf('this.tabs.set(paneId, tabInfo)');
         expect(tabsSetIdx).toBeGreaterThan(0);
 
-        const overflowCallIdx = src.indexOf('this.updateTabOverflow()', tabsSetIdx);
+        const overflowCallIdx = src.indexOf(
+            'this.updateTabOverflow()',
+            tabsSetIdx,
+        );
         expect(overflowCallIdx).toBeGreaterThan(tabsSetIdx);
     });
 
@@ -438,7 +494,10 @@ describe('overflow refresh timing in createTab', () => {
         const fs = require('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
 
-        const sigIdx = src.indexOf('createTab(paneId, sessionId, title, coder,');
+        const sigMatch = src.match(
+            /createTab\(\s*paneId,\s*sessionId,\s*title,\s*coder,/,
+        );
+        const sigIdx = sigMatch?.index ?? -1;
         expect(sigIdx).toBeGreaterThan(0);
         const openIdx = src.indexOf('{', sigIdx);
         let depth = 0;
@@ -447,7 +506,10 @@ describe('overflow refresh timing in createTab', () => {
             if (src[i] === '{') depth++;
             else if (src[i] === '}') {
                 depth--;
-                if (depth === 0) { endIdx = i; break; }
+                if (depth === 0) {
+                    endIdx = i;
+                    break;
+                }
             }
         }
         expect(endIdx).toBeGreaterThan(openIdx);

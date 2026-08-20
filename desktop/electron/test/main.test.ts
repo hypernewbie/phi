@@ -21,12 +21,24 @@ import { describe, expect, it } from 'vitest';
 // (the npm package exports a path string), so this is safe under vitest.
 import { FORWARD_CHANNEL } from '../src/single-instance.js';
 import { DEEPLINK_CHANNEL } from '../src/deeplink.js';
-import { ALWAYS_SAFE_RAIL_CHORDS, CONDITIONAL_RAIL_CHORDS } from '../src/shortcuts.js';
+import {
+  ALWAYS_SAFE_RAIL_CHORDS,
+  CONDITIONAL_RAIL_CHORDS,
+} from '../src/shortcuts.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const mainSource = readFileSync(path.join(here, '..', 'src', 'main.ts'), 'utf8');
-const desktopSource = readFileSync(path.join(here, '..', 'src', 'desktop.ts'), 'utf8');
-const preloadSource = readFileSync(path.join(here, '..', 'src', 'preload.ts'), 'utf8');
+const mainSource = readFileSync(
+  path.join(here, '..', 'src', 'main.ts'),
+  'utf8',
+);
+const desktopSource = readFileSync(
+  path.join(here, '..', 'src', 'desktop.ts'),
+  'utf8',
+);
+const preloadSource = readFileSync(
+  path.join(here, '..', 'src', 'preload.ts'),
+  'utf8',
+);
 const singleInstanceSource = readFileSync(
   path.join(here, '..', 'src', 'single-instance.ts'),
   'utf8',
@@ -60,7 +72,9 @@ describe('src/main.ts (phase-2 single-instance + argv routing)', () => {
   it('requests the single-instance lock as the first app call in the gate module', () => {
     // Inside setupSingleInstance the lock is requested before any other
     // app interaction (listener registration, quit).
-    const lockIdx = singleInstanceSource.indexOf('app.requestSingleInstanceLock()');
+    const lockIdx = singleInstanceSource.indexOf(
+      'app.requestSingleInstanceLock()',
+    );
     const onIdx = singleInstanceSource.indexOf("app.on('second-instance'");
     const quitIdx = singleInstanceSource.indexOf('app.quit');
     expect(lockIdx).toBeGreaterThan(-1);
@@ -133,7 +147,7 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
 
   it('runs installProtocol with the trailing -- args, logs the result and exits 0', () => {
     expect(mainSource).toMatch(
-      /installProtocol\(realPlatform, \[path\.join\(here, 'main\.js'\), '--'\]\)/,
+      /installProtocol\(realPlatform,\s*\[\s*path\.join\(here,\s*'main\.js'\),\s*'--',?\s*\]\)/,
     );
     expect(mainSource).toContain('installed at ${reg.path}, exe ${reg.exe}');
     const installIdx = mainSource.indexOf('installProtocol(realPlatform');
@@ -149,14 +163,18 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
     expect(flagIdx).toBeGreaterThan(-1);
     expect(flagIdx).toBeLessThan(gateIdx);
     expect(mainSource).toContain('uninstallProtocol(realPlatform)');
-    expect(mainSource).toContain('uninstalled at ${unreg.path}, exe ${unreg.exe}');
+    expect(mainSource).toContain(
+      'uninstalled at ${unreg.path}, exe ${unreg.exe}',
+    );
     expect(mainSource).toContain('app.exit(0)');
   });
 
   it('makes --register-protocol win when both flags are given (Wails parity)', () => {
     // The register branch is the if, the unregister branch the else-if.
     const registerIdx = mainSource.indexOf("includes('--register-protocol')");
-    const unregisterIdx = mainSource.indexOf("includes('--unregister-protocol')");
+    const unregisterIdx = mainSource.indexOf(
+      "includes('--unregister-protocol')",
+    );
     expect(registerIdx).toBeGreaterThan(-1);
     expect(unregisterIdx).toBeGreaterThan(registerIdx);
   });
@@ -203,8 +221,12 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
     // single.ForegroundMainWindow parity).
     const showIdx = desktopSource.indexOf("case 'show'");
     expect(showIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('mainWindow.restore()')).toBeGreaterThan(showIdx);
-    expect(desktopSource.indexOf('mainWindow.focus()')).toBeGreaterThan(showIdx);
+    expect(desktopSource.indexOf('mainWindow.restore()')).toBeGreaterThan(
+      showIdx,
+    );
+    expect(desktopSource.indexOf('mainWindow.focus()')).toBeGreaterThan(
+      showIdx,
+    );
     // Quit notifies the main window's renderer on the tray channel.
     expect(desktopSource).toContain('webContents.send(TRAY_COMMAND_CHANNEL');
   });
@@ -220,7 +242,9 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
     expect(desktopSource).toContain('getActiveProfileId:');
     expect(desktopSource).toContain('getUnread:');
     expect(desktopSource).toContain('const state = this.controller?.state();');
-    expect(desktopSource).toContain("health: state.health.get(p.id) ?? 'unknown'");
+    expect(desktopSource).toContain(
+      "health: state.health.get(p.id) ?? 'unknown'",
+    );
     expect(desktopSource).toContain('unread: state.unread.get(p.id) ?? 0');
   });
 
@@ -256,7 +280,9 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     expect(listenerIdx).toBeGreaterThan(-1);
     expect(trayIdx).toBeLessThan(listenerIdx);
     expect(listenerIdx).toBeLessThan(ctorIdx);
-    expect(desktopSource).toContain("app.getPath('userData') + '/profiles.json'");
+    expect(desktopSource).toContain(
+      "app.getPath('userData') + '/profiles.json'",
+    );
   });
 
   it('wires the controller events to the tray (active -> setActiveProfile, unread -> setUnread)', () => {
@@ -274,25 +300,36 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     // The rebuild must live inside the subscribe callback (after the
     // active/unread branches), and must not recreate the tray.
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    const profilesIdx = desktopSource.indexOf("event.kind === 'profiles-changed'", subscribeIdx);
-    expect(profilesIdx).toBeGreaterThan(subscribeIdx);
-    expect(desktopSource.indexOf('trayHandle?.rebuildMenu()', profilesIdx)).toBeGreaterThan(
-      profilesIdx,
+    const profilesIdx = desktopSource.indexOf(
+      "event.kind === 'profiles-changed'",
+      subscribeIdx,
     );
+    expect(profilesIdx).toBeGreaterThan(subscribeIdx);
+    expect(
+      desktopSource.indexOf('trayHandle?.rebuildMenu()', profilesIdx),
+    ).toBeGreaterThan(profilesIdx);
   });
 
   it('routes the tray select-profile intent into controller.setActive (the receiver)', () => {
     const selectIdx = desktopSource.indexOf("case 'select-profile'");
     expect(selectIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setActive(cmd.id)')).toBeGreaterThan(selectIdx);
+    expect(desktopSource.indexOf('ctrl.setActive(cmd.id)')).toBeGreaterThan(
+      selectIdx,
+    );
   });
 
   it('owns the quit intent: logs, notifies the main window and calls app.quit()', () => {
     const quitIdx = desktopSource.indexOf("case 'quit'");
     expect(quitIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf("'phi-desktop: tray quit'")).toBeGreaterThan(quitIdx);
-    expect(desktopSource.indexOf('webContents.send(TRAY_COMMAND_CHANNEL, cmd)')).toBeGreaterThan(quitIdx);
-    expect(desktopSource.indexOf('app.quit()', quitIdx)).toBeGreaterThan(quitIdx);
+    expect(desktopSource.indexOf("'phi-desktop: tray quit'")).toBeGreaterThan(
+      quitIdx,
+    );
+    expect(
+      desktopSource.indexOf('webContents.send(TRAY_COMMAND_CHANNEL, cmd)'),
+    ).toBeGreaterThan(quitIdx);
+    expect(desktopSource.indexOf('app.quit()', quitIdx)).toBeGreaterThan(
+      quitIdx,
+    );
   });
 
   it('routes --server and incoming server URLs through activateServerUrl (add when unmatched, then activate)', () => {
@@ -313,7 +350,9 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     // deep links keep the forward channel.
     expect(desktopSource).toContain("payload.kind === 'server'");
     expect(desktopSource).toContain('activateServerUrl(payload.value)');
-    expect(desktopSource).toContain('win.webContents.send(FORWARD_CHANNEL, payload)');
+    expect(desktopSource).toContain(
+      'win.webContents.send(FORWARD_CHANNEL, payload)',
+    );
   });
 
   it('registers the global hotkey after the tray and unregisters every registration on before-quit', () => {
@@ -325,13 +364,19 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     expect(desktopSource).toContain('hotkeyRegistrations');
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
     expect(beforeQuitIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('reg.unregister()')).toBeGreaterThan(beforeQuitIdx);
+    expect(desktopSource.indexOf('reg.unregister()')).toBeGreaterThan(
+      beforeQuitIdx,
+    );
   });
 
   it('restores and focuses the main window from the hotkey action (Show Phi parity)', () => {
     const hotkeyIdx = desktopSource.indexOf('registerHotkey(');
-    expect(desktopSource.indexOf('mainWindow.restore()', hotkeyIdx)).toBeGreaterThan(hotkeyIdx);
-    expect(desktopSource.indexOf('mainWindow.focus()', hotkeyIdx)).toBeGreaterThan(hotkeyIdx);
+    expect(
+      desktopSource.indexOf('mainWindow.restore()', hotkeyIdx),
+    ).toBeGreaterThan(hotkeyIdx);
+    expect(
+      desktopSource.indexOf('mainWindow.focus()', hotkeyIdx),
+    ).toBeGreaterThan(hotkeyIdx);
   });
 
   it('reports hotkeyNotExercised and controllerPersisted in the smoke self-check payload', () => {
@@ -365,32 +410,55 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     expect(makeViewIdx).toBeGreaterThan(-1);
     const prefsIdx = desktopSource.indexOf('webPreferences:', makeViewIdx);
     expect(prefsIdx).toBeGreaterThan(makeViewIdx);
-    expect(desktopSource.indexOf('sandbox: true', prefsIdx)).toBeGreaterThan(prefsIdx);
-    expect(desktopSource.indexOf('contextIsolation: true', prefsIdx)).toBeGreaterThan(prefsIdx);
-    expect(desktopSource.indexOf('nodeIntegration: false', prefsIdx)).toBeGreaterThan(prefsIdx);
-    expect(desktopSource.indexOf('webSecurity: true', prefsIdx)).toBeGreaterThan(prefsIdx);
+    expect(desktopSource.indexOf('sandbox: true', prefsIdx)).toBeGreaterThan(
+      prefsIdx,
+    );
+    expect(
+      desktopSource.indexOf('contextIsolation: true', prefsIdx),
+    ).toBeGreaterThan(prefsIdx);
+    expect(
+      desktopSource.indexOf('nodeIntegration: false', prefsIdx),
+    ).toBeGreaterThan(prefsIdx);
+    expect(
+      desktopSource.indexOf('webSecurity: true', prefsIdx),
+    ).toBeGreaterThan(prefsIdx);
   });
 
   it('presents same-origin popup children as hidden native windows, shown on ready-to-show and navigation-guarded', () => {
     const guardIdx = desktopSource.indexOf('const attachNavGuard =');
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('attachNavGuard(view.webContents)', guardIdx)).toBeGreaterThan(guardIdx);
+    expect(
+      desktopSource.indexOf('attachNavGuard(view.webContents)', guardIdx),
+    ).toBeGreaterThan(guardIdx);
     const createIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(createIdx).toBeGreaterThan(-1);
     expect(guardIdx).toBeGreaterThan(createIdx);
     const childIdx = desktopSource.indexOf('new BrowserWindow({', createIdx);
     expect(childIdx).toBeGreaterThan(createIdx);
-    expect(desktopSource.indexOf('show: false', childIdx)).toBeGreaterThan(childIdx);
-    expect(desktopSource.indexOf('session: sharedSession', childIdx)).toBeGreaterThan(childIdx);
-    expect(desktopSource.indexOf("child.once('ready-to-show'", childIdx)).toBeGreaterThan(childIdx);
-    expect(desktopSource.indexOf('attachNavGuard(child.webContents)', childIdx)).toBeGreaterThan(childIdx);
-    const childRegion = desktopSource.slice(childIdx, desktopSource.indexOf('return child.webContents;', childIdx));
+    expect(desktopSource.indexOf('show: false', childIdx)).toBeGreaterThan(
+      childIdx,
+    );
+    expect(
+      desktopSource.indexOf('session: sharedSession', childIdx),
+    ).toBeGreaterThan(childIdx);
+    expect(
+      desktopSource.indexOf("child.once('ready-to-show'", childIdx),
+    ).toBeGreaterThan(childIdx);
+    expect(
+      desktopSource.indexOf('attachNavGuard(child.webContents)', childIdx),
+    ).toBeGreaterThan(childIdx);
+    const childRegion = desktopSource.slice(
+      childIdx,
+      desktopSource.indexOf('return child.webContents;', childIdx),
+    );
     expect(childRegion).not.toContain('.loadFile(');
     const sizeIdx = desktopSource.indexOf('const popupSize =');
     expect(sizeIdx).toBeGreaterThan(-1);
     expect(desktopSource.indexOf('?? 860', sizeIdx)).toBeGreaterThan(sizeIdx);
     expect(desktopSource.indexOf('?? 1000', sizeIdx)).toBeGreaterThan(sizeIdx);
-    expect(desktopSource.indexOf('setWindowOpenHandler', sizeIdx)).toBeGreaterThan(sizeIdx);
+    expect(
+      desktopSource.indexOf('setWindowOpenHandler', sizeIdx),
+    ).toBeGreaterThan(sizeIdx);
   });
 
   it('computes the normalized comparison origin once and uses it in both guard paths', () => {
@@ -398,16 +466,26 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // `new URL(origin).origin`) before setWindowOpenHandler, and both
     // handler paths (window-open and will-navigate) must compare against
     // the same `allowedOrigin` constant.
-    expect(desktopSource).toContain('const allowedOrigin = new URL(origin).origin');
-    const allowedIdx = desktopSource.indexOf('const allowedOrigin = new URL(origin).origin');
-    const openHandlerIdx = desktopSource.indexOf('setWindowOpenHandler', allowedIdx);
+    expect(desktopSource).toContain(
+      'const allowedOrigin = new URL(origin).origin',
+    );
+    const allowedIdx = desktopSource.indexOf(
+      'const allowedOrigin = new URL(origin).origin',
+    );
+    const openHandlerIdx = desktopSource.indexOf(
+      'setWindowOpenHandler',
+      allowedIdx,
+    );
     expect(openHandlerIdx).toBeGreaterThan(allowedIdx);
     const windowOpenCompare = desktopSource.indexOf(
       'target.origin === allowedOrigin',
       openHandlerIdx,
     );
     expect(windowOpenCompare).toBeGreaterThan(openHandlerIdx);
-    const navGuardCompare = desktopSource.indexOf('target.origin === allowedOrigin', windowOpenCompare + 1);
+    const navGuardCompare = desktopSource.indexOf(
+      'target.origin === allowedOrigin',
+      windowOpenCompare + 1,
+    );
     expect(navGuardCompare).toBeGreaterThan(windowOpenCompare);
     // No stale direct comparison to the raw origin string remains in either path.
     expect(desktopSource.match(/target\.origin === origin/g)).toBeNull();
@@ -421,7 +499,9 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // The push must happen for every mutation kind, not only active/unread.
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
     expect(subscribeIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('pushRailState()', subscribeIdx)).toBeGreaterThan(subscribeIdx);
+    expect(
+      desktopSource.indexOf('pushRailState()', subscribeIdx),
+    ).toBeGreaterThan(subscribeIdx);
   });
 
   it('syncs divider widths across retained views on active-changed (capture before setActive, apply after)', () => {
@@ -429,8 +509,14 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // read before the switch and applied to the incoming retained view
     // by id via getView (immediately when loaded, else on did-finish-load).
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    const syncIdx = desktopSource.indexOf('syncDividersOnSwitch(event.id)', subscribeIdx);
-    const setActiveIdx = desktopSource.indexOf('profileViews?.setActive(event.id)', subscribeIdx);
+    const syncIdx = desktopSource.indexOf(
+      'syncDividersOnSwitch(event.id)',
+      subscribeIdx,
+    );
+    const setActiveIdx = desktopSource.indexOf(
+      'profileViews?.setActive(event.id)',
+      subscribeIdx,
+    );
     expect(syncIdx).toBeGreaterThan(subscribeIdx);
     expect(syncIdx).toBeLessThan(setActiveIdx);
     expect(desktopSource).toContain('READ_DIVIDERS_SCRIPT');
@@ -442,7 +528,9 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
   it('registers phi:select-profile -> controller.setActive (the rail item click handler)', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:select-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setActive(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('ctrl.setActive(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 
   it('registers phi:add-server -> controller.add (URL validation) + profileViews.addProfile + controller.setActive', () => {
@@ -451,20 +539,29 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // controller.add is the URL validation (throws on invalid/same-host);
     // the returned profile is registered with the view manager, then
     // activated (the retained-view switch follows active-changed).
-    expect(desktopSource.indexOf('ctrl.add(url)', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(
-      desktopSource.indexOf('profileViews?.addProfile(profile.id, profile.origin)', handlerIdx),
-    ).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf('ctrl.setActive(profile.id)', handlerIdx)).toBeGreaterThan(
+    expect(desktopSource.indexOf('ctrl.add(url)', handlerIdx)).toBeGreaterThan(
       handlerIdx,
     );
+    expect(
+      desktopSource.indexOf(
+        'profileViews?.addProfile(profile.id, profile.origin)',
+        handlerIdx,
+      ),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('ctrl.setActive(profile.id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 
   it('opens the local modal picker from phi:open-picker', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('modal: true', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf("'picker.html'", handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(desktopSource.indexOf('modal: true', handlerIdx)).toBeGreaterThan(
+      handlerIdx,
+    );
+    expect(desktopSource.indexOf("'picker.html'", handlerIdx)).toBeGreaterThan(
+      handlerIdx,
+    );
   });
 
   it('recomputes the active view and the rail on window resize', () => {
@@ -473,49 +570,79 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
     // The resize handler delegates to the single layout function, which
     // recomputes the two child regions (profile body + rail) below the
     // main view page's header row.
-    expect(desktopSource.indexOf('layoutChildren()', resizeIdx)).toBeGreaterThan(resizeIdx);
+    expect(
+      desktopSource.indexOf('layoutChildren()', resizeIdx),
+    ).toBeGreaterThan(resizeIdx);
     const layoutIdx = desktopSource.indexOf('const layoutChildren');
     expect(layoutIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('profileViews?.onWindowResize()', layoutIdx)).toBeGreaterThan(layoutIdx);
-    expect(desktopSource.indexOf('layoutRail()', layoutIdx)).toBeGreaterThan(layoutIdx);
+    expect(
+      desktopSource.indexOf('profileViews?.onWindowResize()', layoutIdx),
+    ).toBeGreaterThan(layoutIdx);
+    expect(desktopSource.indexOf('layoutRail()', layoutIdx)).toBeGreaterThan(
+      layoutIdx,
+    );
   });
 
   it('places the rail below the composed header and re-applies its bounds on every resize', () => {
     const layoutIdx = desktopSource.indexOf('const layoutRail =');
     expect(layoutIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('railView.setBounds', layoutIdx)).toBeGreaterThan(layoutIdx);
+    expect(
+      desktopSource.indexOf('railView.setBounds', layoutIdx),
+    ).toBeGreaterThan(layoutIdx);
     // The rail begins at HEADER_HEIGHT; its height is the content height less
     // the header row so the title island never overlaps a rail entry.
     const setBoundsIdx = desktopSource.indexOf('railView.setBounds', layoutIdx);
-    expect(desktopSource.indexOf('x: 0,', setBoundsIdx)).toBeGreaterThan(setBoundsIdx);
-    expect(desktopSource.indexOf('y: HEADER_HEIGHT,', setBoundsIdx)).toBeGreaterThan(setBoundsIdx);
-    expect(desktopSource.indexOf('width: RAIL_WIDTH,', setBoundsIdx)).toBeGreaterThan(setBoundsIdx);
-    expect(desktopSource.indexOf('b.height - HEADER_HEIGHT', setBoundsIdx)).toBeGreaterThan(
+    expect(desktopSource.indexOf('x: 0,', setBoundsIdx)).toBeGreaterThan(
       setBoundsIdx,
     );
-    expect(desktopSource.indexOf('railView.webContents.isDestroyed()', layoutIdx)).toBeGreaterThan(
+    expect(
+      desktopSource.indexOf('y: HEADER_HEIGHT,', setBoundsIdx),
+    ).toBeGreaterThan(setBoundsIdx);
+    expect(
+      desktopSource.indexOf('width: RAIL_WIDTH,', setBoundsIdx),
+    ).toBeGreaterThan(setBoundsIdx);
+    expect(
+      desktopSource.indexOf('b.height - HEADER_HEIGHT', setBoundsIdx),
+    ).toBeGreaterThan(setBoundsIdx);
+    expect(
+      desktopSource.indexOf('railView.webContents.isDestroyed()', layoutIdx),
+    ).toBeGreaterThan(layoutIdx);
+    const finishLoadIdx = desktopSource.indexOf(
+      "rail.webContents.on('did-finish-load'",
       layoutIdx,
     );
-    const finishLoadIdx = desktopSource.indexOf("rail.webContents.on('did-finish-load'", layoutIdx);
     expect(finishLoadIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('layoutRail()', finishLoadIdx)).toBeGreaterThan(finishLoadIdx);
+    expect(
+      desktopSource.indexOf('layoutRail()', finishLoadIdx),
+    ).toBeGreaterThan(finishLoadIdx);
   });
 
   it('builds the rail renderer as a never-hidden child view loading dist/renderer.html', () => {
     expect(desktopSource).toContain('session: sharedSession');
     expect(desktopSource).toContain('win.contentView.addChildView(rail)');
-    const addChildIdx = desktopSource.indexOf('win.contentView.addChildView(rail)');
-    expect(desktopSource.indexOf('layoutRail();', addChildIdx)).toBeGreaterThan(addChildIdx);
+    const addChildIdx = desktopSource.indexOf(
+      'win.contentView.addChildView(rail)',
+    );
+    expect(desktopSource.indexOf('layoutRail();', addChildIdx)).toBeGreaterThan(
+      addChildIdx,
+    );
     expect(desktopSource).toContain("'dist', 'renderer.html'");
     // The initial rail-state snapshot is pushed after the page loads.
-    const loadFileIdx = desktopSource.indexOf('await rail.webContents.loadFile(');
+    const loadFileIdx = desktopSource.indexOf(
+      'await rail.webContents.loadFile(',
+    );
     expect(loadFileIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('pushRailState()', loadFileIdx)).toBeGreaterThan(loadFileIdx);
+    expect(
+      desktopSource.indexOf('pushRailState()', loadFileIdx),
+    ).toBeGreaterThan(loadFileIdx);
   });
 
   it('tears the retained views down on before-quit BEFORE app.quit()', () => {
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
-    const destroyIdx = desktopSource.indexOf('profileViews.destroyAll()', beforeQuitIdx);
+    const destroyIdx = desktopSource.indexOf(
+      'profileViews.destroyAll()',
+      beforeQuitIdx,
+    );
     const quitIdx = desktopSource.indexOf('app.quit()', destroyIdx);
     expect(beforeQuitIdx).toBeGreaterThan(-1);
     expect(destroyIdx).toBeGreaterThan(beforeQuitIdx);
@@ -546,25 +673,45 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
 
 describe('src/desktop.ts (rail reorder receiver)', () => {
   it('registers phi:reorder-profile -> controller.reorder with a nullable beforeId and no reply channel', () => {
-    const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:reorder-profile'");
+    const handlerMatch = desktopSource.match(
+      /ipcMain\.on\(\s*'phi:reorder-profile'/,
+    );
+    const handlerIdx = handlerMatch?.index ?? -1;
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.reorder(id, beforeId)', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf("typeof beforeId !== 'string'", handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf('phi-desktop: phi:reorder-profile', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('ctrl.reorder(id, beforeId)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf("typeof beforeId !== 'string'", handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('phi-desktop: phi:reorder-profile', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 });
 
 describe('src/desktop.ts (rail server session context)', () => {
   it('registers phi:open-server-sessions -> controller.setActive, then the retained-view selector click', () => {
-    const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:open-server-sessions'");
+    const handlerIdx = desktopSource.indexOf(
+      "ipcMain.on('phi:open-server-sessions'",
+    );
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setActive(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf('openServerSessions(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('ctrl.setActive(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('openServerSessions(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
     // Unknown ids (stale rail entry) are logged and the selector is never opened.
-    expect(desktopSource.indexOf('phi-desktop: phi:open-server-sessions', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf(
+        'phi-desktop: phi:open-server-sessions',
+        handlerIdx,
+      ),
+    ).toBeGreaterThan(handlerIdx);
   });
 
-  it('opens the page\'s own selector via a fixed guarded #hostname-display click (fixed constant, never interpolated)', () => {
+  it("opens the page's own selector via a fixed guarded #hostname-display click (fixed constant, never interpolated)", () => {
     expect(desktopSource).toContain('const OPEN_SESSIONS_SCRIPT = `(() => {');
     expect(desktopSource).toContain("getElementById('hostname-display')");
     expect(desktopSource).toContain('if (!display) return false;');
@@ -584,10 +731,21 @@ describe('src/desktop.ts (rail server session context)', () => {
   it('reuses the loadedViews did-finish-load gate when the retained view has not finished loading', () => {
     const idx = desktopSource.indexOf('openServerSessions(');
     expect(idx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('profileViews?.getView(id)', idx)).toBeGreaterThan(idx);
-    expect(desktopSource.indexOf('loadedViews.has(view)', idx)).toBeGreaterThan(idx);
-    expect(desktopSource.indexOf("view.webContents.once('did-finish-load', open)", idx)).toBeGreaterThan(idx);
-    expect(desktopSource.indexOf('view.webContents.isDestroyed()', idx)).toBeGreaterThan(idx);
+    expect(
+      desktopSource.indexOf('profileViews?.getView(id)', idx),
+    ).toBeGreaterThan(idx);
+    expect(desktopSource.indexOf('loadedViews.has(view)', idx)).toBeGreaterThan(
+      idx,
+    );
+    expect(
+      desktopSource.indexOf(
+        "view.webContents.once('did-finish-load', open)",
+        idx,
+      ),
+    ).toBeGreaterThan(idx);
+    expect(
+      desktopSource.indexOf('view.webContents.isDestroyed()', idx),
+    ).toBeGreaterThan(idx);
   });
 });
 
@@ -595,22 +753,25 @@ describe('src/desktop.ts (step-6 completion: rail-targeted snapshots, content bo
   it('sends phi:rail-state to the RAIL view webContents (the renderer that renders the rail)', () => {
     const pushIdx = desktopSource.indexOf('pushRailState(): void');
     expect(pushIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('rail.webContents.send', pushIdx)).toBeGreaterThan(pushIdx);
+    expect(
+      desktopSource.indexOf('rail.webContents.send', pushIdx),
+    ).toBeGreaterThan(pushIdx);
     // The covered main window's own webContents must never receive the
     // rail snapshot.
-    expect(desktopSource.indexOf('win.webContents.send(\'phi:rail-state\'', pushIdx)).toBe(-1);
+    expect(
+      desktopSource.indexOf("win.webContents.send('phi:rail-state'", pushIdx),
+    ).toBe(-1);
   });
 
   it('bounds the active view from the window CONTENT bounds, below the header, right of the rail', () => {
     const boundsIdx = desktopSource.indexOf('const defaultBounds');
     expect(boundsIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('win.getContentBounds()', boundsIdx)).toBeGreaterThan(boundsIdx);
     expect(
-      desktopSource.indexOf(
-        'x: RAIL_WIDTH, y: HEADER_HEIGHT, width: b.width - RAIL_WIDTH, height: b.height - HEADER_HEIGHT',
-        boundsIdx,
-      ),
+      desktopSource.indexOf('win.getContentBounds()', boundsIdx),
     ).toBeGreaterThan(boundsIdx);
+    expect(desktopSource.slice(boundsIdx)).toMatch(
+      /x:\s*RAIL_WIDTH,\s*y:\s*HEADER_HEIGHT,\s*width:\s*b\.width - RAIL_WIDTH,\s*height:\s*b\.height - HEADER_HEIGHT/,
+    );
   });
 
   it('restores the most recently used profile at startup (its retained view loads immediately)', () => {
@@ -626,9 +787,12 @@ describe('src/desktop.ts (step-6 completion: rail-targeted snapshots, content bo
   it('loads the picker from a local file', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf("picker.loadFile(path.join(here, 'picker.html'))", handlerIdx)).toBeGreaterThan(
-      handlerIdx,
-    );
+    expect(
+      desktopSource.indexOf(
+        "picker.loadFile(path.join(here, 'picker.html'))",
+        handlerIdx,
+      ),
+    ).toBeGreaterThan(handlerIdx);
   });
 });
 
@@ -636,14 +800,20 @@ describe('src/desktop.ts (title-marker attention routing)', () => {
   it('routes only exact `● ` marker transitions to setUnread, notifies once per entry, and adds no preload/IPC', () => {
     const markerIdx = desktopSource.indexOf("const TITLE_MARKER = '● ';");
     expect(markerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('title.startsWith(TITLE_MARKER)', markerIdx)).toBeGreaterThan(markerIdx);
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    expect(
+      desktopSource.indexOf('title.startsWith(TITLE_MARKER)', markerIdx),
+    ).toBeGreaterThan(markerIdx);
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     expect(makeViewIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf("'page-title-updated'", makeViewIdx)).toBeGreaterThan(makeViewIdx);
+    expect(
+      desktopSource.indexOf("'page-title-updated'", makeViewIdx),
+    ).toBeGreaterThan(makeViewIdx);
     expect(desktopSource).toContain('setUnread(profile.id, 1)');
     expect(desktopSource).toContain('setUnread(profile.id, 0)');
     expect(desktopSource).toContain('marked === prev');
-    expect(desktopSource).toContain("title: `Phi · ${profile.name}`");
+    expect(desktopSource).toContain('title: `Phi · ${profile.name}`');
     expect(desktopSource).toContain("'Terminal done'");
     expect(desktopSource).toContain('isFocused()');
     expect(desktopSource).toContain('isMinimized()');
@@ -660,25 +830,35 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
   it('hides the main window on close when the persisted preference is on (default true)', () => {
     const closeIdx = desktopSource.indexOf("win.on('close'");
     expect(closeIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('event.preventDefault()', closeIdx)).toBeGreaterThan(closeIdx);
-    expect(desktopSource.indexOf('win.hide()', closeIdx)).toBeGreaterThan(closeIdx);
+    expect(
+      desktopSource.indexOf('event.preventDefault()', closeIdx),
+    ).toBeGreaterThan(closeIdx);
+    expect(desktopSource.indexOf('win.hide()', closeIdx)).toBeGreaterThan(
+      closeIdx,
+    );
     expect(desktopSource).toContain('controller?.state().closeToTray ?? true');
   });
 
   it('guards explicit quits with the quitting flag set in before-quit (no hide-loop)', () => {
     // The close handler must check the flag before hiding.
     const closeIdx = desktopSource.indexOf("win.on('close'");
-    expect(desktopSource.indexOf('!this.quitting', closeIdx)).toBeGreaterThan(closeIdx);
+    expect(desktopSource.indexOf('!this.quitting', closeIdx)).toBeGreaterThan(
+      closeIdx,
+    );
     // before-quit fires before windows close, so every quit path is covered.
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
-    expect(desktopSource.indexOf('quitting = true;', beforeQuitIdx)).toBeGreaterThan(beforeQuitIdx);
+    expect(
+      desktopSource.indexOf('quitting = true;', beforeQuitIdx),
+    ).toBeGreaterThan(beforeQuitIdx);
   });
 
   it('registers the close interception on the main window only (child windows close normally)', () => {
     const closeHandlers = desktopSource.match(/\.on\('close'/g) ?? [];
     expect(closeHandlers).toHaveLength(1);
     // The picker child window creation block registers no close handler.
-    const pickerIdx = desktopSource.indexOf('const picker = new BrowserWindow({');
+    const pickerIdx = desktopSource.indexOf(
+      'const picker = new BrowserWindow({',
+    );
     const pickerEnd = desktopSource.indexOf("picker.once('ready-to-show'");
     const pickerBlock = desktopSource.slice(pickerIdx, pickerEnd);
     expect(pickerBlock).not.toMatch(/\.on\('close'|\.once\('close'/);
@@ -687,22 +867,38 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
   it('routes the tray toggle intent into controller.setCloseToTray and feeds the checkbox from the store', () => {
     const toggleIdx = desktopSource.indexOf("case 'toggle-close-to-tray'");
     expect(toggleIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setCloseToTray(!ctrl.getCloseToTray())', toggleIdx)).toBeGreaterThan(toggleIdx);
-    expect(desktopSource).toContain('getCloseToTray: () => this.controller?.state().closeToTray ?? true');
+    expect(
+      desktopSource.indexOf(
+        'ctrl.setCloseToTray(!ctrl.getCloseToTray())',
+        toggleIdx,
+      ),
+    ).toBeGreaterThan(toggleIdx);
+    expect(desktopSource).toContain(
+      'getCloseToTray: () => this.controller?.state().closeToTray ?? true',
+    );
   });
 
   it('rebuilds the tray menu on close-to-tray-changed (the checkbox reflects the new state)', () => {
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    const kindIdx = desktopSource.indexOf("event.kind === 'close-to-tray-changed'", subscribeIdx);
+    const kindIdx = desktopSource.indexOf(
+      "event.kind === 'close-to-tray-changed'",
+      subscribeIdx,
+    );
     expect(kindIdx).toBeGreaterThan(subscribeIdx);
-    expect(desktopSource.indexOf('trayHandle?.rebuildMenu()', kindIdx)).toBeGreaterThan(kindIdx);
+    expect(
+      desktopSource.indexOf('trayHandle?.rebuildMenu()', kindIdx),
+    ).toBeGreaterThan(kindIdx);
   });
 
   it('restores a hidden (close-to-tray) window from the tray Show Phi and the hotkey actions', () => {
     const showIdx = desktopSource.indexOf("case 'show'");
-    expect(desktopSource.indexOf('mainWindow.show()', showIdx)).toBeGreaterThan(showIdx);
+    expect(desktopSource.indexOf('mainWindow.show()', showIdx)).toBeGreaterThan(
+      showIdx,
+    );
     const hotkeyIdx = desktopSource.indexOf('registerHotkey(');
-    expect(desktopSource.indexOf('mainWindow.show()', hotkeyIdx)).toBeGreaterThan(hotkeyIdx);
+    expect(
+      desktopSource.indexOf('mainWindow.show()', hotkeyIdx),
+    ).toBeGreaterThan(hotkeyIdx);
   });
 });
 
@@ -710,11 +906,15 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
   it('observes the remote page through a fixed executeJavaScript expression reading #hostname-display and the --accent token', () => {
     expect(desktopSource).toContain("getElementById('hostname-display')");
     expect(desktopSource).toContain("getPropertyValue('--accent')");
-    expect(desktopSource).toContain('executeJavaScript(REMOTE_IDENTITY_SCRIPT)');
+    expect(desktopSource).toMatch(
+      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT,?\s*\)/,
+    );
   });
 
   it('keeps remote observation in the view factory, with no preload or IPC on remote origins', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
     const titleIdx = factoryRegion.indexOf("'page-title-updated'");
@@ -722,8 +922,12 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
     expect(titleIdx).toBeGreaterThan(-1);
     expect(loadIdx).toBeGreaterThan(-1);
     // Observation rides page-title-updated (post app-ready), never did-finish-load.
-    expect(factoryRegion.indexOf('observeProfileIdentity(view, origin)', titleIdx)).toBeGreaterThan(titleIdx);
-    expect(factoryRegion.slice(loadIdx)).not.toContain('observeProfileIdentity');
+    expect(
+      factoryRegion.indexOf('observeProfileIdentity(view, origin)', titleIdx),
+    ).toBeGreaterThan(titleIdx);
+    expect(factoryRegion.slice(loadIdx)).not.toContain(
+      'observeProfileIdentity',
+    );
     expect(factoryRegion).not.toContain('preload:');
     expect(factoryRegion).not.toContain('ipcMain.');
   });
@@ -735,11 +939,15 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
   });
 
   it('caches an observation only once the page reports a hostname or accent', () => {
-    expect(desktopSource).toContain("if (identity.hostname === '' && identity.accent === '') return null;");
+    expect(desktopSource).toContain(
+      "if (identity.hostname === '' && identity.accent === '') return null;",
+    );
   });
 
   it('re-pushes the rail snapshot and refreshes the window title only after a valid observation resolves', () => {
-    expect(desktopSource).toContain('observeProfileIdentity(view, origin).then((identity) => {');
+    expect(desktopSource).toContain(
+      'observeProfileIdentity(view, origin).then((identity) => {',
+    );
     expect(desktopSource).toContain('if (identity !== null) {');
     expect(desktopSource).toContain('refreshWindowTitle();');
   });
@@ -747,7 +955,9 @@ describe('src/desktop.ts (observed rail identity + accent)', () => {
   it('drops the observed identity when its profile is removed', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:remove-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('observedIdentity.delete(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('observedIdentity.delete(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 });
 
@@ -755,7 +965,9 @@ describe('src/desktop.ts (desktop title row + selected-server taskbar title)', (
   it('creates the main window frameless with no native titleBarOverlay workaround', () => {
     const windowIdx = desktopSource.indexOf('const win = new BrowserWindow({');
     expect(windowIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('frame: false', windowIdx)).toBeGreaterThan(windowIdx);
+    expect(desktopSource.indexOf('frame: false', windowIdx)).toBeGreaterThan(
+      windowIdx,
+    );
     // The native-overlay workaround is gone: the desktop composes its own
     // header row, so neither titleBarStyle nor titleBarOverlay may appear.
     expect(desktopSource).not.toContain('titleBarStyle');
@@ -770,36 +982,46 @@ describe('src/desktop.ts (desktop title row + selected-server taskbar title)', (
     expect(desktopSource).not.toContain('CAPTION_LANE_WIDTH');
     expect(desktopSource).not.toContain('TITLE_ROW_HEIGHT');
     const boundsIdx = desktopSource.indexOf('const defaultBounds');
-    expect(desktopSource.indexOf('x: RAIL_WIDTH, y: HEADER_HEIGHT,', boundsIdx)).toBeGreaterThan(boundsIdx);
+    expect(desktopSource.slice(boundsIdx)).toMatch(
+      /x:\s*RAIL_WIDTH,\s*y:\s*HEADER_HEIGHT,/,
+    );
   });
 
   it('composes the selected-server taskbar title from the remote title glyph contract and observed hostname', () => {
     expect(desktopSource).toContain('refreshWindowTitle(): void');
     expect(desktopSource).toContain('observedTitle.get(activeId)');
     expect(desktopSource).toContain('identity.hostname.toUpperCase()');
-    expect(desktopSource).toContain(
-      "win.setTitle(`${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`)",
+    expect(desktopSource).toMatch(
+      /win\.setTitle\(\s*`\$\{marked \? TITLE_MARKER : ''\}\$\{glyph\} Phi — \$\{identity\.hostname\.toUpperCase\(\)\}`,?\s*\)/,
     );
   });
 
   it('refreshes the title on active-changed, title updates, and identity observation only', () => {
     expect(desktopSource).toContain('observedTitle.set(profile.id, title);');
     const titleIdx = desktopSource.indexOf("'page-title-updated'");
-    expect(desktopSource.indexOf('refreshWindowTitle()', titleIdx)).toBeGreaterThan(titleIdx);
+    expect(
+      desktopSource.indexOf('refreshWindowTitle()', titleIdx),
+    ).toBeGreaterThan(titleIdx);
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    expect(desktopSource.indexOf('refreshWindowTitle()', subscribeIdx)).toBeGreaterThan(subscribeIdx);
+    expect(
+      desktopSource.indexOf('refreshWindowTitle()', subscribeIdx),
+    ).toBeGreaterThan(subscribeIdx);
   });
 
   it('falls back to the plain app name before any observation and loads the local main view page', () => {
     expect(desktopSource).toContain("win.setTitle('Phi')");
-    const loadFileIdx = desktopSource.indexOf("loadFile(path.join(here, '..', 'web', 'index.html'))");
+    const loadFileIdx = desktopSource.indexOf(
+      "loadFile(path.join(here, '..', 'web', 'index.html'))",
+    );
     expect(loadFileIdx).toBeGreaterThan(-1);
   });
 });
 
 describe('src/desktop.ts (main view page + window controls)', () => {
   it('loads the local main view page (the vendored header) via loadFile and never renders an island page', () => {
-    const loadFileIdx = desktopSource.indexOf("loadFile(path.join(here, '..', 'web', 'index.html'))");
+    const loadFileIdx = desktopSource.indexOf(
+      "loadFile(path.join(here, '..', 'web', 'index.html'))",
+    );
     expect(loadFileIdx).toBeGreaterThan(-1);
     // The title/caption islands are gone: no island page is ever loaded
     // and no island field or layout remains.
@@ -813,30 +1035,52 @@ describe('src/desktop.ts (main view page + window controls)', () => {
 
   it('registers the three window-control IPC handlers (minimize, toggle-maximize, close)', () => {
     expect(desktopSource).toContain("ipcMain.handle('phi:window-minimize'");
-    expect(desktopSource).toContain("ipcMain.handle('phi:window-toggle-maximize'");
-    expect(desktopSource).toContain("ipcMain.handle('phi:window-close'");
-    const minimizeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-minimize'");
-    expect(desktopSource.indexOf('win.minimize()', minimizeIdx)).toBeGreaterThan(minimizeIdx);
-    const toggleIdx = desktopSource.indexOf("ipcMain.handle('phi:window-toggle-maximize'");
-    expect(desktopSource.indexOf('win.isMaximized()', toggleIdx)).toBeGreaterThan(toggleIdx);
-    expect(desktopSource.indexOf('win.unmaximize()', toggleIdx)).toBeGreaterThan(toggleIdx);
-    expect(desktopSource.indexOf('win.maximize()', toggleIdx)).toBeGreaterThan(toggleIdx);
-    const closeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-close'");
-    expect(desktopSource.indexOf('win.close()', closeIdx)).toBeGreaterThan(closeIdx);
-  });
-
-  it('validates the sender: only the main view page (the window webContents) may invoke the window controls', () => {
-    const minimizeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-minimize'");
-    expect(minimizeIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('isMainViewSender(event)', minimizeIdx)).toBeGreaterThan(
-      minimizeIdx,
+    expect(desktopSource).toContain(
+      "ipcMain.handle('phi:window-toggle-maximize'",
     );
-    const toggleIdx = desktopSource.indexOf("ipcMain.handle('phi:window-toggle-maximize'");
-    expect(desktopSource.indexOf('isMainViewSender(event)', toggleIdx)).toBeGreaterThan(
+    expect(desktopSource).toContain("ipcMain.handle('phi:window-close'");
+    const minimizeIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:window-minimize'",
+    );
+    expect(
+      desktopSource.indexOf('win.minimize()', minimizeIdx),
+    ).toBeGreaterThan(minimizeIdx);
+    const toggleIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:window-toggle-maximize'",
+    );
+    expect(
+      desktopSource.indexOf('win.isMaximized()', toggleIdx),
+    ).toBeGreaterThan(toggleIdx);
+    expect(
+      desktopSource.indexOf('win.unmaximize()', toggleIdx),
+    ).toBeGreaterThan(toggleIdx);
+    expect(desktopSource.indexOf('win.maximize()', toggleIdx)).toBeGreaterThan(
       toggleIdx,
     );
     const closeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-close'");
-    expect(desktopSource.indexOf('isMainViewSender(event)', closeIdx)).toBeGreaterThan(closeIdx);
+    expect(desktopSource.indexOf('win.close()', closeIdx)).toBeGreaterThan(
+      closeIdx,
+    );
+  });
+
+  it('validates the sender: only the main view page (the window webContents) may invoke the window controls', () => {
+    const minimizeIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:window-minimize'",
+    );
+    expect(minimizeIdx).toBeGreaterThan(-1);
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', minimizeIdx),
+    ).toBeGreaterThan(minimizeIdx);
+    const toggleIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:window-toggle-maximize'",
+    );
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', toggleIdx),
+    ).toBeGreaterThan(toggleIdx);
+    const closeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-close'");
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', closeIdx),
+    ).toBeGreaterThan(closeIdx);
     // The guard compares the sender against the window's own webContents —
     // a remote profile origin, the rail, or the picker can never drive the
     // window.
@@ -849,37 +1093,55 @@ describe('src/desktop.ts (main view page + window controls)', () => {
 
   it('installs the plain-F11 fullscreen toggle on the main view, picker, and popups', () => {
     // The main window's own page (the vendored header).
-    expect(desktopSource).toContain('installFullscreenToggle(win.webContents, win)');
+    expect(desktopSource).toContain(
+      'installFullscreenToggle(win.webContents, win)',
+    );
     // The local add-server picker (modal child of the main window).
     const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(pickerIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installFullscreenToggle(picker.webContents, win)', pickerIdx),
+      desktopSource.indexOf(
+        'installFullscreenToggle(picker.webContents, win)',
+        pickerIdx,
+      ),
     ).toBeGreaterThan(pickerIdx);
     // Same-origin popup children each toggle their own window.
     const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(popupIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installFullscreenToggle(child.webContents, child)', popupIdx),
+      desktopSource.indexOf(
+        'installFullscreenToggle(child.webContents, child)',
+        popupIdx,
+      ),
     ).toBeGreaterThan(popupIdx);
     // The retained body views install the same contract via the shared
     // module (behavioural coverage in test/views.test.ts + fullscreen.test.ts).
-    expect(desktopSource).toContain("import { installFullscreenToggle } from './fullscreen.js'");
+    expect(desktopSource).toContain(
+      "import { installFullscreenToggle } from './fullscreen.js'",
+    );
   });
 
   it('installs the F5 reload shortcut on the main view, picker, and popups', () => {
-    expect(desktopSource).toContain('installReloadShortcut(win.webContents');
+    expect(desktopSource).toMatch(/installReloadShortcut\(\s*win\.webContents/);
     const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(pickerIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installReloadShortcut(picker.webContents)', pickerIdx),
+      desktopSource.indexOf(
+        'installReloadShortcut(picker.webContents)',
+        pickerIdx,
+      ),
     ).toBeGreaterThan(pickerIdx);
     const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(popupIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installReloadShortcut(child.webContents)', popupIdx),
+      desktopSource.indexOf(
+        'installReloadShortcut(child.webContents)',
+        popupIdx,
+      ),
     ).toBeGreaterThan(popupIdx);
-    expect(desktopSource).toContain("import { installReloadShortcut } from './reload.js'");
+    expect(desktopSource).toContain(
+      "import { installReloadShortcut } from './reload.js'",
+    );
   });
 
   it('installs the zoom shortcuts on the main view, picker, and popups', () => {
@@ -887,14 +1149,22 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(pickerIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installZoomShortcuts(picker.webContents)', pickerIdx),
+      desktopSource.indexOf(
+        'installZoomShortcuts(picker.webContents)',
+        pickerIdx,
+      ),
     ).toBeGreaterThan(pickerIdx);
     const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(popupIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('installZoomShortcuts(child.webContents)', popupIdx),
+      desktopSource.indexOf(
+        'installZoomShortcuts(child.webContents)',
+        popupIdx,
+      ),
     ).toBeGreaterThan(popupIdx);
-    expect(desktopSource).toContain("import { installZoomShortcuts } from './zoom.js'");
+    expect(desktopSource).toContain(
+      "import { installZoomShortcuts } from './zoom.js'",
+    );
   });
 
   it('pushes maximize/focus state and the active server to the main view page on maximize, unmaximize, focus and blur', () => {
@@ -904,15 +1174,25 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(
       desktopSource.indexOf("win.webContents.send('phi:window-state'", pushIdx),
     ).toBeGreaterThan(pushIdx);
-    expect(desktopSource.indexOf('isMaximized: win.isMaximized()', pushIdx)).toBeGreaterThan(
-      pushIdx,
-    );
-    expect(desktopSource.indexOf('focused: win.isFocused()', pushIdx)).toBeGreaterThan(pushIdx);
+    expect(
+      desktopSource.indexOf('isMaximized: win.isMaximized()', pushIdx),
+    ).toBeGreaterThan(pushIdx);
+    expect(
+      desktopSource.indexOf('focused: win.isFocused()', pushIdx),
+    ).toBeGreaterThan(pushIdx);
     const focusIdx = desktopSource.indexOf("win.on('focus'");
-    expect(desktopSource.indexOf('pushWindowState()', focusIdx)).toBeGreaterThan(focusIdx);
-    expect(desktopSource.indexOf("win.on('blur'", focusIdx)).toBeGreaterThan(focusIdx);
-    expect(desktopSource.indexOf("win.on('maximize'", focusIdx)).toBeGreaterThan(focusIdx);
-    expect(desktopSource.indexOf("win.on('unmaximize'", focusIdx)).toBeGreaterThan(focusIdx);
+    expect(
+      desktopSource.indexOf('pushWindowState()', focusIdx),
+    ).toBeGreaterThan(focusIdx);
+    expect(desktopSource.indexOf("win.on('blur'", focusIdx)).toBeGreaterThan(
+      focusIdx,
+    );
+    expect(
+      desktopSource.indexOf("win.on('maximize'", focusIdx),
+    ).toBeGreaterThan(focusIdx);
+    expect(
+      desktopSource.indexOf("win.on('unmaximize'", focusIdx),
+    ).toBeGreaterThan(focusIdx);
     // The header's hostname/project display tracks the SELECTED server.
     expect(desktopSource).toContain("'phi:active-server'");
     expect(desktopSource).toContain('pushActiveServer()');
@@ -924,9 +1204,15 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // unobserved fallback.
     const pushIdx = desktopSource.indexOf('pushActiveServer(): void');
     expect(pushIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('win.setIcon(', pushIdx)).toBeGreaterThan(pushIdx);
-    expect(desktopSource.indexOf('iconResolver.resolve(', pushIdx)).toBeGreaterThan(pushIdx);
-    expect(desktopSource).toContain("import { iconResolver } from './appicon.js'");
+    expect(desktopSource.indexOf('win.setIcon(', pushIdx)).toBeGreaterThan(
+      pushIdx,
+    );
+    expect(
+      desktopSource.indexOf('iconResolver.resolve(', pushIdx),
+    ).toBeGreaterThan(pushIdx);
+    expect(desktopSource).toContain(
+      "import { iconResolver } from './appicon.js'",
+    );
   });
 
   it('mirrors the observed remote title to the main view page from refreshWindowTitle', () => {
@@ -934,18 +1220,29 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(desktopSource).toContain('pushMainViewTitle(');
     const titleIdx = desktopSource.indexOf('refreshWindowTitle(): void');
     expect(titleIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('pushMainViewTitle(rest)', titleIdx)).toBeGreaterThan(titleIdx);
+    expect(
+      desktopSource.indexOf('pushMainViewTitle(rest)', titleIdx),
+    ).toBeGreaterThan(titleIdx);
   });
 
   it('proxies the ACTIVE server /api/config to the main view page with sender validation + 401-triggered unlock', () => {
-    const handlerIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
+    const handlerIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:server-config'",
+    );
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('isMainViewSender(event)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
     // The handler delegates to AccessAuth.fetchConfig; the access-auth
     // module pins the path to /api/config so a future rename surfaces
     // here.
-    expect(desktopSource).toContain("import { AccessAuth } from './access-auth.js'");
-    const accessAuthSource = readFileSync(path.join(here, '..', 'src', 'access-auth.ts'), 'utf8');
+    expect(desktopSource).toContain(
+      "import { AccessAuth } from './access-auth.js'",
+    );
+    const accessAuthSource = readFileSync(
+      path.join(here, '..', 'src', 'access-auth.ts'),
+      'utf8',
+    );
     expect(accessAuthSource).toContain("CONFIG_PATH = '/api/config'");
     // 401-triggered unlock wiring lives in the same module so a future
     // refactor cannot remove it without breaking the test.
@@ -967,7 +1264,9 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // (auth.go). The desktop must consult the on-disk PBKDF2 verifier
     // before falling through to the password modal — otherwise every
     // returning user re-prompts after every server bounce.
-    const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
+    const configIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:server-config'",
+    );
     expect(configIdx).toBeGreaterThan(-1);
     // Per-origin coalescing prevents two concurrent stale-cookie
     // fetchConfig calls from both deleting a freshly-installed
@@ -983,12 +1282,19 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // The silent re-auth block lives between the 'trusted' status check
     // and the `pendingUnlock = {` prompt-creation. Anchor on both ends
     // so a future refactor cannot silently remove the re-auth path.
-    const trustedIdx = desktopSource.indexOf("status.kind === 'trusted'", configIdx);
+    const trustedIdx = desktopSource.indexOf(
+      "status.kind === 'trusted'",
+      configIdx,
+    );
     expect(trustedIdx).toBeGreaterThan(configIdx);
     const promptIdx = desktopSource.indexOf('pendingUnlock = {', trustedIdx);
     expect(promptIdx).toBeGreaterThan(trustedIdx);
-    expect(desktopSource.indexOf('this.storedCredentials.has(origin)', trustedIdx)).toBeLessThan(promptIdx);
-    expect(desktopSource.indexOf('accessAuth.tryUnlockWithVerifier', trustedIdx)).toBeLessThan(promptIdx);
+    expect(
+      desktopSource.indexOf('this.storedCredentials.has(origin)', trustedIdx),
+    ).toBeLessThan(promptIdx);
+    expect(
+      desktopSource.indexOf('accessAuth.tryUnlockWithVerifier', trustedIdx),
+    ).toBeLessThan(promptIdx);
     // Conservative clearing: ONLY on a server-evaluated proof rejection
     // (invalid-password) or a confirmed salt/iteration rotation.
     // rate-limited is NOT a proof rejection (auth.go returns 429 before
@@ -997,19 +1303,31 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // and re-introduce the prompt bug). The old test had a permissive
     // assertion that would have accepted the regression; this asserts
     // the fix.
-    const clearIdx = desktopSource.indexOf('this.clearStoredCredential(origin)', trustedIdx);
+    const clearIdx = desktopSource.indexOf(
+      'this.clearStoredCredential(origin)',
+      trustedIdx,
+    );
     expect(clearIdx).toBeGreaterThan(trustedIdx);
-    expect(desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx)).toBeGreaterThan(clearIdx);
-    expect(desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx)).toBeLessThan(promptIdx);
+    expect(
+      desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx),
+    ).toBeGreaterThan(clearIdx);
+    expect(
+      desktopSource.indexOf("unlock.kind === 'invalid-password'", clearIdx),
+    ).toBeLessThan(promptIdx);
     // Between the invalid-password check and the prompt creation,
     // rate-limited must NOT appear as a clear trigger.
-    const rateLimitedBetween = desktopSource.lastIndexOf("unlock.kind === 'rate-limited'", promptIdx);
+    const rateLimitedBetween = desktopSource.lastIndexOf(
+      "unlock.kind === 'rate-limited'",
+      promptIdx,
+    );
     expect(rateLimitedBetween).toBeLessThan(clearIdx);
     // Body reauth failure must not leave the body stuck on its own
     // auth UI: schedule an independent retry with backoff (the next
     // config poll uses the fresh main cookie and never re-enters the
     // 401 branch, so the body needs its own retry chain).
-    expect(desktopSource).toContain('scheduleBodyReauthRetry(origin, active.id)');
+    expect(desktopSource).toContain(
+      'scheduleBodyReauthRetry(origin, active.id)',
+    );
     expect(desktopSource).toContain('const bodyReauthInFlight = new Map');
     expect(desktopSource).toContain('const scheduleBodyReauthRetry');
     // After a successful silent re-auth the body view is also re-logged-
@@ -1022,7 +1340,9 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // authenticateBodyView is the contract tweak that lets the silent
     // path through without disturbing the typed-unlock prompt flow.
     expect(desktopSource).toContain('const silentBodyReauth');
-    expect(desktopSource).toContain('(pendingUnlock !== null && pendingUnlock !== pending)');
+    expect(desktopSource).toContain(
+      '(pendingUnlock !== null && pendingUnlock !== pending)',
+    );
   });
 
   it('invalidates in-flight body logins across an A→B→A rail switch via an active-selection epoch', () => {
@@ -1035,9 +1355,13 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // Bumped on active-changed (next to the existing pendingUnlock
     // abort block — a future refactor that moves the abort without
     // also moving the epoch bump would silently reintroduce the race).
-    const activeChangedIdx = desktopSource.indexOf("event.kind === 'active-changed'");
+    const activeChangedIdx = desktopSource.indexOf(
+      "event.kind === 'active-changed'",
+    );
     expect(activeChangedIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('activeEpoch++;', activeChangedIdx)).toBeGreaterThan(activeChangedIdx);
+    expect(
+      desktopSource.indexOf('activeEpoch++;', activeChangedIdx),
+    ).toBeGreaterThan(activeChangedIdx);
     // Captured into both pending types so a synthetic silent path
     // pending can't outlive a rail switch.
     expect(desktopSource).toContain('epoch: activeEpoch');
@@ -1046,37 +1370,63 @@ describe('src/desktop.ts (main view page + window controls)', () => {
   });
 
   it('rejects stale config/workspace reads after an active-server switch', () => {
-    const configIdx = desktopSource.indexOf("ipcMain.handle('phi:server-config'");
+    const configIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:server-config'",
+    );
     expect(configIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.state().activeId !== capture.profileId', configIdx)).toBeGreaterThan(configIdx);
-    const workspaceIdx = desktopSource.indexOf("ipcMain.handle('phi:active-workspace'");
+    expect(
+      desktopSource.indexOf(
+        'ctrl.state().activeId !== capture.profileId',
+        configIdx,
+      ),
+    ).toBeGreaterThan(configIdx);
+    const workspaceIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:active-workspace'",
+    );
     expect(workspaceIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('isMainViewSender(event)', workspaceIdx)).toBeGreaterThan(workspaceIdx);
-    expect(desktopSource.indexOf('executeJavaScript(READ_WORKSPACE_SCRIPT)', workspaceIdx)).toBeGreaterThan(workspaceIdx);
-    expect(desktopSource.indexOf('ctrl.state().activeId !== active.id', workspaceIdx)).toBeGreaterThan(workspaceIdx);
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', workspaceIdx),
+    ).toBeGreaterThan(workspaceIdx);
+    expect(desktopSource.slice(workspaceIdx)).toMatch(
+      /executeJavaScript\(\s*READ_WORKSPACE_SCRIPT,?\s*\)/,
+    );
+    expect(
+      desktopSource.indexOf(
+        'ctrl.state().activeId !== active.id',
+        workspaceIdx,
+      ),
+    ).toBeGreaterThan(workspaceIdx);
   });
 
   it('relays header actions to the ACTIVE body view with a fixed button whitelist', () => {
-    const handlerIdx = desktopSource.indexOf("ipcMain.handle('phi:header-action'");
+    const handlerIdx = desktopSource.indexOf(
+      "ipcMain.handle('phi:header-action'",
+    );
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('isMainViewSender(event)', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf('HEADER_ACTION_BUTTONS', handlerIdx)).toBeGreaterThan(handlerIdx);
-    expect(desktopSource.indexOf('headerActionClickScript(action.id)', handlerIdx)).toBeGreaterThan(
-      handlerIdx,
-    );
-    expect(desktopSource.indexOf('setWorkspaceScript(action.value)', handlerIdx)).toBeGreaterThan(
-      handlerIdx,
-    );
+    expect(
+      desktopSource.indexOf('isMainViewSender(event)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('HEADER_ACTION_BUTTONS', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('headerActionClickScript(action.id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('setWorkspaceScript(action.value)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
     // The relay targets the retained body view only (never the window).
-    expect(desktopSource.indexOf('viewByOrigin.get(active.origin)', handlerIdx)).toBeGreaterThan(
-      handlerIdx,
-    );
+    expect(
+      desktopSource.indexOf('viewByOrigin.get(active.origin)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 
   it('tears the retained views and the rail down on before-quit (no island teardown)', () => {
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
     expect(beforeQuitIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('this.railView', beforeQuitIdx)).toBeGreaterThan(beforeQuitIdx);
+    expect(
+      desktopSource.indexOf('this.railView', beforeQuitIdx),
+    ).toBeGreaterThan(beforeQuitIdx);
     expect(desktopSource).not.toContain('titleIsland');
     expect(desktopSource).not.toContain('captionIsland');
   });
@@ -1110,7 +1460,9 @@ describe('src/preload.ts (main-view-page window-control + server bridge)', () =>
 
 describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar progress)', () => {
   it('reads every retained server CPU via a fixed executeJavaScript selector on .brand .logo data-cpu-pct', () => {
-    expect(desktopSource).toContain("document.querySelector('.brand .logo')?.dataset.cpuPct");
+    expect(desktopSource).toContain(
+      "document.querySelector('.brand .logo')?.dataset.cpuPct",
+    );
     expect(desktopSource).toContain('executeJavaScript(REMOTE_CPU_SCRIPT)');
     // The script is a fixed constant — page data is never interpolated into it.
     expect(desktopSource).toContain('const REMOTE_CPU_SCRIPT = `(() => {');
@@ -1118,61 +1470,98 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
 
   it('gates the taskbar progress: cpu above 50 -> cpu/100, at or below 50 -> clear (-1), clamped defensively', () => {
     expect(desktopSource).toMatch(/Math\.min\(100, Math\.max\(0, raw\w*\)/);
-    expect(desktopSource).toContain('setProgressBar(next !== null && next > 50 ? next / 100 : -1)');
+    expect(desktopSource).toContain(
+      'setProgressBar(next !== null && next > 50 ? next / 100 : -1)',
+    );
     expect(desktopSource).toContain('setProgressBar(-1)');
   });
 
   it('polls every retained view at the remote 2s cadence; the taskbar follows only the selected server', () => {
     const intervalIdx = desktopSource.indexOf('cpuInterval = setInterval');
     expect(intervalIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('pollCpu()', intervalIdx)).toBeGreaterThan(intervalIdx);
-    expect(desktopSource.indexOf('2_000', intervalIdx)).toBeGreaterThan(intervalIdx);
+    expect(desktopSource.indexOf('pollCpu()', intervalIdx)).toBeGreaterThan(
+      intervalIdx,
+    );
+    expect(desktopSource.indexOf('2_000', intervalIdx)).toBeGreaterThan(
+      intervalIdx,
+    );
     const pollIdx = desktopSource.indexOf('pollCpu(): void');
     expect(pollIdx).toBeGreaterThan(-1);
     // Every retained view is read (each saved server keeps its own reading).
-    expect(desktopSource.indexOf('for (const profile of st.profiles)', pollIdx)).toBeGreaterThan(pollIdx);
-    expect(desktopSource.indexOf('viewByOrigin.get(profile.origin)', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('for (const profile of st.profiles)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('viewByOrigin.get(profile.origin)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
     // The taskbar branch applies to the selected server only.
-    expect(desktopSource.match(/profileId !== st\.activeId|profile\.id !== st\.activeId/g)).not.toBeNull();
+    expect(
+      desktopSource.match(
+        /profileId !== st\.activeId|profile\.id !== st\.activeId/g,
+      ),
+    ).not.toBeNull();
   });
 
   it('clears taskbar progress on active-profile change, destroyed view, missing read, or no active profile', () => {
     // The active-changed subscription deactivates the previous server's
     // progress before the poll re-applies it from the new view.
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    expect(desktopSource.indexOf('win.setProgressBar(-1)', subscribeIdx)).toBeGreaterThan(subscribeIdx);
+    expect(
+      desktopSource.indexOf('win.setProgressBar(-1)', subscribeIdx),
+    ).toBeGreaterThan(subscribeIdx);
     // A destroyed/no view and a failed or non-finite read clear too.
     const pollIdx = desktopSource.indexOf('pollCpu(): void');
     expect(pollIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('view.webContents.isDestroyed()', pollIdx)).toBeGreaterThan(pollIdx);
-    expect(desktopSource.indexOf('ctrl.state().activeId !== st.activeId', pollIdx)).toBeGreaterThan(pollIdx);
-    expect(desktopSource.indexOf('Number.isFinite(cpu)', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('view.webContents.isDestroyed()', pollIdx),
+    ).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('ctrl.state().activeId !== st.activeId', pollIdx),
+    ).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('Number.isFinite(cpu)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
   });
 
   it('merges each profile CPU reading into the rail snapshot and clears it when the view or profile is gone', () => {
     // The snapshot carries the per-profile reading (null until observed).
     const pushIdx = desktopSource.indexOf('pushRailState(): void');
     expect(pushIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('cpu: this.observedCpu.get(p.id) ?? null', pushIdx)).toBeGreaterThan(pushIdx);
+    expect(
+      desktopSource.indexOf('cpu: this.observedCpu.get(p.id) ?? null', pushIdx),
+    ).toBeGreaterThan(pushIdx);
     // A destroyed/missing view drops the reading on the next poll.
     const pollIdx = desktopSource.indexOf('pollCpu(): void');
     expect(pollIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('observedCpu.delete(profile.id)', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('observedCpu.delete(profile.id)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
     // Profile removal clears the reading alongside the observed identity.
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:remove-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('observedCpu.delete(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('observedCpu.delete(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 
   it('clears the CPU poll interval on before-quit alongside the health poll', () => {
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
     expect(beforeQuitIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('clearInterval(this.cpuInterval)', beforeQuitIdx)).toBeGreaterThan(beforeQuitIdx);
-    expect(desktopSource.indexOf('clearInterval(this.healthInterval)', beforeQuitIdx)).toBeGreaterThan(beforeQuitIdx);
+    expect(
+      desktopSource.indexOf('clearInterval(this.cpuInterval)', beforeQuitIdx),
+    ).toBeGreaterThan(beforeQuitIdx);
+    expect(
+      desktopSource.indexOf(
+        'clearInterval(this.healthInterval)',
+        beforeQuitIdx,
+      ),
+    ).toBeGreaterThan(beforeQuitIdx);
   });
 
   it('observes CPU through executeJavaScript only, with no preload or IPC on remote origins', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
     expect(factoryRegion).toContain('viewByOrigin.set(origin, view)');
@@ -1190,44 +1579,72 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
 
 describe('src/desktop.ts (desktop-local file actions)', () => {
   it('installs the gesture listeners on every profile view via executeJavaScript at did-finish-load', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
     const loadIdx = factoryRegion.indexOf("'did-finish-load'");
     expect(loadIdx).toBeGreaterThan(-1);
-    expect(factoryRegion.indexOf('executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)', loadIdx)).toBeGreaterThan(loadIdx);
+    expect(
+      factoryRegion.indexOf(
+        'executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)',
+        loadIdx,
+      ),
+    ).toBeGreaterThan(loadIdx);
     expect(factoryRegion).toContain('pushRailState();');
   });
 
   it('polls only the ACTIVE retained view with the fixed read-and-clear script', () => {
     const pollIdx = desktopSource.indexOf('pollFileAction(): void');
     expect(pollIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('READ_FILE_ACTION_SCRIPT', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('READ_FILE_ACTION_SCRIPT', pollIdx),
+    ).toBeGreaterThan(pollIdx);
     // Only the active profile's view is read (find by activeId, resolve the origin's retained view).
-    expect(desktopSource.indexOf('st.profiles.find((p) => p.id === st.activeId)', pollIdx)).toBeGreaterThan(pollIdx);
-    expect(desktopSource.indexOf('viewByOrigin.get(profile.origin)', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf(
+        'st.profiles.find((p) => p.id === st.activeId)',
+        pollIdx,
+      ),
+    ).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('viewByOrigin.get(profile.origin)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
     // Results are validated before any OS action.
-    expect(desktopSource.indexOf('parseFileAction(raw)', pollIdx)).toBeGreaterThan(pollIdx);
+    expect(
+      desktopSource.indexOf('parseFileAction(raw)', pollIdx),
+    ).toBeGreaterThan(pollIdx);
   });
 
   it('resolves the local path and gates every action on a local exists check', () => {
     const runIdx = desktopSource.indexOf('async runFileAction');
     expect(runIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('path.resolve(action.cwd, action.rel)', runIdx)).toBeGreaterThan(runIdx);
-    expect(desktopSource.indexOf('existsSync(localPath)', runIdx)).toBeGreaterThan(runIdx);
+    expect(
+      desktopSource.indexOf('path.resolve(action.cwd, action.rel)', runIdx),
+    ).toBeGreaterThan(runIdx);
+    expect(
+      desktopSource.indexOf('existsSync(localPath)', runIdx),
+    ).toBeGreaterThan(runIdx);
   });
 
   it('opens via the OS shell only: shell.openPath for open, shell.showItemInFolder for folder', () => {
     const runIdx = desktopSource.indexOf('async runFileAction');
     expect(runIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('shell.openPath(localPath)', runIdx)).toBeGreaterThan(runIdx);
-    expect(desktopSource.indexOf('shell.showItemInFolder(localPath)', runIdx)).toBeGreaterThan(runIdx);
+    expect(
+      desktopSource.indexOf('shell.openPath(localPath)', runIdx),
+    ).toBeGreaterThan(runIdx);
+    expect(
+      desktopSource.indexOf('shell.showItemInFolder(localPath)', runIdx),
+    ).toBeGreaterThan(runIdx);
   });
 
   it('toasts failures in the page and never toasts successful opens', () => {
     const toastIdx = desktopSource.indexOf('toastFileActionFailure');
     expect(toastIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('executeJavaScript(toastErrorScript', toastIdx)).toBeGreaterThan(toastIdx);
+    expect(
+      desktopSource.indexOf('executeJavaScript(toastErrorScript', toastIdx),
+    ).toBeGreaterThan(toastIdx);
     const runIdx = desktopSource.indexOf('async runFileAction');
     const runEndIdx = desktopSource.indexOf('pollFileAction(): void', runIdx);
     const runRegion = desktopSource.slice(runIdx, runEndIdx);
@@ -1240,20 +1657,33 @@ describe('src/desktop.ts (desktop-local file actions)', () => {
 
   it('keeps the file-action poll out of smoke mode and tears it down on before-quit', () => {
     const smokeIdx = desktopSource.indexOf('if (SMOKE)');
-    const intervalIdx = desktopSource.indexOf('fileActionInterval = setInterval');
+    const intervalIdx = desktopSource.indexOf(
+      'fileActionInterval = setInterval',
+    );
     expect(smokeIdx).toBeGreaterThan(-1);
     expect(intervalIdx).toBeGreaterThan(smokeIdx);
-    expect(desktopSource.indexOf('FILE_ACTION_POLL_MS', intervalIdx)).toBeGreaterThan(intervalIdx);
+    expect(
+      desktopSource.indexOf('FILE_ACTION_POLL_MS', intervalIdx),
+    ).toBeGreaterThan(intervalIdx);
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
     expect(beforeQuitIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('clearInterval(this.fileActionInterval)', beforeQuitIdx)).toBeGreaterThan(beforeQuitIdx);
+    expect(
+      desktopSource.indexOf(
+        'clearInterval(this.fileActionInterval)',
+        beforeQuitIdx,
+      ),
+    ).toBeGreaterThan(beforeQuitIdx);
   });
 
   it('uses executeJavaScript only — the view factory keeps no preload or IPC on remote origins', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
-    expect(factoryRegion).toContain('executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)');
+    expect(factoryRegion).toContain(
+      'executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)',
+    );
     expect(factoryRegion).not.toContain('preload:');
     expect(factoryRegion).not.toContain('ipcMain.');
     // No remote OS/filesystem layer, path translation, or proxying is introduced.
@@ -1287,7 +1717,9 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
     // the menu is installed before the main window is created.
     const readyIdx = mainSource.indexOf('app.whenReady');
     expect(readyIdx).toBeGreaterThan(-1);
-    expect(mainSource.indexOf('host.start(', readyIdx)).toBeGreaterThan(readyIdx);
+    expect(mainSource.indexOf('host.start(', readyIdx)).toBeGreaterThan(
+      readyIdx,
+    );
     const installIdx = desktopSource.indexOf('installAppMenu()');
     const createIdx = desktopSource.indexOf('createMainWindow()');
     expect(installIdx).toBeGreaterThan(-1);
@@ -1310,26 +1742,34 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
 
 describe('electron-builder.json (native branding)', () => {
   it('packages the runtime assets used by the desktop host', () => {
-    const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
       files?: string[];
     };
     expect(builder.files).toContain('assets/**');
   });
 
   it('points win.icon at the generated 256px icon asset without adding build targets', () => {
-    const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
       win?: { icon?: string };
     };
     expect(builder.win).toEqual({ icon: 'assets/icon.png' });
   });
 
   it('uses phi-client for both the packaged app and release artifacts', () => {
-    const builder = JSON.parse(readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8')) as {
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
       productName?: string;
       artifactName?: string;
     };
     expect(builder.productName).toBe('phi-client');
-    expect(builder.artifactName).toBe('phi-client-${version}-${os}-${arch}.${ext}');
+    expect(builder.artifactName).toBe(
+      'phi-client-${version}-${os}-${arch}.${ext}',
+    );
   });
 });
 
@@ -1344,68 +1784,117 @@ describe('src/desktop.ts (sync board desktop alerts)', () => {
     expect(markerIdx).toBeGreaterThan(-1);
     const titleIdx = desktopSource.indexOf('onProfileTitleUpdated(');
     expect(titleIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('title.startsWith(SYNC_NOTIF_MARKER)', titleIdx)).toBeGreaterThan(titleIdx);
-    expect(desktopSource.indexOf('title.startsWith(SYNC_ALARM_MARKER)', titleIdx)).toBeGreaterThan(titleIdx);
+    expect(
+      desktopSource.indexOf('title.startsWith(SYNC_NOTIF_MARKER)', titleIdx),
+    ).toBeGreaterThan(titleIdx);
+    expect(
+      desktopSource.indexOf('title.startsWith(SYNC_ALARM_MARKER)', titleIdx),
+    ).toBeGreaterThan(titleIdx);
     // A marker must never reach the ● attention transition (it must not
     // clear an existing unread state), so both marker branches return.
-    const markedIdx = desktopSource.indexOf('const marked = title.startsWith(TITLE_MARKER)', titleIdx);
-    const notifIdx = desktopSource.indexOf('onSyncAlert(profile, SYNC_NOTIF_MARKER', titleIdx);
+    const markedIdx = desktopSource.indexOf(
+      'const marked = title.startsWith(TITLE_MARKER)',
+      titleIdx,
+    );
+    const notifMatch = desktopSource
+      .slice(titleIdx)
+      .match(/onSyncAlert\(\s*profile,\s*SYNC_NOTIF_MARKER/);
+    const notifIdx =
+      notifMatch?.index === undefined ? -1 : titleIdx + notifMatch.index;
     expect(notifIdx).toBeGreaterThan(-1);
     expect(notifIdx).toBeLessThan(markedIdx);
-    expect(desktopSource.indexOf('return;', notifIdx)).toBeGreaterThan(notifIdx);
+    expect(desktopSource.indexOf('return;', notifIdx)).toBeGreaterThan(
+      notifIdx,
+    );
   });
 
   it('gates the alert on the opt-in syncAlerts preference and dedupes by key within a per-profile set', () => {
-    expect(desktopSource).toContain('!(this.controller?.state().syncAlerts ?? true)');
-    expect(desktopSource).toContain('firedSyncKeys = new Map<string, Set<string>>();');
+    expect(desktopSource).toContain(
+      '!(this.controller?.state().syncAlerts ?? true)',
+    );
+    expect(desktopSource).toContain(
+      'firedSyncKeys = new Map<string, Set<string>>();',
+    );
     expect(desktopSource).toContain('seen.has(key)');
   });
 
   it('notifies with the profile title, the Sync: <key> body and a distinct alarm label, then flashes once', () => {
     const alertIdx = desktopSource.indexOf('onSyncAlert(');
     expect(alertIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('title: `Phi · ${profile.name}`', alertIdx)).toBeGreaterThan(alertIdx);
-    expect(desktopSource.indexOf('`Sync: ${key}`', alertIdx)).toBeGreaterThan(alertIdx);
-    expect(desktopSource.indexOf('`Sync ALARM: ${key}`', alertIdx)).toBeGreaterThan(alertIdx);
-    expect(desktopSource.indexOf('flashFrame(true)', alertIdx)).toBeGreaterThan(alertIdx);
+    expect(
+      desktopSource.indexOf('title: `Phi · ${profile.name}`', alertIdx),
+    ).toBeGreaterThan(alertIdx);
+    expect(desktopSource.indexOf('`Sync: ${key}`', alertIdx)).toBeGreaterThan(
+      alertIdx,
+    );
+    expect(
+      desktopSource.indexOf('`Sync ALARM: ${key}`', alertIdx),
+    ).toBeGreaterThan(alertIdx);
+    expect(desktopSource.indexOf('flashFrame(true)', alertIdx)).toBeGreaterThan(
+      alertIdx,
+    );
   });
 
   it('clears the taskbar flash and focuses the active view when the main window regains focus', () => {
     const focusIdx = desktopSource.indexOf("win.on('focus'");
     expect(focusIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('flashFrame(false)', focusIdx)).toBeGreaterThan(focusIdx);
-    expect(desktopSource.indexOf('view.webContents.focus()', focusIdx)).toBeGreaterThan(focusIdx);
+    expect(
+      desktopSource.indexOf('flashFrame(false)', focusIdx),
+    ).toBeGreaterThan(focusIdx);
+    expect(
+      desktopSource.indexOf('view.webContents.focus()', focusIdx),
+    ).toBeGreaterThan(focusIdx);
   });
 
   it('routes the notification click to focusProfile (restore+show+focus, then setActive)', () => {
-    expect(desktopSource).toContain('notification.on(\'click\', () => this.focusProfile(profile))');
+    expect(desktopSource).toContain(
+      "notification.on('click', () => this.focusProfile(profile))",
+    );
     const focusIdx = desktopSource.indexOf('focusProfile(');
     expect(focusIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setActive(profile.id)', focusIdx)).toBeGreaterThan(focusIdx);
+    expect(
+      desktopSource.indexOf('ctrl.setActive(profile.id)', focusIdx),
+    ).toBeGreaterThan(focusIdx);
   });
 
   it('drops the fired-key set when the profile is removed', () => {
     const handlerIdx = desktopSource.indexOf("ipcMain.on('phi:remove-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('firedSyncKeys.delete(id)', handlerIdx)).toBeGreaterThan(handlerIdx);
+    expect(
+      desktopSource.indexOf('firedSyncKeys.delete(id)', handlerIdx),
+    ).toBeGreaterThan(handlerIdx);
   });
 
   it('feeds the tray checkbox from the store and routes the toggle intent into setSyncAlerts', () => {
-    expect(desktopSource).toContain('getSyncAlerts: () => this.controller?.state().syncAlerts ?? true');
+    expect(desktopSource).toContain(
+      'getSyncAlerts: () => this.controller?.state().syncAlerts ?? true',
+    );
     const toggleIdx = desktopSource.indexOf("case 'toggle-sync-alerts'");
     expect(toggleIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('ctrl.setSyncAlerts(!ctrl.getSyncAlerts())', toggleIdx)).toBeGreaterThan(toggleIdx);
+    expect(
+      desktopSource.indexOf(
+        'ctrl.setSyncAlerts(!ctrl.getSyncAlerts())',
+        toggleIdx,
+      ),
+    ).toBeGreaterThan(toggleIdx);
   });
 
   it('rebuilds the tray menu on sync-alerts-changed alongside close-to-tray-changed', () => {
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
-    const kindIdx = desktopSource.indexOf("event.kind === 'sync-alerts-changed'", subscribeIdx);
+    const kindIdx = desktopSource.indexOf(
+      "event.kind === 'sync-alerts-changed'",
+      subscribeIdx,
+    );
     expect(kindIdx).toBeGreaterThan(subscribeIdx);
-    expect(desktopSource.indexOf('trayHandle?.rebuildMenu()', kindIdx)).toBeGreaterThan(kindIdx);
+    expect(
+      desktopSource.indexOf('trayHandle?.rebuildMenu()', kindIdx),
+    ).toBeGreaterThan(kindIdx);
   });
 
   it('keeps the alert observation on the existing page-title-updated path with no preload or IPC on remote origins', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
     expect(factoryRegion).toContain("'page-title-updated'");
@@ -1421,7 +1910,9 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
     const alertIdx = desktopSource.indexOf('onSyncAlert(');
     expect(alertIdx).toBeGreaterThan(-1);
     const afterAlert = desktopSource.slice(alertIdx);
-    const optInIdx = afterAlert.indexOf('!(this.controller?.state().syncAlerts ?? true)');
+    const optInIdx = afterAlert.indexOf(
+      '!(this.controller?.state().syncAlerts ?? true)',
+    );
     const chimeIdx = afterAlert.indexOf('if (alarm) this.playAlarmChime()');
     expect(optInIdx).toBeGreaterThan(-1);
     expect(chimeIdx).toBeGreaterThan(optInIdx);
@@ -1431,23 +1922,43 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
   it('executes the fixed chime script on the RAIL view via executeJavaScript, with no new IPC channel', () => {
     const chimeIdx = desktopSource.indexOf('playAlarmChime(): void');
     expect(chimeIdx).toBeGreaterThan(-1);
-    expect(desktopSource.indexOf('rail.webContents.executeJavaScript', chimeIdx)).toBeGreaterThan(chimeIdx);
-    expect(desktopSource.indexOf('PLAY_ALARM_CHIME_SCRIPT(ALARM_CHIME_URL)', chimeIdx)).toBeGreaterThan(chimeIdx);
+    expect(desktopSource.slice(chimeIdx)).toMatch(
+      /rail\.webContents\s*\.executeJavaScript/,
+    );
+    expect(
+      desktopSource.indexOf(
+        'PLAY_ALARM_CHIME_SCRIPT(ALARM_CHIME_URL)',
+        chimeIdx,
+      ),
+    ).toBeGreaterThan(chimeIdx);
     expect(desktopSource).not.toContain("'phi:alarm-chime'");
   });
 
   it('resolves the bell asset as an absolute file:// URL beside the tray icon asset', () => {
-    expect(desktopSource).toContain("import { fileURLToPath, pathToFileURL } from 'node:url';");
-    expect(desktopSource).toContain("pathToFileURL(path.join(here, '..', 'assets', 'bell.wav'))");
+    expect(desktopSource).toContain(
+      "import { fileURLToPath, pathToFileURL } from 'node:url';",
+    );
+    expect(desktopSource).toMatch(
+      /pathToFileURL\(\s*path\.join\(here,\s*'\.\.',\s*'assets',\s*'bell\.wav'\),?\s*\)/,
+    );
   });
 
   it('guards a destroyed rail view and rate-limits rapid re-fires to one burst at a time', () => {
     expect(desktopSource).toContain('const ALARM_CHIME_BURST_MS = 3_000;');
     expect(desktopSource).toContain('lastAlarmChimeAt = 0;');
     const chimeIdx = desktopSource.indexOf('playAlarmChime(): void');
-    expect(desktopSource.indexOf('rail.webContents.isDestroyed()', chimeIdx)).toBeGreaterThan(chimeIdx);
-    expect(desktopSource.indexOf('now - this.lastAlarmChimeAt < ALARM_CHIME_BURST_MS', chimeIdx)).toBeGreaterThan(chimeIdx);
-    expect(desktopSource.indexOf('lastAlarmChimeAt = now;', chimeIdx)).toBeGreaterThan(chimeIdx);
+    expect(
+      desktopSource.indexOf('rail.webContents.isDestroyed()', chimeIdx),
+    ).toBeGreaterThan(chimeIdx);
+    expect(
+      desktopSource.indexOf(
+        'now - this.lastAlarmChimeAt < ALARM_CHIME_BURST_MS',
+        chimeIdx,
+      ),
+    ).toBeGreaterThan(chimeIdx);
+    expect(
+      desktopSource.indexOf('lastAlarmChimeAt = now;', chimeIdx),
+    ).toBeGreaterThan(chimeIdx);
   });
 
   it('never steals focus in the chime path', () => {
@@ -1460,9 +1971,13 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
 
 describe('src/desktop.ts (rail-selection shortcuts)', () => {
   it('imports the shortcuts module and attaches before-input-event in the production view factory only (smoke-gated)', () => {
-    expect(desktopSource).toContain("import { ALWAYS_SAFE_RAIL_CHORDS, TERMINAL_FOCUS_SCRIPT, resolveRailChord } from './shortcuts.js';");
+    expect(desktopSource).toMatch(
+      /import \{\s*ALWAYS_SAFE_RAIL_CHORDS,\s*TERMINAL_FOCUS_SCRIPT,\s*resolveRailChord,?\s*\}\s*from '\.\/shortcuts\.js';/,
+    );
     const smokeIdx = desktopSource.indexOf('if (SMOKE)');
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
     expect(makeViewIdx).toBeGreaterThan(-1);
     expect(makeViewIdx).toBeGreaterThan(smokeIdx);
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
@@ -1475,45 +1990,92 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
   });
 
   it('preventDefaults the always-safe digits synchronously and switches through controller.setActive', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
-    const listenerIdx = desktopSource.indexOf("'before-input-event'", makeViewIdx);
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
+    const listenerIdx = desktopSource.indexOf(
+      "'before-input-event'",
+      makeViewIdx,
+    );
     expect(listenerIdx).toBeGreaterThan(-1);
-    const listenerRegion = desktopSource.slice(listenerIdx, desktopSource.indexOf('return view;', listenerIdx));
+    const listenerRegion = desktopSource.slice(
+      listenerIdx,
+      desktopSource.indexOf('return view;', listenerIdx),
+    );
     expect(listenerRegion).toContain("input.type !== 'keyDown'");
     // Shift is allowed at the outer guard so Ctrl+Shift+Tab can resolve
     // to prev; the resolver rejects Shift for digits.
-    expect(listenerRegion).toContain('!input.control || input.alt || input.meta');
-    expect(listenerRegion).toContain('resolveRailChord(input, profiles.length)');
+    expect(listenerRegion).toContain(
+      '!input.control || input.alt || input.meta',
+    );
+    expect(listenerRegion).toContain(
+      'resolveRailChord(input, profiles.length)',
+    );
     expect(listenerRegion).toContain('ALWAYS_SAFE_RAIL_CHORDS.has(input.key)');
     expect(listenerRegion).toContain('event.preventDefault()');
-    expect(listenerRegion).toContain('ctrl.setActive(profiles[target.index].id)');
-    // The always-safe preventDefault precedes the conditional probe.
-    expect(listenerRegion.indexOf('ALWAYS_SAFE_RAIL_CHORDS.has(input.key)')).toBeLessThan(
-      listenerRegion.indexOf('TERMINAL_FOCUS_SCRIPT'),
+    expect(listenerRegion).toContain(
+      'ctrl.setActive(profiles[target.index].id)',
     );
+    // The always-safe preventDefault precedes the conditional probe.
+    expect(
+      listenerRegion.indexOf('ALWAYS_SAFE_RAIL_CHORDS.has(input.key)'),
+    ).toBeLessThan(listenerRegion.indexOf('TERMINAL_FOCUS_SCRIPT'));
   });
 
   it('never preventDefaults the conditional chords and gates them on the terminal-focus probe', () => {
-    const makeViewIdx = desktopSource.indexOf('const makeView = (origin: string): WebContentsView => {');
-    const listenerIdx = desktopSource.indexOf("'before-input-event'", makeViewIdx);
-    const listenerRegion = desktopSource.slice(listenerIdx, desktopSource.indexOf('return view;', listenerIdx));
-    expect(listenerRegion).toContain("void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(");
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
+    const listenerIdx = desktopSource.indexOf(
+      "'before-input-event'",
+      makeViewIdx,
+    );
+    const listenerRegion = desktopSource.slice(
+      listenerIdx,
+      desktopSource.indexOf('return view;', listenerIdx),
+    );
+    expect(listenerRegion).toContain(
+      'void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(',
+    );
     expect(listenerRegion).toContain('if (raw === true) return;');
-    expect(listenerRegion).toContain("const step = target.kind === 'next' ? 1 : -1;");
+    expect(listenerRegion).toContain(
+      "const step = target.kind === 'next' ? 1 : -1;",
+    );
     // The only preventDefault sits inside the always-safe branch: after
     // the membership guard, before the conditional probe.
-    const guardIdx = listenerRegion.indexOf('ALWAYS_SAFE_RAIL_CHORDS.has(input.key)');
+    const guardIdx = listenerRegion.indexOf(
+      'ALWAYS_SAFE_RAIL_CHORDS.has(input.key)',
+    );
     const preventIdx = listenerRegion.indexOf('event.preventDefault()');
     const probeIdx = listenerRegion.indexOf('TERMINAL_FOCUS_SCRIPT');
     expect(preventIdx).toBeGreaterThan(guardIdx);
     expect(preventIdx).toBeLessThan(probeIdx);
-    expect(listenerRegion.indexOf('executeJavaScript', probeIdx)).toBeGreaterThan(preventIdx);
+    expect(
+      listenerRegion.indexOf('executeJavaScript', probeIdx),
+    ).toBeGreaterThan(preventIdx);
   });
 
   it('keeps protected chords, terminal control chords and Ctrl+L unbound (no new interception)', () => {
     expect(ALWAYS_SAFE_RAIL_CHORDS.size).toBe(3);
     expect(CONDITIONAL_RAIL_CHORDS.size).toBe(7);
-    for (const key of ['+', '-', '0', 'r', 'R', 'F5', 'w', 'W', 't', 'T', 'Escape', 'l', 'L', 'c', 'o', 'p']) {
+    for (const key of [
+      '+',
+      '-',
+      '0',
+      'r',
+      'R',
+      'F5',
+      'w',
+      'W',
+      't',
+      'T',
+      'Escape',
+      'l',
+      'L',
+      'c',
+      'o',
+      'p',
+    ]) {
       expect(ALWAYS_SAFE_RAIL_CHORDS.has(key)).toBe(false);
       expect(CONDITIONAL_RAIL_CHORDS.has(key)).toBe(false);
     }

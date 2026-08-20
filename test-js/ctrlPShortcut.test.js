@@ -7,24 +7,40 @@ import { TabManager } from '../web/terminal.js';
 // consumed the key (defaultPrevented).
 
 function makeEvent(over = {}) {
-    const e = { ctrlKey: true, altKey: false, metaKey: false, shiftKey: false, key: 'p', defaultPrevented: false, ...over };
-    e.preventDefault = vi.fn(() => { e.defaultPrevented = true; });
+    const e = {
+        ctrlKey: true,
+        altKey: false,
+        metaKey: false,
+        shiftKey: false,
+        key: 'p',
+        defaultPrevented: false,
+        ...over,
+    };
+    e.preventDefault = vi.fn(() => {
+        e.defaultPrevented = true;
+    });
     return e;
 }
 
-const termTab = (over = {}) => ({ isDead: false, coder: 'opencode', ws: { sendInput: vi.fn() }, ...over });
+const termTab = (over = {}) => ({
+    isDead: false,
+    coder: 'opencode',
+    ws: { sendInput: vi.fn() },
+    ...over,
+});
 
 function makeCtx(tab) {
-    return { 
-        getActiveTab: vi.fn(() => tab), 
+    return {
+        getActiveTab: vi.fn(() => tab),
         _spamScrollToBottom: vi.fn(),
         sendInput: vi.fn((t, payload) => {
             if (t && t.ws && !t.isDead) t.ws.sendInput(payload);
-        })
+        }),
     };
 }
 
-const run = (ctx, e) => TabManager.prototype.handleGlobalTabShortcuts.call(ctx, e);
+const run = (ctx, e) =>
+    TabManager.prototype.handleGlobalTabShortcuts.call(ctx, e);
 
 beforeEach(() => vi.clearAllMocks());
 

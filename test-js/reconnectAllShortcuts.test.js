@@ -3,8 +3,18 @@ import { TabManager } from '../web/terminal.js';
 
 describe('Shift+F5 and Ctrl/Cmd+Shift+R reconnect all in handleGlobalTabShortcuts', () => {
     function makeEvent(over = {}) {
-        const e = { ctrlKey: false, altKey: false, metaKey: false, shiftKey: true, key: 'F5', defaultPrevented: false, ...over };
-        e.preventDefault = vi.fn(() => { e.defaultPrevented = true; });
+        const e = {
+            ctrlKey: false,
+            altKey: false,
+            metaKey: false,
+            shiftKey: true,
+            key: 'F5',
+            defaultPrevented: false,
+            ...over,
+        };
+        e.preventDefault = vi.fn(() => {
+            e.defaultPrevented = true;
+        });
         return e;
     }
 
@@ -16,7 +26,8 @@ describe('Shift+F5 and Ctrl/Cmd+Shift+R reconnect all in handleGlobalTabShortcut
         };
     }
 
-    const run = (ctx, e) => TabManager.prototype.handleGlobalTabShortcuts.call(ctx, e);
+    const run = (ctx, e) =>
+        TabManager.prototype.handleGlobalTabShortcuts.call(ctx, e);
 
     it('triggers reconnectAllTabsWithToast on Shift+F5', () => {
         const ctx = makeCtx();

@@ -18,7 +18,9 @@ afterEach(() => {
 
 describe('renderMarkdownSafe', () => {
     it('keeps benign tags through sanitization', () => {
-        vi.stubGlobal('marked', { parse: () => '<h1>hi</h1><p><code>code</code></p>' });
+        vi.stubGlobal('marked', {
+            parse: () => '<h1>hi</h1><p><code>code</code></p>',
+        });
         const out = renderMarkdownSafe('# hi');
         expect(out).toContain('<h1');
         expect(out).toContain('<code');

@@ -29,7 +29,9 @@ function windowField(): Record<string, unknown> {
 
 describe('parseFileAction (the main-process validator)', () => {
   it('accepts a well-formed open gesture', () => {
-    expect(parseFileAction({ kind: 'open', rel: 'docs/plan.md', cwd: 'C:\\work' })).toEqual({
+    expect(
+      parseFileAction({ kind: 'open', rel: 'docs/plan.md', cwd: 'C:\\work' }),
+    ).toEqual({
       kind: 'open',
       rel: 'docs/plan.md',
       cwd: 'C:\\work',
@@ -37,7 +39,9 @@ describe('parseFileAction (the main-process validator)', () => {
   });
 
   it('accepts a well-formed folder gesture', () => {
-    expect(parseFileAction({ kind: 'folder', rel: 'a/b.txt', cwd: '/srv/work' })).toEqual({
+    expect(
+      parseFileAction({ kind: 'folder', rel: 'a/b.txt', cwd: '/srv/work' }),
+    ).toEqual({
       kind: 'folder',
       rel: 'a/b.txt',
       cwd: '/srv/work',
@@ -49,7 +53,9 @@ describe('parseFileAction (the main-process validator)', () => {
     expect(parseFileAction(undefined)).toBeNull();
     expect(parseFileAction('open')).toBeNull();
     expect(parseFileAction({ kind: 'delete', rel: 'x', cwd: 'y' })).toBeNull();
-    expect(parseFileAction({ kind: 'open', rel: 'x', cwd: 'y', extra: 1 })).toEqual({
+    expect(
+      parseFileAction({ kind: 'open', rel: 'x', cwd: 'y', extra: 1 }),
+    ).toEqual({
       kind: 'open',
       rel: 'x',
       cwd: 'y',
@@ -73,17 +79,23 @@ describe('the injected script constants', () => {
   });
 
   it('install the listeners on the documented fixed selectors', () => {
-    expect(INSTALL_FILE_ACTION_SCRIPT).toContain("getElementById('file-tree-list')");
+    expect(INSTALL_FILE_ACTION_SCRIPT).toContain(
+      "getElementById('file-tree-list')",
+    );
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'.md-file-row'");
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'.md-file-item'");
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'.md-file-icon-doc'");
-    expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'.worktree-section.active[data-worktree-path]'");
+    expect(INSTALL_FILE_ACTION_SCRIPT).toContain(
+      "'.worktree-section.active[data-worktree-path]'",
+    );
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'open'");
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'folder'");
   });
 
   it('guard the listener install with a window flag (idempotent injection)', () => {
-    expect(INSTALL_FILE_ACTION_SCRIPT).toContain('window.__phiFileActionInstalled');
+    expect(INSTALL_FILE_ACTION_SCRIPT).toContain(
+      'window.__phiFileActionInstalled',
+    );
   });
 
   it('read-and-clear the recorded gesture field', () => {
@@ -131,10 +143,15 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
 
   it('records a folder gesture on right-click of a file row and suppresses the page handlers', () => {
     let pageHandlerRan = false;
-    document.querySelector<HTMLElement>('.md-file-item')!.addEventListener('contextmenu', () => {
-      pageHandlerRan = true;
+    document
+      .querySelector<HTMLElement>('.md-file-item')!
+      .addEventListener('contextmenu', () => {
+        pageHandlerRan = true;
+      });
+    const ev = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
     });
-    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     document.querySelector<HTMLElement>('.md-file-item')!.dispatchEvent(ev);
     expect(ev.defaultPrevented).toBe(true);
     expect(pageHandlerRan).toBe(false);
@@ -147,16 +164,22 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
 
   it('ignores directory rows and the action button', () => {
     const dirItem = document.querySelectorAll<HTMLElement>('.md-file-item')[1];
-    dirItem.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    dirItem.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+    );
     const btn = document.querySelector<HTMLElement>('.md-file-action-btn')!;
-    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    btn.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true, cancelable: true }),
+    );
     expect(windowField().__phiFileAction).toBeUndefined();
   });
 
   it('is idempotent: a second install does not break recording', () => {
     window.eval(INSTALL_FILE_ACTION_SCRIPT);
     const item = document.querySelector<HTMLElement>('.md-file-item')!;
-    item.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    item.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true, cancelable: true }),
+    );
     expect(windowField().__phiFileAction).toEqual({
       kind: 'open',
       rel: 'docs/plan.md',
@@ -166,10 +189,16 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
 
   it('read-and-clears the recorded gesture once', () => {
     const item = document.querySelector<HTMLElement>('.md-file-item')!;
-    item.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    item.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true, cancelable: true }),
+    );
     const first = window.eval(READ_FILE_ACTION_SCRIPT);
     const second = window.eval(READ_FILE_ACTION_SCRIPT);
-    expect(first).toEqual({ kind: 'open', rel: 'docs/plan.md', cwd: 'C:\\work' });
+    expect(first).toEqual({
+      kind: 'open',
+      rel: 'docs/plan.md',
+      cwd: 'C:\\work',
+    });
     expect(second).toBeNull();
   });
 });
@@ -191,12 +220,16 @@ describe('toastErrorScript', () => {
 
   it('renders a dismissible error toast in the page (jsdom)', () => {
     window.eval(toastErrorScript('"plan.md" — not found on this machine'));
-    const toast = document.querySelector<HTMLElement>('.toast-container .toast.toast-error')!;
+    const toast = document.querySelector<HTMLElement>(
+      '.toast-container .toast.toast-error',
+    )!;
     expect(toast).not.toBeNull();
-    expect(toast.querySelector<HTMLElement>('.toast-message')!.textContent).toBe(
-      '"plan.md" — not found on this machine',
+    expect(
+      toast.querySelector<HTMLElement>('.toast-message')!.textContent,
+    ).toBe('"plan.md" — not found on this machine');
+    expect(toast.querySelector<HTMLElement>('.toast-title')!.textContent).toBe(
+      "Couldn't open",
     );
-    expect(toast.querySelector<HTMLElement>('.toast-title')!.textContent).toBe("Couldn't open");
     expect(toast.querySelector<HTMLElement>('.toast-close')).not.toBeNull();
   });
 });
@@ -221,14 +254,23 @@ describe('the divider-width page scripts', () => {
   });
 
   it('returns null for never-set keys and clamped values for set ones (jsdom)', () => {
-    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({ left: null, right: null });
+    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({
+      left: null,
+      right: null,
+    });
     window.localStorage.setItem('phi_panel_left_width', '300');
     window.localStorage.setItem('phi_panel_right_width', '999');
-    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({ left: 300, right: 600 });
+    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({
+      left: 300,
+      right: 600,
+    });
     window.localStorage.setItem('phi_panel_left_width', '10');
     expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({ left: 60, right: 600 });
     window.localStorage.setItem('phi_panel_right_width', 'not-a-number');
-    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({ left: 60, right: null });
+    expect(window.eval(READ_DIVIDERS_SCRIPT)).toEqual({
+      left: 60,
+      right: null,
+    });
   });
 
   it('embeds apply values as JSON.stringify literals, never raw text', () => {
@@ -273,9 +315,18 @@ describe('the divider-width page scripts', () => {
   });
 
   it('parseDividers accepts well-formed snapshots and rejects malformed ones', () => {
-    expect(parseDividers({ left: 300, right: 420 })).toEqual({ left: 300, right: 420 });
-    expect(parseDividers({ left: null, right: null })).toEqual({ left: null, right: null });
-    expect(parseDividers({ left: 300, right: null })).toEqual({ left: 300, right: null });
+    expect(parseDividers({ left: 300, right: 420 })).toEqual({
+      left: 300,
+      right: 420,
+    });
+    expect(parseDividers({ left: null, right: null })).toEqual({
+      left: null,
+      right: null,
+    });
+    expect(parseDividers({ left: 300, right: null })).toEqual({
+      left: 300,
+      right: null,
+    });
     expect(parseDividers({ left: 300 })).toBeNull();
     expect(parseDividers(null)).toBeNull();
     expect(parseDividers('x')).toBeNull();
@@ -313,10 +364,12 @@ describe('PLAY_ALARM_CHIME_SCRIPT (the Sync Board alarm chime)', () => {
   it('rings up to 3 times ~1s apart then stops (bounded burst, jsdom)', async () => {
     vi.useFakeTimers();
     let rings = 0;
-    vi.spyOn(window.HTMLMediaElement.prototype, 'play').mockImplementation(() => {
-      rings += 1;
-      return Promise.resolve();
-    });
+    vi.spyOn(window.HTMLMediaElement.prototype, 'play').mockImplementation(
+      () => {
+        rings += 1;
+        return Promise.resolve();
+      },
+    );
     window.eval(PLAY_ALARM_CHIME_SCRIPT('file:///a.wav'));
     expect(rings).toBe(1);
     await vi.advanceTimersByTimeAsync(1000);
@@ -355,18 +408,26 @@ describe('PLAY_ALARM_CHIME_SCRIPT (the Sync Board alarm chime)', () => {
 
 describe('retained body state scripts', () => {
   it('reads the body workspace selector value', () => {
-    document.body.innerHTML = '<select id="workspace-select"><option value="/a">a</option><option value="/b">b</option></select>';
-    const select = document.getElementById('workspace-select') as HTMLSelectElement;
+    document.body.innerHTML =
+      '<select id="workspace-select"><option value="/a">a</option><option value="/b">b</option></select>';
+    const select = document.getElementById(
+      'workspace-select',
+    ) as HTMLSelectElement;
     select.value = '/b';
     expect(window.eval(READ_WORKSPACE_SCRIPT)).toBe('/b');
   });
 
   it('builds a same-origin body login with JSON-escaped one-time proof data', async () => {
     const fetchSpy = vi.fn(async () => ({ status: 200 }));
-    Object.defineProperty(window, 'fetch', { value: fetchSpy, configurable: true });
+    Object.defineProperty(window, 'fetch', {
+      value: fetchSpy,
+      configurable: true,
+    });
     const challenge = 'challenge"</script>';
     const proof = 'proof\\value';
-    await expect(window.eval(bodyAuthLoginScript(challenge, proof))).resolves.toBe(200);
+    await expect(
+      window.eval(bodyAuthLoginScript(challenge, proof)),
+    ).resolves.toBe(200);
     expect(fetchSpy).toHaveBeenCalledWith('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -378,7 +439,9 @@ describe('retained body state scripts', () => {
 describe('headerActionClickScript + setWorkspaceScript (header->body relays)', () => {
   it('headerActionClickScript clicks the target element and reports whether it existed', () => {
     document.body.innerHTML = '<button id="header-kanban-btn"></button>';
-    expect(window.eval(headerActionClickScript('header-kanban-btn'))).toBe(true);
+    expect(window.eval(headerActionClickScript('header-kanban-btn'))).toBe(
+      true,
+    );
     expect(window.eval(headerActionClickScript('missing-id'))).toBe(false);
   });
 
@@ -391,7 +454,9 @@ describe('headerActionClickScript + setWorkspaceScript (header->body relays)', (
   it('setWorkspaceScript sets the selector value and dispatches a native change', () => {
     document.body.innerHTML =
       '<select id="workspace-select"><option value="/a">a</option><option value="/b">b</option></select>';
-    const select = document.getElementById('workspace-select') as HTMLSelectElement;
+    const select = document.getElementById(
+      'workspace-select',
+    ) as HTMLSelectElement;
     let changes = 0;
     select.addEventListener('change', () => {
       changes += 1;
@@ -404,7 +469,9 @@ describe('headerActionClickScript + setWorkspaceScript (header->body relays)', (
   it('setWorkspaceScript is a no-op for a workspace value the page does not know', () => {
     document.body.innerHTML =
       '<select id="workspace-select"><option value="/a">a</option></select>';
-    const select = document.getElementById('workspace-select') as HTMLSelectElement;
+    const select = document.getElementById(
+      'workspace-select',
+    ) as HTMLSelectElement;
     expect(window.eval(setWorkspaceScript('/nope'))).toBe(false);
     expect(select.value).toBe('/a');
   });

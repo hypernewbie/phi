@@ -13,7 +13,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(here, '..', 'src');
 const htmlSource = readFileSync(path.join(srcDir, 'shell.html'), 'utf8');
 const cssSource = readFileSync(path.join(srcDir, 'shell.css'), 'utf8');
-const captionHtmlSource = readFileSync(path.join(srcDir, 'caption.html'), 'utf8');
+const captionHtmlSource = readFileSync(
+  path.join(srcDir, 'caption.html'),
+  'utf8',
+);
 const captionCssSource = readFileSync(path.join(srcDir, 'caption.css'), 'utf8');
 const titleHtmlSource = readFileSync(path.join(srcDir, 'title.html'), 'utf8');
 const titleCssSource = readFileSync(path.join(srcDir, 'title.css'), 'utf8');
@@ -22,7 +25,8 @@ describe('shell.html (phase-1 local shell page)', () => {
   it('parses without throwing and renders the sidebar + pane structure', () => {
     // JSDOM's HTML5 parser throws on unusable input; constructing it is the
     // parse assertion.
-    const doc = new JSDOM(htmlSource, { url: 'file:///shell.html' }).window.document;
+    const doc = new JSDOM(htmlSource, { url: 'file:///shell.html' }).window
+      .document;
 
     const aside = doc.querySelector('aside.rail');
     expect(aside).not.toBeNull();
@@ -52,7 +56,9 @@ describe('shell.html (phase-1 local shell page)', () => {
 
   it('shows the phase-1 placeholder text in the right pane', () => {
     const pane = new JSDOM(htmlSource).window.document.getElementById('pane');
-    expect(pane?.textContent ?? '').toContain('phi-desktop electron shell — phase 1');
+    expect(pane?.textContent ?? '').toContain(
+      'phi-desktop electron shell — phase 1',
+    );
   });
 });
 
@@ -60,7 +66,8 @@ describe('caption.html (the caption-controls island)', () => {
   it('parses and renders exactly three window-control buttons wired to the preload bridge', () => {
     // JSDOM's HTML5 parser throws on unusable input; constructing it is the
     // parse assertion.
-    const doc = new JSDOM(captionHtmlSource, { url: 'file:///caption.html' }).window.document;
+    const doc = new JSDOM(captionHtmlSource, { url: 'file:///caption.html' })
+      .window.document;
     const buttons = doc.querySelectorAll('button');
     expect(buttons.length).toBe(3);
     expect(doc.getElementById('caption-minimize')).not.toBeNull();
@@ -84,7 +91,8 @@ describe('caption.html (the caption-controls island)', () => {
 
 describe('title.html (the title/drag island)', () => {
   it('parses and shows the Φ phi mark with a draggable body and no-drag text', () => {
-    const doc = new JSDOM(titleHtmlSource, { url: 'file:///title.html' }).window.document;
+    const doc = new JSDOM(titleHtmlSource, { url: 'file:///title.html' }).window
+      .document;
     expect(doc.querySelector('.title-mark')?.textContent?.trim()).toBe('Φ');
     expect(doc.getElementById('title-text')).not.toBeNull();
     expect(titleHtmlSource).toContain('onWindowTitle');

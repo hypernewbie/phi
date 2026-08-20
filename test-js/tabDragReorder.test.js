@@ -47,7 +47,9 @@ function makeTabManager({ withTabs = [], pinned = new Set() } = {}) {
 }
 
 function domOrder(tm) {
-    return Array.from(tm.tabsContainer.children).map(el => el.getAttribute('data-pane-id'));
+    return Array.from(tm.tabsContainer.children).map((el) =>
+        el.getAttribute('data-pane-id'),
+    );
 }
 
 function mapOrder(tm) {
@@ -118,14 +120,20 @@ describe('applyTabOrder - DOM side effects', () => {
         const originalA = tm.tabsContainer.querySelector('[data-pane-id="a"]');
         tm.applyTabOrder(['b', 'a'], { persist: false });
         // Same node reference, just moved in the DOM.
-        expect(tm.tabsContainer.querySelector('[data-pane-id="a"]')).toBe(originalA);
+        expect(tm.tabsContainer.querySelector('[data-pane-id="a"]')).toBe(
+            originalA,
+        );
         expect(tm.tabsContainer.children.length).toBe(2);
     });
 
     it('persists the new order to localStorage by default', () => {
         const tm = makeTabManager({ withTabs: ['a', 'b', 'c'] });
         tm.applyTabOrder(['c', 'b', 'a']);
-        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(['c', 'b', 'a']);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual([
+            'c',
+            'b',
+            'a',
+        ]);
     });
 
     it('does not persist when persist: false', () => {
@@ -142,7 +150,11 @@ describe('moveTabTo - DOM side effects', () => {
         expect(domOrder(tm)).toEqual(['c', 'a', 'b']);
         expect(mapOrder(tm)).toEqual(['c', 'a', 'b']);
         // And the saved order matches.
-        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(['c', 'a', 'b']);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual([
+            'c',
+            'a',
+            'b',
+        ]);
     });
 });
 
@@ -187,7 +199,7 @@ describe('drag handlers', () => {
         expect(tm.dragSourceId).toBe('a');
         expect(dt.setData).toHaveBeenCalledWith('text/plain', 'a');
         // Wait one rAF tick so the class is applied.
-        await new Promise(r => requestAnimationFrame(r));
+        await new Promise((r) => requestAnimationFrame(r));
         expect(tabA.classList.contains('dragging')).toBe(true);
     });
 
@@ -213,9 +225,16 @@ describe('drag handlers', () => {
             currentTarget: tabA,
             clientX: 50,
         };
-        const rectSpy = vi.spyOn(tabA, 'getBoundingClientRect').mockReturnValue({
-            left: 0, right: 100, top: 0, bottom: 34, width: 100, height: 34,
-        });
+        const rectSpy = vi
+            .spyOn(tabA, 'getBoundingClientRect')
+            .mockReturnValue({
+                left: 0,
+                right: 100,
+                top: 0,
+                bottom: 34,
+                width: 100,
+                height: 34,
+            });
         tm.handleTabDragOver(e, 'a');
         expect(e.preventDefault).not.toHaveBeenCalled();
         expect(tabA.classList.contains('drop-before')).toBe(false);
@@ -232,9 +251,16 @@ describe('drag handlers', () => {
             currentTarget: tabB,
             clientX: 30, // left half of a 100px-wide tab
         };
-        const rectSpy = vi.spyOn(tabB, 'getBoundingClientRect').mockReturnValue({
-            left: 0, right: 100, top: 0, bottom: 34, width: 100, height: 34,
-        });
+        const rectSpy = vi
+            .spyOn(tabB, 'getBoundingClientRect')
+            .mockReturnValue({
+                left: 0,
+                right: 100,
+                top: 0,
+                bottom: 34,
+                width: 100,
+                height: 34,
+            });
         tm.handleTabDragOver(e, 'b');
         expect(e.preventDefault).toHaveBeenCalled();
         expect(tabB.classList.contains('drop-before')).toBe(true);
@@ -252,9 +278,16 @@ describe('drag handlers', () => {
             currentTarget: tabB,
             clientX: 80, // right half
         };
-        const rectSpy = vi.spyOn(tabB, 'getBoundingClientRect').mockReturnValue({
-            left: 0, right: 100, top: 0, bottom: 34, width: 100, height: 34,
-        });
+        const rectSpy = vi
+            .spyOn(tabB, 'getBoundingClientRect')
+            .mockReturnValue({
+                left: 0,
+                right: 100,
+                top: 0,
+                bottom: 34,
+                width: 100,
+                height: 34,
+            });
         tm.handleTabDragOver(e, 'b');
         expect(tabB.classList.contains('drop-after')).toBe(true);
         expect(tabB.classList.contains('drop-before')).toBe(false);
@@ -265,12 +298,22 @@ describe('drag handlers', () => {
         // Pinning protects the server-side PTY across WS disconnects; it
         // no longer locks position. Pinned tabs are valid drop targets so
         // users can still reorder the strip without unpinning.
-        const tm = makeTabManager({ withTabs: ['a', 'b'], pinned: new Set(['b']) });
+        const tm = makeTabManager({
+            withTabs: ['a', 'b'],
+            pinned: new Set(['b']),
+        });
         tm.dragSourceId = 'a';
         const tabB = tm.tabsContainer.querySelector('[data-pane-id="b"]');
-        const rectSpy = vi.spyOn(tabB, 'getBoundingClientRect').mockReturnValue({
-            left: 0, right: 100, top: 0, bottom: 34, width: 100, height: 34,
-        });
+        const rectSpy = vi
+            .spyOn(tabB, 'getBoundingClientRect')
+            .mockReturnValue({
+                left: 0,
+                right: 100,
+                top: 0,
+                bottom: 34,
+                width: 100,
+                height: 34,
+            });
         const e = {
             preventDefault: vi.fn(),
             dataTransfer: { dropEffect: '' },
@@ -312,7 +355,10 @@ describe('drag handlers', () => {
 describe('applySavedTabOrder - restore on page reload', () => {
     it('applies the saved order, drops stale paneIds, appends new ones', () => {
         // Simulate "saved" state from a prior session.
-        localStorage.setItem('phi_tab_order', JSON.stringify(['c', 'a', 'ghost']));
+        localStorage.setItem(
+            'phi_tab_order',
+            JSON.stringify(['c', 'a', 'ghost']),
+        );
         const tm = makeTabManager({ withTabs: ['a', 'b', 'c'] });
         tm.applySavedTabOrder();
         // ghost is dropped; b is appended at the end.
@@ -338,7 +384,9 @@ describe('applySavedTabOrder - restore on page reload', () => {
         tm.applySavedTabOrder();
         // Value should be unchanged after a no-op restore (it already was
         // ['b','a']). applySavedTabOrder calls applyTabOrder({persist:false}).
-        expect(localStorage.getItem('phi_tab_order')).toBe(JSON.stringify(['b', 'a']));
+        expect(localStorage.getItem('phi_tab_order')).toBe(
+            JSON.stringify(['b', 'a']),
+        );
     });
 });
 
@@ -348,7 +396,11 @@ describe('saveTabsState - persists order alongside active pane', () => {
         tm.activePaneId = 'b';
         tm.saveTabsState();
         expect(localStorage.getItem('phi_active_pane')).toBe('b');
-        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual(['a', 'b', 'c']);
+        expect(JSON.parse(localStorage.getItem('phi_tab_order'))).toEqual([
+            'a',
+            'b',
+            'c',
+        ]);
     });
 });
 
@@ -361,8 +413,10 @@ describe('tabs are draggable regardless of pin status', () => {
         const fs = require('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
         expect(src).toMatch(/tabEl\.draggable\s*=\s*true/);
-        expect(src).toMatch(/dragstart.*handleTabDragStart/);
+        expect(src).toMatch(/dragstart[\s\S]*handleTabDragStart/);
         // Drag listeners must be set unconditionally now (no `if (!pinned)` gate).
-        expect(src).not.toMatch(/if\s*\(\s*!pinned\s*\)\s*\{\s*tabEl\.addEventListener\(\s*['"]dragstart/);
+        expect(src).not.toMatch(
+            /if\s*\(\s*!pinned\s*\)\s*\{\s*tabEl\.addEventListener\(\s*['"]dragstart/,
+        );
     });
 });

@@ -22,10 +22,26 @@ const VENDOR_DIR = join(process.cwd(), 'web', 'vendor');
 // Each xterm addon the codebase uses + the expected namespace it exposes.
 // `window.<Namespace>.<ClassName>` is what createTab calls into.
 const XTERM_ADDONS = [
-    { file: 'xterm-addon-fit.js',       namespace: 'FitAddon',       className: 'FitAddon'       },
-    { file: 'xterm-addon-search.js',    namespace: 'SearchAddon',    className: 'SearchAddon'    },
-    { file: 'xterm-addon-webgl.js',     namespace: 'WebglAddon',     className: 'WebglAddon'     },
-    { file: 'xterm-addon-unicode11.js', namespace: 'Unicode11Addon', className: 'Unicode11Addon' },
+    {
+        file: 'xterm-addon-fit.js',
+        namespace: 'FitAddon',
+        className: 'FitAddon',
+    },
+    {
+        file: 'xterm-addon-search.js',
+        namespace: 'SearchAddon',
+        className: 'SearchAddon',
+    },
+    {
+        file: 'xterm-addon-webgl.js',
+        namespace: 'WebglAddon',
+        className: 'WebglAddon',
+    },
+    {
+        file: 'xterm-addon-unicode11.js',
+        namespace: 'Unicode11Addon',
+        className: 'Unicode11Addon',
+    },
 ];
 
 // UMD wrappers reference either `self` or `globalThis` as free variables.
@@ -95,10 +111,13 @@ describe('web/vendor/*.js - parse integrity', () => {
     ])('%s parses as valid JavaScript', (filename) => {
         const src = readFileSync(join(VENDOR_DIR, filename), 'utf8');
         // Catches truncation mid-statement (the regression we hit on 2026-07-11).
-        expect(() => new Function(src), `${filename} failed to parse`).not.toThrow();
+        expect(
+            () => new Function(src),
+            `${filename} failed to parse`,
+        ).not.toThrow();
     });
 
-    it.each(XTERM_ADDONS.map(a => a.file))(
+    it.each(XTERM_ADDONS.map((a) => a.file))(
         '%s ends with the UMD-closure sequence (regression: addon was truncated before closing)',
         (filename) => {
             const src = readFileSync(join(VENDOR_DIR, filename), 'utf8');
@@ -117,7 +136,7 @@ describe('web/vendor/*.js - parse integrity', () => {
             expect(
                 /[})]\)+;\s*$/.test(trimmed),
                 `${filename} does not end with the UMD-closure sequence - file is likely truncated. ` +
-                `Last 80 chars: ${JSON.stringify(trimmed.slice(-80))}`,
+                    `Last 80 chars: ${JSON.stringify(trimmed.slice(-80))}`,
             ).toBe(true);
         },
     );
@@ -130,7 +149,9 @@ describe('web/vendor/*.js - parse integrity', () => {
 // webgl addon touches `document` on load and is verified by the static
 // namespace-assignment check below.
 describe('xterm addons expose the expected constructor on globalThis', () => {
-    const RUNTIME_ADDONS = XTERM_ADDONS.filter(a => a.file !== 'xterm-addon-webgl.js');
+    const RUNTIME_ADDONS = XTERM_ADDONS.filter(
+        (a) => a.file !== 'xterm-addon-webgl.js',
+    );
     for (const { file, namespace, className } of RUNTIME_ADDONS) {
         it(`${file} sets globalThis.${namespace}.${className}`, () => {
             const result = loadAddon(file);
@@ -140,13 +161,19 @@ describe('xterm addons expose the expected constructor on globalThis', () => {
             expect(
                 ns,
                 `globalThis.${namespace} is undefined after evaluating ${file} - ` +
-                `the UMD wrapper likely never completed`,
+                    `the UMD wrapper likely never completed`,
             ).toBeDefined();
 
             // Assert the class constructor exists.
             const Ctor = ns[className];
-            expect(Ctor, `${namespace}.${className} is undefined in ${file}`).toBeDefined();
-            expect(typeof Ctor, `${namespace}.${className} should be a constructor`).toBe('function');
+            expect(
+                Ctor,
+                `${namespace}.${className} is undefined in ${file}`,
+            ).toBeDefined();
+            expect(
+                typeof Ctor,
+                `${namespace}.${className} should be a constructor`,
+            ).toBe('function');
         });
     }
 });
@@ -162,12 +189,19 @@ describe('xterm addons expose the expected constructor on globalThis', () => {
 describe('createTab addons can be constructed without throwing', () => {
     it('window.SearchAddon.SearchAddon can be instantiated', () => {
         const Ctor = loadAddon('xterm-addon-search.js').SearchAddon.SearchAddon;
-        expect(() => new Ctor(), 'new SearchAddon() must not throw').not.toThrow();
+        expect(
+            () => new Ctor(),
+            'new SearchAddon() must not throw',
+        ).not.toThrow();
     });
 
     it('window.Unicode11Addon.Unicode11Addon can be instantiated', () => {
-        const Ctor = loadAddon('xterm-addon-unicode11.js').Unicode11Addon.Unicode11Addon;
-        expect(() => new Ctor(), 'new Unicode11Addon() must not throw').not.toThrow();
+        const Ctor = loadAddon('xterm-addon-unicode11.js').Unicode11Addon
+            .Unicode11Addon;
+        expect(
+            () => new Ctor(),
+            'new Unicode11Addon() must not throw',
+        ).not.toThrow();
     });
 
     it('window.FitAddon.FitAddon can be instantiated', () => {
@@ -182,14 +216,17 @@ describe('createTab addons can be constructed without throwing', () => {
 // (e.g. webgl addon wraps everything in an IIFE and the wrapper has to
 // finish for WebglAddon to be reachable).
 describe('xterm addons contain the expected namespace assignment', () => {
-    it.each(XTERM_ADDONS)('$file assigns to $namespace', ({ file, namespace }) => {
-        const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
-        // Match either `e.<Namespace>=t()` or `.exports.<Namespace>=t()` -
-        // both shapes show up across UMD bundles.
-        const pattern = new RegExp(`\\.${namespace}\\s*=\\s*t\\(\\)`);
-        expect(
-            pattern.test(src),
-            `${file} does not contain an assignment of '${namespace}'. The UMD wrapper is broken.`,
-        ).toBe(true);
-    });
+    it.each(XTERM_ADDONS)(
+        '$file assigns to $namespace',
+        ({ file, namespace }) => {
+            const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
+            // Match either `e.<Namespace>=t()` or `.exports.<Namespace>=t()` -
+            // both shapes show up across UMD bundles.
+            const pattern = new RegExp(`\\.${namespace}\\s*=\\s*t\\(\\)`);
+            expect(
+                pattern.test(src),
+                `${file} does not contain an assignment of '${namespace}'. The UMD wrapper is broken.`,
+            ).toBe(true);
+        },
+    );
 });

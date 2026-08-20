@@ -53,12 +53,24 @@ describe('App.initGlobalShortcuts', () => {
         const a = makeApp();
         a.initGlobalShortcuts();
 
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'D', ctrlKey: true, shiftKey: false, bubbles: true, cancelable: true,
-        }));
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'D', ctrlKey: false, shiftKey: true, bubbles: true, cancelable: true,
-        }));
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'D',
+                ctrlKey: true,
+                shiftKey: false,
+                bubbles: true,
+                cancelable: true,
+            }),
+        );
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'D',
+                ctrlKey: false,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+            }),
+        );
 
         expect(a.markdownManager.openDiagModal).not.toHaveBeenCalled();
     });

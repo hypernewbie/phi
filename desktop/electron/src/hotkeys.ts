@@ -64,7 +64,9 @@ export interface RegisterHotkeyDeps {
  * Resolves the accelerator: the PHI_DESKTOP_HOTKEY environment variable
  * when set (non-blank), otherwise the default CommandOrControl+Shift+L.
  */
-export function resolveAccelerator(env: Record<string, string | undefined> = process.env): string {
+export function resolveAccelerator(
+  env: Record<string, string | undefined> = process.env,
+): string {
   const raw = env[HOTKEY_ENV_VAR]?.trim();
   return raw && raw !== '' ? raw : DEFAULT_HOTKEY_ACCELERATOR;
 }
@@ -90,7 +92,9 @@ export function registerHotkey(
   try {
     const ok = shortcut.register(accelerator, action);
     if (!ok) {
-      log(`phi-desktop: hotkey ${accelerator} is already taken by another app; continuing without it`);
+      log(
+        `phi-desktop: hotkey ${accelerator} is already taken by another app; continuing without it`,
+      );
       return { status: 'busy', unregister: () => {} };
     }
     return {
@@ -104,7 +108,9 @@ export function registerHotkey(
       },
     };
   } catch (err) {
-    log(`phi-desktop: hotkey ${accelerator} registration failed: ${String(err)}`);
+    log(
+      `phi-desktop: hotkey ${accelerator} registration failed: ${String(err)}`,
+    );
     return { status: 'error', unregister: () => {} };
   }
 }

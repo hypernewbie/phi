@@ -16,7 +16,9 @@ import path from 'node:path';
 
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
-    '..', 'web', 'terminal.js'
+    '..',
+    'web',
+    'terminal.js',
 );
 
 describe('xterm scrollback configuration', () => {

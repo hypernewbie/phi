@@ -49,7 +49,15 @@ if (process.platform !== 'win32') {
 }
 
 const WEB_THEME_JS = path.join(here, '..', '..', '..', 'web', 'theme.js');
-const WEB_FONTS_DIR = path.join(here, '..', '..', '..', 'web', 'vendor', 'fonts');
+const WEB_FONTS_DIR = path.join(
+  here,
+  '..',
+  '..',
+  '..',
+  'web',
+  'vendor',
+  'fonts',
+);
 
 const SIZE = 256;
 const TRAY_SIZES = [16, 24, 32, 48, 64, 128, 256];
@@ -79,7 +87,9 @@ function pickJetBrainsMonoFile() {
     const src = block.match(/url\((jetbrainsmono-[0-9a-f]+\.woff2)\)/);
     if (src) return path.join(WEB_FONTS_DIR, src[1]);
   }
-  throw new Error('gen-icon: no greek-subset JetBrains Mono woff2 in web/vendor/fonts/fonts.css');
+  throw new Error(
+    'gen-icon: no greek-subset JetBrains Mono woff2 in web/vendor/fonts/fonts.css',
+  );
 }
 
 async function ensureJetBrainsMonoTtf() {
@@ -92,16 +102,21 @@ async function ensureJetBrainsMonoTtf() {
 
 function loadAccentPalette() {
   const src = readFileSync(WEB_THEME_JS, 'utf8');
-  const match = src.match(/(?:export\s+)?const ACCENT_COLORS\s*=\s*\{([\s\S]*?)\n\};/);
-  if (!match) throw new Error('gen-icon: ACCENT_COLORS not found in web/theme.js');
+  const match = src.match(
+    /(?:export\s+)?const ACCENT_COLORS\s*=\s*\{([\s\S]*?)\n\};/,
+  );
+  if (!match)
+    throw new Error('gen-icon: ACCENT_COLORS not found in web/theme.js');
   const body = match[1];
   const entries = [];
   const re = /(\w+):\s*\{\s*accent:\s*['"]#([0-9a-fA-F]{6})['"]/g;
-  let m;
-  while ((m = re.exec(body)) !== null) {
+  let m = re.exec(body);
+  while (m !== null) {
     entries.push({ name: m[1], hex: '#' + m[2].toLowerCase() });
+    m = re.exec(body);
   }
-  if (entries.length === 0) throw new Error('gen-icon: no accent entries parsed');
+  if (entries.length === 0)
+    throw new Error('gen-icon: no accent entries parsed');
   return entries;
 }
 
@@ -153,14 +168,20 @@ $gMaster.Dispose(); $gOut.Dispose(); $master.Dispose(); $out.Dispose(); $font.Di
     maxBuffer: 50 * 1024 * 1024,
   });
   if (result.status !== 0) {
-    throw new Error(`gen-icon: PowerShell render failed: ${result.stderr?.toString()}`);
+    throw new Error(
+      `gen-icon: PowerShell render failed: ${result.stderr?.toString()}`,
+    );
   }
   return result.stdout;
 }
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
 }
 
 function icoFor(entries) {
@@ -193,7 +214,9 @@ const palette = loadAccentPalette();
 mkdirSync(ICONS_DIR, { recursive: true });
 
 const ttfPath = await ensureJetBrainsMonoTtf();
-console.log(`decoded ${path.basename(ttfPath)} from web/vendor/fonts/ JetBrains Mono woff2`);
+console.log(
+  `decoded ${path.basename(ttfPath)} from web/vendor/fonts/ JetBrains Mono woff2`,
+);
 
 // Application/window icon: white Φ, transparent bg, no halo.
 const whiteIcon = renderPhiPng(ttfPath, SIZE, [0xff, 0xff, 0xff]);
@@ -209,7 +232,10 @@ for (const { name, hex } of palette) {
   writeFileSync(path.join(ICONS_DIR, file), png);
   manifest[hex] = file;
 }
-writeFileSync(path.join(ICONS_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+writeFileSync(
+  path.join(ICONS_DIR, 'manifest.json'),
+  JSON.stringify(manifest, null, 2) + '\n',
+);
 console.log(`wrote ${palette.length} accent icons + manifest -> assets/icons/`);
 
 // Tray fallback PNG: 256x256 white glyph, transparent.
@@ -227,8 +253,12 @@ const icoEntries = TRAY_SIZES.map((size) => ({
 }));
 const iconIco = icoFor(icoEntries);
 writeFileSync(OUT_ICON_ICO, iconIco);
-console.log(`wrote ${OUT_ICON_ICO} (${TRAY_SIZES.join('/')}px, ${FONT_NAME} Φ, taskbar)`);
+console.log(
+  `wrote ${OUT_ICON_ICO} (${TRAY_SIZES.join('/')}px, ${FONT_NAME} Φ, taskbar)`,
+);
 
 // Same multi-size ICO for the tray.
 writeFileSync(OUT_TRAY_ICO, iconIco);
-console.log(`wrote ${OUT_TRAY_ICO} (${TRAY_SIZES.join('/')}px, ${FONT_NAME} Φ, tray)`);
+console.log(
+  `wrote ${OUT_TRAY_ICO} (${TRAY_SIZES.join('/')}px, ${FONT_NAME} Φ, tray)`,
+);

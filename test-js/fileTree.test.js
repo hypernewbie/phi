@@ -45,7 +45,13 @@ function installFetch(fixtures) {
 describe('FileTreeManager', () => {
     it('renders root entries, dirs first with collapsed chevron', async () => {
         installFetch({
-            '': { truncated: false, entries: [{ name: 'src', dir: true }, { name: 'main.go', dir: false }] },
+            '': {
+                truncated: false,
+                entries: [
+                    { name: 'src', dir: true },
+                    { name: 'main.go', dir: false },
+                ],
+            },
         });
         const manager = makeManager(makeApp());
         await manager.refresh();
@@ -53,13 +59,18 @@ describe('FileTreeManager', () => {
         const rows = manager.treeEl.querySelectorAll('.md-file-row');
         expect(rows.length).toBe(2);
         const firstItem = rows[0].querySelector('.md-file-item');
-        expect(firstItem.querySelector('.md-file-name').textContent).toBe('src');
+        expect(firstItem.querySelector('.md-file-name').textContent).toBe(
+            'src',
+        );
         expect(firstItem.querySelector('.ft-chevron').textContent).toBe('▸');
     });
 
     it('clicking a file row inserts @path for the claude coder', async () => {
         installFetch({
-            '': { truncated: false, entries: [{ name: 'main.go', dir: false }] },
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
         });
         const manager = makeManager(makeApp({ coder: 'claude' }));
         await manager.refresh();
@@ -74,7 +85,10 @@ describe('FileTreeManager', () => {
 
     it('clicking a file row inserts a raw path for a non-mention coder', async () => {
         installFetch({
-            '': { truncated: false, entries: [{ name: 'main.go', dir: false }] },
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
         });
         const manager = makeManager(makeApp({ coder: 'bash' }));
         await manager.refresh();
@@ -90,7 +104,10 @@ describe('FileTreeManager', () => {
     it('clicking a dir row expands it, fetches its children, and indents them', async () => {
         const fetchMock = installFetch({
             '': { truncated: false, entries: [{ name: 'src', dir: true }] },
-            src: { truncated: false, entries: [{ name: 'main.go', dir: false }] },
+            src: {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
         });
         const manager = makeManager(makeApp());
         await manager.refresh();
@@ -103,7 +120,9 @@ describe('FileTreeManager', () => {
             expect(urls.some((u) => u.includes('path=src'))).toBe(true);
         });
         await vi.waitFor(() => {
-            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(2);
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                2,
+            );
         });
 
         // refresh() rebuilds treeEl from scratch, so the pre-click `dirItem`
@@ -120,29 +139,41 @@ describe('FileTreeManager', () => {
     it('collapsing a dir row removes its children and refetches root', async () => {
         const fetchMock = installFetch({
             '': { truncated: false, entries: [{ name: 'src', dir: true }] },
-            src: { truncated: false, entries: [{ name: 'main.go', dir: false }] },
+            src: {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
         });
         const manager = makeManager(makeApp());
         await manager.refresh();
 
         manager.treeEl.querySelector('.md-file-item').click();
         await vi.waitFor(() => {
-            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(2);
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                2,
+            );
         });
 
         fetchMock.mockClear();
         manager.treeEl.querySelector('.md-file-item').click(); // collapse
 
         await vi.waitFor(() => {
-            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(1);
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                1,
+            );
         });
         const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-        expect(urls.some((u) => u.includes('path=') && !u.includes('path=src'))).toBe(true);
+        expect(
+            urls.some((u) => u.includes('path=') && !u.includes('path=src')),
+        ).toBe(true);
     });
 
     it('the ⋯ button opens a one-action context menu that inserts the path and closes', async () => {
         installFetch({
-            '': { truncated: false, entries: [{ name: 'main.go', dir: false }] },
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
         });
         const manager = makeManager(makeApp());
         await manager.refresh();

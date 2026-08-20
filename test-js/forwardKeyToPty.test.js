@@ -7,7 +7,15 @@ import { TabManager } from '../web/terminal.js';
 // on a stub ctx — no DOM needed.
 
 function makeEvent(over = {}) {
-    const e = { key: '', ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, isComposing: false, ...over };
+    const e = {
+        key: '',
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        ...over,
+    };
     e.preventDefault = vi.fn();
     return e;
 }
@@ -18,7 +26,8 @@ function makeCtx() {
     return { sendToTab: vi.fn(() => true) };
 }
 
-const run = (ctx, e, tab) => TabManager.prototype._forwardKeyToPty.call(ctx, e, tab);
+const run = (ctx, e, tab) =>
+    TabManager.prototype._forwardKeyToPty.call(ctx, e, tab);
 
 beforeEach(() => vi.clearAllMocks());
 
