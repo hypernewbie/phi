@@ -270,7 +270,7 @@ describe('DiffController._wireCopyHandlers', () => {
         }
     });
 
-    it('passes Shift+F5 and Ctrl/Cmd+R reload/reconnect shortcuts through to browser/desktop', async () => {
+    it('passes F5, Shift+F5, and Ctrl/Cmd+R reload/reconnect shortcuts through to browser/desktop', async () => {
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -279,6 +279,7 @@ describe('DiffController._wireCopyHandlers', () => {
         _wireCopyHandlers.call(ctx, term, container);
 
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
+        expect(keyHandler({ type: 'keydown', key: 'F5', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false })).toBe(false);
         expect(keyHandler({ type: 'keydown', key: 'F5', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false })).toBe(false);
         expect(keyHandler({ type: 'keydown', key: 'r', shiftKey: true, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
         expect(keyHandler({ type: 'keydown', key: 'R', shiftKey: true, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);

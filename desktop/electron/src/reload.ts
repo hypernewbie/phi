@@ -27,8 +27,10 @@ export function installReloadShortcut(
   contents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
 
+    const isF5 = input.key?.toUpperCase() === 'F5' || input.code === 'F5';
+
     // Alt+F5: reload all servers
-    const isAltReload = input.key === 'F5' && input.alt && !input.meta;
+    const isAltReload = isF5 && input.alt && !input.meta;
 
     if (isAltReload) {
       if (typeof reloadAllServers === 'function') {
@@ -39,7 +41,7 @@ export function installReloadShortcut(
     }
 
     // F5: reload active target view
-    const isReloadKey = input.key === 'F5' && !input.alt && !input.meta;
+    const isReloadKey = isF5 && !input.alt && !input.meta;
 
     if (isReloadKey) {
       event.preventDefault();
