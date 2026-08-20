@@ -43,7 +43,12 @@ describe('picker.html (the add-server picker)', () => {
     expect(sent).toEqual(['https://server.example.com:7070/']);
     // Enter submits too; a scheme-less input gets http://.
     input.value = 'example.com';
-    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    expect(sent).toEqual(['https://server.example.com:7070/', 'http://example.com:7070/']);
+    input.dispatchEvent(
+      new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    expect(sent).toEqual([
+      'https://server.example.com:7070/',
+      'http://example.com:7070/',
+    ]);
   });
 });

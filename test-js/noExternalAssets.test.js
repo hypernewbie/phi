@@ -54,9 +54,9 @@ function walk(dir) {
 // rationale does not trip it.
 function stripComments(text) {
     return text
-        .replace(/<!--[\s\S]*?-->/g, '')   // html
-        .replace(/\/\*[\s\S]*?\*\//g, '')  // block
-        .replace(/^\s*\/\/.*$/gm, '');     // line
+        .replace(/<!--[\s\S]*?-->/g, '') // html
+        .replace(/\/\*[\s\S]*?\*\//g, '') // block
+        .replace(/^\s*\/\/.*$/gm, ''); // line
 }
 
 describe('no external asset references in web/', () => {
@@ -73,7 +73,10 @@ describe('no external asset references in web/', () => {
             .filter(([, body]) => body.includes(host))
             .map(([f]) => f.replace(process.cwd(), '').replace(/\\/g, '/'));
 
-        expect(offenders, `${host} referenced in: ${offenders.join(', ')}`).toEqual([]);
+        expect(
+            offenders,
+            `${host} referenced in: ${offenders.join(', ')}`,
+        ).toEqual([]);
     });
 
     it('has the vendored replacements on disk and non-empty', () => {
@@ -93,12 +96,18 @@ describe('no external asset references in web/', () => {
 
     it('vendored font css points only at local woff2 files', () => {
         const css = readFileSync(join(WEB, 'vendor/fonts/fonts.css'), 'utf8');
-        const urls = [...css.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1].replace(/['"]/g, ''));
+        const urls = [...css.matchAll(/url\(([^)]+)\)/g)].map((m) =>
+            m[1].replace(/['"]/g, ''),
+        );
         expect(urls.length).toBeGreaterThan(0);
         for (const u of urls) {
             expect(u.startsWith('http'), `remote font url: ${u}`).toBe(false);
-            expect(u.endsWith('.woff2'), `unexpected font url: ${u}`).toBe(true);
-            expect(statSync(join(WEB, 'vendor/fonts', u)).size).toBeGreaterThan(0);
+            expect(u.endsWith('.woff2'), `unexpected font url: ${u}`).toBe(
+                true,
+            );
+            expect(statSync(join(WEB, 'vendor/fonts', u)).size).toBeGreaterThan(
+                0,
+            );
         }
     });
 

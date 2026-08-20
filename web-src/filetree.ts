@@ -4,8 +4,14 @@ import type { AppLike } from './types.js';
 import { formatAttachment, type Attachment } from './attachments.js';
 import { escapeHtml } from './util.js';
 
-interface FSEntry { name: string; dir: boolean; }
-interface FSListResponse { truncated: boolean; entries: FSEntry[]; }
+interface FSEntry {
+    name: string;
+    dir: boolean;
+}
+interface FSListResponse {
+    truncated: boolean;
+    entries: FSEntry[];
+}
 
 const FILE_ICON_SVG = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>`;
 
@@ -30,7 +36,11 @@ export class FileTreeManager {
             if (e.key === 'Escape') this._hideContextMenu();
         });
         document.addEventListener('click', (e) => {
-            if (this.contextMenuEl && !(e.target as any).closest('.ft-context-menu') && !(e.target as any).closest('.md-file-action-btn')) {
+            if (
+                this.contextMenuEl &&
+                !(e.target as any).closest('.ft-context-menu') &&
+                !(e.target as any).closest('.md-file-action-btn')
+            ) {
                 this._hideContextMenu();
             }
         });
@@ -56,7 +66,9 @@ export class FileTreeManager {
 
     async _fetchDir(rel: string): Promise<FSListResponse> {
         const cwd = this.app.sessionsManager.activeCWD || '';
-        const res = await fetch(`/api/fs/list?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(rel)}`);
+        const res = await fetch(
+            `/api/fs/list?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(rel)}`,
+        );
         if (!res.ok) throw new Error(await res.text());
         return await res.json();
     }
@@ -66,7 +78,11 @@ export class FileTreeManager {
     // relpath after a cwd switch) is silently pruned from the expanded set
     // rather than failing the whole tree — deliberate: do NOT add
     // expanded-set clearing on cwd change.
-    async _renderDir(rel: string, depth: number, requestId: number): Promise<DocumentFragment | null> {
+    async _renderDir(
+        rel: string,
+        depth: number,
+        requestId: number,
+    ): Promise<DocumentFragment | null> {
         const data = await this._fetchDir(rel);
         if (requestId !== this.refreshRequestId) return null;
         const frag = document.createDocumentFragment();
@@ -82,7 +98,11 @@ export class FileTreeManager {
             frag.appendChild(this._buildRow(entry, childRel, depth));
             if (entry.dir && this.expanded.has(childRel)) {
                 try {
-                    const sub = await this._renderDir(childRel, depth + 1, requestId);
+                    const sub = await this._renderDir(
+                        childRel,
+                        depth + 1,
+                        requestId,
+                    );
                     if (requestId !== this.refreshRequestId) return null;
                     if (sub) frag.appendChild(sub);
                 } catch {
@@ -152,7 +172,9 @@ export class FileTreeManager {
         const coder = this.app.tabManager?.getActiveTab?.()?.coder || '';
         const insertText = formatAttachment(coder, { path: rel } as Attachment);
 
-        const textarea = document.getElementById('input-textarea') as HTMLTextAreaElement | null;
+        const textarea = document.getElementById(
+            'input-textarea',
+        ) as HTMLTextAreaElement | null;
         if (!textarea) return;
         const start = textarea.selectionStart as number;
         const end = textarea.selectionEnd as number;
@@ -160,8 +182,8 @@ export class FileTreeManager {
         const before = text.substring(0, start);
         const after = text.substring(end, text.length);
 
-        const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
-        const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
+        const padBefore = start > 0 && !before.endsWith(' ') ? ' ' : '';
+        const padAfter = !after.startsWith(' ') && after.length > 0 ? ' ' : '';
 
         textarea.value = before + padBefore + insertText + padAfter + after;
 
@@ -186,10 +208,15 @@ export class FileTreeManager {
         this.contextMenuEl.innerHTML = '';
 
         const actions = [
-            { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertPath(rel) },
+            {
+                icon: '@',
+                label: 'Insert @path',
+                className: 'insert-path',
+                handler: () => this._insertPath(rel),
+            },
         ];
 
-        actions.forEach(action => {
+        actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
             btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;
@@ -204,8 +231,17 @@ export class FileTreeManager {
         const rect = anchorEl.getBoundingClientRect();
         this.contextMenuEl.classList.remove('hidden');
         const menuRect = this.contextMenuEl.getBoundingClientRect();
-        const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
-        const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8));
+        const left = Math.max(
+            8,
+            Math.min(
+                rect.right - menuRect.width,
+                window.innerWidth - menuRect.width - 8,
+            ),
+        );
+        const top = Math.max(
+            8,
+            Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8),
+        );
         this.contextMenuEl.style.left = `${left}px`;
         this.contextMenuEl.style.top = `${top}px`;
     }

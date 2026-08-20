@@ -89,11 +89,20 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
         const tm = makeManager();
         tm._initHieroPreview();
         const tabEl = attachTab(tm, {
-            paneId: 'p1', glyph: '𓀀', cwd: '/Users/dev/code/phi/main',
+            paneId: 'p1',
+            glyph: '𓀀',
+            cwd: '/Users/dev/code/phi/main',
         });
         // Stub getBoundingClientRect to predictable coords (jsdom layout
         // is fake otherwise).
-        tabEl.getBoundingClientRect = () => ({ left: 100, right: 200, top: 0, bottom: 38, width: 100, height: 38 });
+        tabEl.getBoundingClientRect = () => ({
+            left: 100,
+            right: 200,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         const p = document.getElementById('tab-hiero-preview');
         expect(p.classList.contains('visible')).toBe(false);
@@ -109,18 +118,33 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
         const tm = makeManager();
         tm._initHieroPreview();
         const tabEl = attachTab(tm, {
-            paneId: 'p1', glyph: '𓂀', cwd: '/Users/dev/code/phi/feat-x',
+            paneId: 'p1',
+            glyph: '𓂀',
+            cwd: '/Users/dev/code/phi/feat-x',
         });
-        tabEl.getBoundingClientRect = () => ({ left: 50, right: 150, top: 0, bottom: 38, width: 100, height: 38 });
+        tabEl.getBoundingClientRect = () => ({
+            left: 50,
+            right: 150,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe('𓂀');
+        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe(
+            '𓂀',
+        );
         // getProjectWorktreeLabel uses / - / so '/Users/dev/code/phi/feat-x'
         // -> 'phi/feat-x'.
-        expect(p.querySelector('.tab-hiero-preview-label').textContent).toBe('phi/feat-x');
-        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe('/Users/dev/code/phi/feat-x');
+        expect(p.querySelector('.tab-hiero-preview-label').textContent).toBe(
+            'phi/feat-x',
+        );
+        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe(
+            '/Users/dev/code/phi/feat-x',
+        );
     });
 
     it('counts tabs sharing the same glyph', () => {
@@ -130,26 +154,55 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
         attachTab(tm, { paneId: 'a', glyph: '𓆎', cwd: '/repo1' });
         attachTab(tm, { paneId: 'b', glyph: '𓆎', cwd: '/repo2' });
         attachTab(tm, { paneId: 'c', glyph: '𓆎', cwd: '/repo3' });
-        const targetTab = attachTab(tm, { paneId: 'd', glyph: '𓈖', cwd: '/other' });
+        const targetTab = attachTab(tm, {
+            paneId: 'd',
+            glyph: '𓈖',
+            cwd: '/other',
+        });
 
-        targetTab.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        targetTab.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
         targetTab.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-count').textContent).toBe('1 tab in this worktree');
+        expect(p.querySelector('.tab-hiero-preview-count').textContent).toBe(
+            '1 tab in this worktree',
+        );
 
         // Now hover one of the three '𓆎' tabs - should count 3.
         const sharedTab = tm.tabsContainer.querySelector('[data-pane-id="a"]');
-        sharedTab.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        sharedTab.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
         sharedTab.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        expect(p.querySelector('.tab-hiero-preview-count').textContent).toBe('3 tabs in this worktree');
+        expect(p.querySelector('.tab-hiero-preview-count').textContent).toBe(
+            '3 tabs in this worktree',
+        );
     });
 
     it('positions the card below the hovered tab', () => {
         const tm = makeManager();
         tm._initHieroPreview();
         const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
-        tabEl.getBoundingClientRect = () => ({ left: 240, right: 340, top: 0, bottom: 38, width: 100, height: 38 });
+        tabEl.getBoundingClientRect = () => ({
+            left: 240,
+            right: 340,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
@@ -164,9 +217,19 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
         tm._initHieroPreview();
         // Tab near the right edge of a narrow viewport.
         const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
-        tabEl.getBoundingClientRect = () => ({ left: 1900, right: 2000, top: 0, bottom: 38, width: 100, height: 38 });
+        tabEl.getBoundingClientRect = () => ({
+            left: 1900,
+            right: 2000,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
         // Simulate a 1280px viewport.
-        Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+        Object.defineProperty(window, 'innerWidth', {
+            value: 1280,
+            configurable: true,
+        });
 
         tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
@@ -183,14 +246,29 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
         tabEl.setAttribute('data-pane-id', 'p1');
         // No dataset.worktreeGlyph set - some race or weird state.
         tm.tabsContainer.appendChild(tabEl);
-        tm.tabs.set('p1', { paneId: 'p1', coder: 'bash', cwd: '/x', tabEl, termContainer: document.createElement('div') });
-        tabEl.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        tm.tabs.set('p1', {
+            paneId: 'p1',
+            coder: 'bash',
+            cwd: '/x',
+            tabEl,
+            termContainer: document.createElement('div'),
+        });
+        tabEl.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
         const p = document.getElementById('tab-hiero-preview');
         // Falls back to '◆' per worktreeGlyph() spec.
-        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe('◆');
+        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe(
+            '◆',
+        );
     });
 });
 
@@ -202,15 +280,27 @@ describe('_showHieroPreview / _hideHieroPreview', () => {
 describe('intra-tab mouse movement (relatedTarget guard)', () => {
     function attachTabWithChildren(tm, opts) {
         const tabEl = attachTab(tm, opts);
-        tabEl.innerHTML = '<span class="tab-title">t</span><button class="tab-close">×</button>';
+        tabEl.innerHTML =
+            '<span class="tab-title">t</span><button class="tab-close">×</button>';
         return tabEl;
     }
 
     it('keeps the preview visible when the mouse moves between children', () => {
         const tm = makeManager();
         tm._initHieroPreview();
-        const tabEl = attachTabWithChildren(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
-        tabEl.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        const tabEl = attachTabWithChildren(tm, {
+            paneId: 'p1',
+            glyph: '𓀀',
+            cwd: '/x',
+        });
+        tabEl.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
         const title = tabEl.querySelector('.tab-title');
         const close = tabEl.querySelector('.tab-close');
 
@@ -222,10 +312,17 @@ describe('intra-tab mouse movement (relatedTarget guard)', () => {
         // browser fires mouseout(title)+mouseover(close), both with
         // relatedTarget inside the same tab. Neither should touch the
         // preview.
-        title.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: close }));
+        title.dispatchEvent(
+            new MouseEvent('mouseout', { bubbles: true, relatedTarget: close }),
+        );
         expect(p.classList.contains('visible')).toBe(true);
         const show = vi.spyOn(tm, '_showHieroPreview');
-        close.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: title }));
+        close.dispatchEvent(
+            new MouseEvent('mouseover', {
+                bubbles: true,
+                relatedTarget: title,
+            }),
+        );
         expect(show).not.toHaveBeenCalled();
         expect(p.classList.contains('visible')).toBe(true);
     });
@@ -233,15 +330,31 @@ describe('intra-tab mouse movement (relatedTarget guard)', () => {
     it('still hides when the mouse truly leaves the tab', () => {
         const tm = makeManager();
         tm._initHieroPreview();
-        const tabEl = attachTabWithChildren(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
-        tabEl.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        const tabEl = attachTabWithChildren(tm, {
+            paneId: 'p1',
+            glyph: '𓀀',
+            cwd: '/x',
+        });
+        tabEl.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
         const p = document.getElementById('tab-hiero-preview');
         expect(p.classList.contains('visible')).toBe(true);
 
         // relatedTarget outside the tab (document.body) -> real leave.
-        tabEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+        tabEl.dispatchEvent(
+            new MouseEvent('mouseout', {
+                bubbles: true,
+                relatedTarget: document.body,
+            }),
+        );
         expect(p.classList.contains('visible')).toBe(false);
     });
 });
@@ -251,20 +364,33 @@ describe('hover preview integration with multiple workspaces', () => {
         const tm = makeManager();
         tm._initHieroPreview();
         const paths = [
-            { paneId: 'phi',   glyph: '𓀀', cwd: '/code/github/phi/main' },
+            { paneId: 'phi', glyph: '𓀀', cwd: '/code/github/phi/main' },
             { paneId: 'alpha', glyph: '𓂀', cwd: '/work/alpha/feat' },
-            { paneId: 'beta',  glyph: '𓆎', cwd: '/work/beta/x' },
+            { paneId: 'beta', glyph: '𓆎', cwd: '/work/beta/x' },
         ];
         const tabs = {};
         for (const p of paths) {
             tabs[p.paneId] = attachTab(tm, p);
-            tabs[p.paneId].getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+            tabs[p.paneId].getBoundingClientRect = () => ({
+                left: 0,
+                right: 100,
+                top: 0,
+                bottom: 38,
+                width: 100,
+                height: 38,
+            });
         }
         const p = document.getElementById('tab-hiero-preview');
         for (const { paneId, glyph, cwd } of paths) {
-            tabs[paneId].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-            expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe(glyph);
-            expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe(cwd);
+            tabs[paneId].dispatchEvent(
+                new MouseEvent('mouseover', { bubbles: true }),
+            );
+            expect(
+                p.querySelector('.tab-hiero-preview-glyph').textContent,
+            ).toBe(glyph);
+            expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe(
+                cwd,
+            );
         }
     });
 });
@@ -325,18 +451,34 @@ describe('_showWorktreeHieroPreview', () => {
         tm._initHieroPreview();
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓂀', name: 'phi', branch: 'main',
+            path: '/code/phi',
+            glyph: '𓂀',
+            name: 'phi',
+            branch: 'main',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
 
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
         const p = document.getElementById('tab-hiero-preview');
         expect(p.classList.contains('visible')).toBe(true);
         // Medium variant flag set so CSS shrinks the glyph + padding.
         expect(p.classList.contains('tab-hiero-preview-medium')).toBe(true);
-        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe('𓂀');
-        expect(p.querySelector('.tab-hiero-preview-label').textContent).toBe('phi');
-        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe('/code/phi');
+        expect(p.querySelector('.tab-hiero-preview-glyph').textContent).toBe(
+            '𓂀',
+        );
+        expect(p.querySelector('.tab-hiero-preview-label').textContent).toBe(
+            'phi',
+        );
+        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe(
+            '/code/phi',
+        );
     });
 
     it('positions to the right of the worktree header (sidebar anchor)', () => {
@@ -345,11 +487,23 @@ describe('_showWorktreeHieroPreview', () => {
         tm._initHieroPreview();
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓀀', name: 'phi',
+            path: '/code/phi',
+            glyph: '𓀀',
+            name: 'phi',
         });
         // Worktree header sits at left:0, right:240 in the sidebar.
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
-        Object.defineProperty(window, 'innerWidth', { value: 1400, configurable: true });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
+        Object.defineProperty(window, 'innerWidth', {
+            value: 1400,
+            configurable: true,
+        });
 
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
         const p = document.getElementById('tab-hiero-preview');
@@ -364,13 +518,30 @@ describe('_showWorktreeHieroPreview', () => {
         tm._initHieroPreview();
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓀀', name: 'phi',
+            path: '/code/phi',
+            glyph: '𓀀',
+            name: 'phi',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        expect(document.getElementById('tab-hiero-preview').classList.contains('visible')).toBe(true);
+        expect(
+            document
+                .getElementById('tab-hiero-preview')
+                .classList.contains('visible'),
+        ).toBe(true);
         header.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-        expect(document.getElementById('tab-hiero-preview').classList.contains('visible')).toBe(false);
+        expect(
+            document
+                .getElementById('tab-hiero-preview')
+                .classList.contains('visible'),
+        ).toBe(false);
     });
 
     it('shows how many open tabs would land in this worktree', () => {
@@ -384,11 +555,21 @@ describe('_showWorktreeHieroPreview', () => {
 
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓂀', name: 'phi',
+            path: '/code/phi',
+            glyph: '𓂀',
+            name: 'phi',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        const count = document.getElementById('tab-hiero-preview')
+        const count = document
+            .getElementById('tab-hiero-preview')
             .querySelector('.tab-hiero-preview-count').textContent;
         expect(count).toBe('2 tabs open in this worktree');
     });
@@ -401,11 +582,21 @@ describe('_showWorktreeHieroPreview', () => {
 
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓂀', name: 'phi',
+            path: '/code/phi',
+            glyph: '𓂀',
+            name: 'phi',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        const count = document.getElementById('tab-hiero-preview')
+        const count = document
+            .getElementById('tab-hiero-preview')
             .querySelector('.tab-hiero-preview-count').textContent;
         expect(count).toBe('no tabs open in this worktree');
     });
@@ -416,9 +607,19 @@ describe('_showWorktreeHieroPreview', () => {
         tm._initHieroPreview();
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓂀', name: 'phi', branch: 'main',
+            path: '/code/phi',
+            glyph: '𓂀',
+            name: 'phi',
+            branch: 'main',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
         const glyphSpan = header.querySelector('.worktree-section-glyph');
         const nameSpan = header.querySelector('.worktree-name');
 
@@ -428,7 +629,12 @@ describe('_showWorktreeHieroPreview', () => {
 
         // Pointer slides from the glyph to the name - both inside the
         // header, so the preview must not hide.
-        glyphSpan.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: nameSpan }));
+        glyphSpan.dispatchEvent(
+            new MouseEvent('mouseout', {
+                bubbles: true,
+                relatedTarget: nameSpan,
+            }),
+        );
         expect(p.classList.contains('visible')).toBe(true);
     });
 
@@ -438,11 +644,31 @@ describe('_showWorktreeHieroPreview', () => {
         tm._initHieroPreview();
         const sessionList = document.getElementById('session-list');
         const { header } = attachWorktreeSection(sessionList, {
-            path: '/code/phi', glyph: '𓂀', name: 'phi',
+            path: '/code/phi',
+            glyph: '𓂀',
+            name: 'phi',
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
-        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓂀', cwd: '/code/phi' });
-        tabEl.getBoundingClientRect = () => ({ left: 50, right: 150, top: 0, bottom: 38, width: 100, height: 38 });
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
+        });
+        const tabEl = attachTab(tm, {
+            paneId: 'p1',
+            glyph: '𓂀',
+            cwd: '/code/phi',
+        });
+        tabEl.getBoundingClientRect = () => ({
+            left: 50,
+            right: 150,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
 
         const p = document.getElementById('tab-hiero-preview');
 
@@ -464,7 +690,14 @@ describe('_showWorktreeHieroPreview', () => {
 
 describe('tab title + status rows', () => {
     function hover(el) {
-        el.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 38, width: 100, height: 38 });
+        el.getBoundingClientRect = () => ({
+            left: 0,
+            right: 100,
+            top: 0,
+            bottom: 38,
+            width: 100,
+            height: 38,
+        });
         el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     }
 
@@ -472,11 +705,13 @@ describe('tab title + status rows', () => {
         const tm = makeManager();
         tm._initHieroPreview();
         const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
-        tm.tabs.get('p1').title = 'a very long session title that the strip clips';
+        tm.tabs.get('p1').title =
+            'a very long session title that the strip clips';
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-title').textContent)
-            .toBe('a very long session title that the strip clips');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            'a very long session title that the strip clips',
+        );
     });
 
     it('reflects a rename on the next hover (title is never stashed)', () => {
@@ -485,12 +720,21 @@ describe('tab title + status rows', () => {
         const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('test');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            'test',
+        );
 
         tm.tabs.get('p1').title = 'renamed'; // what openTabRenamer commits
-        tabEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+        tabEl.dispatchEvent(
+            new MouseEvent('mouseout', {
+                bubbles: true,
+                relatedTarget: document.body,
+            }),
+        );
         hover(tabEl);
-        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('renamed');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            'renamed',
+        );
     });
 
     it('falls back to the .tab-title span + dataset.cwd mid-createTab', () => {
@@ -507,8 +751,12 @@ describe('tab title + status rows', () => {
         tm.tabsContainer.appendChild(tabEl);
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('freshly-spawned');
-        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe('/spawn/dir');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            'freshly-spawned',
+        );
+        expect(p.querySelector('.tab-hiero-preview-path').textContent).toBe(
+            '/spawn/dir',
+        );
     });
 
     it('shows "● busy Xm" with the is-busy flag while the tab is busy', () => {
@@ -520,7 +768,9 @@ describe('tab title + status rows', () => {
         tab.busyStartTime = Date.now() - 65000;
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('● busy 1m');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe(
+            '● busy 1m',
+        );
         expect(p.classList.contains('is-busy')).toBe(true);
     });
 
@@ -533,8 +783,9 @@ describe('tab title + status rows', () => {
         tab.lastOutputAt = Date.now() - 5000;
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-status').textContent)
-            .toMatch(/^idle · last output \d+s ago$/);
+        expect(
+            p.querySelector('.tab-hiero-preview-status').textContent,
+        ).toMatch(/^idle · last output \d+s ago$/);
         expect(p.classList.contains('is-busy')).toBe(false);
     });
 
@@ -546,7 +797,9 @@ describe('tab title + status rows', () => {
         const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓀀', cwd: '/x' });
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('');
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe(
+            '',
+        );
         expect(p.classList.contains('is-busy')).toBe(false);
     });
 
@@ -554,21 +807,43 @@ describe('tab title + status rows', () => {
         mountSidebarDom();
         const tm = makeManager();
         tm._initHieroPreview();
-        const tabEl = attachTab(tm, { paneId: 'p1', glyph: '𓂀', cwd: '/code/phi' });
+        const tabEl = attachTab(tm, {
+            paneId: 'p1',
+            glyph: '𓂀',
+            cwd: '/code/phi',
+        });
         const tab = tm.tabs.get('p1');
         tab.isBusy = true;
         tab.busyStartTime = Date.now();
         hover(tabEl);
         const p = document.getElementById('tab-hiero-preview');
-        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('test');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            'test',
+        );
 
-        const { header } = attachWorktreeSection(document.getElementById('session-list'), {
-            path: '/code/phi', glyph: '𓂀', name: 'phi',
+        const { header } = attachWorktreeSection(
+            document.getElementById('session-list'),
+            {
+                path: '/code/phi',
+                glyph: '𓂀',
+                name: 'phi',
+            },
+        );
+        header.getBoundingClientRect = () => ({
+            left: 0,
+            right: 240,
+            top: 50,
+            bottom: 88,
+            width: 240,
+            height: 38,
         });
-        header.getBoundingClientRect = () => ({ left: 0, right: 240, top: 50, bottom: 88, width: 240, height: 38 });
         header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe('');
-        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe('');
+        expect(p.querySelector('.tab-hiero-preview-title').textContent).toBe(
+            '',
+        );
+        expect(p.querySelector('.tab-hiero-preview-status').textContent).toBe(
+            '',
+        );
         expect(p.classList.contains('is-busy')).toBe(false);
     });
 });

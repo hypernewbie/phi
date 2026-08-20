@@ -1,0 +1,83 @@
+{
+    "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+    "files": {
+        "includes": [
+            ".htmlvalidate.js",
+            ".stylelintrc.js",
+            "vite.config.js",
+            "vitest.config.js",
+            "npm/scripts/**/*.js",
+            "web-src/**/*.ts",
+            "test-js/**/*.js",
+            "web/**/*.js",
+            "desktop/electron/src/**/*.ts",
+            "desktop/electron/test/**/*.ts",
+            "desktop/electron/scripts/**/*.mjs",
+            "desktop/electron/vitest.config.ts",
+            "desktop/pet/dist/**/*.js",
+            "desktop/pet/dist-preload/**/*.js",
+            "!web/vendor/**",
+            "!web/attachments.js",
+            "!web/desktop.js",
+            "!web/diff.js",
+            "!web/filetree.js",
+            "!web/kanban-features.js",
+            "!web/kanban.js",
+            "!web/markdown.js",
+            "!web/md-render.js",
+            "!web/md-view.js",
+            "!web/sessions.js",
+            "!web/sync.js",
+            "!web/util.js",
+            "!web/ws.js",
+            "!desktop/pet/**/*.js.map"
+        ]
+    },
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "single"
+        }
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "recommended": true
+        }
+    },
+    "assist": {
+        "enabled": false
+    },
+    "overrides": [
+        {
+            "includes": ["desktop/electron/test/injected.test.ts"],
+            "formatter": {
+                "indentStyle": "space",
+                "indentWidth": 2
+            },
+            "linter": {
+                "rules": {
+                    "security": {
+                        "noGlobalEval": "off"
+                    }
+                }
+            }
+        },
+        {
+            "includes": [
+                "npm/scripts/install.js",
+                "desktop/electron/**/*.ts",
+                "desktop/electron/**/*.mjs",
+                "desktop/electron/vitest.config.ts"
+            ],
+            "formatter": {
+                "indentStyle": "space",
+                "indentWidth": 2
+            }
+        }
+    ]
+}

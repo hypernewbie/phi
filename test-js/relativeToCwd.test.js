@@ -7,11 +7,15 @@ import { relativeToCwd } from '../web/util.js';
 
 describe('relativeToCwd', () => {
     it('returns the path relative to cwd', () => {
-        expect(relativeToCwd('/home/user/proj/src/a.js', '/home/user/proj')).toBe('src/a.js');
+        expect(
+            relativeToCwd('/home/user/proj/src/a.js', '/home/user/proj'),
+        ).toBe('src/a.js');
     });
 
     it('normalizes backslashes on both sides', () => {
-        expect(relativeToCwd('C:\\proj\\src\\a.js', 'C:\\proj')).toBe('src/a.js');
+        expect(relativeToCwd('C:\\proj\\src\\a.js', 'C:\\proj')).toBe(
+            'src/a.js',
+        );
     });
 
     it('strips exactly one leading slash after the prefix', () => {

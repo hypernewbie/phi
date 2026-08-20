@@ -171,7 +171,10 @@ export interface ElectronApi {
   onBodyObscuring(cb: (obscured: boolean) => void): () => void;
   /** Reply to an access-auth prompt with a password (or null to dismiss).
    *  The main process validates requestId; mismatches yield 'stale'. */
-  submitAccessPassword(requestId: string, password: string | null): Promise<AuthUnlockResult>;
+  submitAccessPassword(
+    requestId: string,
+    password: string | null,
+  ): Promise<AuthUnlockResult>;
 }
 
 declare global {

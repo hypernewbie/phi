@@ -54,7 +54,12 @@ export function applyBrandCpuTier(cpuPercent) {
     const first = logo.dataset.cpuLevel === undefined;
     for (const el of [logo, brandName]) {
         if (!el) continue;
-        el.classList.remove('cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical');
+        el.classList.remove(
+            'cpu-idle',
+            'cpu-moderate',
+            'cpu-high',
+            'cpu-critical',
+        );
         el.classList.add(level);
         el.dataset.cpuLevel = level;
     }

@@ -185,7 +185,8 @@ export const unknownHealthChecker: HealthChecker = {
  * label is non-empty and does not start or end with a separator — the
  * Wails `validHostname` regex, ported verbatim.
  */
-const hostnameRe = /^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?)*\.?$/;
+const hostnameRe =
+  /^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?)*\.?$/;
 
 /** idRe: legal profile ids (used in deep links and directory names later). */
 const idRe = /^[a-z0-9][a-z0-9-]*$/;
@@ -278,13 +279,18 @@ export function hostnameKey(origin: string): string {
 
 /** Wails profile.ValidateName parity: non-empty, <= 64 runes, no control characters. */
 function validateName(name: string): void {
-  if (name.trim() === '') throw new InvalidNameError('profile name must not be empty');
+  if (name.trim() === '')
+    throw new InvalidNameError('profile name must not be empty');
   if ([...name].length > MAX_NAME_RUNES) {
-    throw new InvalidNameError(`profile name must be at most ${MAX_NAME_RUNES} runes`);
+    throw new InvalidNameError(
+      `profile name must be at most ${MAX_NAME_RUNES} runes`,
+    );
   }
   for (const ch of name) {
     if (ch.charCodeAt(0) < 0x20) {
-      throw new InvalidNameError('profile name must not contain control characters');
+      throw new InvalidNameError(
+        'profile name must not contain control characters',
+      );
     }
   }
 }
@@ -309,7 +315,9 @@ export function parseEndpoint(raw: string): ParsedEndpoint {
     throw new InvalidUrlError(`invalid server URL "${raw}": ${String(err)}`);
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-    throw new InvalidUrlError(`server URL "${raw}" must use the http or https scheme`);
+    throw new InvalidUrlError(
+      `server URL "${raw}" must use the http or https scheme`,
+    );
   }
   const authority = rawAuthority(raw);
   if (u.hostname === '' || authority === null || authority === '') {
@@ -322,13 +330,19 @@ export function parseEndpoint(raw: string): ParsedEndpoint {
     throw new InvalidUrlError(`server URL "${raw}" must not contain userinfo`);
   }
   if (raw.includes('?')) {
-    throw new InvalidUrlError(`server URL "${raw}" must not contain a query string`);
+    throw new InvalidUrlError(
+      `server URL "${raw}" must not contain a query string`,
+    );
   }
   if (raw.includes('#')) {
-    throw new InvalidUrlError(`server URL "${raw}" must not contain a fragment`);
+    throw new InvalidUrlError(
+      `server URL "${raw}" must not contain a fragment`,
+    );
   }
   if (u.pathname !== '/') {
-    throw new InvalidUrlError(`server URL "${raw}" must use the root path (Phi serves /api and /ws at the origin)`);
+    throw new InvalidUrlError(
+      `server URL "${raw}" must use the root path (Phi serves /api and /ws at the origin)`,
+    );
   }
   const port = rawPort(authority);
   if (port === '') {
@@ -337,7 +351,9 @@ export function parseEndpoint(raw: string): ParsedEndpoint {
   if (port !== null) {
     const n = Number(port);
     if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      throw new InvalidUrlError(`server URL "${raw}" has an invalid port "${port}"`);
+      throw new InvalidUrlError(
+        `server URL "${raw}" has an invalid port "${port}"`,
+      );
     }
   }
   const scheme = u.protocol.slice(0, -1) as 'http' | 'https';
@@ -375,7 +391,11 @@ interface LoadedStore {
  * failure is logged and yields an empty store (close-to-tray defaults
  * true).
  */
-function readStore(filePath: string, isBackup: boolean, log: ControllerLog): LoadedStore {
+function readStore(
+  filePath: string,
+  isBackup: boolean,
+  log: ControllerLog,
+): LoadedStore {
   let data: string;
   try {
     data = readFileSync(filePath, 'utf8');
@@ -390,31 +410,56 @@ function readStore(filePath: string, isBackup: boolean, log: ControllerLog): Loa
     parsed = JSON.parse(data);
   } catch (err) {
     if (isBackup) {
-      log(`controller: ${filePath} is corrupt (${String(err)}); starting with an empty store`);
+      log(
+        `controller: ${filePath} is corrupt (${String(err)}); starting with an empty store`,
+      );
       setAsideCorrupt(filePath, log);
       return { profiles: [], closeToTray: true, syncAlerts: true };
     }
-    log(`controller: ${filePath} is corrupt (${String(err)}); trying ${filePath}.bak`);
+    log(
+      `controller: ${filePath} is corrupt (${String(err)}); trying ${filePath}.bak`,
+    );
     setAsideCorrupt(filePath, log);
     return readStore(`${filePath}.bak`, true, log);
   }
-  const obj = parsed as { profiles?: unknown; closeToTray?: unknown; syncAlerts?: unknown } | null;
+  const obj = parsed as {
+    profiles?: unknown;
+    closeToTray?: unknown;
+    syncAlerts?: unknown;
+  } | null;
   if (obj === null || typeof obj !== 'object' || !Array.isArray(obj.profiles)) {
     if (isBackup) {
-      log(`controller: ${filePath} has an unusable schema; starting with an empty store`);
+      log(
+        `controller: ${filePath} has an unusable schema; starting with an empty store`,
+      );
       setAsideCorrupt(filePath, log);
       return { profiles: [], closeToTray: true, syncAlerts: true };
     }
-    log(`controller: ${filePath} has an unusable schema; trying ${filePath}.bak`);
+    log(
+      `controller: ${filePath} has an unusable schema; trying ${filePath}.bak`,
+    );
     setAsideCorrupt(filePath, log);
     return readStore(`${filePath}.bak`, true, log);
   }
-  const syncAlerts = typeof obj.syncAlerts === 'boolean' ? obj.syncAlerts : true;
+  const syncAlerts =
+    typeof obj.syncAlerts === 'boolean' ? obj.syncAlerts : true;
   const profiles: InternalProfile[] = [];
   const seen = new Set<string>();
   for (const entry of obj.profiles) {
-    const p = entry as { id?: unknown; name?: unknown; origin?: unknown; lastUsed?: unknown };
-    if (p === null || typeof p !== 'object' || typeof p.id !== 'string' || p.id === '' || typeof p.origin !== 'string' || p.origin === '') {
+    const p = entry as {
+      id?: unknown;
+      name?: unknown;
+      origin?: unknown;
+      lastUsed?: unknown;
+    };
+    if (
+      p === null ||
+      typeof p !== 'object' ||
+      typeof p.id !== 'string' ||
+      p.id === '' ||
+      typeof p.origin !== 'string' ||
+      p.origin === ''
+    ) {
       log(`controller: skipping invalid profile entry in ${filePath}`);
       continue;
     }
@@ -427,7 +472,8 @@ function readStore(filePath: string, isBackup: boolean, log: ControllerLog): Loa
       id: p.id,
       name: typeof p.name === 'string' && p.name !== '' ? p.name : p.origin,
       origin: p.origin,
-      lastUsed: typeof p.lastUsed === 'string' && p.lastUsed !== '' ? p.lastUsed : null,
+      lastUsed:
+        typeof p.lastUsed === 'string' && p.lastUsed !== '' ? p.lastUsed : null,
     });
   }
   if (isBackup) {
@@ -446,7 +492,12 @@ function readStore(filePath: string, isBackup: boolean, log: ControllerLog): Loa
  * the final path. Throws ControllerError('persist', ...) on failure; the
  * temp file is removed on the way out.
  */
-function saveStore(persistPath: string, profiles: InternalProfile[], closeToTray: boolean, syncAlerts: boolean): void {
+function saveStore(
+  persistPath: string,
+  profiles: InternalProfile[],
+  closeToTray: boolean,
+  syncAlerts: boolean,
+): void {
   const dir = path.dirname(persistPath);
   mkdirSync(dir, { recursive: true });
   const backup = `${persistPath}.bak`;
@@ -455,7 +506,10 @@ function saveStore(persistPath: string, profiles: InternalProfile[], closeToTray
       rmSync(backup, { force: true });
       copyFileSync(persistPath, backup);
     } catch (err) {
-      throw new ControllerError('persist', `controller: backup: ${String(err)}`);
+      throw new ControllerError(
+        'persist',
+        `controller: backup: ${String(err)}`,
+      );
     }
   }
   const tmp = path.join(dir, `profiles.json.tmp-${process.pid}-${Date.now()}`);
@@ -486,7 +540,10 @@ function saveStore(persistPath: string, profiles: InternalProfile[], closeToTray
     } catch {
       // best-effort cleanup
     }
-    throw new ControllerError('persist', `controller: write ${tmp}: ${String(err)}`);
+    throw new ControllerError(
+      'persist',
+      `controller: write ${tmp}: ${String(err)}`,
+    );
   } finally {
     if (fd !== undefined) {
       try {
@@ -570,17 +627,28 @@ export class Controller {
    */
   add(rawUrl: string): ProfileMeta {
     const parsed = parseEndpoint(rawUrl);
-    const existing = this.profiles.find((p) => p.origin === parsed.origin) ?? null;
+    const existing =
+      this.profiles.find((p) => p.origin === parsed.origin) ?? null;
     if (existing) return toMeta(existing);
     let id = idForOrigin(parsed.origin, parsed.host);
     if (this.byID.has(id)) id = `${id}-${sha256Hex(parsed.origin).slice(0, 6)}`;
-    const profile: InternalProfile = { id, name: parsed.host, origin: parsed.origin, lastUsed: null };
+    const profile: InternalProfile = {
+      id,
+      name: parsed.host,
+      origin: parsed.origin,
+      lastUsed: null,
+    };
     this.profiles.push(profile);
     this.byID.set(id, profile);
     this.health.set(id, 'unknown');
     this.unread.set(id, 0);
     try {
-      saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+      );
     } catch (err) {
       this.profiles.pop();
       this.byID.delete(id);
@@ -600,7 +668,8 @@ export class Controller {
    */
   remove(id: string): void {
     const idx = this.profiles.findIndex((p) => p.id === id);
-    if (idx < 0) throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    if (idx < 0)
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     const removed = this.profiles[idx];
     const wasActive = this.activeId === id;
     const removedHealth = this.health.get(id) ?? null;
@@ -610,7 +679,12 @@ export class Controller {
     this.health.delete(id);
     this.unread.delete(id);
     try {
-      saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+      );
     } catch (err) {
       this.profiles.splice(idx, 0, removed);
       this.byID.set(id, removed);
@@ -632,10 +706,16 @@ export class Controller {
    */
   rename(id: string, name: string): void {
     const p = this.byID.get(id);
-    if (!p) throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    if (!p)
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     validateName(name);
     p.name = name;
-    saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+    );
     this.emit({ kind: 'profiles-changed' });
   }
 
@@ -647,19 +727,33 @@ export class Controller {
    * in-memory move back.
    */
   reorder(id: string, beforeId: string | null): void {
-    if (!this.byID.has(id)) throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    if (!this.byID.has(id))
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     if (beforeId !== null && !this.byID.has(beforeId)) {
-      throw new UnknownProfileError(`controller: unknown profile "${beforeId}"`);
+      throw new UnknownProfileError(
+        `controller: unknown profile "${beforeId}"`,
+      );
     }
     const from = this.profiles.findIndex((p) => p.id === id);
-    const to = beforeId === null ? this.profiles.length : this.profiles.findIndex((p) => p.id === beforeId);
+    const to =
+      beforeId === null
+        ? this.profiles.length
+        : this.profiles.findIndex((p) => p.id === beforeId);
     // Already directly before the target, or last when moving to the end.
     if (from === to || from + 1 === to) return;
     const [moved] = this.profiles.splice(from, 1);
-    const insertAt = beforeId === null ? this.profiles.length : this.profiles.findIndex((p) => p.id === beforeId);
+    const insertAt =
+      beforeId === null
+        ? this.profiles.length
+        : this.profiles.findIndex((p) => p.id === beforeId);
     this.profiles.splice(insertAt, 0, moved);
     try {
-      saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+      );
     } catch (err) {
       this.profiles.splice(insertAt, 1);
       this.profiles.splice(from, 0, moved);
@@ -671,9 +765,15 @@ export class Controller {
   /** Stamps the profile's last-used timestamp and persists. */
   setLastUsed(id: string): void {
     const p = this.byID.get(id);
-    if (!p) throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    if (!p)
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     p.lastUsed = new Date().toISOString();
-    saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+    );
     this.emit({ kind: 'profiles-changed' });
   }
 
@@ -685,10 +785,16 @@ export class Controller {
    */
   setActive(id: string): void {
     const p = this.byID.get(id);
-    if (!p) throw new UnknownProfileError(`controller: unknown profile "${id}"`);
+    if (!p)
+      throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     p.lastUsed = new Date().toISOString();
     try {
-      saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+      );
     } catch (err) {
       this.log(`controller: record last-used: ${String(err)}`);
     }
@@ -727,7 +833,12 @@ export class Controller {
   setCloseToTray(value: boolean): void {
     if (value === this.closeToTray) return;
     this.closeToTray = value;
-    saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+    );
     this.emit({ kind: 'close-to-tray-changed' });
   }
 
@@ -749,7 +860,12 @@ export class Controller {
   setSyncAlerts(value: boolean): void {
     if (value === this.syncAlerts) return;
     this.syncAlerts = value;
-    saveStore(this.persistPath, this.profiles, this.closeToTray, this.syncAlerts);
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+    );
     this.emit({ kind: 'sync-alerts-changed' });
   }
 
@@ -774,10 +890,14 @@ export class Controller {
     const check = checker ?? unknownHealthChecker;
     const targets = this.profiles.map((p) => ({ id: p.id, origin: p.origin }));
     const results = await Promise.all(
-      targets.map(async (t) => ({ id: t.id, status: await check.check(t.origin) })),
+      targets.map(async (t) => ({
+        id: t.id,
+        status: await check.check(t.origin),
+      })),
     );
     for (const r of results) {
-      const status: HealthStatus = r.status === 'up' || r.status === 'down' ? r.status : 'unknown';
+      const status: HealthStatus =
+        r.status === 'up' || r.status === 'down' ? r.status : 'unknown';
       this.health.set(r.id, status);
     }
     this.emit({ kind: 'health-changed' });

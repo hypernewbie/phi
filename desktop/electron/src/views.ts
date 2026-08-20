@@ -121,7 +121,9 @@ export class ProfileViewManager {
       return;
     }
     this.profiles.set(id, { id, origin });
-    this.log(`views: registered profile ${id} (${origin}) — view created on first activation`);
+    this.log(
+      `views: registered profile ${id} (${origin}) — view created on first activation`,
+    );
   }
 
   /**
@@ -171,7 +173,8 @@ export class ProfileViewManager {
       existing.view.setVisible(true);
       // Keyboard/shortcuts route to the newly shown view (the outgoing
       // view kept focus until now).
-      if (!existing.view.webContents.isDestroyed()) existing.view.webContents.focus();
+      if (!existing.view.webContents.isDestroyed())
+        existing.view.webContents.focus();
     } else {
       // First activation: created hidden; shown after did-finish-load.
       this.ensureView(target, profile.origin);
@@ -236,7 +239,9 @@ export class ProfileViewManager {
         } else {
           entry.view.webContents.reload();
         }
-        this.log(`views: reloadAll — reloaded profile ${id} (ignoringCache=${ignoringCache})`);
+        this.log(
+          `views: reloadAll — reloaded profile ${id} (ignoringCache=${ignoringCache})`,
+        );
       }
     }
   }
@@ -254,7 +259,9 @@ export class ProfileViewManager {
       } else {
         entry.view.webContents.reload();
       }
-      this.log(`views: reloaded profile ${id} (ignoringCache=${ignoringCache})`);
+      this.log(
+        `views: reloaded profile ${id} (ignoringCache=${ignoringCache})`,
+      );
     }
   }
 
@@ -339,7 +346,9 @@ export class ProfileViewManager {
     // that fire while a body view has focus). Modified F11 chords stay
     // untouched; xterm.js leaves plain F11 unbound.
     installFullscreenToggle(view.webContents, this.win);
-    installReloadShortcut(view.webContents, undefined, (ignoringCache) => this.reloadAll(ignoringCache));
+    installReloadShortcut(view.webContents, undefined, (ignoringCache) =>
+      this.reloadAll(ignoringCache),
+    );
     installZoomShortcuts(view.webContents);
     const rootUrl = new URL(origin);
     rootUrl.searchParams.set('desktop', '1');

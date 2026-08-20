@@ -2,7 +2,11 @@
 
 import type { AppLike } from './types.js';
 import { relativeToCwd, escapeHtml } from './util.js';
-import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn } from './md-render.js';
+import {
+    renderMarkdownSafe,
+    rewriteRelativeImages,
+    highlightCodeIn,
+} from './md-render.js';
 import { normalizePath } from './sessions.js';
 import { formatAttachment, type Attachment } from './attachments.js';
 import { tryNative } from './desktop.js';
@@ -47,20 +51,38 @@ export class MarkdownManager {
         this.modal = document.getElementById('md-modal')!;
         this.modalTitle = document.getElementById('md-modal-title')!;
         this.modalBody = document.getElementById('md-modal-body')!;
-        this.modalClose = document.getElementById('md-modal-close') as HTMLElement;
-        this.modalCopyBtn = document.getElementById('md-modal-copy-btn') as HTMLElement;
+        this.modalClose = document.getElementById(
+            'md-modal-close',
+        ) as HTMLElement;
+        this.modalCopyBtn = document.getElementById(
+            'md-modal-copy-btn',
+        ) as HTMLElement;
         this.pasteModal = document.getElementById('md-paste-modal')!;
-        this.pasteModalForm = document.getElementById('md-paste-modal-form') as HTMLFormElement;
+        this.pasteModalForm = document.getElementById(
+            'md-paste-modal-form',
+        ) as HTMLFormElement;
         this.pasteModalTitle = document.getElementById('md-paste-modal-title')!;
         this.pasteModalHint = document.getElementById('md-paste-modal-hint')!;
-        this.pasteModalContent = document.getElementById('md-paste-modal-content') as HTMLTextAreaElement;
-        this.pasteModalName = document.getElementById('md-paste-modal-name') as HTMLInputElement;
+        this.pasteModalContent = document.getElementById(
+            'md-paste-modal-content',
+        ) as HTMLTextAreaElement;
+        this.pasteModalName = document.getElementById(
+            'md-paste-modal-name',
+        ) as HTMLInputElement;
         this.pasteModalDir = document.getElementById('md-paste-modal-dir')!;
-        this.pasteModalDirLabel = document.getElementById('md-paste-modal-dir-label')!;
+        this.pasteModalDirLabel = document.getElementById(
+            'md-paste-modal-dir-label',
+        )!;
         this.pasteModalError = document.getElementById('md-paste-modal-error')!;
-        this.pasteModalCancel = document.getElementById('md-paste-modal-cancel') as HTMLElement;
-        this.pasteModalSave = document.getElementById('md-paste-modal-save') as HTMLButtonElement;
-        this.pasteModalClose = document.getElementById('md-paste-modal-close') as HTMLElement;
+        this.pasteModalCancel = document.getElementById(
+            'md-paste-modal-cancel',
+        ) as HTMLElement;
+        this.pasteModalSave = document.getElementById(
+            'md-paste-modal-save',
+        ) as HTMLButtonElement;
+        this.pasteModalClose = document.getElementById(
+            'md-paste-modal-close',
+        ) as HTMLElement;
         this._pastePending = false;
         this._pasteConflict = false;
         this.currentRawContent = '';
@@ -90,7 +112,10 @@ export class MarkdownManager {
         if (this.modalCopyBtn) {
             this.modalCopyBtn.addEventListener('click', () => {
                 if (this.currentRawContent) {
-                    this._copyToClipboard(this.currentRawContent, 'Copied markdown content to clipboard');
+                    this._copyToClipboard(
+                        this.currentRawContent,
+                        'Copied markdown content to clipboard',
+                    );
                 } else {
                     this.app.showToast('No content to copy', { type: 'error' });
                 }
@@ -114,22 +139,33 @@ export class MarkdownManager {
         // on disk: the user knows what they did better than we do.
         this.restartModal = document.getElementById('restart-modal');
         this.restartModalClose = document.getElementById('restart-modal-close');
-        this.restartModalCancel = document.getElementById('restart-modal-cancel');
-        this.restartModalConfirm = document.getElementById('restart-modal-confirm');
+        this.restartModalCancel = document.getElementById(
+            'restart-modal-cancel',
+        );
+        this.restartModalConfirm = document.getElementById(
+            'restart-modal-confirm',
+        );
         const restartBtn = document.getElementById('phi-restart-btn');
         // The desktop shell hosts this page with ?desktop=1 and owns the
         // process lifecycle, so the in-page restart affordance is hidden there.
-        const desktopView = new URLSearchParams(location.search).get('desktop') === '1';
+        const desktopView =
+            new URLSearchParams(location.search).get('desktop') === '1';
         if (restartBtn && !desktopView) {
-            restartBtn.addEventListener('click', () => this._openRestartModal());
+            restartBtn.addEventListener('click', () =>
+                this._openRestartModal(),
+            );
         } else if (restartBtn) {
             restartBtn.style.display = 'none';
         }
         if (this.restartModalClose) {
-            this.restartModalClose.addEventListener('click', () => this._closeRestartModal());
+            this.restartModalClose.addEventListener('click', () =>
+                this._closeRestartModal(),
+            );
         }
         if (this.restartModalCancel) {
-            this.restartModalCancel.addEventListener('click', () => this._closeRestartModal());
+            this.restartModalCancel.addEventListener('click', () =>
+                this._closeRestartModal(),
+            );
         }
         if (this.restartModal) {
             this.restartModal.addEventListener('click', (e) => {
@@ -137,7 +173,9 @@ export class MarkdownManager {
             });
         }
         if (this.restartModalConfirm) {
-            this.restartModalConfirm.addEventListener('click', () => this._doRestart());
+            this.restartModalConfirm.addEventListener('click', () =>
+                this._doRestart(),
+            );
         }
 
         // Paste-from-clipboard modal wires. Each handler reads/writes
@@ -145,10 +183,14 @@ export class MarkdownManager {
         // double-POST, and so the second POST after a 409 carries
         // overwrite:true.
         if (this.pasteModalClose) {
-            this.pasteModalClose.addEventListener('click', () => this._closePasteModal());
+            this.pasteModalClose.addEventListener('click', () =>
+                this._closePasteModal(),
+            );
         }
         if (this.pasteModalCancel) {
-            this.pasteModalCancel.addEventListener('click', () => this._closePasteModal());
+            this.pasteModalCancel.addEventListener('click', () =>
+                this._closePasteModal(),
+            );
         }
         if (this.pasteModal) {
             this.pasteModal.addEventListener('click', (e) => {
@@ -177,16 +219,26 @@ export class MarkdownManager {
             if (e.key === 'Escape') {
                 if (!this.modal.classList.contains('hidden')) {
                     this.closeModal();
-                } else if (this.restartModal && !this.restartModal.classList.contains('hidden')) {
+                } else if (
+                    this.restartModal &&
+                    !this.restartModal.classList.contains('hidden')
+                ) {
                     this._closeRestartModal();
-                } else if (this.pasteModal && !this.pasteModal.classList.contains('hidden')) {
+                } else if (
+                    this.pasteModal &&
+                    !this.pasteModal.classList.contains('hidden')
+                ) {
                     this._closePasteModal();
                 }
                 this._hideContextMenu();
             }
         });
         document.addEventListener('click', (e) => {
-            if (this.contextMenuEl && !(e.target as any).closest('.md-context-menu') && !(e.target as any).closest('.md-file-action-btn')) {
+            if (
+                this.contextMenuEl &&
+                !(e.target as any).closest('.md-context-menu') &&
+                !(e.target as any).closest('.md-file-action-btn')
+            ) {
                 this._hideContextMenu();
             }
         });
@@ -198,22 +250,31 @@ export class MarkdownManager {
     //     re-render when the fetched list is identical to what's shown —
     //     this is what background triggers (fsnotify push, same-context
     //     tab clicks) use so the list never flickers under the user.
-    async refreshFiles(options: { force?: boolean; silent?: boolean } = {}): Promise<void> {
+    async refreshFiles(
+        options: { force?: boolean; silent?: boolean } = {},
+    ): Promise<void> {
         const force = options.force !== false;
         const silent = options.silent === true;
 
         const diffCtrl = this.app.diffController;
-        if (!force && diffCtrl && (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')) {
+        if (
+            !force &&
+            diffCtrl &&
+            (!diffCtrl.isPanelOpen || diffCtrl.activeTab !== 'markdown')
+        ) {
             return;
         }
 
         const cwd = this.app.sessionsManager.activeCWD || '';
         const requestId = ++this.refreshRequestId;
         if (!silent) {
-            this.fileListEl.innerHTML = '<div class="md-list-loading">Scanning...</div>';
+            this.fileListEl.innerHTML =
+                '<div class="md-list-loading">Scanning...</div>';
         }
         try {
-            const res = await fetch(`/api/markdown/files?cwd=${encodeURIComponent(cwd)}`);
+            const res = await fetch(
+                `/api/markdown/files?cwd=${encodeURIComponent(cwd)}`,
+            );
             if (!res.ok) throw new Error(await res.text());
             const files = await res.json();
             if (requestId !== this.refreshRequestId) return;
@@ -240,7 +301,13 @@ export class MarkdownManager {
                 if (d.startsWith('/') || /^[A-Za-z]:[\\/]/.test(d)) return d;
                 return cwd.replace(/\/+$/, '') + '/' + d.replace(/^\.\//, '');
             });
-            if (!dirs.some((d: string) => normalizePath(d) === normalizePath(data.dir!))) return;
+            if (
+                !dirs.some(
+                    (d: string) =>
+                        normalizePath(d) === normalizePath(data.dir!),
+                )
+            )
+                return;
         }
         if (this._externalDebounce) clearTimeout(this._externalDebounce);
         this._externalDebounce = setTimeout(() => {
@@ -259,14 +326,15 @@ export class MarkdownManager {
         });
 
         if (files && files.length > 0) {
-            files.forEach(f => {
+            files.forEach((f) => {
                 if (!byDir[f.dir]) byDir[f.dir] = [];
                 byDir[f.dir].push(f);
             });
         }
 
         if (Object.keys(byDir).length === 0) {
-            this.fileListEl.innerHTML = '<div class="md-list-empty">No markdown directories configured.</div>';
+            this.fileListEl.innerHTML =
+                '<div class="md-list-empty">No markdown directories configured.</div>';
         } else {
             for (const [dir, dirFiles] of Object.entries(byDir)) {
                 const group = document.createElement('div');
@@ -285,17 +353,24 @@ export class MarkdownManager {
                 delBtn.title = `Remove directory "${dir}"`;
                 delBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    if (confirm(`Remove directory "${dir}" from markdown search list?`)) {
+                    if (
+                        confirm(
+                            `Remove directory "${dir}" from markdown search list?`,
+                        )
+                    ) {
                         try {
                             await fetch('/api/config/markdown-dirs', {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ dir })
+                                body: JSON.stringify({ dir }),
                             });
                             await this.app.sessionsManager.loadConfig(); // Refresh cache!
                             this.refreshFiles();
                         } catch (err) {
-                            console.error("Failed to delete markdown dir:", err);
+                            console.error(
+                                'Failed to delete markdown dir:',
+                                err,
+                            );
                         }
                     }
                 });
@@ -308,7 +383,7 @@ export class MarkdownManager {
                     emptyHint.innerText = 'No files found';
                     group.appendChild(emptyHint);
                 } else {
-                    dirFiles.forEach(f => {
+                    dirFiles.forEach((f) => {
                         const row = document.createElement('div');
                         row.className = 'md-file-row';
 
@@ -366,7 +441,8 @@ export class MarkdownManager {
         const exportBtn = document.createElement('button');
         exportBtn.className = 'md-manage-btn';
         exportBtn.innerText = '⤓  Export';
-        exportBtn.title = 'Copy all markdown files to clipboard (gzip + clipboard)';
+        exportBtn.title =
+            'Copy all markdown files to clipboard (gzip + clipboard)';
         exportBtn.addEventListener('click', () => this._exportMarkdownBundle());
         manageRow.appendChild(exportBtn);
 
@@ -392,7 +468,9 @@ export class MarkdownManager {
         pasteBtn.id = 'md-paste-btn';
         pasteBtn.innerText = '📋  Paste';
         pasteBtn.title = 'Paste clipboard text into a new markdown file';
-        pasteBtn.addEventListener('click', () => this._pasteFromSystemClipboard());
+        pasteBtn.addEventListener('click', () =>
+            this._pasteFromSystemClipboard(),
+        );
         manageRow.appendChild(pasteBtn);
 
         const addDirBtn = document.createElement('button');
@@ -421,19 +499,21 @@ export class MarkdownManager {
             <line x1="11" y1="16" x2="20" y2="16" stroke-width="0.9" opacity="0.55"/>
             <line x1="11" y1="19" x2="21" y2="19" stroke-width="0.9" opacity="0.55"/>
         </svg>`;
-        this.modalTitle.innerHTML =
-            `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
+        this.modalTitle.innerHTML = `${scrollSvg}<span class="md-modal-title-text">${escapeHtml(name)}</span>`;
     }
 
     async openFile(f: any): Promise<void> {
         const cwd = this.app.sessionsManager.activeCWD || '';
         this._setModalTitle(f.name);
-        this.modalBody.innerHTML = '<div class="md-rendering">Rendering...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Rendering...</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
 
         try {
-            const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`);
+            const res = await fetch(
+                `/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`,
+            );
             if (!res.ok) throw new Error(await res.text());
             const raw = await res.text();
             this.currentRawContent = raw;
@@ -465,7 +545,8 @@ export class MarkdownManager {
             (this.restartModalConfirm as HTMLButtonElement).disabled = true;
             this.restartModalConfirm.textContent = 'Restarting…';
         }
-        if (this.restartModalCancel) (this.restartModalCancel as HTMLButtonElement).disabled = true;
+        if (this.restartModalCancel)
+            (this.restartModalCancel as HTMLButtonElement).disabled = true;
         try {
             const res = await fetch('/api/restart', { method: 'POST' });
             if (!res.ok) {
@@ -475,12 +556,16 @@ export class MarkdownManager {
             // The 0x05 frame from /api/restart will fire handleServerShutdown
             // which shows its own toast and reloads the page. Nothing to do here.
         } catch (err) {
-            this.app.showToast(`Restart failed: ${(err as Error).message}`, { type: 'error' });
+            this.app.showToast(`Restart failed: ${(err as Error).message}`, {
+                type: 'error',
+            });
             if (this.restartModalConfirm) {
-                (this.restartModalConfirm as HTMLButtonElement).disabled = false;
+                (this.restartModalConfirm as HTMLButtonElement).disabled =
+                    false;
                 this.restartModalConfirm.textContent = 'Restart';
             }
-            if (this.restartModalCancel) (this.restartModalCancel as HTMLButtonElement).disabled = false;
+            if (this.restartModalCancel)
+                (this.restartModalCancel as HTMLButtonElement).disabled = false;
         }
     }
 
@@ -495,18 +580,23 @@ export class MarkdownManager {
 
     async openHelpModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Documentation';
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading help...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading help...</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
 
         try {
             const res = await fetch('help.md');
-            if (!res.ok) throw new Error(await res.text() || 'Failed to load help.md');
+            if (!res.ok)
+                throw new Error((await res.text()) || 'Failed to load help.md');
             const raw = await res.text();
             this.openRawMarkdown('Phi Documentation', raw);
         } catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load help: ${escapeHtml((e as Error).message)}</div>`;
-            this.app.showToast(`Failed to open help: ${(e as Error).message}`, { type: 'error', title: 'Help' });
+            this.app.showToast(`Failed to open help: ${(e as Error).message}`, {
+                type: 'error',
+                title: 'Help',
+            });
         }
     }
 
@@ -517,7 +607,8 @@ export class MarkdownManager {
     // every 2s while open.
     async openDiagModal(): Promise<void> {
         this.modalTitle.innerText = 'Phi Diagnostics';
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading diagnostics…</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
 
@@ -534,17 +625,27 @@ export class MarkdownManager {
                 ['Mem alloc (MB)', d.mem_alloc_mb.toFixed(1)],
                 ['PTYs', d.pty_count],
             ];
-            const body = rows.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join('');
-            const panes = (d.panes || []).map((p: any) => {
-                const pct = p.ring_capacity > 0 ? Math.round(p.ring_bytes * 100 / p.ring_capacity) : 0;
-                return `<tr>
+            const body = rows
+                .map(
+                    ([k, v]) =>
+                        `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`,
+                )
+                .join('');
+            const panes = (d.panes || [])
+                .map((p: any) => {
+                    const pct =
+                        p.ring_capacity > 0
+                            ? Math.round((p.ring_bytes * 100) / p.ring_capacity)
+                            : 0;
+                    return `<tr>
                     <td>${escapeHtml(p.title || p.id.slice(0, 8))}</td>
                     <td>${escapeHtml(p.coder || '—')}</td>
                     <td>${p.client_count}</td>
                     <td>${p.ring_bytes}/${p.ring_capacity} (${pct}%)</td>
                     <td>${p.busy ? 'busy' : 'idle'}</td>
                 </tr>`;
-            }).join('');
+                })
+                .join('');
             this.modalBody.innerHTML = `
                 <div class="diag-panel">
                     <table class="diag-table"><tbody>${body}</tbody></table>
@@ -586,10 +687,11 @@ export class MarkdownManager {
     // which release they're reading the changelog for.
     async openChangelogModal(): Promise<void> {
         const versionEl = document.getElementById('phi-changelog-btn');
-        const version = (versionEl && versionEl.textContent || '').trim();
+        const version = ((versionEl && versionEl.textContent) || '').trim();
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
-        this.modalBody.innerHTML = '<div class="md-rendering">Loading changelog...</div>';
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';
         this.modal.classList.remove('hidden');
 
@@ -608,12 +710,18 @@ export class MarkdownManager {
 
         try {
             const res = await fetch('changelog.md');
-            if (!res.ok) throw new Error(await res.text() || 'Failed to load changelog.md');
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to load changelog.md',
+                );
             const raw = await res.text();
             this.openRawMarkdown(title, raw);
         } catch (e) {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load changelog: ${escapeHtml((e as Error).message)}</div>`;
-            this.app.showToast(`Failed to open changelog: ${(e as Error).message}`, { type: 'error', title: 'Changelog' });
+            this.app.showToast(
+                `Failed to open changelog: ${(e as Error).message}`,
+                { type: 'error', title: 'Changelog' },
+            );
         }
     }
 
@@ -624,7 +732,8 @@ export class MarkdownManager {
     // the Apply button.
     _buildUpdateBanner(): HTMLElement | null {
         const status = this.app && this.app.updateStatus;
-        if (!status || !status.update_available || status.current === 'dev') return null;
+        if (!status || !status.update_available || status.current === 'dev')
+            return null;
 
         const banner = document.createElement('div');
         banner.className = 'update-banner';
@@ -642,14 +751,20 @@ export class MarkdownManager {
 
         // Show Apply button only for eligible install methods (npm / standalone).
         // Server-side enforce too: POST /api/update/apply returns 403 otherwise.
-        if (status.install_method === 'npm' || status.install_method === 'standalone') {
+        if (
+            status.install_method === 'npm' ||
+            status.install_method === 'standalone'
+        ) {
             const actions = document.createElement('div');
             actions.className = 'update-banner-actions';
             const applyBtn = document.createElement('button');
             applyBtn.className = 'update-banner-btn';
             applyBtn.textContent = `Apply & restart next time`;
-            applyBtn.title = 'Stage the binary. phi restarts into it next time it restarts (manual: Ctrl+C + relaunch).';
-            applyBtn.addEventListener('click', () => this._startUpdateApply(status.latest, applyBtn, banner));
+            applyBtn.title =
+                'Stage the binary. phi restarts into it next time it restarts (manual: Ctrl+C + relaunch).';
+            applyBtn.addEventListener('click', () =>
+                this._startUpdateApply(status.latest, applyBtn, banner),
+            );
             actions.appendChild(applyBtn);
 
             // Phase 9 T3: 'Apply & restart now' chains the staged swap
@@ -659,10 +774,19 @@ export class MarkdownManager {
             // §3.5 'npm-shim consideration'.
             if (status.install_method === 'standalone') {
                 const restartBtn = document.createElement('button');
-                restartBtn.className = 'update-banner-btn update-banner-btn-restart';
+                restartBtn.className =
+                    'update-banner-btn update-banner-btn-restart';
                 restartBtn.textContent = 'Apply & restart now';
-                restartBtn.title = 'Stage the binary and immediately restart phi. Browser will reload.';
-                restartBtn.addEventListener('click', () => this._startUpdateApplyAndRestart(status.latest, restartBtn, applyBtn, banner));
+                restartBtn.title =
+                    'Stage the binary and immediately restart phi. Browser will reload.';
+                restartBtn.addEventListener('click', () =>
+                    this._startUpdateApplyAndRestart(
+                        status.latest,
+                        restartBtn,
+                        applyBtn,
+                        banner,
+                    ),
+                );
                 actions.appendChild(restartBtn);
             }
 
@@ -672,7 +796,11 @@ export class MarkdownManager {
         return banner;
     }
 
-    async _startUpdateApply(version: string, btn: HTMLButtonElement, banner: HTMLElement): Promise<void> {
+    async _startUpdateApply(
+        version: string,
+        btn: HTMLButtonElement,
+        banner: HTMLElement,
+    ): Promise<void> {
         btn.disabled = true;
         btn.textContent = 'Starting…';
         const progressEl = document.createElement('div');
@@ -684,7 +812,7 @@ export class MarkdownManager {
             const res = await fetch('/api/update/apply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version })
+                body: JSON.stringify({ version }),
             });
             if (!res.ok) {
                 const errText = await res.text();
@@ -711,7 +839,10 @@ export class MarkdownManager {
                 if (p.phase === 'done' || p.phase === 'error') {
                     if (p.phase === 'done') {
                         btn.textContent = `Staged ${version} — restart into it`;
-                        this.app.showToast(`Update staged. Restart phi to apply ${version}.`, { type: 'success' });
+                        this.app.showToast(
+                            `Update staged. Restart phi to apply ${version}.`,
+                            { type: 'success' },
+                        );
                     } else {
                         btn.disabled = false;
                         btn.textContent = `Retry apply`;
@@ -729,13 +860,20 @@ export class MarkdownManager {
     _formatProgress(p: any): string {
         if (!p || !p.phase) return '';
         switch (p.phase) {
-            case 'downloading': return `Downloading… ${p.pct}%`;
-            case 'verifying':   return 'Verifying checksum…';
-            case 'extracting':  return 'Extracting binary…';
-            case 'staging':     return 'Staging swap…';
-            case 'done':        return `Staged. Old binary kept at ${p.old_path || 'phi.old'}.`;
-            case 'error':       return `Error: ${p.error || 'unknown'}`;
-            default:            return p.phase;
+            case 'downloading':
+                return `Downloading… ${p.pct}%`;
+            case 'verifying':
+                return 'Verifying checksum…';
+            case 'extracting':
+                return 'Extracting binary…';
+            case 'staging':
+                return 'Staging swap…';
+            case 'done':
+                return `Staged. Old binary kept at ${p.old_path || 'phi.old'}.`;
+            case 'error':
+                return `Error: ${p.error || 'unknown'}`;
+            default:
+                return p.phase;
         }
     }
 
@@ -744,7 +882,12 @@ export class MarkdownManager {
     // see plan §3.5). The WS 0x05 handler in terminal.js arms the page
     // reload; the staging step must complete BEFORE the restart, so
     // we poll progress until phase==done before POSTing /api/restart.
-    async _startUpdateApplyAndRestart(version: string, restartBtn: HTMLButtonElement, applyBtn: HTMLButtonElement, banner: HTMLElement): Promise<void> {
+    async _startUpdateApplyAndRestart(
+        version: string,
+        restartBtn: HTMLButtonElement,
+        applyBtn: HTMLButtonElement,
+        banner: HTMLElement,
+    ): Promise<void> {
         restartBtn.disabled = true;
         applyBtn.disabled = true;
         restartBtn.textContent = 'Staging…';
@@ -756,9 +899,10 @@ export class MarkdownManager {
             const res = await fetch('/api/update/apply', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ version })
+                body: JSON.stringify({ version }),
             });
-            if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
+            if (!res.ok)
+                throw new Error((await res.text()) || `HTTP ${res.status}`);
         } catch (err) {
             restartBtn.disabled = false;
             applyBtn.disabled = false;
@@ -779,14 +923,15 @@ export class MarkdownManager {
                 progressEl.classList.toggle('error', p.phase === 'error');
             }
             if (p.phase === 'done') return true;
-            if (p.phase === 'error') throw new Error(p.error || 'staging failed');
+            if (p.phase === 'error')
+                throw new Error(p.error || 'staging failed');
             return false;
         };
 
         try {
             for (;;) {
                 if (await waitForStaged()) break;
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise((r) => setTimeout(r, 500));
             }
         } catch (err) {
             restartBtn.disabled = false;
@@ -811,18 +956,20 @@ export class MarkdownManager {
     }
 
     async _promptAddDir(): Promise<void> {
-        const dir = prompt("Add markdown directory (relative to workspace, e.g. ./docs):");
+        const dir = prompt(
+            'Add markdown directory (relative to workspace, e.g. ./docs):',
+        );
         if (!dir || !dir.trim()) return;
         try {
             await fetch('/api/config/markdown-dirs', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dir: dir.trim() })
+                body: JSON.stringify({ dir: dir.trim() }),
             });
             await this.app.sessionsManager.loadConfig(); // Refresh cache!
             this.refreshFiles();
         } catch (e) {
-            console.error("Failed to add markdown dir:", e);
+            console.error('Failed to add markdown dir:', e);
         }
     }
 
@@ -838,15 +985,46 @@ export class MarkdownManager {
         this.contextMenuEl.innerHTML = '';
 
         const actions = [
-            { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertRelativePath(file, { mention: true }) },
-            { icon: '↗', label: 'Open in new window', className: 'open-window', handler: () => this._openInNewWindow(file) },
-            { icon: '⧉', label: 'Copy', className: 'copy', handler: () => this._copyMarkdownFile(file) },
-            { icon: '⇉', label: 'Copy to all worktrees', className: 'copy-all', handler: () => this._copyMarkdownFileToAllWorktrees(file) },
-            { icon: '⇩', label: 'Paste…', className: 'paste', handler: () => this._pasteMarkdownFile(file) },
-            { icon: '🗑', label: 'Delete…', className: 'delete', handler: () => this._deleteMarkdownFile(file) },
+            {
+                icon: '@',
+                label: 'Insert @path',
+                className: 'insert-path',
+                handler: () =>
+                    this._insertRelativePath(file, { mention: true }),
+            },
+            {
+                icon: '↗',
+                label: 'Open in new window',
+                className: 'open-window',
+                handler: () => this._openInNewWindow(file),
+            },
+            {
+                icon: '⧉',
+                label: 'Copy',
+                className: 'copy',
+                handler: () => this._copyMarkdownFile(file),
+            },
+            {
+                icon: '⇉',
+                label: 'Copy to all worktrees',
+                className: 'copy-all',
+                handler: () => this._copyMarkdownFileToAllWorktrees(file),
+            },
+            {
+                icon: '⇩',
+                label: 'Paste…',
+                className: 'paste',
+                handler: () => this._pasteMarkdownFile(file),
+            },
+            {
+                icon: '🗑',
+                label: 'Delete…',
+                className: 'delete',
+                handler: () => this._deleteMarkdownFile(file),
+            },
         ];
 
-        actions.forEach(action => {
+        actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
             btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;
@@ -861,8 +1039,17 @@ export class MarkdownManager {
         const rect = anchorEl.getBoundingClientRect();
         this.contextMenuEl.classList.remove('hidden');
         const menuRect = this.contextMenuEl.getBoundingClientRect();
-        const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
-        const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8));
+        const left = Math.max(
+            8,
+            Math.min(
+                rect.right - menuRect.width,
+                window.innerWidth - menuRect.width - 8,
+            ),
+        );
+        const top = Math.max(
+            8,
+            Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8),
+        );
         this.contextMenuEl.style.left = `${left}px`;
         this.contextMenuEl.style.top = `${top}px`;
     }
@@ -883,20 +1070,36 @@ export class MarkdownManager {
         // when noopener is set, which would defeat popup-blocked detection.
         // Same-origin page; sever the back-reference manually instead.
         const win = window.open(url, '_blank', 'width=860,height=1000');
-        if (win) { win.opener = null; }
-        else this.app.showToast('Popup blocked — allow popups for this site.', { type: 'error' });
+        if (win) {
+            win.opener = null;
+        } else
+            this.app.showToast('Popup blocked — allow popups for this site.', {
+                type: 'error',
+            });
     }
 
     async _copyMarkdownFile(file: any): Promise<void> {
         try {
             const cwd = this.app.sessionsManager.activeCWD || '';
-            const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(file.path)}&cwd=${encodeURIComponent(cwd)}`);
+            const res = await fetch(
+                `/api/markdown/file?path=${encodeURIComponent(file.path)}&cwd=${encodeURIComponent(cwd)}`,
+            );
             if (!res.ok) throw new Error(await res.text());
             const content = await res.text();
-            this.markdownClipboard = { name: file.name, dir: file.dir, content };
-            this.app.showToast(`Copied "${file.name}"`, { type: 'info', title: 'Markdown Clipboard' });
+            this.markdownClipboard = {
+                name: file.name,
+                dir: file.dir,
+                content,
+            };
+            this.app.showToast(`Copied "${file.name}"`, {
+                type: 'info',
+                title: 'Markdown Clipboard',
+            });
         } catch (e) {
-            this.app.showToast(`Failed to copy file: ${(e as Error).message}`, { type: 'error', title: 'Markdown Clipboard' });
+            this.app.showToast(`Failed to copy file: ${(e as Error).message}`, {
+                type: 'error',
+                title: 'Markdown Clipboard',
+            });
         }
     }
 
@@ -906,19 +1109,28 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/copy-all-worktrees', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, dir: file.dir, path: file.path })
+                body: JSON.stringify({ cwd, dir: file.dir, path: file.path }),
             });
             if (!res.ok) throw new Error(await res.text());
             const result = await res.json();
-            this.app.showToast(`Copied "${file.name}" to ${result.copied} worktree(s)`, { type: 'info', title: 'Markdown' });
+            this.app.showToast(
+                `Copied "${file.name}" to ${result.copied} worktree(s)`,
+                { type: 'info', title: 'Markdown' },
+            );
         } catch (e) {
-            this.app.showToast(`Failed to copy to worktrees: ${(e as Error).message}`, { type: 'error', title: 'Markdown' });
+            this.app.showToast(
+                `Failed to copy to worktrees: ${(e as Error).message}`,
+                { type: 'error', title: 'Markdown' },
+            );
         }
     }
 
     async _pasteMarkdownFile(file: any): Promise<void> {
         if (!this.markdownClipboard) {
-            this.app.showToast('Nothing copied yet', { type: 'error', title: 'Markdown Clipboard' });
+            this.app.showToast('Nothing copied yet', {
+                type: 'error',
+                title: 'Markdown Clipboard',
+            });
             return;
         }
         const suggested = this.markdownClipboard.name;
@@ -931,7 +1143,13 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/paste', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, dir: file.dir, name, content: this.markdownClipboard!.content, overwrite })
+                body: JSON.stringify({
+                    cwd,
+                    dir: file.dir,
+                    name,
+                    content: this.markdownClipboard!.content,
+                    overwrite,
+                }),
             });
             if (res.status === 409 && !overwrite) {
                 if (confirm(`"${name}" already exists. Overwrite it?`)) {
@@ -940,14 +1158,20 @@ export class MarkdownManager {
                 return;
             }
             if (!res.ok) throw new Error(await res.text());
-            this.app.showToast(`Pasted as "${name}"`, { type: 'info', title: 'Markdown Clipboard' });
+            this.app.showToast(`Pasted as "${name}"`, {
+                type: 'info',
+                title: 'Markdown Clipboard',
+            });
             await this.refreshFiles();
         };
 
         try {
             await doPaste(false);
         } catch (e) {
-            this.app.showToast(`Failed to paste file: ${(e as Error).message}`, { type: 'error', title: 'Markdown Clipboard' });
+            this.app.showToast(
+                `Failed to paste file: ${(e as Error).message}`,
+                { type: 'error', title: 'Markdown Clipboard' },
+            );
         }
     }
 
@@ -972,7 +1196,11 @@ export class MarkdownManager {
         let content = '';
         let clipboardAvailable = false;
         try {
-            if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+            if (
+                typeof navigator !== 'undefined' &&
+                navigator.clipboard &&
+                navigator.clipboard.readText
+            ) {
                 content = await navigator.clipboard.readText();
                 clipboardAvailable = true;
             }
@@ -1004,11 +1232,18 @@ export class MarkdownManager {
     // a <select> when more than one. The default filename is local-time
     // `pasted-YYYY-MM-DD-HHmmss.md` so two clicks in the same minute are
     // rare; the 409 overwrite flow handles the residual collision.
-    _openPasteModal(opts: { content: string; hint: string; focusContent: boolean }): void {
+    _openPasteModal(opts: {
+        content: string;
+        hint: string;
+        focusContent: boolean;
+    }): void {
         const dirs = (this.app.markdownDirs as string[] | undefined) || [];
         if (dirs.length === 0) {
             // Race: directories cleared between button click and modal open.
-            this.app.showToast('No markdown directory configured', { type: 'error', title: 'Markdown' });
+            this.app.showToast('No markdown directory configured', {
+                type: 'error',
+                title: 'Markdown',
+            });
             return;
         }
 
@@ -1078,8 +1313,10 @@ export class MarkdownManager {
     _selectedPasteDir(): string {
         const dirs = (this.app.markdownDirs as string[] | undefined) || [];
         if (dirs.length === 1) return dirs[0];
-        const select = this.pasteModalDir.querySelector('select') as HTMLSelectElement | null;
-        return (select && select.value) ? select.value : (dirs[0] || '');
+        const select = this.pasteModalDir.querySelector(
+            'select',
+        ) as HTMLSelectElement | null;
+        return select && select.value ? select.value : dirs[0] || '';
     }
 
     _setPasteError(msg: string): void {
@@ -1118,9 +1355,10 @@ export class MarkdownManager {
         }
 
         const overwrite = this._pasteConflict;
-        const name = nameRaw.endsWith('.md') || nameRaw.toLowerCase().endsWith('.md')
-            ? nameRaw
-            : `${nameRaw}.md`;
+        const name =
+            nameRaw.endsWith('.md') || nameRaw.toLowerCase().endsWith('.md')
+                ? nameRaw
+                : `${nameRaw}.md`;
         const dir = this._selectedPasteDir();
 
         this._pastePending = true;
@@ -1140,7 +1378,9 @@ export class MarkdownManager {
                 // the modal. Next submit retries with overwrite:true.
                 this._pasteConflict = true;
                 this.pasteModalSave.textContent = 'Overwrite';
-                this._setPasteError(`"${name}" already exists. Click Overwrite to replace it.`);
+                this._setPasteError(
+                    `"${name}" already exists. Click Overwrite to replace it.`,
+                );
                 this._pastePending = false;
                 this.pasteModalSave.disabled = false;
                 return;
@@ -1156,7 +1396,10 @@ export class MarkdownManager {
             // past the request.
             this._pastePending = false;
             this._closePasteModal();
-            this.app.showToast(`Pasted as "${savedName}"`, { type: 'info', title: 'Markdown' });
+            this.app.showToast(`Pasted as "${savedName}"`, {
+                type: 'info',
+                title: 'Markdown',
+            });
             await this.refreshFiles();
         } catch (e) {
             // Keep modal open, surface the error inline. Save re-enabled
@@ -1180,13 +1423,19 @@ export class MarkdownManager {
             const res = await fetch('/api/markdown/delete', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cwd, path: file.path })
+                body: JSON.stringify({ cwd, path: file.path }),
             });
             if (!res.ok) throw new Error(await res.text());
-            this.app.showToast(`Deleted "${file.name}"`, { type: 'info', title: 'Markdown' });
+            this.app.showToast(`Deleted "${file.name}"`, {
+                type: 'info',
+                title: 'Markdown',
+            });
             await this.refreshFiles();
         } catch (e) {
-            this.app.showToast(`Failed to delete file: ${(e as Error).message}`, { type: 'error', title: 'Markdown' });
+            this.app.showToast(
+                `Failed to delete file: ${(e as Error).message}`,
+                { type: 'error', title: 'Markdown' },
+            );
         }
     }
 
@@ -1201,10 +1450,14 @@ export class MarkdownManager {
         let insertText = relPath;
         if (opts.mention) {
             const coder = this.app.tabManager?.getActiveTab?.()?.coder || '';
-            insertText = formatAttachment(coder, { path: relPath } as Attachment);
+            insertText = formatAttachment(coder, {
+                path: relPath,
+            } as Attachment);
         }
 
-        const textarea = document.getElementById('input-textarea') as HTMLTextAreaElement | null;
+        const textarea = document.getElementById(
+            'input-textarea',
+        ) as HTMLTextAreaElement | null;
         if (textarea) {
             const start = textarea.selectionStart as number;
             const end = textarea.selectionEnd as number;
@@ -1212,8 +1465,9 @@ export class MarkdownManager {
             const before = text.substring(0, start);
             const after = text.substring(end, text.length);
 
-            const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
-            const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
+            const padBefore = start > 0 && !before.endsWith(' ') ? ' ' : '';
+            const padAfter =
+                !after.startsWith(' ') && after.length > 0 ? ' ' : '';
 
             textarea.value = before + padBefore + insertText + padAfter + after;
 
@@ -1232,7 +1486,9 @@ export class MarkdownManager {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(text);
             } else {
-                const ta = Object.assign(document.createElement('textarea'), { value: text });
+                const ta = Object.assign(document.createElement('textarea'), {
+                    value: text,
+                });
                 ta.style.cssText = 'position:fixed;opacity:0';
                 document.body.appendChild(ta);
                 ta.select();
@@ -1260,15 +1516,19 @@ export class MarkdownManager {
             if (!res.ok) throw new Error(`export failed: ${res.status}`);
             const data = (await res.json()) as { blob: string; count: number };
             if (!data.blob) {
-                this.app.showToast('No markdown files to export', { type: 'info' });
+                this.app.showToast('No markdown files to export', {
+                    type: 'info',
+                });
                 return;
             }
             await this._copyToClipboard(
                 data.blob,
-                `Exported ${data.count} markdown file${data.count === 1 ? '' : 's'} to clipboard`
+                `Exported ${data.count} markdown file${data.count === 1 ? '' : 's'} to clipboard`,
             );
         } catch (err) {
-            this.app.showToast(`Export failed: ${(err as Error).message}`, { type: 'error' });
+            this.app.showToast(`Export failed: ${(err as Error).message}`, {
+                type: 'error',
+            });
         }
     }
 
@@ -1287,21 +1547,30 @@ export class MarkdownManager {
             console.warn('[md] clipboard read blocked', err);
         }
         if (!blob || !blob.trim()) {
-            blob = (typeof prompt === 'function')
-                ? (prompt('Paste your markdown bundle here (starts with PHIMD:):') || '')
-                : '';
+            blob =
+                typeof prompt === 'function'
+                    ? prompt(
+                          'Paste your markdown bundle here (starts with PHIMD:):',
+                      ) || ''
+                    : '';
         }
         if (!blob || !blob.trim()) {
             this.app.showToast('No bundle text to import', { type: 'info' });
             return;
         }
         if (!blob.startsWith('PHIMD:')) {
-            this.app.showToast('Clipboard does not contain a markdown bundle (expected PHIMD:…)', { type: 'error' });
+            this.app.showToast(
+                'Clipboard does not contain a markdown bundle (expected PHIMD:…)',
+                { type: 'error' },
+            );
             return;
         }
-        const overwrite = typeof confirm === 'function'
-            ? confirm('Overwrite existing files with the same name?\nClick Cancel to skip existing files (safe default).')
-            : false;
+        const overwrite =
+            typeof confirm === 'function'
+                ? confirm(
+                      'Overwrite existing files with the same name?\nClick Cancel to skip existing files (safe default).',
+                  )
+                : false;
         try {
             const cwd = this.app.sessionsManager.activeCWD || '';
             const res = await fetch('/api/markdown/import-bundle', {
@@ -1313,18 +1582,23 @@ export class MarkdownManager {
                 const errText = await res.text();
                 throw new Error(errText || `${res.status}`);
             }
-            const data = (await res.json()) as { written: string[]; skipped: string[] };
+            const data = (await res.json()) as {
+                written: string[];
+                skipped: string[];
+            };
             const written = data.written?.length || 0;
             const skipped = data.skipped?.length || 0;
             this.app.showToast(
                 `Imported ${written} file${written === 1 ? '' : 's'}` +
-                (skipped ? `, skipped ${skipped}` : ''),
-                { type: 'info', title: 'Markdown' }
+                    (skipped ? `, skipped ${skipped}` : ''),
+                { type: 'info', title: 'Markdown' },
             );
             // Refresh the file list so newly written files appear.
             await this.refreshFiles({ force: true });
         } catch (err) {
-            this.app.showToast(`Import failed: ${(err as Error).message}`, { type: 'error' });
+            this.app.showToast(`Import failed: ${(err as Error).message}`, {
+                type: 'error',
+            });
         }
     }
 }

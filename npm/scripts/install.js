@@ -9,19 +9,21 @@ const repo = 'hypernewbie/phi';
 const platformMap = {
   darwin: 'darwin',
   linux: 'linux',
-  win32: 'windows'
+  win32: 'windows',
 };
 
 const archMap = {
   x64: 'amd64',
-  arm64: 'arm64'
+  arm64: 'arm64',
 };
 
 const os = platformMap[process.platform];
 const arch = archMap[process.arch];
 
 if (!os || !arch) {
-  console.error(`Unsupported platform/architecture: ${process.platform}/${process.arch}`);
+  console.error(
+    `Unsupported platform/architecture: ${process.platform}/${process.arch}`,
+  );
   process.exit(1);
 }
 
@@ -41,24 +43,30 @@ console.log(`Downloading precompiled Phi binary from ${downloadUrl}...`);
 
 function download(url, dest) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        download(res.headers.location, dest).then(resolve).catch(reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`Failed to download binary: status code ${res.statusCode}`));
-        return;
-      }
-      const file = fs.createWriteStream(dest);
-      res.pipe(file);
-      file.on('finish', () => {
-        file.close();
-        resolve();
+    https
+      .get(url, (res) => {
+        if (res.statusCode === 302 || res.statusCode === 301) {
+          download(res.headers.location, dest).then(resolve).catch(reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(
+            new Error(
+              `Failed to download binary: status code ${res.statusCode}`,
+            ),
+          );
+          return;
+        }
+        const file = fs.createWriteStream(dest);
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve();
+        });
+      })
+      .on('error', (err) => {
+        reject(err);
       });
-    }).on('error', (err) => {
-      reject(err);
-    });
   });
 }
 
@@ -68,12 +76,14 @@ download(downloadUrl, tempFile)
     const destBinaryPath = path.join(binDir, binaryName);
 
     if (isWindows) {
-      execSync(`powershell -Command "Expand-Archive -Path '${tempFile}' -DestinationPath '${binDir}' -Force"`);
+      execSync(
+        `powershell -Command "Expand-Archive -Path '${tempFile}' -DestinationPath '${binDir}' -Force"`,
+      );
     } else {
       execSync(`tar -xzf "${tempFile}" -C "${binDir}"`);
       fs.chmodSync(destBinaryPath, 0o755);
     }
-    
+
     fs.unlinkSync(tempFile);
     console.log('Phi binary successfully installed!');
   })

@@ -6,8 +6,13 @@ import path from 'node:path';
 import { TabManager } from '../web/terminal.js';
 
 const terminalJsSrc = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'terminal.js'),
-    'utf8'
+    path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'web',
+        'terminal.js',
+    ),
+    'utf8',
 );
 
 // F7 hardening: typing/clicking into a dead tab must never be a silent no-op.
@@ -35,7 +40,11 @@ function deadTab() {
     return { isDead: true, ws: { sendInput: vi.fn(() => false) } };
 }
 function liveTab() {
-    return { isDead: false, ws: { sendInput: vi.fn(() => true) }, directMode: true };
+    return {
+        isDead: false,
+        ws: { sendInput: vi.fn(() => true) },
+        directMode: true,
+    };
 }
 
 describe('sendStagedInput on a dead tab', () => {
@@ -50,7 +59,7 @@ describe('sendStagedInput on a dead tab', () => {
         TabManager.prototype.sendStagedInput.call(c);
         expect(c.app.showToast).toHaveBeenCalledWith(
             'Tab is disconnected — input not sent',
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
         expect(c._showReconnectOverlay).toHaveBeenCalled();
     });
@@ -87,7 +96,7 @@ describe('sendRawInput on a dead tab', () => {
         expect(tab.ws.sendInput).not.toHaveBeenCalled();
         expect(c.app.showToast).toHaveBeenCalledWith(
             'Tab is disconnected — input not sent',
-            expect.objectContaining({ type: 'error' })
+            expect.objectContaining({ type: 'error' }),
         );
         expect(c._spamScrollToBottom).not.toHaveBeenCalled();
     });

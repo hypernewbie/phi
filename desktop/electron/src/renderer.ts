@@ -21,18 +21,48 @@ export function identityLabel(profile: RailProfile): string {
    across sessions without any manual assignment. Phi (Φ/φ) is excluded
    — the brand mark belongs to the title row, not to a generated glyph. */
 const GREEK_PAIRS: ReadonlyArray<readonly [string, string]> = [
-  ['Α', 'α'], ['Β', 'β'], ['Γ', 'γ'], ['Δ', 'δ'], ['Ε', 'ε'], ['Ζ', 'ζ'],
-  ['Η', 'η'], ['Θ', 'θ'], ['Ι', 'ι'], ['Κ', 'κ'], ['Λ', 'λ'], ['Μ', 'μ'],
-  ['Ν', 'ν'], ['Ξ', 'ξ'], ['Ο', 'ο'], ['Π', 'π'], ['Ρ', 'ρ'], ['Σ', 'σ'],
-  ['Τ', 'τ'], ['Υ', 'υ'], ['Χ', 'χ'], ['Ψ', 'ψ'], ['Ω', 'ω'],
+  ['Α', 'α'],
+  ['Β', 'β'],
+  ['Γ', 'γ'],
+  ['Δ', 'δ'],
+  ['Ε', 'ε'],
+  ['Ζ', 'ζ'],
+  ['Η', 'η'],
+  ['Θ', 'θ'],
+  ['Ι', 'ι'],
+  ['Κ', 'κ'],
+  ['Λ', 'λ'],
+  ['Μ', 'μ'],
+  ['Ν', 'ν'],
+  ['Ξ', 'ξ'],
+  ['Ο', 'ο'],
+  ['Π', 'π'],
+  ['Ρ', 'ρ'],
+  ['Σ', 'σ'],
+  ['Τ', 'τ'],
+  ['Υ', 'υ'],
+  ['Χ', 'χ'],
+  ['Ψ', 'ψ'],
+  ['Ω', 'ω'],
 ];
 
 /** Every uppercase and lowercase Greek letter (Φ/φ excluded) plus final sigma. */
-const GREEK_POOL: readonly string[] = GREEK_PAIRS.flatMap(([u, l]) => [u, l]).concat('ς');
+const GREEK_POOL: readonly string[] = GREEK_PAIRS.flatMap(([u, l]) => [
+  u,
+  l,
+]).concat('ς');
 
 /** Case counterpart of a Greek letter for collision disambiguation (ς → Σ). */
 const GREEK_CASE: ReadonlyMap<string, string> = (() => {
-  const map = new Map<string, string>(GREEK_PAIRS.flatMap(([u, l]) => [[u, l], [l, u]] as const));
+  const map = new Map<string, string>(
+    GREEK_PAIRS.flatMap(
+      ([u, l]) =>
+        [
+          [u, l],
+          [l, u],
+        ] as const,
+    ),
+  );
   map.set('ς', 'Σ');
   return map;
 })();
@@ -50,8 +80,12 @@ function fnv1a(input: string): number {
 /** A stable Greek letter for a hostname. Collisions resolve to the
  *  case-different letter first, then Greek numeral marks (Αʹ, Αʹʹ, …).
  *  `used` carries the glyphs already shown in the current rail render. */
-export function greekGlyphForHostname(hostname: string, used: ReadonlySet<string> = new Set()): string {
-  const base = GREEK_POOL[fnv1a(canonicalHostname(hostname)) % GREEK_POOL.length];
+export function greekGlyphForHostname(
+  hostname: string,
+  used: ReadonlySet<string> = new Set(),
+): string {
+  const base =
+    GREEK_POOL[fnv1a(canonicalHostname(hostname)) % GREEK_POOL.length];
   if (!used.has(base)) return base;
   const swapped = GREEK_CASE.get(base);
   if (swapped !== undefined && !used.has(swapped)) return swapped;
@@ -77,7 +111,10 @@ export function badgeText(n: number): string {
  * An open entry context menu is dismissed first (its target may have
  * changed or vanished).
  */
-export function render(state: RailState, list: HTMLElement | null = document.getElementById('rail-list')): void {
+export function render(
+  state: RailState,
+  list: HTMLElement | null = document.getElementById('rail-list'),
+): void {
   closeRailMenu();
   if (list === null) return;
   // Active server accent drives the rail chrome; unobserved keeps the fallback.
@@ -159,7 +196,9 @@ let railMenuClose: (() => void) | null = null;
 let draggedProfileId: string | null = null;
 
 function clearDropIndicator(list: HTMLElement): void {
-  for (const el of list.querySelectorAll<HTMLElement>('.rail-item.drop-before, .rail-item.drop-after')) {
+  for (const el of list.querySelectorAll<HTMLElement>(
+    '.rail-item.drop-before, .rail-item.drop-after',
+  )) {
     el.classList.remove('drop-before', 'drop-after');
   }
 }
@@ -170,7 +209,12 @@ function nearestItem(list: HTMLElement, clientY: number): HTMLElement | null {
   let bestDistance = Infinity;
   for (const el of list.querySelectorAll<HTMLElement>('.rail-item')) {
     const rect = el.getBoundingClientRect();
-    const distance = clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0;
+    const distance =
+      clientY < rect.top
+        ? rect.top - clientY
+        : clientY > rect.bottom
+          ? clientY - rect.bottom
+          : 0;
     if (distance < bestDistance) {
       bestDistance = distance;
       best = el;
@@ -184,7 +228,9 @@ function nearestItem(list: HTMLElement, clientY: number): HTMLElement | null {
  * (before its next sibling, or the end when none remains). */
 function setupDragAndDrop(list: HTMLElement): void {
   list.addEventListener('dragstart', (event) => {
-    const item = (event.target as HTMLElement).closest<HTMLElement>('.rail-item');
+    const item = (event.target as HTMLElement).closest<HTMLElement>(
+      '.rail-item',
+    );
     if (item === null) return;
     const id = item.dataset.id;
     if (id === undefined || id === '') return;
@@ -200,11 +246,14 @@ function setupDragAndDrop(list: HTMLElement): void {
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
     const item =
-      (event.target as HTMLElement).closest<HTMLElement>('.rail-item') ?? nearestItem(list, event.clientY);
+      (event.target as HTMLElement).closest<HTMLElement>('.rail-item') ??
+      nearestItem(list, event.clientY);
     clearDropIndicator(list);
     if (item === null || item.dataset.id === draggedProfileId) return;
     const rect = item.getBoundingClientRect();
-    item.classList.add(event.clientY < rect.top + rect.height / 2 ? 'drop-before' : 'drop-after');
+    item.classList.add(
+      event.clientY < rect.top + rect.height / 2 ? 'drop-before' : 'drop-after',
+    );
   });
   list.addEventListener('dragleave', (event) => {
     const related = event.relatedTarget as Node | null;
@@ -215,24 +264,31 @@ function setupDragAndDrop(list: HTMLElement): void {
     const id = draggedProfileId;
     clearDropIndicator(list);
     draggedProfileId = null;
-    for (const el of list.querySelectorAll<HTMLElement>('.rail-item.dragging')) {
+    for (const el of list.querySelectorAll<HTMLElement>(
+      '.rail-item.dragging',
+    )) {
       el.classList.remove('dragging');
     }
     if (id === null) return;
     const item =
-      (event.target as HTMLElement).closest<HTMLElement>('.rail-item') ?? nearestItem(list, event.clientY);
+      (event.target as HTMLElement).closest<HTMLElement>('.rail-item') ??
+      nearestItem(list, event.clientY);
     let beforeId: string | null = null;
     if (item !== null) {
       const rect = item.getBoundingClientRect();
       const before = event.clientY < rect.top + rect.height / 2;
-      const target = before ? item : (item.nextElementSibling as HTMLElement | null);
+      const target = before
+        ? item
+        : (item.nextElementSibling as HTMLElement | null);
       beforeId = target?.dataset.id ?? null;
     }
     window.electron.postReorderProfile(id, beforeId);
   });
   list.addEventListener('dragend', () => {
     draggedProfileId = null;
-    for (const el of list.querySelectorAll<HTMLElement>('.rail-item.dragging')) {
+    for (const el of list.querySelectorAll<HTMLElement>(
+      '.rail-item.dragging',
+    )) {
       el.classList.remove('dragging');
     }
     clearDropIndicator(list);
@@ -244,7 +300,8 @@ function closeRailMenu(): void {
   railMenuClose = null;
   if (railMenu !== null) {
     const active = railMenu.ownerDocument.activeElement;
-    if (active !== null && railMenu.contains(active)) (active as HTMLElement).blur();
+    if (active !== null && railMenu.contains(active))
+      (active as HTMLElement).blur();
     railMenu.hidden = true;
   }
   railMenuProfile = null;
@@ -297,7 +354,8 @@ function showRailMenuActions(menu: HTMLElement): void {
 function saveRename(input: HTMLInputElement): void {
   const profile = railMenuProfile;
   const name = input.value.trim();
-  if (profile !== null && name !== '') window.electron.postRenameProfile(profile.id, name);
+  if (profile !== null && name !== '')
+    window.electron.postRenameProfile(profile.id, name);
   closeRailMenu();
 }
 

@@ -47,7 +47,9 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
   }
   return {
     fakeApp: { quit: vi.fn() },
-    fakeMenu: { buildFromTemplate: vi.fn((template: unknown[]) => ({ template })) },
+    fakeMenu: {
+      buildFromTemplate: vi.fn((template: unknown[]) => ({ template })),
+    },
     fakeNativeImage: {
       createFromPath: vi.fn(() => ({
         isEmpty: () => true,
@@ -84,8 +86,16 @@ import {
 
 type FakeTrayInstance = InstanceType<typeof FakeTray>;
 
-const home: TrayProfile = { id: 'home', name: 'Home Phi', origin: 'http://127.0.0.1:7070/' };
-const work: TrayProfile = { id: 'work', name: 'Work Phi', origin: 'http://10.0.0.5:7070/' };
+const home: TrayProfile = {
+  id: 'home',
+  name: 'Home Phi',
+  origin: 'http://127.0.0.1:7070/',
+};
+const work: TrayProfile = {
+  id: 'work',
+  name: 'Work Phi',
+  origin: 'http://10.0.0.5:7070/',
+};
 
 /** The menu template Menu.buildFromTemplate was last called with. */
 function lastTemplate(): TrayMenuEntry[] {
@@ -97,15 +107,15 @@ function lastTemplate(): TrayMenuEntry[] {
 /** Click helper: invokes a leaf entry's click (throws for the submenu parent). */
 function clickEntry(entry: TrayMenuEntry | undefined): void {
   if (!entry) throw new Error('menu entry missing');
-  if (!entry.click) throw new Error(`menu entry has no click handler: ${entry.label}`);
+  if (!entry.click)
+    throw new Error(`menu entry has no click handler: ${entry.label}`);
   entry.click();
 }
 
 /** Builds the tray under test with recording fakes and returns every seam. */
-function setupTrayForTest(opts: {
-  profiles?: TrayProfile[];
-  deps?: Partial<TrayDeps>;
-} = {}): {
+function setupTrayForTest(
+  opts: { profiles?: TrayProfile[]; deps?: Partial<TrayDeps> } = {},
+): {
   handle: TrayHandle;
   tray: FakeTrayInstance;
   ipcSend: ReturnType<typeof vi.fn>;
@@ -147,22 +157,81 @@ describe('buildTrayMenu (pure menu builder)', () => {
       health: 'down',
       unread: 2,
     };
-    const menu = buildTrayMenu([home, work, alpha], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
-    expect(menu.map((e) => e.label)).toEqual(['Show Phi', 'Profiles', 'Close to tray', 'Sync board alerts', 'Quit']);
+    const menu = buildTrayMenu(
+      [home, work, alpha],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
+    expect(menu.map((e) => e.label)).toEqual([
+      'Show Phi',
+      'Profiles',
+      'Close to tray',
+      'Sync board alerts',
+      'Quit',
+    ]);
     const profiles = menu[1].submenu;
     // Labels go through formatProfileLabel: name + health status + (N) unread suffix.
-    expect(profiles?.map((e) => e.label)).toEqual(['Home Phi', 'Work Phi', 'alpha — down (2)']);
+    expect(profiles?.map((e) => e.label)).toEqual([
+      'Home Phi',
+      'Work Phi',
+      'alpha — down (2)',
+    ]);
   });
 
   it('always includes Show Phi, the Close to tray and Sync board alerts checkboxes and Quit and omits Profiles when no profiles exist', () => {
-    const menu = buildTrayMenu([], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
-    expect(menu.map((e) => e.label)).toEqual(['Show Phi', 'Close to tray', 'Sync board alerts', 'Quit']);
+    const menu = buildTrayMenu(
+      [],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
+    expect(menu.map((e) => e.label)).toEqual([
+      'Show Phi',
+      'Close to tray',
+      'Sync board alerts',
+      'Quit',
+    ]);
     expect(menu.some((e) => e.label === 'Profiles')).toBe(false);
   });
 
   it('renders the Close to tray entry as a checkbox carrying the preference state', () => {
-    const on = buildTrayMenu([], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
-    const off = buildTrayMenu([], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, false, false);
+    const on = buildTrayMenu(
+      [],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
+    const off = buildTrayMenu(
+      [],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      false,
+      false,
+    );
     const entryOn = on.find((e) => e.label === 'Close to tray');
     const entryOff = off.find((e) => e.label === 'Close to tray');
     expect(entryOn?.type).toBe('checkbox');
@@ -174,7 +243,18 @@ describe('buildTrayMenu (pure menu builder)', () => {
   it('calls the show handler from Show Phi and the quit handler from Quit', () => {
     const show = vi.fn();
     const quit = vi.fn();
-    const menu = buildTrayMenu([home], { show, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit }, true, false);
+    const menu = buildTrayMenu(
+      [home],
+      {
+        show,
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit,
+      },
+      true,
+      false,
+    );
     clickEntry(menu.find((e) => e.label === 'Show Phi'));
     clickEntry(menu.find((e) => e.label === 'Quit'));
     expect(show).toHaveBeenCalledTimes(1);
@@ -183,14 +263,47 @@ describe('buildTrayMenu (pure menu builder)', () => {
 
   it('calls the toggle handler from the Close to tray checkbox', () => {
     const toggleCloseToTray = vi.fn();
-    const menu = buildTrayMenu([home], { show: () => {}, selectProfile: () => {}, toggleCloseToTray, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
+    const menu = buildTrayMenu(
+      [home],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray,
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
     clickEntry(menu.find((e) => e.label === 'Close to tray'));
     expect(toggleCloseToTray).toHaveBeenCalledTimes(1);
   });
 
   it('renders the Sync board alerts entry as a checkbox carrying the preference state', () => {
-    const on = buildTrayMenu([], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, true);
-    const off = buildTrayMenu([], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
+    const on = buildTrayMenu(
+      [],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      true,
+    );
+    const off = buildTrayMenu(
+      [],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
     const entryOn = on.find((e) => e.label === 'Sync board alerts');
     const entryOff = off.find((e) => e.label === 'Sync board alerts');
     expect(entryOn?.type).toBe('checkbox');
@@ -201,14 +314,36 @@ describe('buildTrayMenu (pure menu builder)', () => {
 
   it('calls the toggle handler from the Sync board alerts checkbox', () => {
     const toggleSyncAlerts = vi.fn();
-    const menu = buildTrayMenu([home], { show: () => {}, selectProfile: () => {}, toggleCloseToTray: () => {}, toggleSyncAlerts, quit: () => {} }, true, false);
+    const menu = buildTrayMenu(
+      [home],
+      {
+        show: () => {},
+        selectProfile: () => {},
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts,
+        quit: () => {},
+      },
+      true,
+      false,
+    );
     clickEntry(menu.find((e) => e.label === 'Sync board alerts'));
     expect(toggleSyncAlerts).toHaveBeenCalledTimes(1);
   });
 
   it('posts the select-profile intent with the profile id from a submenu click', () => {
     const selectProfile = vi.fn();
-    const menu = buildTrayMenu([home, work], { show: () => {}, selectProfile, toggleCloseToTray: () => {}, toggleSyncAlerts: () => {}, quit: () => {} }, true, false);
+    const menu = buildTrayMenu(
+      [home, work],
+      {
+        show: () => {},
+        selectProfile,
+        toggleCloseToTray: () => {},
+        toggleSyncAlerts: () => {},
+        quit: () => {},
+      },
+      true,
+      false,
+    );
     const profiles = menu.find((e) => e.label === 'Profiles')?.submenu ?? [];
     clickEntry(profiles.find((e) => e.label === 'Work Phi'));
     expect(selectProfile).toHaveBeenCalledWith('work');
@@ -228,12 +363,16 @@ describe('setupTray (wiring, recording fakes)', () => {
 
   it('uses the production icon path override from deps', () => {
     setupTrayForTest({ deps: { iconPath: '/prod/assets/tray.png' } });
-    expect(fakeNativeImage.createFromPath).toHaveBeenCalledWith('/prod/assets/tray.png');
+    expect(fakeNativeImage.createFromPath).toHaveBeenCalledWith(
+      '/prod/assets/tray.png',
+    );
   });
 
   it('falls back to the sibling PNG when the ICO decodes empty (non-Windows platforms)', () => {
     setupTrayForTest();
-    const calls = (fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+    const calls = (
+      fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>
+    ).mock.calls.map((c) => c[0] as string);
     expect(calls).toEqual([
       TRAY_ICON_PATH,
       TRAY_ICON_PATH.replace(/\.ico$/, '.png'),
@@ -246,7 +385,9 @@ describe('setupTray (wiring, recording fakes)', () => {
       resize: vi.fn((_opts?: unknown) => fakeImage),
       setTemplateImage: vi.fn(),
     };
-    (fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>).mockReturnValueOnce(fakeImage);
+    (
+      fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce(fakeImage);
     setupTrayForTest();
     if (process.platform === 'darwin') {
       expect(fakeImage.resize).toHaveBeenCalledWith({ width: 16, height: 16 });
@@ -257,8 +398,17 @@ describe('setupTray (wiring, recording fakes)', () => {
   it('builds the context menu from the profile list (Show Phi / Profiles / Close to tray / Quit)', () => {
     setupTrayForTest({ profiles: [home, work] });
     const template = lastTemplate();
-    expect(template.map((e) => e.label)).toEqual(['Show Phi', 'Profiles', 'Close to tray', 'Sync board alerts', 'Quit']);
-    expect(template[1].submenu?.map((e) => e.label)).toEqual(['Home Phi', 'Work Phi']);
+    expect(template.map((e) => e.label)).toEqual([
+      'Show Phi',
+      'Profiles',
+      'Close to tray',
+      'Sync board alerts',
+      'Quit',
+    ]);
+    expect(template[1].submenu?.map((e) => e.label)).toEqual([
+      'Home Phi',
+      'Work Phi',
+    ]);
   });
 
   it('sets the initial tooltip to Phi', () => {
@@ -277,7 +427,9 @@ describe('setupTray (wiring, recording fakes)', () => {
   it('posts the show intent on plain left-click (restores+focuses the window)', () => {
     const { tray, ipcSend } = setupTrayForTest();
     tray.listeners.get('click')?.();
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'show' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'show',
+    });
   });
 
   it('rebuilds the menu from the current profile list without recreating the tray', () => {
@@ -290,8 +442,17 @@ describe('setupTray (wiring, recording fakes)', () => {
     // A fresh Menu.buildFromTemplate runs over the updated profile list.
     expect(fakeMenu.buildFromTemplate.mock.calls.length).toBe(buildsBefore + 1);
     const template = lastTemplate();
-    expect(template.map((e) => e.label)).toEqual(['Show Phi', 'Profiles', 'Close to tray', 'Sync board alerts', 'Quit']);
-    expect(template[1].submenu?.map((e) => e.label)).toEqual(['Home Phi', 'Work Phi']);
+    expect(template.map((e) => e.label)).toEqual([
+      'Show Phi',
+      'Profiles',
+      'Close to tray',
+      'Sync board alerts',
+      'Quit',
+    ]);
+    expect(template[1].submenu?.map((e) => e.label)).toEqual([
+      'Home Phi',
+      'Work Phi',
+    ]);
     // No tray recreation: the original Tray instance is untouched.
     expect(FakeTray.instances).toHaveLength(1);
     expect(tray.destroyed).toBe(false);
@@ -300,9 +461,13 @@ describe('setupTray (wiring, recording fakes)', () => {
     tray.listeners.get('right-click')?.();
     expect(tray.popups).toEqual([{ template }]);
     // The rebuilt menu's actions still route through the retained handlers.
-    const profilesEntry = template.find((e) => e.label === 'Profiles')?.submenu ?? [];
+    const profilesEntry =
+      template.find((e) => e.label === 'Profiles')?.submenu ?? [];
     clickEntry(profilesEntry.find((e) => e.label === 'Work Phi'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'select-profile', id: 'work' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'select-profile',
+      id: 'work',
+    });
   });
 
   it('rebuildMenu drops the Profiles submenu when the profile list empties', () => {
@@ -310,64 +475,93 @@ describe('setupTray (wiring, recording fakes)', () => {
     const { handle } = setupTrayForTest({ profiles });
     profiles.length = 0;
     handle.rebuildMenu();
-    expect(lastTemplate().map((e) => e.label)).toEqual(['Show Phi', 'Close to tray', 'Sync board alerts', 'Quit']);
+    expect(lastTemplate().map((e) => e.label)).toEqual([
+      'Show Phi',
+      'Close to tray',
+      'Sync board alerts',
+      'Quit',
+    ]);
   });
 
   it('renders the Close to tray checkbox from the deps getter and rebuilds with a fresh value', () => {
     let closeToTray = true;
-    const { handle } = setupTrayForTest({ deps: { getCloseToTray: () => closeToTray } });
-    expect(lastTemplate().find((e) => e.label === 'Close to tray')).toMatchObject({
+    const { handle } = setupTrayForTest({
+      deps: { getCloseToTray: () => closeToTray },
+    });
+    expect(
+      lastTemplate().find((e) => e.label === 'Close to tray'),
+    ).toMatchObject({
       type: 'checkbox',
       checked: true,
     });
     closeToTray = false;
     handle.rebuildMenu();
-    expect(lastTemplate().find((e) => e.label === 'Close to tray')?.checked).toBe(false);
+    expect(
+      lastTemplate().find((e) => e.label === 'Close to tray')?.checked,
+    ).toBe(false);
   });
 
   it('renders the Sync board alerts checkbox from the deps getter and rebuilds with a fresh value', () => {
     let syncAlerts = false;
-    const { handle } = setupTrayForTest({ deps: { getSyncAlerts: () => syncAlerts } });
-    expect(lastTemplate().find((e) => e.label === 'Sync board alerts')).toMatchObject({
+    const { handle } = setupTrayForTest({
+      deps: { getSyncAlerts: () => syncAlerts },
+    });
+    expect(
+      lastTemplate().find((e) => e.label === 'Sync board alerts'),
+    ).toMatchObject({
       type: 'checkbox',
       checked: false,
     });
     syncAlerts = true;
     handle.rebuildMenu();
-    expect(lastTemplate().find((e) => e.label === 'Sync board alerts')?.checked).toBe(true);
+    expect(
+      lastTemplate().find((e) => e.label === 'Sync board alerts')?.checked,
+    ).toBe(true);
   });
 
   it('posts the toggle-close-to-tray intent from the checkbox entry', () => {
     const { ipcSend } = setupTrayForTest();
     clickEntry(lastTemplate().find((e) => e.label === 'Close to tray'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'toggle-close-to-tray',
+    });
   });
 
   it('posts the toggle-sync-alerts intent from the checkbox entry', () => {
     const { ipcSend } = setupTrayForTest();
     clickEntry(lastTemplate().find((e) => e.label === 'Sync board alerts'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'toggle-sync-alerts',
+    });
   });
 
   it('emits the show intent from the Show Phi entry', () => {
     const { ipcSend } = setupTrayForTest();
     const template = lastTemplate();
     clickEntry(template.find((e) => e.label === 'Show Phi'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'show' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'show',
+    });
   });
 
   it('emits the select-profile intent with the profile id from a submenu entry', () => {
     const { ipcSend } = setupTrayForTest({ profiles: [home, work] });
     const template = lastTemplate();
-    const profiles = template.find((e) => e.label === 'Profiles')?.submenu ?? [];
+    const profiles =
+      template.find((e) => e.label === 'Profiles')?.submenu ?? [];
     clickEntry(profiles.find((e) => e.label === 'Work Phi'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'select-profile', id: 'work' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'select-profile',
+      id: 'work',
+    });
   });
 
   it('posts the quit intent and lets the host loop own app.quit() (step-5 receiver)', () => {
     const { ipcSend } = setupTrayForTest();
     clickEntry(lastTemplate().find((e) => e.label === 'Quit'));
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, { kind: 'quit' });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'quit',
+    });
     // Step 5: the host-loop receiver (main.ts) logs, notifies the main
     // window and calls app.quit(); the tray no longer quits directly, so
     // a real app.quit() never fires from the tray.
@@ -419,7 +613,10 @@ describe('setupTray (wiring, recording fakes)', () => {
 });
 
 describe('wireTrayEvents (platform menu convention)', () => {
-  function fakeTray(): TrayLike & { listeners: Map<string, () => void>; popups: unknown[] } {
+  function fakeTray(): TrayLike & {
+    listeners: Map<string, () => void>;
+    popups: unknown[];
+  } {
     const listeners = new Map<string, () => void>();
     const popups: unknown[] = [];
     return {
@@ -478,13 +675,21 @@ describe('formatProfileLabel (profile label contract)', () => {
   });
 
   it('canonicalizes host[:port] names to the uppercase hostname, never the port', () => {
-    expect(formatProfileLabel('127.0.0.1:7070', 'up', 0)).toBe('127.0.0.1 — up');
-    expect(formatProfileLabel('charon.local:7070', 'up', 0)).toBe('CHARON — up');
-    expect(formatProfileLabel('charon.local:7070', 'down', 3)).toBe('CHARON — down (3)');
+    expect(formatProfileLabel('127.0.0.1:7070', 'up', 0)).toBe(
+      '127.0.0.1 — up',
+    );
+    expect(formatProfileLabel('charon.local:7070', 'up', 0)).toBe(
+      'CHARON — up',
+    );
+    expect(formatProfileLabel('charon.local:7070', 'down', 3)).toBe(
+      'CHARON — down (3)',
+    );
   });
 
   it('passes explicit names through unchanged (no host[:port] shape)', () => {
-    expect(formatProfileLabel('Server: Primary', 'up', 0)).toBe('Server: Primary — up');
+    expect(formatProfileLabel('Server: Primary', 'up', 0)).toBe(
+      'Server: Primary — up',
+    );
     expect(formatProfileLabel('Home Phi', 'unknown', 0)).toBe('Home Phi');
   });
 });
@@ -492,7 +697,9 @@ describe('formatProfileLabel (profile label contract)', () => {
 describe('buildTooltip / formatCanonicalHostname (tooltip contract)', () => {
   it('formats an origin URL as the canonical hostname and falls back for junk', () => {
     expect(formatCanonicalHostname('http://127.0.0.1:7070/')).toBe('127.0.0.1');
-    expect(formatCanonicalHostname('https://example.com/x')).toBe('EXAMPLE.COM');
+    expect(formatCanonicalHostname('https://example.com/x')).toBe(
+      'EXAMPLE.COM',
+    );
     expect(formatCanonicalHostname('http://charon.local:7070/')).toBe('CHARON');
     expect(formatCanonicalHostname('not a url')).toBe('not a url');
     expect(formatCanonicalHostname('')).toBe('');
@@ -500,19 +707,27 @@ describe('buildTooltip / formatCanonicalHostname (tooltip contract)', () => {
 
   it('builds the one-line tooltip with name, canonical hostname and unread suffix', () => {
     expect(buildTooltip({})).toBe('Phi');
-    expect(buildTooltip({ name: 'Home Phi', origin: 'http://127.0.0.1:7070/' })).toBe(
-      'Phi — Home Phi (127.0.0.1)',
-    );
-    expect(buildTooltip({ name: 'Home Phi', origin: 'http://127.0.0.1:7070/', unread: 2 })).toBe(
-      'Phi — Home Phi (127.0.0.1) (2 unread)',
-    );
+    expect(
+      buildTooltip({ name: 'Home Phi', origin: 'http://127.0.0.1:7070/' }),
+    ).toBe('Phi — Home Phi (127.0.0.1)');
+    expect(
+      buildTooltip({
+        name: 'Home Phi',
+        origin: 'http://127.0.0.1:7070/',
+        unread: 2,
+      }),
+    ).toBe('Phi — Home Phi (127.0.0.1) (2 unread)');
     // Name-less active profile: the canonical hostname stands in (the documented example).
     expect(buildTooltip({ origin: 'http://127.0.0.1:7070/', unread: 2 })).toBe(
       'Phi — 127.0.0.1 (2 unread)',
     );
-    expect(buildTooltip({ name: 'Work', origin: 'http://10.0.0.5:7070/', unread: 0 })).toBe(
-      'Phi — Work (10.0.0.5)',
-    );
+    expect(
+      buildTooltip({
+        name: 'Work',
+        origin: 'http://10.0.0.5:7070/',
+        unread: 0,
+      }),
+    ).toBe('Phi — Work (10.0.0.5)');
   });
 
   it('exposes the documented tray command channel constant', () => {

@@ -4,10 +4,10 @@
 // paths. Both entry points produce one of these; the rest of the system
 // (chip strip, send integration) treats them identically.
 export interface Attachment {
-    id: string;            // stable client-side id for chip keying
-    name: string;          // display name (server-generated for clipboard; original filename for drops)
-    path: string;          // absolute filesystem path — what we send to the coder
-    type: string;          // MIME
+    id: string; // stable client-side id for chip keying
+    name: string; // display name (server-generated for clipboard; original filename for drops)
+    path: string; // absolute filesystem path — what we send to the coder
+    type: string; // MIME
     sizeBytes: number;
     source: 'drop' | 'paste';
 }
@@ -26,18 +26,21 @@ export interface Attachment {
 // If a particular coder doesn't actually accept `@path`, edit this map —
 // it's the only place that needs to change.
 export const ATTACHMENT_SYNTAX: Record<string, (a: Attachment) => string> = {
-    claude:   (a) => `@${a.path}`,
-    pi:       (a) => a.path,
+    claude: (a) => `@${a.path}`,
+    pi: (a) => a.path,
     opencode: (a) => `@${a.path}`,
-    agy:      (a) => `@${a.path}`,
-    bash:     (a) => a.path,
-    pwsh:     (a) => a.path,
+    agy: (a) => `@${a.path}`,
+    bash: (a) => a.path,
+    pwsh: (a) => a.path,
 };
 
 // formatAttachment returns the coder-specific mention token for an
 // attachment. Unknown coders get the raw path (safer than guessing a
 // mention syntax the agent doesn't recognize).
-export function formatAttachment(coder: string, attachment: Attachment): string {
+export function formatAttachment(
+    coder: string,
+    attachment: Attachment,
+): string {
     const fn = ATTACHMENT_SYNTAX[coder];
     return fn ? fn(attachment) : attachment.path;
 }
@@ -46,13 +49,15 @@ export function formatAttachment(coder: string, attachment: Attachment): string 
 // DataTransferItemList, kept loose so it can be supplied by both real
 // browser events and jsdom tests (jsdom does not implement DataTransfer).
 export interface DataTransferItemLike {
-    kind: string;          // 'file' | 'string'
-    type: string;          // MIME
+    kind: string; // 'file' | 'string'
+    type: string; // MIME
     getAsFile?: () => Blob | null;
 }
 
 export interface DataTransferLike {
-    items?: DataTransferItemLike[] | { length: number; [i: number]: DataTransferItemLike };
+    items?:
+        | DataTransferItemLike[]
+        | { length: number; [i: number]: DataTransferItemLike };
     files?: FileList | { length: number; [i: number]: File };
 }
 
@@ -60,14 +65,21 @@ export interface DataTransferLike {
 // shape. Pure — no DOM mutation, no event reading. The drop/paste listeners
 // pass `e.dataTransfer` / `e.clipboardData` in directly; tests pass plain
 // objects with the same shape.
-export function extractImageItems(dt: DataTransferLike | null | undefined): DataTransferItemLike[] {
+export function extractImageItems(
+    dt: DataTransferLike | null | undefined,
+): DataTransferItemLike[] {
     if (!dt || !dt.items) return [];
     const items: DataTransferItemLike[] = [];
     const raw = dt.items;
     const len = (raw as { length: number }).length;
     for (let i = 0; i < len; i++) {
         const it = (raw as DataTransferItemLike[])[i];
-        if (it && it.kind === 'file' && typeof it.type === 'string' && it.type.startsWith('image/')) {
+        if (
+            it &&
+            it.kind === 'file' &&
+            typeof it.type === 'string' &&
+            it.type.startsWith('image/')
+        ) {
             items.push(it);
         }
     }
@@ -78,7 +90,9 @@ export function extractImageItems(dt: DataTransferLike | null | undefined): Data
 // entries. Used by the drop handler where we read files directly rather
 // than going through items (drops don't always expose getAsFile consistently
 // across browsers — files does).
-export function extractImageFiles(files: FileList | { length: number; [i: number]: File } | null | undefined): File[] {
+export function extractImageFiles(
+    files: FileList | { length: number; [i: number]: File } | null | undefined,
+): File[] {
     if (!files) return [];
     const out: File[] = [];
     const len = (files as { length: number }).length;
@@ -107,7 +121,10 @@ export function attachmentClientId(): string {
 // The filename hint is informational only — the server ignores it and
 // generates a unique name itself to avoid collisions when the user pastes
 // multiple images in quick succession.
-export async function uploadClipboardImage(blob: Blob, filenameHint: string): Promise<Attachment> {
+export async function uploadClipboardImage(
+    blob: Blob,
+    filenameHint: string,
+): Promise<Attachment> {
     const form = new FormData();
     // The third arg to append is the filename sent on the multipart part.
     // The server still ignores this and assigns its own name.
@@ -115,7 +132,9 @@ export async function uploadClipboardImage(blob: Blob, filenameHint: string): Pr
 
     const res = await fetch('/api/attachments', { method: 'POST', body: form });
     if (!res.ok) {
-        throw new Error(`Attachment upload failed: ${res.status} ${res.statusText}`);
+        throw new Error(
+            `Attachment upload failed: ${res.status} ${res.statusText}`,
+        );
     }
     const json = (await res.json()) as {
         path: string;
@@ -128,7 +147,8 @@ export async function uploadClipboardImage(blob: Blob, filenameHint: string): Pr
         name: json.name || filenameHint || 'attachment',
         path: json.path,
         type: json.mimeType || blob.type || 'application/octet-stream',
-        sizeBytes: typeof json.sizeBytes === 'number' ? json.sizeBytes : blob.size,
+        sizeBytes:
+            typeof json.sizeBytes === 'number' ? json.sizeBytes : blob.size,
         source: 'paste',
     };
 }

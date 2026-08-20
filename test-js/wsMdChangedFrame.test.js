@@ -29,9 +29,10 @@ FakeWebSocket.CLOSING = 2;
 FakeWebSocket.CLOSED = 3;
 
 function sendFrame(pty, msgType, jsonPayload) {
-    const payloadBytes = jsonPayload === undefined
-        ? new Uint8Array(0)
-        : new TextEncoder().encode(JSON.stringify(jsonPayload));
+    const payloadBytes =
+        jsonPayload === undefined
+            ? new Uint8Array(0)
+            : new TextEncoder().encode(JSON.stringify(jsonPayload));
     const buffer = new ArrayBuffer(1 + payloadBytes.length);
     const view = new Uint8Array(buffer);
     view[0] = msgType;
@@ -51,7 +52,10 @@ describe('PTYWebSocket 0x07 md-changed frame', () => {
         sendFrame(pty, 0x07, { dir: '/w/research' });
 
         expect(onControl).toHaveBeenCalledTimes(1);
-        expect(onControl).toHaveBeenCalledWith({ type: 'md-changed', dir: '/w/research' });
+        expect(onControl).toHaveBeenCalledWith({
+            type: 'md-changed',
+            dir: '/w/research',
+        });
     });
 
     it('a malformed 0x07 payload logs and does not throw or call onControl', () => {

@@ -45,8 +45,9 @@ export function installReloadShortcut(
 
     if (isReloadKey) {
       event.preventDefault();
-      const target = targetGetter ? targetGetter() ?? contents : contents;
-      if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
+      const target = targetGetter ? (targetGetter() ?? contents) : contents;
+      if (typeof target.isDestroyed === 'function' && target.isDestroyed())
+        return;
       if (input.control || input.shift) {
         target.reloadIgnoringCache();
       } else {

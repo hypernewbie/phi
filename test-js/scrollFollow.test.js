@@ -31,7 +31,10 @@ function makeTab({ viewportY, baseY, follow = true } = {}) {
             // makes preAtBottom's pre-write capture (terminal.js:933)
             // load-bearing — computing it after write() would see the
             // post-write buffer and never snap.
-            write: vi.fn((data, cb) => { tab.term.buffer.active.baseY += 1; if (cb) cb(); }),
+            write: vi.fn((data, cb) => {
+                tab.term.buffer.active.baseY += 1;
+                if (cb) cb();
+            }),
             scrollToBottom: vi.fn(),
             buffer: { active: { viewportY, baseY } },
         },
@@ -45,7 +48,10 @@ function makeTm() {
 
 describe('user-follow tracking on PTY writes', () => {
     it('snaps to bottom when user is following and at bottom', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = makeTm();
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
@@ -56,7 +62,10 @@ describe('user-follow tracking on PTY writes', () => {
         // User has scrolled up (wheel disengages follow). Output arriving
         // at the bottom must NOT yank the viewport back to live tail —
         // that's exactly the "scrollbar snap" bug we're fixing.
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = makeTm();
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: false });
         tm.writeToTerminal(tab, 'hello');
@@ -66,7 +75,10 @@ describe('user-follow tracking on PTY writes', () => {
     it('does NOT snap when user is NOT at bottom (regardless of follow flag)', () => {
         // User scrolled away and is reading history. Output should not
         // pop the viewport back to live tail.
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = makeTm();
         const tab = makeTab({ viewportY: 50, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
@@ -77,7 +89,10 @@ describe('user-follow tracking on PTY writes', () => {
         // Regression: the contract pinned by test-js/scrollBugs.test.js
         // requires no "baseY - 1" slack. We use the exact same predicate
         // as the scroll-to-bottom button's onScroll handler.
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = makeTm();
         const tab = makeTab({ viewportY: 99, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');

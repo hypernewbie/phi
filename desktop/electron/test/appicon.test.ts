@@ -26,13 +26,19 @@ describe('createIconResolver', () => {
   it('resolves an observed accent hex to its generated icon path', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-icon-test-'));
     const manifestPath = path.join(dir, 'manifest.json');
-    writeFileSync(manifestPath, JSON.stringify({ '#7c6af7': 'icon-purple.png' }));
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ '#7c6af7': 'icon-purple.png' }),
+    );
     const resolver = createIconResolver(manifestPath, FALLBACK);
     expect(resolver.resolve('#7c6af7')).toBe(path.join(dir, 'icon-purple.png'));
   });
 
   it('falls back to the brand icon for an unknown accent hex', () => {
-    const resolver = createIconResolver(fixtureManifest({ '#7c6af7': 'icon-purple.png' }), FALLBACK);
+    const resolver = createIconResolver(
+      fixtureManifest({ '#7c6af7': 'icon-purple.png' }),
+      FALLBACK,
+    );
     expect(resolver.resolve('#000000')).toBe(FALLBACK);
   });
 
@@ -42,7 +48,10 @@ describe('createIconResolver', () => {
   });
 
   it('falls back to the brand icon when the manifest is missing or unreadable', () => {
-    const resolver = createIconResolver(path.join(os.tmpdir(), 'phi-no-such-manifest.json'), FALLBACK);
+    const resolver = createIconResolver(
+      path.join(os.tmpdir(), 'phi-no-such-manifest.json'),
+      FALLBACK,
+    );
     expect(resolver.resolve('#7c6af7')).toBe(FALLBACK);
   });
 

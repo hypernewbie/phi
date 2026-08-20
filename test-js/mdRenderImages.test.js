@@ -38,7 +38,7 @@ describe('rewriteRelativeImages', () => {
         // resolved absolute URL and mask what we actually wrote.
         expect(c.querySelector('img').getAttribute('src')).toBe(
             `/api/markdown/asset?path=${encodeURIComponent('/work space/docs/images/pic.png')}` +
-            `&cwd=${encodeURIComponent('/work space')}`
+                `&cwd=${encodeURIComponent('/work space')}`,
         );
     });
 
@@ -47,7 +47,7 @@ describe('rewriteRelativeImages', () => {
         rewriteRelativeImages(c, '/docs/readme.md', '/docs');
         expect(c.querySelector('img').getAttribute('src')).toBe(
             `/api/markdown/asset?path=${encodeURIComponent('/docs/pic.png')}` +
-            `&cwd=${encodeURIComponent('/docs')}`
+                `&cwd=${encodeURIComponent('/docs')}`,
         );
     });
 

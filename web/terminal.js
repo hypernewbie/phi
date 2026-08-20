@@ -14,7 +14,10 @@ import {
     formatDurationMin,
     escapeHtml,
 } from './util.js';
-import { applyBrandCpuTier, applyTerminalActivityIndicator } from './header-state.js';
+import {
+    applyBrandCpuTier,
+    applyTerminalActivityIndicator,
+} from './header-state.js';
 import {
     formatAttachment,
     extractImageItems,
@@ -28,12 +31,12 @@ import {
 let doneChimeAudio = null;
 
 const CODER_FAVICONS = {
-    'opencode': 'vendor/logos/opencode.png',
-    'claude': 'vendor/logos/claude.png',
-    'agy': 'vendor/logos/agy.png',
-    'pi': 'vendor/logos/pi.png',
-    'bash': 'vendor/logos/bash.jpg',
-    'review': 'vendor/logos/review.png'
+    opencode: 'vendor/logos/opencode.png',
+    claude: 'vendor/logos/claude.png',
+    agy: 'vendor/logos/agy.png',
+    pi: 'vendor/logos/pi.png',
+    bash: 'vendor/logos/bash.jpg',
+    review: 'vendor/logos/review.png',
 };
 
 // Automatic-reconnect retry policy: full-jitter exponential backoff.
@@ -57,7 +60,7 @@ export class TabManager {
         this.app = app;
         this.tabs = new Map(); // paneId -> TabInfo
         this.activePaneId = null;
-        
+
         this.tabsContainer = document.getElementById('tabs-container');
         this.terminalsWrapper = document.getElementById('terminals-wrapper');
         this.inputBarContainer = document.getElementById('input-bar-container');
@@ -69,10 +72,10 @@ export class TabManager {
         // previously-sent prompts in the active cwd. _historyCursor is the
         // index into _historyCache for the currently-shown entry; -1 means
         // no entry shown (the textarea holds fresh text the user is typing).
-        this._historyCache = [];      // newest-first: index 0 = most recent entry
-        this._historyCursor = -1;     // -1 = free-form, ≥0 = showing cache[idx]
-        this._historyCwd = '';        // cwd the cache was loaded for
-        this._historyLoaded = false;  // first Alt+Up needs a fetch
+        this._historyCache = []; // newest-first: index 0 = most recent entry
+        this._historyCursor = -1; // -1 = free-form, ≥0 = showing cache[idx]
+        this._historyCwd = ''; // cwd the cache was loaded for
+        this._historyLoaded = false; // first Alt+Up needs a fetch
         this.selfHudEl = document.getElementById('self-hud-popover');
         this.selfHudOpen = false;
         this.selfHudCloseTimer = null;
@@ -83,15 +86,18 @@ export class TabManager {
         this.presetsContainer = document.getElementById('presets-container');
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
-        
+
         if (window.innerWidth <= 768 && this.inputTextArea) {
-            this.inputTextArea.placeholder = "Type a prompt...";
+            this.inputTextArea.placeholder = 'Type a prompt...';
         }
 
         this.setupEventListeners();
 
         // Prompt for OS-level notification permissions on page load if not configured.
-        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        if (
+            typeof Notification !== 'undefined' &&
+            Notification.permission === 'default'
+        ) {
             Notification.requestPermission();
         }
 
@@ -110,7 +116,9 @@ export class TabManager {
         // silently lost the socket" signals. The helper is idempotent (config
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
         window.addEventListener('online', () => this._reviveActiveTabIfDead());
-        window.addEventListener('pageshow', () => this._reviveActiveTabIfDead());
+        window.addEventListener('pageshow', () =>
+            this._reviveActiveTabIfDead(),
+        );
         window.addEventListener('focus', () => this._reviveActiveTabIfDead());
 
         // Initialise the 1-second background visual idle and prompt detection loop.
@@ -180,7 +188,7 @@ export class TabManager {
             el.addEventListener('animationcancel', done);
         }
     }
-    
+
     saveTabsState() {
         localStorage.setItem('phi_active_pane', this.activePaneId || '');
         // Tab order is localStorage-only (no backend sync). Drag-reorder
@@ -194,7 +202,10 @@ export class TabManager {
     // are filtered out at restore time - see restoreTabsState.
     saveTabOrder() {
         try {
-            localStorage.setItem('phi_tab_order', JSON.stringify(Array.from(this.tabs.keys())));
+            localStorage.setItem(
+                'phi_tab_order',
+                JSON.stringify(Array.from(this.tabs.keys())),
+            );
         } catch (e) {
             // localStorage can throw in private-mode / quota-exceeded. Failing
             // to persist order shouldn't break tab switching - just log.
@@ -216,11 +227,13 @@ export class TabManager {
         if (!Array.isArray(saved) || saved.length === 0) return;
 
         const present = new Set(this.tabs.keys());
-        const filtered = saved.filter(id => present.has(id));
+        const filtered = saved.filter((id) => present.has(id));
         // Any tabs not in the saved order get appended at the end in the
         // order they currently sit (preserves API order for newly-spawned
         // tabs that the user hasn't touched yet).
-        const missing = Array.from(present).filter(id => !filtered.includes(id));
+        const missing = Array.from(present).filter(
+            (id) => !filtered.includes(id),
+        );
         const final = [...filtered, ...missing];
         if (final.length !== this.tabs.size) return; // safety
         this.applyTabOrder(final, { persist: false });
@@ -246,7 +259,9 @@ export class TabManager {
         // doesn't clone it. The terminal-content side (`terminalsWrapper`)
         // is untouched; only the tab strip is reordered.
         for (const id of order) {
-            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${id}"]`);
+            const tabEl = this.tabsContainer.querySelector(
+                `[data-pane-id="${id}"]`,
+            );
             if (tabEl) this.tabsContainer.appendChild(tabEl);
         }
         if (persist) this.saveTabOrder();
@@ -283,10 +298,14 @@ export class TabManager {
         try {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', paneId);
-        } catch (_) { /* some browsers throw if dataTransfer is accessed oddly */ }
+        } catch (_) {
+            /* some browsers throw if dataTransfer is accessed oddly */
+        }
         // Use rAF so the drag image captures the un-faded tab.
         requestAnimationFrame(() => {
-            const tabEl = this.tabsContainer.querySelector(`[data-pane-id="${paneId}"]`);
+            const tabEl = this.tabsContainer.querySelector(
+                `[data-pane-id="${paneId}"]`,
+            );
             if (tabEl) tabEl.classList.add('dragging');
         });
     }
@@ -350,13 +369,17 @@ export class TabManager {
             this._dragScrollDir = dir;
             this._dragScrollVel = Math.min(Math.max(prox, 0), 1) * EDGE_MAX_VEL;
             if (dir !== 0 && !this._dragScrollRaf) {
-                this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
+                this._dragScrollRaf = requestAnimationFrame(() =>
+                    this._stepDragAutoScroll(),
+                );
             }
             // The whitespace case: we still need to preventDefault so
             // that dragover keeps firing and the drop event is allowed.
             // The per-tab handler does this too, but only over tabs.
             if (!e.defaultPrevented) e.preventDefault();
-            try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+            try {
+                e.dataTransfer.dropEffect = 'move';
+            } catch (_) {}
         };
 
         const onDragLeave = (e) => {
@@ -412,15 +435,20 @@ export class TabManager {
             if (overflowX <= 4) return;
             // Trackpad horizontal gestures come through as deltaX. Mouse
             // vertical wheels come through as deltaY. We accept both.
-            const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            const dx =
+                Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
             if (dx === 0) return;
             // Only consume the event when there's actually room to scroll
             // in the requested direction (so we don't trap a wheel that
             // overshoots).
             const before = strip.scrollLeft;
-            strip.scrollLeft = Math.max(0, Math.min(
-                strip.scrollWidth - strip.clientWidth,
-                strip.scrollLeft + dx));
+            strip.scrollLeft = Math.max(
+                0,
+                Math.min(
+                    strip.scrollWidth - strip.clientWidth,
+                    strip.scrollLeft + dx,
+                ),
+            );
             if (strip.scrollLeft !== before) {
                 e.preventDefault();
                 this.updateTabOverflow();
@@ -437,12 +465,19 @@ export class TabManager {
         // Velocity may have been set to 0 if cursor moved to mid-strip;
         // keep the rAF idling so it can pick back up on edge re-entry.
         if (this._dragScrollVel > 0) {
-            strip.scrollLeft = Math.max(0, Math.min(
-                strip.scrollWidth - strip.clientWidth,
-                strip.scrollLeft + this._dragScrollDir * this._dragScrollVel));
+            strip.scrollLeft = Math.max(
+                0,
+                Math.min(
+                    strip.scrollWidth - strip.clientWidth,
+                    strip.scrollLeft +
+                        this._dragScrollDir * this._dragScrollVel,
+                ),
+            );
             this.updateTabOverflow();
         }
-        this._dragScrollRaf = requestAnimationFrame(() => this._stepDragAutoScroll());
+        this._dragScrollRaf = requestAnimationFrame(() =>
+            this._stepDragAutoScroll(),
+        );
     }
 
     _stopDragAutoScroll() {
@@ -462,7 +497,9 @@ export class TabManager {
         const tabEl = e.currentTarget;
         if (!tabEl) return;
         e.preventDefault(); // required so the `drop` event fires
-        try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        try {
+            e.dataTransfer.dropEffect = 'move';
+        } catch (_) {}
 
         const rect = tabEl.getBoundingClientRect();
         const insertBefore = e.clientX < rect.left + rect.width / 2;
@@ -500,7 +537,9 @@ export class TabManager {
     }
 
     clearDropIndicators() {
-        for (const el of this.tabsContainer.querySelectorAll('.drop-before, .drop-after')) {
+        for (const el of this.tabsContainer.querySelectorAll(
+            '.drop-before, .drop-after',
+        )) {
             el.classList.remove('drop-before', 'drop-after');
         }
     }
@@ -509,7 +548,7 @@ export class TabManager {
         localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
         try {
             const res = await fetch('/api/terminals');
-            if (!res.ok) throw new Error("Failed to load server terminal list");
+            if (!res.ok) throw new Error('Failed to load server terminal list');
             const instances = await res.json();
             if (!instances || !instances.length) {
                 this.showEmptyState();
@@ -517,7 +556,16 @@ export class TabManager {
 
             const savedActive = localStorage.getItem('phi_active_pane') || '';
             for (const t of instances) {
-                this.createTab(t.id, t.session_id, t.title || t.coder, t.coder, t.workspace || '', t.cwd || '', !!t.pinned, !!t.marked);
+                this.createTab(
+                    t.id,
+                    t.session_id,
+                    t.title || t.coder,
+                    t.coder,
+                    t.workspace || '',
+                    t.cwd || '',
+                    !!t.pinned,
+                    !!t.marked,
+                );
             }
             // Apply the user's drag-reorder (if any) from localStorage. Stale
             // paneIds (closed tabs, or IDs that changed during a session
@@ -537,12 +585,14 @@ export class TabManager {
                 this.switchTab(instances[0].id);
             }
         } catch (e) {
-            console.error("Failed to restore tabs from server-side state:", e);
+            console.error('Failed to restore tabs from server-side state:', e);
         }
     }
 
     setupEventListeners() {
-        document.addEventListener('keydown', (e) => this.handleGlobalTabShortcuts(e));
+        document.addEventListener('keydown', (e) =>
+            this.handleGlobalTabShortcuts(e),
+        );
 
         // Hover preview card (glassmorphism, big hieroglyph). Shows on
         // mouseover of a tab so users can identify the worktree at a
@@ -566,7 +616,10 @@ export class TabManager {
                 // focus-scroll. Generic page/terminal scrolling must never
                 // be reset to the document origin.
                 this.app.updateLayoutPosition?.(true, true);
-                setTimeout(() => this.app.updateLayoutPosition?.(true, true), 50);
+                setTimeout(
+                    () => this.app.updateLayoutPosition?.(true, true),
+                    50,
+                );
             }
         });
 
@@ -596,12 +649,14 @@ export class TabManager {
 
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
-
             // When input is empty, capture arrows, enter, escape and ctrl key
             // shortcuts to control PTY directly. The map lives in
             // _forwardKeyToPty, shared with the terminal-focused and mobile
             // paths; the emptiness gate is this caller's concern.
-            if (this.inputTextArea.value === '' && this._forwardKeyToPty(e, this.getActiveTab())) {
+            if (
+                this.inputTextArea.value === '' &&
+                this._forwardKeyToPty(e, this.getActiveTab())
+            ) {
                 return;
             }
 
@@ -615,7 +670,7 @@ export class TabManager {
                 this.focusActiveTerminal();
             }
         });
-        
+
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
         });
@@ -634,8 +689,13 @@ export class TabManager {
         // chip only displays for pi, but the keybinding itself is
         // universally available since it's a quality-of-life shortcut.
         document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey &&
-                (e.key === 'X' || e.key === 'x')) {
+            if (
+                e.ctrlKey &&
+                e.shiftKey &&
+                !e.altKey &&
+                !e.metaKey &&
+                (e.key === 'X' || e.key === 'x')
+            ) {
                 e.preventDefault();
                 this.sendStagedInput();
                 return;
@@ -654,7 +714,12 @@ export class TabManager {
             const activeTab = this.getActiveTab();
             if (!activeTab || activeTab.isDead) return;
             // Skip if a modal is open - let the modal handler have the key.
-            if (document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) return;
+            if (
+                document.querySelector(
+                    '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
+                )
+            )
+                return;
 
             // Shared map (see _forwardKeyToPty). Two guards the old private
             // map made unnecessary: skip keys another handler already
@@ -665,8 +730,14 @@ export class TabManager {
             // hardware keyboards on tablets keep their browser shortcuts.
             if (e.defaultPrevented) return;
             const t = e.target;
-            if (t instanceof HTMLElement && t !== this.inputTextArea &&
-                (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+            if (
+                t instanceof HTMLElement &&
+                t !== this.inputTextArea &&
+                (t.tagName === 'INPUT' ||
+                    t.tagName === 'TEXTAREA' ||
+                    t.isContentEditable)
+            )
+                return;
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             this._forwardKeyToPty(e, activeTab);
         });
@@ -674,7 +745,11 @@ export class TabManager {
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                const cancelKey = (activeTab && ['pi', 'claude', 'opencode'].includes(activeTab.coder)) ? '\x1b' : '\x03';
+                const cancelKey =
+                    activeTab &&
+                    ['pi', 'claude', 'opencode'].includes(activeTab.coder)
+                        ? '\x1b'
+                        : '\x03';
                 this.sendRawInput(cancelKey);
                 this.inputTextArea.focus({ preventScroll: true });
             });
@@ -698,12 +773,18 @@ export class TabManager {
         }
 
         const closeAllBtn = document.getElementById('close-all-tabs-btn');
-        const mobileCloseAllBtn = document.getElementById('mobile-close-all-tabs-btn');
+        const mobileCloseAllBtn = document.getElementById(
+            'mobile-close-all-tabs-btn',
+        );
         const handleCloseAll = () => {
             if (this.tabs.size === 0) return;
-            if (confirm(`Are you sure you want to close all ${this.tabs.size} active sessions?`)) {
+            if (
+                confirm(
+                    `Are you sure you want to close all ${this.tabs.size} active sessions?`,
+                )
+            ) {
                 const keys = Array.from(this.tabs.keys());
-                keys.forEach(paneId => {
+                keys.forEach((paneId) => {
                     this.closeTab(paneId);
                 });
                 this.app.sessionsManager.loadSessions();
@@ -712,40 +793,54 @@ export class TabManager {
         closeAllBtn?.addEventListener('click', handleCloseAll);
         mobileCloseAllBtn?.addEventListener('click', handleCloseAll);
 
-        const reconnectAllBtn = document.getElementById('reconnect-all-tabs-btn');
-        const mobileReconnectAllBtn = document.getElementById('mobile-reconnect-all-tabs-btn');
+        const reconnectAllBtn = document.getElementById(
+            'reconnect-all-tabs-btn',
+        );
+        const mobileReconnectAllBtn = document.getElementById(
+            'mobile-reconnect-all-tabs-btn',
+        );
         const handleReconnectAll = () => {
             this.reconnectAllDead();
         };
         reconnectAllBtn?.addEventListener('click', handleReconnectAll);
         mobileReconnectAllBtn?.addEventListener('click', handleReconnectAll);
 
-        const refreshConsoleBtn = document.getElementById('refresh-console-btn');
-        const mobileRefreshConsoleBtn = document.getElementById('mobile-refresh-console-btn');
+        const refreshConsoleBtn = document.getElementById(
+            'refresh-console-btn',
+        );
+        const mobileRefreshConsoleBtn = document.getElementById(
+            'mobile-refresh-console-btn',
+        );
         const handleRefreshConsole = () => {
             const activeTab = this.getActiveTab();
             if (!activeTab || !activeTab.term) return;
             activeTab.term.refresh(0, activeTab.term.rows - 1);
-            this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: true });
+            this.activateTabViewport(activeTab, {
+                scrollToBottom: true,
+                autoReconnect: true,
+            });
         };
         refreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
-        mobileRefreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
-        
+        mobileRefreshConsoleBtn?.addEventListener(
+            'click',
+            handleRefreshConsole,
+        );
+
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
             const activeTab = this.getActiveTab();
             if (!activeTab) return;
-            
+
             activeTab.directMode = !activeTab.directMode;
             this.updateDirectModeUI(activeTab);
-            
+
             if (activeTab.directMode) {
                 this.focusActiveTerminal();
             } else {
                 this.inputTextArea.focus({ preventScroll: true });
             }
         });
-        
+
         // Fit active terminal on window resize
         let resizeTimeout;
         window.addEventListener('resize', () => {
@@ -768,7 +863,9 @@ export class TabManager {
                 if (typeof this._closeSelfHudNow === 'function') {
                     this._closeSelfHudNow();
                 }
-                const dropdown = document.getElementById('hostname-tabs-dropdown');
+                const dropdown = document.getElementById(
+                    'hostname-tabs-dropdown',
+                );
                 if (dropdown) {
                     const isHidden = dropdown.classList.contains('hidden');
                     if (isHidden) {
@@ -785,35 +882,57 @@ export class TabManager {
         document.addEventListener('click', (e) => {
             const modelDropup = document.getElementById('model-presets-dropup');
             if (modelDropup && !modelDropup.classList.contains('hidden')) {
-                if (!e.target.closest('#model-presets-dropup') && !e.target.closest('.model-trigger-btn')) {
+                if (
+                    !e.target.closest('#model-presets-dropup') &&
+                    !e.target.closest('.model-trigger-btn')
+                ) {
                     modelDropup.classList.add('hidden');
                 }
             }
-            
+
             const qcDropup = document.getElementById('quick-commands-dropup');
             if (qcDropup && !qcDropup.classList.contains('hidden')) {
-                if (!e.target.closest('#quick-commands-dropup') && !e.target.closest('.model-trigger-btn')) {
+                if (
+                    !e.target.closest('#quick-commands-dropup') &&
+                    !e.target.closest('.model-trigger-btn')
+                ) {
                     qcDropup.classList.add('hidden');
                 }
             }
-            
+
             const slashDropup = document.getElementById('slash-presets-dropup');
             if (slashDropup && !slashDropup.classList.contains('hidden')) {
-                if (!e.target.closest('#slash-presets-dropup') && !e.target.closest('.slash-trigger-btn')) {
+                if (
+                    !e.target.closest('#slash-presets-dropup') &&
+                    !e.target.closest('.slash-trigger-btn')
+                ) {
                     slashDropup.classList.add('hidden');
                 }
             }
-            
-            const hostDropdown = document.getElementById('hostname-tabs-dropdown');
+
+            const hostDropdown = document.getElementById(
+                'hostname-tabs-dropdown',
+            );
             if (hostDropdown && !hostDropdown.classList.contains('hidden')) {
-                if (!e.target.closest('#hostname-display') && !e.target.closest('#hostname-tabs-dropdown')) {
+                if (
+                    !e.target.closest('#hostname-display') &&
+                    !e.target.closest('#hostname-tabs-dropdown')
+                ) {
                     hostDropdown.classList.add('hidden');
                 }
             }
 
-            const overflowDropdown = document.getElementById('tab-overflow-dropdown');
-            if (overflowDropdown && !overflowDropdown.classList.contains('hidden')) {
-                if (!e.target.closest('#tab-overflow-btn') && !e.target.closest('#tab-overflow-dropdown')) {
+            const overflowDropdown = document.getElementById(
+                'tab-overflow-dropdown',
+            );
+            if (
+                overflowDropdown &&
+                !overflowDropdown.classList.contains('hidden')
+            ) {
+                if (
+                    !e.target.closest('#tab-overflow-btn') &&
+                    !e.target.closest('#tab-overflow-dropdown')
+                ) {
                     this._closeOverflowDropdown();
                 }
             }
@@ -846,7 +965,7 @@ export class TabManager {
             window.addEventListener('resize', onScroll, { passive: true });
         }
     }
-    
+
     getActiveTab() {
         return this.tabs.get(this.activePaneId);
     }
@@ -859,7 +978,9 @@ export class TabManager {
         const state = getTerminalActivityState(this.tabs.values());
         document.title = formatTerminalActivityTitle(this.app.hostname, state);
 
-        const indicator = document.getElementById('terminal-activity-indicator');
+        const indicator = document.getElementById(
+            'terminal-activity-indicator',
+        );
         if (indicator) {
             const hostnameKnown = Boolean(this.app.hostname);
             applyTerminalActivityIndicator(state.hasActivity, hostnameKnown);
@@ -871,14 +992,14 @@ export class TabManager {
             this.app.setTerminalActivity(state.hasActivity);
         }
     }
-    
+
     focusActiveTerminal() {
         const activeTab = this.getActiveTab();
         if (activeTab && activeTab.term) {
             activeTab.term.focus();
         }
     }
-    
+
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
@@ -916,8 +1037,11 @@ export class TabManager {
             // whether to auto-follow bottom on the rAF tick. Standard
             // xterm "is-at-bottom" predicate, matching the scroll-to-bottom
             // button's check (viewportY >= baseY, no slack).
-            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
-            const preAtBottom = buf && (buf.viewportY >= buf.baseY);
+            const buf =
+                tabInfo.term &&
+                tabInfo.term.buffer &&
+                tabInfo.term.buffer.active;
+            const preAtBottom = buf && buf.viewportY >= buf.baseY;
             requestAnimationFrame(() => {
                 if (tabInfo.writeBuffer.length > 0 && !tabInfo.isDead) {
                     // write(data, cb): cb fires once the chunk is parsed into
@@ -949,7 +1073,7 @@ export class TabManager {
             });
         }
     }
-    
+
     updateDirectModeUI(tab) {
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
@@ -983,14 +1107,24 @@ export class TabManager {
 
         this.fitActiveTerminal();
     }
-    
-    createTab(paneId, sessionId, title, coder, workspace = '', cwd = '', pinned = true, marked = false, initialCmd = '') {
+
+    createTab(
+        paneId,
+        sessionId,
+        title,
+        coder,
+        workspace = '',
+        cwd = '',
+        pinned = true,
+        marked = false,
+        initialCmd = '',
+    ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
             this.switchTab(paneId, { userInitiated: true });
             return;
         }
-        
+
         const faviconUrl = CODER_FAVICONS[coder] || 'vendor/logos/bash.jpg';
 
         // Create elements
@@ -1003,12 +1137,16 @@ export class TabManager {
         // not a position-lock - all tabs get drag-reorder regardless of
         // pin state (moveTabTo / applyTabOrder / saveTabOrder).
         tabEl.draggable = true;
-        tabEl.addEventListener('dragstart', (e) => this.handleTabDragStart(e, paneId));
+        tabEl.addEventListener('dragstart', (e) =>
+            this.handleTabDragStart(e, paneId),
+        );
         tabEl.addEventListener('dragend', (e) => this.handleTabDragEnd(e));
-        tabEl.addEventListener('dragover', (e) => this.handleTabDragOver(e, paneId));
+        tabEl.addEventListener('dragover', (e) =>
+            this.handleTabDragOver(e, paneId),
+        );
         tabEl.addEventListener('dragleave', (e) => this.handleTabDragLeave(e));
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
-        
+
         // Stash the worktree glyph + cwd on the tab DOM so the legend, the
         // +N dropdown, and the hover preview can read them without a tabs
         // Map lookup (the Map entry lands ~300 lines later - see NOTE below).
@@ -1025,11 +1163,11 @@ export class TabManager {
             <button class="tab-close">×</button>
             <button class="tab-reopen" title="Undo close">↻</button>
         `;
-        
+
         const termContainer = document.createElement('div');
         termContainer.className = 'term-container';
         termContainer.id = `term-${paneId}`;
-        
+
         let loaderEl = null;
         if (coder !== 'review' && coder !== 'kanban') {
             loaderEl = document.createElement('div');
@@ -1055,7 +1193,7 @@ export class TabManager {
         // missing from the legend and overflow count until the next
         // event happened to trigger a refresh. Both are called below
         // immediately after the tabs.set instead.
-        
+
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
             if (e.target.closest('.tab-reopen')) {
@@ -1102,26 +1240,38 @@ export class TabManager {
                 isReview: coder === 'review',
                 isKanban: coder === 'kanban',
                 pinned: !!pinned,
-                marked: !!marked
+                marked: !!marked,
             };
             this.tabs.set(paneId, tabInfo);
             this.switchTab(paneId);
             return;
         }
-        
+
         const isMobile = window.innerWidth <= 768;
-        
+
         // Initialize xterm.js instance
         const term = new window.Terminal({
             cursorBlink: true,
             cursorStyle: 'bar',
-            fontSize: (this.app && this.app.terminalFontSize >= 8 && this.app.terminalFontSize <= 32) ? this.app.terminalFontSize : (isMobile ? 10 : 14),
-            fontFamily: (this.app && this.app.terminalFontFamily) || 'JetBrains Mono, monospace',
+            fontSize:
+                this.app &&
+                this.app.terminalFontSize >= 8 &&
+                this.app.terminalFontSize <= 32
+                    ? this.app.terminalFontSize
+                    : isMobile
+                      ? 10
+                      : 14,
+            fontFamily:
+                (this.app && this.app.terminalFontFamily) ||
+                'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
-                cursor: document.documentElement.style.getPropertyValue('--accent') || '#7c6af7',
+                cursor:
+                    document.documentElement.style.getPropertyValue(
+                        '--accent',
+                    ) || '#7c6af7',
                 cursorAccent: '#08080a',
                 black: '#18181b',
                 red: '#ef4444',
@@ -1138,16 +1288,16 @@ export class TabManager {
                 brightBlue: '#60a5fa',
                 brightMagenta: '#c084fc',
                 brightCyan: '#22d3ee',
-                brightWhite: '#ffffff'
-            }
+                brightWhite: '#ffffff',
+            },
         });
-        
+
         const fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
 
         const searchAddon = new window.SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
-        
+
         // Open in DOM
         term.open(termContainer);
 
@@ -1167,14 +1317,16 @@ export class TabManager {
                     const text = new TextDecoder('utf-8').decode(bytes);
                     this._agentClipboardCopy(text);
                 } catch (e) {
-                    console.error("OSC 52 decode error:", e);
+                    console.error('OSC 52 decode error:', e);
                 }
                 return true;
             });
         }
-        
+
         // Prevent browser viewport jump when xterm focuses its hidden textarea
-        const textarea = termContainer.querySelector('textarea.xterm-helper-textarea');
+        const textarea = termContainer.querySelector(
+            'textarea.xterm-helper-textarea',
+        );
         if (textarea) {
             const originalFocus = textarea.focus.bind(textarea);
             textarea.focus = (options) => {
@@ -1185,19 +1337,28 @@ export class TabManager {
         // Right-click on terminal → copy xterm selection.
         // Uses capture phase on termContainer so we fire BEFORE xterm's own
         // contextmenu handler (which calls stopPropagation and blocks bubble-phase listeners).
-        termContainer.addEventListener('contextmenu', (e) => {
-            const sel = term.getSelection();
-            if (!sel) return;
-            e.preventDefault();
-            e.stopPropagation();
-            this.copyTextRobustly(sel);
-        }, { capture: true });
+        termContainer.addEventListener(
+            'contextmenu',
+            (e) => {
+                const sel = term.getSelection();
+                if (!sel) return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.copyTextRobustly(sel);
+            },
+            { capture: true },
+        );
 
         term.attachCustomKeyEventHandler((e) => {
             if (e.type === 'keydown') {
-                const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-                const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') || 
-                               (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
+                const isMac =
+                    navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+                const isCopy =
+                    (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
+                    (!isMac &&
+                        e.ctrlKey &&
+                        e.shiftKey &&
+                        e.key.toLowerCase() === 'c');
                 if (isCopy) {
                     const sel = term.getSelection();
                     if (sel) {
@@ -1210,7 +1371,15 @@ export class TabManager {
             // Support Ctrl/Cmd + (+/- / 0) zoom shortcuts inside xterm (pass through to browser/desktop)
             if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey) {
                 const k = e.key;
-                if (k === '+' || k === '=' || k === '-' || k === '_' || k === '0' || k === 'Add' || k === 'Subtract') {
+                if (
+                    k === '+' ||
+                    k === '=' ||
+                    k === '-' ||
+                    k === '_' ||
+                    k === '0' ||
+                    k === 'Add' ||
+                    k === 'Subtract'
+                ) {
                     return false;
                 }
             }
@@ -1221,7 +1390,13 @@ export class TabManager {
                 }
                 return false;
             }
-            if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R')) {
+            if (
+                e.type === 'keydown' &&
+                (e.ctrlKey || e.metaKey) &&
+                e.shiftKey &&
+                !e.altKey &&
+                (e.key === 'r' || e.key === 'R')
+            ) {
                 this.handleGlobalTabShortcuts(e);
                 return false;
             }
@@ -1244,11 +1419,22 @@ export class TabManager {
             // bar uses, but with no emptiness gate: a draft in the input bar
             // must not change what Enter means on a focused terminal
             // (answering a TUI prompt mid-draft keeps the draft staged).
-            if (!tabInfo.directMode && e.type === 'keydown' && this._forwardKeyToPty(e, tabInfo)) {
+            if (
+                !tabInfo.directMode &&
+                e.type === 'keydown' &&
+                this._forwardKeyToPty(e, tabInfo)
+            ) {
                 return false;
             }
             // In non-direct mode: redirect printable keystrokes to the input textarea
-            if (!tabInfo.directMode && e.type === 'keydown' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (
+                !tabInfo.directMode &&
+                e.type === 'keydown' &&
+                e.key.length === 1 &&
+                !e.ctrlKey &&
+                !e.altKey &&
+                !e.metaKey
+            ) {
                 // preventDefault: focus moves to the textarea mid-keydown, so
                 // without it the browser's default insertion lands there too
                 // and doubles the character.
@@ -1261,13 +1447,16 @@ export class TabManager {
                 // but the textarea's input listeners (spam-scroll,
                 // lastInputValue, autosize, prompt-history cursor reset)
                 // still need to run.
-                this.inputTextArea.dispatchEvent(new Event('input', { bubbles: true }));
+                this.inputTextArea.dispatchEvent(
+                    new Event('input', { bubbles: true }),
+                );
                 return false;
             }
             // Prevent browser default for standard CLI shortcuts in direct mode
             if (tabInfo.directMode && e.ctrlKey && !e.altKey && !e.shiftKey) {
                 const key = e.key.toLowerCase();
-                if (['o', 's', 'p', 'f', 'r', 'g'].includes(key)) e.preventDefault();
+                if (['o', 's', 'p', 'f', 'r', 'g'].includes(key))
+                    e.preventDefault();
             }
             return true;
         });
@@ -1278,68 +1467,84 @@ export class TabManager {
                 this.copyTextRobustly(sel, true);
             }
         });
-        
+
         // Opencode scroll fix: intercept in capture phase before xterm.js can consume the event
         // Scoped strictly to opencode tabs – all other coders pass through untouched.
         // We always send Ctrl+Alt+Y / Ctrl+Alt+E to the TUI regardless of alternate buffer detection,
         // as OpenCode is a full-screen TUI application and doesn't use standard terminal scrollback.
-        termContainer.addEventListener('wheel', (e) => {
-            if (tabInfo.coder !== 'opencode') return;
+        termContainer.addEventListener(
+            'wheel',
+            (e) => {
+                if (tabInfo.coder !== 'opencode') return;
 
-            const isUp = e.deltaY < 0;
+                const isUp = e.deltaY < 0;
 
-            // Scale scroll amount from the wheel delta for natural-feeling speed
-            // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
-            const lines = Math.max(1, Math.min(Math.round(Math.abs(e.deltaY) / 40), 8));
+                // Scale scroll amount from the wheel delta for natural-feeling speed
+                // Math.abs(deltaY) is typically ~100 for a single notch; clamp to a sane range
+                const lines = Math.max(
+                    1,
+                    Math.min(Math.round(Math.abs(e.deltaY) / 40), 8),
+                );
 
-            e.preventDefault();
-            e.stopPropagation();
-            const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-            const payload = seq.repeat(lines);
-            if (tabInfo.ws && !tabInfo.isDead) {
-                tabInfo.ws.sendInput(payload);
-            }
-        }, { capture: true, passive: false });
+                e.preventDefault();
+                e.stopPropagation();
+                const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+                const payload = seq.repeat(lines);
+                if (tabInfo.ws && !tabInfo.isDead) {
+                    tabInfo.ws.sendInput(payload);
+                }
+            },
+            { capture: true, passive: false },
+        );
 
         // Touch scrolling for OpenCode alt screen (TUI) on mobile viewports
         let termTouchStartY = 0;
         let termTouchRemainder = 0;
-        termContainer.addEventListener('touchstart', (e) => {
-            if (tabInfo.coder !== 'opencode') return;
-            if (e.touches.length === 1) {
-                termTouchStartY = e.touches[0].clientY;
-                termTouchRemainder = 0;
-            }
-        }, { capture: true, passive: false });
-
-        termContainer.addEventListener('touchmove', (e) => {
-            if (tabInfo.coder !== 'opencode') return;
-            if (e.touches.length === 1 && termTouchStartY !== null) {
-                const currentY = e.touches[0].clientY;
-                const rawDelta = currentY - termTouchStartY;
-                const totalDelta = rawDelta + termTouchRemainder;
-                const cellHeight = 16;
-                
-                const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
-                if (lines > 0) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    
-                    const isUp = totalDelta > 0; // swipe down -> scroll up
-                    const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-                    const payload = seq.repeat(lines);
-                    
-                    if (tabInfo.ws && !tabInfo.isDead) {
-                        tabInfo.ws.sendInput(payload);
-                    }
-                    
-                    const consumed = lines * cellHeight * (totalDelta > 0 ? 1 : -1);
-                    termTouchRemainder = totalDelta - consumed;
-                    termTouchStartY = currentY;
+        termContainer.addEventListener(
+            'touchstart',
+            (e) => {
+                if (tabInfo.coder !== 'opencode') return;
+                if (e.touches.length === 1) {
+                    termTouchStartY = e.touches[0].clientY;
+                    termTouchRemainder = 0;
                 }
-            }
-        }, { capture: true, passive: false });
-        
+            },
+            { capture: true, passive: false },
+        );
+
+        termContainer.addEventListener(
+            'touchmove',
+            (e) => {
+                if (tabInfo.coder !== 'opencode') return;
+                if (e.touches.length === 1 && termTouchStartY !== null) {
+                    const currentY = e.touches[0].clientY;
+                    const rawDelta = currentY - termTouchStartY;
+                    const totalDelta = rawDelta + termTouchRemainder;
+                    const cellHeight = 16;
+
+                    const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
+                    if (lines > 0) {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        const isUp = totalDelta > 0; // swipe down -> scroll up
+                        const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+                        const payload = seq.repeat(lines);
+
+                        if (tabInfo.ws && !tabInfo.isDead) {
+                            tabInfo.ws.sendInput(payload);
+                        }
+
+                        const consumed =
+                            lines * cellHeight * (totalDelta > 0 ? 1 : -1);
+                        termTouchRemainder = totalDelta - consumed;
+                        termTouchStartY = currentY;
+                    }
+                }
+            },
+            { capture: true, passive: false },
+        );
+
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
         bellAudio.volume = 0.3;
@@ -1347,7 +1552,7 @@ export class TabManager {
             bellAudio.currentTime = 0;
             bellAudio.play().catch(() => {});
         });
-        
+
         // Graceful WebGL/Canvas renderer.
         //
         // The try/catch only covers a renderer that fails to construct. A
@@ -1361,28 +1566,42 @@ export class TabManager {
             const webgl = new window.WebglAddon.WebglAddon();
             if (typeof webgl.onContextLoss === 'function') {
                 webgl.onContextLoss(() => {
-                    console.warn('[term] WebGL context lost; falling back to the DOM renderer');
-                    try { webgl.dispose(); } catch (e) { console.error('[term] WebGL dispose failed:', e); }
+                    console.warn(
+                        '[term] WebGL context lost; falling back to the DOM renderer',
+                    );
+                    try {
+                        webgl.dispose();
+                    } catch (e) {
+                        console.error('[term] WebGL dispose failed:', e);
+                    }
                 });
             }
             term.loadAddon(webgl);
-            console.log("[term] Loaded WebGL hardware acceleration");
+            console.log('[term] Loaded WebGL hardware acceleration');
         } catch (e) {
-            console.warn("[term] Falling back to standard canvas renderer");
+            console.warn('[term] Falling back to standard canvas renderer');
         }
-        
+
         // Load Unicode 11 Addon for correct emoji cell width measurements
         try {
             const unicode11 = new window.Unicode11Addon.Unicode11Addon();
             term.loadAddon(unicode11);
             term.unicode.activeVersion = '11';
-            console.log("[term] Loaded Unicode 11 character width addon");
+            console.log('[term] Loaded Unicode 11 character width addon');
         } catch (e) {
-            console.warn("[term] Failed to load Unicode 11 addon:", e);
+            console.warn('[term] Failed to load Unicode 11 addon:', e);
         }
-        
-        const activeWS = workspace || (this.app.sessionsManager ? this.app.sessionsManager.activeWorkspace : '');
-        const activeCWD = cwd || (this.app.sessionsManager ? this.app.sessionsManager.activeCWD : '');
+
+        const activeWS =
+            workspace ||
+            (this.app.sessionsManager
+                ? this.app.sessionsManager.activeWorkspace
+                : '');
+        const activeCWD =
+            cwd ||
+            (this.app.sessionsManager
+                ? this.app.sessionsManager.activeCWD
+                : '');
 
         // Setup WebSocket connection
         let ws;
@@ -1405,7 +1624,7 @@ export class TabManager {
             // that's the whole phi workflow: queue prompts, attach files,
             // Ctrl+Shift+X chip. DirectMode is not persisted — restored
             // tabs pick this up via createTab() on each load.
-            directMode: (coder === 'bash' || coder === 'pwsh'),
+            directMode: coder === 'bash' || coder === 'pwsh',
             isDead: false,
             isAtBottom: true,
             isBtop: title === 'btop',
@@ -1432,26 +1651,35 @@ export class TabManager {
             //   - Re-engage follow if user scrolls back to bottom
             // Without it, the scrollbar shows the line from N minutes ago
             // while content scrolls past, then snaps when the user wheels.
-            userFollowBottom: true
+            userFollowBottom: true,
         };
 
         if (pinned) {
             fetch(`/api/terminals/${paneId}/pin`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pinned: true })
-            }).catch(err => console.error('[term] Failed to sync pin on backend:', err));
+                body: JSON.stringify({ pinned: true }),
+            }).catch((err) =>
+                console.error('[term] Failed to sync pin on backend:', err),
+            );
         }
-        
+
         ws = new PTYWebSocket(
             paneId,
-            (data) => { this.writeToTerminal(tabInfo, data); },
-            (control) => { this.handleControlMessage(tabInfo, control); },
+            (data) => {
+                this.writeToTerminal(tabInfo, data);
+            },
+            (control) => {
+                this.handleControlMessage(tabInfo, control);
+            },
             () => this._handleTerminalDisconnect(tabInfo),
             () => {
                 try {
                     if (tabInfo === this.getActiveTab()) {
-                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
+                        this.activateTabViewport(tabInfo, {
+                            scrollToBottom: true,
+                            autoReconnect: false,
+                        });
                     } else {
                         tabInfo.fitAddon.fit();
                         this.sendResizeToBackend(tabInfo);
@@ -1460,19 +1688,28 @@ export class TabManager {
                     if (initialCmd) {
                         // Deliver startup command after terminal settles
                         setTimeout(() => {
-                            if (initialCmd.length > 16 || initialCmd.includes('\n')) {
-                                this.sendInput(tabInfo, '\x1b[200~' + initialCmd + '\x1b[201~\r');
+                            if (
+                                initialCmd.length > 16 ||
+                                initialCmd.includes('\n')
+                            ) {
+                                this.sendInput(
+                                    tabInfo,
+                                    '\x1b[200~' + initialCmd + '\x1b[201~\r',
+                                );
                             } else {
                                 this.sendInput(tabInfo, initialCmd + '\r');
                             }
                         }, 1000);
                     }
                 } catch (e) {
-                    console.error("[term] Fit/resize error on initial socket open:", e);
+                    console.error(
+                        '[term] Fit/resize error on initial socket open:',
+                        e,
+                    );
                 }
-            }
+            },
         );
-        
+
         tabInfo.ws = ws;
         this.tabs.set(paneId, tabInfo);
 
@@ -1481,12 +1718,23 @@ export class TabManager {
         // it for our own programmatic scrolls too, which would weaken the
         // proven 10ms/300ms stabilization loop. DOM input events identify
         // user intent without changing that loop's timing or behavior.
-        const cancelFollowForUserScroll = () => this._cancelScrollFollowForUserScroll(tabInfo);
-        termContainer.addEventListener('wheel', cancelFollowForUserScroll, { capture: true, passive: true });
-        termContainer.addEventListener('touchstart', cancelFollowForUserScroll, { capture: true, passive: true });
-        term.element?.querySelector('.xterm-viewport')?.addEventListener(
-            'pointerdown', cancelFollowForUserScroll, { capture: true, passive: true },
+        const cancelFollowForUserScroll = () =>
+            this._cancelScrollFollowForUserScroll(tabInfo);
+        termContainer.addEventListener('wheel', cancelFollowForUserScroll, {
+            capture: true,
+            passive: true,
+        });
+        termContainer.addEventListener(
+            'touchstart',
+            cancelFollowForUserScroll,
+            { capture: true, passive: true },
         );
+        term.element
+            ?.querySelector('.xterm-viewport')
+            ?.addEventListener('pointerdown', cancelFollowForUserScroll, {
+                capture: true,
+                passive: true,
+            });
 
         // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
         // at a fake bottom while real output sits below (viewportY < baseY).
@@ -1494,18 +1742,30 @@ export class TabManager {
         // bottom re-engages follow via the scroll listeners in the button
         // block below. Registered bubble-phase so the opencode capture
         // handler's stopPropagation keeps opencode tabs out of this path.
-        termContainer.addEventListener('wheel', (e) => {
-            if (e.deltaY <= 0) return;
-            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
-            if (!buf || buf.viewportY >= buf.baseY) return;
-            const vp = tabInfo.term.element && tabInfo.term.element.querySelector('.xterm-viewport');
-            if (!vp) return;
-            if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
-                // Same wheel→lines scaling as the opencode handler above.
-                const lines = Math.max(1, Math.min(Math.round(e.deltaY / 40), 8));
-                tabInfo.term.scrollLines(lines);
-            }
-        }, { passive: true });
+        termContainer.addEventListener(
+            'wheel',
+            (e) => {
+                if (e.deltaY <= 0) return;
+                const buf =
+                    tabInfo.term &&
+                    tabInfo.term.buffer &&
+                    tabInfo.term.buffer.active;
+                if (!buf || buf.viewportY >= buf.baseY) return;
+                const vp =
+                    tabInfo.term.element &&
+                    tabInfo.term.element.querySelector('.xterm-viewport');
+                if (!vp) return;
+                if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
+                    // Same wheel→lines scaling as the opencode handler above.
+                    const lines = Math.max(
+                        1,
+                        Math.min(Math.round(e.deltaY / 40), 8),
+                    );
+                    tabInfo.term.scrollLines(lines);
+                }
+            },
+            { passive: true },
+        );
 
         // Scroll-to-bottom affordance: a small floating button that
         // fades in when the user scrolls up into scrollback, fades out
@@ -1525,7 +1785,10 @@ export class TabManager {
         const scrollToBottomBtn = document.createElement('button');
         scrollToBottomBtn.className = 'scroll-to-bottom-btn hidden';
         scrollToBottomBtn.setAttribute('type', 'button');
-        scrollToBottomBtn.setAttribute('aria-label', 'Jump to bottom of output');
+        scrollToBottomBtn.setAttribute(
+            'aria-label',
+            'Jump to bottom of output',
+        );
         scrollToBottomBtn.title = 'Jump to bottom';
         scrollToBottomBtn.innerHTML = '\u2193'; // ↓
         scrollToBottomBtn.addEventListener('click', (e) => {
@@ -1540,11 +1803,18 @@ export class TabManager {
         tabInfo.scrollToBottomBtn = scrollToBottomBtn;
 
         const updateScrollBtn = () => {
-            if (tabInfo.isDead || tabInfo.coder === 'review' || tabInfo.coder === 'kanban') {
+            if (
+                tabInfo.isDead ||
+                tabInfo.coder === 'review' ||
+                tabInfo.coder === 'kanban'
+            ) {
                 scrollToBottomBtn.classList.add('hidden');
                 return;
             }
-            const buf = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+            const buf =
+                tabInfo.term &&
+                tabInfo.term.buffer &&
+                tabInfo.term.buffer.active;
             if (!buf) return;
             const atBottom = buf.viewportY >= buf.baseY;
             if (atBottom) {
@@ -1561,7 +1831,10 @@ export class TabManager {
             // to the live tail. Lets the user "release" and re-follow
             // without needing to click Jump-to-bottom.
             term.onScroll(() => {
-                const b = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
+                const b =
+                    tabInfo.term &&
+                    tabInfo.term.buffer &&
+                    tabInfo.term.buffer.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
                 }
@@ -1577,18 +1850,25 @@ export class TabManager {
         // the buffer, so defer one frame (house rAF-coalesce pattern) to
         // read fresh coordinates.
         let viewportScrollRafPending = false;
-        termContainer.addEventListener('scroll', () => {
-            if (viewportScrollRafPending) return;
-            viewportScrollRafPending = true;
-            requestAnimationFrame(() => {
-                viewportScrollRafPending = false;
-                updateScrollBtn();
-                const b = tabInfo.term && tabInfo.term.buffer && tabInfo.term.buffer.active;
-                if (b && b.viewportY >= b.baseY) {
-                    tabInfo.userFollowBottom = true;
-                }
-            });
-        }, { capture: true, passive: true });
+        termContainer.addEventListener(
+            'scroll',
+            () => {
+                if (viewportScrollRafPending) return;
+                viewportScrollRafPending = true;
+                requestAnimationFrame(() => {
+                    viewportScrollRafPending = false;
+                    updateScrollBtn();
+                    const b =
+                        tabInfo.term &&
+                        tabInfo.term.buffer &&
+                        tabInfo.term.buffer.active;
+                    if (b && b.viewportY >= b.baseY) {
+                        tabInfo.userFollowBottom = true;
+                    }
+                });
+            },
+            { capture: true, passive: true },
+        );
         // Also re-evaluate on every write so a button shown while
         // scrolled up hides itself once new output catches up to bottom.
         const origWrite = tabInfo.term.write.bind(tabInfo.term);
@@ -1612,7 +1892,7 @@ export class TabManager {
                 if (data.includes('\r')) this._spamScrollToBottom(tabInfo);
             }
         });
-        
+
         // Double click terminal → toggle direct focus mode
         termContainer.addEventListener('dblclick', (e) => {
             e.preventDefault();
@@ -1622,30 +1902,33 @@ export class TabManager {
                 const buffer = tab.term.buffer.active;
                 tab.isAtBottom = buffer.viewportY >= buffer.baseY;
                 tab.lastScrollY = buffer.viewportY;
-                
+
                 // 2. Toggle mode
                 tab.directMode = !tab.directMode;
-                
+
                 // 3. Focus first so focus-induced browser scroll resets are captured
                 if (tab.directMode) {
                     term.focus();
                 } else {
                     this.inputTextArea.focus({ preventScroll: true });
                 }
-                
+
                 // 4. Update UI and fit (which will restore the scroll perfectly)
                 this.updateDirectModeUI(tab);
             }
         });
-        
+
         // Switch to the newly created tab
         this.switchTab(paneId);
         this.saveTabsState();
-        
+
         // Initial fit delay to let rendering engine draw
         setTimeout(() => {
             if (tabInfo === this.getActiveTab()) {
-                this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: true });
+                this.activateTabViewport(tabInfo, {
+                    scrollToBottom: true,
+                    autoReconnect: true,
+                });
             }
         }, 100);
     }
@@ -1677,14 +1960,19 @@ export class TabManager {
                     type: 'error',
                     title: 'Terminal disconnected',
                     duration: 8000,
-                    action: tabInfo.exitCode === undefined || tabInfo.exitCode === null
-                        ? { text: 'Reconnect', callback: () => this.reconnectTab(tabInfo) }
-                        : null,
+                    action:
+                        tabInfo.exitCode === undefined ||
+                        tabInfo.exitCode === null
+                            ? {
+                                  text: 'Reconnect',
+                                  callback: () => this.reconnectTab(tabInfo),
+                              }
+                            : null,
                 },
             );
         }
     }
-    
+
     switchTab(paneId, { userInitiated = false } = {}) {
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
@@ -1695,37 +1983,47 @@ export class TabManager {
                 // tab gets a chance to revive itself on explicit click.
                 // Use scrollToBottom:false so a user mid-scrollback reading
                 // old output doesn't get yanked to the bottom line.
-                this.activateTabViewport(activeTab, { scrollToBottom: false, autoReconnect: true, force: userInitiated });
+                this.activateTabViewport(activeTab, {
+                    scrollToBottom: false,
+                    autoReconnect: true,
+                    force: userInitiated,
+                });
             }
             return;
         }
-        
+
         // Deactivate current active tab
         const prevTab = this.getActiveTab();
         if (prevTab) {
             if (prevTab.term) {
-                prevTab.isAtBottom = prevTab.term.buffer.active.viewportY >= prevTab.term.buffer.active.baseY;
+                prevTab.isAtBottom =
+                    prevTab.term.buffer.active.viewportY >=
+                    prevTab.term.buffer.active.baseY;
                 prevTab.lastScrollY = prevTab.term.buffer.active.viewportY;
             }
             // Park the draft on the outgoing tab, mirroring the scroll save
             // above. review/kanban tabs hide the input bar and never carry
             // one. Guard inputTextArea: test harnesses build partial managers.
-            if (this.inputTextArea && prevTab.coder !== 'review' && prevTab.coder !== 'kanban') {
+            if (
+                this.inputTextArea &&
+                prevTab.coder !== 'review' &&
+                prevTab.coder !== 'kanban'
+            ) {
                 prevTab.draft = this.inputTextArea.value;
                 prevTab.draftAttachments = this.stagedAttachments;
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
         }
-        
+
         // Set new active tab
         this.activePaneId = paneId;
         const newTab = this.getActiveTab();
         if (!newTab) return;
-        
+
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
-        
+
         // Show/hide staged input & direct mode based on tab settings
         if (newTab.coder === 'review' || newTab.coder === 'kanban') {
             this.inputBarContainer.classList.add('hidden');
@@ -1745,11 +2043,15 @@ export class TabManager {
                 this._historyPreCycleValue = undefined;
             }
         }
-        
+
         // Scroll tabs bar to active tab
-        newTab.tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        newTab.tabEl.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'nearest',
+        });
         this.saveTabsState();
-        
+
         // Update sidebar select state and active coder tab, but skip auto-reload since we coordinate it
         const prevCoder = this.app.sessionsManager.activeCoder;
         this.app.sessionsManager.switchCoder(newTab.coder, true);
@@ -1763,23 +2065,35 @@ export class TabManager {
         // So skip the workspace/cwd sync for non-terminal coders entirely.
         if (newTab.coder === 'kanban' || newTab.coder === 'review') {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
-            this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
+            this.activateTabViewport(newTab, {
+                scrollToBottom: true,
+                autoReconnect: true,
+                force: userInitiated,
+            });
             return;
         }
 
         // Sync project / workspace context from the tab using normalized paths
-        const workspaceChanged = newTab.workspace && (normalizePath(this.app.sessionsManager.activeWorkspace) !== normalizePath(newTab.workspace));
+        const workspaceChanged =
+            newTab.workspace &&
+            normalizePath(this.app.sessionsManager.activeWorkspace) !==
+                normalizePath(newTab.workspace);
         const coderChanged = prevCoder !== newTab.coder;
-        const cwdChanged = newTab.cwd && (normalizePath(this.app.sessionsManager.activeCWD) !== normalizePath(newTab.cwd));
+        const cwdChanged =
+            newTab.cwd &&
+            normalizePath(this.app.sessionsManager.activeCWD) !==
+                normalizePath(newTab.cwd);
 
         if (workspaceChanged) {
             this.app.sessionsManager.workspaceSelect.value = newTab.workspace;
             this.app.sessionsManager.activeWorkspace = newTab.workspace;
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.updateWorkspaceSelectWidth();
-            
+
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+                this.app.sessionsManager.highlightActiveSession(
+                    newTab.sessionId,
+                );
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
@@ -1789,7 +2103,9 @@ export class TabManager {
             // Workspace is the same, but coder changed. We need to rebuild worktrees to load the sessions for the new coder!
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+                this.app.sessionsManager.highlightActiveSession(
+                    newTab.sessionId,
+                );
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
@@ -1808,28 +2124,35 @@ export class TabManager {
             // Workspace, coder, and CWD are all the same, only session might have changed.
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             if (this.app.markdownManager) {
-                this.app.markdownManager.refreshFiles({ force: false, silent: true });
+                this.app.markdownManager.refreshFiles({
+                    force: false,
+                    silent: true,
+                });
             }
         }
 
-        this.activateTabViewport(newTab, { scrollToBottom: true, autoReconnect: true, force: userInitiated });
+        this.activateTabViewport(newTab, {
+            scrollToBottom: true,
+            autoReconnect: true,
+            force: userInitiated,
+        });
         this.updateDocumentTitle();
     }
-    
+
     togglePinTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab) return;
-        
+
         tab.pinned = !tab.pinned;
         if (tab.pinned) {
             tab.tabEl.classList.add('pinned');
         } else {
             tab.tabEl.classList.remove('pinned');
         }
-        
+
         // Sync with backend API.
         this.syncBackendPin(paneId, tab.pinned);
-        
+
         this.saveTabsState();
     }
 
@@ -1837,16 +2160,20 @@ export class TabManager {
         fetch(`/api/terminals/${paneId}/pin`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pinned: pinned })
-        }).catch(err => console.error('[term] Failed to sync pin on backend:', err));
+            body: JSON.stringify({ pinned: pinned }),
+        }).catch((err) =>
+            console.error('[term] Failed to sync pin on backend:', err),
+        );
     }
-    
+
     syncBackendMark(paneId, marked) {
         fetch(`/api/terminals/${paneId}/mark`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ marked: marked })
-        }).catch(err => console.error('[term] Failed to sync mark on backend:', err));
+            body: JSON.stringify({ marked: marked }),
+        }).catch((err) =>
+            console.error('[term] Failed to sync mark on backend:', err),
+        );
     }
 
     openTabRenamer(paneId, titleEl) {
@@ -1872,7 +2199,8 @@ export class TabManager {
             if (next && next !== current) {
                 tab.title = next;
                 span.textContent = next;
-                if (!tab.isReview && !tab.isKanban) this.syncBackendTitle(paneId, next);
+                if (!tab.isReview && !tab.isKanban)
+                    this.syncBackendTitle(paneId, next);
             } else {
                 span.textContent = current;
             }
@@ -1888,8 +2216,13 @@ export class TabManager {
         };
 
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+            }
         });
         input.addEventListener('blur', commit);
     }
@@ -1898,8 +2231,10 @@ export class TabManager {
         fetch(`/api/terminals/${paneId}/title`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
-        }).catch(err => console.error('[term] Failed to sync title on backend:', err));
+            body: JSON.stringify({ title }),
+        }).catch((err) =>
+            console.error('[term] Failed to sync title on backend:', err),
+        );
     }
 
     // Soft-close: when the user clicks × on a tab, the tab doesn't actually
@@ -1961,9 +2296,14 @@ export class TabManager {
         // Cap: if too many soft-closed tabs in the strip, force-finalize
         // the oldest. This keeps the strip readable and bounds the grace
         // memory footprint.
-        const softTabs = Array.from(this.tabs.values()).filter(t => t.softClosing);
+        const softTabs = Array.from(this.tabs.values()).filter(
+            (t) => t.softClosing,
+        );
         if (softTabs.length > TabManager.MAX_SOFT_CLOSED_TABS) {
-            softTabs.sort((a, b) => (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0));
+            softTabs.sort(
+                (a, b) =>
+                    (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0),
+            );
             this.finalizeCloseTab(softTabs[0].paneId);
             return;
         }
@@ -2066,8 +2406,13 @@ export class TabManager {
         const tick = () => {
             if (!tab.softCloseOverlay) return; // overlay gone -> stop
             const elapsed = Date.now() - startedAt;
-            const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
-            const secsEl = tab.softCloseOverlay.querySelector('.tab-soft-close-secs');
+            const remaining = Math.max(
+                0,
+                Math.ceil((duration - elapsed) / 1000),
+            );
+            const secsEl = tab.softCloseOverlay.querySelector(
+                '.tab-soft-close-secs',
+            );
             if (secsEl) secsEl.textContent = String(remaining);
             if (remaining <= 0) return;
         };
@@ -2093,10 +2438,14 @@ export class TabManager {
         const textEl = pill.querySelector('.tab-soft-close-pill-text');
         const tick = () => {
             const elapsed = Date.now() - startedAt;
-            const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
+            const remaining = Math.max(
+                0,
+                Math.ceil((duration - elapsed) / 1000),
+            );
             if (textEl) textEl.textContent = `${remaining}s`;
             if (remaining <= 0) {
-                if (tab.softClosePillTimer) clearInterval(tab.softClosePillTimer);
+                if (tab.softClosePillTimer)
+                    clearInterval(tab.softClosePillTimer);
                 tab.softClosePillTimer = null;
                 return;
             }
@@ -2205,17 +2554,27 @@ export class TabManager {
                 if (this.app && this.app.showToast) {
                     this.app.showToast(
                         `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
-                        { type: 'error', duration: 8000 }
+                        { type: 'error', duration: 8000 },
                     );
                 }
             });
 
-        try { if (tab.ws) tab.ws.close(); } catch (e) { console.error("[tab] WS close error:", e); }
-        try { if (tab.term) tab.term.dispose(); } catch (e) { console.error("[tab] Term dispose error:", e); }
+        try {
+            if (tab.ws) tab.ws.close();
+        } catch (e) {
+            console.error('[tab] WS close error:', e);
+        }
+        try {
+            if (tab.term) tab.term.dispose();
+        } catch (e) {
+            console.error('[tab] Term dispose error:', e);
+        }
         try {
             if (tab.tabEl) tab.tabEl.remove();
             if (tab.termContainer) tab.termContainer.remove();
-        } catch (e) { console.error("[tab] DOM removal error:", e); }
+        } catch (e) {
+            console.error('[tab] DOM removal error:', e);
+        }
 
         // BUG-3 fix: notify the per-coder manager so it can tear down
         // listeners and overlays it added.
@@ -2305,11 +2664,15 @@ export class TabManager {
         for (const tabEl of strip.querySelectorAll('.tab')) {
             const tabRect = tabEl.getBoundingClientRect();
             if (tabRect.left >= stripRect.right - 1) hiddenCount += 1;
-            else if (tabRect.right > stripRect.right + 1 && tabRect.left > stripRect.left) {
+            else if (
+                tabRect.right > stripRect.right + 1 &&
+                tabRect.left > stripRect.left
+            ) {
                 // Partially-clipped tab: count it as hidden too. Treat
                 // the half-tab as "effectively offscreen" since the
                 // important info (title, x) may be clipped.
-                if (tabRect.right - stripRect.right > tabRect.width / 2) hiddenCount += 1;
+                if (tabRect.right - stripRect.right > tabRect.width / 2)
+                    hiddenCount += 1;
             }
         }
         if (hiddenCount <= 0) {
@@ -2320,7 +2683,10 @@ export class TabManager {
         btn.classList.remove('hidden');
         const label = btn.querySelector('.tab-overflow-btn-label');
         if (label) label.textContent = `+${hiddenCount} more`;
-        btn.setAttribute('aria-expanded', btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false');
+        btn.setAttribute(
+            'aria-expanded',
+            btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false',
+        );
     }
 
     // ----- Hover preview card -------------------------------------------------
@@ -2352,7 +2718,9 @@ export class TabManager {
         this._hieroPreviewLabel = el.querySelector('.tab-hiero-preview-label');
         this._hieroPreviewPath = el.querySelector('.tab-hiero-preview-path');
         this._hieroPreviewCount = el.querySelector('.tab-hiero-preview-count');
-        this._hieroPreviewStatus = el.querySelector('.tab-hiero-preview-status');
+        this._hieroPreviewStatus = el.querySelector(
+            '.tab-hiero-preview-status',
+        );
 
         // Event delegation on the tabs container - one listener, works for
         // every tab and any tab created later (event bubbles up).
@@ -2363,11 +2731,13 @@ export class TabManager {
             // (and its shimmer) doesn't replay on intra-tab movement.
             this.tabsContainer.addEventListener('mouseover', (e) => {
                 const tabEl = e.target.closest('.tab');
-                if (tabEl && !tabEl.contains(e.relatedTarget)) this._showHieroPreview(tabEl);
+                if (tabEl && !tabEl.contains(e.relatedTarget))
+                    this._showHieroPreview(tabEl);
             });
             this.tabsContainer.addEventListener('mouseout', (e) => {
                 const tabEl = e.target.closest('.tab');
-                if (tabEl && !tabEl.contains(e.relatedTarget)) this._hideHieroPreview();
+                if (tabEl && !tabEl.contains(e.relatedTarget))
+                    this._hideHieroPreview();
             });
         }
         // Sidebar worktree headers also drive the preview: hovering a
@@ -2377,11 +2747,13 @@ export class TabManager {
         if (sessionList) {
             sessionList.addEventListener('mouseover', (e) => {
                 const headerEl = e.target.closest('.worktree-header');
-                if (headerEl && !headerEl.contains(e.relatedTarget)) this._showWorktreeHieroPreview(headerEl);
+                if (headerEl && !headerEl.contains(e.relatedTarget))
+                    this._showWorktreeHieroPreview(headerEl);
             });
             sessionList.addEventListener('mouseout', (e) => {
                 const headerEl = e.target.closest('.worktree-header');
-                if (headerEl && !headerEl.contains(e.relatedTarget)) this._hideHieroPreview();
+                if (headerEl && !headerEl.contains(e.relatedTarget))
+                    this._hideHieroPreview();
             });
         }
         // Hide on scroll/resize so the preview never lags behind a moved tab.
@@ -2406,7 +2778,8 @@ export class TabManager {
         // tab strips always resolve to the current full title. Mid-createTab
         // the Map entry doesn't exist yet - the .tab-title span does.
         const titleSpan = tabEl.querySelector('.tab-title');
-        const titleText = (tab && tab.title) || (titleSpan ? titleSpan.textContent : '');
+        const titleText =
+            (tab && tab.title) || (titleSpan ? titleSpan.textContent : '');
 
         // Live status line - coder-agnostic, from the client-side busy/idle
         // tracking every PTY tab gets (isBusy set on output frames, cleared
@@ -2429,11 +2802,21 @@ export class TabManager {
         }
 
         this._populateHieroPreview({
-            glyph, titleText, label, path, sourceEl: tabEl, anchor: 'below', size: 'large',
-            countText: count > 1
-                ? `${count} tabs in this worktree`
-                : (count === 1 ? '1 tab in this worktree' : ''),
-            statusText, busy,
+            glyph,
+            titleText,
+            label,
+            path,
+            sourceEl: tabEl,
+            anchor: 'below',
+            size: 'large',
+            countText:
+                count > 1
+                    ? `${count} tabs in this worktree`
+                    : count === 1
+                      ? '1 tab in this worktree'
+                      : '',
+            statusText,
+            busy,
         });
     }
 
@@ -2448,7 +2831,11 @@ export class TabManager {
         const glyphEl = headerEl.querySelector('.worktree-section-glyph');
         const glyph = glyphEl ? glyphEl.textContent : '◆';
         const nameEl = headerEl.querySelector('.worktree-name');
-        const label = nameEl ? nameEl.textContent : (path ? path.split(/[/\\]/).pop() : '—');
+        const label = nameEl
+            ? nameEl.textContent
+            : path
+              ? path.split(/[/\\]/).pop()
+              : '—';
 
         // How many tabs would land in this worktree if opened here? Lets
         // the user gauge whether the worktree already has a session
@@ -2460,10 +2847,16 @@ export class TabManager {
             }
         }
         this._populateHieroPreview({
-            glyph, label, path, sourceEl: headerEl, anchor: 'right', size: 'medium',
-            countText: count > 0
-                ? `${count} tab${count === 1 ? '' : 's'} open in this worktree`
-                : 'no tabs open in this worktree',
+            glyph,
+            label,
+            path,
+            sourceEl: headerEl,
+            anchor: 'right',
+            size: 'medium',
+            countText:
+                count > 0
+                    ? `${count} tab${count === 1 ? '' : 's'} open in this worktree`
+                    : 'no tabs open in this worktree',
         });
     }
 
@@ -2471,7 +2864,18 @@ export class TabManager {
     // on anchor (below|right) and size (large|medium). titleText/statusText
     // are tab-hover-only; worktree headers leave them empty and the rows
     // collapse via :empty CSS.
-    _populateHieroPreview({ glyph, titleText, label, path, sourceEl, anchor, size, countText, statusText, busy }) {
+    _populateHieroPreview({
+        glyph,
+        titleText,
+        label,
+        path,
+        sourceEl,
+        anchor,
+        size,
+        countText,
+        statusText,
+        busy,
+    }) {
         const p = this._hieroPreview;
         if (!p) return;
 
@@ -2596,7 +3000,8 @@ export class TabManager {
                     this.closeTab(paneId);
                     // Re-render after async finalize so the row disappears.
                     setTimeout(() => {
-                        if (!this._overflowDropdownHidden()) this._buildOverflowDropdown();
+                        if (!this._overflowDropdownHidden())
+                            this._buildOverflowDropdown();
                     }, 50);
                 });
                 row.appendChild(closeBtn);
@@ -2640,13 +3045,17 @@ export class TabManager {
 
     sendInput(tabInfo, payload) {
         if (!tabInfo || !tabInfo.ws || tabInfo.isDead) {
-            this.app.showToast("Tab is disconnected — input not sent", { type: 'error' });
+            this.app.showToast('Tab is disconnected — input not sent', {
+                type: 'error',
+            });
             if (tabInfo) this._showReconnectOverlay(tabInfo);
             return false;
         }
         const ok = tabInfo.ws.sendInput(payload);
         if (!ok) {
-            this.app.showToast("Tab is disconnected — input not sent", { type: 'error' });
+            this.app.showToast('Tab is disconnected — input not sent', {
+                type: 'error',
+            });
             this._showReconnectOverlay(tabInfo);
             return false;
         }
@@ -2680,7 +3089,9 @@ export class TabManager {
         document.addEventListener('dragover', (e) => {
             if (!isFileDrag(e)) return;
             e.preventDefault();
-            try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {}
+            try {
+                e.dataTransfer.dropEffect = 'copy';
+            } catch (_) {}
             this.inputBarContainer.classList.add('is-drop-target');
         });
 
@@ -2704,7 +3115,8 @@ export class TabManager {
             // handler manages tab reordering. Use closest('.tab') rather
             // than a stored tabsContainer reference so this check stays
             // correct across TabManager instances and test resets.
-            if (e.target && e.target.closest && e.target.closest('.tab')) return;
+            if (e.target && e.target.closest && e.target.closest('.tab'))
+                return;
             if (!isFileDrag(e)) return;
             e.preventDefault();
             dragDepth = 0;
@@ -2712,7 +3124,10 @@ export class TabManager {
             const files = extractImageFiles(e.dataTransfer.files);
             for (const file of files) {
                 try {
-                    const attachment = await uploadClipboardImage(file, file.name || 'dropped');
+                    const attachment = await uploadClipboardImage(
+                        file,
+                        file.name || 'dropped',
+                    );
                     attachment.source = 'drop';
                     this._addAttachmentChip(attachment);
                 } catch (err) {
@@ -2739,7 +3154,10 @@ export class TabManager {
                 const blob = item.getAsFile && item.getAsFile();
                 if (!blob) continue;
                 try {
-                    const attachment = await uploadClipboardImage(blob, 'clipboard.png');
+                    const attachment = await uploadClipboardImage(
+                        blob,
+                        'clipboard.png',
+                    );
                     this._addAttachmentChip(attachment);
                 } catch (err) {
                     this._attachmentToast(`Paste failed: ${err.message}`);
@@ -2749,8 +3167,8 @@ export class TabManager {
     }
 
     // (Removed _initDocumentDropGuard: the page-wide dragover/drop handlers
-// in _initAttachmentDropZone now do both preventDefault AND the upload
-// in one place, so a separate "guard" listener is redundant.)
+    // in _initAttachmentDropZone now do both preventDefault AND the upload
+    // in one place, so a separate "guard" listener is redundant.)
 
     // _initPromptHistoryKeydown wires Alt+Up / Alt+Down on the staged
     // input textarea to cycle through previously-sent prompts (see
@@ -2761,12 +3179,24 @@ export class TabManager {
     _initPromptHistoryKeydown() {
         if (!this.inputTextArea) return;
         this.inputTextArea.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowUp' && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            if (
+                e.key === 'ArrowUp' &&
+                e.altKey &&
+                !e.shiftKey &&
+                !e.ctrlKey &&
+                !e.metaKey
+            ) {
                 e.preventDefault();
                 this._cyclePromptHistory('older');
                 return;
             }
-            if (e.key === 'ArrowDown' && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            if (
+                e.key === 'ArrowDown' &&
+                e.altKey &&
+                !e.shiftKey &&
+                !e.ctrlKey &&
+                !e.metaKey
+            ) {
                 e.preventDefault();
                 this._cyclePromptHistory('newer');
                 return;
@@ -2784,14 +3214,17 @@ export class TabManager {
     // _addAttachmentChip stores the attachment and re-renders the strip.
     _addAttachmentChip(attachment) {
         // De-dupe by path: same file dropped twice shouldn't chip twice.
-        if (this.stagedAttachments.some((a) => a.path === attachment.path)) return;
+        if (this.stagedAttachments.some((a) => a.path === attachment.path))
+            return;
         this.stagedAttachments.push(attachment);
         this._renderAttachmentStrip();
     }
 
     // _removeAttachmentChip removes a single attachment by id.
     _removeAttachmentChip(id) {
-        this.stagedAttachments = this.stagedAttachments.filter((a) => a.id !== id);
+        this.stagedAttachments = this.stagedAttachments.filter(
+            (a) => a.id !== id,
+        );
         this._renderAttachmentStrip();
     }
 
@@ -2830,7 +3263,9 @@ export class TabManager {
             remove.className = 'attachment-remove';
             remove.setAttribute('aria-label', 'Remove attachment');
             remove.textContent = '✕';
-            remove.addEventListener('click', () => this._removeAttachmentChip(a.id));
+            remove.addEventListener('click', () =>
+                this._removeAttachmentChip(a.id),
+            );
             chip.appendChild(remove);
 
             this.attachmentStrip.appendChild(chip);
@@ -2846,7 +3281,10 @@ export class TabManager {
 
     _attachmentToast(message) {
         if (this.app && typeof this.app.showToast === 'function') {
-            this.app.showToast(message, { type: 'error', title: 'Attachments' });
+            this.app.showToast(message, {
+                type: 'error',
+                title: 'Attachments',
+            });
         } else {
             console.warn('[attachments]', message);
         }
@@ -2866,7 +3304,8 @@ export class TabManager {
         if (!brand) return;
         this.brandEl = brand;
         // Make the brand discoverable as interactive for keyboard users.
-        if (!brand.hasAttribute('tabindex')) brand.setAttribute('tabindex', '0');
+        if (!brand.hasAttribute('tabindex'))
+            brand.setAttribute('tabindex', '0');
         if (!brand.hasAttribute('role')) brand.setAttribute('role', 'button');
         if (!brand.getAttribute('aria-describedby')) {
             brand.setAttribute('aria-describedby', 'self-hud-popover');
@@ -2944,16 +3383,22 @@ export class TabManager {
                     this.selfHudCloseTimer = null;
                 }
             });
-            this.selfHudEl.addEventListener('mouseleave', () => scheduleClose());
+            this.selfHudEl.addEventListener('mouseleave', () =>
+                scheduleClose(),
+            );
         }
 
         // Track scroll/resize while open so the popover follows the brand
         // when the layout shifts. capture:true ensures we catch scrolls on
         // any container (not just window). passive:true keeps it cheap.
         if (this.selfHudEl) {
-            window.addEventListener('scroll', () => {
-                if (this.selfHudOpen) this._positionSelfHud();
-            }, { capture: true, passive: true });
+            window.addEventListener(
+                'scroll',
+                () => {
+                    if (this.selfHudOpen) this._positionSelfHud();
+                },
+                { capture: true, passive: true },
+            );
             window.addEventListener('resize', () => {
                 if (this.selfHudOpen) this._positionSelfHud();
             });
@@ -2974,8 +3419,9 @@ export class TabManager {
         // tablets), tap brand to open, tap again to close. On
         // mouse-driven devices, hover owns opening/closing; clicks pass
         // through to the outside-click handler below.
-        const isTouch = typeof window.matchMedia === 'function'
-            && window.matchMedia('(hover: none)').matches;
+        const isTouch =
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(hover: none)').matches;
         if (isTouch) {
             brand.addEventListener('click', (e) => {
                 if (e.target.closest('button, .hostname-wrapper')) return;
@@ -2990,7 +3436,11 @@ export class TabManager {
         document.addEventListener('click', (e) => {
             if (!this.selfHudOpen) return;
             const t = e.target;
-            if (t.closest && (t.closest('.brand') || t.closest('#self-hud-popover'))) return;
+            if (
+                t.closest &&
+                (t.closest('.brand') || t.closest('#self-hud-popover'))
+            )
+                return;
             closeNow();
         });
     }
@@ -3031,28 +3481,43 @@ export class TabManager {
     // current as of the most recent open event.
     _renderSelfHud() {
         if (!this.selfHudEl) return;
-        const version = (this.app && this.app.versionInfo && this.app.versionInfo.version) || '';
+        const version =
+            (this.app &&
+                this.app.versionInfo &&
+                this.app.versionInfo.version) ||
+            '';
         const hud = buildSelfHud({
             hostname: (this.app && this.app.hostname) || '',
             version,
-            cpuPercent: typeof this.lastCpuPercent === 'number' ? this.lastCpuPercent : null,
+            cpuPercent:
+                typeof this.lastCpuPercent === 'number'
+                    ? this.lastCpuPercent
+                    : null,
             tabs: this.tabs.values(),
         });
 
         // CPU-driven emphasis class on the popover so the cpu line tints
         // when load climbs. Matches the brand-logo class names.
-        const level = hud.cpuPercent != null ? cpuLevel(hud.cpuPercent) : 'cpu-idle';
-        for (const cls of ['cpu-idle', 'cpu-moderate', 'cpu-high', 'cpu-critical']) {
+        const level =
+            hud.cpuPercent != null ? cpuLevel(hud.cpuPercent) : 'cpu-idle';
+        for (const cls of [
+            'cpu-idle',
+            'cpu-moderate',
+            'cpu-high',
+            'cpu-critical',
+        ]) {
             this.selfHudEl.classList.remove(cls);
         }
         this.selfHudEl.classList.add(level);
 
-        const workingGlyph = hud.busy > 0
-            ? '<span class="glyph glyph-working" title="Working">ϕ</span>'
-            : '<span class="glyph glyph-idle" title="Idle">Φ</span>';
-        const attentionGlyph = hud.attention > 0
-            ? '<span class="glyph glyph-attention" title="Needs attention">☥</span>'
-            : '';
+        const workingGlyph =
+            hud.busy > 0
+                ? '<span class="glyph glyph-working" title="Working">ϕ</span>'
+                : '<span class="glyph glyph-idle" title="Idle">Φ</span>';
+        const attentionGlyph =
+            hud.attention > 0
+                ? '<span class="glyph glyph-attention" title="Needs attention">☥</span>'
+                : '';
 
         const versionBit = hud.version
             ? `<span class="self-hud-version">v${escapeHtml(hud.version)}</span>`
@@ -3077,12 +3542,16 @@ export class TabManager {
                     <span class="metric-count">${hud.busy}</span>
                     <span class="metric-label">working</span>
                 </span>
-                ${hud.attention > 0 ? `
+                ${
+                    hud.attention > 0
+                        ? `
                 <span class="metric glyph-attention">
                     ${attentionGlyph}
                     <span class="metric-count">${hud.attention}</span>
                     <span class="metric-label">attention</span>
-                </span>` : ''}
+                </span>`
+                        : ''
+                }
             </div>
             <div class="self-hud-footer">
                 <span class="cpu">${escapeHtml(formatHudCpu(hud))}</span>
@@ -3129,12 +3598,17 @@ export class TabManager {
         // (FIFO at 100 entries, per-cwd filter).
         const sentText = val && val.trim() ? val.trim() : '';
         if (sentText) {
-            const cwdForHistory = (this.app.sessionsManager && this.app.sessionsManager.activeCWD) || '';
+            const cwdForHistory =
+                (this.app.sessionsManager &&
+                    this.app.sessionsManager.activeCWD) ||
+                '';
             fetch('/api/prompt-history/append', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: sentText, cwd: cwdForHistory }),
-            }).catch((err) => console.warn('[prompt_history] append failed', err));
+            }).catch((err) =>
+                console.warn('[prompt_history] append failed', err),
+            );
             // Reset history cursor — user just sent fresh text, cycling
             // should start back at the most-recent prior entry.
             this._historyCursor = -1;
@@ -3156,7 +3630,7 @@ export class TabManager {
 
         this.inputTextArea.focus({ preventScroll: true });
     }
-    
+
     sendRawInput(bytes) {
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
@@ -3206,35 +3680,35 @@ export class TabManager {
      * Emptiness/modifier gates are caller concerns, not decided here.
      */
     _forwardKeyToPty(e, tab) {
-        if (e.isComposing) return false;  // never emit bytes mid-IME composition
+        if (e.isComposing) return false; // never emit bytes mid-IME composition
         let sendChar = null;
         // Shift+Tab (Backtab) — also prevents the browser focus shift.
         if (e.key === 'Tab' && e.shiftKey) {
             sendChar = '\x1b[Z';
         } else {
             const keys = {
-                'ArrowUp': '\u001b[A',
-                'ArrowDown': '\u001b[B',
-                'ArrowLeft': '\u001b[D',
-                'ArrowRight': '\u001b[C',
-                'PageUp': '\u001b[5~',
-                'PageDown': '\u001b[6~',
-                'Home': '\u001b[H',
-                'End': '\u001b[F',
-                'Delete': '\u001b[3~',
-                'Tab': '\t',
-                'Enter': '\r',
-                'Escape': '\x1b',
-                'Backspace': '\x7f'
+                ArrowUp: '\u001b[A',
+                ArrowDown: '\u001b[B',
+                ArrowLeft: '\u001b[D',
+                ArrowRight: '\u001b[C',
+                PageUp: '\u001b[5~',
+                PageDown: '\u001b[6~',
+                Home: '\u001b[H',
+                End: '\u001b[F',
+                Delete: '\u001b[3~',
+                Tab: '\t',
+                Enter: '\r',
+                Escape: '\x1b',
+                Backspace: '\x7f',
             };
             if (keys[e.key]) {
                 sendChar = keys[e.key];
             } else if (e.ctrlKey) {
                 const ctrlKeys = {
-                    'c': '\x03',
-                    'o': '\x0f',
-                    'p': '\x10',
-                    't': '\x14'
+                    c: '\x03',
+                    o: '\x0f',
+                    p: '\x10',
+                    t: '\x14',
                 };
                 const lowerKey = e.key.toLowerCase();
                 if (ctrlKeys[lowerKey]) {
@@ -3270,9 +3744,10 @@ export class TabManager {
         }
         return true;
     }
-    
+
     _showReconnectOverlay(tabInfo) {
-        const existing = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const existing =
+            tabInfo.termContainer.querySelector('.reconnect-overlay');
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');
@@ -3301,9 +3776,11 @@ export class TabManager {
             </div>`;
 
         if (showReconnect) {
-            overlay.querySelector('.reconnect-btn').addEventListener('click', () => {
-                this.reconnectTab(tabInfo);
-            });
+            overlay
+                .querySelector('.reconnect-btn')
+                .addEventListener('click', () => {
+                    this.reconnectTab(tabInfo);
+                });
         }
         overlay.querySelector('.restart-btn').addEventListener('click', () => {
             this.restartTab(tabInfo);
@@ -3352,13 +3829,15 @@ export class TabManager {
 
         // Show a one-time toast so the user knows what's happening.
         if (this.app && this.app.showToast) {
-            this.app.showToast(
-                `phi is ${reason}… reloading when ready.`,
-                { type: 'info', durationMs: 8000 }
-            );
+            this.app.showToast(`phi is ${reason}… reloading when ready.`, {
+                type: 'info',
+                durationMs: 8000,
+            });
         }
 
-        const beforeCommit = (this.app && this.app.versionInfo && this.app.versionInfo.commit) || '';
+        const beforeCommit =
+            (this.app && this.app.versionInfo && this.app.versionInfo.commit) ||
+            '';
         const startedAt = Date.now();
         const maxWaitMs = 10_000;
 
@@ -3394,7 +3873,8 @@ export class TabManager {
         tabInfo.reconnectInFlight = true;
         tabInfo.exitCode = null;
 
-        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const overlay =
+            tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const btnEl = overlay?.querySelector('.reconnect-btn');
         const restartBtn = overlay?.querySelector('.restart-btn');
@@ -3403,7 +3883,10 @@ export class TabManager {
         if (btnEl) btnEl.disabled = true;
         if (restartBtn) restartBtn.disabled = true;
 
-        if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
+        if (tabInfo.ws)
+            try {
+                tabInfo.ws.close();
+            } catch (e) {}
 
         // The server replays the whole ring buffer on every attach, so without
         // clearing first a reconnect appends a second copy of the scrollback.
@@ -3419,11 +3902,17 @@ export class TabManager {
                 (data) => {
                     if (tabInfo.awaitingReplay) {
                         tabInfo.awaitingReplay = false;
-                        try { tabInfo.term.reset(); } catch (e) { console.error('[term] reset on replay failed:', e); }
+                        try {
+                            tabInfo.term.reset();
+                        } catch (e) {
+                            console.error('[term] reset on replay failed:', e);
+                        }
                     }
                     this.writeToTerminal(tabInfo, data);
                 },
-                (control) => { this.handleControlMessage(tabInfo, control); },
+                (control) => {
+                    this.handleControlMessage(tabInfo, control);
+                },
                 () => {
                     tabInfo.reconnectInFlight = false;
                     // Died before proving itself: cancel the pending success
@@ -3431,8 +3920,12 @@ export class TabManager {
                     clearTimeout(tabInfo.reconnectStableTimer);
                     tabInfo.reconnectStableTimer = null;
                     if (!opened) {
-                        if (msgEl) msgEl.innerText = 'Session expired (PTY gone)';
-                        if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+                        if (msgEl)
+                            msgEl.innerText = 'Session expired (PTY gone)';
+                        if (btnEl) {
+                            btnEl.disabled = false;
+                            btnEl.innerText = '⟳ Retry';
+                        }
                         if (restartBtn) restartBtn.disabled = false;
                         this.updateDisconnectBanner();
                         this.maybeAutoReconnect(tabInfo);
@@ -3474,24 +3967,34 @@ export class TabManager {
                                 tabInfo.term.refresh(0, tabInfo.term.rows - 1);
                             }
                         } catch (e) {
-                            console.error("[term] Fit/refresh error on reconnect:", e);
+                            console.error(
+                                '[term] Fit/refresh error on reconnect:',
+                                e,
+                            );
                         }
-                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
+                        this.activateTabViewport(tabInfo, {
+                            scrollToBottom: true,
+                            autoReconnect: false,
+                        });
                     }, 100);
-                }
+                },
             );
             tabInfo.ws = newWs;
         } catch (e) {
             tabInfo.reconnectInFlight = false;
             if (msgEl) msgEl.innerText = `failed: ${e.message}`;
-            if (btnEl) { btnEl.disabled = false; btnEl.innerText = '⟳ Retry'; }
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerText = '⟳ Retry';
+            }
             if (restartBtn) restartBtn.disabled = false;
-            console.error("[term] PTYWebSocket instantiation threw:", e);
+            console.error('[term] PTYWebSocket instantiation threw:', e);
         }
     }
 
     restartTab(tabInfo) {
-        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+        const overlay =
+            tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
         const reconnectBtn = overlay?.querySelector('.reconnect-btn');
         const restartBtn = overlay?.querySelector('.restart-btn');
@@ -3500,7 +4003,10 @@ export class TabManager {
         if (reconnectBtn) reconnectBtn.disabled = true;
         if (restartBtn) restartBtn.disabled = true;
 
-        if (tabInfo.ws) try { tabInfo.ws.close(); } catch(e) {}
+        if (tabInfo.ws)
+            try {
+                tabInfo.ws.close();
+            } catch (e) {}
 
         fetch('/api/terminals', {
             method: 'POST',
@@ -3510,84 +4016,95 @@ export class TabManager {
                 cwd: tabInfo.cwd,
                 session_id: tabInfo.sessionId || '',
                 title: tabInfo.title || '',
-                workspace: tabInfo.workspace || ''
+                workspace: tabInfo.workspace || '',
+            }),
+        })
+            .then((res) => {
+                if (!res.ok)
+                    throw new Error('failed to spawn restarted session');
+                return res.json();
             })
-        })
-        .then(res => {
-            if (!res.ok) throw new Error('failed to spawn restarted session');
-            return res.json();
-        })
-        .then(data => {
-            const oldPaneId = tabInfo.paneId;
-            
-            // Update paneId and sessionId
-            tabInfo.paneId = data.pane_id;
-            tabInfo.sessionId = data.session_id;
-            
-            // Update DOM element references to synchronise new IDs
-            tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
-            tabInfo.termContainer.id = `term-${data.pane_id}`;
-            
-            // Update TabManager map tracking
-            this.tabs.delete(oldPaneId);
-            this.tabs.set(data.pane_id, tabInfo);
-            
-            if (this.activePaneId === oldPaneId) {
-                this.activePaneId = data.pane_id;
-            }
-            
-            // Reset terminal screen and print visual cue
-            tabInfo.term.reset();
-            tabInfo.term.write('\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n');
+            .then((data) => {
+                const oldPaneId = tabInfo.paneId;
 
-            let opened = false;
-            const newWs = new PTYWebSocket(
-                tabInfo.paneId,
-                (msg) => { this.writeToTerminal(tabInfo, msg); },
-                (control) => { this.handleControlMessage(tabInfo, control); },
-                () => {
-                    if (!opened) {
-                        if (msgEl) msgEl.innerText = 'Session expired (PTY gone)';
-                        if (reconnectBtn) reconnectBtn.disabled = false;
-                        if (restartBtn) restartBtn.disabled = false;
-                        this.updateDisconnectBanner();
-                    } else {
-                        tabInfo.isDead = true;
-                        tabInfo.tabEl.classList.add('dead');
-                        this.updateDocumentTitle();
-                        this._showReconnectOverlay(tabInfo);
-                        this.updateDisconnectBanner();
-                    }
-                },
-                () => {
-                    opened = true;
-                    tabInfo.isDead = false;
-                    tabInfo.isBusy = false;
-                    tabInfo.lastOutputAt = undefined;
-                    tabInfo.tabEl.classList.remove('dead');
-                    this.updateDocumentTitle();
-                    if (overlay) overlay.remove();
-                    this.updateDisconnectBanner();
-                    
-                    // Trigger terminal fit & backend resize to synchronise viewport
-                    setTimeout(() => {
-                        this.activateTabViewport(tabInfo, { scrollToBottom: true, autoReconnect: false });
-                    }, 100);
+                // Update paneId and sessionId
+                tabInfo.paneId = data.pane_id;
+                tabInfo.sessionId = data.session_id;
+
+                // Update DOM element references to synchronise new IDs
+                tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
+                tabInfo.termContainer.id = `term-${data.pane_id}`;
+
+                // Update TabManager map tracking
+                this.tabs.delete(oldPaneId);
+                this.tabs.set(data.pane_id, tabInfo);
+
+                if (this.activePaneId === oldPaneId) {
+                    this.activePaneId = data.pane_id;
                 }
-            );
-            tabInfo.ws = newWs;
-            
-            // Sync with session list in sidebar
-            if (this.app.sessionsManager) {
-                this.app.sessionsManager.loadSessions();
-            }
-        })
-        .catch(err => {
-            console.error('[restart] Failed to restart tab:', err);
-            if (msgEl) msgEl.innerText = 'restart failed';
-            if (reconnectBtn) reconnectBtn.disabled = false;
-            if (restartBtn) restartBtn.disabled = false;
-        });
+
+                // Reset terminal screen and print visual cue
+                tabInfo.term.reset();
+                tabInfo.term.write(
+                    '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n',
+                );
+
+                let opened = false;
+                const newWs = new PTYWebSocket(
+                    tabInfo.paneId,
+                    (msg) => {
+                        this.writeToTerminal(tabInfo, msg);
+                    },
+                    (control) => {
+                        this.handleControlMessage(tabInfo, control);
+                    },
+                    () => {
+                        if (!opened) {
+                            if (msgEl)
+                                msgEl.innerText = 'Session expired (PTY gone)';
+                            if (reconnectBtn) reconnectBtn.disabled = false;
+                            if (restartBtn) restartBtn.disabled = false;
+                            this.updateDisconnectBanner();
+                        } else {
+                            tabInfo.isDead = true;
+                            tabInfo.tabEl.classList.add('dead');
+                            this.updateDocumentTitle();
+                            this._showReconnectOverlay(tabInfo);
+                            this.updateDisconnectBanner();
+                        }
+                    },
+                    () => {
+                        opened = true;
+                        tabInfo.isDead = false;
+                        tabInfo.isBusy = false;
+                        tabInfo.lastOutputAt = undefined;
+                        tabInfo.tabEl.classList.remove('dead');
+                        this.updateDocumentTitle();
+                        if (overlay) overlay.remove();
+                        this.updateDisconnectBanner();
+
+                        // Trigger terminal fit & backend resize to synchronise viewport
+                        setTimeout(() => {
+                            this.activateTabViewport(tabInfo, {
+                                scrollToBottom: true,
+                                autoReconnect: false,
+                            });
+                        }, 100);
+                    },
+                );
+                tabInfo.ws = newWs;
+
+                // Sync with session list in sidebar
+                if (this.app.sessionsManager) {
+                    this.app.sessionsManager.loadSessions();
+                }
+            })
+            .catch((err) => {
+                console.error('[restart] Failed to restart tab:', err);
+                if (msgEl) msgEl.innerText = 'restart failed';
+                if (reconnectBtn) reconnectBtn.disabled = false;
+                if (restartBtn) restartBtn.disabled = false;
+            });
     }
 
     updateDisconnectBanner() {
@@ -3596,7 +4113,12 @@ export class TabManager {
 
         const deadTabs = [];
         for (const tabInfo of this.tabs.values()) {
-            if (tabInfo.isDead && (tabInfo.exitCode === undefined || tabInfo.exitCode === null) && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban') {
+            if (
+                tabInfo.isDead &&
+                (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
+                tabInfo.coder !== 'review' &&
+                tabInfo.coder !== 'kanban'
+            ) {
                 deadTabs.push(tabInfo);
             }
         }
@@ -3624,27 +4146,39 @@ export class TabManager {
             </div>
         `;
 
-        banner.querySelector('.reconnect-all-banner-btn').addEventListener('click', () => {
-            this.reconnectAllDead();
-        });
-        banner.querySelector('.dismiss-banner-btn').addEventListener('click', () => {
-            this._bannerDismissed = true;
-            this._dismissedCount = currentCount;
-            banner.classList.add('hidden');
-        });
+        banner
+            .querySelector('.reconnect-all-banner-btn')
+            .addEventListener('click', () => {
+                this.reconnectAllDead();
+            });
+        banner
+            .querySelector('.dismiss-banner-btn')
+            .addEventListener('click', () => {
+                this._bannerDismissed = true;
+                this._dismissedCount = currentCount;
+                banner.classList.add('hidden');
+            });
     }
 
     reconnectAllDead() {
         let count = 0;
         for (const tabInfo of this.tabs.values()) {
-            if (tabInfo.isDead && (tabInfo.exitCode === undefined || tabInfo.exitCode === null) && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban') {
+            if (
+                tabInfo.isDead &&
+                (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
+                tabInfo.coder !== 'review' &&
+                tabInfo.coder !== 'kanban'
+            ) {
                 this.reconnectTab(tabInfo, { auto: false });
                 count++;
             }
         }
         const activeTab = this.getActiveTab();
         if (activeTab) {
-            this.activateTabViewport(activeTab, { scrollToBottom: true, autoReconnect: false });
+            this.activateTabViewport(activeTab, {
+                scrollToBottom: true,
+                autoReconnect: false,
+            });
         }
         this.updateDisconnectBanner();
         return count;
@@ -3658,9 +4192,15 @@ export class TabManager {
         }
         if (this.app && typeof this.app.showToast === 'function') {
             if (deadCount > 0) {
-                this.app.showToast('info', `Reconnected ${deadCount} disconnected tab${deadCount > 1 ? 's' : ''}`);
+                this.app.showToast(
+                    'info',
+                    `Reconnected ${deadCount} disconnected tab${deadCount > 1 ? 's' : ''}`,
+                );
             } else {
-                this.app.showToast('info', `Refreshed ${total} tab${total !== 1 ? 's' : ''}`);
+                this.app.showToast(
+                    'info',
+                    `Refreshed ${total} tab${total !== 1 ? 's' : ''}`,
+                );
             }
         }
     }
@@ -3689,7 +4229,8 @@ export class TabManager {
 
         if (document.visibilityState !== 'visible') return false;
         if (tabInfo.paneId !== this.activePaneId) return false;
-        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return false;
+        if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null)
+            return false;
 
         if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
@@ -3698,17 +4239,28 @@ export class TabManager {
         }
 
         tabInfo.reconnectAttempts++;
-        const backoff = Math.min(AUTO_RECONNECT_MAX_DELAY_MS, Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000);
+        const backoff = Math.min(
+            AUTO_RECONNECT_MAX_DELAY_MS,
+            Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000,
+        );
         const delay = AUTO_RECONNECT_GRACE_MS + Math.random() * backoff;
-        
-        console.log(`[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`);
-        
-        const overlay = tabInfo.termContainer.querySelector('.reconnect-overlay');
+
+        console.log(
+            `[term] Auto-reconnecting pane ${tabInfo.paneId} (attempt ${tabInfo.reconnectAttempts}) in ${delay}ms...`,
+        );
+
+        const overlay =
+            tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
-        if (msgEl) msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
+        if (msgEl)
+            msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
 
         setTimeout(() => {
-            if (tabInfo.isDead && tabInfo.paneId === this.activePaneId && (tabInfo.exitCode === undefined || tabInfo.exitCode === null)) {
+            if (
+                tabInfo.isDead &&
+                tabInfo.paneId === this.activePaneId &&
+                (tabInfo.exitCode === undefined || tabInfo.exitCode === null)
+            ) {
                 this.reconnectTab(tabInfo, { auto: true });
             }
         }, delay);
@@ -3749,9 +4301,19 @@ export class TabManager {
             }
             if (tabInfo.searchAddon) {
                 if (direction === 'prev') {
-                    tabInfo.searchAddon.findPrevious(val, { decorations: { matchBackground: 'rgba(255,255,0,0.3)', activeMatchBackground: 'rgba(255,165,0,0.5)' } });
+                    tabInfo.searchAddon.findPrevious(val, {
+                        decorations: {
+                            matchBackground: 'rgba(255,255,0,0.3)',
+                            activeMatchBackground: 'rgba(255,165,0,0.5)',
+                        },
+                    });
                 } else {
-                    tabInfo.searchAddon.findNext(val, { decorations: { matchBackground: 'rgba(255,255,0,0.3)', activeMatchBackground: 'rgba(255,165,0,0.5)' } });
+                    tabInfo.searchAddon.findNext(val, {
+                        decorations: {
+                            matchBackground: 'rgba(255,255,0,0.3)',
+                            activeMatchBackground: 'rgba(255,165,0,0.5)',
+                        },
+                    });
                 }
             }
         };
@@ -3786,14 +4348,29 @@ export class TabManager {
 
     handleGlobalTabShortcuts(e) {
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
-        if ((e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'F5') ||
-            ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === 'r' || e.key === 'R'))) {
+        if (
+            (e.shiftKey &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.altKey &&
+                e.key === 'F5') ||
+            ((e.ctrlKey || e.metaKey) &&
+                e.shiftKey &&
+                !e.altKey &&
+                (e.key === 'r' || e.key === 'R'))
+        ) {
             e.preventDefault();
             this.reconnectAllTabsWithToast();
             return;
         }
 
-        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'f') {
+        if (
+            e.ctrlKey &&
+            e.shiftKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            e.key.toLowerCase() === 'f'
+        ) {
             const activeTab = this.getActiveTab();
             if (activeTab && activeTab.term) {
                 e.preventDefault();
@@ -3802,13 +4379,19 @@ export class TabManager {
             return;
         }
 
-        if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
+        if (
+            e.altKey &&
+            !e.ctrlKey &&
+            !e.metaKey &&
+            e.key >= '1' &&
+            e.key <= '9'
+        ) {
             const num = parseInt(e.key, 10);
             const paneIds = Array.from(this.tabs.keys());
             if (paneIds.length === 0) return;
 
             e.preventDefault();
-            
+
             let targetPaneId;
             if (num === 9) {
                 // Alt+9 switches to the last tab
@@ -3827,7 +4410,13 @@ export class TabManager {
             return;
         }
 
-        if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === 'Enter') {
+        if (
+            e.ctrlKey &&
+            e.shiftKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            e.key === 'Enter'
+        ) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
                 e.preventDefault();
@@ -3844,10 +4433,20 @@ export class TabManager {
         // already dealt with it (e.g. the empty staged-input box calls
         // preventDefault and sends \x10 itself, or xterm consumed it while the
         // terminal was focused) we bail via defaultPrevented to avoid double-send.
-        if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'p') {
+        if (
+            e.ctrlKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            !e.shiftKey &&
+            e.key.toLowerCase() === 'p'
+        ) {
             if (e.defaultPrevented) return;
             const activeTab = this.getActiveTab();
-            if (activeTab && activeTab.coder !== 'review' && activeTab.coder !== 'kanban') {
+            if (
+                activeTab &&
+                activeTab.coder !== 'review' &&
+                activeTab.coder !== 'kanban'
+            ) {
                 e.preventDefault();
                 this.sendInput(activeTab, '\x10');
                 this._spamScrollToBottom(activeTab);
@@ -3864,7 +4463,7 @@ export class TabManager {
         if (this.inputTextArea.value.trim() === '') {
             newHeight = window.innerWidth <= 768 ? 36 : 40;
             if (window.innerWidth <= 768) {
-                this.inputTextArea.placeholder = "Type a prompt...";
+                this.inputTextArea.placeholder = 'Type a prompt...';
             }
         }
         this.inputTextArea.style.height = newHeight + 'px';
@@ -3889,13 +4488,13 @@ export class TabManager {
 
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
         if (!tabInfo || tabInfo.isDead) return;
-        
+
         clearInterval(tabInfo.spamInterval);
         clearTimeout(tabInfo.stopSpamTimeout);
-        
+
         tabInfo.isSpammingBottom = isAtBottom;
         tabInfo.spamScrollY = scrollY;
-        
+
         tabInfo.spamInterval = setInterval(() => {
             if (isAtBottom) {
                 tabInfo.term.scrollToBottom();
@@ -3903,7 +4502,7 @@ export class TabManager {
                 tabInfo.term.scrollToLine(scrollY);
             }
         }, 10);
-        
+
         tabInfo.stopSpamTimeout = setTimeout(() => {
             clearInterval(tabInfo.spamInterval);
             tabInfo.spamInterval = null;
@@ -3924,11 +4523,17 @@ export class TabManager {
 
     copyTextRobustly(text, silent = false) {
         if (navigator.clipboard && window.isSecureContext) {
-            navigator.clipboard.writeText(text).then(() => {
-                if (!silent) {
-                    this.app.showToast("Copied to clipboard", { type: 'info', title: 'Clipboard' });
-                }
-            }).catch(() => this.fallbackCopy(text, silent));
+            navigator.clipboard
+                .writeText(text)
+                .then(() => {
+                    if (!silent) {
+                        this.app.showToast('Copied to clipboard', {
+                            type: 'info',
+                            title: 'Clipboard',
+                        });
+                    }
+                })
+                .catch(() => this.fallbackCopy(text, silent));
         } else {
             this.fallbackCopy(text, silent);
         }
@@ -3945,14 +4550,20 @@ export class TabManager {
         try {
             success = document.execCommand('copy');
             if (success && !silent) {
-                this.app.showToast("Copied to clipboard", { type: 'info', title: 'Clipboard' });
+                this.app.showToast('Copied to clipboard', {
+                    type: 'info',
+                    title: 'Clipboard',
+                });
             }
         } catch (e) {
-            console.error("Fallback copy failed", e);
+            console.error('Fallback copy failed', e);
         }
         document.body.removeChild(ta);
         if (!success && !silent) {
-            this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard' });
+            this.app.showToast('Failed to copy. Please copy manually.', {
+                type: 'error',
+                title: 'Clipboard',
+            });
         }
     }
 
@@ -3989,40 +4600,57 @@ export class TabManager {
     // and if every automated attempt fails, surface a toast with a manual copy
     // button that runs inside the click's user-gesture. Returns a promise.
     _agentClipboardCopy(text) {
-        const okToast = () => this.app.showToast(
-            `Agent copied ${text.length} characters to clipboard`,
-            { type: 'info', title: 'Clipboard Sync' }
-        );
-        const manualToast = () => this.app.showToast(`Agent copied ${text.length} characters`, {
-            type: 'info',
-            title: 'Clipboard Sync',
-            duration: 15000,
-            action: {
-                text: 'Copy to Clipboard',
-                callback: () => {
-                    if (this._execCommandCopy(text)) {
-                        this.app.showToast("Copied to clipboard!", { type: 'info', title: 'Clipboard Sync' });
-                    } else {
-                        this.app.showToast("Failed to copy. Please copy manually.", { type: 'error', title: 'Clipboard Sync' });
-                    }
-                }
-            }
-        });
+        const okToast = () =>
+            this.app.showToast(
+                `Agent copied ${text.length} characters to clipboard`,
+                { type: 'info', title: 'Clipboard Sync' },
+            );
+        const manualToast = () =>
+            this.app.showToast(`Agent copied ${text.length} characters`, {
+                type: 'info',
+                title: 'Clipboard Sync',
+                duration: 15000,
+                action: {
+                    text: 'Copy to Clipboard',
+                    callback: () => {
+                        if (this._execCommandCopy(text)) {
+                            this.app.showToast('Copied to clipboard!', {
+                                type: 'info',
+                                title: 'Clipboard Sync',
+                            });
+                        } else {
+                            this.app.showToast(
+                                'Failed to copy. Please copy manually.',
+                                { type: 'error', title: 'Clipboard Sync' },
+                            );
+                        }
+                    },
+                },
+            });
 
-        if (navigator.clipboard && window.isSecureContext && navigator.clipboard.writeText) {
-            return navigator.clipboard.writeText(text)
+        if (
+            navigator.clipboard &&
+            window.isSecureContext &&
+            navigator.clipboard.writeText
+        ) {
+            return navigator.clipboard
+                .writeText(text)
                 .then(okToast)
-                .catch(() => { if (this._execCommandCopy(text)) okToast(); else manualToast(); });
+                .catch(() => {
+                    if (this._execCommandCopy(text)) okToast();
+                    else manualToast();
+                });
         }
         // Insecure context (e.g. http://host:port over LAN): no Clipboard API.
-        if (this._execCommandCopy(text)) okToast(); else manualToast();
+        if (this._execCommandCopy(text)) okToast();
+        else manualToast();
         return Promise.resolve();
     }
 
     startResize() {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
-        
+
         // Save the correct, stable scroll state before the continuous resize begins
         if (activeTab.isAtBottom === undefined) {
             const buffer = activeTab.term.buffer.active;
@@ -4044,10 +4672,17 @@ export class TabManager {
     fitActiveTerminal() {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
-        
+
         try {
             const isMobile = window.innerWidth <= 768;
-            const size = (this.app && this.app.terminalFontSize >= 8 && this.app.terminalFontSize <= 32) ? this.app.terminalFontSize : (isMobile ? 10 : 14);
+            const size =
+                this.app &&
+                this.app.terminalFontSize >= 8 &&
+                this.app.terminalFontSize <= 32
+                    ? this.app.terminalFontSize
+                    : isMobile
+                      ? 10
+                      : 14;
             if (activeTab.term.options.fontSize !== size) {
                 activeTab.term.options.fontSize = size;
             }
@@ -4056,41 +4691,53 @@ export class TabManager {
             const buffer = activeTab.term.buffer.active;
             let isAtBottom;
             let scrollY;
-            
+
             // If we are resizing continuously, cache these stable coordinates on the tab
             if (this.isResizing) {
-                isAtBottom = activeTab.isAtBottom !== undefined ? activeTab.isAtBottom : (buffer.viewportY >= buffer.baseY);
-                scrollY = activeTab.lastScrollY !== undefined ? activeTab.lastScrollY : buffer.viewportY;
+                isAtBottom =
+                    activeTab.isAtBottom !== undefined
+                        ? activeTab.isAtBottom
+                        : buffer.viewportY >= buffer.baseY;
+                scrollY =
+                    activeTab.lastScrollY !== undefined
+                        ? activeTab.lastScrollY
+                        : buffer.viewportY;
                 activeTab.isAtBottom = isAtBottom;
                 activeTab.lastScrollY = scrollY;
-            } else if (activeTab.spamInterval && activeTab.isSpammingBottom !== undefined) {
-                // If a spam scroll is already trying to force the scroll position, respect its intended target 
+            } else if (
+                activeTab.spamInterval &&
+                activeTab.isSpammingBottom !== undefined
+            ) {
+                // If a spam scroll is already trying to force the scroll position, respect its intended target
                 // instead of capturing a mid-flight coordinate.
                 isAtBottom = activeTab.isSpammingBottom;
                 scrollY = activeTab.spamScrollY;
             } else {
-                isAtBottom = (buffer.viewportY >= buffer.baseY);
+                isAtBottom = buffer.viewportY >= buffer.baseY;
                 scrollY = buffer.viewportY;
             }
 
             activeTab.fitAddon.fit();
-            
+
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
-            
+
             // Clear temporary saved scroll state only if NOT in the middle of a continuous resize
             if (!this.isResizing) {
                 activeTab.isAtBottom = undefined;
                 activeTab.lastScrollY = undefined;
             }
-            
+
             this.sendResizeToBackend(activeTab);
         } catch (e) {
-            console.error("[term] Fit error:", e);
+            console.error('[term] Fit error:', e);
         }
     }
 
-    activateTabViewport(tabInfo, { scrollToBottom = true, autoReconnect = true, force = false } = {}) {
+    activateTabViewport(
+        tabInfo,
+        { scrollToBottom = true, autoReconnect = true, force = false } = {},
+    ) {
         if (!tabInfo) return;
 
         setTimeout(() => {
@@ -4112,21 +4759,39 @@ export class TabManager {
         // (focus on xterm) so terminal-internal tools still capture
         // keys normally. Direct mode still wins — if the tab is in
         // direct mode, the xterm is where the user is typing.
-        if (window.innerWidth <= 768 && !tabInfo.directMode && !tabInfo.isDead
-            && this.inputTextArea && !this.inputBarContainer?.classList.contains('hidden')
-            && !document.querySelector('.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)')) {
-            setTimeout(() => this.inputTextArea.focus({ preventScroll: true }), 80);
+        if (
+            window.innerWidth <= 768 &&
+            !tabInfo.directMode &&
+            !tabInfo.isDead &&
+            this.inputTextArea &&
+            !this.inputBarContainer?.classList.contains('hidden') &&
+            !document.querySelector(
+                '.modal-overlay:not(.hidden), .md-modal-overlay:not(.hidden)',
+            )
+        ) {
+            setTimeout(
+                () => this.inputTextArea.focus({ preventScroll: true }),
+                80,
+            );
         }
 
         // force=true bypasses the passive auto_reconnect gate for explicit user actions.
-        const configAutoReconnect = this.app.config && this.app.config.auto_reconnect;
-        if (autoReconnect && (force || configAutoReconnect === 'visible') && tabInfo.isDead && tabInfo.coder !== 'review' && tabInfo.coder !== 'kanban' && !tabInfo.reconnectInFlight) {
+        const configAutoReconnect =
+            this.app.config && this.app.config.auto_reconnect;
+        if (
+            autoReconnect &&
+            (force || configAutoReconnect === 'visible') &&
+            tabInfo.isDead &&
+            tabInfo.coder !== 'review' &&
+            tabInfo.coder !== 'kanban' &&
+            !tabInfo.reconnectInFlight
+        ) {
             if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
                 this.reconnectTab(tabInfo, { auto: true });
             }
         }
     }
-    
+
     sendResizeToBackend(tab) {
         if (!tab || tab.isDead) return;
         const term = tab.term;
@@ -4134,18 +4799,28 @@ export class TabManager {
             tab.ws.sendResize(term.cols, term.rows);
         }
     }
-    
+
     _toggleDropup(dropupId, triggerBtn, renderFn) {
         const dropup = document.getElementById(dropupId);
         if (!dropup) return;
         const wasHidden = dropup.classList.contains('hidden');
-        document.querySelectorAll('.model-presets-dropup').forEach(d => d.classList.add('hidden'));
+        document.querySelectorAll('.model-presets-dropup').forEach((d) => {
+            d.classList.add('hidden');
+        });
         if (wasHidden) {
             const btnRect = triggerBtn.getBoundingClientRect();
-            const containerRect = document.querySelector('.terminal-content').getBoundingClientRect();
+            const containerRect = document
+                .querySelector('.terminal-content')
+                .getBoundingClientRect();
             let left = btnRect.left - containerRect.left;
-            const dropupWidth = window.innerWidth <= 768 ? Math.min(280, window.innerWidth - 24) : 320;
-            left = Math.max(12, Math.min(left, containerRect.width - dropupWidth - 12));
+            const dropupWidth =
+                window.innerWidth <= 768
+                    ? Math.min(280, window.innerWidth - 24)
+                    : 320;
+            left = Math.max(
+                12,
+                Math.min(left, containerRect.width - dropupWidth - 12),
+            );
             dropup.style.left = `${left}px`;
             dropup.classList.remove('hidden');
             renderFn();
@@ -4154,27 +4829,34 @@ export class TabManager {
 
     renderPresets(coderId) {
         this.presetsContainer.innerHTML = '';
-        
+
         const coderPresetInfo = this.app.codersPresetRegistry[coderId];
-        const hasCoderPresets = coderPresetInfo && coderPresetInfo.presets && coderPresetInfo.presets.length > 0;
-        
+        const hasCoderPresets =
+            coderPresetInfo &&
+            coderPresetInfo.presets &&
+            coderPresetInfo.presets.length > 0;
+
         // If direct mode, do not render presets
         const activeTab = this.getActiveTab();
         if (activeTab && activeTab.directMode) {
             this.presetsContainer.classList.add('hidden');
             return;
         }
-        
+
         this.presetsContainer.classList.remove('hidden');
-        
+
         const isMobile = window.innerWidth <= 768;
 
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
             if (isMobile) {
                 // Separate slash commands from utility shortcuts
-                const slashPresets = coderPresetInfo.presets.filter(p => p.value.startsWith('/'));
-                const utilityPresets = coderPresetInfo.presets.filter(p => !p.value.startsWith('/'));
+                const slashPresets = coderPresetInfo.presets.filter((p) =>
+                    p.value.startsWith('/'),
+                );
+                const utilityPresets = coderPresetInfo.presets.filter(
+                    (p) => !p.value.startsWith('/'),
+                );
 
                 // Render single Slash trigger button if slash commands exist
                 if (slashPresets.length > 0) {
@@ -4183,13 +4865,17 @@ export class TabManager {
                     slashBtn.innerText = '/ ▾';
                     slashBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        this._toggleDropup('slash-presets-dropup', slashBtn, () => this.renderSlashDropup(slashPresets));
+                        this._toggleDropup(
+                            'slash-presets-dropup',
+                            slashBtn,
+                            () => this.renderSlashDropup(slashPresets),
+                        );
                     });
                     this.presetsContainer.appendChild(slashBtn);
                 }
 
                 // Render other horizontal utility presets (like ctrl+c, esc, y)
-                utilityPresets.forEach(p => {
+                utilityPresets.forEach((p) => {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
@@ -4200,13 +4886,19 @@ export class TabManager {
                 });
             } else {
                 // Desktop: Render everything horizontally as before
-                coderPresetInfo.presets.forEach(p => {
+                coderPresetInfo.presets.forEach((p) => {
                     const btn = document.createElement('button');
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
                     btn.addEventListener('click', () => {
                         const activeTab = this.getActiveTab();
-                        if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                        if (
+                            activeTab &&
+                            (activeTab.coder === 'opencode' ||
+                                activeTab.coder === 'pi') &&
+                            p.value.startsWith('/') &&
+                            p.value.endsWith('\r')
+                        ) {
                             const cmd = p.value.slice(0, -1);
                             // Atomic paste+Enter. pkg/pty's crGapDur handles
                             // the ConPTY Enter quirk at the PTY layer; pi-tui
@@ -4223,7 +4915,7 @@ export class TabManager {
                 });
             }
         }
-        
+
         // 2. Render Divider if static presets exist
         if (hasCoderPresets) {
             const divider = document.createElement('div');
@@ -4249,14 +4941,18 @@ export class TabManager {
             });
             this.presetsContainer.appendChild(chip);
         }
-        
+
         // 3. Render QuickCmds trigger button
         const quickCmdsTriggerBtn = document.createElement('button');
         quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
         quickCmdsTriggerBtn.innerText = '⚡ Cmds ▾';
         quickCmdsTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._toggleDropup('quick-commands-dropup', quickCmdsTriggerBtn, () => this.renderQuickCmdsDropup());
+            this._toggleDropup(
+                'quick-commands-dropup',
+                quickCmdsTriggerBtn,
+                () => this.renderQuickCmdsDropup(),
+            );
         });
         this.presetsContainer.appendChild(quickCmdsTriggerBtn);
 
@@ -4264,15 +4960,20 @@ export class TabManager {
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
-        
+
         if (activeTab && activeTab.coder === 'agy') {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
-            modelsTriggerBtn.title = 'Model selection not supported for Antigravity';
+            modelsTriggerBtn.title =
+                'Model selection not supported for Antigravity';
         } else {
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._toggleDropup('model-presets-dropup', modelsTriggerBtn, () => this.renderModelDropup());
+                this._toggleDropup(
+                    'model-presets-dropup',
+                    modelsTriggerBtn,
+                    () => this.renderModelDropup(),
+                );
             });
         }
         this.presetsContainer.appendChild(modelsTriggerBtn);
@@ -4288,7 +4989,9 @@ export class TabManager {
         }
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
-            const slashPresets = coderPresetInfo ? coderPresetInfo.presets.filter(p => p.value.startsWith('/')) : [];
+            const slashPresets = coderPresetInfo
+                ? coderPresetInfo.presets.filter((p) => p.value.startsWith('/'))
+                : [];
             this.renderSlashDropup(slashPresets);
         }
 
@@ -4302,10 +5005,10 @@ export class TabManager {
                 { name: '▲', value: '\u001b[A' },
                 { name: '▼', value: '\u001b[B' },
                 { name: '◀', value: '\u001b[D' },
-                { name: '▶', value: '\u001b[C' }
+                { name: '▶', value: '\u001b[C' },
             ];
 
-            mobileNavs.forEach(nav => {
+            mobileNavs.forEach((nav) => {
                 const btn = document.createElement('button');
                 btn.className = 'preset-btn mobile-nav-btn';
                 btn.innerText = nav.name;
@@ -4338,7 +5041,7 @@ export class TabManager {
             return;
         }
 
-        slashPresets.forEach(p => {
+        slashPresets.forEach((p) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
 
@@ -4347,7 +5050,13 @@ export class TabManager {
             btn.innerText = p.name;
             btn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (activeTab && (activeTab.coder === 'opencode' || activeTab.coder === 'pi') && p.value.startsWith('/') && p.value.endsWith('\r')) {
+                if (
+                    activeTab &&
+                    (activeTab.coder === 'opencode' ||
+                        activeTab.coder === 'pi') &&
+                    p.value.startsWith('/') &&
+                    p.value.endsWith('\r')
+                ) {
                     const cmd = p.value.slice(0, -1);
                     // Atomic paste+Enter (see sibling site above).
                     this.sendSlashCommand(activeTab, cmd);
@@ -4398,7 +5107,8 @@ export class TabManager {
             // since the favicon already identifies the coder)
             const faviconImg = document.createElement('img');
             faviconImg.className = 'hostname-dropdown-favicon';
-            faviconImg.src = CODER_FAVICONS[tabInfo.coder] || CODER_FAVICONS.bash;
+            faviconImg.src =
+                CODER_FAVICONS[tabInfo.coder] || CODER_FAVICONS.bash;
             faviconImg.alt = tabInfo.coder;
 
             // Worktree hieroglyph — same glyph shown on the tab itself.
@@ -4406,7 +5116,8 @@ export class TabManager {
             const glyphSpan = document.createElement('span');
             glyphSpan.className = 'hostname-dropdown-glyph';
             glyphSpan.setAttribute('aria-hidden', 'true');
-            glyphSpan.textContent = (tabInfo.tabEl && tabInfo.tabEl.dataset.worktreeGlyph) || '◆';
+            glyphSpan.textContent =
+                (tabInfo.tabEl && tabInfo.tabEl.dataset.worktreeGlyph) || '◆';
 
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
@@ -4490,9 +5201,13 @@ export class TabManager {
             title: 'Add Model Preset',
             subtitle: `Saved under ${backend}. Use the exact model identifier your backend expects.`,
             fields: [
-                { id: 'model', label: 'Model identifier', placeholder: 'provider/model-name' }
+                {
+                    id: 'model',
+                    label: 'Model identifier',
+                    placeholder: 'provider/model-name',
+                },
             ],
-            submitLabel: 'Add Model'
+            submitLabel: 'Add Model',
         });
         if (!values) return;
 
@@ -4500,14 +5215,20 @@ export class TabManager {
             const res = await fetch('/api/config/models', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: values.model, coder: backend })
+                body: JSON.stringify({ model: values.model, coder: backend }),
             });
-            if (!res.ok) throw new Error(await res.text() || 'Failed to add model preset');
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to add model preset',
+                );
             await this.app.sessionsManager.loadConfig();
             this.renderModelDropup();
-            this.app.showToast(`Added model preset "${values.model}"`, { type: 'info', title: 'Models' });
+            this.app.showToast(`Added model preset "${values.model}"`, {
+                type: 'info',
+                title: 'Models',
+            });
         } catch (err) {
-            console.error("Failed to add model preset:", err);
+            console.error('Failed to add model preset:', err);
             this.app.showToast(err.message, { type: 'error', title: 'Models' });
         }
     }
@@ -4517,9 +5238,14 @@ export class TabManager {
             title: 'Edit Model Preset',
             subtitle: `Update the saved model identifier for ${backend}.`,
             fields: [
-                { id: 'model', label: 'Model identifier', value: model, placeholder: 'provider/model-name' }
+                {
+                    id: 'model',
+                    label: 'Model identifier',
+                    value: model,
+                    placeholder: 'provider/model-name',
+                },
             ],
-            submitLabel: 'Save Model'
+            submitLabel: 'Save Model',
         });
         if (!values || values.model === model) return;
 
@@ -4527,14 +5253,24 @@ export class TabManager {
             const res = await fetch('/api/config/models', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ old_model: model, model: values.model, coder: backend })
+                body: JSON.stringify({
+                    old_model: model,
+                    model: values.model,
+                    coder: backend,
+                }),
             });
-            if (!res.ok) throw new Error(await res.text() || 'Failed to edit model preset');
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to edit model preset',
+                );
             await this.app.sessionsManager.loadConfig();
             this.renderModelDropup();
-            this.app.showToast(`Updated model preset "${values.model}"`, { type: 'info', title: 'Models' });
+            this.app.showToast(`Updated model preset "${values.model}"`, {
+                type: 'info',
+                title: 'Models',
+            });
         } catch (err) {
-            console.error("Failed to edit model preset:", err);
+            console.error('Failed to edit model preset:', err);
             this.app.showToast(err.message, { type: 'error', title: 'Models' });
         }
     }
@@ -4542,12 +5278,23 @@ export class TabManager {
     async addQuickCommand() {
         const values = await this.app.openConfigEditor({
             title: 'Add Quick Command',
-            subtitle: 'Quick commands run in the active terminal. Use {} as a placeholder for selected input text.',
+            subtitle:
+                'Quick commands run in the active terminal. Use {} as a placeholder for selected input text.',
             fields: [
-                { id: 'name', label: 'Label', placeholder: 'tests', monospace: false },
-                { id: 'command', label: 'Command', placeholder: 'npm test', multiline: true }
+                {
+                    id: 'name',
+                    label: 'Label',
+                    placeholder: 'tests',
+                    monospace: false,
+                },
+                {
+                    id: 'command',
+                    label: 'Command',
+                    placeholder: 'npm test',
+                    multiline: true,
+                },
             ],
-            submitLabel: 'Add Command'
+            submitLabel: 'Add Command',
         });
         if (!values) return;
 
@@ -4555,43 +5302,83 @@ export class TabManager {
             const res = await fetch('/api/config/quick-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: values.name, command: values.command })
+                body: JSON.stringify({
+                    name: values.name,
+                    command: values.command,
+                }),
             });
-            if (!res.ok) throw new Error(await res.text() || 'Failed to add quick command');
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to add quick command',
+                );
             await this.app.sessionsManager.loadConfig();
             this.renderQuickCmdsDropup();
-            this.app.showToast(`Added quick command "${values.name}"`, { type: 'info', title: 'Commands' });
+            this.app.showToast(`Added quick command "${values.name}"`, {
+                type: 'info',
+                title: 'Commands',
+            });
         } catch (err) {
-            console.error("Failed to add quick command:", err);
-            this.app.showToast(err.message, { type: 'error', title: 'Commands' });
+            console.error('Failed to add quick command:', err);
+            this.app.showToast(err.message, {
+                type: 'error',
+                title: 'Commands',
+            });
         }
     }
 
     async editQuickCommand(cmd) {
         const values = await this.app.openConfigEditor({
             title: 'Edit Quick Command',
-            subtitle: 'Rename the action or change the text sent to the active terminal.',
+            subtitle:
+                'Rename the action or change the text sent to the active terminal.',
             fields: [
-                { id: 'name', label: 'Label', value: cmd.name, monospace: false },
-                { id: 'command', label: 'Command', value: cmd.command, multiline: true }
+                {
+                    id: 'name',
+                    label: 'Label',
+                    value: cmd.name,
+                    monospace: false,
+                },
+                {
+                    id: 'command',
+                    label: 'Command',
+                    value: cmd.command,
+                    multiline: true,
+                },
             ],
-            submitLabel: 'Save Command'
+            submitLabel: 'Save Command',
         });
-        if (!values || (values.name === cmd.name && values.command === cmd.command)) return;
+        if (
+            !values ||
+            (values.name === cmd.name && values.command === cmd.command)
+        )
+            return;
 
         try {
             const res = await fetch('/api/config/quick-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ old_name: cmd.name, name: values.name, command: values.command })
+                body: JSON.stringify({
+                    old_name: cmd.name,
+                    name: values.name,
+                    command: values.command,
+                }),
             });
-            if (!res.ok) throw new Error(await res.text() || 'Failed to edit quick command');
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to edit quick command',
+                );
             await this.app.sessionsManager.loadConfig();
             this.renderQuickCmdsDropup();
-            this.app.showToast(`Updated quick command "${values.name}"`, { type: 'info', title: 'Commands' });
+            this.app.showToast(`Updated quick command "${values.name}"`, {
+                type: 'info',
+                title: 'Commands',
+            });
         } catch (err) {
-            console.error("Failed to edit quick command:", err);
-            this.app.showToast(err.message, { type: 'error', title: 'Commands' });
+            console.error('Failed to edit quick command:', err);
+            this.app.showToast(err.message, {
+                type: 'error',
+                title: 'Commands',
+            });
         }
     }
 
@@ -4599,25 +5386,27 @@ export class TabManager {
         const dropup = document.getElementById('model-presets-dropup');
         if (!dropup) return;
         dropup.innerHTML = '';
-        
+
         const activeTab = this.getActiveTab();
         if (!activeTab) return;
-        
+
         const backend = activeTab.coder;
         const allPresets = this.app.modelPresets || {};
-        const modelPresets = [...(allPresets[backend] || [])].sort((a, b) => a.localeCompare(b));
-        
+        const modelPresets = [...(allPresets[backend] || [])].sort((a, b) =>
+            a.localeCompare(b),
+        );
+
         // 1. Header
         const header = document.createElement('div');
         header.className = 'dropup-header';
         header.innerText = 'Model Presets';
         dropup.appendChild(header);
-        
+
         // 2. Render preset rows
-        modelPresets.forEach(model => {
+        modelPresets.forEach((model) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
-            
+
             const btn = document.createElement('button');
             btn.className = 'dropup-model-btn';
             btn.innerText = model;
@@ -4680,7 +5469,7 @@ export class TabManager {
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);
-            
+
             const actionsContainer = document.createElement('div');
             actionsContainer.className = 'dropup-row-actions';
 
@@ -4705,11 +5494,11 @@ export class TabManager {
                         await fetch('/api/config/models', {
                             method: 'DELETE',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model, coder: backend })
+                            body: JSON.stringify({ model, coder: backend }),
                         });
                         await this.app.sessionsManager.loadConfig();
                     } catch (err) {
-                        console.error("Failed to delete model preset:", err);
+                        console.error('Failed to delete model preset:', err);
                     }
                 }
             });
@@ -4717,11 +5506,11 @@ export class TabManager {
             row.appendChild(actionsContainer);
             dropup.appendChild(row);
         });
-        
+
         // 3. Add Preset Action Row
         const addRow = document.createElement('div');
         addRow.className = 'dropup-add-row';
-        
+
         const addBtn = document.createElement('button');
         addBtn.className = 'dropup-add-btn';
         addBtn.innerText = '+ Add Model Preset...';
@@ -4747,7 +5536,7 @@ export class TabManager {
         header.innerText = 'Quick Commands';
         dropup.appendChild(header);
 
-        quickCmds.forEach(cmd => {
+        quickCmds.forEach((cmd) => {
             const row = document.createElement('div');
             row.className = 'dropup-row';
 
@@ -4759,9 +5548,12 @@ export class TabManager {
                 const activeTab = this.getActiveTab();
                 if (!activeTab) return;
                 const prefix = this.inputTextArea.value.trim();
-                const combined = prefix && cmd.command.includes('{}')
-                    ? cmd.command.replace('{}', prefix)
-                    : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+                const combined =
+                    prefix && cmd.command.includes('{}')
+                        ? cmd.command.replace('{}', prefix)
+                        : prefix
+                          ? `${prefix} ${cmd.command}`
+                          : cmd.command;
                 let payload = combined;
                 if (combined.length > 16 || combined.includes('\n')) {
                     payload = '\x1b[200~' + combined + '\x1b[201~';
@@ -4800,11 +5592,11 @@ export class TabManager {
                         await fetch('/api/config/quick-commands', {
                             method: 'DELETE',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: cmd.name })
+                            body: JSON.stringify({ name: cmd.name }),
                         });
                         await this.app.sessionsManager.loadConfig();
                     } catch (err) {
-                        console.error("Failed to delete quick command:", err);
+                        console.error('Failed to delete quick command:', err);
                     }
                 }
             });
@@ -4835,7 +5627,10 @@ export class TabManager {
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'dropup-config-btn';
-        copyBtn.title = mode === 'cmds' ? 'Copy commands config to clipboard' : 'Copy models config to clipboard';
+        copyBtn.title =
+            mode === 'cmds'
+                ? 'Copy commands config to clipboard'
+                : 'Copy models config to clipboard';
         copyBtn.innerHTML = '↑ Copy config';
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -4849,7 +5644,10 @@ export class TabManager {
 
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'dropup-config-btn';
-        pasteBtn.title = mode === 'cmds' ? 'Paste commands config from clipboard' : 'Paste models config from clipboard';
+        pasteBtn.title =
+            mode === 'cmds'
+                ? 'Paste commands config from clipboard'
+                : 'Paste models config from clipboard';
         pasteBtn.innerHTML = '↓ Paste config';
         pasteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -4858,7 +5656,9 @@ export class TabManager {
             } else {
                 await this.app.importModelsConfig(pasteBtn);
             }
-            document.querySelectorAll('.model-presets-dropup').forEach(d => d.classList.add('hidden'));
+            document.querySelectorAll('.model-presets-dropup').forEach((d) => {
+                d.classList.add('hidden');
+            });
             const activeTab = this.getActiveTab();
             if (activeTab) {
                 this.renderPresets(activeTab.coder);
@@ -4875,7 +5675,7 @@ export class TabManager {
             if (tab.term) {
                 tab.term.options.theme = {
                     ...tab.term.options.theme,
-                    cursor: color
+                    cursor: color,
                 };
             }
         }
@@ -4887,12 +5687,17 @@ export class TabManager {
     // Deliberately does NOT touch any scroll / _spamScroll timing
     // (see AGENTS.md hard-won-stabilization rule).
     applyFontToAllActiveTerminals(family) {
-        const safe = (family && String(family).trim()) || 'JetBrains Mono, monospace';
+        const safe =
+            (family && String(family).trim()) || 'JetBrains Mono, monospace';
         for (const tab of this.tabs.values()) {
             if (tab.term) {
                 tab.term.options.fontFamily = safe;
                 if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
-                    try { tab.fitAddon.fit(); } catch (e) { /* tolerate closed term */ }
+                    try {
+                        tab.fitAddon.fit();
+                    } catch (e) {
+                        /* tolerate closed term */
+                    }
                 }
             }
         }
@@ -4904,13 +5709,18 @@ export class TabManager {
     // scroll / _spamScroll timing (see AGENTS.md hard-won-stabilization rule).
     applyTerminalFontSizeToAll(size) {
         const isMobile = window.innerWidth <= 768;
-        const safe = (size >= 8 && size <= 32) ? size : (isMobile ? 10 : 14);
+        const safe = size >= 8 && size <= 32 ? size : isMobile ? 10 : 14;
         for (const tab of this.tabs.values()) {
             if (!tab.term) continue;
             if (tab.term.options.fontSize === safe) continue;
             tab.term.options.fontSize = safe;
             if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
-                try { tab.fitAddon.fit(); this.sendResizeToBackend(tab); } catch (e) { /* tolerate closed term */ }
+                try {
+                    tab.fitAddon.fit();
+                    this.sendResizeToBackend(tab);
+                } catch (e) {
+                    /* tolerate closed term */
+                }
             }
         }
     }
@@ -4922,7 +5732,8 @@ export class TabManager {
         for (const tab of this.tabs.values()) {
             if (tab.isDead) continue;
 
-            const isActiveAndVisible = (tab.paneId === this.activePaneId) && isTabVisible;
+            const isActiveAndVisible =
+                tab.paneId === this.activePaneId && isTabVisible;
 
             // If the tab is currently focused and visible, clear attention states immediately.
             if (isActiveAndVisible && tab.isAttention) {
@@ -4945,17 +5756,27 @@ export class TabManager {
                     }
 
                     // Calculate total execution duration
-                    const totalDuration = Date.now() - (tab.busyStartTime || Date.now());
+                    const totalDuration =
+                        Date.now() - (tab.busyStartTime || Date.now());
                     const isLongTask = totalDuration > 8000;
 
                     // Only notify if this tab is NOT currently active and focused, was a long-running task, and is NOT a shell/terminal tab.
-                    const isShellTab = tab.coder === 'bash' || tab.coder === 'pwsh';
+                    const isShellTab =
+                        tab.coder === 'bash' || tab.coder === 'pwsh';
                     if (!isActiveAndVisible && isLongTask && !isShellTab) {
                         let promptDetected = false;
-                        if (tab.term && tab.term.buffer && tab.term.buffer.active) {
+                        if (
+                            tab.term &&
+                            tab.term.buffer &&
+                            tab.term.buffer.active
+                        ) {
                             const buffer = tab.term.buffer.active;
-                            const line = buffer.getLine(buffer.cursorY + buffer.baseY);
-                            const text = line ? line.translateToString(true) : '';
+                            const line = buffer.getLine(
+                                buffer.cursorY + buffer.baseY,
+                            );
+                            const text = line
+                                ? line.translateToString(true)
+                                : '';
                             const promptRe = /[$>❯…╰─]|agy>|opencode>/;
                             promptDetected = promptRe.test(text);
                         }
@@ -4990,7 +5811,8 @@ export class TabManager {
                 duration: 6000,
                 action: {
                     text: 'Go to tab',
-                    callback: () => this.switchTab(tab.paneId, { userInitiated: true }),
+                    callback: () =>
+                        this.switchTab(tab.paneId, { userInitiated: true }),
                 },
             });
         }
@@ -5004,13 +5826,17 @@ export class TabManager {
         doneChimeAudio.play().catch(() => {});
 
         // 3. Show OS-level notification if tab is hidden / not active.
-        if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        if (
+            document.hidden &&
+            typeof Notification !== 'undefined' &&
+            Notification.permission === 'granted'
+        ) {
             try {
                 const n = new Notification('Phi Session Done', {
                     body: message,
                     tag: 'phi-pane-' + tab.paneId,
                     icon: 'screenshot.png',
-                    silent: true
+                    silent: true,
                 });
                 n.onclick = () => {
                     window.focus();
@@ -5018,7 +5844,10 @@ export class TabManager {
                     n.close();
                 };
             } catch (e) {
-                console.error('[notification] Failed to show OS notification:', e);
+                console.error(
+                    '[notification] Failed to show OS notification:',
+                    e,
+                );
             }
         }
     }
@@ -5056,11 +5885,16 @@ export class TabManager {
         if (this._historyCursor === -1 && direction === 'newer') {
             return; // already at the "newest" position
         }
-        if (this._historyPreCycleValue === undefined && this._historyCursor === -1) {
+        if (
+            this._historyPreCycleValue === undefined &&
+            this._historyCursor === -1
+        ) {
             this._historyPreCycleValue = this.inputTextArea.value;
         }
 
-        const cwd = (this.app.sessionsManager && this.app.sessionsManager.activeCWD) || '';
+        const cwd =
+            (this.app.sessionsManager && this.app.sessionsManager.activeCWD) ||
+            '';
         if (cwd !== this._historyCwd || !this._historyLoaded) {
             // Lazy-load the cache for this cwd.
             const ok = await this._loadPromptHistory(cwd);
@@ -5105,7 +5939,9 @@ export class TabManager {
 
     async _loadPromptHistory(cwd) {
         try {
-            const res = await fetch(`/api/prompt-history/recent?cwd=${encodeURIComponent(cwd)}&n=50`);
+            const res = await fetch(
+                `/api/prompt-history/recent?cwd=${encodeURIComponent(cwd)}&n=50`,
+            );
             if (!res.ok) return false;
             const entries = await res.json();
             if (!Array.isArray(entries)) return false;

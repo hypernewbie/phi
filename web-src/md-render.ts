@@ -3,11 +3,20 @@ import { escapeHtml } from './util.js';
 // Shared DOMPurify policy for untrusted HTML. Callers must check
 // window.DOMPurify?.sanitize first and pick their own fallback.
 export function sanitizeHtml(html: string): string {
-    return String(window.DOMPurify.sanitize(html, {
-        USE_PROFILES: { html: true },
-        FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
-        FORBID_ATTR: ['style'],
-    }));
+    return String(
+        window.DOMPurify.sanitize(html, {
+            USE_PROFILES: { html: true },
+            FORBID_TAGS: [
+                'script',
+                'style',
+                'iframe',
+                'object',
+                'embed',
+                'form',
+            ],
+            FORBID_ATTR: ['style'],
+        }),
+    );
 }
 
 // Renders markdown to HTML and sanitizes it. Every innerHTML sink for
@@ -26,7 +35,10 @@ export function resolveRelative(baseDir: string, rel: string): string {
     const stack = baseDir.split('/').filter(Boolean);
     for (const seg of rel.split('/')) {
         if (!seg || seg === '.') continue;
-        if (seg === '..') { stack.pop(); continue; }
+        if (seg === '..') {
+            stack.pop();
+            continue;
+        }
         stack.push(seg);
     }
     return '/' + stack.join('/');
@@ -35,7 +47,11 @@ export function resolveRelative(baseDir: string, rel: string): string {
 // Rewrites relative <img> srcs to the asset endpoint, resolved against
 // the markdown file's directory. Absolute URLs (scheme, //, /, #, data:)
 // are left untouched.
-export function rewriteRelativeImages(container: HTMLElement, mdPath: string, cwd: string): void {
+export function rewriteRelativeImages(
+    container: HTMLElement,
+    mdPath: string,
+    cwd: string,
+): void {
     // Windows-aware: server paths may use backslashes (filepath.Join).
     const cut = Math.max(mdPath.lastIndexOf('/'), mdPath.lastIndexOf('\\'));
     const baseDir = cut > 0 ? mdPath.slice(0, cut).replace(/\\/g, '/') : '';
@@ -44,7 +60,10 @@ export function rewriteRelativeImages(container: HTMLElement, mdPath: string, cw
         if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(src)) return;
         const clean = src.replace(/[?#].*$/, ''); // img.png?v=2 → img.png
         const abs = resolveRelative(baseDir, clean);
-        img.setAttribute('src', `/api/markdown/asset?path=${encodeURIComponent(abs)}&cwd=${encodeURIComponent(cwd)}`);
+        img.setAttribute(
+            'src',
+            `/api/markdown/asset?path=${encodeURIComponent(abs)}&cwd=${encodeURIComponent(cwd)}`,
+        );
     });
 }
 

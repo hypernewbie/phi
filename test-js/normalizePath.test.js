@@ -36,8 +36,12 @@ describe('normalizePath', () => {
     });
 
     it('treats case- and separator-variant paths as equal', () => {
-        expect(normalizePath('C:\\Users\\Foo')).toBe(normalizePath('c:/users/foo'));
-        expect(normalizePath('C:\\Users\\Foo\\')).toBe(normalizePath('c:/users/foo'));
+        expect(normalizePath('C:\\Users\\Foo')).toBe(
+            normalizePath('c:/users/foo'),
+        );
+        expect(normalizePath('C:\\Users\\Foo\\')).toBe(
+            normalizePath('c:/users/foo'),
+        );
     });
 
     it('is idempotent', () => {

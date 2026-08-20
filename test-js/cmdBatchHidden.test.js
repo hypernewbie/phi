@@ -55,8 +55,12 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
         const mod = await import('../web/diff.js');
         mod.DiffController.prototype.renderCmdPanel.call(fakeController);
 
-        const hiddenToggle = document.getElementById('use-hidden-terminal-toggle');
-        const reuseToggle = document.getElementById('use-existing-terminal-tab-toggle');
+        const hiddenToggle = document.getElementById(
+            'use-hidden-terminal-toggle',
+        );
+        const reuseToggle = document.getElementById(
+            'use-existing-terminal-tab-toggle',
+        );
 
         expect(hiddenToggle).not.toBeNull();
         expect(reuseToggle).not.toBeNull();
@@ -70,12 +74,18 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
         const mod = await import('../web/diff.js');
         mod.DiffController.prototype.renderCmdPanel.call(fakeController);
 
-        const hiddenToggle = document.getElementById('use-hidden-terminal-toggle');
-        const reuseToggle = document.getElementById('use-existing-terminal-tab-toggle');
+        const hiddenToggle = document.getElementById(
+            'use-hidden-terminal-toggle',
+        );
+        const reuseToggle = document.getElementById(
+            'use-existing-terminal-tab-toggle',
+        );
 
         expect(hiddenToggle.checked).toBe(true);
         expect(reuseToggle.disabled).toBe(true);
-        expect(reuseToggle.parentElement.classList.contains('disabled')).toBe(true);
+        expect(reuseToggle.parentElement.classList.contains('disabled')).toBe(
+            true,
+        );
     });
 
     it('renders current, dirty, and all buttons for each command', async () => {
@@ -97,36 +107,63 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
     it('clicking dirty button queries dirty worktrees and executes batch run', async () => {
         const fetchSpy = mockFetch((url) => {
             if (url.includes('/api/git/worktrees')) {
-                return [{ path: '/repo/wt1' }, { path: '/repo/wt2' }, { path: '/repo/wt3' }];
+                return [
+                    { path: '/repo/wt1' },
+                    { path: '/repo/wt2' },
+                    { path: '/repo/wt3' },
+                ];
             }
             if (url.includes('/api/git/worktree-dirty')) {
-                return { '/repo/wt1': true, '/repo/wt2': false, '/repo/wt3': true };
+                return {
+                    '/repo/wt1': true,
+                    '/repo/wt2': false,
+                    '/repo/wt3': true,
+                };
             }
             if (url.includes('/api/cmd/batch-run')) {
                 return {
                     results: [
-                        { worktree: '/repo/wt1', success: true, exit_code: 0, output: 'committed 1', duration_ms: 100 },
-                        { worktree: '/repo/wt3', success: true, exit_code: 0, output: 'committed 3', duration_ms: 150 },
-                    ]
+                        {
+                            worktree: '/repo/wt1',
+                            success: true,
+                            exit_code: 0,
+                            output: 'committed 1',
+                            duration_ms: 100,
+                        },
+                        {
+                            worktree: '/repo/wt3',
+                            success: true,
+                            exit_code: 0,
+                            output: 'committed 3',
+                            duration_ms: 150,
+                        },
+                    ],
                 };
             }
             return {};
         });
 
         const mod = await import('../web/diff.js');
-        fakeController.executeHiddenBatch = mod.DiffController.prototype.executeHiddenBatch;
+        fakeController.executeHiddenBatch =
+            mod.DiffController.prototype.executeHiddenBatch;
         fakeController.renderCmdPanel = vi.fn();
 
-        await mod.DiffController.prototype.runCommand.call(fakeController, fakeApp.terminalCommands[0], 'dirty');
+        await mod.DiffController.prototype.runCommand.call(
+            fakeController,
+            fakeApp.terminalCommands[0],
+            'dirty',
+        );
 
-        const batchCalls = fetchSpy.mock.calls.filter(c => c[0].includes('/api/cmd/batch-run'));
+        const batchCalls = fetchSpy.mock.calls.filter((c) =>
+            c[0].includes('/api/cmd/batch-run'),
+        );
         expect(batchCalls.length).toBe(1);
         const payload = JSON.parse(batchCalls[0][1].body);
         expect(payload.worktrees).toEqual(['/repo/wt1', '/repo/wt3']);
         expect(payload.command).toBe('git commit -m "update"');
         expect(fakeApp.showToast).toHaveBeenCalledWith(
             expect.stringContaining('Completed "commit" across 2 worktree(s)'),
-            expect.objectContaining({ type: 'success' })
+            expect.objectContaining({ type: 'success' }),
         );
     });
 
@@ -138,21 +175,38 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
             if (url.includes('/api/cmd/batch-run')) {
                 return {
                     results: [
-                        { worktree: '/repo/wt1', success: true, exit_code: 0, duration_ms: 50 },
-                        { worktree: '/repo/wt2', success: true, exit_code: 0, duration_ms: 60 },
-                    ]
+                        {
+                            worktree: '/repo/wt1',
+                            success: true,
+                            exit_code: 0,
+                            duration_ms: 50,
+                        },
+                        {
+                            worktree: '/repo/wt2',
+                            success: true,
+                            exit_code: 0,
+                            duration_ms: 60,
+                        },
+                    ],
                 };
             }
             return {};
         });
 
         const mod = await import('../web/diff.js');
-        fakeController.executeHiddenBatch = mod.DiffController.prototype.executeHiddenBatch;
+        fakeController.executeHiddenBatch =
+            mod.DiffController.prototype.executeHiddenBatch;
         fakeController.renderCmdPanel = vi.fn();
 
-        await mod.DiffController.prototype.runCommand.call(fakeController, fakeApp.terminalCommands[1], 'all');
+        await mod.DiffController.prototype.runCommand.call(
+            fakeController,
+            fakeApp.terminalCommands[1],
+            'all',
+        );
 
-        const batchCalls = fetchSpy.mock.calls.filter(c => c[0].includes('/api/cmd/batch-run'));
+        const batchCalls = fetchSpy.mock.calls.filter((c) =>
+            c[0].includes('/api/cmd/batch-run'),
+        );
         expect(batchCalls.length).toBe(1);
         const payload = JSON.parse(batchCalls[0][1].body);
         expect(payload.worktrees).toEqual(['/repo/wt1', '/repo/wt2']);
@@ -165,20 +219,33 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
             if (url.includes('/api/cmd/batch-run')) {
                 return {
                     results: [
-                        { worktree: '/repo/wt1', success: true, exit_code: 0, output: 'ok', duration_ms: 80 }
-                    ]
+                        {
+                            worktree: '/repo/wt1',
+                            success: true,
+                            exit_code: 0,
+                            output: 'ok',
+                            duration_ms: 80,
+                        },
+                    ],
                 };
             }
             return {};
         });
 
         const mod = await import('../web/diff.js');
-        fakeController.executeHiddenBatch = mod.DiffController.prototype.executeHiddenBatch;
+        fakeController.executeHiddenBatch =
+            mod.DiffController.prototype.executeHiddenBatch;
         fakeController.renderCmdPanel = vi.fn();
 
-        await mod.DiffController.prototype.runCommand.call(fakeController, fakeApp.terminalCommands[0], 'current');
+        await mod.DiffController.prototype.runCommand.call(
+            fakeController,
+            fakeApp.terminalCommands[0],
+            'current',
+        );
 
-        const batchCalls = fetchSpy.mock.calls.filter(c => c[0].includes('/api/cmd/batch-run'));
+        const batchCalls = fetchSpy.mock.calls.filter((c) =>
+            c[0].includes('/api/cmd/batch-run'),
+        );
         expect(batchCalls.length).toBe(1);
         const payload = JSON.parse(batchCalls[0][1].body);
         expect(payload.worktrees).toEqual(['/repo/wt1']);
@@ -189,9 +256,25 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
             commandName: 'commit',
             scopeLabel: 'Dirty Worktrees (2)',
             worktrees: [
-                { path: '/repo/wt1', name: 'wt1', glyph: '◆', status: 'success', exitCode: 0, durationMs: 120, output: '1 file changed' },
-                { path: '/repo/wt2', name: 'wt2', glyph: '◇', status: 'error', exitCode: 1, durationMs: 90, error: 'failed' },
-            ]
+                {
+                    path: '/repo/wt1',
+                    name: 'wt1',
+                    glyph: '◆',
+                    status: 'success',
+                    exitCode: 0,
+                    durationMs: 120,
+                    output: '1 file changed',
+                },
+                {
+                    path: '/repo/wt2',
+                    name: 'wt2',
+                    glyph: '◇',
+                    status: 'error',
+                    exitCode: 1,
+                    durationMs: 90,
+                    error: 'failed',
+                },
+            ],
         };
 
         const mod = await import('../web/diff.js');

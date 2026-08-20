@@ -7,7 +7,7 @@ export function directSubtasks(task) {
 }
 export function featureProgress(task) {
     const seen = new Set();
-    const subtasks = directSubtasks(task).filter(child => {
+    const subtasks = directSubtasks(task).filter((child) => {
         if (child?.id == null)
             return false;
         const key = String(child.id);
@@ -16,20 +16,20 @@ export function featureProgress(task) {
         seen.add(key);
         return true;
     });
-    const completed = subtasks.filter(child => child.done).length;
+    const completed = subtasks.filter((child) => child.done).length;
     const total = subtasks.length;
     return {
         task,
         subtasks,
         total,
         completed,
-        percent: total === 0 ? 0 : Math.round((completed / total) * 100)
+        percent: total === 0 ? 0 : Math.round((completed / total) * 100),
     };
 }
 export function buildFeatures(tasks) {
     return tasks
-        .map(task => featureProgress(task))
-        .filter(feature => feature.total > 0);
+        .map((task) => featureProgress(task))
+        .filter((feature) => feature.total > 0);
 }
 function utcDay(value) {
     if (!value)
@@ -52,7 +52,7 @@ export function cumulativeTimeline(tasks) {
         change[key] += 1;
         changes.set(date, change);
     };
-    tasks.forEach(task => {
+    tasks.forEach((task) => {
         add(utcDay(task.created), 'filed');
         // An undone task may retain a historical done_at in some Vikunja
         // versions; count only currently done tasks.
@@ -61,7 +61,7 @@ export function cumulativeTimeline(tasks) {
     });
     let filed = 0;
     let completed = 0;
-    return [...changes.keys()].sort().map(date => {
+    return [...changes.keys()].sort().map((date) => {
         const change = changes.get(date);
         filed += change.filed;
         completed += change.completed;
@@ -78,7 +78,7 @@ function utcDate(date) {
 // Project-level burn-up for feature parents. Filed is the point a feature was
 // created; completed is when that parent was marked done.
 export function portfolioTimeline(features) {
-    return cumulativeTimeline(features.map(feature => feature.task));
+    return cumulativeTimeline(features.map((feature) => feature.task));
 }
 // Whole-board task statistics. This counts every task, not just the ones that
 // happen to have subtasks: a project's health is its task flow, and most
@@ -104,7 +104,7 @@ export function taskStats(tasks, now = new Date(), velocityWindowDays = 28) {
     const seen = new Set();
     let completedTasks = 0;
     let createdInWindow = 0;
-    tasks.forEach(task => {
+    tasks.forEach((task) => {
         if (task?.id == null)
             return;
         const key = String(task.id);
@@ -128,15 +128,20 @@ export function taskStats(tasks, now = new Date(), velocityWindowDays = 28) {
     const velocityPerDay = completedInWindow / windowDays;
     const estimatedDaysRemaining = openTasks === 0
         ? 0
-        : velocityPerDay > 0 ? Math.ceil(openTasks / velocityPerDay) : null;
+        : velocityPerDay > 0
+            ? Math.ceil(openTasks / velocityPerDay)
+            : null;
     const projectedCompletionDate = estimatedDaysRemaining == null
         ? null
-        : utcDate(new Date(today.getTime() + (estimatedDaysRemaining * 24 * 60 * 60 * 1000)));
+        : utcDate(new Date(today.getTime() +
+            estimatedDaysRemaining * 24 * 60 * 60 * 1000));
     return {
         totalTasks,
         completedTasks,
         openTasks,
-        taskPercent: totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100),
+        taskPercent: totalTasks === 0
+            ? 0
+            : Math.round((completedTasks / totalTasks) * 100),
         velocityWindowDays: windowDays,
         completedInWindow,
         createdInWindow,
@@ -144,7 +149,7 @@ export function taskStats(tasks, now = new Date(), velocityWindowDays = 28) {
         velocityPerDay,
         estimatedDaysRemaining,
         projectedCompletionDate,
-        dailyCompletions
+        dailyCompletions,
     };
 }
 // Calculates portfolio-level feature progress from current Vikunja task state.
@@ -167,7 +172,7 @@ export function featureStats(features, now = new Date(), velocityWindowDays = 28
     let completedFeatures = 0;
     let totalSubtasks = 0;
     let completedSubtasks = 0;
-    features.forEach(feature => {
+    features.forEach((feature) => {
         totalSubtasks += feature.total;
         completedSubtasks += feature.completed;
         if (!feature.task.done)
@@ -184,23 +189,30 @@ export function featureStats(features, now = new Date(), velocityWindowDays = 28
     const velocityPerDay = completedInWindow / windowDays;
     const estimatedDaysRemaining = remainingFeatures === 0
         ? 0
-        : velocityPerDay > 0 ? Math.ceil(remainingFeatures / velocityPerDay) : null;
+        : velocityPerDay > 0
+            ? Math.ceil(remainingFeatures / velocityPerDay)
+            : null;
     const projectedCompletionDate = estimatedDaysRemaining == null
         ? null
-        : utcDate(new Date(today.getTime() + (estimatedDaysRemaining * 24 * 60 * 60 * 1000)));
+        : utcDate(new Date(today.getTime() +
+            estimatedDaysRemaining * 24 * 60 * 60 * 1000));
     return {
         totalFeatures,
         completedFeatures,
-        featurePercent: totalFeatures === 0 ? 0 : Math.round((completedFeatures / totalFeatures) * 100),
+        featurePercent: totalFeatures === 0
+            ? 0
+            : Math.round((completedFeatures / totalFeatures) * 100),
         totalSubtasks,
         completedSubtasks,
-        subtaskPercent: totalSubtasks === 0 ? 0 : Math.round((completedSubtasks / totalSubtasks) * 100),
+        subtaskPercent: totalSubtasks === 0
+            ? 0
+            : Math.round((completedSubtasks / totalSubtasks) * 100),
         velocityWindowDays: windowDays,
         completedInWindow,
         velocityPerDay,
         remainingFeatures,
         estimatedDaysRemaining,
         projectedCompletionDate,
-        dailyCompletions
+        dailyCompletions,
     };
 }

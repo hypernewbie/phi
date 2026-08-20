@@ -26,5 +26,8 @@ mkdirSync(distDir, { recursive: true });
 for (const name of assets) {
   copyFileSync(path.join(srcDir, name), path.join(distDir, name));
 }
-copyFileSync(path.join(preloadDir, 'preload.js'), path.join(distDir, 'preload.js'));
+copyFileSync(
+  path.join(preloadDir, 'preload.js'),
+  path.join(distDir, 'preload.js'),
+);
 console.log(`copied ${assets.join(', ')}, preload.js -> dist/`);

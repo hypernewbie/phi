@@ -13,7 +13,10 @@ import {
 } from '../src/zoom.js';
 
 interface FakeWebContents {
-  on: (name: string, cb: (event: unknown, input: ZoomChordInput) => void) => void;
+  on: (
+    name: string,
+    cb: (event: unknown, input: ZoomChordInput) => void,
+  ) => void;
   getZoomLevel: () => number;
   setZoomLevel: (level: number) => void;
   isDestroyed: () => boolean;
@@ -23,8 +26,9 @@ function makeHarness(targetGetter?: () => unknown) {
   let zoomLevel = 0;
   const zoomLevelHistory: number[] = [];
   const event = { preventDefault: vi.fn() };
-  const listeners: Array<(event: { preventDefault: () => void }, input: ZoomChordInput) => void> =
-    [];
+  const listeners: Array<
+    (event: { preventDefault: () => void }, input: ZoomChordInput) => void
+  > = [];
   let destroyed = false;
 
   const contents: FakeWebContents = {
@@ -64,35 +68,70 @@ function makeHarness(targetGetter?: () => unknown) {
 describe('resolveZoomAction', () => {
   it('resolves Ctrl and Cmd zoom-in chords (+, =, Add, NumpadAdd)', () => {
     for (const key of ['+', '=', 'Add', 'NumpadAdd']) {
-      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe('in');
-      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe('in');
-      expect(resolveZoomAction({ type: 'keyDown', key, control: true, shift: true })).toBe('in');
-      expect(resolveZoomAction({ type: 'keyDown', key, meta: true, shift: true })).toBe('in');
+      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe(
+        'in',
+      );
+      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe(
+        'in',
+      );
+      expect(
+        resolveZoomAction({ type: 'keyDown', key, control: true, shift: true }),
+      ).toBe('in');
+      expect(
+        resolveZoomAction({ type: 'keyDown', key, meta: true, shift: true }),
+      ).toBe('in');
     }
   });
 
   it('resolves Ctrl and Cmd zoom-out chords (-, _, Subtract, NumpadSubtract)', () => {
     for (const key of ['-', '_', 'Subtract', 'NumpadSubtract']) {
-      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe('out');
-      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe('out');
-      expect(resolveZoomAction({ type: 'keyDown', key, control: true, shift: true })).toBe('out');
-      expect(resolveZoomAction({ type: 'keyDown', key, meta: true, shift: true })).toBe('out');
+      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe(
+        'out',
+      );
+      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe(
+        'out',
+      );
+      expect(
+        resolveZoomAction({ type: 'keyDown', key, control: true, shift: true }),
+      ).toBe('out');
+      expect(
+        resolveZoomAction({ type: 'keyDown', key, meta: true, shift: true }),
+      ).toBe('out');
     }
   });
 
   it('resolves Ctrl and Cmd reset-zoom chords (0, Numpad0)', () => {
     for (const key of ['0', 'Numpad0']) {
-      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe('reset');
-      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe('reset');
+      expect(resolveZoomAction({ type: 'keyDown', key, control: true })).toBe(
+        'reset',
+      );
+      expect(resolveZoomAction({ type: 'keyDown', key, meta: true })).toBe(
+        'reset',
+      );
     }
   });
 
   it('rejects Alt chords and keyUp events', () => {
-    expect(resolveZoomAction({ type: 'keyDown', key: '+', control: true, alt: true })).toBeNull();
-    expect(resolveZoomAction({ type: 'keyDown', key: '-', meta: true, alt: true })).toBeNull();
-    expect(resolveZoomAction({ type: 'keyUp', key: '+', control: true })).toBeNull();
-    expect(resolveZoomAction({ type: 'keyDown', key: 'a', control: true })).toBeNull();
-    expect(resolveZoomAction({ type: 'keyDown', key: 'F5', control: true })).toBeNull();
+    expect(
+      resolveZoomAction({
+        type: 'keyDown',
+        key: '+',
+        control: true,
+        alt: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveZoomAction({ type: 'keyDown', key: '-', meta: true, alt: true }),
+    ).toBeNull();
+    expect(
+      resolveZoomAction({ type: 'keyUp', key: '+', control: true }),
+    ).toBeNull();
+    expect(
+      resolveZoomAction({ type: 'keyDown', key: 'a', control: true }),
+    ).toBeNull();
+    expect(
+      resolveZoomAction({ type: 'keyDown', key: 'F5', control: true }),
+    ).toBeNull();
   });
 });
 

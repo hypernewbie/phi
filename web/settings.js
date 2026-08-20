@@ -33,7 +33,8 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     verEl.textContent = v.version
         ? `v${v.version}${short ? ' · ' + short : ''}`
         : 'v?';
-    verEl.title = [v.date, v.buildSource].filter(Boolean).join(' · ') || 'unknown build';
+    verEl.title =
+        [v.date, v.buildSource].filter(Boolean).join(' · ') || 'unknown build';
     idText.appendChild(titleEl);
     idText.appendChild(verEl);
     identity.appendChild(idText);
@@ -52,7 +53,8 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const appGroup = _buildSettingsGroup('Appearance');
     body.appendChild(appGroup);
 
-    const activeColor = document.documentElement.getAttribute('data-theme-color') || 'purple';
+    const activeColor =
+        document.documentElement.getAttribute('data-theme-color') || 'purple';
     const swatchRow = _buildSwatchRow(app, activeColor, accentColors);
     appGroup.appendChild(swatchRow);
 
@@ -61,43 +63,110 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         { value: 'Inter, system-ui, sans-serif', label: 'Inter' },
         { value: 'system-ui, -apple-system, sans-serif', label: 'System UI' },
         { value: '"Segoe UI", system-ui, sans-serif', label: 'Segoe UI' },
-        { value: '"Helvetica Neue", Arial, sans-serif', label: 'Helvetica Neue' },
-        { value: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace', label: 'Mono / dev-style' },
+        {
+            value: '"Helvetica Neue", Arial, sans-serif',
+            label: 'Helvetica Neue',
+        },
+        {
+            value: 'ui-monospace, "Cascadia Code", "Source Code Pro", monospace',
+            label: 'Mono / dev-style',
+        },
     ];
     if (app.customFontName) {
-        uiFontOptions.push({ value: 'Phi Custom Font', label: `Custom: ${app.customFontName}` });
+        uiFontOptions.push({
+            value: 'Phi Custom Font',
+            label: `Custom: ${app.customFontName}`,
+        });
     }
-    const uiFontRow = _buildSelectRow('UI font', 'settings-ui-font', uiFontOptions, app.uiFontFamily);
+    const uiFontRow = _buildSelectRow(
+        'UI font',
+        'settings-ui-font',
+        uiFontOptions,
+        app.uiFontFamily,
+    );
     appGroup.appendChild(uiFontRow);
 
-    const uiSizeRow = _buildNumberRow('UI font size', 'settings-ui-font-size', app.uiFontSize || 14, 10, 24);
+    const uiSizeRow = _buildNumberRow(
+        'UI font size',
+        'settings-ui-font-size',
+        app.uiFontSize || 14,
+        10,
+        24,
+    );
     appGroup.appendChild(uiSizeRow);
 
     const termFontOptions = [
-        { value: '',                                            label: 'Default (JetBrains Mono)' },
-        { value: "'Fira Code', ui-monospace, monospace",        label: 'Fira Code' },
-        { value: "'Cascadia Code', ui-monospace, monospace",    label: 'Cascadia Code' },
-        { value: "ui-monospace, 'SF Mono', Menlo, monospace",   label: 'SF Mono / Menlo' },
-        { value: "Consolas, 'Cascadia Mono', monospace",        label: 'Consolas' },
-        { value: "'Source Code Pro', ui-monospace, monospace",  label: 'Source Code Pro' },
-        { value: "'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrains Mono', ui-monospace, monospace", label: 'JetBrainsMono Nerd Font' },
-        { value: "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font', 'Fira Code', ui-monospace, monospace",                label: 'FiraCode Nerd Font' },
-        { value: "'Hack Nerd Font Mono', 'Hack Nerd Font', Hack, ui-monospace, monospace",                               label: 'Hack Nerd Font' },
-        { value: "'MesloLGS NF', 'MesloLGM Nerd Font Mono', Menlo, ui-monospace, monospace",                             label: 'MesloLGS NF' },
-        { value: "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove Nerd Font', 'Cascadia Code', ui-monospace, monospace",  label: 'CaskaydiaCove Nerd Font' },
-        { value: "'SauceCodePro Nerd Font Mono', 'SauceCodePro Nerd Font', 'Source Code Pro', ui-monospace, monospace",  label: 'SauceCodePro Nerd Font' },
-        { value: 'monospace',                                   label: 'System monospace' },
+        { value: '', label: 'Default (JetBrains Mono)' },
+        { value: "'Fira Code', ui-monospace, monospace", label: 'Fira Code' },
+        {
+            value: "'Cascadia Code', ui-monospace, monospace",
+            label: 'Cascadia Code',
+        },
+        {
+            value: "ui-monospace, 'SF Mono', Menlo, monospace",
+            label: 'SF Mono / Menlo',
+        },
+        { value: "Consolas, 'Cascadia Mono', monospace", label: 'Consolas' },
+        {
+            value: "'Source Code Pro', ui-monospace, monospace",
+            label: 'Source Code Pro',
+        },
+        {
+            value: "'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', 'JetBrains Mono', ui-monospace, monospace",
+            label: 'JetBrainsMono Nerd Font',
+        },
+        {
+            value: "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font', 'Fira Code', ui-monospace, monospace",
+            label: 'FiraCode Nerd Font',
+        },
+        {
+            value: "'Hack Nerd Font Mono', 'Hack Nerd Font', Hack, ui-monospace, monospace",
+            label: 'Hack Nerd Font',
+        },
+        {
+            value: "'MesloLGS NF', 'MesloLGM Nerd Font Mono', Menlo, ui-monospace, monospace",
+            label: 'MesloLGS NF',
+        },
+        {
+            value: "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove Nerd Font', 'Cascadia Code', ui-monospace, monospace",
+            label: 'CaskaydiaCove Nerd Font',
+        },
+        {
+            value: "'SauceCodePro Nerd Font Mono', 'SauceCodePro Nerd Font', 'Source Code Pro', ui-monospace, monospace",
+            label: 'SauceCodePro Nerd Font',
+        },
+        { value: 'monospace', label: 'System monospace' },
     ];
-    if (app.terminalFontFamily && !termFontOptions.some(o => o.value === app.terminalFontFamily)) {
-        termFontOptions.splice(1, 0, { value: app.terminalFontFamily, label: `Current: ${app.terminalFontFamily}` });
+    if (
+        app.terminalFontFamily &&
+        !termFontOptions.some((o) => o.value === app.terminalFontFamily)
+    ) {
+        termFontOptions.splice(1, 0, {
+            value: app.terminalFontFamily,
+            label: `Current: ${app.terminalFontFamily}`,
+        });
     }
     if (app.customFontName) {
-        termFontOptions.push({ value: 'Phi Custom Font', label: `Custom: ${app.customFontName}` });
+        termFontOptions.push({
+            value: 'Phi Custom Font',
+            label: `Custom: ${app.customFontName}`,
+        });
     }
-    const termFontRow = _buildSelectRow('Terminal font', 'settings-term-font', termFontOptions, app.terminalFontFamily);
+    const termFontRow = _buildSelectRow(
+        'Terminal font',
+        'settings-term-font',
+        termFontOptions,
+        app.terminalFontFamily,
+    );
     appGroup.appendChild(termFontRow);
 
-    const termSizeRow = _buildNumberRow('Terminal font size', 'settings-term-font-size', app.terminalFontSize || 14, 8, 32);
+    const termSizeRow = _buildNumberRow(
+        'Terminal font size',
+        'settings-term-font-size',
+        app.terminalFontSize || 14,
+        8,
+        32,
+    );
     appGroup.appendChild(termSizeRow);
 
     const uploadRow = document.createElement('div');
@@ -165,7 +234,8 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     headerLabel.className = 'settings-access-title';
     headerLabel.textContent = 'Access password';
     const stateDot = document.createElement('span');
-    stateDot.className = 'settings-access-dot ' + (app.accessAuthEnabled ? 'is-on' : 'is-off');
+    stateDot.className =
+        'settings-access-dot ' + (app.accessAuthEnabled ? 'is-on' : 'is-off');
     const stateText = document.createElement('span');
     stateText.className = 'settings-access-state-text';
     stateText.textContent = app.accessAuthEnabled ? 'Enabled' : 'Disabled';
@@ -208,7 +278,9 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const setPasswordBtn = document.createElement('button');
     setPasswordBtn.className = 'btn btn-accent settings-access-primary';
     setPasswordBtn.type = 'button';
-    setPasswordBtn.textContent = app.accessAuthEnabled ? 'Update password' : 'Set password';
+    setPasswordBtn.textContent = app.accessAuthEnabled
+        ? 'Update password'
+        : 'Set password';
 
     const removeLink = document.createElement('button');
     removeLink.className = 'settings-access-remove-link';
@@ -217,13 +289,19 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     removeLink.classList.toggle('hidden', !app.accessAuthEnabled);
 
     const confirmRemoveBtn = document.createElement('button');
-    confirmRemoveBtn.className = 'btn btn-red settings-access-confirm-remove hidden';
+    confirmRemoveBtn.className =
+        'btn btn-red settings-access-confirm-remove hidden';
     confirmRemoveBtn.type = 'button';
     confirmRemoveBtn.textContent = 'Confirm remove';
 
     const actionsSpacer = document.createElement('span');
     actionsSpacer.className = 'settings-access-spacer';
-    actionsRow.append(actionsSpacer, setPasswordBtn, removeLink, confirmRemoveBtn);
+    actionsRow.append(
+        actionsSpacer,
+        setPasswordBtn,
+        removeLink,
+        confirmRemoveBtn,
+    );
     securityGroup.appendChild(actionsRow);
 
     const showError = (msg) => {
@@ -249,7 +327,12 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     if (v.buildSource) {
         aboutGroup.appendChild(_buildAboutRow('Build source', v.buildSource));
     }
-    aboutGroup.appendChild(_buildAboutRow('Workspaces', `${(app.sessionsManager?.workspaces || []).length}`));
+    aboutGroup.appendChild(
+        _buildAboutRow(
+            'Workspaces',
+            `${(app.sessionsManager?.workspaces || []).length}`,
+        ),
+    );
 
     modal.appendChild(header);
     modal.appendChild(body);
@@ -271,10 +354,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         overlay.classList.add('hidden');
         overlay.remove();
     };
-    const onKeydown = (e) => { if (e.key === 'Escape') close(); };
+    const onKeydown = (e) => {
+        if (e.key === 'Escape') close();
+    };
     closeBtn.addEventListener('click', close);
     doneBtn.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
     document.addEventListener('keydown', onKeydown);
 
     let persistTimer = null;
@@ -298,7 +385,9 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     });
     termFontRow.querySelector('select')?.addEventListener('change', (e) => {
         app.terminalFontFamily = e.target.value;
-        app.tabManager?.applyFontToAllActiveTerminals(app.terminalFontFamily || 'JetBrains Mono, monospace');
+        app.tabManager?.applyFontToAllActiveTerminals(
+            app.terminalFontFamily || 'JetBrains Mono, monospace',
+        );
         app._saveAppearanceLocal();
         debouncedPersist();
     });
@@ -314,26 +403,40 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         const file = e.target.files?.[0];
         if (!file) return;
         const MAX = 8 * 1024 * 1024;
-        if (file.size > MAX) { app.showToast('Font too large (max 8MB)', { type: 'error' }); return; }
+        if (file.size > MAX) {
+            app.showToast('Font too large (max 8MB)', { type: 'error' });
+            return;
+        }
         try {
             await app._putCustomFont(file.name, file);
             app._injectCustomFontFace(file);
             app.customFontName = file.name;
             app._saveAppearanceLocal();
-            app.showToast(`Loaded ${file.name}. Pick "Custom: ${file.name}" in the font dropdowns.`, { type: 'success' });
+            app.showToast(
+                `Loaded ${file.name}. Pick "Custom: ${file.name}" in the font dropdowns.`,
+                { type: 'success' },
+            );
         } catch (err) {
-            app.showToast('Font upload failed: ' + err.message, { type: 'error' });
+            app.showToast('Font upload failed: ' + err.message, {
+                type: 'error',
+            });
         }
     });
     resetBtn.addEventListener('click', async () => {
-        try { localStorage.removeItem('phi_appearance'); } catch {}
+        try {
+            localStorage.removeItem('phi_appearance');
+        } catch {}
         document.getElementById('phi-prepaint-appearance')?.remove();
         await app.clearCustomFont?.();
-        app.uiFontFamily = ''; app.uiFontSize = 0;
-        app.terminalFontFamily = ''; app.terminalFontSize = 0;
+        app.uiFontFamily = '';
+        app.uiFontSize = 0;
+        app.terminalFontFamily = '';
+        app.terminalFontSize = 0;
         app.customFontName = '';
         app.applyUIFont();
-        app.tabManager?.applyFontToAllActiveTerminals('JetBrains Mono, monospace');
+        app.tabManager?.applyFontToAllActiveTerminals(
+            'JetBrains Mono, monospace',
+        );
         app.tabManager?.applyTerminalFontSizeToAll(0);
         app.persistAppearance();
         document.getElementById('settings-ui-font').value = '';
@@ -358,7 +461,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 body: JSON.stringify({ enabled: app.useHiddenTerminal }),
             });
         } catch (err) {
-            console.warn('[settings] failed to persist hidden-terminal toggle', err);
+            console.warn(
+                '[settings] failed to persist hidden-terminal toggle',
+                err,
+            );
         }
     });
     reuseRow.querySelector('input')?.addEventListener('change', async (e) => {
@@ -373,33 +479,44 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             console.warn('[settings] failed to persist reuse-tab toggle', err);
         }
     });
-    autoReconnectRow.querySelector('input')?.addEventListener('change', async (e) => {
-        const enabled = !!e.target.checked;
-        if (app.config) app.config.auto_reconnect = enabled ? 'visible' : 'off';
-        try {
-            await fetch('/api/config/auto-reconnect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled }),
-            });
-        } catch (err) {
-            console.warn('[settings] failed to persist auto-reconnect toggle', err);
-        }
-    });
-    fastModeRow.querySelector('input')?.addEventListener('change', async (e) => {
-        const enabled = !!e.target.checked;
-        if (app.config) app.config.fast_mode = enabled;
-        app.applyFastMode();
-        try {
-            await fetch('/api/config/fast-mode', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled }),
-            });
-        } catch (err) {
-            console.warn('[settings] failed to persist fast-mode toggle', err);
-        }
-    });
+    autoReconnectRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config)
+                app.config.auto_reconnect = enabled ? 'visible' : 'off';
+            try {
+                await fetch('/api/config/auto-reconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist auto-reconnect toggle',
+                    err,
+                );
+            }
+        });
+    fastModeRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config) app.config.fast_mode = enabled;
+            app.applyFastMode();
+            try {
+                await fetch('/api/config/fast-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist fast-mode toggle',
+                    err,
+                );
+            }
+        });
 
     const piOfflineRow = _buildCheckboxRow(
         'Start pi with --offline (new tabs only)',
@@ -407,19 +524,24 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         !!(app.config && app.config.pi_offline),
     );
     behGroup.appendChild(piOfflineRow);
-    piOfflineRow.querySelector('input')?.addEventListener('change', async (e) => {
-        const enabled = !!e.target.checked;
-        if (app.config) app.config.pi_offline = enabled;
-        try {
-            await fetch('/api/config/pi-offline', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled }),
-            });
-        } catch (err) {
-            console.warn('[settings] failed to persist pi-offline toggle', err);
-        }
-    });
+    piOfflineRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config) app.config.pi_offline = enabled;
+            try {
+                await fetch('/api/config/pi-offline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist pi-offline toggle',
+                    err,
+                );
+            }
+        });
 
     const claudeSkipPermsRow = _buildCheckboxRow(
         'Start Claude with --dangerously-skip-permissions (new tabs only)',
@@ -427,19 +549,25 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         !!(app.config && app.config.claude_dangerously_skip_permissions),
     );
     behGroup.appendChild(claudeSkipPermsRow);
-    claudeSkipPermsRow.querySelector('input')?.addEventListener('change', async (e) => {
-        const enabled = !!e.target.checked;
-        if (app.config) app.config.claude_dangerously_skip_permissions = enabled;
-        try {
-            await fetch('/api/config/claude-dangerously-skip-permissions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled }),
-            });
-        } catch (err) {
-            console.warn('[settings] failed to persist claude-skip-permissions toggle', err);
-        }
-    });
+    claudeSkipPermsRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config)
+                app.config.claude_dangerously_skip_permissions = enabled;
+            try {
+                await fetch('/api/config/claude-dangerously-skip-permissions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist claude-skip-permissions toggle',
+                    err,
+                );
+            }
+        });
     setPasswordBtn.addEventListener('click', async () => {
         const newPw = newInput.value;
         const confirmPw = confirmInput.value;
@@ -466,7 +594,12 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             confirmRemoveBtn.classList.add('hidden');
             app.showToast('Password updated', { type: 'success' });
         } catch (err) {
-            app.showToast(err instanceof Error ? err.message : 'Unable to save access password', { type: 'error' });
+            app.showToast(
+                err instanceof Error
+                    ? err.message
+                    : 'Unable to save access password',
+                { type: 'error' },
+            );
         } finally {
             setPasswordBtn.disabled = false;
         }
@@ -489,7 +622,12 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             confirmRemoveBtn.classList.add('hidden');
             app.showToast('Password removed', { type: 'success' });
         } catch (err) {
-            app.showToast(err instanceof Error ? err.message : 'Unable to clear access password', { type: 'error' });
+            app.showToast(
+                err instanceof Error
+                    ? err.message
+                    : 'Unable to clear access password',
+                { type: 'error' },
+            );
         } finally {
             confirmRemoveBtn.disabled = false;
         }
@@ -539,7 +677,10 @@ function _buildSwatchRow(app, activeColor, accentColors) {
             app.applyAccentTheme(key);
             app.saveTheme(key);
             grid.querySelectorAll('.settings-swatch').forEach((s) => {
-                s.setAttribute('aria-checked', s.dataset.color === key ? 'true' : 'false');
+                s.setAttribute(
+                    'aria-checked',
+                    s.dataset.color === key ? 'true' : 'false',
+                );
             });
         });
         grid.appendChild(sw);

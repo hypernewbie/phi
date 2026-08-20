@@ -20,10 +20,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.join(here, '..', '..', '..', 'web');
 const desktopElectronRoot = path.join(here, '..');
 const webHeaderStatePath = path.join(webRoot, 'header-state.js');
-const vendoredHeaderStatePath = path.join(desktopElectronRoot, 'web', 'vendor', 'header-state.js');
+const vendoredHeaderStatePath = path.join(
+  desktopElectronRoot,
+  'web',
+  'vendor',
+  'header-state.js',
+);
 
 let applyBrandCpuTier: (cpuPercent: number) => void;
-let applyTerminalActivityIndicator: (hasActivity: boolean, hostnameKnown: boolean) => void;
+let applyTerminalActivityIndicator: (
+  hasActivity: boolean,
+  hostnameKnown: boolean,
+) => void;
 
 beforeEach(async () => {
   // Load the vendored copy (which is byte-identical to web/). The
@@ -118,7 +126,9 @@ describe('applyTerminalActivityIndicator', () => {
     expect(indicator?.classList.contains('is-active')).toBe(false);
     expect(indicator?.classList.contains('hidden')).toBe(false);
     expect(indicator?.textContent).toBe('—');
-    expect(indicator?.getAttribute('aria-label')).toBe('All terminal tabs are quiet');
+    expect(indicator?.getAttribute('aria-label')).toBe(
+      'All terminal tabs are quiet',
+    );
   });
 
   it('shows the block-pipe and is-active=true when hasActivity=true', () => {
@@ -126,7 +136,9 @@ describe('applyTerminalActivityIndicator', () => {
     const indicator = document.getElementById('terminal-activity-indicator');
     expect(indicator?.classList.contains('is-active')).toBe(true);
     expect(indicator?.textContent).toBe('▍');
-    expect(indicator?.getAttribute('aria-label')).toBe('Terminal output on one or more tabs');
+    expect(indicator?.getAttribute('aria-label')).toBe(
+      'Terminal output on one or more tabs',
+    );
   });
 
   it('hides the indicator when hostnameKnown=false regardless of hasActivity', () => {
@@ -144,9 +156,13 @@ describe('applyTerminalActivityIndicator', () => {
 describe('TBAR pipeline: header-state module', () => {
   it('web/header-state.js is vendored byte-identical into desktop/electron/web/vendor/header-state.js', () => {
     if (!existsSync(vendoredHeaderStatePath)) {
-      throw new Error('vendor: header-state.js missing — run `pnpm run build` first');
+      throw new Error(
+        'vendor: header-state.js missing — run `pnpm run build` first',
+      );
     }
-    expect(readFileSync(vendoredHeaderStatePath, 'utf8')).toBe(readFileSync(webHeaderStatePath, 'utf8'));
+    expect(readFileSync(vendoredHeaderStatePath, 'utf8')).toBe(
+      readFileSync(webHeaderStatePath, 'utf8'),
+    );
   });
 
   it('mainview.js drives the same helpers via the IPC header-state push', () => {

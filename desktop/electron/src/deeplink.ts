@@ -78,14 +78,23 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
   // like Go's url.Parse). The authority must be present (phi:// form).
   const colon = input.indexOf(':');
   if (colon <= 0) {
-    return { ok: false, error: `deeplink: "${input}" must use the "phi" scheme` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" must use the "phi" scheme`,
+    };
   }
   if (input.slice(0, colon).toLowerCase() !== 'phi') {
-    return { ok: false, error: `deeplink: "${input}" must use the "phi" scheme` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" must use the "phi" scheme`,
+    };
   }
   const rest = input.slice(colon + 1);
   if (!rest.startsWith('//')) {
-    return { ok: false, error: `deeplink: "${input}" must use the "phi://" form` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" must use the "phi://" form`,
+    };
   }
 
   // Authority ends at the first '/', '?' or '#'; the rest is path + more.
@@ -95,19 +104,31 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
   const pathAndMore = sep === -1 ? '' : body.slice(sep);
 
   if (pathAndMore.includes('?')) {
-    return { ok: false, error: `deeplink: "${input}" must not contain a query string` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" must not contain a query string`,
+    };
   }
   if (pathAndMore.includes('#')) {
-    return { ok: false, error: `deeplink: "${input}" must not contain a fragment` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" must not contain a fragment`,
+    };
   }
   // Host: '' or 'profile' only (Go lowercases the host; unknown hosts,
   // userinfo and explicit ports are all rejected here).
   const host = authority.toLowerCase();
   if (host !== '' && host !== 'profile') {
-    return { ok: false, error: `deeplink: "${input}" has an unknown host "${authority}"` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" has an unknown host "${authority}"`,
+    };
   }
   if (pathAndMore.includes('//')) {
-    return { ok: false, error: `deeplink: "${input}" contains an empty path segment` };
+    return {
+      ok: false,
+      error: `deeplink: "${input}" contains an empty path segment`,
+    };
   }
 
   const segs = splitSegments(pathAndMore);
@@ -118,7 +139,10 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
   if (segs.length === 1) {
     const profileId = segs[0];
     if (!ID_RE.test(profileId)) {
-      return { ok: false, error: `deeplink: invalid profile id "${profileId}" in "${input}"` };
+      return {
+        ok: false,
+        error: `deeplink: invalid profile id "${profileId}" in "${input}"`,
+      };
     }
     return { ok: true, kind: 'profile', profileId };
   }
@@ -126,10 +150,16 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
     const profileId = segs[0];
     const ref = segs[2];
     if (!ID_RE.test(profileId)) {
-      return { ok: false, error: `deeplink: invalid profile id "${profileId}" in "${input}"` };
+      return {
+        ok: false,
+        error: `deeplink: invalid profile id "${profileId}" in "${input}"`,
+      };
     }
     if (!DIGITS_RE.test(ref)) {
-      return { ok: false, error: `deeplink: session ref must be digits, got "${ref}" in "${input}"` };
+      return {
+        ok: false,
+        error: `deeplink: session ref must be digits, got "${ref}" in "${input}"`,
+      };
     }
     return { ok: true, kind: 'session', profileId, ref };
   }
@@ -137,14 +167,23 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
     const profileId = segs[0];
     const ref = segs[2];
     if (!ID_RE.test(profileId)) {
-      return { ok: false, error: `deeplink: invalid profile id "${profileId}" in "${input}"` };
+      return {
+        ok: false,
+        error: `deeplink: invalid profile id "${profileId}" in "${input}"`,
+      };
     }
     if (!REF_RE.test(ref)) {
-      return { ok: false, error: `deeplink: invalid route reference "${ref}" in "${input}"` };
+      return {
+        ok: false,
+        error: `deeplink: invalid route reference "${ref}" in "${input}"`,
+      };
     }
     return { ok: true, kind: 'worktree', profileId, ref };
   }
-  return { ok: false, error: `deeplink: "${input}" is not a valid phi://profile link` };
+  return {
+    ok: false,
+    error: `deeplink: "${input}" is not a valid phi://profile link`,
+  };
 }
 
 /**
@@ -152,7 +191,10 @@ export function parseDeepLink(raw: string): ParseDeepLinkResult {
  * A null or destroyed window is a no-op (the window may not exist yet when
  * a link arrives during startup).
  */
-export function dispatchDeepLink(window: DeepLinkWindow | null, link: DeepLink): void {
+export function dispatchDeepLink(
+  window: DeepLinkWindow | null,
+  link: DeepLink,
+): void {
   if (!window || window.webContents.isDestroyed()) return;
   window.webContents.send(DEEPLINK_CHANNEL, link);
 }

@@ -41,14 +41,23 @@ function proxiedTarget(url) {
     const u = String(url);
     const m = u.match(/\/api\/proxy\?url=([^&]+)/);
     if (!m) return u;
-    try { return decodeURIComponent(m[1]); } catch { return u; }
+    try {
+        return decodeURIComponent(m[1]);
+    } catch {
+        return u;
+    }
 }
 
 // Build a JSON Response the mockFetch contract expects. mockFetch()
 // turns a truthy value into an OK JSON response; this helper builds
 // richer shapes (errors, ok-with-body).
 function jsonResponse(body, { ok = true, status = 200 } = {}) {
-    return { ok, status, json: async () => body, text: async () => JSON.stringify(body) };
+    return {
+        ok,
+        status,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+    };
 }
 
 describe('SyncManager — Clear all', () => {
@@ -60,7 +69,9 @@ describe('SyncManager — Clear all', () => {
         expect(clearBtn, 'clear-all button should be in the DOM').toBeTruthy();
         expect(addBtn, 'add button should still be in the DOM').toBeTruthy();
         expect(clearBtn.classList.contains('sync-btn-secondary')).toBe(true);
-        expect(clearBtn.parentElement.classList.contains('sync-header-actions')).toBe(true);
+        expect(
+            clearBtn.parentElement.classList.contains('sync-header-actions'),
+        ).toBe(true);
         expect(clearBtn.parentElement.children.length).toBe(2);
     });
 
@@ -77,7 +88,9 @@ describe('SyncManager — Clear all', () => {
             }
             return jsonResponse([]);
         });
-        const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true);
+        const confirmSpy = vi
+            .spyOn(window, 'confirm')
+            .mockImplementation(() => true);
         new SyncManager(app);
         await new Promise((r) => setTimeout(r, 0));
         const baseline = calls.length;
@@ -109,12 +122,17 @@ describe('SyncManager — Clear all', () => {
             if (target.endsWith('/api/sync/messages') && method === 'GET') {
                 return messages;
             }
-            if (/\/api\/sync\/messages\/[^/]+$/.test(target) && method === 'DELETE') {
+            if (
+                /\/api\/sync\/messages\/[^/]+$/.test(target) &&
+                method === 'DELETE'
+            ) {
                 return jsonResponse({});
             }
             return jsonResponse([]);
         });
-        const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true);
+        const confirmSpy = vi
+            .spyOn(window, 'confirm')
+            .mockImplementation(() => true);
         new SyncManager(app);
         await new Promise((r) => setTimeout(r, 0));
         const baseline = calls.length;
@@ -149,7 +167,9 @@ describe('SyncManager — Clear all', () => {
         const baseline = calls.length;
         document.getElementById('sync-clear-btn').click();
         await new Promise((r) => setTimeout(r, 20));
-        const deletes = calls.slice(baseline).filter((c) => c.method === 'DELETE');
+        const deletes = calls
+            .slice(baseline)
+            .filter((c) => c.method === 'DELETE');
         expect(deletes.length).toBe(0);
         expect(app.showToast).not.toHaveBeenCalledWith(
             expect.stringMatching(/^Cleared/),
@@ -173,10 +193,16 @@ describe('SyncManager — Clear all', () => {
             if (target.endsWith('/api/sync/messages') && method === 'GET') {
                 return messages;
             }
-            if (target.includes('/api/sync/messages/a') && method === 'DELETE') {
+            if (
+                target.includes('/api/sync/messages/a') &&
+                method === 'DELETE'
+            ) {
                 throw new Error('boom a');
             }
-            if (/\/api\/sync\/messages\/[^/]+$/.test(target) && method === 'DELETE') {
+            if (
+                /\/api\/sync\/messages\/[^/]+$/.test(target) &&
+                method === 'DELETE'
+            ) {
                 return jsonResponse({});
             }
             return jsonResponse([]);
@@ -187,7 +213,9 @@ describe('SyncManager — Clear all', () => {
         const baseline = calls.length;
         document.getElementById('sync-clear-btn').click();
         await new Promise((r) => setTimeout(r, 60));
-        const deletes = calls.slice(baseline).filter((c) => c.method === 'DELETE');
+        const deletes = calls
+            .slice(baseline)
+            .filter((c) => c.method === 'DELETE');
         expect(deletes.length).toBe(3);
         expect(app.showToast).toHaveBeenCalledWith(
             expect.stringMatching(/^Cleared; 1 delete failed/),

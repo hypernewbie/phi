@@ -12,7 +12,14 @@
  * no real HTTP anywhere in this slice (the real liveness checker is
  * deferred to step 8). No Electron runtime is involved.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,7 +51,9 @@ function persistPath(): string {
   return path.join(dir, 'profiles.json');
 }
 
-function makeController(opts: { log?: (msg: string) => void } = {}): Controller {
+function makeController(
+  opts: { log?: (msg: string) => void } = {},
+): Controller {
   return new Controller({ persistPath: persistPath(), log: opts.log });
 }
 
@@ -68,14 +77,24 @@ describe('parseEndpoint (endpoint.Parse parity)', () => {
   });
 
   it('accepts the trailing-root and no-path forms equivalently', () => {
-    expect(parseEndpoint('http://example.com/').origin).toBe('http://example.com/');
-    expect(parseEndpoint('http://example.com').origin).toBe('http://example.com/');
-    expect(parseEndpoint('https://example.com:7070/').origin).toBe('https://example.com:7070/');
+    expect(parseEndpoint('http://example.com/').origin).toBe(
+      'http://example.com/',
+    );
+    expect(parseEndpoint('http://example.com').origin).toBe(
+      'http://example.com/',
+    );
+    expect(parseEndpoint('https://example.com:7070/').origin).toBe(
+      'https://example.com:7070/',
+    );
   });
 
   it('preserves an explicit default port (Go keeps it in u.Host)', () => {
-    expect(parseEndpoint('http://example.com:80/').origin).toBe('http://example.com:80/');
-    expect(parseEndpoint('https://example.com:443/').origin).toBe('https://example.com:443/');
+    expect(parseEndpoint('http://example.com:80/').origin).toBe(
+      'http://example.com:80/',
+    );
+    expect(parseEndpoint('https://example.com:443/').origin).toBe(
+      'https://example.com:443/',
+    );
   });
 
   it('accepts IPv6 literals and reports the bracket-stripped hostname key', () => {
@@ -86,7 +105,9 @@ describe('parseEndpoint (endpoint.Parse parity)', () => {
   });
 
   it('accepts intranet-style underscore hostnames', () => {
-    expect(parseEndpoint('http://my_server.local:7070/').hostname).toBe('my_server.local');
+    expect(parseEndpoint('http://my_server.local:7070/').hostname).toBe(
+      'my_server.local',
+    );
   });
 
   it('rejects userinfo, queries, fragments, non-root paths, bad schemes and hostless URLs', () => {
@@ -121,7 +142,13 @@ describe('parseEndpoint (endpoint.Parse parity)', () => {
   });
 
   it('rejects invalid hostnames', () => {
-    for (const raw of ['http://exa mple.com/', 'http://-bad.com/', 'http://bad-.com/', 'http://a..b/', 'http://_foo.com/']) {
+    for (const raw of [
+      'http://exa mple.com/',
+      'http://-bad.com/',
+      'http://bad-.com/',
+      'http://a..b/',
+      'http://_foo.com/',
+    ]) {
       expect(() => parseEndpoint(raw), raw).toThrowError(InvalidUrlError);
     }
   });
@@ -131,7 +158,11 @@ describe('Controller: add', () => {
   it('adds a profile with the derived id, default name and normalized origin and persists it', () => {
     const c = makeController();
     const p = c.add('http://127.0.0.1:7070/');
-    expect(p).toEqual({ id: '127-0-0-1-7070', name: '127.0.0.1:7070', origin: 'http://127.0.0.1:7070/' });
+    expect(p).toEqual({
+      id: '127-0-0-1-7070',
+      name: '127.0.0.1:7070',
+      origin: 'http://127.0.0.1:7070/',
+    });
     const st = c.state();
     expect(st.profiles).toEqual([p]);
     expect(st.activeId).toBe('');
@@ -142,7 +173,11 @@ describe('Controller: add', () => {
       profiles: Array<{ id: string; name: string; origin: string }>;
     };
     expect(onDisk.profiles).toEqual([
-      { id: '127-0-0-1-7070', name: '127.0.0.1:7070', origin: 'http://127.0.0.1:7070/' },
+      {
+        id: '127-0-0-1-7070',
+        name: '127.0.0.1:7070',
+        origin: 'http://127.0.0.1:7070/',
+      },
     ]);
   });
 
@@ -168,8 +203,16 @@ describe('Controller: add', () => {
     expect(second.origin).toBe('http://127.0.0.1:8080/');
     expect(second.id).toBe('127-0-0-1-8080');
     expect(c.state().profiles).toEqual([
-      { id: '127-0-0-1-7070', name: '127.0.0.1:7070', origin: 'http://127.0.0.1:7070/' },
-      { id: '127-0-0-1-8080', name: '127.0.0.1:8080', origin: 'http://127.0.0.1:8080/' },
+      {
+        id: '127-0-0-1-7070',
+        name: '127.0.0.1:7070',
+        origin: 'http://127.0.0.1:7070/',
+      },
+      {
+        id: '127-0-0-1-8080',
+        name: '127.0.0.1:8080',
+        origin: 'http://127.0.0.1:8080/',
+      },
     ]);
   });
 
@@ -183,7 +226,15 @@ describe('Controller: add', () => {
 
   it('rejects invalid URLs with a typed invalid-url error and persists nothing', () => {
     const c = makeController();
-    for (const raw of ['ftp://x/', 'http://user:pass@x/', 'http://x/?q=1', 'http://x#f', 'http://x/path', 'http://x:0/', 'http://x:']) {
+    for (const raw of [
+      'ftp://x/',
+      'http://user:pass@x/',
+      'http://x/?q=1',
+      'http://x#f',
+      'http://x/path',
+      'http://x:0/',
+      'http://x:',
+    ]) {
       const err = capture(() => c.add(raw));
       expect(err).toBeInstanceOf(InvalidUrlError);
       expect((err as InvalidUrlError).kind).toBe('invalid_url');
@@ -252,7 +303,9 @@ describe('Controller: remove / rename / setLastUsed / setActive / setUnread', ()
     const c = makeController();
     const p = c.add('http://127.0.0.1:7070/');
     c.setLastUsed(p.id);
-    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as { profiles: Array<{ lastUsed?: string }> };
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as {
+      profiles: Array<{ lastUsed?: string }>;
+    };
     expect(typeof onDisk.profiles[0].lastUsed).toBe('string');
     expect(() => c.setLastUsed('ghost')).toThrowError(UnknownProfileError);
   });
@@ -291,7 +344,11 @@ describe('Controller: reorder (rail drag-and-drop order)', () => {
     c.reorder(d.id, a.id);
     expect(c.state().profiles.map((p) => p.id)).toEqual([d.id, a.id, b.id]);
     const reloaded = new Controller({ persistPath: persistPath() });
-    expect(reloaded.state().profiles.map((p) => p.id)).toEqual([d.id, a.id, b.id]);
+    expect(reloaded.state().profiles.map((p) => p.id)).toEqual([
+      d.id,
+      a.id,
+      b.id,
+    ]);
   });
 
   it('moves a profile to the end when the target is null', () => {
@@ -372,7 +429,10 @@ describe('Controller: state snapshot + subscribe', () => {
     c.remove(p.id);
     unsubscribe();
     c.add('http://10.0.0.5:7070/');
-    expect(seen.map((e) => e.kind)).toEqual(['profiles-changed', 'profiles-changed']);
+    expect(seen.map((e) => e.kind)).toEqual([
+      'profiles-changed',
+      'profiles-changed',
+    ]);
   });
 
   it('a throwing subscriber does not break the mutation (fire-and-forget)', () => {
@@ -398,7 +458,9 @@ describe('Controller: persistence + corruption recovery', () => {
     expect(files).toContain('profiles.json.bak');
     expect(files.filter((f) => f.includes('.tmp-'))).toHaveLength(0);
     // The backup holds the previous good state.
-    const backup = JSON.parse(readFileSync(path.join(dir, 'profiles.json.bak'), 'utf8')) as {
+    const backup = JSON.parse(
+      readFileSync(path.join(dir, 'profiles.json.bak'), 'utf8'),
+    ) as {
       profiles: Array<{ id: string }>;
     };
     expect(backup.profiles.map((p) => p.id)).toEqual(['127-0-0-1-7070']);
@@ -412,7 +474,11 @@ describe('Controller: persistence + corruption recovery', () => {
     const reloaded = new Controller({ persistPath: persistPath() });
     expect(reloaded.state().profiles).toEqual([
       { id: '127-0-0-1-7070', name: 'Home', origin: 'http://127.0.0.1:7070/' },
-      { id: '10-0-0-5-7070', name: '10.0.0.5:7070', origin: 'http://10.0.0.5:7070/' },
+      {
+        id: '10-0-0-5-7070',
+        name: '10.0.0.5:7070',
+        origin: 'http://10.0.0.5:7070/',
+      },
     ]);
   });
 
@@ -427,7 +493,9 @@ describe('Controller: persistence + corruption recovery', () => {
     const c = makeController({ log });
     expect(c.state().profiles).toHaveLength(0);
     const files = readdirSync(dir);
-    expect(files.some((f) => f.startsWith('profiles.json.corrupt-'))).toBe(true);
+    expect(files.some((f) => f.startsWith('profiles.json.corrupt-'))).toBe(
+      true,
+    );
     expect(log).toHaveBeenCalledWith(expect.stringContaining('corrupt'));
   });
 
@@ -441,11 +509,15 @@ describe('Controller: persistence + corruption recovery', () => {
     // The .bak holds the previous good state (the state after the first
     // save), so recovery yields the pre-last-save profiles — Wails
     // Store.Save parity.
-    expect(reloaded.state().profiles.map((p) => p.id)).toEqual(['127-0-0-1-7070']);
+    expect(reloaded.state().profiles.map((p) => p.id)).toEqual([
+      '127-0-0-1-7070',
+    ]);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('recovered'));
     // The corrupt main file was moved aside; the backup is untouched.
     const files = readdirSync(dir);
-    expect(files.some((f) => f.startsWith('profiles.json.corrupt-'))).toBe(true);
+    expect(files.some((f) => f.startsWith('profiles.json.corrupt-'))).toBe(
+      true,
+    );
     expect(files).toContain('profiles.json.bak');
   });
 
@@ -488,7 +560,9 @@ describe('Controller: health slice (recording fake checker, no real HTTP)', () =
     const c = makeController();
     const a = c.add('http://127.0.0.1:7070/');
     const b = c.add('http://10.0.0.5:8080/');
-    const check = vi.fn((origin: string) => (origin.includes(':7070') ? 'up' : 'down'));
+    const check = vi.fn((origin: string) =>
+      origin.includes(':7070') ? 'up' : 'down',
+    );
     const events: ControllerEvent[] = [];
     c.subscribe((e) => events.push(e));
     await c.updateHealth({ check });
@@ -569,7 +643,9 @@ describe('Controller: close-to-tray preference', () => {
     // A legacy store file (profiles only, no closeToTray) loads with the default.
     writeFileSync(
       persistPath(),
-      JSON.stringify({ profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }] }),
+      JSON.stringify({
+        profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }],
+      }),
       'utf8',
     );
     expect(makeController().getCloseToTray()).toBe(true);
@@ -579,11 +655,17 @@ describe('Controller: close-to-tray preference', () => {
     const c = makeController();
     c.setCloseToTray(false);
     expect(c.getCloseToTray()).toBe(false);
-    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as { closeToTray?: boolean };
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as {
+      closeToTray?: boolean;
+    };
     expect(onDisk.closeToTray).toBe(false);
-    expect(new Controller({ persistPath: persistPath() }).getCloseToTray()).toBe(false);
+    expect(
+      new Controller({ persistPath: persistPath() }).getCloseToTray(),
+    ).toBe(false);
     c.setCloseToTray(true);
-    expect(new Controller({ persistPath: persistPath() }).getCloseToTray()).toBe(true);
+    expect(
+      new Controller({ persistPath: persistPath() }).getCloseToTray(),
+    ).toBe(true);
   });
 
   it('emits close-to-tray-changed on a change and stays silent on a no-op', () => {
@@ -603,7 +685,9 @@ describe('Controller: close-to-tray preference', () => {
     c.rename(p.id, 'Home');
     c.remove(p.id);
     expect(c.getCloseToTray()).toBe(false);
-    expect(new Controller({ persistPath: persistPath() }).getCloseToTray()).toBe(false);
+    expect(
+      new Controller({ persistPath: persistPath() }).getCloseToTray(),
+    ).toBe(false);
   });
 
   it('state() carries the preference and the deep copy protects it', () => {
@@ -623,7 +707,9 @@ describe('Controller: sync-alerts preference', () => {
     // A legacy store file (profiles only, no syncAlerts) loads with the default.
     writeFileSync(
       persistPath(),
-      JSON.stringify({ profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }] }),
+      JSON.stringify({
+        profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }],
+      }),
       'utf8',
     );
     expect(makeController().getSyncAlerts()).toBe(true);
@@ -633,11 +719,17 @@ describe('Controller: sync-alerts preference', () => {
     const c = makeController();
     c.setSyncAlerts(false); // flips the default (true)
     expect(c.getSyncAlerts()).toBe(false);
-    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as { syncAlerts?: boolean };
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as {
+      syncAlerts?: boolean;
+    };
     expect(onDisk.syncAlerts).toBe(false);
-    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(false);
+    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(
+      false,
+    );
     c.setSyncAlerts(true);
-    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(
+      true,
+    );
   });
 
   it('emits sync-alerts-changed on a change and stays silent on a no-op', () => {
@@ -657,7 +749,9 @@ describe('Controller: sync-alerts preference', () => {
     c.rename(p.id, 'Home');
     c.remove(p.id);
     expect(c.getSyncAlerts()).toBe(true);
-    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getSyncAlerts()).toBe(
+      true,
+    );
   });
 
   it('state() carries the preference and the deep copy protects it', () => {

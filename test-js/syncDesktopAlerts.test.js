@@ -47,7 +47,9 @@ async function refreshWith(messages) {
     mockFetch((url) => {
         // buildProxyUrl wraps every coordinator request in
         // /api/proxy?url=<encoded>, so match on the decoded inner URL.
-        const target = decodeURIComponent(String(url).match(/\/api\/proxy\?url=([^&]+)/)?.[1] ?? String(url));
+        const target = decodeURIComponent(
+            String(url).match(/\/api\/proxy\?url=([^&]+)/)?.[1] ?? String(url),
+        );
         if (target.endsWith('/api/sync/messages')) return messages;
         return [];
     });
@@ -85,7 +87,10 @@ describe('SyncManager — desktop alert title marker', () => {
     it('never sets the marker in a plain browser (no Electron, no ?desktop=1)', async () => {
         bootstrapDom();
         document.title = 'Φ phi — charon';
-        await refreshWith([msg('status_check', 'ok PHI_NOTIF'), msg('alarm_key', 'boom PHI_ALARM')]);
+        await refreshWith([
+            msg('status_check', 'ok PHI_NOTIF'),
+            msg('alarm_key', 'boom PHI_ALARM'),
+        ]);
         expect(document.title).toBe('Φ phi — charon');
     });
 

@@ -3,13 +3,16 @@
    Loaded ONLY by web/md.html (the pop-out window), never by index.html.
    Imports only pure helpers — no app singletons. Importing this module
    has no side effects; md.html calls initMdView() explicitly. */
-import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn } from './md-render.js';
+import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
 import { escapeHtml, getLastFolderName } from './util.js';
 // --- pure helpers (exported for tests) ---
 // decodeEventFrame splits a binary hub frame into its 1-byte type tag and
 // UTF-8 payload (the wire format of BroadcastAll: [type, ...json]).
 export function decodeEventFrame(bytes) {
-    return { type: bytes[0] ?? 0, payload: new TextDecoder().decode(bytes.subarray(1)) };
+    return {
+        type: bytes[0] ?? 0,
+        payload: new TextDecoder().decode(bytes.subarray(1)),
+    };
 }
 // mdEventMatchesPath reports whether a 0x07 md-changed event for `dir`
 // concerns the file at `path`.
@@ -28,14 +31,15 @@ const STATIC_PAGES = {
 async function initStaticPage(container, page) {
     const spec = STATIC_PAGES[page];
     if (!spec) {
-        container.innerHTML = '<div class="md-list-error">Unknown "page" query parameter.</div>';
+        container.innerHTML =
+            '<div class="md-list-error">Unknown "page" query parameter.</div>';
         return;
     }
     document.title = spec.title;
     try {
         const res = await fetch(spec.file);
         if (!res.ok)
-            throw new Error(await res.text() || `Failed to load ${spec.file}`);
+            throw new Error((await res.text()) || `Failed to load ${spec.file}`);
         const raw = await res.text();
         container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(raw)}</div>`;
         highlightCodeIn(container);
@@ -58,7 +62,8 @@ export function initMdView() {
     const path = params.get('path') || '';
     const cwd = params.get('cwd') || '';
     if (!path) {
-        container.innerHTML = '<div class="md-list-error">Missing "path" query parameter.</div>';
+        container.innerHTML =
+            '<div class="md-list-error">Missing "path" query parameter.</div>';
         return;
     }
     document.title = getLastFolderName(path);
@@ -73,7 +78,8 @@ export function initMdView() {
             if (requestId !== loadRequestId)
                 return;
             if (res.status === 401) {
-                container.innerHTML = '<div class="md-list-error">Session expired — log in in the main phi window, then reload this one.</div>';
+                container.innerHTML =
+                    '<div class="md-list-error">Session expired — log in in the main phi window, then reload this one.</div>';
                 return;
             }
             if (!res.ok) {
@@ -107,7 +113,9 @@ export function initMdView() {
         const ws = new WebSocket(`${proto}://${location.host}/ws/md-events`);
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
-        ws.onopen = () => { void loadAndRender(); };
+        ws.onopen = () => {
+            void loadAndRender();
+        };
         ws.onmessage = (e) => {
             if (!(e.data instanceof ArrayBuffer))
                 return;
@@ -118,11 +126,15 @@ export function initMdView() {
             try {
                 dir = JSON.parse(frame.payload)?.dir ?? null;
             }
-            catch (_) { /* refresh anyway */ }
+            catch (_) {
+                /* refresh anyway */
+            }
             if (mdEventMatchesPath(dir, path))
                 void loadAndRender();
         };
-        ws.onclose = () => { setTimeout(connect, 10000); };
+        ws.onclose = () => {
+            setTimeout(connect, 10000);
+        };
     }
     void loadAndRender();
     connect();

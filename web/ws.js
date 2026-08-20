@@ -34,10 +34,12 @@ export class PTYWebSocket {
             const msgType = view.getUint8(0);
             const payload = buffer.slice(1);
             switch (msgType) {
-                case 0x01: // PTY Output Stdout
+                case 0x01: {
+                    // PTY Output Stdout
                     const text = this.decoder.decode(payload, { stream: true });
                     this.onData(text);
                     break;
+                }
                 case 0x02: // Control JSON Message
                     try {
                         const dec = new TextDecoder('utf-8');
@@ -47,7 +49,7 @@ export class PTYWebSocket {
                             this.onControl(data);
                     }
                     catch (e) {
-                        console.error("[ws] Failed to parse control JSON", e);
+                        console.error('[ws] Failed to parse control JSON', e);
                     }
                     break;
                 case 0x03: // Pong
@@ -62,7 +64,7 @@ export class PTYWebSocket {
                             this.onControl({ type: 'pty-exited', ...data });
                     }
                     catch (e) {
-                        console.error("[ws] Failed to parse pty-exited JSON", e);
+                        console.error('[ws] Failed to parse pty-exited JSON', e);
                     }
                     break;
                 case 0x05: // server-shutdown
@@ -71,10 +73,13 @@ export class PTYWebSocket {
                         const jsonStr = dec.decode(payload);
                         const data = JSON.parse(jsonStr);
                         if (this.onControl)
-                            this.onControl({ type: 'server-shutdown', ...data });
+                            this.onControl({
+                                type: 'server-shutdown',
+                                ...data,
+                            });
                     }
                     catch (e) {
-                        console.error("[ws] Failed to parse server-shutdown JSON", e);
+                        console.error('[ws] Failed to parse server-shutdown JSON', e);
                     }
                     break;
                 case 0x06: // replay-complete
@@ -89,7 +94,7 @@ export class PTYWebSocket {
                             this.onControl({ type: 'md-changed', ...data });
                     }
                     catch (e) {
-                        console.error("[ws] Failed to parse md-changed JSON", e);
+                        console.error('[ws] Failed to parse md-changed JSON', e);
                     }
                     break;
             }

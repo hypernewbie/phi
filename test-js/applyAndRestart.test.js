@@ -51,17 +51,24 @@ describe('Phase 9 T3: Apply & restart now', () => {
     it('chains apply -> poll-until-done -> restart', async () => {
         // Mock fetch: first call returns apply-OK, then 2 progress polls
         // (downloading then done), then restart-OK.
-        const fakeFetch = vi.fn()
+        const fakeFetch = vi
+            .fn()
             .mockResolvedValueOnce({ ok: true }) // /api/update/apply
-            .mockResolvedValueOnce({ ok: true, json: async () => ({ phase: 'downloading', pct: 50 }) })
-            .mockResolvedValueOnce({ ok: true, json: async () => ({ phase: 'done' }) })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ phase: 'downloading', pct: 50 }),
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ phase: 'done' }),
+            })
             .mockResolvedValueOnce({ ok: true }); // /api/restart
         vi.stubGlobal('fetch', fakeFetch);
 
         const reloadSpy = vi.fn();
         Object.defineProperty(window, 'location', {
             configurable: true,
-            value: { reload: reloadSpy, href: 'http://localhost/' }
+            value: { reload: reloadSpy, href: 'http://localhost/' },
         });
         vi.useFakeTimers();
 
@@ -71,7 +78,12 @@ describe('Phase 9 T3: Apply & restart now', () => {
         const applyBtn = banner.querySelector('.update-banner-btn');
 
         // Kick off the chain (don't await)
-        const promise = mm._startUpdateApplyAndRestart('v0.8.2', restartBtn, applyBtn, banner);
+        const promise = mm._startUpdateApplyAndRestart(
+            'v0.8.2',
+            restartBtn,
+            applyBtn,
+            banner,
+        );
 
         // Let microtasks + the 500ms inter-poll delay advance
         await vi.advanceTimersByTimeAsync(600);
@@ -79,7 +91,7 @@ describe('Phase 9 T3: Apply & restart now', () => {
         await vi.advanceTimersByTimeAsync(3000); // for the 2500 reload fallback
 
         // Sequence check
-        const urls = fakeFetch.mock.calls.map(c => c[0]);
+        const urls = fakeFetch.mock.calls.map((c) => c[0]);
         expect(urls[0]).toBe('/api/update/apply');
         expect(urls[1]).toBe('/api/update/progress');
         expect(urls[2]).toBe('/api/update/progress');
@@ -95,9 +107,16 @@ describe('Phase 9 T3: Apply & restart now', () => {
     });
 
     it('does NOT restart if staging fails (phase=error)', async () => {
-        const fakeFetch = vi.fn()
+        const fakeFetch = vi
+            .fn()
             .mockResolvedValueOnce({ ok: true }) // /api/update/apply
-            .mockResolvedValueOnce({ ok: true, json: async () => ({ phase: 'error', error: 'checksum mismatch' }) });
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    phase: 'error',
+                    error: 'checksum mismatch',
+                }),
+            });
         vi.stubGlobal('fetch', fakeFetch);
 
         const mm = makeMarkdownManager();
@@ -105,7 +124,12 @@ describe('Phase 9 T3: Apply & restart now', () => {
         const restartBtn = banner.querySelector('.update-banner-btn-restart');
         const applyBtn = banner.querySelector('.update-banner-btn');
 
-        await mm._startUpdateApplyAndRestart('v0.8.2', restartBtn, applyBtn, banner);
+        await mm._startUpdateApplyAndRestart(
+            'v0.8.2',
+            restartBtn,
+            applyBtn,
+            banner,
+        );
 
         // Exactly apply + one progress poll: the error phase must stop the
         // loop immediately (web/markdown.js:673-674), not fall through to
@@ -119,7 +143,7 @@ describe('Phase 9 T3: Apply & restart now', () => {
         expect(applyBtn.disabled).toBe(false);
 
         // /api/restart was NOT called
-        const urls = fakeFetch.mock.calls.map(c => c[0]);
+        const urls = fakeFetch.mock.calls.map((c) => c[0]);
         expect(urls).not.toContain('/api/restart');
 
         vi.unstubAllGlobals();
@@ -128,7 +152,7 @@ describe('Phase 9 T3: Apply & restart now', () => {
     it('does NOT restart if /api/update/apply itself errors', async () => {
         const fakeFetch = vi.fn().mockResolvedValueOnce({
             ok: false,
-            text: async () => 'Forbidden: install method not eligible'
+            text: async () => 'Forbidden: install method not eligible',
         });
         vi.stubGlobal('fetch', fakeFetch);
 
@@ -137,13 +161,18 @@ describe('Phase 9 T3: Apply & restart now', () => {
         const restartBtn = banner.querySelector('.update-banner-btn-restart');
         const applyBtn = banner.querySelector('.update-banner-btn');
 
-        await mm._startUpdateApplyAndRestart('v0.8.2', restartBtn, applyBtn, banner);
+        await mm._startUpdateApplyAndRestart(
+            'v0.8.2',
+            restartBtn,
+            applyBtn,
+            banner,
+        );
 
         expect(restartBtn.disabled).toBe(false);
         const progress = banner.querySelector('.update-banner-progress');
         expect(progress.textContent).toContain('Forbidden');
 
-        const urls = fakeFetch.mock.calls.map(c => c[0]);
+        const urls = fakeFetch.mock.calls.map((c) => c[0]);
         expect(urls).not.toContain('/api/restart');
 
         vi.unstubAllGlobals();
@@ -168,19 +197,23 @@ describe('Phase 9 T3: Apply & restart now', () => {
 describe('_formatProgress', () => {
     it('formats the staged phase with the kept-binary path', () => {
         const mm = makeMarkdownManager();
-        expect(mm._formatProgress({ phase: 'done', old_path: '/opt/phi/phi.old' }))
-            .toBe('Staged. Old binary kept at /opt/phi/phi.old.');
+        expect(
+            mm._formatProgress({ phase: 'done', old_path: '/opt/phi/phi.old' }),
+        ).toBe('Staged. Old binary kept at /opt/phi/phi.old.');
     });
 
     it('falls back to phi.old when old_path is missing', () => {
         const mm = makeMarkdownManager();
-        expect(mm._formatProgress({ phase: 'done' })).toBe('Staged. Old binary kept at phi.old.');
+        expect(mm._formatProgress({ phase: 'done' })).toBe(
+            'Staged. Old binary kept at phi.old.',
+        );
     });
 
     it('formats the error phase with the server-provided message', () => {
         const mm = makeMarkdownManager();
-        expect(mm._formatProgress({ phase: 'error', error: 'checksum mismatch' }))
-            .toBe('Error: checksum mismatch');
+        expect(
+            mm._formatProgress({ phase: 'error', error: 'checksum mismatch' }),
+        ).toBe('Error: checksum mismatch');
     });
 
     it('falls back to "unknown" when the error phase has no message', () => {

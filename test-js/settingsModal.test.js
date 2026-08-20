@@ -34,14 +34,15 @@ function makeAppDom() {
 function buildApp(overrides = {}) {
     const app = Object.create(App.prototype);
     // Use 'in' so explicit null/undefined overrides are respected.
-    app.versionInfo = 'versionInfo' in overrides
-        ? overrides.versionInfo
-        : {
-            version: '0.12.1',
-            commit: 'deadbeef1234567',
-            date: '2026-07-19T16:00:00Z',
-            buildSource: 'npm',
-        };
+    app.versionInfo =
+        'versionInfo' in overrides
+            ? overrides.versionInfo
+            : {
+                  version: '0.12.1',
+                  commit: 'deadbeef1234567',
+                  date: '2026-07-19T16:00:00Z',
+                  buildSource: 'npm',
+              };
     app.hostname = overrides.hostname || 'hammond';
     app.uiFontFamily = overrides.uiFontFamily || '';
     app.uiFontSize = overrides.uiFontSize || 0;
@@ -72,8 +73,12 @@ describe('Settings modal — trigger', () => {
         // Spot-check a known color renders with the right --swatch var.
         // We don't know the hex from outside the module, but the click
         // handler wires it through applyAccentTheme, which is spied.
-        const purpleSwatch = Array.from(swatches).find((s) => s.dataset.color === 'purple');
-        const copperSwatch = Array.from(swatches).find((s) => s.dataset.color === 'copper');
+        const purpleSwatch = Array.from(swatches).find(
+            (s) => s.dataset.color === 'purple',
+        );
+        const copperSwatch = Array.from(swatches).find(
+            (s) => s.dataset.color === 'copper',
+        );
         expect(purpleSwatch).toBeTruthy();
         expect(copperSwatch).toBeTruthy();
         expect(purpleSwatch.style.getPropertyValue('--swatch')).toMatch(/^#/);
@@ -86,9 +91,13 @@ describe('Settings modal — trigger', () => {
         const app = buildApp();
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const cyan = document.querySelector('.settings-swatch[data-color="cyan"]');
+        const cyan = document.querySelector(
+            '.settings-swatch[data-color="cyan"]',
+        );
         expect(cyan.getAttribute('aria-checked')).toBe('true');
-        const purple = document.querySelector('.settings-swatch[data-color="purple"]');
+        const purple = document.querySelector(
+            '.settings-swatch[data-color="purple"]',
+        );
         expect(purple.getAttribute('aria-checked')).toBe('false');
         document.documentElement.removeAttribute('data-theme-color');
     });
@@ -98,7 +107,9 @@ describe('Settings modal — trigger', () => {
         const app = buildApp();
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const amber = document.querySelector('.settings-swatch[data-color="amber"]');
+        const amber = document.querySelector(
+            '.settings-swatch[data-color="amber"]',
+        );
         amber.click();
         expect(app.applyAccentTheme).toHaveBeenCalledWith('amber');
         expect(app.saveTheme).toHaveBeenCalledWith('amber');
@@ -120,18 +131,40 @@ describe('Settings modal — trigger', () => {
         expect(confirmInput).toBeTruthy();
         expect(confirmInput.placeholder).toBe('Confirm new password');
         // State dot renders off, primary button says "Set password".
-        expect(document.querySelector('.settings-access-dot.is-off')).toBeTruthy();
+        expect(
+            document.querySelector('.settings-access-dot.is-off'),
+        ).toBeTruthy();
         expect(document.querySelector('.settings-access-dot.is-on')).toBeNull();
-        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
-        expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
+        expect(
+            document.querySelector('.settings-access-state-text').textContent,
+        ).toBe('Disabled');
+        expect(
+            document.querySelector('.settings-access-primary').textContent,
+        ).toBe('Set password');
         // Remove link is hidden when password is not set.
-        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(true);
-        expect(document.querySelector('.settings-access-confirm-remove').classList.contains('hidden')).toBe(true);
+        expect(
+            document
+                .querySelector('.settings-access-remove-link')
+                .classList.contains('hidden'),
+        ).toBe(true);
+        expect(
+            document
+                .querySelector('.settings-access-confirm-remove')
+                .classList.contains('hidden'),
+        ).toBe(true);
         // Hint visible, no error yet.
-        expect(document.querySelector('.settings-access-hint').textContent).toMatch(/characters/);
-        expect(document.querySelector('.settings-access-error').textContent).toBe('');
+        expect(
+            document.querySelector('.settings-access-hint').textContent,
+        ).toMatch(/characters/);
+        expect(
+            document.querySelector('.settings-access-error').textContent,
+        ).toBe('');
         // Existing primary Config close action remains present.
-        expect(Array.from(document.querySelectorAll('.settings-footer button')).some((b) => b.textContent === 'Close')).toBe(true);
+        expect(
+            Array.from(
+                document.querySelectorAll('.settings-footer button'),
+            ).some((b) => b.textContent === 'Close'),
+        ).toBe(true);
     });
 
     it('renders Update + Remove controls when access protection is enabled', async () => {
@@ -140,12 +173,26 @@ describe('Settings modal — trigger', () => {
         app.accessAuthEnabled = true;
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        expect(document.querySelector('.settings-access-dot.is-on')).toBeTruthy();
-        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Enabled');
-        expect(document.querySelector('.settings-access-primary').textContent).toBe('Update password');
+        expect(
+            document.querySelector('.settings-access-dot.is-on'),
+        ).toBeTruthy();
+        expect(
+            document.querySelector('.settings-access-state-text').textContent,
+        ).toBe('Enabled');
+        expect(
+            document.querySelector('.settings-access-primary').textContent,
+        ).toBe('Update password');
         // Remove link visible (but Confirm button hidden until clicked).
-        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(false);
-        expect(document.querySelector('.settings-access-confirm-remove').classList.contains('hidden')).toBe(true);
+        expect(
+            document
+                .querySelector('.settings-access-remove-link')
+                .classList.contains('hidden'),
+        ).toBe(false);
+        expect(
+            document
+                .querySelector('.settings-access-confirm-remove')
+                .classList.contains('hidden'),
+        ).toBe(true);
     });
 
     it('version block renders from app.versionInfo, no fetch', async () => {
@@ -153,7 +200,14 @@ describe('Settings modal — trigger', () => {
         const fetchSpy = mockFetch(() => {
             throw new Error('no fetch expected');
         });
-        const app = buildApp({ versionInfo: { version: '0.99.0', commit: 'abc1234567', date: '2026-07-20', buildSource: 'local' } });
+        const app = buildApp({
+            versionInfo: {
+                version: '0.99.0',
+                commit: 'abc1234567',
+                date: '2026-07-20',
+                buildSource: 'local',
+            },
+        });
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
         const ver = document.querySelector('.settings-version');
@@ -188,7 +242,9 @@ describe('Settings modal — live apply', () => {
             sel.value = 'Inter, system-ui, sans-serif';
             sel.dispatchEvent(new Event('change', { bubbles: true }));
             expect(app.uiFontFamily).toBe('Inter, system-ui, sans-serif');
-            expect(document.body.style.fontFamily).toBe('Inter, system-ui, sans-serif');
+            expect(document.body.style.fontFamily).toBe(
+                'Inter, system-ui, sans-serif',
+            );
             // Debounced persist: advance the fake clock past the 300ms debounce.
             vi.advanceTimersByTime(400);
             await Promise.resolve();
@@ -229,8 +285,12 @@ describe('Settings modal — live apply', () => {
             const select = document.getElementById('settings-term-font');
             select.value = "'Fira Code', ui-monospace, monospace";
             select.dispatchEvent(new Event('change', { bubbles: true }));
-            expect(app.terminalFontFamily).toBe("'Fira Code', ui-monospace, monospace");
-            expect(app.tabManager.applyFontToAllActiveTerminals).toHaveBeenCalledWith("'Fira Code', ui-monospace, monospace");
+            expect(app.terminalFontFamily).toBe(
+                "'Fira Code', ui-monospace, monospace",
+            );
+            expect(
+                app.tabManager.applyFontToAllActiveTerminals,
+            ).toHaveBeenCalledWith("'Fira Code', ui-monospace, monospace");
             vi.advanceTimersByTime(400);
             await Promise.resolve();
             expect(app.persistAppearance).toHaveBeenCalled();
@@ -248,7 +308,9 @@ describe('Settings modal — live apply', () => {
         select.value = '';
         select.dispatchEvent(new Event('change', { bubbles: true }));
         expect(app.terminalFontFamily).toBe('');
-        expect(app.tabManager.applyFontToAllActiveTerminals).toHaveBeenCalledWith('JetBrains Mono, monospace');
+        expect(
+            app.tabManager.applyFontToAllActiveTerminals,
+        ).toHaveBeenCalledWith('JetBrains Mono, monospace');
     });
 
     it('reuse shell tab checkbox POSTs to /api/config/use-existing-terminal-tab', async () => {
@@ -276,7 +338,9 @@ describe('Settings modal — close behavior', () => {
         const app = buildApp();
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const closeBtn = document.querySelector('.settings-modal .modal-close-btn');
+        const closeBtn = document.querySelector(
+            '.settings-modal .modal-close-btn',
+        );
         closeBtn.click();
         await new Promise((r) => setTimeout(r, 0));
         expect(document.querySelector('.settings-overlay')).toBeNull();
@@ -287,7 +351,9 @@ describe('Settings modal — close behavior', () => {
         const app = buildApp();
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
         await new Promise((r) => setTimeout(r, 0));
         expect(document.querySelector('.settings-overlay')).toBeNull();
     });
@@ -319,7 +385,9 @@ describe('Settings modal — access password flow', () => {
         app.accessAuthEnabled = false;
         // openSettingsModal reaches into the auth.js module directly, so spy via global.
         const authModule = await import('../web/auth.js');
-        const spy = vi.spyOn(authModule, 'setAccessPassword').mockResolvedValue({ enabled: true });
+        const spy = vi
+            .spyOn(authModule, 'setAccessPassword')
+            .mockResolvedValue({ enabled: true });
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
         document.getElementById('settings-access-new').value = 'short';
@@ -329,7 +397,11 @@ describe('Settings modal — access password flow', () => {
         expect(spy).not.toHaveBeenCalled();
         const err = document.querySelector('.settings-access-error');
         expect(err.textContent).toMatch(/characters/);
-        expect(document.getElementById('settings-access-new').classList.contains('is-invalid')).toBe(true);
+        expect(
+            document
+                .getElementById('settings-access-new')
+                .classList.contains('is-invalid'),
+        ).toBe(true);
         spy.mockRestore();
     });
 
@@ -338,11 +410,15 @@ describe('Settings modal — access password flow', () => {
         const app = buildApp();
         app.accessAuthEnabled = false;
         const authModule = await import('../web/auth.js');
-        const spy = vi.spyOn(authModule, 'setAccessPassword').mockResolvedValue({ enabled: true });
+        const spy = vi
+            .spyOn(authModule, 'setAccessPassword')
+            .mockResolvedValue({ enabled: true });
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        document.getElementById('settings-access-new').value = 'correct horse battery staple';
-        document.getElementById('settings-access-confirm').value = 'different password value';
+        document.getElementById('settings-access-new').value =
+            'correct horse battery staple';
+        document.getElementById('settings-access-confirm').value =
+            'different password value';
         document.querySelector('.settings-access-primary').click();
         await new Promise((r) => setTimeout(r, 0));
         expect(spy).not.toHaveBeenCalled();
@@ -361,12 +437,20 @@ describe('Settings modal — access password flow', () => {
         document.getElementById('settings-access-confirm').value = 'short';
         document.querySelector('.settings-access-primary').click();
         await new Promise((r) => setTimeout(r, 0));
-        expect(document.querySelector('.settings-access-error').textContent).not.toBe('');
+        expect(
+            document.querySelector('.settings-access-error').textContent,
+        ).not.toBe('');
         // Typing into either input clears the error.
         const evt = new Event('input', { bubbles: true });
         document.getElementById('settings-access-new').dispatchEvent(evt);
-        expect(document.querySelector('.settings-access-error').textContent).toBe('');
-        expect(document.getElementById('settings-access-new').classList.contains('is-invalid')).toBe(false);
+        expect(
+            document.querySelector('.settings-access-error').textContent,
+        ).toBe('');
+        expect(
+            document
+                .getElementById('settings-access-new')
+                .classList.contains('is-invalid'),
+        ).toBe(false);
     });
 
     it('remove-link is hidden when password not set; clicking it reveals Confirm; clicking Confirm calls clearAccessPassword', async () => {
@@ -374,12 +458,18 @@ describe('Settings modal — access password flow', () => {
         const app = buildApp();
         app.accessAuthEnabled = true;
         const authModule = await import('../web/auth.js');
-        const clearSpy = vi.spyOn(authModule, 'clearAccessPassword').mockResolvedValue({ enabled: false });
+        const clearSpy = vi
+            .spyOn(authModule, 'clearAccessPassword')
+            .mockResolvedValue({ enabled: false });
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
 
-        const removeLink = document.querySelector('.settings-access-remove-link');
-        const confirmBtn = document.querySelector('.settings-access-confirm-remove');
+        const removeLink = document.querySelector(
+            '.settings-access-remove-link',
+        );
+        const confirmBtn = document.querySelector(
+            '.settings-access-confirm-remove',
+        );
         expect(removeLink.classList.contains('hidden')).toBe(false);
         expect(confirmBtn.classList.contains('hidden')).toBe(true);
 
@@ -391,10 +481,20 @@ describe('Settings modal — access password flow', () => {
         await new Promise((r) => setTimeout(r, 0));
         expect(clearSpy).toHaveBeenCalledTimes(1);
         // After success: state flips to Disabled, primary reverts to Set password, link hidden again.
-        expect(document.querySelector('.settings-access-dot.is-off')).toBeTruthy();
-        expect(document.querySelector('.settings-access-state-text').textContent).toBe('Disabled');
-        expect(document.querySelector('.settings-access-primary').textContent).toBe('Set password');
-        expect(document.querySelector('.settings-access-remove-link').classList.contains('hidden')).toBe(true);
+        expect(
+            document.querySelector('.settings-access-dot.is-off'),
+        ).toBeTruthy();
+        expect(
+            document.querySelector('.settings-access-state-text').textContent,
+        ).toBe('Disabled');
+        expect(
+            document.querySelector('.settings-access-primary').textContent,
+        ).toBe('Set password');
+        expect(
+            document
+                .querySelector('.settings-access-remove-link')
+                .classList.contains('hidden'),
+        ).toBe(true);
         clearSpy.mockRestore();
     });
 
@@ -408,8 +508,12 @@ describe('Settings modal — access password flow', () => {
         app.accessAuthEnabled = true;
         app.openSettingsModal();
         await new Promise((r) => setTimeout(r, 0));
-        const confirmBtn = document.querySelector('.settings-access-confirm-remove');
-        const removeLink = document.querySelector('.settings-access-remove-link');
+        const confirmBtn = document.querySelector(
+            '.settings-access-confirm-remove',
+        );
+        const removeLink = document.querySelector(
+            '.settings-access-remove-link',
+        );
         // The Confirm button is initially hidden — via the .hidden CLASS,
         // not the hidden ATTRIBUTE. Without this, it would render in big
         // red despite `el.hidden = true`.

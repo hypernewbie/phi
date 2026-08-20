@@ -10,7 +10,7 @@ function makeTab(over = {}) {
         term: { write: vi.fn() },
         termContainer: document.createElement('div'),
         tabEl: document.createElement('div'),
-        ...over
+        ...over,
     };
 }
 
@@ -21,7 +21,8 @@ describe('Disconnect Banner UX', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         // Setup mock DOM
-        document.body.innerHTML = '<div id="disconnect-banner" class="disconnect-banner hidden"></div>';
+        document.body.innerHTML =
+            '<div id="disconnect-banner" class="disconnect-banner hidden"></div>';
         banner = document.getElementById('disconnect-banner');
 
         tabManager = Object.create(TabManager.prototype);
@@ -93,9 +94,17 @@ describe('Disconnect Banner UX', () => {
         tabManager.tabs.set(tab3.paneId, tab3);
 
         tabManager.reconnectAllDead();
-        expect(tabManager.reconnectTab).toHaveBeenCalledWith(tab1, { auto: false });
-        expect(tabManager.reconnectTab).not.toHaveBeenCalledWith(tab2, expect.any(Object));
-        expect(tabManager.reconnectTab).not.toHaveBeenCalledWith(tab3, expect.any(Object));
+        expect(tabManager.reconnectTab).toHaveBeenCalledWith(tab1, {
+            auto: false,
+        });
+        expect(tabManager.reconnectTab).not.toHaveBeenCalledWith(
+            tab2,
+            expect.any(Object),
+        );
+        expect(tabManager.reconnectTab).not.toHaveBeenCalledWith(
+            tab3,
+            expect.any(Object),
+        );
     });
 
     it('banner can be dismissed and re-arms on new death', () => {
@@ -128,7 +137,9 @@ describe('Disconnect Banner UX', () => {
 
         const overlay = tab.termContainer.querySelector('.reconnect-overlay');
         expect(overlay).not.toBeNull();
-        expect(overlay.querySelector('.reconnect-msg').textContent).toBe('Session expired (PTY gone)');
+        expect(overlay.querySelector('.reconnect-msg').textContent).toBe(
+            'Session expired (PTY gone)',
+        );
         expect(overlay.querySelector('.reconnect-btn')).toBeNull(); // No reconnect button
         expect(overlay.querySelector('.restart-btn')).not.toBeNull(); // Restart button present
     });
@@ -139,7 +150,9 @@ describe('Disconnect Banner UX', () => {
 
         const overlay = tab.termContainer.querySelector('.reconnect-overlay');
         expect(overlay).not.toBeNull();
-        expect(overlay.querySelector('.reconnect-msg').textContent).toBe('Connection lost');
+        expect(overlay.querySelector('.reconnect-msg').textContent).toBe(
+            'Connection lost',
+        );
         expect(overlay.querySelector('.reconnect-btn')).not.toBeNull(); // Reconnect button present
         expect(overlay.querySelector('.restart-btn')).not.toBeNull();
     });

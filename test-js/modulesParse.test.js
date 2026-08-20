@@ -80,18 +80,23 @@ describe('no TDZ trap between term.open() and the next const tabInfo in createTa
         // Find the slice AFTER the first `term.open(termContainer)`
         // (that's the spot where the original bug lived).
         const termOpenIdx = body.indexOf('term.open(termContainer)');
-        expect(termOpenIdx, 'no term.open(termContainer) inside createTab()').toBeGreaterThan(0);
+        expect(
+            termOpenIdx,
+            'no term.open(termContainer) inside createTab()',
+        ).toBeGreaterThan(0);
         const afterOpen = body.slice(termOpenIdx);
         // Find the next `const tabInfo` after that.
         const nextDecl = afterOpen.indexOf('const tabInfo');
-        expect(nextDecl, 'no const tabInfo after term.open()').toBeGreaterThan(0);
+        expect(nextDecl, 'no const tabInfo after term.open()').toBeGreaterThan(
+            0,
+        );
         const slice = afterOpen.slice(0, nextDecl);
 
         // Strip line + block comments so the heuristic doesn't false-fire
         // on documentation that mentions `tabInfo.X = ...`.
         const stripped = slice
             .split('\n')
-            .map(l => l.replace(/\/\/.*$/, ''))
+            .map((l) => l.replace(/\/\/.*$/, ''))
             .join('\n')
             .replace(/\/\*[\s\S]*?\*\//g, '');
         expect(

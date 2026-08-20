@@ -124,7 +124,7 @@ describe('markdown paste-from-system-clipboard', () => {
             expect(fetchMock).not.toHaveBeenCalled();
             expect(app.showToast).toHaveBeenCalledWith(
                 expect.stringMatching(/Add a markdown directory/i),
-                expect.objectContaining({ type: 'error' })
+                expect.objectContaining({ type: 'error' }),
             );
         });
     });
@@ -132,10 +132,16 @@ describe('markdown paste-from-system-clipboard', () => {
     describe('happy path', () => {
         it('reads clipboard, opens modal pre-filled, POSTs to /api/markdown/paste on Save', async () => {
             const { mm, app } = makeMm();
-            const { readText } = stubClipboard(async () => '# Pasted heading\n\nbody text');
+            const { readText } = stubClipboard(
+                async () => '# Pasted heading\n\nbody text',
+            );
             fetchMock.mockImplementation((url, opts) => {
                 if (String(url) === '/api/markdown/paste') {
-                    return { ok: true, status: 200, json: async () => ({ name: 'pasted-2026-08-06.md' }) };
+                    return {
+                        ok: true,
+                        status: 200,
+                        json: async () => ({ name: 'pasted-2026-08-06.md' }),
+                    };
                 }
                 return undefined;
             });
@@ -146,17 +152,23 @@ describe('markdown paste-from-system-clipboard', () => {
             expect(readText).toHaveBeenCalledTimes(1);
             // Modal is open and pre-filled with the clipboard text.
             expect(mm.pasteModal.classList.contains('hidden')).toBe(false);
-            expect(mm.pasteModalContent.value).toBe('# Pasted heading\n\nbody text');
+            expect(mm.pasteModalContent.value).toBe(
+                '# Pasted heading\n\nbody text',
+            );
             // Hint shows the success path (not the blocked-fallback hint).
             expect(mm.pasteModalHint.textContent).toMatch(/Pasting/);
             // Default filename is the timestamped form.
-            expect(mm.pasteModalName.value).toMatch(/^pasted-\d{4}-\d{2}-\d{2}-\d{6}\.md$/);
+            expect(mm.pasteModalName.value).toMatch(
+                /^pasted-\d{4}-\d{2}-\d{2}-\d{6}\.md$/,
+            );
             // Single configured dir is rendered as plain text (no <select>).
             expect(mm.pasteModalDir.querySelector('select')).toBeNull();
             expect(mm.pasteModalDir.textContent).toBe('./docs');
 
             // Submit -> fetch, close, refresh, toast.
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();
@@ -176,7 +188,7 @@ describe('markdown paste-from-system-clipboard', () => {
             expect(mm.refreshFiles).toHaveBeenCalledTimes(1);
             expect(app.showToast).toHaveBeenCalledWith(
                 expect.stringMatching(/Pasted as "pasted-2026-08-06\.md"/),
-                expect.objectContaining({ type: 'info' })
+                expect.objectContaining({ type: 'info' }),
             );
         });
 
@@ -196,8 +208,14 @@ describe('markdown paste-from-system-clipboard', () => {
             await mm._pasteFromSystemClipboard();
             // User types a name without .md
             mm.pasteModalName.value = 'meeting-notes';
-            fetchMock.mockReturnValue({ ok: true, status: 200, json: async () => ({ name: 'meeting-notes.md' }) });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValue({
+                ok: true,
+                status: 200,
+                json: async () => ({ name: 'meeting-notes.md' }),
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             const body = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -208,15 +226,21 @@ describe('markdown paste-from-system-clipboard', () => {
             const { mm, app } = makeMm();
             stubClipboard(async () => 'x');
             await mm._pasteFromSystemClipboard();
-            fetchMock.mockReturnValue({ ok: true, status: 200, json: async () => ({ name: 'meeting.md' }) });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValue({
+                ok: true,
+                status: 200,
+                json: async () => ({ name: 'meeting.md' }),
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();
             expect(app.showToast).toHaveBeenCalledWith(
                 expect.stringMatching(/Pasted as "meeting\.md"/),
-                expect.anything()
+                expect.anything(),
             );
         });
     });
@@ -224,7 +248,9 @@ describe('markdown paste-from-system-clipboard', () => {
     describe('clipboard blocked / empty', () => {
         it('opens the modal with empty textarea + fallback hint when readText throws', async () => {
             const { mm } = makeMm();
-            stubClipboard(async () => { throw new Error('permission denied'); });
+            stubClipboard(async () => {
+                throw new Error('permission denied');
+            });
             await mm._pasteFromSystemClipboard();
             expect(mm.pasteModal.classList.contains('hidden')).toBe(false);
             expect(mm.pasteModalContent.value).toBe('');
@@ -263,7 +289,9 @@ describe('markdown paste-from-system-clipboard', () => {
             await mm._pasteFromSystemClipboard();
             // Erase the clipboard-prefilled content.
             mm.pasteModalContent.value = '   ';
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             expect(fetchMock).not.toHaveBeenCalled();
             expect(mm.pasteModalError.textContent).toMatch(/Content is empty/);
             // Modal stays open.
@@ -274,16 +302,22 @@ describe('markdown paste-from-system-clipboard', () => {
             const { mm } = makeMm();
             await mm._pasteFromSystemClipboard();
             mm.pasteModalName.value = '';
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             expect(fetchMock).not.toHaveBeenCalled();
-            expect(mm.pasteModalError.textContent).toMatch(/Filename is required/);
+            expect(mm.pasteModalError.textContent).toMatch(
+                /Filename is required/,
+            );
         });
 
         it('rejects filenames with path separators with inline error (no POST)', async () => {
             const { mm } = makeMm();
             await mm._pasteFromSystemClipboard();
             mm.pasteModalName.value = '../escape/notes';
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             expect(fetchMock).not.toHaveBeenCalled();
             expect(mm.pasteModalError.textContent).toMatch(/path separators/);
         });
@@ -295,8 +329,14 @@ describe('markdown paste-from-system-clipboard', () => {
             stubClipboard(async () => 'x');
             await mm._pasteFromSystemClipboard();
             // First POST -> 409 (file exists, overwrite:false was sent).
-            fetchMock.mockReturnValueOnce({ ok: false, status: 409, text: async () => 'File already exists' });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValueOnce({
+                ok: false,
+                status: 409,
+                text: async () => 'File already exists',
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();
@@ -306,7 +346,7 @@ describe('markdown paste-from-system-clipboard', () => {
             expect(mm.refreshFiles).not.toHaveBeenCalled();
             expect(app.showToast).not.toHaveBeenCalledWith(
                 expect.stringMatching(/Pasted as/),
-                expect.anything()
+                expect.anything(),
             );
             // Modal stays open; button label changed; inline error set.
             expect(mm.pasteModal.classList.contains('hidden')).toBe(false);
@@ -317,8 +357,14 @@ describe('markdown paste-from-system-clipboard', () => {
             expect(firstBody.overwrite).toBe(false);
 
             // Second POST -> 200. overwrite:true this time.
-            fetchMock.mockReturnValueOnce({ ok: true, status: 200, json: async () => ({ name: 'pasted-2026-08-06.md' }) });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValueOnce({
+                ok: true,
+                status: 200,
+                json: async () => ({ name: 'pasted-2026-08-06.md' }),
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();
@@ -334,22 +380,36 @@ describe('markdown paste-from-system-clipboard', () => {
             const { mm } = makeMm();
             stubClipboard(async () => 'x');
             await mm._pasteFromSystemClipboard();
-            fetchMock.mockReturnValueOnce({ ok: false, status: 409, text: async () => 'File already exists' });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValueOnce({
+                ok: false,
+                status: 409,
+                text: async () => 'File already exists',
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             expect(mm.pasteModalSave.textContent).toBe('Overwrite');
 
             // User edits the filename.
             mm.pasteModalName.value = 'fresh-name.md';
-            mm.pasteModalName.dispatchEvent(new Event('input', { bubbles: true }));
+            mm.pasteModalName.dispatchEvent(
+                new Event('input', { bubbles: true }),
+            );
             expect(mm.pasteModalSave.textContent).toBe('Save');
             expect(mm._pasteConflict).toBe(false);
             expect(mm.pasteModalError.textContent).toBe('');
 
             // Next submit: overwrite:false again.
-            fetchMock.mockReturnValueOnce({ ok: true, status: 200, json: async () => ({ name: 'fresh-name.md' }) });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValueOnce({
+                ok: true,
+                status: 200,
+                json: async () => ({ name: 'fresh-name.md' }),
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             const body = JSON.parse(fetchMock.mock.calls[1][1].body);
@@ -363,8 +423,14 @@ describe('markdown paste-from-system-clipboard', () => {
             const { mm } = makeMm();
             stubClipboard(async () => 'x');
             await mm._pasteFromSystemClipboard();
-            fetchMock.mockReturnValue({ ok: false, status: 500, text: async () => 'internal error' });
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValue({
+                ok: false,
+                status: 500,
+                text: async () => 'internal error',
+            });
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             await Promise.resolve();
             await Promise.resolve();
             expect(mm.pasteModal.classList.contains('hidden')).toBe(false);
@@ -391,13 +457,25 @@ describe('markdown paste-from-system-clipboard', () => {
             await mm._pasteFromSystemClipboard();
             // Make the first POST hang.
             let resolveFirst;
-            fetchMock.mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }));
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            fetchMock.mockReturnValueOnce(
+                new Promise((r) => {
+                    resolveFirst = r;
+                }),
+            );
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             // Second submit while the first is still pending.
-            mm.pasteModalForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            mm.pasteModalForm.dispatchEvent(
+                new Event('submit', { cancelable: true, bubbles: true }),
+            );
             expect(fetchMock).toHaveBeenCalledTimes(1);
             // Resolve and let microtasks run.
-            resolveFirst({ ok: true, status: 200, json: async () => ({ name: 'x.md' }) });
+            resolveFirst({
+                ok: true,
+                status: 200,
+                json: async () => ({ name: 'x.md' }),
+            });
             await Promise.resolve();
             await Promise.resolve();
             await Promise.resolve();

@@ -28,7 +28,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it } from 'vitest';
-import { badgeText, boot, canonicalHostname, greekGlyphForHostname, identityLabel, render } from '../src/renderer.js';
+import {
+  badgeText,
+  boot,
+  canonicalHostname,
+  greekGlyphForHostname,
+  identityLabel,
+  render,
+} from '../src/renderer.js';
 import type { RailState } from '../src/electron.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,8 +46,22 @@ const preloadSource = readFileSync(path.join(srcDir, 'preload.ts'), 'utf8');
 
 const SNAPSHOT: RailState = {
   profiles: [
-    { id: 'a', name: 'Alpha Phi', origin: 'http://127.0.0.1:7070/', hostname: 'charon.local', accent: '#e76f51', cpu: 62 },
-    { id: 'b', name: 'Beta', origin: 'http://10.0.0.5:8080/', hostname: '', accent: '', cpu: null },
+    {
+      id: 'a',
+      name: 'Alpha Phi',
+      origin: 'http://127.0.0.1:7070/',
+      hostname: 'charon.local',
+      accent: '#e76f51',
+      cpu: 62,
+    },
+    {
+      id: 'b',
+      name: 'Beta',
+      origin: 'http://10.0.0.5:8080/',
+      hostname: '',
+      accent: '',
+      cpu: null,
+    },
   ],
   activeId: 'b',
   health: { a: 'up', b: 'down' },
@@ -71,7 +92,8 @@ function withPage<T>(html: string, fn: (doc: Document) => T): T {
 
 describe('renderer.html (the rail page)', () => {
   it('parses and renders the fixed 72px rail with the server-list placeholder and the add button', () => {
-    const doc = new JSDOM(htmlSource, { url: 'file:///renderer.html' }).window.document;
+    const doc = new JSDOM(htmlSource, { url: 'file:///renderer.html' }).window
+      .document;
     const rail = doc.getElementById('rail');
     expect(rail?.tagName.toLowerCase()).toBe('aside');
     expect(doc.getElementById('rail-list')).not.toBeNull();
@@ -97,8 +119,12 @@ describe('renderer.html (the rail page)', () => {
 
   it('constrains the server list to a scroll region and bottom-anchors the add control', () => {
     expect(cssSource).toMatch(/#rail\s*\{[^}]*display:\s*flex[^}]*\}/s);
-    expect(cssSource).toMatch(/#rail\s*\{[^}]*flex-direction:\s*column[^}]*\}/s);
-    expect(cssSource).toMatch(/#rail-list\s*\{[^}]*flex:\s*1\s+1\s+auto[^}]*\}/s);
+    expect(cssSource).toMatch(
+      /#rail\s*\{[^}]*flex-direction:\s*column[^}]*\}/s,
+    );
+    expect(cssSource).toMatch(
+      /#rail-list\s*\{[^}]*flex:\s*1\s+1\s+auto[^}]*\}/s,
+    );
     expect(cssSource).toMatch(/#rail-list\s*\{[^}]*overflow-y:\s*auto[^}]*\}/s);
     const addRule = /#rail-add\s*\{([^}]*)\}/s.exec(cssSource);
     expect(addRule).not.toBeNull();
@@ -111,7 +137,9 @@ describe('renderer.html (the rail page)', () => {
   });
 
   it('loads the compiled renderer module (ESM) from ./renderer.js', () => {
-    expect(htmlSource).toContain('<script type="module" src="./renderer.js"></script>');
+    expect(htmlSource).toContain(
+      '<script type="module" src="./renderer.js"></script>',
+    );
   });
 });
 
@@ -129,7 +157,7 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(itemRule![1]).not.toMatch(/rgba\(24,\s*24,\s*27/);
   });
 
-  it('renders the rail over Phi\'s obsidian field — the same radial gradient as the web body', () => {
+  it("renders the rail over Phi's obsidian field — the same radial gradient as the web body", () => {
     expect(cssSource).toMatch(
       /#rail\s*\{[^}]*radial-gradient\(circle at 50% 0%, #16161c 0%, #08080a 70%\)/s,
     );
@@ -151,7 +179,9 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(offline![1]).toMatch(/var\(--bg-border\)/);
     // No status block element remains in the stylesheet.
     expect(cssSource).not.toMatch(/\.rail-item\s+\.dot/);
-    const attention = /\.rail-item\s+\.attention\s*\{([^}]*)\}/s.exec(cssSource);
+    const attention = /\.rail-item\s+\.attention\s*\{([^}]*)\}/s.exec(
+      cssSource,
+    );
     expect(attention![1]).toMatch(/transform:\s*rotate\(45deg\)/);
     expect(attention![1]).toMatch(/var\(--entry-accent/);
     expect(attention![1]).toMatch(/var\(--accent/);
@@ -212,16 +242,24 @@ describe('renderer module (src/renderer.ts)', () => {
       expect(items[1].querySelector('.attention')).toBeNull();
       // No numeric badge is rendered.
       expect(items[0].querySelector('.badge')).toBeNull();
-      expect((items[0] as HTMLElement).title).toBe('CHARON · http://127.0.0.1:7070/ · CPU 62%');
-      expect((items[0] as HTMLElement).getAttribute('aria-label')).toBe('CHARON · CPU 62%');
-      expect((items[1] as HTMLElement).title).toBe('Beta · http://10.0.0.5:8080/');
+      expect((items[0] as HTMLElement).title).toBe(
+        'CHARON · http://127.0.0.1:7070/ · CPU 62%',
+      );
+      expect((items[0] as HTMLElement).getAttribute('aria-label')).toBe(
+        'CHARON · CPU 62%',
+      );
+      expect((items[1] as HTMLElement).title).toBe(
+        'Beta · http://10.0.0.5:8080/',
+      );
       expect((items[1] as HTMLElement).getAttribute('aria-label')).toBe('Beta');
     });
   });
 
   it('a rail item click dispatches phi:select-profile with the profile id (recording-fake bridge)', () => {
     const sent: string[] = [];
-    (window as { electron?: { postSelectProfile(id: string): void } }).electron = {
+    (
+      window as { electron?: { postSelectProfile(id: string): void } }
+    ).electron = {
       postSelectProfile: (id) => sent.push(id),
     };
     try {
@@ -240,12 +278,14 @@ describe('renderer module (src/renderer.ts)', () => {
   it('boot opens the native picker through postOpenPicker', () => {
     const stateCbs: Array<(state: RailState) => void> = [];
     const opened: number[] = [];
-    (window as {
-      electron?: {
-        onRailState(cb: (state: RailState) => void): () => void;
-        postOpenPicker(): void;
-      };
-    }).electron = {
+    (
+      window as {
+        electron?: {
+          onRailState(cb: (state: RailState) => void): () => void;
+          postOpenPicker(): void;
+        };
+      }
+    ).electron = {
       onRailState: (cb) => {
         stateCbs.push(cb);
         return () => {};
@@ -279,10 +319,24 @@ describe('rail identity and accent (src/renderer.ts)', () => {
 
   it('identityLabel prefers the canonical hostname and falls back to the profile name', () => {
     expect(
-      identityLabel({ id: 'a', name: 'Alpha Phi', origin: 'http://127.0.0.1:7070/', hostname: 'charon.local', accent: '#e76f51', cpu: null }),
+      identityLabel({
+        id: 'a',
+        name: 'Alpha Phi',
+        origin: 'http://127.0.0.1:7070/',
+        hostname: 'charon.local',
+        accent: '#e76f51',
+        cpu: null,
+      }),
     ).toBe('CHARON');
     expect(
-      identityLabel({ id: 'b', name: 'Beta', origin: 'http://10.0.0.5:8080/', hostname: '', accent: '', cpu: null }),
+      identityLabel({
+        id: 'b',
+        name: 'Beta',
+        origin: 'http://10.0.0.5:8080/',
+        hostname: '',
+        accent: '',
+        cpu: null,
+      }),
     ).toBe('Beta');
   });
 
@@ -323,7 +377,12 @@ describe('rail identity and accent (src/renderer.ts)', () => {
     expect([...second].length).toBeGreaterThanOrEqual(1);
     // The resolved glyph is either the case-swapped letter or a numeral-marked one.
     const base = greekGlyphForHostname('CHARON');
-    expect(second === base || second === base.toUpperCase() || second === base.toLowerCase() || second.includes('ʹ')).toBe(true);
+    expect(
+      second === base ||
+        second === base.toUpperCase() ||
+        second === base.toLowerCase() ||
+        second.includes('ʹ'),
+    ).toBe(true);
   });
 
   it('renders a Greek glyph for endpoint-looking identities, never raw characters or Φ', () => {
@@ -354,7 +413,14 @@ describe('rail identity and accent (src/renderer.ts)', () => {
       const list = doc.getElementById('rail-list')!;
       const unknown: RailState = {
         profiles: [
-          { id: 'c', name: '127.0.0.1:7070', origin: 'http://127.0.0.1:7070/', hostname: '', accent: '', cpu: null },
+          {
+            id: 'c',
+            name: '127.0.0.1:7070',
+            origin: 'http://127.0.0.1:7070/',
+            hostname: '',
+            accent: '',
+            cpu: null,
+          },
         ],
         activeId: 'c',
         health: { c: 'unknown' },
@@ -362,7 +428,9 @@ describe('rail identity and accent (src/renderer.ts)', () => {
       };
       render(unknown, list);
       const item = list.querySelector('li.rail-item') as HTMLElement;
-      expect(item.querySelector('.mono')?.textContent).toBe(greekGlyphForHostname('127.0.0.1:7070'));
+      expect(item.querySelector('.mono')?.textContent).toBe(
+        greekGlyphForHostname('127.0.0.1:7070'),
+      );
       expect(item.querySelector('.mono')?.textContent).not.toBe('Φ');
       expect(item.title).toBe('127.0.0.1:7070 · http://127.0.0.1:7070/');
       expect(item.getAttribute('aria-label')).toBe('127.0.0.1:7070');
@@ -394,7 +462,16 @@ describe('rail CPU intensity (src/renderer.ts + src/rail.css)', () => {
     withPage('<ul id="rail-list"></ul>', (doc) => {
       const list = doc.getElementById('rail-list')!;
       const state: RailState = {
-        profiles: [{ id: 'x', name: 'X', origin: 'http://x/', hostname: '', accent: '', cpu: 137 }],
+        profiles: [
+          {
+            id: 'x',
+            name: 'X',
+            origin: 'http://x/',
+            hostname: '',
+            accent: '',
+            cpu: 137,
+          },
+        ],
         activeId: 'x',
         health: { x: 'up' },
         unread: { x: 0 },
@@ -448,7 +525,8 @@ describe('rail entry context menu (src/renderer.ts)', () => {
       postSelectProfile: (id: string) => calls.select.push(id),
       postOpenServerSessions: (id: string) => calls.sessions.push(id),
       postOpenPicker: () => {},
-      postRenameProfile: (id: string, name: string) => calls.rename.push([id, name]),
+      postRenameProfile: (id: string, name: string) =>
+        calls.rename.push([id, name]),
       postRemoveProfile: (id: string) => calls.remove.push(id),
       postReloadServer: (id?: string) => calls.reloadServer.push(id ?? ''),
       postReloadAllServers: () => calls.reloadAll++,
@@ -463,7 +541,11 @@ describe('rail entry context menu (src/renderer.ts)', () => {
 
   function contextMenu(doc: Document, item: HTMLElement, y = 90): void {
     item.dispatchEvent(
-      new doc.defaultView!.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientY: y }),
+      new doc.defaultView!.MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientY: y,
+      }),
     );
   }
 
@@ -479,7 +561,9 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     expect((items[1] as HTMLElement).dispatchEvent(evt)).toBe(false);
     const menu = doc.getElementById('rail-menu') as HTMLElement;
     expect(menu.hidden).toBe(false);
-    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+    expect(
+      [...menu.querySelectorAll('button')].map((b) => b.textContent),
+    ).toEqual([
       'Reload server',
       'Reload all servers',
       'Open sessions',
@@ -529,7 +613,12 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     // The rename input is seeded with the targeted profile's current name.
     expect(input.value).toBe('Alpha Phi');
     input.value = 'Renamed';
-    input.dispatchEvent(new doc.defaultView!.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    input.dispatchEvent(
+      new doc.defaultView!.KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+      }),
+    );
     expect(calls.rename).toEqual([['a', 'Renamed']]);
     expect(menu.hidden).toBe(true);
   });
@@ -566,11 +655,18 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     const menu = doc.getElementById('rail-menu') as HTMLElement;
     contextMenu(doc, items[0] as HTMLElement);
     expect(menu.hidden).toBe(false);
-    menu.dispatchEvent(new doc.defaultView!.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    menu.dispatchEvent(
+      new doc.defaultView!.KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+      }),
+    );
     expect(menu.hidden).toBe(true);
     contextMenu(doc, items[0] as HTMLElement);
     expect(menu.hidden).toBe(false);
-    doc.body.dispatchEvent(new doc.defaultView!.MouseEvent('click', { bubbles: true }));
+    doc.body.dispatchEvent(
+      new doc.defaultView!.MouseEvent('click', { bubbles: true }),
+    );
     expect(menu.hidden).toBe(true);
     contextMenu(doc, items[0] as HTMLElement);
     expect(menu.hidden).toBe(false);
@@ -582,7 +678,10 @@ describe('rail entry context menu (src/renderer.ts)', () => {
 describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
   /** jsdom reports zero rects, so pin item i to [i*48, i*48+40] for
    * deterministic top/bottom-half drop slots. */
-  function bootPage(): { doc: Document; reorder: Array<[string, string | null]> } {
+  function bootPage(): {
+    doc: Document;
+    reorder: Array<[string, string | null]>;
+  } {
     const reorder: Array<[string, string | null]> = [];
     const stateCbs: Array<(state: RailState) => void> = [];
     (window as { electron?: unknown }).electron = {
@@ -594,7 +693,8 @@ describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
       postOpenPicker: () => {},
       postRenameProfile: () => {},
       postRemoveProfile: () => {},
-      postReorderProfile: (id: string, beforeId: string | null) => reorder.push([id, beforeId]),
+      postReorderProfile: (id: string, beforeId: string | null) =>
+        reorder.push([id, beforeId]),
     };
     const doc = withPage(htmlSource, (d) => {
       boot();
@@ -617,9 +717,18 @@ describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
     return { doc, reorder };
   }
 
-  function drag(doc: Document, target: HTMLElement, type: string, clientY: number): void {
+  function drag(
+    doc: Document,
+    target: HTMLElement,
+    type: string,
+    clientY: number,
+  ): void {
     target.dispatchEvent(
-      new doc.defaultView!.MouseEvent(type, { bubbles: true, cancelable: true, clientY }),
+      new doc.defaultView!.MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientY,
+      }),
     );
   }
 

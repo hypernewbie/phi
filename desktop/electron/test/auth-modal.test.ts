@@ -35,22 +35,54 @@ interface FakeBridge {
   /** Plain function so tests can replace it per case. */
   fetchServerConfig: () => Promise<unknown>;
   fetchActiveWorkspace: () => Promise<string | null>;
-  submitAccessPassword: (requestId: string, password: string | null) => Promise<unknown>;
+  submitAccessPassword: (
+    requestId: string,
+    password: string | null,
+  ) => Promise<unknown>;
   postWindowMinimize: () => void;
   postWindowToggleMaximize: () => void;
   postWindowClose: () => void;
-  postHeaderAction: (action: { kind: string; id?: string; value?: string }) => void;
-  onAuthRequired: (cb: (info: { requestId: string; profileId: string; origin: string; label?: string }) => void) => void;
+  postHeaderAction: (action: {
+    kind: string;
+    id?: string;
+    value?: string;
+  }) => void;
+  onAuthRequired: (
+    cb: (info: {
+      requestId: string;
+      profileId: string;
+      origin: string;
+      label?: string;
+    }) => void,
+  ) => void;
   onBodyObscuring: (cb: (obscured: boolean) => void) => void;
-  onActiveServer: (cb: (info: { id: string; origin: string; accent: string }) => void) => void;
-  onHeaderState: (cb: (state: { cpuPercent: number | null; terminalActivity: boolean }) => void) => void;
-  onWindowState: (cb: (state: { isMaximized: boolean; focused: boolean }) => void) => void;
+  onActiveServer: (
+    cb: (info: { id: string; origin: string; accent: string }) => void,
+  ) => void;
+  onHeaderState: (
+    cb: (state: {
+      cpuPercent: number | null;
+      terminalActivity: boolean;
+    }) => void,
+  ) => void;
+  onWindowState: (
+    cb: (state: { isMaximized: boolean; focused: boolean }) => void,
+  ) => void;
   onWindowTitle: (cb: (title: string) => void) => void;
 }
 
-let recordedAuthRequired: ((info: { requestId: string; profileId: string; origin: string; label?: string }) => void) | null = null;
+let recordedAuthRequired:
+  | ((info: {
+      requestId: string;
+      profileId: string;
+      origin: string;
+      label?: string;
+    }) => void)
+  | null = null;
 let recordedBodyObscuring: ((obscured: boolean) => void) | null = null;
-let recordedActiveServer: ((info: { id: string; origin: string; accent: string }) => void) | null = null;
+let recordedActiveServer:
+  | ((info: { id: string; origin: string; accent: string }) => void)
+  | null = null;
 
 let submitCalls: Array<{ requestId: string; password: string | null }> = [];
 
@@ -65,10 +97,12 @@ beforeEach(() => {
   fakeBridge = {
     fetchServerConfig: vi.fn(async () => null),
     fetchActiveWorkspace: vi.fn(async () => null),
-    submitAccessPassword: vi.fn(async (requestId: string, password: string | null) => {
-      submitCalls.push({ requestId, password });
-      return { ok: true };
-    }),
+    submitAccessPassword: vi.fn(
+      async (requestId: string, password: string | null) => {
+        submitCalls.push({ requestId, password });
+        return { ok: true };
+      },
+    ),
     postWindowMinimize: () => undefined,
     postWindowToggleMaximize: () => undefined,
     postWindowClose: () => undefined,
@@ -117,10 +151,19 @@ async function loadMainView(): Promise<Document> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as unknown as { window: any }).window = window;
   (window as unknown as { electron: FakeBridge }).electron = fakeBridge;
-  Object.defineProperty(globalThis, 'document', { value: window.document, configurable: true, writable: true });
-  Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true, writable: true });
+  Object.defineProperty(globalThis, 'document', {
+    value: window.document,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(globalThis, 'navigator', {
+    value: window.navigator,
+    configurable: true,
+    writable: true,
+  });
   Object.defineProperty(globalThis, 'requestAnimationFrame', {
-    value: (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0) as unknown as number,
+    value: (cb: FrameRequestCallback) =>
+      setTimeout(() => cb(Date.now()), 0) as unknown as number,
     configurable: true,
     writable: true,
   });
@@ -145,7 +188,9 @@ describe('desktop active-server header state (mainview.js)', () => {
     fakeBridge.fetchActiveWorkspace = vi.fn(async () => bodyWorkspace);
     const doc = await loadMainView();
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
-    expect((doc.getElementById('workspace-select') as HTMLSelectElement).value).toBe('/alpha');
+    expect(
+      (doc.getElementById('workspace-select') as HTMLSelectElement).value,
+    ).toBe('/alpha');
 
     config = {
       hostname: 'BETA',
@@ -158,7 +203,10 @@ describe('desktop active-server header state (mainview.js)', () => {
 
     const select = doc.getElementById('workspace-select') as HTMLSelectElement;
     expect(select.value).toBe('/beta');
-    expect([...select.options].map((option) => option.value)).toEqual(['/common', '/beta']);
+    expect([...select.options].map((option) => option.value)).toEqual([
+      '/common',
+      '/beta',
+    ]);
   });
 
   it('does not let a late config response from the outgoing server repaint the incoming server', async (ctx) => {
@@ -189,13 +237,21 @@ describe('desktop active-server header state (mainview.js)', () => {
     recordedActiveServer!({ id: 'alpha', origin: 'http://alpha/', accent: '' });
     recordedActiveServer!({ id: 'beta', origin: 'http://beta/', accent: '' });
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
-    expect((doc.getElementById('workspace-select') as HTMLSelectElement).value).toBe('/beta');
+    expect(
+      (doc.getElementById('workspace-select') as HTMLSelectElement).value,
+    ).toBe('/beta');
 
-    resolveAlpha!({ hostname: 'ALPHA', workspaces: ['/alpha'], active_cwd: '/alpha' });
+    resolveAlpha!({
+      hostname: 'ALPHA',
+      workspaces: ['/alpha'],
+      active_cwd: '/alpha',
+    });
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
     const select = doc.getElementById('workspace-select') as HTMLSelectElement;
     expect(select.value).toBe('/beta');
-    expect([...select.options].map((option) => option.value)).toEqual(['/beta']);
+    expect([...select.options].map((option) => option.value)).toEqual([
+      '/beta',
+    ]);
   });
 });
 
@@ -206,13 +262,17 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    const modal = doc.getElementById('desktop-auth-modal') as HTMLDivElement | null;
+    const modal = doc.getElementById(
+      'desktop-auth-modal',
+    ) as HTMLDivElement | null;
     expect(modal).not.toBeNull();
     expect(modal?.classList.contains('desktop-auth-modal')).toBe(true);
     // The modal starts hidden, with empty error, empty input.
     expect(modal?.hasAttribute('hidden')).toBe(true);
     const origin = doc.getElementById('desktop-auth-origin');
-    const input = doc.getElementById('desktop-auth-input') as HTMLInputElement | null;
+    const input = doc.getElementById(
+      'desktop-auth-input',
+    ) as HTMLInputElement | null;
     const submit = doc.getElementById('desktop-auth-submit');
     const cancel = doc.getElementById('desktop-auth-cancel');
     expect(origin).not.toBeNull();
@@ -238,11 +298,15 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://127.0.0.1:7070/',
       label: '127.0.0.1:7070',
     });
-    const modal = doc.getElementById('desktop-auth-modal') as HTMLDivElement | null;
+    const modal = doc.getElementById(
+      'desktop-auth-modal',
+    ) as HTMLDivElement | null;
     expect(modal?.hasAttribute('hidden')).toBe(false);
     const origin = doc.getElementById('desktop-auth-origin');
     expect(origin?.textContent).toBe('127.0.0.1:7070');
-    const input = doc.getElementById('desktop-auth-input') as HTMLInputElement | null;
+    const input = doc.getElementById(
+      'desktop-auth-input',
+    ) as HTMLInputElement | null;
     expect(input?.value).toBe('');
     // Body obscuring should have been toggled on.
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(true);
@@ -283,7 +347,9 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://a/',
       label: 'A (renamed)',
     });
-    expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe('A (renamed)');
+    expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe(
+      'A (renamed)',
+    );
   });
 
   it('a push for a different requestId while a prompt is open is ignored', async (ctx) => {
@@ -323,12 +389,16 @@ describe('desktop auth modal (mainview.js)', () => {
     });
     const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
     input.value = 'hunter22-secret';
-    const submit = doc.getElementById('desktop-auth-submit') as HTMLButtonElement;
+    const submit = doc.getElementById(
+      'desktop-auth-submit',
+    ) as HTMLButtonElement;
     submit.click();
     // submitAccessPassword is awaited, so we wait one microtask flush.
     await Promise.resolve();
     await Promise.resolve();
-    expect(submitCalls).toEqual([{ requestId: 'r-submit', password: 'hunter22-secret' }]);
+    expect(submitCalls).toEqual([
+      { requestId: 'r-submit', password: 'hunter22-secret' },
+    ]);
     const modal = doc.getElementById('desktop-auth-modal');
     expect(modal?.hasAttribute('hidden')).toBe(true);
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(false);
@@ -348,7 +418,9 @@ describe('desktop auth modal (mainview.js)', () => {
     });
     const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
     input.value = 'short'; // < 8 chars
-    const submit = doc.getElementById('desktop-auth-submit') as HTMLButtonElement;
+    const submit = doc.getElementById(
+      'desktop-auth-submit',
+    ) as HTMLButtonElement;
     submit.click();
     await Promise.resolve();
     expect(submitCalls).toEqual([]);
@@ -365,7 +437,10 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     // Override the bridge to return a failure for this test.
-    fakeBridge.submitAccessPassword = vi.fn(async () => ({ ok: false, code: 'invalid-password' }));
+    fakeBridge.submitAccessPassword = vi.fn(async () => ({
+      ok: false,
+      code: 'invalid-password',
+    }));
     const doc = await loadMainView();
     recordedAuthRequired!({
       requestId: 'r-fail',
@@ -375,7 +450,9 @@ describe('desktop auth modal (mainview.js)', () => {
     });
     const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
     input.value = 'wrong-password-1';
-    const submit = doc.getElementById('desktop-auth-submit') as HTMLButtonElement;
+    const submit = doc.getElementById(
+      'desktop-auth-submit',
+    ) as HTMLButtonElement;
     submit.click();
     await Promise.resolve();
     await Promise.resolve();
@@ -400,7 +477,9 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://a/',
       label: 'A',
     });
-    const cancel = doc.getElementById('desktop-auth-cancel') as HTMLButtonElement;
+    const cancel = doc.getElementById(
+      'desktop-auth-cancel',
+    ) as HTMLButtonElement;
     cancel.click();
     await Promise.resolve();
     await Promise.resolve();
@@ -423,7 +502,9 @@ describe('desktop auth modal (mainview.js)', () => {
       label: 'A',
     });
     const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
-    const ev = new (window as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent('keydown', {
+    const ev = new (
+      window as unknown as { KeyboardEvent: typeof KeyboardEvent }
+    ).KeyboardEvent('keydown', {
       key: 'Escape',
       bubbles: true,
     });
@@ -445,10 +526,18 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://a/',
       label: 'A',
     });
-    expect(doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden')).toBe(false);
+    expect(
+      doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+    ).toBe(false);
     // Active server switches to a DIFFERENT profile → modal closes.
-    recordedActiveServer!({ id: 'p-other', origin: 'http://other/', accent: '' });
-    expect(doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden')).toBe(true);
+    recordedActiveServer!({
+      id: 'p-other',
+      origin: 'http://other/',
+      accent: '',
+    });
+    expect(
+      doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+    ).toBe(true);
     // Now a push for a NEW requestId must be accepted (the renderer
     // must have cleared its requestId, not just hidden the modal).
     recordedAuthRequired!({
@@ -457,7 +546,9 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://b/',
       label: 'B',
     });
-    expect(doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden')).toBe(false);
+    expect(
+      doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+    ).toBe(false);
     expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe('B');
   });
 
@@ -473,13 +564,17 @@ describe('desktop auth modal (mainview.js)', () => {
       origin: 'http://a/',
       label: 'A',
     });
-    expect(doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden')).toBe(false);
+    expect(
+      doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+    ).toBe(false);
     // The controller fires active-changed for the persisted MRU on
     // launch. If the active id matches the modal's profileId, the
     // modal must stay open — otherwise the 401-triggered prompt would
     // open then immediately close.
     recordedActiveServer!({ id: 'p-mru', origin: 'http://a/', accent: '' });
-    expect(doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden')).toBe(false);
+    expect(
+      doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
+    ).toBe(false);
     expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe('A');
   });
 

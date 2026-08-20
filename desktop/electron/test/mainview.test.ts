@@ -23,11 +23,18 @@ const rootWebIndex = path.join(here, '..', '..', '..', 'web', 'index.html');
 const generatedIndex = path.join(webDir, 'index.html');
 const hasGenerated = existsSync(generatedIndex);
 
-const templateSource = readFileSync(path.join(webDir, 'index.template.html'), 'utf8');
+const templateSource = readFileSync(
+  path.join(webDir, 'index.template.html'),
+  'utf8',
+);
 const mainCssSource = readFileSync(path.join(webDir, 'main.css'), 'utf8');
 const mainJsSource = readFileSync(path.join(webDir, 'mainview.js'), 'utf8');
-const indexHtmlSource = hasGenerated ? readFileSync(generatedIndex, 'utf8') : '';
-const headerHtmlSource = hasGenerated ? readFileSync(path.join(webDir, 'header.html'), 'utf8') : '';
+const indexHtmlSource = hasGenerated
+  ? readFileSync(generatedIndex, 'utf8')
+  : '';
+const headerHtmlSource = hasGenerated
+  ? readFileSync(path.join(webDir, 'header.html'), 'utf8')
+  : '';
 
 /** The exact <header class="app-header"> block from the browser Phi page
  *  (the vendoring source of truth). */
@@ -35,7 +42,8 @@ function browserHeaderBlock(): string {
   const html = readFileSync(rootWebIndex, 'utf8');
   const start = html.indexOf('<header class="app-header"');
   const end = html.indexOf('</header>', start);
-  if (start < 0 || end < 0) throw new Error('web/index.html has no app-header block');
+  if (start < 0 || end < 0)
+    throw new Error('web/index.html has no app-header block');
   return html.slice(start, end + '</header>'.length);
 }
 
@@ -58,7 +66,8 @@ describe('main view page (web/index.html)', () => {
     }
     // JSDOM's HTML5 parser throws on unusable input; constructing it is the
     // parse assertion.
-    const doc = new JSDOM(indexHtmlSource, { url: 'file:///web/index.html' }).window.document;
+    const doc = new JSDOM(indexHtmlSource, { url: 'file:///web/index.html' })
+      .window.document;
 
     const header = doc.querySelector('.app-header');
     expect(header).not.toBeNull();
@@ -88,7 +97,9 @@ describe('main view page (web/index.html)', () => {
     // is untouched — no mutations, no injected drag-gaps, no hidden
     // children. Single source of truth via vendoring.
     expect(headerHtmlSource).toBe(browserHeaderBlock());
-    expect(indexHtmlSource).toContain(headerHtmlSource.slice(0, -'</header>'.length));
+    expect(indexHtmlSource).toContain(
+      headerHtmlSource.slice(0, -'</header>'.length),
+    );
     // The caption-controls is the only desktop-local element injected
     // into the header — appended just before </header>.
     expect(indexHtmlSource).toContain('class="caption-controls"');
@@ -102,10 +113,18 @@ describe('main view page (web/index.html)', () => {
     // `Notifications`); `header-btop-btn` has always been icon-only
     // (no `<span>` in the markup). Regression: any future addition of
     // a `<span>` to these buttons fails this test.
-    expect(headerHtmlSource).toContain('id="header-clipboard-btn" class="header-btn icon-only"');
-    expect(headerHtmlSource).toContain('id="header-ntfy-btn" class="header-btn icon-only"');
-    expect(headerHtmlSource).not.toMatch(/id="header-clipboard-btn"[\s\S]*?<span>Get Clipboard<\/span>/);
-    expect(headerHtmlSource).not.toMatch(/id="header-ntfy-btn"[\s\S]*?<span>Notifications<\/span>/);
+    expect(headerHtmlSource).toContain(
+      'id="header-clipboard-btn" class="header-btn icon-only"',
+    );
+    expect(headerHtmlSource).toContain(
+      'id="header-ntfy-btn" class="header-btn icon-only"',
+    );
+    expect(headerHtmlSource).not.toMatch(
+      /id="header-clipboard-btn"[\s\S]*?<span>Get Clipboard<\/span>/,
+    );
+    expect(headerHtmlSource).not.toMatch(
+      /id="header-ntfy-btn"[\s\S]*?<span>Notifications<\/span>/,
+    );
   });
 });
 
@@ -128,14 +147,20 @@ describe('main view page chrome (web/main.css)', () => {
     // `.app-header` directly (the additive drag region), and ONE
     // comma-separated selector list for the no-drag children — both
     // are frameless-window requirements, not visual overrides.
-    const directAppHeaderRule = mainCssSource.match(/\n\.app-header\s*\{([^}]*)\}/);
+    const directAppHeaderRule = mainCssSource.match(
+      /\n\.app-header\s*\{([^}]*)\}/,
+    );
     expect(directAppHeaderRule).not.toBeNull();
     expect(directAppHeaderRule![1]).toContain('-webkit-app-region: drag');
-    expect(directAppHeaderRule![1]).not.toMatch(/background|backdrop|justify-content|height/);
+    expect(directAppHeaderRule![1]).not.toMatch(
+      /background|backdrop|justify-content|height/,
+    );
     // Negative assertions: no desktop-side override of brand-name,
     // activity-indicator, or any vendor styling property.
     expect(mainCssSource).not.toMatch(/\.brand-name\s*\{[^}]*display:\s*none/);
-    expect(mainCssSource).not.toMatch(/#terminal-activity-indicator\s*\{[^}]*display:\s*none/);
+    expect(mainCssSource).not.toMatch(
+      /#terminal-activity-indicator\s*\{[^}]*display:\s*none/,
+    );
     expect(mainCssSource).not.toMatch(/\.app-header\s*\{[^}]*background/);
     expect(mainCssSource).not.toMatch(/\.app-header\s*\{[^}]*backdrop/);
     expect(mainCssSource).not.toMatch(/\.app-header\s*\{[^}]*justify-content/);
@@ -151,8 +176,12 @@ describe('main view page chrome (web/main.css)', () => {
     // `data-phi-desktop-root` instead so the vendor's beheading does
     // not apply, and the header renders by default.
     expect(templateSource).toMatch(/<html[^>]*data-phi-desktop-root/);
-    expect(templateSource).not.toMatch(/<html[^>]*data-phi-desktop(?!\w|-root)/);
-    expect(mainCssSource).not.toMatch(/html\[data-phi-desktop\][^{]*\.app-header/);
+    expect(templateSource).not.toMatch(
+      /<html[^>]*data-phi-desktop(?!\w|-root)/,
+    );
+    expect(mainCssSource).not.toMatch(
+      /html\[data-phi-desktop\][^{]*\.app-header/,
+    );
   });
 
   it('does not mutate the vendored header — the vendor script only appends caption controls', () => {
@@ -169,15 +198,25 @@ describe('main view page chrome (web/main.css)', () => {
     );
     expect(vendorSource).toContain('CAPTION_CONTROLS');
     expect(vendorSource).toContain('caption-controls');
-    expect(vendorSource).not.toMatch(/DESKTOP_DRAG_GAPS|preWorkspace|postWorkspace/);
+    expect(vendorSource).not.toMatch(
+      /DESKTOP_DRAG_GAPS|preWorkspace|postWorkspace/,
+    );
     expect(vendorSource).not.toMatch(/inject.*drag-gap|inject.*workspace/);
   });
 
   it('marks interactive header children and the caption controls no-drag', () => {
-    expect(mainCssSource).toMatch(/\.app-header\s+button[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
-    expect(mainCssSource).toMatch(/\.app-header\s+select[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
-    expect(mainCssSource).toMatch(/\.app-header\s+\.header-config-pill[^{]*\{[\s\S]*?-webkit-app-region: no-drag/);
-    expect(mainCssSource).toMatch(/\.caption-controls\s*\{[\s\S]*?-webkit-app-region: no-drag/);
+    expect(mainCssSource).toMatch(
+      /\.app-header\s+button[^{]*\{[\s\S]*?-webkit-app-region: no-drag/,
+    );
+    expect(mainCssSource).toMatch(
+      /\.app-header\s+select[^{]*\{[\s\S]*?-webkit-app-region: no-drag/,
+    );
+    expect(mainCssSource).toMatch(
+      /\.app-header\s+\.header-config-pill[^{]*\{[\s\S]*?-webkit-app-region: no-drag/,
+    );
+    expect(mainCssSource).toMatch(
+      /\.caption-controls\s*\{[\s\S]*?-webkit-app-region: no-drag/,
+    );
   });
 
   it('pushes the caption controls to the right edge of the header content area', () => {
@@ -189,7 +228,9 @@ describe('main view page chrome (web/main.css)', () => {
     // desktop-only caption lane makes the X flush regardless of that
     // padding. The lane is removed from the flex flow so the action
     // cluster's natural width isn't pushed inward.
-    const captionBlock = mainCssSource.match(/\.caption-controls\s*\{([^}]*)\}/);
+    const captionBlock = mainCssSource.match(
+      /\.caption-controls\s*\{([^}]*)\}/,
+    );
     expect(captionBlock).not.toBeNull();
     expect(captionBlock![1]).toContain('position: absolute');
     expect(captionBlock![1]).toContain('right: 0');
@@ -201,13 +242,21 @@ describe('main view page chrome (web/main.css)', () => {
   });
 
   it('keeps the middle gap draggable and the body area input-transparent', () => {
-    expect(mainCssSource).toMatch(/\.app-header-drag-gap\s*\{[\s\S]*?-webkit-app-region: drag/);
-    expect(mainCssSource).toMatch(/\.desktop-body-area\s*\{[\s\S]*?pointer-events: none/);
-    expect(mainCssSource).toMatch(/\.desktop-body-area\s*\{[\s\S]*?top: var\(--header-height\)/);
+    expect(mainCssSource).toMatch(
+      /\.app-header-drag-gap\s*\{[\s\S]*?-webkit-app-region: drag/,
+    );
+    expect(mainCssSource).toMatch(
+      /\.desktop-body-area\s*\{[\s\S]*?pointer-events: none/,
+    );
+    expect(mainCssSource).toMatch(
+      /\.desktop-body-area\s*\{[\s\S]*?top: var\(--header-height\)/,
+    );
   });
 
   it('suppresses the browser’s access-auth-overlay on the desktop-root page only', () => {
-    expect(mainCssSource).toMatch(/html\[data-phi-desktop-root\][^{]*\.access-auth-overlay\s*\{[^}]*display:\s*none\s*!important/);
+    expect(mainCssSource).toMatch(
+      /html\[data-phi-desktop-root\][^{]*\.access-auth-overlay\s*\{[^}]*display:\s*none\s*!important/,
+    );
   });
 });
 
@@ -216,14 +265,22 @@ describe('main view page behaviors (web/mainview.js)', () => {
     // The TBAR must run the same code the browser Phi page runs: the
     // canonical helpers are imported from the vendored web/ sources, not
     // reimplemented with hand-rolled "parity" copies.
-    expect(mainJsSource).toContain("import { ACCENT_COLORS, App } from './vendor/app.js'");
-    expect(mainJsSource).toContain("import { displayHostname, formatWorkspaceLabel } from './vendor/util.js'");
-    expect(mainJsSource).toContain("import { SessionsManager } from './vendor/sessions.js'");
+    expect(mainJsSource).toContain(
+      "import { ACCENT_COLORS, App } from './vendor/app.js'",
+    );
+    expect(mainJsSource).toContain(
+      "import { displayHostname, formatWorkspaceLabel } from './vendor/util.js'",
+    );
+    expect(mainJsSource).toContain(
+      "import { SessionsManager } from './vendor/sessions.js'",
+    );
     // The canonical application paths are called through the vendored
     // classes (applyAccentTheme, updateWorkspaceSelectWidth) rather than
     // reimplemented locally.
     expect(mainJsSource).toContain('App.prototype.applyAccentTheme.call');
-    expect(mainJsSource).toContain('SessionsManager.prototype.updateWorkspaceSelectWidth.call');
+    expect(mainJsSource).toContain(
+      'SessionsManager.prototype.updateWorkspaceSelectWidth.call',
+    );
     // No hand-rolled accent palette may exist in the local wiring.
     expect(mainJsSource).not.toMatch(/#[0-9a-f]{6}/i);
   });
@@ -241,7 +298,7 @@ describe('main view page behaviors (web/mainview.js)', () => {
     expect(mainJsSource).toContain('fetchActiveWorkspace');
     expect(mainJsSource).toContain('postHeaderAction(');
     expect(mainJsSource).toContain('onActiveServer(');
-    expect(mainJsSource).toContain('getElementById(\'workspace-select\')');
+    expect(mainJsSource).toContain("getElementById('workspace-select')");
   });
 
   it('relays every action-cluster button and the workspace change to the body', () => {
@@ -259,7 +316,9 @@ describe('main view page behaviors (web/mainview.js)', () => {
     ]) {
       expect(mainJsSource).toContain(id);
     }
-    expect(mainJsSource).toContain("{ kind: 'workspace', value: workspaceSelect.value }");
+    expect(mainJsSource).toContain(
+      "{ kind: 'workspace', value: workspaceSelect.value }",
+    );
   });
 });
 
@@ -272,7 +331,10 @@ describe('vendored browser JS (web/vendor/*)', () => {
     }
     for (const name of ['app.js', 'sessions.js', 'util.js']) {
       const vendored = readFileSync(path.join(vendorDir, name), 'utf8');
-      const canonical = readFileSync(path.join(rootWebIndex, '..', name), 'utf8');
+      const canonical = readFileSync(
+        path.join(rootWebIndex, '..', name),
+        'utf8',
+      );
       expect(vendored).toBe(canonical);
     }
   });
@@ -283,14 +345,35 @@ describe('vendored browser JS (web/vendor/*)', () => {
       ctx.skip('web/vendor missing — run `pnpm run build` first');
       return;
     }
-    const keys = [...readFileSync(vendored, 'utf8').matchAll(/^\s{4}([a-z]+):\s*\{\s*accent: '/gm)].map(
-      (m) => m[1],
-    );
+    const keys = [
+      ...readFileSync(vendored, 'utf8').matchAll(
+        /^\s{4}([a-z]+):\s*\{\s*accent: '/gm,
+      ),
+    ].map((m) => m[1]);
     expect(keys.length).toBe(22);
     for (const k of [
-      'purple', 'blue', 'green', 'amber', 'red', 'pink', 'teal', 'indigo',
-      'orange', 'cyan', 'rose', 'lime', 'white', 'gold', 'violet', 'emerald',
-      'neon', 'coral', 'fuchsia', 'canary', 'copper', 'mint',
+      'purple',
+      'blue',
+      'green',
+      'amber',
+      'red',
+      'pink',
+      'teal',
+      'indigo',
+      'orange',
+      'cyan',
+      'rose',
+      'lime',
+      'white',
+      'gold',
+      'violet',
+      'emerald',
+      'neon',
+      'coral',
+      'fuchsia',
+      'canary',
+      'copper',
+      'mint',
     ]) {
       expect(keys).toContain(k);
     }
@@ -310,7 +393,9 @@ describe('vendored browser JS (web/vendor/*)', () => {
   });
 
   it('loads the vendored module entry in the main view page (no sidecar script)', () => {
-    expect(templateSource).toContain('<script type="module" src="./mainview.js"></script>');
+    expect(templateSource).toContain(
+      '<script type="module" src="./mainview.js"></script>',
+    );
     expect(templateSource).not.toContain('src="./main.js"');
   });
 });

@@ -74,8 +74,9 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
         // "Scroll tabs bar to active tab" call doesn't throw.
         tabEl.scrollIntoView = vi.fn();
         tm.tabsContainer.appendChild(tabEl);
-        const meta = (typeof id === 'string') ? { paneId: id } : id;
-        const isReviewOrKanban = meta.coder === 'review' || meta.coder === 'kanban';
+        const meta = typeof id === 'string' ? { paneId: id } : id;
+        const isReviewOrKanban =
+            meta.coder === 'review' || meta.coder === 'kanban';
         const fullMeta = {
             paneId: meta.paneId,
             sessionId: meta.paneId,
@@ -99,7 +100,8 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
                 refresh: vi.fn(),
                 buffer: { active: { viewportY: 0, baseY: 0 } },
                 options: { fontSize: 14 },
-                cols: 80, rows: 24,
+                cols: 80,
+                rows: 24,
             },
             fitAddon: { fit: vi.fn() },
         };
@@ -183,7 +185,6 @@ describe('per-tab input draft', () => {
         expect(tm.inputTextArea.value).toBe('');
         expect(tm.tabs.get('K').draft).toBeUndefined();
     });
-
 });
 
 // The inputTextArea guards in switchTab (harnesses without an input bar)

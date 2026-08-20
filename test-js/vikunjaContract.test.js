@@ -11,7 +11,12 @@ import { fileURLToPath } from 'node:url';
 // vendored copy: curl the URL above to testdata/vikunja_swagger.json.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const swagger = JSON.parse(readFileSync(resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'), 'utf8'));
+const swagger = JSON.parse(
+    readFileSync(
+        resolve(__dirname, '..', 'testdata', 'vikunja_swagger.json'),
+        'utf8',
+    ),
+);
 
 // Helper: {method, path} -> Vikunja op or undefined.
 function vikOp(method, path) {
@@ -34,11 +39,14 @@ describe('Vikunja swagger contract (locked-in)', () => {
     });
 
     it('There is a dedicated bucket-move endpoint', () => {
-        const op = vikOp('POST', '/projects/{project}/views/{view}/buckets/{bucket}/tasks');
+        const op = vikOp(
+            'POST',
+            '/projects/{project}/views/{view}/buckets/{bucket}/tasks',
+        );
         expect(op).toBeTruthy();
         expect(op.summary).toMatch(/Update a task bucket/i);
         // body schema accepts { task_id }
-        const body = (op.parameters || []).find(p => p.in === 'body');
+        const body = (op.parameters || []).find((p) => p.in === 'body');
         expect(body && body.name).toBe('taskBucket');
     });
 
@@ -54,17 +62,29 @@ describe('Vikunja swagger contract (locked-in)', () => {
         const relation = vikOp('PUT', '/tasks/{taskID}/relations');
         expect(relation).toBeTruthy();
         expect(relation.summary).toMatch(/relation/i);
-        const body = (relation.parameters || []).find(p => p.in === 'body');
-        expect(body && body.schema.$ref).toBe('#/definitions/models.TaskRelation');
-        expect(swagger.definitions['models.RelationKind'].enum).toContain('subtask');
+        const body = (relation.parameters || []).find((p) => p.in === 'body');
+        expect(body && body.schema.$ref).toBe(
+            '#/definitions/models.TaskRelation',
+        );
+        expect(swagger.definitions['models.RelationKind'].enum).toContain(
+            'subtask',
+        );
 
         const tasks = vikOp('GET', '/projects/{id}/views/{view}/tasks');
-        const expand = (tasks.parameters || []).find(p => p.name === 'expand');
+        const expand = (tasks.parameters || []).find(
+            (p) => p.name === 'expand',
+        );
         expect(expand).toBeTruthy();
         expect(expand.description).toMatch(/subtasks/i);
-        expect(swagger.definitions['models.Task'].properties.related_tasks).toBeTruthy();
-        expect(swagger.definitions['models.Task'].properties.created).toBeTruthy();
-        expect(swagger.definitions['models.Task'].properties.done_at).toBeTruthy();
+        expect(
+            swagger.definitions['models.Task'].properties.related_tasks,
+        ).toBeTruthy();
+        expect(
+            swagger.definitions['models.Task'].properties.created,
+        ).toBeTruthy();
+        expect(
+            swagger.definitions['models.Task'].properties.done_at,
+        ).toBeTruthy();
     });
 
     it('Vendor file is actually Vikunja swagger (sanity)', () => {

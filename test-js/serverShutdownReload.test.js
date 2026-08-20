@@ -30,7 +30,7 @@ describe('handleServerShutdown reload poller', () => {
         // jsdom doesn't allow replacing window.location; stub .reload
         Object.defineProperty(window, 'location', {
             configurable: true,
-            value: { reload: reloadSpy, href: 'http://localhost/' }
+            value: { reload: reloadSpy, href: 'http://localhost/' },
         });
         vi.useFakeTimers();
     });
@@ -44,27 +44,36 @@ describe('handleServerShutdown reload poller', () => {
 
     it('arms the reload poller once — a second shutdown does not stack timers', () => {
         const tm = ctx();
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'restart',
+        });
         expect(tm._reloadArmed).toBe(true);
         expect(vi.getTimerCount()).toBe(1);
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'update' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'update',
+        });
         expect(vi.getTimerCount()).toBe(1);
     });
 
     it('reloads when /api/version reports a different commit', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
-            json: async () => ({ commit: 'NEW-COMMIT', version: '0.8.1' })
+            json: async () => ({ commit: 'NEW-COMMIT', version: '0.8.1' }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
         const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'OLD-COMMIT' },
-            showToast: vi.fn()
+            showToast: vi.fn(),
         };
 
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'restart',
+        });
 
         // First poll is scheduled at +1000ms
         await vi.advanceTimersByTimeAsync(1100);
@@ -75,17 +84,20 @@ describe('handleServerShutdown reload poller', () => {
     it('does NOT reload when /api/version reports the same commit', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
-            json: async () => ({ commit: 'SAME-COMMIT', version: '0.8.0' })
+            json: async () => ({ commit: 'SAME-COMMIT', version: '0.8.0' }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
         const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'SAME-COMMIT' },
-            showToast: vi.fn()
+            showToast: vi.fn(),
         };
 
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'restart',
+        });
         await vi.advanceTimersByTimeAsync(3000);
 
         expect(reloadSpy).not.toHaveBeenCalled();
@@ -94,17 +106,20 @@ describe('handleServerShutdown reload poller', () => {
     it('reloads after maxWaitMs timeout even if commit never changes', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
-            json: async () => ({ commit: 'STUCK', version: '0.8.0' })
+            json: async () => ({ commit: 'STUCK', version: '0.8.0' }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
         const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'STUCK' },
-            showToast: vi.fn()
+            showToast: vi.fn(),
         };
 
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'shutdown' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'shutdown',
+        });
 
         // Advance past the 10s maxWaitMs plus enough poll cycles
         await vi.advanceTimersByTimeAsync(11_000);
@@ -113,21 +128,25 @@ describe('handleServerShutdown reload poller', () => {
     });
 
     it('keeps polling when fetch throws (network blip during bounce)', async () => {
-        const fakeFetch = vi.fn()
+        const fakeFetch = vi
+            .fn()
             .mockRejectedValueOnce(new Error('offline'))
             .mockResolvedValueOnce({
                 ok: true,
-                json: async () => ({ commit: 'NEW-COMMIT', version: '0.8.1' })
+                json: async () => ({ commit: 'NEW-COMMIT', version: '0.8.1' }),
             });
         vi.stubGlobal('fetch', fakeFetch);
 
         const tm = ctx();
         tm.app = {
             versionInfo: { commit: 'OLD' },
-            showToast: vi.fn()
+            showToast: vi.fn(),
         };
 
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'restart' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'restart',
+        });
 
         // First poll: fetch rejects. Second poll (1s later): succeeds with new commit.
         await vi.advanceTimersByTimeAsync(2200);
@@ -140,10 +159,13 @@ describe('handleServerShutdown reload poller', () => {
         const tm = ctx();
         tm.app = { showToast };
 
-        tm.handleControlMessage(tabInfo(), { type: 'server-shutdown', reason: 'update' });
+        tm.handleControlMessage(tabInfo(), {
+            type: 'server-shutdown',
+            reason: 'update',
+        });
         expect(showToast).toHaveBeenCalledWith(
             expect.stringContaining('update'),
-            expect.any(Object)
+            expect.any(Object),
         );
     });
 
@@ -155,7 +177,7 @@ describe('handleServerShutdown reload poller', () => {
         tm.handleControlMessage(tabInfo(), { type: 'server-shutdown' });
         expect(showToast).toHaveBeenCalledWith(
             expect.stringContaining('shutdown'),
-            expect.any(Object)
+            expect.any(Object),
         );
     });
 });

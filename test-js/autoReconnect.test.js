@@ -46,12 +46,18 @@ describe('_reviveActiveTabIfDead (wake / online / pageshow trigger)', () => {
     it('does nothing while the document is hidden (online fires in background windows)', () => {
         const c = ctx();
         c.getActiveTab = vi.fn(() => deadTab());
-        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        Object.defineProperty(document, 'visibilityState', {
+            value: 'hidden',
+            configurable: true,
+        });
         try {
             TabManager.prototype._reviveActiveTabIfDead.call(c);
             expect(c.reconnectTab).not.toHaveBeenCalled();
         } finally {
-            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+            Object.defineProperty(document, 'visibilityState', {
+                value: 'visible',
+                configurable: true,
+            });
         }
     });
 
@@ -165,7 +171,9 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
     it('hard-stops after 10 attempts and resets the counter', () => {
         const tab = deadTab({ reconnectAttempts: 10 });
         const c = armedCtx(tab);
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(false);
+        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(
+            false,
+        );
         expect(tab.reconnectAttempts).toBe(0);
         expect(vi.getTimerCount()).toBe(0);
     });
@@ -181,10 +189,15 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
     it('overlay message reports the 10-attempt budget', () => {
         vi.spyOn(Math, 'random').mockReturnValue(1);
         const msgEl = { innerText: '' };
-        const overlay = { querySelector: (sel) => (sel === '.reconnect-msg' ? msgEl : null) };
+        const overlay = {
+            querySelector: (sel) => (sel === '.reconnect-msg' ? msgEl : null),
+        };
         const tab = deadTab({
             reconnectAttempts: 2,
-            termContainer: { querySelector: (sel) => (sel === '.reconnect-overlay' ? overlay : null) },
+            termContainer: {
+                querySelector: (sel) =>
+                    sel === '.reconnect-overlay' ? overlay : null,
+            },
         });
         const c = armedCtx(tab);
         TabManager.prototype.maybeAutoReconnect.call(c, tab);
@@ -195,7 +208,9 @@ describe('maybeAutoReconnect retry policy (full jitter, 10 attempts, 20s cap)', 
         const tab = deadTab();
         const c = armedCtx(tab);
         c.app = { config: { auto_reconnect: 'off' } };
-        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(false);
+        expect(TabManager.prototype.maybeAutoReconnect.call(c, tab)).toBe(
+            false,
+        );
         expect(vi.getTimerCount()).toBe(0);
     });
 });

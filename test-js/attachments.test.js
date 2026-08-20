@@ -16,8 +16,12 @@ setupDomHarness();
 
 describe('formatAttachment', () => {
     const att = {
-        id: 'a1', name: 'shot.png', path: '/tmp/shot.png',
-        type: 'image/png', sizeBytes: 1024, source: 'paste',
+        id: 'a1',
+        name: 'shot.png',
+        path: '/tmp/shot.png',
+        type: 'image/png',
+        sizeBytes: 1024,
+        source: 'paste',
     };
 
     it('prefixes @ for vision-capable coding agents', () => {
@@ -152,7 +156,9 @@ describe('uploadClipboardImage', () => {
         expect(lastInit.method).toBe('POST');
         expect(lastInit.body).toBeInstanceOf(FormData);
 
-        expect(attachment.path).toBe('/home/u/.phi/clipboard/clip-1234-abcd.png');
+        expect(attachment.path).toBe(
+            '/home/u/.phi/clipboard/clip-1234-abcd.png',
+        );
         expect(attachment.name).toBe('clip-1234-abcd.png');
         expect(attachment.type).toBe('image/png');
         expect(attachment.sizeBytes).toBe(16);
@@ -165,7 +171,9 @@ describe('uploadClipboardImage', () => {
         // mockFetch returns ok=true unless we explicitly set ok:false.
         response = { ok: false, status: 413, json: { error: 'too large' } };
         const { uploadClipboardImage } = await import('../web/attachments.js');
-        await expect(uploadClipboardImage(blob, 'big.png')).rejects.toThrow(/413/);
+        await expect(uploadClipboardImage(blob, 'big.png')).rejects.toThrow(
+            /413/,
+        );
     });
 
     it('falls back to blob.type and blob.size when server omits them', async () => {

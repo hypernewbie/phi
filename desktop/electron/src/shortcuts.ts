@@ -39,7 +39,11 @@ export type RailSelectTarget =
  * Ctrl+digit chords safe to intercept synchronously at the webContents
  * layer even with a terminal focused (see the file header).
  */
-export const ALWAYS_SAFE_RAIL_CHORDS: ReadonlySet<string> = new Set(['1', '2', '9']);
+export const ALWAYS_SAFE_RAIL_CHORDS: ReadonlySet<string> = new Set([
+  '1',
+  '2',
+  '9',
+]);
 
 /**
  * Chords that are live terminal bytes with a terminal focused (Ctrl+3..8
@@ -47,7 +51,15 @@ export const ALWAYS_SAFE_RAIL_CHORDS: ReadonlySet<string> = new Set(['1', '2', '
  * terminal.js). They are never preventDefaulted; main.ts probes terminal
  * focus after dispatch and acts only when the page is not a terminal.
  */
-export const CONDITIONAL_RAIL_CHORDS: ReadonlySet<string> = new Set(['3', '4', '5', '6', '7', '8', 'Tab']);
+export const CONDITIONAL_RAIL_CHORDS: ReadonlySet<string> = new Set([
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  'Tab',
+]);
 
 /**
  * Resolves a Ctrl chord to a rail target in rail (insertion) order:
@@ -57,7 +69,10 @@ export const CONDITIONAL_RAIL_CHORDS: ReadonlySet<string> = new Set(['3', '4', '
  * a resolved target is acted on synchronously (always-safe digits) or
  * only when the terminal-focus probe reports a non-terminal page.
  */
-export function resolveRailChord(input: RailChordInput, count: number): RailSelectTarget | null {
+export function resolveRailChord(
+  input: RailChordInput,
+  count: number,
+): RailSelectTarget | null {
   if (input.type !== 'keyDown') return null;
   if (!input.control || input.alt || input.meta) return null;
   if (input.key === 'Tab') {
@@ -65,7 +80,11 @@ export function resolveRailChord(input: RailChordInput, count: number): RailSele
     return input.shift ? { kind: 'prev' } : { kind: 'next' };
   }
   if (input.shift) return null;
-  if (!ALWAYS_SAFE_RAIL_CHORDS.has(input.key) && !CONDITIONAL_RAIL_CHORDS.has(input.key)) return null;
+  if (
+    !ALWAYS_SAFE_RAIL_CHORDS.has(input.key) &&
+    !CONDITIONAL_RAIL_CHORDS.has(input.key)
+  )
+    return null;
   const index = Number(input.key) - 1;
   return index < count ? { kind: 'index', index } : null;
 }

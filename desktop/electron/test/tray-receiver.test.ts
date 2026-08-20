@@ -19,7 +19,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Controller, type ControllerEvent, type ProfileMeta } from '../src/controller.js';
+import {
+  Controller,
+  type ControllerEvent,
+  type ProfileMeta,
+} from '../src/controller.js';
 
 interface FakeTrayHandle {
   setActiveProfile(p: ProfileMeta): void;
@@ -36,7 +40,8 @@ interface FakeTrayHandle {
 function wire(controller: Controller, tray: FakeTrayHandle): () => void {
   return controller.subscribe((event: ControllerEvent) => {
     if (event.kind === 'active-changed') {
-      const profile = controller.state().profiles.find((p) => p.id === event.id) ?? null;
+      const profile =
+        controller.state().profiles.find((p) => p.id === event.id) ?? null;
       if (profile) tray.setActiveProfile(profile);
     } else if (event.kind === 'unread-changed') {
       tray.setUnread(event.id, event.n);
@@ -53,8 +58,14 @@ describe('controller -> tray wiring (step 5 receiver)', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'phi-tray-receiver-'));
-    controller = new Controller({ persistPath: path.join(dir, 'profiles.json') });
-    tray = { setActiveProfile: vi.fn(), setUnread: vi.fn(), rebuildMenu: vi.fn() };
+    controller = new Controller({
+      persistPath: path.join(dir, 'profiles.json'),
+    });
+    tray = {
+      setActiveProfile: vi.fn(),
+      setUnread: vi.fn(),
+      rebuildMenu: vi.fn(),
+    };
     wire(controller, tray);
   });
 
@@ -111,7 +122,12 @@ describe('controller -> tray wiring (step 5 receiver)', () => {
   it('the profile object handed to the tray carries the controller origin', () => {
     const profile: ProfileMeta = controller.add('http://127.0.0.1:7070/');
     controller.setActive(profile.id);
-    const handed = vi.mocked(tray.setActiveProfile).mock.calls[0][0] as ProfileMeta;
-    expect(handed).toEqual({ id: profile.id, name: profile.name, origin: 'http://127.0.0.1:7070/' });
+    const handed = vi.mocked(tray.setActiveProfile).mock
+      .calls[0][0] as ProfileMeta;
+    expect(handed).toEqual({
+      id: profile.id,
+      name: profile.name,
+      origin: 'http://127.0.0.1:7070/',
+    });
   });
 });

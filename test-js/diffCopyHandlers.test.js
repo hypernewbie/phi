@@ -28,14 +28,24 @@ function makeStubTerm() {
     let selection = '';
     let selectionCb = null;
     return {
-        _setSelectionValue(v) { selection = v; },
-        _fireSelectionChange(v) { selection = v; if (selectionCb) selectionCb(); },
+        _setSelectionValue(v) {
+            selection = v;
+        },
+        _fireSelectionChange(v) {
+            selection = v;
+            if (selectionCb) selectionCb();
+        },
         getSelection: vi.fn(() => selection),
-        onSelectionChange(cb) { selectionCb = cb; },
+        onSelectionChange(cb) {
+            selectionCb = cb;
+        },
         attachCustomKeyEventHandler: vi.fn(() => true),
         addEventListener: vi.fn(),
-        open: vi.fn(), loadAddon: vi.fn(),
-        reset: vi.fn(), clear: vi.fn(), write: vi.fn(),
+        open: vi.fn(),
+        loadAddon: vi.fn(),
+        reset: vi.fn(),
+        clear: vi.fn(),
+        write: vi.fn(),
     };
 }
 
@@ -81,9 +91,13 @@ describe('DiffController._wireCopyHandlers', () => {
         expect(term.onSelectionChange).toBeDefined();
         // attachCustomKeyEventHandler was called once with a function
         expect(term.attachCustomKeyEventHandler).toHaveBeenCalledTimes(1);
-        expect(typeof term.attachCustomKeyEventHandler.mock.calls[0][0]).toBe('function');
+        expect(typeof term.attachCustomKeyEventHandler.mock.calls[0][0]).toBe(
+            'function',
+        );
         // contextmenu wired via capture-phase addEventListener on the container
-        const ctxCall = container.addEventListener.mock.calls.find(c => c[0] === 'contextmenu');
+        const ctxCall = container.addEventListener.mock.calls.find(
+            (c) => c[0] === 'contextmenu',
+        );
         expect(ctxCall).toBeTruthy();
         expect(ctxCall[2]).toEqual({ capture: true });
     });
@@ -124,7 +138,9 @@ describe('DiffController._wireCopyHandlers', () => {
         // Populate selection WITHOUT firing auto-copy (real right-click in
         // a browser already has a selection active when the menu opens).
         term._setSelectionValue('something');
-        const ctxCall = container.addEventListener.mock.calls.find(c => c[0] === 'contextmenu');
+        const ctxCall = container.addEventListener.mock.calls.find(
+            (c) => c[0] === 'contextmenu',
+        );
         const handler = ctxCall[1];
         const ev = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
         handler(ev);
@@ -145,7 +161,9 @@ describe('DiffController._wireCopyHandlers', () => {
         const ctx = ctrlCtx({ copyTextRobustly: copy, term, container });
         _wireCopyHandlers.call(ctx, term, container);
 
-        const ctxCall = container.addEventListener.mock.calls.find(c => c[0] === 'contextmenu');
+        const ctxCall = container.addEventListener.mock.calls.find(
+            (c) => c[0] === 'contextmenu',
+        );
         const handler = ctxCall[1];
         const ev = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
         handler(ev);
@@ -154,7 +172,10 @@ describe('DiffController._wireCopyHandlers', () => {
     });
 
     it('Cmd-C with a selection copies and swallows the keystroke (Mac)', async () => {
-        Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+        Object.defineProperty(navigator, 'platform', {
+            value: 'MacIntel',
+            configurable: true,
+        });
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -164,7 +185,14 @@ describe('DiffController._wireCopyHandlers', () => {
 
         term._setSelectionValue('+added');
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const ev = { type: 'keydown', key: 'c', metaKey: true, ctrlKey: false, shiftKey: false, preventDefault: vi.fn() };
+        const ev = {
+            type: 'keydown',
+            key: 'c',
+            metaKey: true,
+            ctrlKey: false,
+            shiftKey: false,
+            preventDefault: vi.fn(),
+        };
         const result = keyHandler(ev);
         expect(copy).toHaveBeenCalledTimes(1);
         expect(copy.mock.calls[0][0]).toBe('+added');
@@ -173,7 +201,10 @@ describe('DiffController._wireCopyHandlers', () => {
     });
 
     it('Ctrl-Shift-C with a selection copies on Linux/Windows', async () => {
-        Object.defineProperty(navigator, 'platform', { value: 'Linux x86_64', configurable: true });
+        Object.defineProperty(navigator, 'platform', {
+            value: 'Linux x86_64',
+            configurable: true,
+        });
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -183,7 +214,14 @@ describe('DiffController._wireCopyHandlers', () => {
 
         term._setSelectionValue('+added');
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const ev = { type: 'keydown', key: 'c', metaKey: false, ctrlKey: true, shiftKey: true, preventDefault: vi.fn() };
+        const ev = {
+            type: 'keydown',
+            key: 'c',
+            metaKey: false,
+            ctrlKey: true,
+            shiftKey: true,
+            preventDefault: vi.fn(),
+        };
         const result = keyHandler(ev);
         expect(copy).toHaveBeenCalledTimes(1);
         expect(copy.mock.calls[0][0]).toBe('+added');
@@ -191,7 +229,10 @@ describe('DiffController._wireCopyHandlers', () => {
     });
 
     it('Cmd-C with no selection passes through (returns true)', async () => {
-        Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+        Object.defineProperty(navigator, 'platform', {
+            value: 'MacIntel',
+            configurable: true,
+        });
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -200,7 +241,14 @@ describe('DiffController._wireCopyHandlers', () => {
         _wireCopyHandlers.call(ctx, term, container);
 
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const ev = { type: 'keydown', key: 'c', metaKey: true, ctrlKey: false, shiftKey: false, preventDefault: vi.fn() };
+        const ev = {
+            type: 'keydown',
+            key: 'c',
+            metaKey: true,
+            ctrlKey: false,
+            shiftKey: false,
+            preventDefault: vi.fn(),
+        };
         const result = keyHandler(ev);
         expect(copy).not.toHaveBeenCalled();
         expect(result).toBe(true);
@@ -209,7 +257,10 @@ describe('DiffController._wireCopyHandlers', () => {
     it('plain Ctrl-C (no shift) does NOT trigger copy on Linux/Windows', async () => {
         // Plain Ctrl-C is the SIGINT keystroke for shells; we must not
         // swallow it as a copy even when there is a selection.
-        Object.defineProperty(navigator, 'platform', { value: 'Linux x86_64', configurable: true });
+        Object.defineProperty(navigator, 'platform', {
+            value: 'Linux x86_64',
+            configurable: true,
+        });
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -219,7 +270,14 @@ describe('DiffController._wireCopyHandlers', () => {
 
         term._setSelectionValue('selected');
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const ev = { type: 'keydown', key: 'c', metaKey: false, ctrlKey: true, shiftKey: false, preventDefault: vi.fn() };
+        const ev = {
+            type: 'keydown',
+            key: 'c',
+            metaKey: false,
+            ctrlKey: true,
+            shiftKey: false,
+            preventDefault: vi.fn(),
+        };
         const result = keyHandler(ev);
         expect(copy).not.toHaveBeenCalled();
         expect(result).toBe(true);
@@ -234,13 +292,22 @@ describe('DiffController._wireCopyHandlers', () => {
         _wireCopyHandlers.call(ctx, term, container);
 
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const result = keyHandler({ type: 'keydown', key: 'a', metaKey: false, ctrlKey: false, shiftKey: false });
+        const result = keyHandler({
+            type: 'keydown',
+            key: 'a',
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+        });
         expect(copy).not.toHaveBeenCalled();
         expect(result).toBe(true);
     });
 
     it('key-up events pass through (we only intercept keydown)', async () => {
-        Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+        Object.defineProperty(navigator, 'platform', {
+            value: 'MacIntel',
+            configurable: true,
+        });
         const { _wireCopyHandlers } = await loadDiffControllerPrototype();
         const term = makeStubTerm();
         const container = makeStubContainer();
@@ -250,7 +317,13 @@ describe('DiffController._wireCopyHandlers', () => {
 
         term._setSelectionValue('selected');
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        const result = keyHandler({ type: 'keyup', key: 'c', metaKey: true, ctrlKey: false, shiftKey: false });
+        const result = keyHandler({
+            type: 'keyup',
+            key: 'c',
+            metaKey: true,
+            ctrlKey: false,
+            shiftKey: false,
+        });
         expect(copy).not.toHaveBeenCalled();
         expect(result).toBe(true);
     });
@@ -265,8 +338,24 @@ describe('DiffController._wireCopyHandlers', () => {
 
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
         for (const key of ['+', '=', '-', '_', '0', 'Add', 'Subtract']) {
-            expect(keyHandler({ type: 'keydown', key, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
-            expect(keyHandler({ type: 'keydown', key, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);
+            expect(
+                keyHandler({
+                    type: 'keydown',
+                    key,
+                    ctrlKey: true,
+                    altKey: false,
+                    metaKey: false,
+                }),
+            ).toBe(false);
+            expect(
+                keyHandler({
+                    type: 'keydown',
+                    key,
+                    ctrlKey: false,
+                    altKey: false,
+                    metaKey: true,
+                }),
+            ).toBe(false);
         }
     });
 
@@ -279,10 +368,46 @@ describe('DiffController._wireCopyHandlers', () => {
         _wireCopyHandlers.call(ctx, term, container);
 
         const keyHandler = term.attachCustomKeyEventHandler.mock.calls[0][0];
-        expect(keyHandler({ type: 'keydown', key: 'F5', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false })).toBe(false);
-        expect(keyHandler({ type: 'keydown', key: 'F5', shiftKey: true, ctrlKey: false, altKey: false, metaKey: false })).toBe(false);
-        expect(keyHandler({ type: 'keydown', key: 'r', shiftKey: true, ctrlKey: true, altKey: false, metaKey: false })).toBe(false);
-        expect(keyHandler({ type: 'keydown', key: 'R', shiftKey: true, ctrlKey: false, altKey: false, metaKey: true })).toBe(false);
+        expect(
+            keyHandler({
+                type: 'keydown',
+                key: 'F5',
+                shiftKey: false,
+                ctrlKey: false,
+                altKey: false,
+                metaKey: false,
+            }),
+        ).toBe(false);
+        expect(
+            keyHandler({
+                type: 'keydown',
+                key: 'F5',
+                shiftKey: true,
+                ctrlKey: false,
+                altKey: false,
+                metaKey: false,
+            }),
+        ).toBe(false);
+        expect(
+            keyHandler({
+                type: 'keydown',
+                key: 'r',
+                shiftKey: true,
+                ctrlKey: true,
+                altKey: false,
+                metaKey: false,
+            }),
+        ).toBe(false);
+        expect(
+            keyHandler({
+                type: 'keydown',
+                key: 'R',
+                shiftKey: true,
+                ctrlKey: false,
+                altKey: false,
+                metaKey: true,
+            }),
+        ).toBe(false);
     });
 });
 
@@ -319,7 +444,15 @@ describe('DiffController.copyDiffBuffer', () => {
         // xterm pads its buffer with empty rows. Internal whitespace-only
         // lines (real '   ' and '\\t' from a diff hunk) must survive; only
         // the trailing empties get stripped.
-        const term = makeBufferTerm(['first', 'second', '   ', '\t', 'third', '', '']);
+        const term = makeBufferTerm([
+            'first',
+            'second',
+            '   ',
+            '\t',
+            'third',
+            '',
+            '',
+        ]);
         const copy = vi.fn();
         const ctx = ctrlCtx({ copyTextRobustly: copy, term });
         copyDiffBuffer.call(ctx);
@@ -384,7 +517,9 @@ describe('DiffController Copy button', () => {
         const term = { getSelection: vi.fn(() => 'SELECTED TEXT') };
         const ctx = {
             closeDiffBtn: document.getElementById('close-diff-btn'),
-            headerDiffToggleBtn: document.getElementById('header-diff-toggle-btn'),
+            headerDiffToggleBtn: document.getElementById(
+                'header-diff-toggle-btn',
+            ),
             copyDiffBtn: document.getElementById('copy-diff-btn'),
             refreshDiffBtn: document.getElementById('refresh-diff-btn'),
             term,
@@ -406,7 +541,9 @@ describe('DiffController Copy button', () => {
         const copyDiffBuffer = vi.fn();
         const ctx = {
             closeDiffBtn: document.getElementById('close-diff-btn'),
-            headerDiffToggleBtn: document.getElementById('header-diff-toggle-btn'),
+            headerDiffToggleBtn: document.getElementById(
+                'header-diff-toggle-btn',
+            ),
             copyDiffBtn: document.getElementById('copy-diff-btn'),
             refreshDiffBtn: document.getElementById('refresh-diff-btn'),
             term,
@@ -427,14 +564,18 @@ describe('DiffController Copy button', () => {
         const copyTextRobustly = vi.fn();
         const ctx = {
             closeDiffBtn: document.getElementById('close-diff-btn'),
-            headerDiffToggleBtn: document.getElementById('header-diff-toggle-btn'),
+            headerDiffToggleBtn: document.getElementById(
+                'header-diff-toggle-btn',
+            ),
             copyDiffBtn: document.getElementById('copy-diff-btn'),
             refreshDiffBtn: document.getElementById('refresh-diff-btn'),
             term: null,
             app: { tabManager: { copyTextRobustly } },
         };
         setupEventListeners.call(ctx);
-        expect(() => document.getElementById('copy-diff-btn').click()).not.toThrow();
+        expect(() =>
+            document.getElementById('copy-diff-btn').click(),
+        ).not.toThrow();
         expect(copyTextRobustly).not.toHaveBeenCalled();
     });
 });

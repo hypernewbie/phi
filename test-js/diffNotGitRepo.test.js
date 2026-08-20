@@ -48,7 +48,9 @@ function makeCtx(activeTab, cwd = '/no/repo') {
 // True if any write on the term used a red ANSI code (the spam we're
 // trying to suppress). False otherwise.
 function wroteRed(term) {
-    return term.writes.some((s) => s.includes('\x1b[31m') || s.includes('\x1b[1;31m'));
+    return term.writes.some(
+        (s) => s.includes('\x1b[31m') || s.includes('\x1b[1;31m'),
+    );
 }
 
 // True if any write used a muted gray code.

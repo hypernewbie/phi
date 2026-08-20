@@ -27,7 +27,9 @@ import {
   type SingleInstanceWindow,
 } from '../src/single-instance.js';
 
-function fakeWindow(overrides: Partial<SingleInstanceWindow> = {}): SingleInstanceWindow {
+function fakeWindow(
+  overrides: Partial<SingleInstanceWindow> = {},
+): SingleInstanceWindow {
   return {
     webContents: { send: vi.fn(), isDestroyed: () => false },
     restore: vi.fn(),
@@ -39,7 +41,9 @@ function fakeWindow(overrides: Partial<SingleInstanceWindow> = {}): SingleInstan
 
 /** Extracts the listener setupSingleInstance registered for 'second-instance'. */
 function secondInstanceListener(): (event: unknown, argv: string[]) => void {
-  const call = fakeApp.on.mock.calls.find(([channel]) => channel === 'second-instance');
+  const call = fakeApp.on.mock.calls.find(
+    ([channel]) => channel === 'second-instance',
+  );
   if (!call) throw new Error('second-instance listener was not registered');
   return call[1] as (event: unknown, argv: string[]) => void;
 }
@@ -56,7 +60,9 @@ describe('classifyArgv', () => {
   });
 
   it('classifies http(s):// args as server payloads', () => {
-    expect(classifyArgv(['http://127.0.0.1:7070/', 'https://example.com/'])).toEqual([
+    expect(
+      classifyArgv(['http://127.0.0.1:7070/', 'https://example.com/']),
+    ).toEqual([
       { kind: 'server', value: 'http://127.0.0.1:7070/' },
       { kind: 'server', value: 'https://example.com/' },
     ]);
@@ -81,7 +87,9 @@ describe('classifyArgv', () => {
   });
 
   it('returns [] for flags and junk only', () => {
-    expect(classifyArgv(['--help', '-v', 'notaurl', '', 'C:\\Windows\\x'])).toEqual([]);
+    expect(
+      classifyArgv(['--help', '-v', 'notaurl', '', 'C:\\Windows\\x']),
+    ).toEqual([]);
   });
 
   it('returns [] for empty argv', () => {
@@ -143,11 +151,15 @@ describe('buildForwardPayload', () => {
 
 describe('parseForwardPayload', () => {
   it('accepts valid deep-link and server payloads', () => {
-    expect(parseForwardPayload({ kind: 'deep-link', value: 'phi://profile/home' })).toEqual({
+    expect(
+      parseForwardPayload({ kind: 'deep-link', value: 'phi://profile/home' }),
+    ).toEqual({
       kind: 'deep-link',
       value: 'phi://profile/home',
     });
-    expect(parseForwardPayload({ kind: 'server', value: 'https://example.com/' })).toEqual({
+    expect(
+      parseForwardPayload({ kind: 'server', value: 'https://example.com/' }),
+    ).toEqual({
       kind: 'server',
       value: 'https://example.com/',
     });
@@ -162,11 +174,17 @@ describe('parseForwardPayload', () => {
     expect(parseForwardPayload({ kind: 'deep-link', value: '' })).toBeNull();
     expect(parseForwardPayload({ kind: 'deep-link', value: '   ' })).toBeNull();
     // kind/value mismatch: the value must re-classify to the same kind.
-    expect(parseForwardPayload({ kind: 'server', value: 'phi://profile/x' })).toBeNull();
+    expect(
+      parseForwardPayload({ kind: 'server', value: 'phi://profile/x' }),
+    ).toBeNull();
   });
 
   it('round-trips buildForwardPayload output', () => {
-    for (const arg of ['phi://profile/home', 'https://x.dev/', 'http://127.0.0.1:7070/']) {
+    for (const arg of [
+      'phi://profile/home',
+      'https://x.dev/',
+      'http://127.0.0.1:7070/',
+    ]) {
       const built = buildForwardPayload(arg);
       expect(built).not.toBeNull();
       expect(parseForwardPayload(built)).toEqual(built);
@@ -184,21 +202,35 @@ describe('setupSingleInstance', () => {
     // installListener() is called.
     expect(fakeApp.on).not.toHaveBeenCalled();
     handle.installListener();
-    expect(fakeApp.on).toHaveBeenCalledWith('second-instance', expect.any(Function));
+    expect(fakeApp.on).toHaveBeenCalledWith(
+      'second-instance',
+      expect.any(Function),
+    );
     // acquire is a no-op for the primary.
-    expect(handle.acquire(['phi://profile/home'])).toEqual({ lost: false, forwarded: false });
+    expect(handle.acquire(['phi://profile/home'])).toEqual({
+      lost: false,
+      forwarded: false,
+    });
     expect(fakeApp.quit).not.toHaveBeenCalled();
   });
 
   it('installs the second-instance listener only when installListener() is called', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const handle = setupSingleInstance(null, FORWARD_CHANNEL);
-    expect(fakeApp.on).not.toHaveBeenCalledWith('second-instance', expect.any(Function));
+    expect(fakeApp.on).not.toHaveBeenCalledWith(
+      'second-instance',
+      expect.any(Function),
+    );
     handle.installListener();
-    expect(fakeApp.on).toHaveBeenCalledWith('second-instance', expect.any(Function));
+    expect(fakeApp.on).toHaveBeenCalledWith(
+      'second-instance',
+      expect.any(Function),
+    );
     // Installing twice must not double-register.
     handle.installListener();
-    expect(fakeApp.on.mock.calls.filter(([ch]) => ch === 'second-instance')).toHaveLength(1);
+    expect(
+      fakeApp.on.mock.calls.filter(([ch]) => ch === 'second-instance'),
+    ).toHaveLength(1);
   });
 
   it('forwards classified argv to the main window and foregrounds it on second-instance', () => {
@@ -214,7 +246,12 @@ describe('setupSingleInstance', () => {
     });
     const handle = setupSingleInstance(win, FORWARD_CHANNEL);
     handle.installListener();
-    secondInstanceListener()({}, ['phi://profile/home', 'https://example.com/', 'junk', '-x']);
+    secondInstanceListener()({}, [
+      'phi://profile/home',
+      'https://example.com/',
+      'junk',
+      '-x',
+    ]);
     expect(send).toHaveBeenCalledTimes(2);
     expect(send).toHaveBeenNthCalledWith(1, FORWARD_CHANNEL, {
       kind: 'deep-link',
@@ -235,7 +272,12 @@ describe('setupSingleInstance', () => {
     const win = fakeWindow({ webContents: { send, isDestroyed: () => false } });
     const handle = setupSingleInstance(win, FORWARD_CHANNEL, onServerUrl);
     handle.installListener();
-    secondInstanceListener()({}, ['phi://profile/home', 'https://example.com/', 'junk', '-x']);
+    secondInstanceListener()({}, [
+      'phi://profile/home',
+      'https://example.com/',
+      'junk',
+      '-x',
+    ]);
     // Server payloads go to the callback (never to the window); deep links
     // keep the forward channel.
     expect(onServerUrl).toHaveBeenCalledTimes(1);
@@ -277,7 +319,9 @@ describe('setupSingleInstance', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const handle = setupSingleInstance(null, FORWARD_CHANNEL);
     handle.installListener();
-    expect(() => secondInstanceListener()({}, ['phi://profile/x'])).not.toThrow();
+    expect(() =>
+      secondInstanceListener()({}, ['phi://profile/x']),
+    ).not.toThrow();
   });
 
   it('supports a lazy window accessor (window created after the gate)', () => {
@@ -315,7 +359,10 @@ describe('setupSingleInstance', () => {
     expect(
       handle.acquire(['phi://profile/home', 'http://127.0.0.1:7070/', 'junk']),
     ).toEqual({ lost: true, forwarded: true });
-    expect(handle.acquire(['junk', '-x'])).toEqual({ lost: true, forwarded: false });
+    expect(handle.acquire(['junk', '-x'])).toEqual({
+      lost: true,
+      forwarded: false,
+    });
     expect(handle.acquire([])).toEqual({ lost: true, forwarded: false });
     expect(fakeApp.quit).toHaveBeenCalledTimes(3);
   });

@@ -146,7 +146,12 @@ describe('SessionsManager.loadWorktrees — scan-error path (sessions.ts:~511)',
         // with a payload we simulate a lower-level fetch rejection instead
         // (the network/DNS-failure shape) — whatever propagates up lands
         // in the same escapeHtml((e as Error).message) call at line 511.
-        vi.stubGlobal('fetch', vi.fn(async () => { throw new Error(PAYLOAD); }));
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => {
+                throw new Error(PAYLOAD);
+            }),
+        );
         await SessionsManager.prototype.loadWorktrees.call(ctx, null);
         expect(ctx.sessionList.querySelector('img')).toBeNull();
         expect(ctx.sessionList.textContent).toContain(PAYLOAD);
@@ -158,7 +163,11 @@ describe('SessionsManager.loadWorktreeSessions — fetch-error path (sessions.ts
         const ctx = { activeCoder: 'claude' };
         const container = document.createElement('div');
         mockFetch(() => ({ ok: false, status: 500, text: PAYLOAD }));
-        await SessionsManager.prototype.loadWorktreeSessions.call(ctx, '/wt', container);
+        await SessionsManager.prototype.loadWorktreeSessions.call(
+            ctx,
+            '/wt',
+            container,
+        );
         expect(container.querySelector('img')).toBeNull();
         expect(container.textContent).toContain(PAYLOAD);
     });
@@ -169,7 +178,11 @@ describe('SyncManager.refreshMessages — fetch-error path (sync.ts:~153)', () =
         const m = Object.create(SyncManager.prototype);
         m.coordinatorInput = document.createElement('input');
         m.messagesList = document.createElement('div');
-        m.app = { sessionsManager: { config: { sync_coordinator: 'http://localhost:7070' } } };
+        m.app = {
+            sessionsManager: {
+                config: { sync_coordinator: 'http://localhost:7070' },
+            },
+        };
         mockFetch(() => ({ ok: false, status: 500, text: PAYLOAD }));
         await m.refreshMessages();
         expect(m.messagesList.querySelector('img')).toBeNull();

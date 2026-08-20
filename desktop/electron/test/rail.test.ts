@@ -15,9 +15,15 @@ import { describe, expect, it } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const electronRoot = path.join(here, '..');
 const webRoot = path.join(electronRoot, '..', '..', 'web');
-const railCss = readFileSync(path.join(electronRoot, 'src', 'rail.css'), 'utf8');
+const railCss = readFileSync(
+  path.join(electronRoot, 'src', 'rail.css'),
+  'utf8',
+);
 const webCss = readFileSync(path.join(webRoot, 'style.css'), 'utf8');
-const vendorWebCss = readFileSync(path.join(electronRoot, 'web', 'style.css'), 'utf8');
+const vendorWebCss = readFileSync(
+  path.join(electronRoot, 'web', 'style.css'),
+  'utf8',
+);
 
 function ruleBody(css: string, selector: string): string | null {
   // Match the selector preceded by start-of-line, whitespace, or
@@ -80,8 +86,12 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(railBody).not.toBeNull();
     const btnBody = ruleBody(webCss, '.header-btn');
     expect(btnBody).not.toBeNull();
-    expect(cssValue(railBody!, 'border-radius')).toBe(cssValue(btnBody!, 'border-radius'));
-    expect(cssValue(railBody!, 'background-color')).toBe(cssValue(btnBody!, 'background-color'));
+    expect(cssValue(railBody!, 'border-radius')).toBe(
+      cssValue(btnBody!, 'border-radius'),
+    );
+    expect(cssValue(railBody!, 'background-color')).toBe(
+      cssValue(btnBody!, 'background-color'),
+    );
     expect(cssValue(railBody!, 'border')).toBe(cssValue(btnBody!, 'border'));
   });
 
@@ -90,8 +100,12 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(railBody).not.toBeNull();
     const btnBody = ruleBody(webCss, '.header-btn');
     expect(btnBody).not.toBeNull();
-    expect(cssValue(railBody!, 'border-radius')).toBe(cssValue(btnBody!, 'border-radius'));
-    expect(cssValue(railBody!, 'background-color')).toBe(cssValue(btnBody!, 'background-color'));
+    expect(cssValue(railBody!, 'border-radius')).toBe(
+      cssValue(btnBody!, 'border-radius'),
+    );
+    expect(cssValue(railBody!, 'background-color')).toBe(
+      cssValue(btnBody!, 'background-color'),
+    );
     expect(cssValue(railBody!, 'border')).toBe(cssValue(btnBody!, 'border'));
   });
 
@@ -104,7 +118,9 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(btnHover).not.toBeNull();
     // The transform lifts the chip the same way .header-btn does
     // (browser button hover treatment).
-    expect(cssValue(railHover!, 'transform')).toBe(cssValue(btnHover!, 'transform'));
+    expect(cssValue(railHover!, 'transform')).toBe(
+      cssValue(btnHover!, 'transform'),
+    );
     // Both rules box-shadow on the accent token (the rail uses
     // --entry-accent, the per-server hover-preview accent set by the
     // renderer; the browser uses the global --accent-glow).
@@ -119,7 +135,9 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
     expect(railActive).not.toBeNull();
     const btnActive = ruleBody(webCss, '.header-btn:active');
     expect(btnActive).not.toBeNull();
-    expect(cssValue(railActive!, 'transform')).toBe(cssValue(btnActive!, 'transform'));
+    expect(cssValue(railActive!, 'transform')).toBe(
+      cssValue(btnActive!, 'transform'),
+    );
   });
 
   it('.rail-item.active uses the same accent tokens as .header-btn.active', () => {
@@ -171,12 +189,15 @@ describe('rail.css: matches web/ button / surface vocabulary', () => {
   });
 
   it('every gradient in rail.css traces back to web/style.css (no sidecar gradients)', () => {
-    const railGradients = [...railCss.matchAll(/(linear-gradient|radial-gradient)\([^)]*\)/g)].map(
-      (m) => m[0],
-    );
+    const railGradients = [
+      ...railCss.matchAll(/(linear-gradient|radial-gradient)\([^)]*\)/g),
+    ].map((m) => m[0]);
     expect(railGradients.length).toBeGreaterThan(0);
     for (const g of railGradients) {
-      expect(webCss, `rail gradient "${g.slice(0, 40)}..." not in web/`).toContain(g);
+      expect(
+        webCss,
+        `rail gradient "${g.slice(0, 40)}..." not in web/`,
+      ).toContain(g);
     }
   });
 

@@ -54,14 +54,21 @@ describe('call sites use the right method (static source check)', () => {
         // Match the if-block body: `mode === 'cmds')` followed by any
         // (non-greedy) chars then `this.app.<method>(copyBtn)`. Tolerates
         // nested braces by limiting the lookahead to the relevant line.
-        const match = src.match(/mode === 'cmds'\)[\s\S]*?this\.app\.(\w+)\(copyBtn\)/);
-        expect(match, 'expected to find quick-commands dropup copy handler').toBeTruthy();
+        const match = src.match(
+            /mode === 'cmds'\)[\s\S]*?this\.app\.(\w+)\(copyBtn\)/,
+        );
+        expect(
+            match,
+            'expected to find quick-commands dropup copy handler',
+        ).toBeTruthy();
         expect(match[1]).toBe('exportQuickCommandsConfig');
     });
 
     it('the cmd panel Copy Commands button in web/diff.js calls exportTerminalCommandsConfig', () => {
         const src = readFileSync('web/diff.js', 'utf8');
-        const match = src.match(/copyAllCommands\(btnElement\) \{[\s\S]*?this\.app\.(\w+)\(btnElement\)/);
+        const match = src.match(
+            /copyAllCommands\(btnElement\) \{[\s\S]*?this\.app\.(\w+)\(btnElement\)/,
+        );
         expect(match, 'expected to find copyAllCommands handler').toBeTruthy();
         expect(match[1]).toBe('exportTerminalCommandsConfig');
     });

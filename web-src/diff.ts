@@ -22,7 +22,13 @@ export function normalizeCwd(p: string): string {
 // Pure; returns a falsy value for null/undefined tabs (raw expression, kept
 // as-is because callers only use it in boolean contexts).
 export function isUsableShell(t: any): any {
-    return t && !t.isDead && (t.coder === 'bash' || t.coder === 'pwsh') && t.title !== 'btop' && !t.isBtop;
+    return (
+        t &&
+        !t.isDead &&
+        (t.coder === 'bash' || t.coder === 'pwsh') &&
+        t.title !== 'btop' &&
+        !t.isBtop
+    );
 }
 
 // findReusableShellTab picks the shell tab a quick-command should be sent to:
@@ -31,13 +37,21 @@ export function isUsableShell(t: any): any {
 //      an alive shell whose CWD matches activeCWD (exact, per normalizeCwd);
 //   3. else null (caller spawns a new shell).
 // Pure over a plain iterable of tab-like objects.
-export function findReusableShellTab(tabs: Iterable<any>, activeTab: any, { useExistingTerminalTab, activeCWD }: { useExistingTerminalTab?: boolean; activeCWD?: string } = {}): any {
+export function findReusableShellTab(
+    tabs: Iterable<any>,
+    activeTab: any,
+    {
+        useExistingTerminalTab,
+        activeCWD,
+    }: { useExistingTerminalTab?: boolean; activeCWD?: string } = {},
+): any {
     if (isUsableShell(activeTab)) return activeTab;
     const cwd = activeCWD || '';
     if (useExistingTerminalTab && cwd) {
         const wantedCWD = normalizeCwd(cwd);
-        const match = Array.from(tabs).find(t =>
-            isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD);
+        const match = Array.from(tabs).find(
+            (t) => isUsableShell(t) && normalizeCwd(t.cwd || '') === wantedCWD,
+        );
         if (match) return match;
     }
     return null;
@@ -78,19 +92,29 @@ export class DiffController {
         this.isPanelOpen = true;
 
         this.diffPanel = document.getElementById('diff-panel')!;
-        this.headerDiffToggleBtn = document.getElementById('header-diff-toggle-btn')!;
+        this.headerDiffToggleBtn = document.getElementById(
+            'header-diff-toggle-btn',
+        )!;
         this.closeDiffBtn = document.getElementById('close-diff-btn')!;
         this.refreshDiffBtn = document.getElementById('refresh-diff-btn')!;
         this.copyDiffBtn = document.getElementById('copy-diff-btn');
-        this.diffTermContainer = document.getElementById('diff-term-container')!;
-        this.commitSelect = document.getElementById('diff-commit-select') as HTMLSelectElement;
+        this.diffTermContainer = document.getElementById(
+            'diff-term-container',
+        )!;
+        this.commitSelect = document.getElementById(
+            'diff-commit-select',
+        ) as HTMLSelectElement;
         this.actionBar = document.getElementById('diff-action-bar');
         this.richDiffBtn = document.getElementById('rich-diff-btn');
         this.diffModal = document.getElementById('diff-modal');
         this.diffModalClose = document.getElementById('diff-modal-close');
         this.diffModalBody = document.getElementById('diff-modal-body');
-        this.contextToggleBtn = document.getElementById('diff-context-toggle-btn');
-        this.layoutToggleBtn = document.getElementById('diff-layout-toggle-btn');
+        this.contextToggleBtn = document.getElementById(
+            'diff-context-toggle-btn',
+        );
+        this.layoutToggleBtn = document.getElementById(
+            'diff-layout-toggle-btn',
+        );
         this.currentContextLines = 3;
         this.currentLayout = 'line-by-line'; // Default unified
         this.lastRawDiffText = '';
@@ -100,7 +124,9 @@ export class DiffController {
 
     setupEventListeners(): void {
         // Toggle panel states
-        this.closeDiffBtn.addEventListener('click', () => this.togglePanel(false));
+        this.closeDiffBtn.addEventListener('click', () =>
+            this.togglePanel(false),
+        );
         this.headerDiffToggleBtn.addEventListener('click', () => {
             this.togglePanel(!this.isPanelOpen);
         });
@@ -123,10 +149,14 @@ export class DiffController {
 
         // Rich diff modal triggering
         if (this.richDiffBtn) {
-            this.richDiffBtn.addEventListener('click', () => this.openRichDiffModal());
+            this.richDiffBtn.addEventListener('click', () =>
+                this.openRichDiffModal(),
+            );
         }
         if (this.diffModalClose) {
-            this.diffModalClose.addEventListener('click', () => this.closeRichDiffModal());
+            this.diffModalClose.addEventListener('click', () =>
+                this.closeRichDiffModal(),
+            );
         }
         if (this.diffModal) {
             this.diffModal.addEventListener('click', (e) => {
@@ -137,24 +167,34 @@ export class DiffController {
         // markdown.js (md-modal) and app.js (ws-modal). Document-level
         // listener so we don't need to manage focus to capture Escape.
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.diffModal && !this.diffModal.classList.contains('hidden')) {
+            if (
+                e.key === 'Escape' &&
+                this.diffModal &&
+                !this.diffModal.classList.contains('hidden')
+            ) {
                 this.closeRichDiffModal();
             }
         });
         if (this.contextToggleBtn) {
-            this.contextToggleBtn.addEventListener('click', () => this.toggleRichDiffContext());
+            this.contextToggleBtn.addEventListener('click', () =>
+                this.toggleRichDiffContext(),
+            );
         }
         if (this.layoutToggleBtn) {
-            this.layoutToggleBtn.addEventListener('click', () => this.toggleRichDiffLayout());
+            this.layoutToggleBtn.addEventListener('click', () =>
+                this.toggleRichDiffLayout(),
+            );
         }
 
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
 
         // Diff sub-tabs
-        document.querySelectorAll('.diff-tab-btn').forEach(btn => {
+        document.querySelectorAll('.diff-tab-btn').forEach((btn) => {
             btn.addEventListener('click', () => {
-                document.querySelector('.diff-tab-btn.active')!.classList.remove('active');
+                document
+                    .querySelector('.diff-tab-btn.active')!
+                    .classList.remove('active');
                 btn.classList.add('active');
                 this.activeTab = btn.getAttribute('data-tab') as string;
                 this.refreshDiff(false); // Reload commit list when changing tabs
@@ -192,7 +232,10 @@ export class DiffController {
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
-                cursor: document.documentElement.style.getPropertyValue('--accent') || '#7c6af7',
+                cursor:
+                    document.documentElement.style.getPropertyValue(
+                        '--accent',
+                    ) || '#7c6af7',
                 cursorAccent: '#08080a',
                 black: '#08080a',
                 red: '#ef4444',
@@ -201,8 +244,8 @@ export class DiffController {
                 blue: '#3b82f6',
                 magenta: '#7c6af7',
                 cyan: '#06b6d4',
-                white: '#e4e3e9'
-            }
+                white: '#e4e3e9',
+            },
         });
 
         this.fitAddon = new window.FitAddon.FitAddon();
@@ -235,7 +278,9 @@ export class DiffController {
         // viewport on first launch.)
         const openState = localStorage.getItem('phi_diff_panel_open');
         const isMobileForInit = window.innerWidth <= 768;
-        const shouldOpen = isMobileForInit ? openState === 'true' : openState !== 'false';
+        const shouldOpen = isMobileForInit
+            ? openState === 'true'
+            : openState !== 'false';
         this.togglePanel(shouldOpen);
     }
 
@@ -257,19 +302,28 @@ export class DiffController {
             if (sel) copy(sel, true); // silent: matches main-terminal behavior
         });
 
-        termContainer.addEventListener('contextmenu', (e) => {
-            const sel = term.getSelection();
-            if (!sel) return;
-            e.preventDefault();
-            e.stopPropagation();
-            copy(sel);
-        }, { capture: true });
+        termContainer.addEventListener(
+            'contextmenu',
+            (e) => {
+                const sel = term.getSelection();
+                if (!sel) return;
+                e.preventDefault();
+                e.stopPropagation();
+                copy(sel);
+            },
+            { capture: true },
+        );
 
         term.attachCustomKeyEventHandler((e: any) => {
             if (e.type === 'keydown') {
-                const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-                const isCopy = (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
-                               (!isMac && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c');
+                const isMac =
+                    navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+                const isCopy =
+                    (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
+                    (!isMac &&
+                        e.ctrlKey &&
+                        e.shiftKey &&
+                        e.key.toLowerCase() === 'c');
                 if (isCopy) {
                     const sel = term.getSelection();
                     if (sel) {
@@ -281,12 +335,25 @@ export class DiffController {
                 // Allow zoom shortcuts (Ctrl/Cmd +, -, 0, =) to pass through
                 if ((e.ctrlKey || e.metaKey) && !e.altKey) {
                     const k = e.key;
-                    if (k === '+' || k === '=' || k === '-' || k === '_' || k === '0' || k === 'Add' || k === 'Subtract') {
+                    if (
+                        k === '+' ||
+                        k === '=' ||
+                        k === '-' ||
+                        k === '_' ||
+                        k === '0' ||
+                        k === 'Add' ||
+                        k === 'Subtract'
+                    ) {
                         return false;
                     }
                 }
                 // Allow reload / reconnect shortcuts (F5, Shift+F5, Ctrl+Shift+R) to pass through
-                if (e.key === 'F5' || e.code === 'F5' || ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))) {
+                if (
+                    e.key === 'F5' ||
+                    e.code === 'F5' ||
+                    ((e.ctrlKey || e.metaKey) &&
+                        (e.key === 'r' || e.key === 'R'))
+                ) {
                     return false;
                 }
             }
@@ -357,7 +424,7 @@ export class DiffController {
                 this.currentWs.sendResize(this.term.cols, this.term.rows);
             }
         } catch (e) {
-            console.error("[diff] Fit error:", e);
+            console.error('[diff] Fit error:', e);
         }
     }
 
@@ -366,7 +433,9 @@ export class DiffController {
         this.term.reset();
         this.term.clear();
         const normalized = (text || '').replace(/\r?\n/g, '\r\n');
-        this.term.write(normalized && normalized.trim() ? normalized : emptyText);
+        this.term.write(
+            normalized && normalized.trim() ? normalized : emptyText,
+        );
     }
 
     _setPanel(mode: string): void {
@@ -423,8 +492,10 @@ export class DiffController {
         if (!this.commitSelect) return;
         const cwd = this.app.sessionsManager.activeCWD || '';
         try {
-            const res = await fetch(`/api/git/commits?cwd=${encodeURIComponent(cwd)}`);
-            if (!res.ok) throw new Error("Failed to load commits");
+            const res = await fetch(
+                `/api/git/commits?cwd=${encodeURIComponent(cwd)}`,
+            );
+            if (!res.ok) throw new Error('Failed to load commits');
             const commits = await res.json();
 
             const currentSelected = this.commitSelect.value || 'unstaged';
@@ -443,13 +514,17 @@ export class DiffController {
                 });
             }
 
-            if (Array.from(this.commitSelect.options).some(o => o.value === currentSelected)) {
+            if (
+                Array.from(this.commitSelect.options).some(
+                    (o) => o.value === currentSelected,
+                )
+            ) {
                 this.commitSelect.value = currentSelected;
             } else {
                 this.commitSelect.value = 'unstaged';
             }
         } catch (e) {
-            console.error("[diff] Failed to load commits list:", e);
+            console.error('[diff] Failed to load commits list:', e);
         }
     }
 
@@ -475,7 +550,9 @@ export class DiffController {
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             <span>Copy Commands</span>
         `;
-        copyAllBtn.addEventListener('click', () => this.copyAllCommands(copyAllBtn));
+        copyAllBtn.addEventListener('click', () =>
+            this.copyAllCommands(copyAllBtn),
+        );
         toolbar.appendChild(copyAllBtn);
 
         const pasteListBtn = document.createElement('button');
@@ -483,7 +560,9 @@ export class DiffController {
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
             <span>Paste Config</span>
         `;
-        pasteListBtn.addEventListener('click', () => this.pasteCommands(pasteListBtn));
+        pasteListBtn.addEventListener('click', () =>
+            this.pasteCommands(pasteListBtn),
+        );
         toolbar.appendChild(pasteListBtn);
 
         cmdEl.appendChild(toolbar);
@@ -495,7 +574,8 @@ export class DiffController {
         // Use-separate-hidden-terminal toggle
         const hiddenRow = document.createElement('label');
         hiddenRow.className = 'cmd-reuse-row';
-        hiddenRow.title = 'When on, terminal commands run in a background hidden terminal without creating or switching tabs.';
+        hiddenRow.title =
+            'When on, terminal commands run in a background hidden terminal without creating or switching tabs.';
         const hiddenCheckbox = document.createElement('input');
         hiddenCheckbox.type = 'checkbox';
         hiddenCheckbox.id = 'use-hidden-terminal-toggle';
@@ -504,7 +584,8 @@ export class DiffController {
         // Reuse-existing-terminal-tab toggle
         const reuseRow = document.createElement('label');
         reuseRow.className = 'cmd-reuse-row';
-        reuseRow.title = 'When on, terminal commands route to the first alive shell tab instead of always spawning a new one.';
+        reuseRow.title =
+            'When on, terminal commands route to the first alive shell tab instead of always spawning a new one.';
         const reuseCheckbox = document.createElement('input');
         reuseCheckbox.type = 'checkbox';
         reuseCheckbox.id = 'use-existing-terminal-tab-toggle';
@@ -529,15 +610,20 @@ export class DiffController {
                 await fetch('/api/config/use-hidden-terminal', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled })
+                    body: JSON.stringify({ enabled }),
                 });
                 (this.app as any).useHiddenTerminal = enabled;
                 this.app.showToast(
-                    enabled ? 'Will use separate hidden terminal' : 'Will use visible terminal tabs',
-                    { type: 'info', title: 'Terminal routing' }
+                    enabled
+                        ? 'Will use separate hidden terminal'
+                        : 'Will use visible terminal tabs',
+                    { type: 'info', title: 'Terminal routing' },
                 );
             } catch (err) {
-                this.app.showToast('Failed to save preference', { type: 'error', title: 'Terminal routing' });
+                this.app.showToast('Failed to save preference', {
+                    type: 'error',
+                    title: 'Terminal routing',
+                });
                 target.checked = !enabled;
                 updateReuseState();
             }
@@ -550,15 +636,20 @@ export class DiffController {
                 await fetch('/api/config/use-existing-terminal-tab', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled })
+                    body: JSON.stringify({ enabled }),
                 });
                 (this.app as any).useExistingTerminalTab = enabled;
                 this.app.showToast(
-                    enabled ? 'Will reuse existing terminal tab' : 'Will always open new terminal tab',
-                    { type: 'info', title: 'Terminal routing' }
+                    enabled
+                        ? 'Will reuse existing terminal tab'
+                        : 'Will always open new terminal tab',
+                    { type: 'info', title: 'Terminal routing' },
                 );
             } catch (err) {
-                this.app.showToast('Failed to save preference', { type: 'error', title: 'Terminal routing' });
+                this.app.showToast('Failed to save preference', {
+                    type: 'error',
+                    title: 'Terminal routing',
+                });
                 target.checked = !enabled;
             }
         });
@@ -604,21 +695,27 @@ export class DiffController {
                 runBtn.className = 'cmd-run-btn';
                 runBtn.textContent = `▶ ${cmd.name}`;
                 runBtn.title = `Click to run on current worktree: ${cmd.command}`;
-                runBtn.addEventListener('click', () => this.runCommand(cmd, 'current'));
+                runBtn.addEventListener('click', () =>
+                    this.runCommand(cmd, 'current'),
+                );
                 buttonsGroup.appendChild(runBtn);
 
                 const dirtyBtn = document.createElement('button');
                 dirtyBtn.className = 'cmd-batch-btn cmd-dirty-btn';
                 dirtyBtn.innerHTML = `⚡ Dirty`;
                 dirtyBtn.title = `Run on all dirty worktrees: ${cmd.command}`;
-                dirtyBtn.addEventListener('click', () => this.runCommand(cmd, 'dirty'));
+                dirtyBtn.addEventListener('click', () =>
+                    this.runCommand(cmd, 'dirty'),
+                );
                 buttonsGroup.appendChild(dirtyBtn);
 
                 const allBtn = document.createElement('button');
                 allBtn.className = 'cmd-batch-btn cmd-all-btn';
                 allBtn.innerHTML = `⇉ All`;
                 allBtn.title = `Run on all worktrees in workspace: ${cmd.command}`;
-                allBtn.addEventListener('click', () => this.runCommand(cmd, 'all'));
+                allBtn.addEventListener('click', () =>
+                    this.runCommand(cmd, 'all'),
+                );
                 buttonsGroup.appendChild(allBtn);
 
                 left.appendChild(buttonsGroup);
@@ -640,7 +737,9 @@ export class DiffController {
                 copySingleBtn.className = 'cmd-action-btn';
                 copySingleBtn.title = 'Copy single JSON';
                 copySingleBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-                copySingleBtn.addEventListener('click', () => this.copySingleCommand(cmd));
+                copySingleBtn.addEventListener('click', () =>
+                    this.copySingleCommand(cmd),
+                );
                 actions.appendChild(copySingleBtn);
 
                 // Edit
@@ -740,12 +839,23 @@ export class DiffController {
     async addCommand(): Promise<void> {
         const values = await (this.app as any).openConfigEditor({
             title: 'Add Terminal Command',
-            subtitle: 'Terminal commands run from the cmd panel. Use {} as a placeholder for selected input text.',
+            subtitle:
+                'Terminal commands run from the cmd panel. Use {} as a placeholder for selected input text.',
             fields: [
-                { id: 'name', label: 'Label', placeholder: 'tests', monospace: false },
-                { id: 'command', label: 'Command', placeholder: 'npm test', multiline: true }
+                {
+                    id: 'name',
+                    label: 'Label',
+                    placeholder: 'tests',
+                    monospace: false,
+                },
+                {
+                    id: 'command',
+                    label: 'Command',
+                    placeholder: 'npm test',
+                    multiline: true,
+                },
             ],
-            submitLabel: 'Add Command'
+            submitLabel: 'Add Command',
         });
         if (!values) return;
 
@@ -753,45 +863,81 @@ export class DiffController {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: values.name, command: values.command })
+                body: JSON.stringify({
+                    name: values.name,
+                    command: values.command,
+                }),
             });
-            if (!res.ok) throw new Error(await res.text() || "Failed to add command");
+            if (!res.ok)
+                throw new Error((await res.text()) || 'Failed to add command');
 
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
-            this.app.showToast(`Added terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
+            this.app.showToast(`Added terminal command "${values.name}"`, {
+                type: 'info',
+                title: 'Commands',
+            });
         } catch (e) {
-            console.error("Add command failed:", e);
-            this.app.showToast((e as Error).message, { type: 'error', title: 'Commands' });
+            console.error('Add command failed:', e);
+            this.app.showToast((e as Error).message, {
+                type: 'error',
+                title: 'Commands',
+            });
         }
     }
 
     async editCommand(cmd: any): Promise<void> {
         const values = await (this.app as any).openConfigEditor({
             title: 'Edit Terminal Command',
-            subtitle: 'Rename the action or change the command sent to the shell.',
+            subtitle:
+                'Rename the action or change the command sent to the shell.',
             fields: [
-                { id: 'name', label: 'Label', value: cmd.name, monospace: false },
-                { id: 'command', label: 'Command', value: cmd.command, multiline: true }
+                {
+                    id: 'name',
+                    label: 'Label',
+                    value: cmd.name,
+                    monospace: false,
+                },
+                {
+                    id: 'command',
+                    label: 'Command',
+                    value: cmd.command,
+                    multiline: true,
+                },
             ],
-            submitLabel: 'Save Command'
+            submitLabel: 'Save Command',
         });
-        if (!values || (values.name === cmd.name && values.command === cmd.command)) return;
+        if (
+            !values ||
+            (values.name === cmd.name && values.command === cmd.command)
+        )
+            return;
 
         try {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ old_name: cmd.name, name: values.name, command: values.command })
+                body: JSON.stringify({
+                    old_name: cmd.name,
+                    name: values.name,
+                    command: values.command,
+                }),
             });
-            if (!res.ok) throw new Error(await res.text() || "Failed to save command");
+            if (!res.ok)
+                throw new Error((await res.text()) || 'Failed to save command');
 
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
-            this.app.showToast(`Updated terminal command "${values.name}"`, { type: 'info', title: 'Commands' });
+            this.app.showToast(`Updated terminal command "${values.name}"`, {
+                type: 'info',
+                title: 'Commands',
+            });
         } catch (e) {
-            console.error("Edit command failed:", e);
-            this.app.showToast((e as Error).message, { type: 'error', title: 'Commands' });
+            console.error('Edit command failed:', e);
+            this.app.showToast((e as Error).message, {
+                type: 'error',
+                title: 'Commands',
+            });
         }
     }
 
@@ -802,15 +948,18 @@ export class DiffController {
             const res = await fetch('/api/config/terminal-commands', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: cmd.name })
+                body: JSON.stringify({ name: cmd.name }),
             });
-            if (!res.ok) throw new Error(await res.text() || "Failed to delete command");
+            if (!res.ok)
+                throw new Error(
+                    (await res.text()) || 'Failed to delete command',
+                );
 
             await this.app.sessionsManager.loadConfig();
             this.renderCmdPanel();
         } catch (e) {
-            console.error("Delete command failed:", e);
-            alert("Delete command failed: " + (e as Error).message);
+            console.error('Delete command failed:', e);
+            alert('Delete command failed: ' + (e as Error).message);
         }
     }
 
@@ -825,22 +974,41 @@ export class DiffController {
         this.app.tabManager.copyTextRobustly(jsonStr);
     }
 
-    async runCommand(cmd: any, scope: 'current' | 'dirty' | 'all' = 'current'): Promise<void> {
+    async runCommand(
+        cmd: any,
+        scope: 'current' | 'dirty' | 'all' = 'current',
+    ): Promise<void> {
         if (scope === 'dirty') {
             try {
                 const ws = this.app.sessionsManager?.activeWorkspace || '';
-                const wtRes = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(ws)}`);
+                const wtRes = await fetch(
+                    `/api/git/worktrees?cwd=${encodeURIComponent(ws)}`,
+                );
                 const allWts = await wtRes.json();
-                const dirtyRes = await fetch(`/api/git/worktree-dirty?cwd=${encodeURIComponent(ws)}`);
+                const dirtyRes = await fetch(
+                    `/api/git/worktree-dirty?cwd=${encodeURIComponent(ws)}`,
+                );
                 const dirtyMap = await dirtyRes.json();
-                const targetWts = (Array.isArray(allWts) ? allWts : []).filter(wt => dirtyMap && dirtyMap[wt.path]);
+                const targetWts = (Array.isArray(allWts) ? allWts : []).filter(
+                    (wt) => dirtyMap && dirtyMap[wt.path],
+                );
                 if (targetWts.length === 0) {
-                    this.app.showToast('No dirty worktrees found', { type: 'info', title: 'Batch Command' });
+                    this.app.showToast('No dirty worktrees found', {
+                        type: 'info',
+                        title: 'Batch Command',
+                    });
                     return;
                 }
-                await this.executeHiddenBatch(cmd, targetWts.map(wt => wt.path), `Dirty Worktrees (${targetWts.length})`);
+                await this.executeHiddenBatch(
+                    cmd,
+                    targetWts.map((wt) => wt.path),
+                    `Dirty Worktrees (${targetWts.length})`,
+                );
             } catch (e: any) {
-                this.app.showToast(`Failed to scan dirty worktrees: ${e.message}`, { type: 'error', title: 'Batch Command' });
+                this.app.showToast(
+                    `Failed to scan dirty worktrees: ${e.message}`,
+                    { type: 'error', title: 'Batch Command' },
+                );
             }
             return;
         }
@@ -848,14 +1016,24 @@ export class DiffController {
         if (scope === 'all') {
             try {
                 const ws = this.app.sessionsManager?.activeWorkspace || '';
-                const wtRes = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(ws)}`);
+                const wtRes = await fetch(
+                    `/api/git/worktrees?cwd=${encodeURIComponent(ws)}`,
+                );
                 const allWts = await wtRes.json();
-                const targetWts = Array.isArray(allWts) && allWts.length > 0
-                    ? allWts.map(wt => wt.path)
-                    : [this.app.sessionsManager?.activeCWD || ''];
-                await this.executeHiddenBatch(cmd, targetWts, `All Worktrees (${targetWts.length})`);
+                const targetWts =
+                    Array.isArray(allWts) && allWts.length > 0
+                        ? allWts.map((wt) => wt.path)
+                        : [this.app.sessionsManager?.activeCWD || ''];
+                await this.executeHiddenBatch(
+                    cmd,
+                    targetWts,
+                    `All Worktrees (${targetWts.length})`,
+                );
             } catch (e: any) {
-                this.app.showToast(`Failed to scan worktrees: ${e.message}`, { type: 'error', title: 'Batch Command' });
+                this.app.showToast(`Failed to scan worktrees: ${e.message}`, {
+                    type: 'error',
+                    title: 'Batch Command',
+                });
             }
             return;
         }
@@ -869,9 +1047,12 @@ export class DiffController {
 
         const activeTab = this.app.tabManager.getActiveTab();
         const prefix = this.app.tabManager.inputTextArea.value.trim();
-        const combined = prefix && cmd.command.includes('{}')
-            ? cmd.command.replace('{}', prefix)
-            : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+        const combined =
+            prefix && cmd.command.includes('{}')
+                ? cmd.command.replace('{}', prefix)
+                : prefix
+                  ? `${prefix} ${cmd.command}`
+                  : cmd.command;
 
         // Consume the prefix now, before any tab switch: switchTab parks
         // the textarea per-tab, so clearing after the switch would wipe
@@ -896,10 +1077,15 @@ export class DiffController {
         // activeCWD is set by sessionsManager based on the active workspace
         // and active worktree selection, so it correctly scopes by both
         // project AND worktree boundaries in one check.
-        const targetTab = findReusableShellTab(this.app.tabManager.tabs.values(), activeTab, {
-            useExistingTerminalTab: (this.app as any).useExistingTerminalTab,
-            activeCWD: this.app.sessionsManager.activeCWD || '',
-        });
+        const targetTab = findReusableShellTab(
+            this.app.tabManager.tabs.values(),
+            activeTab,
+            {
+                useExistingTerminalTab: (this.app as any)
+                    .useExistingTerminalTab,
+                activeCWD: this.app.sessionsManager.activeCWD || '',
+            },
+        );
         if (targetTab && targetTab !== activeTab) {
             this.app.tabManager.switchTab(targetTab.paneId);
         }
@@ -921,7 +1107,8 @@ export class DiffController {
             try {
                 const title = `+ Shell`;
                 const cwd = this.app.sessionsManager.activeCWD || '';
-                const workspace = this.app.sessionsManager.activeWorkspace || '';
+                const workspace =
+                    this.app.sessionsManager.activeWorkspace || '';
 
                 const res = await fetch('/api/terminals', {
                     method: 'POST',
@@ -931,32 +1118,56 @@ export class DiffController {
                         cwd: cwd,
                         session_id: '',
                         title: title,
-                        workspace: workspace
-                    })
+                        workspace: workspace,
+                    }),
                 });
 
                 if (!res.ok) {
-                    const errText = await res.text().catch(() => 'unknown error');
-                    throw new Error(errText.trim() || 'Failed to spawn shell terminal');
+                    const errText = await res
+                        .text()
+                        .catch(() => 'unknown error');
+                    throw new Error(
+                        errText.trim() || 'Failed to spawn shell terminal',
+                    );
                 }
 
                 const data = await res.json();
-                this.app.tabManager.createTab(data.pane_id, data.session_id, title, 'bash', workspace, cwd, false, false, combined);
+                this.app.tabManager.createTab(
+                    data.pane_id,
+                    data.session_id,
+                    title,
+                    'bash',
+                    workspace,
+                    cwd,
+                    false,
+                    false,
+                    combined,
+                );
 
                 if (this.app.sessionsManager) {
                     this.app.sessionsManager.loadSessions();
                 }
             } catch (e) {
-                this.app.showToast((e as Error).message, { type: 'error', title: 'Launch Shell' });
+                this.app.showToast((e as Error).message, {
+                    type: 'error',
+                    title: 'Launch Shell',
+                });
             }
         }
     }
 
-    async executeHiddenBatch(cmd: any, worktreePaths: string[], scopeLabel: string): Promise<void> {
+    async executeHiddenBatch(
+        cmd: any,
+        worktreePaths: string[],
+        scopeLabel: string,
+    ): Promise<void> {
         const prefix = this.app.tabManager.inputTextArea.value.trim();
-        const combined = prefix && cmd.command.includes('{}')
-            ? cmd.command.replace('{}', prefix)
-            : prefix ? `${prefix} ${cmd.command}` : cmd.command;
+        const combined =
+            prefix && cmd.command.includes('{}')
+                ? cmd.command.replace('{}', prefix)
+                : prefix
+                  ? `${prefix} ${cmd.command}`
+                  : cmd.command;
 
         this.app.tabManager.inputTextArea.value = '';
         this.app.tabManager.lastInputValue = '';
@@ -965,12 +1176,12 @@ export class DiffController {
         this.activeBatchResults = {
             commandName: cmd.name,
             scopeLabel: scopeLabel,
-            worktrees: worktreePaths.map(wt => ({
+            worktrees: worktreePaths.map((wt) => ({
                 path: wt,
                 name: getLastFolderName(wt) || wt,
                 glyph: worktreeGlyph(wt),
                 status: 'running',
-            }))
+            })),
         };
         this.renderCmdPanel();
 
@@ -981,18 +1192,22 @@ export class DiffController {
                 body: JSON.stringify({
                     command: combined,
                     worktrees: worktreePaths,
-                })
+                }),
             });
 
             if (!res.ok) {
-                throw new Error(await res.text() || 'Batch command execution failed');
+                throw new Error(
+                    (await res.text()) || 'Batch command execution failed',
+                );
             }
 
             const data = await res.json();
             const results: any[] = data.results || [];
             if (this.activeBatchResults) {
-                results.forEach(r => {
-                    const wtItem = this.activeBatchResults.worktrees.find((w: any) => w.path === r.worktree);
+                results.forEach((r) => {
+                    const wtItem = this.activeBatchResults.worktrees.find(
+                        (w: any) => w.path === r.worktree,
+                    );
                     if (wtItem) {
                         wtItem.status = r.success ? 'success' : 'error';
                         wtItem.exitCode = r.exit_code;
@@ -1003,12 +1218,18 @@ export class DiffController {
                 });
             }
 
-            const successCount = results.filter(r => r.success).length;
+            const successCount = results.filter((r) => r.success).length;
             const failCount = results.length - successCount;
             if (failCount === 0) {
-                this.app.showToast(`✓ Completed "${cmd.name}" across ${results.length} worktree(s)`, { type: 'success', title: 'Batch Command' });
+                this.app.showToast(
+                    `✓ Completed "${cmd.name}" across ${results.length} worktree(s)`,
+                    { type: 'success', title: 'Batch Command' },
+                );
             } else {
-                this.app.showToast(`Completed "${cmd.name}": ${successCount} passed, ${failCount} failed`, { type: 'error', title: 'Batch Command' });
+                this.app.showToast(
+                    `Completed "${cmd.name}": ${successCount} passed, ${failCount} failed`,
+                    { type: 'error', title: 'Batch Command' },
+                );
             }
         } catch (err: any) {
             if (this.activeBatchResults) {
@@ -1019,7 +1240,10 @@ export class DiffController {
                     }
                 });
             }
-            this.app.showToast(`Batch execution failed: ${err.message}`, { type: 'error', title: 'Batch Command' });
+            this.app.showToast(`Batch execution failed: ${err.message}`, {
+                type: 'error',
+                title: 'Batch Command',
+            });
         } finally {
             if (this.app.sessionsManager?.loadWorktrees) {
                 this.app.sessionsManager.loadWorktrees();
@@ -1076,7 +1300,9 @@ export class DiffController {
         }
 
         const cwd = this.app.sessionsManager.activeCWD;
-        const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+        const commitVal = this.commitSelect
+            ? this.commitSelect.value
+            : 'unstaged';
 
         // Helper: render the muted "not a git repo" line into the term.
         // Used by both raw endpoints (sentinel text body) and the
@@ -1093,30 +1319,46 @@ export class DiffController {
 
         try {
             if (this.activeTab === 'diff') {
-                const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`);
+                const res = await fetch(
+                    `/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=3&ansi=1`,
+                );
                 if (!res.ok) {
-                    const errText = await res.text().catch(() => 'unknown error');
+                    const errText = await res
+                        .text()
+                        .catch(() => 'unknown error');
                     throw new Error(errText.trim() || 'Diff fetch error');
                 }
                 const text = await res.text();
                 if (text === 'NOT_GIT_REPO') return notAGitRepo('the diff');
-                this._writeStaticTerminalOutput(text, '\x1b[90mNo changes detected.\x1b[0m\r\n');
+                this._writeStaticTerminalOutput(
+                    text,
+                    '\x1b[90mNo changes detected.\x1b[0m\r\n',
+                );
                 return;
             }
 
             if (this.activeTab === 'status') {
-                const res = await fetch(`/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`);
+                const res = await fetch(
+                    `/api/git/raw-status?cwd=${encodeURIComponent(cwd)}`,
+                );
                 if (!res.ok) {
-                    const errText = await res.text().catch(() => 'unknown error');
+                    const errText = await res
+                        .text()
+                        .catch(() => 'unknown error');
                     throw new Error(errText.trim() || 'Status fetch error');
                 }
                 const text = await res.text();
                 if (text === 'NOT_GIT_REPO') return notAGitRepo('the status');
-                this._writeStaticTerminalOutput(text, '\x1b[90mClean working tree.\x1b[0m\r\n');
+                this._writeStaticTerminalOutput(
+                    text,
+                    '\x1b[90mClean working tree.\x1b[0m\r\n',
+                );
                 return;
             }
 
-            const res = await fetch(`/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`);
+            const res = await fetch(
+                `/api/diff?cwd=${encodeURIComponent(cwd)}&type=${this.activeTab}&commit=${commitVal}`,
+            );
             if (!res.ok) {
                 const errText = await res.text().catch(() => 'unknown error');
                 throw new Error(errText.trim() || 'Spawn error');
@@ -1139,16 +1381,17 @@ export class DiffController {
                 () => {
                     // Closed natively on git exit
                     console.log(`[diff] Stream finished for ${this.activeTab}`);
-                }
+                },
             );
 
             // Send initial resize structure after socket gets active
             setTimeout(() => {
                 this.fitTerminal();
             }, 100);
-
         } catch (e) {
-            this.term.write(`\x1b[31mFailed to load: ${(e as Error).message}\x1b[0m\r\n`);
+            this.term.write(
+                `\x1b[31mFailed to load: ${(e as Error).message}\x1b[0m\r\n`,
+            );
         }
     }
 
@@ -1168,23 +1411,33 @@ export class DiffController {
     async toggleRichDiffContext(): Promise<void> {
         this.currentContextLines = this.currentContextLines === 3 ? 30 : 3;
         if (this.contextToggleBtn) {
-            this.contextToggleBtn.innerText = this.currentContextLines === 3 ? "Show 30 lines of context" : "Show 3 lines of context";
+            this.contextToggleBtn.innerText =
+                this.currentContextLines === 3
+                    ? 'Show 30 lines of context'
+                    : 'Show 3 lines of context';
         }
         await this.loadRichDiff();
     }
 
     toggleRichDiffLayout(): void {
         if (window.innerWidth <= 768) return;
-        this.currentLayout = this.currentLayout === 'line-by-line' ? 'side-by-side' : 'line-by-line';
+        this.currentLayout =
+            this.currentLayout === 'line-by-line'
+                ? 'side-by-side'
+                : 'line-by-line';
         if (this.layoutToggleBtn) {
-            this.layoutToggleBtn.innerText = this.currentLayout === 'line-by-line' ? 'Side-by-Side' : 'Unified';
+            this.layoutToggleBtn.innerText =
+                this.currentLayout === 'line-by-line'
+                    ? 'Side-by-Side'
+                    : 'Unified';
         }
         this.renderRichDiff(this.lastRawDiffText);
     }
 
     renderRichDiff(rawDiffText: string): void {
         if (!rawDiffText || !rawDiffText.trim()) {
-            this.diffModalBody!.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
+            this.diffModalBody!.innerHTML =
+                '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
             return;
         }
 
@@ -1195,7 +1448,7 @@ export class DiffController {
             drawFileList: !isMobile,
             matching: 'lines',
             outputFormat,
-            colorScheme: 'dark'
+            colorScheme: 'dark',
         });
 
         this.diffModalBody!.innerHTML = diffHtml;
@@ -1203,13 +1456,18 @@ export class DiffController {
 
     async loadRichDiff(): Promise<void> {
         if (!this.diffModalBody) return;
-        this.diffModalBody.innerHTML = '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
+        this.diffModalBody.innerHTML =
+            '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
 
         const cwd = this.app.sessionsManager.activeCWD || '';
-        const commitVal = this.commitSelect ? this.commitSelect.value : 'unstaged';
+        const commitVal = this.commitSelect
+            ? this.commitSelect.value
+            : 'unstaged';
 
         try {
-            const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`);
+            const res = await fetch(
+                `/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`,
+            );
             if (!res.ok) {
                 const errText = await res.text();
                 throw new Error(errText || 'Failed to fetch raw diff');

@@ -24,15 +24,23 @@ describe('access-password Config save', () => {
             expect(options.method).toBe('POST');
             const record = JSON.parse(options.body).password_hash;
             const parts = record.split('.');
-            expect(parts.slice(0, 3)).toEqual(['v1', 'pbkdf2-sha256', '600000']);
+            expect(parts.slice(0, 3)).toEqual([
+                'v1',
+                'pbkdf2-sha256',
+                '600000',
+            ]);
             expect(parts).toHaveLength(5);
             expect(record).not.toContain(password);
             return { enabled: true };
         });
 
-        await expect(setAccessPassword(password)).resolves.toEqual({ enabled: true });
+        await expect(setAccessPassword(password)).resolves.toEqual({
+            enabled: true,
+        });
         expect(fetchSpy).toHaveBeenCalledTimes(1);
-        const saved = JSON.parse(localStorage.getItem('phi_access_credential_v1'));
+        const saved = JSON.parse(
+            localStorage.getItem('phi_access_credential_v1'),
+        );
         expect(saved.verifier).toMatch(/^[A-Za-z0-9_-]+$/);
         expect(JSON.stringify(saved)).not.toContain(password);
     });

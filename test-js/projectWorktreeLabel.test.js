@@ -12,8 +12,12 @@ describe('projectWorktreeLabel', () => {
     });
 
     it('returns the last two segments joined by /', () => {
-        expect(projectWorktreeLabel('/home/user/project/worktree')).toBe('project/worktree');
-        expect(projectWorktreeLabel('C:\\code\\github\\phi')).toBe('github/phi');
+        expect(projectWorktreeLabel('/home/user/project/worktree')).toBe(
+            'project/worktree',
+        );
+        expect(projectWorktreeLabel('C:\\code\\github\\phi')).toBe(
+            'github/phi',
+        );
     });
 
     it('handles mixed separators', () => {
@@ -21,7 +25,9 @@ describe('projectWorktreeLabel', () => {
     });
 
     it('collapses trailing separators via empty-segment filtering', () => {
-        expect(projectWorktreeLabel('/home/user/project/')).toBe('user/project');
+        expect(projectWorktreeLabel('/home/user/project/')).toBe(
+            'user/project',
+        );
     });
 
     it('returns the single segment when only one is present', () => {

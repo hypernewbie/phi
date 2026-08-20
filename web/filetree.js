@@ -22,7 +22,9 @@ export class FileTreeManager {
                 this._hideContextMenu();
         });
         document.addEventListener('click', (e) => {
-            if (this.contextMenuEl && !e.target.closest('.ft-context-menu') && !e.target.closest('.md-file-action-btn')) {
+            if (this.contextMenuEl &&
+                !e.target.closest('.ft-context-menu') &&
+                !e.target.closest('.md-file-action-btn')) {
                 this._hideContextMenu();
             }
         });
@@ -151,8 +153,8 @@ export class FileTreeManager {
         const text = textarea.value;
         const before = text.substring(0, start);
         const after = text.substring(end, text.length);
-        const padBefore = (start > 0 && !before.endsWith(' ')) ? ' ' : '';
-        const padAfter = (!after.startsWith(' ') && after.length > 0) ? ' ' : '';
+        const padBefore = start > 0 && !before.endsWith(' ') ? ' ' : '';
+        const padAfter = !after.startsWith(' ') && after.length > 0 ? ' ' : '';
         textarea.value = before + padBefore + insertText + padAfter + after;
         const newPos = start + padBefore.length + insertText.length;
         textarea.setSelectionRange(newPos, newPos);
@@ -172,9 +174,14 @@ export class FileTreeManager {
             return;
         this.contextMenuEl.innerHTML = '';
         const actions = [
-            { icon: '@', label: 'Insert @path', className: 'insert-path', handler: () => this._insertPath(rel) },
+            {
+                icon: '@',
+                label: 'Insert @path',
+                className: 'insert-path',
+                handler: () => this._insertPath(rel),
+            },
         ];
-        actions.forEach(action => {
+        actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
             btn.innerHTML = `<span class="md-context-icon">${action.icon}</span><span class="md-context-label">${action.label}</span>`;

@@ -30,7 +30,7 @@ describe('App.renderUpdateBadge', () => {
             latest: 'v0.8.0',
             update_available: true,
             install_method: 'standalone',
-            instructions: 'Download the latest release'
+            instructions: 'Download the latest release',
         });
         const btn = document.getElementById('phi-changelog-btn');
         expect(btn.classList.contains('has-update')).toBe(true);
@@ -45,7 +45,7 @@ describe('App.renderUpdateBadge', () => {
         a.renderUpdateBadge({
             current: 'v0.8.0',
             latest: 'v0.8.0',
-            update_available: false
+            update_available: false,
         });
         expect(btn.classList.contains('has-update')).toBe(false);
     });
@@ -57,7 +57,7 @@ describe('App.renderUpdateBadge', () => {
         a.renderUpdateBadge({
             current: 'dev',
             latest: 'v9.9.9',
-            update_available: true
+            update_available: true,
         });
         expect(btn.classList.contains('has-update')).toBe(false);
     });
@@ -65,9 +65,13 @@ describe('App.renderUpdateBadge', () => {
     it('handles missing badge button gracefully', () => {
         document.body.innerHTML = ''; // no button
         const a = makeApp();
-        expect(() => a.renderUpdateBadge({
-            current: 'v0.7.15', latest: 'v0.8.0', update_available: true
-        })).not.toThrow();
+        expect(() =>
+            a.renderUpdateBadge({
+                current: 'v0.7.15',
+                latest: 'v0.8.0',
+                update_available: true,
+            }),
+        ).not.toThrow();
     });
 });
 
@@ -83,8 +87,8 @@ describe('App.checkForUpdate', () => {
                 latest: 'v0.8.0',
                 update_available: true,
                 install_method: 'npm',
-                instructions: 'npm update -g @hypernewbie/phi-code'
-            })
+                instructions: 'npm update -g @hypernewbie/phi-code',
+            }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 

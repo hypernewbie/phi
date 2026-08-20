@@ -11,16 +11,43 @@ import {
 } from '../src/deeplink.js';
 
 function fakeWindow(overrides: Partial<DeepLinkWindow> = {}): DeepLinkWindow {
-  return { webContents: { send: vi.fn(), isDestroyed: () => false }, ...overrides };
+  return {
+    webContents: { send: vi.fn(), isDestroyed: () => false },
+    ...overrides,
+  };
 }
 
 describe('parseDeepLink valid forms', () => {
-  const cases: Array<{ raw: string; kind: 'profile' | 'session' | 'worktree'; profileId: string; ref?: string }> = [
+  const cases: Array<{
+    raw: string;
+    kind: 'profile' | 'session' | 'worktree';
+    profileId: string;
+    ref?: string;
+  }> = [
     { raw: 'phi://profile/home', kind: 'profile', profileId: 'home' },
-    { raw: 'phi://profile/127-0-0-1-7070', kind: 'profile', profileId: '127-0-0-1-7070' },
-    { raw: 'phi://profile/home/session/123', kind: 'session', profileId: 'home', ref: '123' },
-    { raw: 'phi://profile/home/worktree/feature-x', kind: 'worktree', profileId: 'home', ref: 'feature-x' },
-    { raw: 'phi://profile/home/worktree/feat.1_2~3', kind: 'worktree', profileId: 'home', ref: 'feat.1_2~3' },
+    {
+      raw: 'phi://profile/127-0-0-1-7070',
+      kind: 'profile',
+      profileId: '127-0-0-1-7070',
+    },
+    {
+      raw: 'phi://profile/home/session/123',
+      kind: 'session',
+      profileId: 'home',
+      ref: '123',
+    },
+    {
+      raw: 'phi://profile/home/worktree/feature-x',
+      kind: 'worktree',
+      profileId: 'home',
+      ref: 'feature-x',
+    },
+    {
+      raw: 'phi://profile/home/worktree/feat.1_2~3',
+      kind: 'worktree',
+      profileId: 'home',
+      ref: 'feat.1_2~3',
+    },
     { raw: '  phi://profile/home  ', kind: 'profile', profileId: 'home' },
   ];
   for (const c of cases) {
@@ -39,7 +66,11 @@ describe('parseDeepLink valid forms', () => {
 describe('parseDeepLink picker', () => {
   for (const raw of ['phi://profile', 'phi://profile/']) {
     it(`parses ${JSON.stringify(raw)} as the picker`, () => {
-      expect(parseDeepLink(raw)).toEqual({ ok: true, kind: 'picker', profileId: '' });
+      expect(parseDeepLink(raw)).toEqual({
+        ok: true,
+        kind: 'picker',
+        profileId: '',
+      });
     });
   }
 });
@@ -76,7 +107,9 @@ describe('parseDeepLink escaped refs', () => {
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.ref).toBe('feature_x');
     // Escapes that decode to characters outside the ref charset are rejected.
-    expect(parseDeepLink('phi://profile/home/worktree/feature%20x').ok).toBe(false);
+    expect(parseDeepLink('phi://profile/home/worktree/feature%20x').ok).toBe(
+      false,
+    );
   });
 });
 
@@ -85,7 +118,10 @@ describe('dispatchDeepLink', () => {
     const send = vi.fn();
     const win = fakeWindow({ webContents: { send, isDestroyed: () => false } });
     dispatchDeepLink(win, { kind: 'profile', profileId: 'home' });
-    expect(send).toHaveBeenCalledWith(DEEPLINK_CHANNEL, { kind: 'profile', profileId: 'home' });
+    expect(send).toHaveBeenCalledWith(DEEPLINK_CHANNEL, {
+      kind: 'profile',
+      profileId: 'home',
+    });
   });
 
   it('is a no-op for a null or destroyed window', () => {

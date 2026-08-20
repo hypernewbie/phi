@@ -22,12 +22,12 @@ describe('loadVersion in App', () => {
             commit: 'abcdef',
             date: '2026-07-12',
             build_source: 'release',
-            install_method: 'standalone'
+            install_method: 'standalone',
         }));
 
         const app = Object.create(App.prototype);
         app.versionInfo = null;
-        
+
         await app.loadVersion();
 
         const btn = document.getElementById('phi-changelog-btn');
@@ -45,7 +45,7 @@ describe('loadVersion in App', () => {
             commit: 'none',
             date: 'unknown',
             build_source: 'source',
-            install_method: 'dev'
+            install_method: 'dev',
         }));
 
         // Rebuild the fixture fresh (v0.8.4 is the current default).

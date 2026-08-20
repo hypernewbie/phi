@@ -49,24 +49,41 @@ describe('theme.js & prepaint parity', () => {
 
     it('applyThemeTokens applies CSS properties and data-theme-color attribute', () => {
         const theme = applyThemeTokens('cyan');
-        expect(document.documentElement.getAttribute('data-theme-color')).toBe('cyan');
-        expect(document.documentElement.style.getPropertyValue('--accent')).toBe(theme.accent);
-        expect(document.documentElement.style.getPropertyValue('--accent-glow')).toBe(theme.accentGlow);
-        expect(document.documentElement.style.getPropertyValue('--accent-dim')).toBe(theme.accentDim);
-        expect(document.documentElement.style.getPropertyValue('--accent-bright')).toBe(theme.accentBright);
+        expect(document.documentElement.getAttribute('data-theme-color')).toBe(
+            'cyan',
+        );
+        expect(
+            document.documentElement.style.getPropertyValue('--accent'),
+        ).toBe(theme.accent);
+        expect(
+            document.documentElement.style.getPropertyValue('--accent-glow'),
+        ).toBe(theme.accentGlow);
+        expect(
+            document.documentElement.style.getPropertyValue('--accent-dim'),
+        ).toBe(theme.accentDim);
+        expect(
+            document.documentElement.style.getPropertyValue('--accent-bright'),
+        ).toBe(theme.accentBright);
     });
 
     it('runPrepaint applies stored theme and font settings from localStorage', () => {
         localStorage.setItem('phi_theme_color', 'emerald');
-        localStorage.setItem('phi_appearance', JSON.stringify({
-            ui_font_family: 'Inter, sans-serif',
-            ui_font_size: 14,
-        }));
+        localStorage.setItem(
+            'phi_appearance',
+            JSON.stringify({
+                ui_font_family: 'Inter, sans-serif',
+                ui_font_size: 14,
+            }),
+        );
 
         runPrepaint();
 
-        expect(document.documentElement.getAttribute('data-theme-color')).toBe('emerald');
-        expect(document.documentElement.style.getPropertyValue('--accent')).toBe(ACCENT_COLORS.emerald.accent);
+        expect(document.documentElement.getAttribute('data-theme-color')).toBe(
+            'emerald',
+        );
+        expect(
+            document.documentElement.style.getPropertyValue('--accent'),
+        ).toBe(ACCENT_COLORS.emerald.accent);
 
         const styleEl = document.getElementById('phi-prepaint-appearance');
         expect(styleEl).not.toBeNull();

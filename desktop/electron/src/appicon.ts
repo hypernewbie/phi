@@ -24,7 +24,10 @@ const ICONS_DIR = path.join(here, '..', 'assets', 'icons');
 const MANIFEST_PATH = path.join(ICONS_DIR, 'manifest.json');
 const FALLBACK_ICON = path.join(here, '..', 'assets', 'icon.png');
 
-export function createIconResolver(manifestPath: string, fallbackIcon: string): IconResolver {
+export function createIconResolver(
+  manifestPath: string,
+  fallbackIcon: string,
+): IconResolver {
   let manifest: Record<string, string> | null = null;
   let read = false;
   return {
@@ -33,7 +36,10 @@ export function createIconResolver(manifestPath: string, fallbackIcon: string): 
       if (!read) {
         read = true;
         try {
-          manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, string>;
+          manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<
+            string,
+            string
+          >;
         } catch {
           manifest = null;
         }

@@ -15,8 +15,13 @@ import { TabManager } from '../web/terminal.js';
 // permanent banners that no later reconnect could clear.
 
 const terminalJsSrc = readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'terminal.js'),
-    'utf8'
+    path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'web',
+        'terminal.js',
+    ),
+    'utf8',
 );
 
 function fakeTerm() {
@@ -24,8 +29,13 @@ function fakeTerm() {
         written: [],
         resets: 0,
         rows: 24,
-        write(data) { this.written.push(data); },
-        reset() { this.resets += 1; this.written.length = 0; },
+        write(data) {
+            this.written.push(data);
+        },
+        reset() {
+            this.resets += 1;
+            this.written.length = 0;
+        },
         refresh: vi.fn(),
     };
 }
@@ -48,7 +58,9 @@ function tab() {
         title: 'shell',
         coder: 'bash',
         term: fakeTerm(),
-        tabEl: Object.assign(document.createElement('div'), { classList: document.createElement('div').classList }),
+        tabEl: Object.assign(document.createElement('div'), {
+            classList: document.createElement('div').classList,
+        }),
         isDead: false,
         exitCode: null,
     };
@@ -127,7 +139,9 @@ describe('replay replaces the buffer instead of appending to it', () => {
         t.term.write('history worth keeping');
         t.awaitingReplay = true;
 
-        TabManager.prototype.handleControlMessage.call(c, t, { type: 'replay-complete' });
+        TabManager.prototype.handleControlMessage.call(c, t, {
+            type: 'replay-complete',
+        });
 
         expect(t.awaitingReplay).toBe(false);
         expect(t.term.resets).toBe(0);

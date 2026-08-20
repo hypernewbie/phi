@@ -31,14 +31,22 @@ describe('Update banner (Phase 7/8 UI)', () => {
 
     it('returns null when current=dev', () => {
         const mm = makeMarkdownManager({
-            updateStatus: { current: 'dev', latest: 'v9.9.9', update_available: true }
+            updateStatus: {
+                current: 'dev',
+                latest: 'v9.9.9',
+                update_available: true,
+            },
         });
         expect(mm._buildUpdateBanner()).toBeNull();
     });
 
     it('returns null when no update available', () => {
         const mm = makeMarkdownManager({
-            updateStatus: { current: 'v0.8.0', latest: 'v0.8.0', update_available: false }
+            updateStatus: {
+                current: 'v0.8.0',
+                latest: 'v0.8.0',
+                update_available: false,
+            },
         });
         expect(mm._buildUpdateBanner()).toBeNull();
     });
@@ -50,22 +58,29 @@ describe('Update banner (Phase 7/8 UI)', () => {
                 latest: 'v0.8.2',
                 update_available: true,
                 install_method: 'npm',
-                instructions: 'npm update -g @hypernewbie/phi-code'
-            }
+                instructions: 'npm update -g @hypernewbie/phi-code',
+            },
         });
         const banner = mm._buildUpdateBanner();
         expect(banner).toBeTruthy();
         expect(banner.classList.contains('update-banner')).toBe(true);
-        expect(banner.querySelector('.update-banner-title').textContent).toContain('v0.8.2');
-        expect(banner.querySelector('.update-banner-body').textContent).toContain('npm update');
+        expect(
+            banner.querySelector('.update-banner-title').textContent,
+        ).toContain('v0.8.2');
+        expect(
+            banner.querySelector('.update-banner-body').textContent,
+        ).toContain('npm update');
     });
 
     it('renders Apply button for npm install method', () => {
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'npm', instructions: 'npm update'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'npm',
+                instructions: 'npm update',
+            },
         });
         const banner = mm._buildUpdateBanner();
         const btn = banner.querySelector('.update-banner-btn');
@@ -78,21 +93,29 @@ describe('Update banner (Phase 7/8 UI)', () => {
     it('renders Apply button for standalone install method', () => {
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'standalone', instructions: 'Download'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'standalone',
+                instructions: 'Download',
+            },
         });
         const banner = mm._buildUpdateBanner();
         expect(banner.querySelector('.update-banner-btn')).toBeTruthy();
     });
 
     it('renders "Apply & restart now" button for standalone installs, wired to _startUpdateApplyAndRestart', () => {
-        const spy = vi.spyOn(MarkdownManager.prototype, '_startUpdateApplyAndRestart').mockImplementation(() => {});
+        const spy = vi
+            .spyOn(MarkdownManager.prototype, '_startUpdateApplyAndRestart')
+            .mockImplementation(() => {});
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'standalone', instructions: 'Download'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'standalone',
+                instructions: 'Download',
+            },
         });
         const banner = mm._buildUpdateBanner();
         const restartBtn = banner.querySelector('.update-banner-btn-restart');
@@ -103,21 +126,31 @@ describe('Update banner (Phase 7/8 UI)', () => {
         document.body.appendChild(banner);
         restartBtn.click();
 
-        expect(spy).toHaveBeenCalledWith('v0.8.2', restartBtn, applyBtn, banner);
+        expect(spy).toHaveBeenCalledWith(
+            'v0.8.2',
+            restartBtn,
+            applyBtn,
+            banner,
+        );
     });
 
     it('does NOT render Apply button for go-install', () => {
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'go-install', instructions: 'go install'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'go-install',
+                instructions: 'go install',
+            },
         });
         const banner = mm._buildUpdateBanner();
         expect(banner.querySelector('.update-banner-btn')).toBeFalsy();
         expect(banner.querySelector('.update-banner-btn-restart')).toBeFalsy();
         // But the instructions should still show so the user knows what to do
-        expect(banner.querySelector('.update-banner-body').textContent).toContain('go install');
+        expect(
+            banner.querySelector('.update-banner-body').textContent,
+        ).toContain('go install');
     });
 
     it('escapes latest version to prevent XSS', () => {
@@ -127,8 +160,8 @@ describe('Update banner (Phase 7/8 UI)', () => {
                 latest: '<img src=x onerror=alert(1)>',
                 update_available: true,
                 install_method: 'npm',
-                instructions: 'npm update'
-            }
+                instructions: 'npm update',
+            },
         });
         const banner = mm._buildUpdateBanner();
         const title = banner.querySelector('.update-banner-title');
@@ -167,9 +200,12 @@ describe('Update apply click flow', () => {
         // which carries the same 'update-banner-btn' class.
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'npm', instructions: 'npm update'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'npm',
+                instructions: 'npm update',
+            },
         });
         const banner = mm._buildUpdateBanner();
         document.body.appendChild(banner);
@@ -179,10 +215,13 @@ describe('Update apply click flow', () => {
         // Flush the microtask chain up to (but not through) the poll's setTimeout.
         await vi.advanceTimersByTimeAsync(0);
 
-        expect(fakeFetch).toHaveBeenCalledWith('/api/update/apply', expect.objectContaining({
-            method: 'POST',
-            body: JSON.stringify({ version: 'v0.8.2' })
-        }));
+        expect(fakeFetch).toHaveBeenCalledWith(
+            '/api/update/apply',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ version: 'v0.8.2' }),
+            }),
+        );
         expect(btn.disabled).toBe(true);
         expect(btn.textContent).toBe('Starting…');
 
@@ -192,21 +231,24 @@ describe('Update apply click flow', () => {
     it('shows error in progress element when POST fails', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: false,
-            text: async () => 'Forbidden: install method not eligible'
+            text: async () => 'Forbidden: install method not eligible',
         });
         vi.stubGlobal('fetch', fakeFetch);
 
         const mm = makeMarkdownManager({
             updateStatus: {
-                current: 'v0.8.0', latest: 'v0.8.2', update_available: true,
-                install_method: 'npm', instructions: 'npm update'
-            }
+                current: 'v0.8.0',
+                latest: 'v0.8.2',
+                update_available: true,
+                install_method: 'npm',
+                instructions: 'npm update',
+            },
         });
         const banner = mm._buildUpdateBanner();
         document.body.appendChild(banner);
         banner.querySelector('.update-banner-btn').click();
 
-        await new Promise(r => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, 0));
 
         const progress = banner.querySelector('.update-banner-progress');
         expect(progress).toBeTruthy();

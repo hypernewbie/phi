@@ -34,10 +34,17 @@ describe('openDiagModal', () => {
                 mem_alloc_mb: 12.5,
                 pty_count: 1,
                 panes: [
-                    { id: 'abcd1234', title: 'opencode-1', coder: 'opencode',
-                      client_count: 1, ring_bytes: 1024, ring_capacity: 1048576, busy: false }
-                ]
-            })
+                    {
+                        id: 'abcd1234',
+                        title: 'opencode-1',
+                        coder: 'opencode',
+                        client_count: 1,
+                        ring_bytes: 1024,
+                        ring_capacity: 1048576,
+                        busy: false,
+                    },
+                ],
+            }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
@@ -65,7 +72,9 @@ describe('openDiagModal', () => {
     });
 
     it('shows an error when fetch throws, HTML-escaped', async () => {
-        const fakeFetch = vi.fn().mockRejectedValue(new Error('offline & <broken>'));
+        const fakeFetch = vi
+            .fn()
+            .mockRejectedValue(new Error('offline & <broken>'));
         vi.stubGlobal('fetch', fakeFetch);
 
         const mm = makeMm();
@@ -79,16 +88,23 @@ describe('openDiagModal', () => {
         // failing would require this substring to be absent first. The
         // 'md-list-error' wrapper is already covered by the test above on
         // the same shared catch-block line, so it's not re-asserted here.
-        expect(mm.modalBody.innerHTML).toContain('offline &amp; &lt;broken&gt;');
+        expect(mm.modalBody.innerHTML).toContain(
+            'offline &amp; &lt;broken&gt;',
+        );
     });
 
     it('handles empty panes list cleanly', async () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
             json: async () => ({
-                version: 'dev', install_method: 'dev', uptime_seconds: 0,
-                goroutines: 5, mem_alloc_mb: 1.0, pty_count: 0, panes: []
-            })
+                version: 'dev',
+                install_method: 'dev',
+                uptime_seconds: 0,
+                goroutines: 5,
+                mem_alloc_mb: 1.0,
+                pty_count: 0,
+                panes: [],
+            }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
@@ -102,15 +118,24 @@ describe('openDiagModal', () => {
         const fakeFetch = vi.fn().mockResolvedValue({
             ok: true,
             json: async () => ({
-                version: 'v0.8.0', install_method: 'standalone',
-                uptime_seconds: 1, goroutines: 1, mem_alloc_mb: 1.0,
+                version: 'v0.8.0',
+                install_method: 'standalone',
+                uptime_seconds: 1,
+                goroutines: 1,
+                mem_alloc_mb: 1.0,
                 pty_count: 1,
-                panes: [{
-                    id: 'xx', title: '<img src=x onerror=alert(1)>',
-                    coder: 'opencode', client_count: 0,
-                    ring_bytes: 0, ring_capacity: 100, busy: false
-                }]
-            })
+                panes: [
+                    {
+                        id: 'xx',
+                        title: '<img src=x onerror=alert(1)>',
+                        coder: 'opencode',
+                        client_count: 0,
+                        ring_bytes: 0,
+                        ring_capacity: 100,
+                        busy: false,
+                    },
+                ],
+            }),
         });
         vi.stubGlobal('fetch', fakeFetch);
 
@@ -120,6 +145,8 @@ describe('openDiagModal', () => {
         // No actual <img> tag should be created
         expect(mm.modalBody.querySelector('img')).toBeFalsy();
         // But the literal text should be present in the DOM as text content
-        expect(mm.modalBody.textContent).toContain('<img src=x onerror=alert(1)>');
+        expect(mm.modalBody.textContent).toContain(
+            '<img src=x onerror=alert(1)>',
+        );
     });
 });

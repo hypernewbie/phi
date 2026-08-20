@@ -17,7 +17,10 @@ setupDomHarness();
 // Minimal fixtures: sessionsManager + diffController + markdownManager + a few
 // DOM nodes the tab manager needs. Never `new` TabManager or KanbanManager —
 // we exercise individual methods against a hand-built ctx.
-function fixtures({ currentWorkspace = '/wsA', currentCwd = '/wsA/work' } = {}) {
+function fixtures({
+    currentWorkspace = '/wsA',
+    currentCwd = '/wsA/work',
+} = {}) {
     const sessionsManager = {
         activeWorkspace: currentWorkspace,
         activeCWD: currentCwd,
@@ -39,23 +42,28 @@ function fixtures({ currentWorkspace = '/wsA', currentCwd = '/wsA/work' } = {}) 
 function makeApp(fx) {
     // DOM nodes TabManager's ctor / createTab touches
     if (!document.getElementById('tabs-container')) {
-        const tabs = document.createElement('div'); tabs.id = 'tabs-container';
+        const tabs = document.createElement('div');
+        tabs.id = 'tabs-container';
         document.body.appendChild(tabs);
     }
     if (!document.getElementById('terminals-wrapper')) {
-        const w = document.createElement('div'); w.id = 'terminals-wrapper';
+        const w = document.createElement('div');
+        w.id = 'terminals-wrapper';
         document.body.appendChild(w);
     }
     if (!document.getElementById('input-bar-container')) {
-        const i = document.createElement('div'); i.id = 'input-bar-container';
+        const i = document.createElement('div');
+        i.id = 'input-bar-container';
         document.body.appendChild(i);
     }
     if (!document.getElementById('presets-container')) {
-        const p = document.createElement('div'); p.id = 'presets-container';
+        const p = document.createElement('div');
+        p.id = 'presets-container';
         document.body.appendChild(p);
     }
     if (!document.getElementById('empty-state')) {
-        const e = document.createElement('div'); e.id = 'empty-state';
+        const e = document.createElement('div');
+        e.id = 'empty-state';
         document.body.appendChild(e);
     }
     // TabManager reads these in setupEventListeners via constructors etc.
@@ -69,26 +77,29 @@ function makeApp(fx) {
 }
 
 // jsdom elements don't implement scrollIntoView; stub it on every test's tabEls
-    HTMLElement.prototype.scrollIntoView = function () {};
+HTMLElement.prototype.scrollIntoView = function () {};
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        localStorage.clear();
-        sessionStorage.clear();
-        // Soft-close uses setTimeout(SOFT_CLOSE_GRACE_MS=3000). Tests that
-        // exercise the finalize path advance the fake clock; tests that
-        // exercise the undo path clear it.
-        vi.useFakeTimers();
-    });
+beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+    // Soft-close uses setTimeout(SOFT_CLOSE_GRACE_MS=3000). Tests that
+    // exercise the finalize path advance the fake clock; tests that
+    // exercise the undo path clear it.
+    vi.useFakeTimers();
+});
 
-    afterEach(() => {
-        vi.useRealTimers();
-    });
+afterEach(() => {
+    vi.useRealTimers();
+});
 
 // -- BUG-1 ----------------------------------------------------------------
 describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () => {
     it('does not call loadWorktrees or change activeWorkspace when returning to kanban', async () => {
-        const fx = fixtures({ currentWorkspace: '/wsB', currentCwd: '/wsB/work' });
+        const fx = fixtures({
+            currentWorkspace: '/wsB',
+            currentCwd: '/wsB/work',
+        });
         const app = makeApp(fx);
 
         // Build a kanban tab (paneId 'kanban-board') that was opened with
@@ -108,19 +119,30 @@ describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () =
         });
         // Simulate a terminal tab currently active in workspace B
         ctx.tabs.set('term-b', {
-            paneId: 'term-b', sessionId: 'term-b', title: 't1', coder: 'opencode',
-            workspace: '/wsB', cwd: '/wsB/work',
+            paneId: 'term-b',
+            sessionId: 'term-b',
+            title: 't1',
+            coder: 'opencode',
+            workspace: '/wsB',
+            cwd: '/wsB/work',
             tabEl: document.createElement('div'),
             termContainer: document.createElement('div'),
-            isDead: false, term: null, ws: null,
+            isDead: false,
+            term: null,
+            ws: null,
         });
         // Now user opens kanban — its tab has the OLD workspace/cwd
         ctx.tabs.set('kanban-board', {
-            paneId: 'kanban-board', sessionId: 'kanban-board', title: 'Kanban', coder: 'kanban',
-            workspace: '/wsA', cwd: '/wsA/work',  // STALE snapshot
+            paneId: 'kanban-board',
+            sessionId: 'kanban-board',
+            title: 'Kanban',
+            coder: 'kanban',
+            workspace: '/wsA',
+            cwd: '/wsA/work', // STALE snapshot
             tabEl: document.createElement('div'),
             termContainer: document.createElement('div'),
-            isDead: true, isKanban: true,
+            isDead: true,
+            isKanban: true,
         });
         ctx.activePaneId = 'term-b';
 
@@ -137,7 +159,10 @@ describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () =
     });
 
     it('also short-circuits for review tabs (same class of bug)', async () => {
-        const fx = fixtures({ currentWorkspace: '/wsB', currentCwd: '/wsB/work' });
+        const fx = fixtures({
+            currentWorkspace: '/wsB',
+            currentCwd: '/wsB/work',
+        });
         const app = makeApp(fx);
         const ctx = Object.create(TabManager.prototype);
         Object.assign(ctx, {
@@ -152,18 +177,29 @@ describe('BUG-1: switching to kanban must NOT touch sidebar workspace/CWD', () =
             _spamScrollToBottom: vi.fn(),
         });
         ctx.tabs.set('term-b', {
-            paneId: 'term-b', sessionId: 'term-b', title: 't1', coder: 'opencode',
-            workspace: '/wsB', cwd: '/wsB/work',
+            paneId: 'term-b',
+            sessionId: 'term-b',
+            title: 't1',
+            coder: 'opencode',
+            workspace: '/wsB',
+            cwd: '/wsB/work',
             tabEl: document.createElement('div'),
             termContainer: document.createElement('div'),
-            isDead: false, term: null, ws: null,
+            isDead: false,
+            term: null,
+            ws: null,
         });
         ctx.tabs.set('review', {
-            paneId: 'review', sessionId: 'review', title: 'Review', coder: 'review',
-            workspace: '/wsA', cwd: '/wsA/work',
+            paneId: 'review',
+            sessionId: 'review',
+            title: 'Review',
+            coder: 'review',
+            workspace: '/wsA',
+            cwd: '/wsA/work',
             tabEl: document.createElement('div'),
             termContainer: document.createElement('div'),
-            isDead: true, isReview: true,
+            isDead: true,
+            isReview: true,
         });
         ctx.activePaneId = 'term-b';
 
@@ -183,7 +219,10 @@ describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
         const fx = fixtures();
         const app = makeApp(fx);
         let cleaned = false;
-        app.kanbanManager.cleanup = vi.fn(() => { cleaned = true; localStorage.removeItem('phi_kanban_open'); });
+        app.kanbanManager.cleanup = vi.fn(() => {
+            cleaned = true;
+            localStorage.removeItem('phi_kanban_open');
+        });
         localStorage.setItem('phi_kanban_open', '1');
 
         const ctx = Object.create(TabManager.prototype);
@@ -203,8 +242,12 @@ describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
         const tabEl = document.createElement('div');
         const termContainer = document.createElement('div');
         ctx.tabs.set('kanban-board', {
-            paneId: 'kanban-board', coder: 'kanban', isKanban: true, isDead: true,
-            tabEl, termContainer,
+            paneId: 'kanban-board',
+            coder: 'kanban',
+            isKanban: true,
+            isDead: true,
+            tabEl,
+            termContainer,
         });
         ctx.activePaneId = 'kanban-board';
 
@@ -264,7 +307,9 @@ describe('BUG-4: openBoard re-initializes an empty kanban container', () => {
         // Pre-existing kanban tab but its container was wiped (e.g. hot reload)
         const tc = document.createElement('div');
         app.tabManager = {
-            tabs: new Map([['kanban-board', { termContainer: tc, isKanban: true }]]),
+            tabs: new Map([
+                ['kanban-board', { termContainer: tc, isKanban: true }],
+            ]),
             switchTab: vi.fn(),
         };
 

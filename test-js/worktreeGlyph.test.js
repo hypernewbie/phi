@@ -49,7 +49,7 @@ describe('worktreeGlyph', () => {
         for (const ch of WORKTREE_GLYPHS) {
             const cp = ch.codePointAt(0);
             expect(cp).toBeGreaterThanOrEqual(0x13000);
-            expect(cp).toBeLessThanOrEqual(0x1342F);
+            expect(cp).toBeLessThanOrEqual(0x1342f);
         }
     });
 
@@ -65,9 +65,18 @@ describe('worktreeGlyph', () => {
         // assertion (6 of 12) since the new pool makes near-perfect
         // distribution trivial.
         const cwds = [
-            '/a', '/b', '/c', '/d', '/e',
-            '/foo', '/bar', '/baz', '/qux', '/quux',
-            '/x/y', '/p/q',
+            '/a',
+            '/b',
+            '/c',
+            '/d',
+            '/e',
+            '/foo',
+            '/bar',
+            '/baz',
+            '/qux',
+            '/quux',
+            '/x/y',
+            '/p/q',
             '/Users/dev/code/phi/main',
             '/Users/dev/code/phi/feature-a',
             '/Users/dev/code/sigma/main',

@@ -25,7 +25,10 @@ describe('tryNative (desktop bridge)', () => {
         expect(request).toHaveBeenCalledTimes(1);
         // Same {kind, payload} the host's ParseIntent expects (message.go
         // parses {k, p}; the injected bridge stringifies it, not us).
-        expect(request).toHaveBeenCalledWith('markdown', { path: 'x', cwd: '.' });
+        expect(request).toHaveBeenCalledWith('markdown', {
+            path: 'x',
+            cwd: '.',
+        });
     });
 
     it('returns false when the bridge exists but exposes no request()', () => {

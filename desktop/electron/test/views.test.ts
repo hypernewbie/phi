@@ -48,7 +48,8 @@ function makeFakeView(): RecordingView {
   const setVisibleCalls: boolean[] = [];
   const loadURLCalls: string[] = [];
   const loadHandlers: Array<() => void> = [];
-  const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> = [];
+  const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> =
+    [];
   let webContentsDestroyed = false;
   let zoomLevel = 0;
   const rec: RecordingView = {
@@ -238,7 +239,7 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     manager.setActive('p1');
     manager.removeProfile('p1');
     expect(views[0].closeCalls).toBe(1);
-    expect(views[0].destroyCalls).toBe(0);  // WebContentsView has no .destroy(); removeChildView suffices
+    expect(views[0].destroyCalls).toBe(0); // WebContentsView has no .destroy(); removeChildView suffices
     expect(win.removed).toEqual([views[0].view]);
     expect(manager.viewsCreated()).toBe(0);
     expect(manager.getActive()).toBeNull();
@@ -257,7 +258,12 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     // The window shrinks; only the ACTIVE view (p2) re-bounds.
     bounds = { x: 72, y: 0, width: 1000, height: 700 };
     manager.onWindowResize();
-    expect(views[1].setBoundsCalls.at(-1)).toEqual({ x: 72, y: 0, width: 1000, height: 700 });
+    expect(views[1].setBoundsCalls.at(-1)).toEqual({
+      x: 72,
+      y: 0,
+      width: 1000,
+      height: 700,
+    });
     // p1 keeps the bounds it had when it was last active/created.
     expect(views[0].setBoundsCalls.at(-1)).toEqual(DEFAULT_BOUNDS);
     expect(manager.getActive()).toBe('p2');
@@ -406,7 +412,9 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     });
     expect(ev3.preventDefault).toHaveBeenCalled();
     expect(
-      (views[1].view.webContents as unknown as { getZoomLevel: () => number }).getZoomLevel(),
+      (
+        views[1].view.webContents as unknown as { getZoomLevel: () => number }
+      ).getZoomLevel(),
     ).toBeCloseTo(0.5);
   });
 

@@ -21,7 +21,15 @@ const PROJECTS = [{ id: 9, title: 'Phi' }];
 const VIEW = { id: 5, view_kind: 'kanban' };
 
 function task(id, over = {}) {
-    return { id, title: `Task ${id}`, done: false, labels: [], assignees: [], bucket_id: 10, ...over };
+    return {
+        id,
+        title: `Task ${id}`,
+        done: false,
+        labels: [],
+        assignees: [],
+        bucket_id: 10,
+        ...over,
+    };
 }
 
 // A mounted board with two columns, wired exactly as the real render path
@@ -47,8 +55,16 @@ function mountBoard({ tasks = [task(1), task(2)] } = {}) {
     c.escListener = null;
 
     const buckets = [
-        { id: 10, title: 'Todo', tasks: tasks.filter(t => t.bucket_id === 10) },
-        { id: 20, title: 'Done', tasks: tasks.filter(t => t.bucket_id === 20) },
+        {
+            id: 10,
+            title: 'Todo',
+            tasks: tasks.filter((t) => t.bucket_id === 10),
+        },
+        {
+            id: 20,
+            title: 'Done',
+            tasks: tasks.filter((t) => t.bucket_id === 20),
+        },
     ];
     c.buckets = buckets;
     for (const t of tasks) c.taskCache[String(t.id)] = t;
@@ -62,7 +78,9 @@ function mountBoard({ tasks = [task(1), task(2)] } = {}) {
 }
 
 const cardTitles = (container) =>
-    [...container.querySelectorAll('.kanban-card')].map(el => el.querySelector('.kanban-card-title').textContent);
+    [...container.querySelectorAll('.kanban-card')].map(
+        (el) => el.querySelector('.kanban-card-title').textContent,
+    );
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -94,7 +112,9 @@ describe('patching a single card', () => {
         c.upsertTaskState({ ...c.taskCache['1'], title: 'Renamed' });
 
         expect(c.taskCache['1'].title).toBe('Renamed');
-        expect(c.buckets[0].tasks.find(t => t.id === 1).title).toBe('Renamed');
+        expect(c.buckets[0].tasks.find((t) => t.id === 1).title).toBe(
+            'Renamed',
+        );
     });
 
     it('re-applies the active filter to a repainted card', () => {
@@ -123,19 +143,27 @@ describe('patching a single card', () => {
 describe('delegated card actions', () => {
     it('delete still fires on a card that was repainted', async () => {
         const { c, container } = mountBoard();
-        vi.stubGlobal('confirm', vi.fn(() => true));
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
         c.deleteTask = vi.fn(async () => {});
 
         // Replace the node, exactly as an optimistic update does.
         c.patchCard(1);
         c.cardEl(1).querySelector('.kanban-card-delete-btn').click();
 
-        await vi.waitFor(() => expect(c.deleteTask).toHaveBeenCalledWith('1', container));
+        await vi.waitFor(() =>
+            expect(c.deleteTask).toHaveBeenCalledWith('1', container),
+        );
     });
 
     it('does not stack handlers across re-renders', async () => {
         const { c, container } = mountBoard();
-        vi.stubGlobal('confirm', vi.fn(() => true));
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
         c.deleteTask = vi.fn(async () => {});
 
         // renderBoardLayout reassigns innerHTML, which discards listeners on
@@ -149,7 +177,10 @@ describe('delegated card actions', () => {
 
     it('cleanup detaches the delegate', () => {
         const { c, container } = mountBoard();
-        vi.stubGlobal('confirm', vi.fn(() => true));
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
         c.deleteTask = vi.fn(async () => {});
         c.destroyStatsCharts = vi.fn();
 
@@ -169,12 +200,24 @@ describe('optimistic task mutations', () => {
     it('shows a rename before the server answers', async () => {
         const { c, container } = mountBoard();
         let release;
-        mockFetch(() => new Promise(resolve => { release = () => resolve({ ok: true, json: {} }); }));
+        mockFetch(
+            () =>
+                new Promise((resolve) => {
+                    release = () => resolve({ ok: true, json: {} });
+                }),
+        );
 
-        const saving = c.saveTaskDetail(c.taskCache['1'], { title: 'Instant' }, null, container);
+        const saving = c.saveTaskDetail(
+            c.taskCache['1'],
+            { title: 'Instant' },
+            null,
+            container,
+        );
 
         // The point of the exercise: repainted before the round-trip resolves.
-        await vi.waitFor(() => expect(cardTitles(container)).toContain('Instant'));
+        await vi.waitFor(() =>
+            expect(cardTitles(container)).toContain('Instant'),
+        );
         release();
         await saving;
         expect(cardTitles(container)).toEqual(['Instant', 'Task 2']);
@@ -184,12 +227,18 @@ describe('optimistic task mutations', () => {
         const { c, container } = mountBoard();
         mockFetch(() => ({ ok: false, status: 500, text: 'boom' }));
 
-        await expect(c.saveTaskDetail(c.taskCache['1'], { title: 'Doomed' }, null, container))
-            .rejects.toThrow();
+        await expect(
+            c.saveTaskDetail(
+                c.taskCache['1'],
+                { title: 'Doomed' },
+                null,
+                container,
+            ),
+        ).rejects.toThrow();
 
         expect(cardTitles(container)).toEqual(['Task 1', 'Task 2']);
         expect(c.taskCache['1'].title).toBe('Task 1');
-        expect(c.buckets[0].tasks.find(t => t.id === 1).title).toBe('Task 1');
+        expect(c.buckets[0].tasks.find((t) => t.id === 1).title).toBe('Task 1');
     });
 
     it('refreshes aggregates in Features mode, where there is no card to patch', async () => {
@@ -198,7 +247,12 @@ describe('optimistic task mutations', () => {
         c.refreshBoard = vi.fn(async () => {});
         mockFetch(() => ({ ok: true, json: {} }));
 
-        await c.saveTaskDetail(c.taskCache['1'], { title: 'Renamed' }, null, container);
+        await c.saveTaskDetail(
+            c.taskCache['1'],
+            { title: 'Renamed' },
+            null,
+            container,
+        );
 
         expect(c.refreshBoard).toHaveBeenCalled();
     });
@@ -230,7 +284,9 @@ describe('optimistic task mutations', () => {
         mockFetch(() => ({ ok: true, status: 204 }));
         await c.deleteTask('1', container);
         expect(cardTitles(container)).toEqual(['Task 2']);
-        expect(container.querySelector('.kanban-column .column-count').textContent).toBe('1');
+        expect(
+            container.querySelector('.kanban-column .column-count').textContent,
+        ).toBe('1');
 
         mockFetch(() => ({ ok: false, status: 500, text: 'boom' }));
         await expect(c.deleteTask('2', container)).rejects.toThrow();
@@ -251,14 +307,23 @@ describe('the cache never keeps a value the server did not accept', () => {
     it('keeps full labels when the server replies 204 with no body', async () => {
         // The wire payload strips labels to bare {id}. Caching those stubs
         // would blank the pills and send the stubs back on the next save.
-        const labelled = task(1, { labels: [{ id: 7, title: 'bug', hex_color: 'ff0000' }] });
+        const labelled = task(1, {
+            labels: [{ id: 7, title: 'bug', hex_color: 'ff0000' }],
+        });
         const { c } = mountBoard({ tasks: [labelled, task(2)] });
         mockFetch(() => ({ ok: true, status: 204 }));
 
-        await c.saveTaskDetail(c.taskCache['1'], { title: 'Renamed' }, null, c.boardContainer);
+        await c.saveTaskDetail(
+            c.taskCache['1'],
+            { title: 'Renamed' },
+            null,
+            c.boardContainer,
+        );
 
         expect(c.taskCache['1'].title).toBe('Renamed');
-        expect(c.taskCache['1'].labels).toEqual([{ id: 7, title: 'bug', hex_color: 'ff0000' }]);
+        expect(c.taskCache['1'].labels).toEqual([
+            { id: 7, title: 'bug', hex_color: 'ff0000' },
+        ]);
     });
 
     it('re-reads the task from the server after a rejected write', async () => {
@@ -268,16 +333,34 @@ describe('the cache never keeps a value the server did not accept', () => {
         const { c } = mountBoard();
         const calls = [];
         mockFetch((url, opts) => {
-            const target = decodeURIComponent(String(url).split('url=')[1] || '');
-            calls.push(`${opts?.method || 'GET'} ${target.replace(/^.*\/api\/v1/, '')}`);
+            const target = decodeURIComponent(
+                String(url).split('url=')[1] || '',
+            );
+            calls.push(
+                `${opts?.method || 'GET'} ${target.replace(/^.*\/api\/v1/, '')}`,
+            );
             if ((opts?.method || 'GET') === 'GET') {
-                return { ok: true, json: { id: 1, title: 'Server Won', labels: [], assignees: [] } };
+                return {
+                    ok: true,
+                    json: {
+                        id: 1,
+                        title: 'Server Won',
+                        labels: [],
+                        assignees: [],
+                    },
+                };
             }
             return { ok: false, status: 500, text: 'boom' };
         });
 
-        await expect(c.saveTaskDetail(c.taskCache['1'], { title: 'Doomed' }, null, c.boardContainer))
-            .rejects.toThrow();
+        await expect(
+            c.saveTaskDetail(
+                c.taskCache['1'],
+                { title: 'Doomed' },
+                null,
+                c.boardContainer,
+            ),
+        ).rejects.toThrow();
 
         expect(calls).toContain('GET /tasks/1');
         expect(c.taskCache['1'].title).toBe('Server Won');
@@ -289,18 +372,36 @@ describe('the cache never keeps a value the server did not accept', () => {
         let firstReject;
         mockFetch((url, opts) => {
             if ((opts?.method || 'GET') === 'GET') {
-                return { ok: true, json: { id: 1, title: 'Task 1', labels: [], assignees: [] } };
+                return {
+                    ok: true,
+                    json: { id: 1, title: 'Task 1', labels: [], assignees: [] },
+                };
             }
             const body = JSON.parse(opts.body);
             sent.push(body.title);
             if (sent.length === 1) {
-                return new Promise((_, reject) => { firstReject = () => reject(new Error('boom')); });
+                return new Promise((_, reject) => {
+                    firstReject = () => reject(new Error('boom'));
+                });
             }
-            return { ok: true, json: { id: 1, title: body.title, labels: [], assignees: [] } };
+            return {
+                ok: true,
+                json: { id: 1, title: body.title, labels: [], assignees: [] },
+            };
         });
 
-        const first = c.saveTaskDetail(c.taskCache['1'], { title: 'First' }, null, c.boardContainer);
-        const second = c.saveTaskDetail(c.taskCache['1'], { title: 'Second' }, null, c.boardContainer);
+        const first = c.saveTaskDetail(
+            c.taskCache['1'],
+            { title: 'First' },
+            null,
+            c.boardContainer,
+        );
+        const second = c.saveTaskDetail(
+            c.taskCache['1'],
+            { title: 'Second' },
+            null,
+            c.boardContainer,
+        );
 
         // The second write must not begin until the first has settled.
         await vi.waitFor(() => expect(sent).toEqual(['First']));
@@ -316,7 +417,10 @@ describe('the cache never keeps a value the server did not accept', () => {
 
     it('setTaskDone keeps server fields merged by the mutation', async () => {
         const { c } = mountBoard();
-        mockFetch(() => ({ ok: true, json: { id: 1, done: true, identifier: 'PHI-1', index: 4 } }));
+        mockFetch(() => ({
+            ok: true,
+            json: { id: 1, done: true, identifier: 'PHI-1', index: 4 },
+        }));
 
         const next = await c.setTaskDone(c.taskCache['1'], true);
 
@@ -340,7 +444,11 @@ describe('feature roll-ups', () => {
 
     function mountFeatures() {
         const parent = {
-            id: 1, title: 'Ship it', done: false, labels: [], assignees: [],
+            id: 1,
+            title: 'Ship it',
+            done: false,
+            labels: [],
+            assignees: [],
             related_tasks: { subtask: [sub(2, true), sub(3, false)] },
         };
         const { c, container } = mountBoard({ tasks: [parent] });
@@ -375,7 +483,11 @@ describe('feature roll-ups', () => {
         c.patchFeatureRow(1);
         container.querySelector('.kanban-feature-row').click();
 
-        expect(c.openTaskDetail).toHaveBeenCalledWith('1', expect.anything(), container);
+        expect(c.openTaskDetail).toHaveBeenCalledWith(
+            '1',
+            expect.anything(),
+            container,
+        );
     });
 
     it('keeps keyboard activation working on a repainted row', () => {
@@ -384,20 +496,30 @@ describe('feature roll-ups', () => {
         c.patchFeatureRow(1);
 
         const row = container.querySelector('.kanban-feature-row');
-        row.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        row.dispatchEvent(
+            new window.KeyboardEvent('keydown', {
+                key: 'Enter',
+                bubbles: true,
+            }),
+        );
 
         expect(c.openTaskDetail).toHaveBeenCalledWith('1', row, container);
     });
 
     it('still refreshes when the parent itself is completed', async () => {
         const { c, container } = mountFeatures();
-        vi.stubGlobal('confirm', vi.fn(() => true));
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
         c.setTaskDone = vi.fn(async (task, done) => ({ ...task, done }));
         c.refreshBoard = vi.fn(async () => {});
 
         container.querySelector('.kanban-feature-done-btn').click();
 
-        await vi.waitFor(() => expect(c.refreshBoard).toHaveBeenCalledWith(container));
+        await vi.waitFor(() =>
+            expect(c.refreshBoard).toHaveBeenCalledWith(container),
+        );
     });
 
     it('does not stack feature delegates across re-renders', async () => {
@@ -419,19 +541,31 @@ describe('feature roll-ups', () => {
 describe('refreshBoard', () => {
     function stubBoardFetch(c, tasks) {
         mockFetch((url) => {
-            const target = decodeURIComponent(String(url).split('url=')[1] || '');
+            const target = decodeURIComponent(
+                String(url).split('url=')[1] || '',
+            );
             if (target.includes('/views?')) return { ok: true, json: [VIEW] };
             if (target.includes('/views/5/tasks')) {
                 return {
                     ok: true,
                     json: [
-                        { id: 10, title: 'Todo', tasks: tasks.filter(t => t.bucket_id === 10) },
-                        { id: 20, title: 'Done', tasks: tasks.filter(t => t.bucket_id === 20) },
+                        {
+                            id: 10,
+                            title: 'Todo',
+                            tasks: tasks.filter((t) => t.bucket_id === 10),
+                        },
+                        {
+                            id: 20,
+                            title: 'Done',
+                            tasks: tasks.filter((t) => t.bucket_id === 20),
+                        },
                     ],
                 };
             }
-            if (target.includes('expand=subtasks')) return { ok: true, json: tasks };
-            if (target.includes('/projects?')) return { ok: true, json: PROJECTS };
+            if (target.includes('expand=subtasks'))
+                return { ok: true, json: tasks };
+            if (target.includes('/projects?'))
+                return { ok: true, json: PROJECTS };
             return { ok: true, json: [] };
         });
     }
@@ -458,20 +592,27 @@ describe('refreshBoard', () => {
 
         await c.refreshBoard(container);
 
-        expect(container.querySelector('#kanban-search-input').value).toBe('Task 2');
+        expect(container.querySelector('#kanban-search-input').value).toBe(
+            'Task 2',
+        );
         expect(c.cardEl(1).classList.contains('hidden-by-filter')).toBe(true);
         expect(c.cardEl(2).classList.contains('hidden-by-filter')).toBe(false);
     });
 
     it('restores column scroll position', async () => {
         const { c, container } = mountBoard();
-        const list = container.querySelector('.kanban-cards-list[data-bucket-id="10"]');
+        const list = container.querySelector(
+            '.kanban-cards-list[data-bucket-id="10"]',
+        );
         list.scrollTop = 120;
         stubBoardFetch(c, [task(1), task(2)]);
 
         await c.refreshBoard(container);
 
-        expect(container.querySelector('.kanban-cards-list[data-bucket-id="10"]').scrollTop).toBe(120);
+        expect(
+            container.querySelector('.kanban-cards-list[data-bucket-id="10"]')
+                .scrollTop,
+        ).toBe(120);
     });
 
     it('clears the syncing indicator even when the load fails', async () => {
@@ -481,7 +622,9 @@ describe('refreshBoard', () => {
         await c.refreshBoard(container);
 
         const pip = container.querySelector('#kanban-sync-indicator');
-        expect(pip === null || !pip.classList.contains('is-syncing')).toBe(true);
+        expect(pip === null || !pip.classList.contains('is-syncing')).toBe(
+            true,
+        );
     });
 
     it('is a no-op when no board is mounted', async () => {

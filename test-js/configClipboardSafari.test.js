@@ -43,7 +43,10 @@ beforeEach(() => {
         () =>
             new Promise((res) => {
                 resolveFetch = () =>
-                    res({ ok: true, json: async () => ({ config: 'PHICONFIG:abc123' }) });
+                    res({
+                        ok: true,
+                        json: async () => ({ config: 'PHICONFIG:abc123' }),
+                    });
             }),
     );
 
@@ -66,7 +69,11 @@ beforeEach(() => {
 describe('config export survives Safari clipboard rules', () => {
     it('requests the clipboard write before the fetch resolves', async () => {
         const btn = makeBtn();
-        const p = App.prototype._doExportConfig.call({}, '/api/config/export', btn);
+        const p = App.prototype._doExportConfig.call(
+            {},
+            '/api/config/export',
+            btn,
+        );
 
         // Let the synchronous part run. The network has NOT responded yet.
         await Promise.resolve();
@@ -84,7 +91,11 @@ describe('config export survives Safari clipboard rules', () => {
 
     it('puts the exported config on the clipboard', async () => {
         const btn = makeBtn();
-        const p = App.prototype._doExportConfig.call({}, '/api/config/export', btn);
+        const p = App.prototype._doExportConfig.call(
+            {},
+            '/api/config/export',
+            btn,
+        );
         await Promise.resolve();
         resolveFetch();
         await p;
@@ -97,7 +108,11 @@ describe('config export survives Safari clipboard rules', () => {
     it('falls back to writeText when ClipboardItem is unavailable', async () => {
         delete global.ClipboardItem;
         const btn = makeBtn();
-        const p = App.prototype._doExportConfig.call({}, '/api/config/export', btn);
+        const p = App.prototype._doExportConfig.call(
+            {},
+            '/api/config/export',
+            btn,
+        );
         await Promise.resolve();
         resolveFetch();
         await p;
@@ -110,7 +125,11 @@ describe('config export survives Safari clipboard rules', () => {
             throw new Error('NotAllowedError');
         });
         const btn = makeBtn();
-        const p = App.prototype._doExportConfig.call({}, '/api/config/export', btn);
+        const p = App.prototype._doExportConfig.call(
+            {},
+            '/api/config/export',
+            btn,
+        );
         await Promise.resolve();
         resolveFetch();
         await p;

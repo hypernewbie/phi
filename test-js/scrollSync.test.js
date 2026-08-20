@@ -38,7 +38,10 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
             // the rAF/write, per terminal.js:932-933) observable: capturing
             // it late (after write) would see the new, taller baseY and
             // wrongly conclude the user isn't at bottom.
-            write: vi.fn(function (data, cb) { this.buffer.active.baseY += 1; if (cb) cb(); }),
+            write: vi.fn(function (data, cb) {
+                this.buffer.active.baseY += 1;
+                if (cb) cb();
+            }),
             scrollToBottom: vi.fn(),
             scrollLines: vi.fn(),
             buffer: { active: { viewportY, baseY } },
@@ -50,7 +53,10 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
 
 describe('write batches sync the DOM scroll area', () => {
     it('calls _core.viewport.syncScrollArea(true) via the write callback', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         tm.writeToTerminal(tab, 'hello');
@@ -59,7 +65,10 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('still snaps to bottom when following at bottom (existing behavior preserved)', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
@@ -67,7 +76,10 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('does not write or sync on a dead tab', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         tab.isDead = true;
@@ -77,7 +89,10 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('tolerates a term without _core.viewport (optional chain)', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            fn();
+            return 1;
+        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         delete tab.term._core;
@@ -100,7 +115,11 @@ describe('write batches sync the DOM scroll area', () => {
 // already wired to the real termContainer — so stubbing it as a no-op
 // isolates the two closures under test without faking their behavior.
 function stubXtermGlobals() {
-    vi.stubGlobal('FitAddon', { FitAddon: class { fit() {} } });
+    vi.stubGlobal('FitAddon', {
+        FitAddon: class {
+            fit() {}
+        },
+    });
     vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
     vi.stubGlobal('Terminal', function () {
         // Mirrors real xterm.js DOM shape: term.element with a
@@ -116,7 +135,9 @@ function stubXtermGlobals() {
             // to open() — without this, .xterm-viewport is never actually a
             // descendant of termContainer, and the capture-phase listener
             // createTab installs on termContainer would silently never fire.
-            open: (container) => { if (container) container.appendChild(rootEl); },
+            open: (container) => {
+                if (container) container.appendChild(rootEl);
+            },
             loadAddon: () => {},
             attachCustomKeyEventHandler: () => {},
             onSelectionChange: () => {},
@@ -124,7 +145,9 @@ function stubXtermGlobals() {
             onScroll: () => {},
             onData: () => {},
             getSelection: () => '',
-            write: vi.fn((data, cb) => { if (cb) cb(); }),
+            write: vi.fn((data, cb) => {
+                if (cb) cb();
+            }),
             scrollToBottom: vi.fn(),
             scrollLines: vi.fn(),
             _core: { viewport: { syncScrollArea: vi.fn() } },
@@ -139,7 +162,10 @@ function stubXtermGlobals() {
 // gets its own TabManager with a fresh `tabs` Map, so a fixed paneId
 // never collides across tests — no caller needs to pick one.
 function mountRealTab({ coder = 'bash' } = {}) {
-    vi.stubGlobal('requestAnimationFrame', (fn) => { fn(); return 1; });
+    vi.stubGlobal('requestAnimationFrame', (fn) => {
+        fn();
+        return 1;
+    });
     stubWebSocket();
     stubXtermGlobals();
     const tm = Object.create(TabManager.prototype);
@@ -162,21 +188,33 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
     it('re-engages follow at the exact bottom, and hides the scroll-to-bottom button', () => {
         const tabInfo = mountRealTab();
         tabInfo.userFollowBottom = false;
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
-        tabInfo.term.element.querySelector('.xterm-viewport')
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 100,
+            baseY: 100,
+        });
+        tabInfo.term.element
+            .querySelector('.xterm-viewport')
             .dispatchEvent(new Event('scroll', { bubbles: false }));
         expect(tabInfo.userFollowBottom).toBe(true);
-        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(true);
+        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(
+            true,
+        );
     });
 
     it('does NOT re-engage follow above the bottom (strict predicate, no slack), and shows the button', () => {
         const tabInfo = mountRealTab();
         tabInfo.userFollowBottom = false;
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 99, baseY: 100 });
-        tabInfo.term.element.querySelector('.xterm-viewport')
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 99,
+            baseY: 100,
+        });
+        tabInfo.term.element
+            .querySelector('.xterm-viewport')
             .dispatchEvent(new Event('scroll', { bubbles: false }));
         expect(tabInfo.userFollowBottom).toBe(false);
-        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(false);
+        expect(tabInfo.scrollToBottomBtn.classList.contains('hidden')).toBe(
+            false,
+        );
     });
 
     it('defers the re-engage decision to the next animation frame, coalescing repeat scrolls into one frame', () => {
@@ -185,9 +223,15 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
         // block above needs the synchronous form, so this is a local,
         // post-mount override rather than a change to mountRealTab.
         const frames = [];
-        vi.stubGlobal('requestAnimationFrame', (fn) => { frames.push(fn); return frames.length; });
+        vi.stubGlobal('requestAnimationFrame', (fn) => {
+            frames.push(fn);
+            return frames.length;
+        });
         tabInfo.userFollowBottom = false;
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 100,
+            baseY: 100,
+        });
         const vp = tabInfo.term.element.querySelector('.xterm-viewport');
         vp.dispatchEvent(new Event('scroll', { bubbles: false }));
         vp.dispatchEvent(new Event('scroll', { bubbles: false }));
@@ -196,52 +240,99 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
         expect(frames.length).toBe(1);
         // Deferred: the decision hasn't run yet, so follow is still off.
         expect(tabInfo.userFollowBottom).toBe(false);
-        frames.forEach((f) => f());
+        frames.forEach((f) => {
+            f();
+        });
         expect(tabInfo.userFollowBottom).toBe(true);
     });
 });
 
 // clientHeight/scrollHeight are getter-only in jsdom (no layout engine), so
 // they need defineProperty; scrollTop is a plain writable property.
-function setViewportScrollMetrics(tabInfo, { scrollTop, clientHeight, scrollHeight }) {
+function setViewportScrollMetrics(
+    tabInfo,
+    { scrollTop, clientHeight, scrollHeight },
+) {
     const vp = tabInfo.term.element.querySelector('.xterm-viewport');
     vp.scrollTop = scrollTop;
-    Object.defineProperty(vp, 'clientHeight', { value: clientHeight, configurable: true });
-    Object.defineProperty(vp, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(vp, 'clientHeight', {
+        value: clientHeight,
+        configurable: true,
+    });
+    Object.defineProperty(vp, 'scrollHeight', {
+        value: scrollHeight,
+        configurable: true,
+    });
     return vp;
 }
 
 describe('wheel-down escape hatch installed by createTab (drives the real handler)', () => {
     it('scrolls the buffer exactly once when clamped below the real bottom', () => {
         const tabInfo = mountRealTab();
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
-        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
-        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 50,
+            baseY: 100,
+        });
+        setViewportScrollMetrics(tabInfo, {
+            scrollTop: 968,
+            clientHeight: 32,
+            scrollHeight: 1000,
+        });
+        tabInfo.termContainer.dispatchEvent(
+            new WheelEvent('wheel', { deltaY: 120, bubbles: true }),
+        );
         expect(tabInfo.term.scrollLines).toHaveBeenCalledWith(3);
         expect(tabInfo.term.scrollLines).toHaveBeenCalledTimes(1);
     });
 
     it('does nothing at the real bottom', () => {
         const tabInfo = mountRealTab();
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 100, baseY: 100 });
-        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
-        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 100,
+            baseY: 100,
+        });
+        setViewportScrollMetrics(tabInfo, {
+            scrollTop: 968,
+            clientHeight: 32,
+            scrollHeight: 1000,
+        });
+        tabInfo.termContainer.dispatchEvent(
+            new WheelEvent('wheel', { deltaY: 120, bubbles: true }),
+        );
         expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 
     it('does nothing when the DOM still has room to scroll', () => {
         const tabInfo = mountRealTab();
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
-        setViewportScrollMetrics(tabInfo, { scrollTop: 0, clientHeight: 32, scrollHeight: 1000 });
-        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 50,
+            baseY: 100,
+        });
+        setViewportScrollMetrics(tabInfo, {
+            scrollTop: 0,
+            clientHeight: 32,
+            scrollHeight: 1000,
+        });
+        tabInfo.termContainer.dispatchEvent(
+            new WheelEvent('wheel', { deltaY: 120, bubbles: true }),
+        );
         expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 
     it('does nothing on wheel-up', () => {
         const tabInfo = mountRealTab();
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
-        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
-        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 50,
+            baseY: 100,
+        });
+        setViewportScrollMetrics(tabInfo, {
+            scrollTop: 968,
+            clientHeight: 32,
+            scrollHeight: 1000,
+        });
+        tabInfo.termContainer.dispatchEvent(
+            new WheelEvent('wheel', { deltaY: -120, bubbles: true }),
+        );
         expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 
@@ -253,9 +344,22 @@ describe('wheel-down escape hatch installed by createTab (drives the real handle
     // tabs too) was uncatchable before driving the real listeners.
     it('is excluded for opencode tabs by the capture-phase handler stopping propagation first', () => {
         const tabInfo = mountRealTab({ coder: 'opencode' });
-        Object.assign(tabInfo.term.buffer.active, { viewportY: 50, baseY: 100 });
-        setViewportScrollMetrics(tabInfo, { scrollTop: 968, clientHeight: 32, scrollHeight: 1000 });
-        tabInfo.termContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+        Object.assign(tabInfo.term.buffer.active, {
+            viewportY: 50,
+            baseY: 100,
+        });
+        setViewportScrollMetrics(tabInfo, {
+            scrollTop: 968,
+            clientHeight: 32,
+            scrollHeight: 1000,
+        });
+        tabInfo.termContainer.dispatchEvent(
+            new WheelEvent('wheel', {
+                deltaY: 120,
+                bubbles: true,
+                cancelable: true,
+            }),
+        );
         expect(tabInfo.term.scrollLines).not.toHaveBeenCalled();
     });
 });
@@ -264,9 +368,13 @@ describe('source contracts', () => {
     it('write path syncs the scroll area, scroll listener + escape hatch exist, no bottom slack', async () => {
         const fs = await import('node:fs');
         const src = fs.readFileSync('web/terminal.js', 'utf8');
-        expect(src).toContain('tabInfo.term._core?.viewport?.syncScrollArea(true)');
-        expect(src).toContain("termContainer.addEventListener('scroll'");
-        expect(src).toContain('vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1');
+        expect(src).toContain(
+            'tabInfo.term._core?.viewport?.syncScrollArea(true)',
+        );
+        expect(src).toMatch(/termContainer\.addEventListener\(\s*'scroll'/);
+        expect(src).toContain(
+            'vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1',
+        );
         expect(src).not.toContain('baseY - 1');
     });
 });

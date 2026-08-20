@@ -19,9 +19,14 @@
     "dev:desktop": "pnpm --dir desktop/electron run build && pnpm --dir desktop/electron run dev",
     "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
     "lint:web": "stylelint web/style.css && html-validate web/index.html web/md.html",
-    "check": "pnpm typecheck && pnpm lint:web && pnpm test"
+    "lint:code": "biome lint .",
+    "format:check": "biome format .",
+    "format": "biome format --write .",
+    "check:code": "biome ci .",
+    "check": "pnpm typecheck && pnpm lint:web && pnpm check:code && pnpm test"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.9",
     "@noble/hashes": "^2.2.0",
     "@vitest/coverage-v8": "4.1.10",
     "dompurify": "^3.4.12",
