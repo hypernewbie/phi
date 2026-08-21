@@ -60,6 +60,8 @@ const onChange = async (): Promise<void> => {
 };
 input?.addEventListener("change", () => void onChange());
 input?.addEventListener("blur", () => void onChange());
+const closeBtn = document.getElementById("pet-settings-close");
+closeBtn?.addEventListener("click", () => window.close());
 const remove = window.petSettings.onIdleDwellState(
   (state: PetIdleDwellState) => {
     if (!validDwellSeconds(state.dwellSeconds)) return;

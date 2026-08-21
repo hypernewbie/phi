@@ -14,7 +14,7 @@ const srcDir = path.join(here, "..", "src");
 const distDir = path.join(here, "..", "dist");
 const preloadDir = path.join(here, "..", "dist-preload");
 
-const assets = ["pet.html", "pet-settings.html"];
+const assets = ["pet.html", "pet-settings.html", "pet-settings.css"];
 
 mkdirSync(distDir, { recursive: true });
 for (const name of assets) {

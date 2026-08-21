@@ -52,8 +52,8 @@ export interface PetSettingsWindowOptions {
 export function createPetSettingsWindow(opts: PetSettingsWindowOptions): BrowserWindow {
   const file = path.join(opts.root, "dist", SETTINGS_HTML_FILE);
   const win = new BrowserWindow({
-    width: 360,
-    height: 180,
+    width: 400,
+    height: 240,
     parent: opts.parent,
     show: false,
     resizable: false,

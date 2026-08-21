@@ -1,10 +1,36 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Pet settings</title></head>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pet settings</title>
+  <link rel="stylesheet" href="./pet-settings.css">
+</head>
 <body>
-  <label for="pet-idle-dwell">Unattended rest interval (seconds)</label>
-  <input id="pet-idle-dwell" type="number" min="1" max="3600" step="1" inputmode="numeric">
-  <p id="pet-settings-error" role="alert"></p>
+  <div class="settings-modal">
+    <header class="settings-header">
+      <div class="settings-identity">
+        <div class="settings-logo">Φ</div>
+        <div>
+          <h3>Pet settings</h3>
+          <div class="settings-version">Desktop pet</div>
+        </div>
+      </div>
+    </header>
+    <div class="settings-body">
+      <div class="settings-group">
+        <h4 class="settings-group-title">Behavior</h4>
+        <div class="settings-row">
+          <label for="pet-idle-dwell">Unattended rest interval (seconds)</label>
+          <input id="pet-idle-dwell" type="number" min="1" max="3600" step="1" inputmode="numeric">
+        </div>
+        <p id="pet-settings-error" class="settings-error" role="alert"></p>
+      </div>
+    </div>
+    <div class="settings-footer">
+      <button class="btn btn-accent" id="pet-settings-close" type="button">Close</button>
+    </div>
+  </div>
   <script type="module" src="./pet-settings-view.js"></script>
 </body>
 </html>
