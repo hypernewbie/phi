@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
+const { fakeApp, fakeMenu, fakeNativeImage, fakeNet, fakeDialog, FakeTray } = vi.hoisted(() => {
   class FakeTray {
     static instances: FakeTray[] = [];
     listeners = new Map<string, () => void>();
@@ -19,7 +19,9 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
   }
   return {
     fakeApp: {
+      isPackaged: false,
       getPath: vi.fn(() => "/tmp/phi-user-data"),
+      getVersion: vi.fn(() => "1.2.3"),
       on: vi.fn(),
       quit: vi.fn(),
     },
@@ -29,6 +31,8 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
     fakeNativeImage: {
       createFromPath: vi.fn(() => ({ isEmpty: () => false })),
     },
+    fakeNet: { fetch: vi.fn() },
+    fakeDialog: { showErrorBox: vi.fn() },
     FakeTray,
   };
 });
@@ -39,6 +43,8 @@ vi.mock("electron", () => ({
   ipcMain: {},
   Menu: fakeMenu,
   nativeImage: fakeNativeImage,
+  net: fakeNet,
+  dialog: fakeDialog,
   Notification: class {},
   safeStorage: {},
   session: {},
@@ -47,7 +53,10 @@ vi.mock("electron", () => ({
   WebContentsView: class {},
 }));
 
+vi.mock("../src/petInstaller.js", () => ({ installPet: vi.fn() }));
+
 import { Controller } from "../src/controller.js";
+import { installPet } from "../src/petInstaller.js";
 import { DesktopHost } from "../src/desktop.js";
 import type { PetDeps, PetHandle } from "../src/petLoader.js";
 
@@ -80,6 +89,9 @@ const enable = (host: DesktopHost, value: boolean): void => {
 beforeEach(() => {
   fakeMenu.buildFromTemplate.mockClear();
   fakeNativeImage.createFromPath.mockClear();
+  fakeDialog.showErrorBox.mockClear();
+  fakeNet.fetch.mockClear();
+  vi.mocked(installPet).mockReset();
   FakeTray.instances.length = 0;
 });
 
@@ -371,6 +383,111 @@ describe("DesktopHost optional pet lifecycle", () => {
     await flush();
     expect(quittingFactory).not.toHaveBeenCalled();
     expect(host.petHandle).not.toBeNull();
+  });
+
+  it("installs and starts the pet when the preference is initially disabled", async () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.isPackaged = true;
+    fakeApp.getPath.mockReturnValue(dir);
+    mkdirSync(path.join(dir, "pet", "1.2.3", "dist"), { recursive: true });
+    writeFileSync(path.join(dir, "pet", "1.2.3", "dist", "pet-main.js"), "");
+    try {
+      const host = new DesktopHost();
+      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
+      vi.mocked(installPet).mockResolvedValue({ root: path.join(dir, "pet", "1.2.3") });
+      const start = vi.spyOn(host, "startPet").mockResolvedValue();
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
+      template.find((entry) => entry.label === "Install Pet…")?.click?.();
+      await flush();
+      expect(installPet).toHaveBeenCalledTimes(1);
+      expect(host.petRoot).toBe(path.join(dir, "pet", "1.2.3"));
+      expect(host.controller.getPetEnabled()).toBe(true);
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, "platform", { configurable: true, value: priorPlatform });
+    }
+  });
+
+  it("restarts the pet when installation succeeds with preference already enabled", async () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.isPackaged = true;
+    fakeApp.getPath.mockReturnValue(dir);
+    mkdirSync(path.join(dir, "pet", "1.2.3", "dist"), { recursive: true });
+    writeFileSync(path.join(dir, "pet", "1.2.3", "dist", "pet-main.js"), "");
+    try {
+      const host = new DesktopHost();
+      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
+      host.controller.setPetEnabled(true);
+      vi.mocked(installPet).mockResolvedValue({ root: path.join(dir, "pet", "1.2.3") });
+      const start = vi.spyOn(host, "startPet").mockResolvedValue();
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
+      template.find((entry) => entry.label === "Install Pet…")?.click?.();
+      await flush();
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, "platform", { configurable: true, value: priorPlatform });
+    }
+  });
+
+  it("shows installation failure and resets the in-flight state", async () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.getPath.mockReturnValue(dir);
+    try {
+      const host = new DesktopHost();
+      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
+      vi.mocked(installPet).mockRejectedValue(new Error("network unavailable"));
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
+      template.find((entry) => entry.label === "Install Pet…")?.click?.();
+      await flush();
+      expect(fakeDialog.showErrorBox).toHaveBeenCalledWith("Pet installation failed", "network unavailable");
+      expect(host.petRoot).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, "platform", { configurable: true, value: priorPlatform });
+    }
+  });
+
+  it("ignores a concurrent install command", async () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.getPath.mockReturnValue(dir);
+    const pending = deferred<{ root: string }>();
+    try {
+      const host = new DesktopHost();
+      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
+      vi.mocked(installPet).mockReturnValue(pending.promise);
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
+      const install = template.find((entry) => entry.label === "Install Pet…")?.click;
+      install?.();
+      install?.();
+      expect(installPet).toHaveBeenCalledTimes(1);
+      pending.resolve({ root: path.join(dir, "pet", "1.2.3") });
+      await flush();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, "platform", { configurable: true, value: priorPlatform });
+    }
   });
 
   it("preserves the Linux preference without importing the unavailable package and logs once", async () => {

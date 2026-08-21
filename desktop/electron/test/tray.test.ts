@@ -136,6 +136,8 @@ function setupTrayForTest(
     getCloseToTray: () => true,
     getSyncAlerts: () => false,
     getPetAvailable: () => false,
+    getPetInstallable: () => false,
+    getPetInstalling: () => false,
     getPetEnabled: () => false,
     getPetZoomPercent: () => 100,
     ipcSend,
@@ -161,6 +163,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
     toggleCloseToTray: () => {},
     toggleSyncAlerts: () => {},
     togglePet: () => {},
+    installPet: () => {},
     petZoomIn: () => {},
     petZoomOut: () => {},
     petResetZoom: () => {},
@@ -312,6 +315,27 @@ describe('buildTrayMenu (pure menu builder)', () => {
     );
     clickEntry(menu.find((e) => e.label === 'Show pet'));
     expect(togglePet).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Install Pet when installable and posts the install command', () => {
+    const installPet = vi.fn();
+    const menu = buildTrayMenu([], mkHandlers({ installPet }), true, false, false, true, false, false, 100);
+    const entry = menu.find((e) => e.label === 'Install Pet…');
+    expect(entry?.enabled).toBe(true);
+    clickEntry(entry);
+    expect(installPet).toHaveBeenCalledTimes(1);
+    expect(menu.some((e) => e.label === 'Show pet' || e.label === 'Pet')).toBe(false);
+  });
+
+  it('shows disabled Installing… while installable installation is in flight', () => {
+    const menu = buildTrayMenu([], mkHandlers(), true, false, false, true, true, false, 100);
+    expect(menu.find((e) => e.label === 'Installing…')).toMatchObject({ enabled: false });
+  });
+
+  it('never offers installation when the pet is available', () => {
+    const menu = buildTrayMenu([], mkHandlers(), true, false, true, true, false, false, 100);
+    expect(menu.some((e) => e.label === 'Install Pet…' || e.label === 'Installing…')).toBe(false);
+    expect(menu.find((e) => e.label === 'Show pet')).toBeDefined();
   });
 
   it('builds Pet zoom commands in browser-style order with readout and boundary enablement', () => {

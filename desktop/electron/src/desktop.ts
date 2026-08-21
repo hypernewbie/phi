@@ -24,6 +24,8 @@
 import {
   app,
   BrowserWindow,
+  dialog,
+  net,
   ipcMain,
   Menu,
   Notification,
@@ -102,6 +104,7 @@ import {
 } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 import { discoverPetRoot, type PetDeps, type PetHandle } from './petLoader.js';
+import { installPet } from './petInstaller.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -238,6 +241,7 @@ export class DesktopHost {
   /** Invalidates an outstanding optional-package import on every toggle/quit. */
   petGeneration = 0;
   private petUnavailableLogged = false;
+  private petInstalling = false;
   private petEnsurePromise: Promise<PetHandle | null> | null = null;
   private petStartRequested = false;
   // Interval handles (cleared in before-quit so no pending probe outlives
@@ -335,6 +339,8 @@ export class DesktopHost {
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getPetAvailable: () => isPetAvailable(this.petRoot),
+      getPetInstallable: () => process.platform !== 'linux' && this.petRoot === null && !SMOKE && !this.petInstalling,
+      getPetInstalling: () => this.petInstalling,
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       getPetZoomPercent: () =>
         this.controller?.state().petZoomPercent ?? PET_ZOOM_DEFAULT_PERCENT,
@@ -403,6 +409,9 @@ export class DesktopHost {
             this.togglePet();
             break;
           }
+          case 'install-pet':
+            void this.handleInstallPet();
+            break;
           case 'pet-zoom-in':
             this.setPetZoomFromTray(
               (this.controller?.getPetZoomPercent() ??
@@ -438,6 +447,37 @@ export class DesktopHost {
     const tray = setupTray(deps);
     this.trayHandle = tray;
     return tray;
+  }
+
+  private async handleInstallPet(): Promise<void> {
+    if (this.petInstalling || this.petRoot !== null || SMOKE || process.platform === 'linux') return;
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    this.petInstalling = true;
+    this.trayHandle?.rebuildMenu();
+    try {
+      const { root } = await installPet({
+        userDataPath: app.getPath('userData'),
+        appVersion: app.getVersion(),
+        repo: 'hypernewbie/phi',
+        fetchBytes: async (url) => {
+          const response = await net.fetch(url);
+          if (!response.ok) throw new Error(`pet download failed: HTTP ${response.status}`);
+          return new Uint8Array(await response.arrayBuffer());
+        },
+        log: (msg) => console.log(msg),
+      });
+      this.petInstalling = false;
+      this.petRoot = discoverPetRoot(app, SMOKE);
+      this.trayHandle?.rebuildMenu();
+      if (ctrl.getPetEnabled()) void this.startPet(); else ctrl.setPetEnabled(true);
+      void root;
+    } catch (err) {
+      this.petInstalling = false;
+      this.trayHandle?.rebuildMenu();
+      console.log(`phi-desktop: pet installation failed: ${String(err)}`);
+      dialog.showErrorBox('Pet installation failed', String(err instanceof Error ? err.message : err));
+    }
   }
 
   private refreshPetTrayForZoom(event: { kind: string }): void {

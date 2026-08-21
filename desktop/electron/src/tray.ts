@@ -67,6 +67,7 @@ export type TrayCommand =
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
   | { kind: 'toggle-pet' }
+  | { kind: 'install-pet' }
   | { kind: 'pet-zoom-in' }
   | { kind: 'pet-zoom-out' }
   | { kind: 'pet-reset-zoom' }
@@ -105,6 +106,10 @@ export interface TrayDeps {
   getSyncAlerts(): boolean;
   /** True when the optional desktop/pet package was discovered (enables the checkbox). */
   getPetAvailable(): boolean;
+  /** True when a released build may offer the pet installer. */
+  getPetInstallable(): boolean;
+  /** True while a pet download/install is in progress. */
+  getPetInstalling(): boolean;
   /** The persisted desktop-pet preference (the menu checkbox state). */
   getPetEnabled(): boolean;
   /** The persisted desktop-pet zoom percentage. */
@@ -160,6 +165,7 @@ export interface TrayMenuHandlers {
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
   togglePet: () => void;
+  installPet: () => void;
   petZoomIn: () => void;
   petZoomOut: () => void;
   petResetZoom: () => void;
@@ -272,9 +278,23 @@ export function buildTrayMenu(
   closeToTray: boolean,
   syncAlerts: boolean,
   petAvailable: boolean,
-  petEnabled: boolean,
+  petInstallable: boolean = false,
+  petInstalling: boolean | number = false,
+  petEnabled: boolean = false,
   petZoomPercent = 100,
 ): TrayMenuEntry[] {
+  // Keep older embedders source-compatible while they adopt the two
+  // installation-state arguments.
+  if (typeof petInstalling === 'number') {
+    petZoomPercent = petInstalling;
+    petEnabled = petInstallable;
+    petInstallable = false;
+    petInstalling = false;
+  } else if (arguments.length <= 8) {
+    petEnabled = petInstallable;
+    petInstallable = false;
+    petInstalling = false;
+  }
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
   ];
@@ -299,44 +319,52 @@ export function buildTrayMenu(
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
   });
-  entries.push({
-    label: 'Show pet',
-    type: 'checkbox',
-    checked: petEnabled,
-    enabled: petAvailable,
-    click: handlers.togglePet,
-  });
   const petActionsEnabled = petAvailable;
-  entries.push({
-    label: 'Pet',
-    enabled: petActionsEnabled,
-    submenu: [
-      {
-        label: 'Zoom out',
-        enabled: petActionsEnabled && petZoomPercent > 50,
-        click: handlers.petZoomOut,
-      },
-      {
-        label: `Zoom: ${petZoomPercent}%`,
-        enabled: false,
-      },
-      {
-        label: 'Zoom in',
-        enabled: petActionsEnabled && petZoomPercent < 300,
-        click: handlers.petZoomIn,
-      },
-      {
-        label: 'Reset zoom',
-        enabled: petActionsEnabled && petZoomPercent !== 100,
-        click: handlers.petResetZoom,
-      },
-      {
-        label: 'Pet settings…',
-        enabled: petActionsEnabled,
-        click: handlers.petSettings,
-      },
-    ],
-  });
+  if (!petAvailable && (petInstallable || petInstalling)) {
+    entries.push({
+      label: petInstalling ? 'Installing…' : 'Install Pet…',
+      enabled: !petInstalling,
+      click: handlers.installPet,
+    });
+  } else {
+    entries.push({
+      label: 'Show pet',
+      type: 'checkbox',
+      checked: petEnabled,
+      enabled: petAvailable,
+      click: handlers.togglePet,
+    });
+    entries.push({
+      label: 'Pet',
+      enabled: petActionsEnabled,
+      submenu: [
+        {
+          label: 'Zoom out',
+          enabled: petActionsEnabled && petZoomPercent > 50,
+          click: handlers.petZoomOut,
+        },
+        {
+          label: `Zoom: ${petZoomPercent}%`,
+          enabled: false,
+        },
+        {
+          label: 'Zoom in',
+          enabled: petActionsEnabled && petZoomPercent < 300,
+          click: handlers.petZoomIn,
+        },
+        {
+          label: 'Reset zoom',
+          enabled: petActionsEnabled && petZoomPercent !== 100,
+          click: handlers.petResetZoom,
+        },
+        {
+          label: 'Pet settings…',
+          enabled: petActionsEnabled,
+          click: handlers.petSettings,
+        },
+      ],
+    });
+  }
   entries.push({ label: 'Quit', click: handlers.quit });
   return entries;
 }
@@ -408,6 +436,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
     toggleSyncAlerts: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
     togglePet: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-pet' }),
+    installPet: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'install-pet' }),
     petZoomIn: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-zoom-in' }),
     petZoomOut: () =>
@@ -433,6 +463,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.getCloseToTray(),
       deps.getSyncAlerts(),
       deps.getPetAvailable(),
+      deps.getPetInstallable(),
+      deps.getPetInstalling(),
       deps.getPetEnabled(),
       deps.getPetZoomPercent(),
     ),
@@ -449,6 +481,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         deps.getCloseToTray(),
         deps.getSyncAlerts(),
         deps.getPetAvailable(),
+        deps.getPetInstallable(),
+        deps.getPetInstalling(),
         deps.getPetEnabled(),
         deps.getPetZoomPercent(),
       ),

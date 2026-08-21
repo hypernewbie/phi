@@ -16,7 +16,7 @@ Phi gives you a single web UI to run, monitor, and switch between multiple AI co
 - **Git worktree aware** — browse and switch between git worktrees per workspace.
 - **Quick-action presets** — one-tap buttons for common agent commands (`/exit`, `/model`, `/compact`, `ctrl+c`, `y↵`, `esc`, …), plus a staged input bar for composing longer prompts.
 - **Multiple workspaces & themes** — register several project directories and pick a UI accent color.
-- **Optional desktop pet** — an animated companion overlay for the Electron shell (`desktop/pet/`), ported from [dsh-pet](https://github.com/PC2005-cloud/dsh-pet).
+- **Optional desktop pet** — an animated companion overlay for the Electron shell (`desktop/pet/`), ported from [dsh-pet](https://github.com/PC2005-cloud/dsh-pet). Released builds install it from the tray.
 - **Optional access password** — set it from **Config** to gate Phi's APIs and terminal WebSockets; trusted browsers stay unlocked without repeated prompts.
 - **Vikunja Kanban Board** — a drag-and-drop Kanban dashboard (using SortableJS) embedded as a custom tab type, synced directly to your local Vikunja REST API via a backend HTTP proxy.
 

@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import process from "node:process";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +20,8 @@ const PET_MAIN_ENTRY = path.join("dist", "pet-main.js");
 /** The minimal Electron surface discoverPetRoot reads. */
 export interface PetAppLike {
  isPackaged: boolean;
+ getPath(name: string): string;
+ getVersion(): string;
 }
 
 /** Result returned by a controller-backed zoom request. */
@@ -52,28 +55,43 @@ export interface PetDeps {
  getZoomPercent(): number;
  requestZoomPercent(percent: number): ZoomResult;
  getIdleDwellSeconds(): number;
- requestIdleDwellSeconds(dwellSeconds: number): { dwellSeconds: number; accepted: boolean; error?: string };
+ requestIdleDwellSeconds(dwellSeconds: number): {
+  dwellSeconds: number;
+  accepted: boolean;
+  error?: string;
+ };
  getParentWindow(): unknown;
 }
 
 /**
  * Discovers the optional desktop/pet package root, or null when absent
- * or in smoke mode. Packaged: <resourcesPath>/pet. Dev:
- * <dist>/../../pet = desktop/pet. Presence is the flag: the directory
- * must contain dist/pet-main.js (the built entry).
+ * or in smoke mode. Packaged: userData/pet/<version> first, then
+ * <resourcesPath>/pet. Dev: <dist>/../../pet = desktop/pet. Presence is
+ * the flag: the directory must contain dist/pet-main.js (the built entry).
  */
 export function discoverPetRoot(
  app: PetAppLike,
  smoke: boolean,
 ): string | null {
  if (smoke) return null;
- const resourcesPath: string | undefined = (
-  process as { resourcesPath?: string }
- ).resourcesPath;
- if (app.isPackaged && !resourcesPath) return null;
- const candidate = app.isPackaged
-  ? path.join(resourcesPath as string, PACKAGED_PET_DIR)
-  : path.join(here, "..", "..", "pet");
- if (existsSync(path.join(candidate, PET_MAIN_ENTRY))) return candidate;
+ if (app.isPackaged) {
+  const userDataCandidate = path.join(
+   app.getPath("userData"),
+   "pet",
+   app.getVersion(),
+  );
+  if (existsSync(path.join(userDataCandidate, PET_MAIN_ENTRY)))
+   return userDataCandidate;
+  const resourcesPath: string | undefined = (
+   process as { resourcesPath?: string }
+  ).resourcesPath;
+  if (!resourcesPath) return null;
+  const bundledCandidate = path.join(resourcesPath, PACKAGED_PET_DIR);
+  if (existsSync(path.join(bundledCandidate, PET_MAIN_ENTRY)))
+   return bundledCandidate;
+  return null;
+ }
+ const devCandidate = path.join(here, "..", "..", "pet");
+ if (existsSync(path.join(devCandidate, PET_MAIN_ENTRY))) return devCandidate;
  return null;
 }
