@@ -9,5 +9,5 @@
     "removeComments": false
   },
   "include": ["src"],
-  "exclude": ["src/pet-preload.ts"]
+  "exclude": ["src/pet-preload.ts", "src/pet-settings-preload.ts"]
 }

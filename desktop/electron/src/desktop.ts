@@ -56,11 +56,11 @@ import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
 import {
   Controller,
   parseEndpoint,
-  PET_SCALE_DEFAULT_TICK,
-  PET_SCALE_MAX_TICK,
-  PET_SCALE_MIN_FACTOR,
-  PET_SCALE_MIN_TICK,
-  PET_SCALE_STEP_FACTOR,
+  PET_BASE_VISUAL_WIDTH_DIP,
+  PET_ZOOM_DEFAULT_PERCENT,
+  PET_ZOOM_MAX_PERCENT,
+  PET_ZOOM_MIN_PERCENT,
+  PET_ZOOM_STEP_PERCENT,
   type HealthChecker,
   type ProfileMeta,
 } from './controller.js';
@@ -238,6 +238,8 @@ export class DesktopHost {
   /** Invalidates an outstanding optional-package import on every toggle/quit. */
   petGeneration = 0;
   private petUnavailableLogged = false;
+  private petEnsurePromise: Promise<PetHandle | null> | null = null;
+  private petStartRequested = false;
   // Interval handles (cleared in before-quit so no pending probe outlives
   // the retained views).
   healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -334,9 +336,8 @@ export class DesktopHost {
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getPetAvailable: () => isPetAvailable(this.petRoot),
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
-      getPetScaleTick: () =>
-        this.controller?.state().petScaleTick ?? PET_SCALE_DEFAULT_TICK,
-      getPetRunning: () => this.petHandle?.isRunning() ?? false,
+      getPetZoomPercent: () =>
+        this.controller?.state().petZoomPercent ?? PET_ZOOM_DEFAULT_PERCENT,
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
       // (log, notify the main window's renderer, then app.quit()).
@@ -403,22 +404,22 @@ export class DesktopHost {
             break;
           }
           case 'pet-zoom-in':
-            this.setPetScaleFromTray(
-              (this.controller?.getPetScaleTick() ?? PET_SCALE_DEFAULT_TICK) +
-                1,
+            this.setPetZoomFromTray(
+              (this.controller?.getPetZoomPercent() ??
+                PET_ZOOM_DEFAULT_PERCENT) + PET_ZOOM_STEP_PERCENT,
             );
             break;
           case 'pet-zoom-out':
-            this.setPetScaleFromTray(
-              (this.controller?.getPetScaleTick() ?? PET_SCALE_DEFAULT_TICK) -
-                1,
+            this.setPetZoomFromTray(
+              (this.controller?.getPetZoomPercent() ??
+                PET_ZOOM_DEFAULT_PERCENT) - PET_ZOOM_STEP_PERCENT,
             );
             break;
           case 'pet-reset-zoom':
-            this.setPetScaleFromTray(PET_SCALE_DEFAULT_TICK);
+            this.setPetZoomFromTray(PET_ZOOM_DEFAULT_PERCENT);
             break;
-          case 'pet-reset-position':
-            this.resetPetPositionFromTray();
+          case 'pet-settings':
+            void this.openPetSettings();
             break;
           case 'quit':
             // Log, notify the main window's renderer on the tray channel,
@@ -439,20 +440,30 @@ export class DesktopHost {
     return tray;
   }
 
-  private setPetScaleFromTray(nextTick: number): void {
+  private refreshPetTrayForZoom(event: { kind: string }): void {
+    if (event.kind === 'pet-zoom-changed') this.trayHandle?.rebuildMenu();
+  }
+
+  private setPetIdleDwellFromController(dwellSeconds: number): void {
+    if (
+      !Number.isInteger(dwellSeconds) ||
+      dwellSeconds < 1 ||
+      dwellSeconds > 3600
+    )
+      return;
+    this.petHandle?.setIdleDwellSeconds?.(dwellSeconds);
+  }
+
+  private setPetZoomFromTray(nextPercent: number): void {
     const ctrl = this.controller;
     if (!ctrl) return;
     try {
-      if (!ctrl.setPetScaleTick(nextTick)) return;
-      const savedTick = ctrl.getPetScaleTick();
-      this.petHandle?.setScaleTick(savedTick);
+      if (!ctrl.setPetZoomPercent(nextPercent)) return;
+      const savedPercent = ctrl.getPetZoomPercent();
+      this.petHandle?.setZoomPercent(savedPercent);
     } catch (err) {
-      console.log(`phi-desktop: tray pet scale: ${String(err)}`);
+      console.log(`phi-desktop: tray pet zoom: ${String(err)}`);
     }
-  }
-
-  private resetPetPositionFromTray(): void {
-    if (this.petHandle?.isRunning()) this.petHandle.resetPosition();
   }
 
   /**
@@ -478,80 +489,108 @@ export class DesktopHost {
     }
   }
 
-  async startPet(): Promise<void> {
+  private ensurePetHandle(): Promise<PetHandle | null> {
+    if (this.petHandle) return Promise.resolve(this.petHandle);
+    if (this.petEnsurePromise) return this.petEnsurePromise;
     const root = this.petRoot;
-    if (!isPetAvailable(root) || root === null) {
+    const ctrl = this.controller;
+    if (!isPetAvailable(root) || root === null || !ctrl || this.quitting) {
       this.logPetUnavailable();
-      return;
-    }
-    if (this.petHandle) {
-      if (this.petHandle.isRunning()) return;
-      if (
-        !isPetAvailable(this.petRoot) ||
-        !this.controller?.state().petEnabled ||
-        this.quitting
-      )
-        return;
-      this.petHandle.start();
-      return;
+      return Promise.resolve(null);
     }
     const generation = ++this.petGeneration;
-    try {
-      const createPet = await this.loadPetFactory(root);
-      if (
-        generation !== this.petGeneration ||
-        !isPetAvailable(this.petRoot) ||
-        !this.controller?.state().petEnabled ||
-        this.quitting ||
-        this.petHandle
-      )
-        return;
-      const ctrl = this.controller;
-      if (!ctrl) return;
-      const handle = createPet({
-        root,
-        log: (msg) => console.log(`phi-desktop: pet: ${msg}`),
-        scale: {
-          minTick: PET_SCALE_MIN_TICK,
-          maxTick: PET_SCALE_MAX_TICK,
-          defaultTick: PET_SCALE_DEFAULT_TICK,
-          minFactor: PET_SCALE_MIN_FACTOR,
-          stepFactor: PET_SCALE_STEP_FACTOR,
-        },
-        getScaleTick: () => ctrl.getPetScaleTick(),
-        requestScaleTick: (tick) => {
-          try {
-            const accepted = ctrl.setPetScaleTick(tick);
-            return { tick: ctrl.getPetScaleTick(), accepted };
-          } catch (err) {
-            console.log(`phi-desktop: pet scale request: ${String(err)}`);
-            return { tick: ctrl.getPetScaleTick(), accepted: false };
-          }
-        },
-      });
-      if (
-        generation !== this.petGeneration ||
-        !ctrl.state().petEnabled ||
-        this.quitting ||
-        this.petHandle
-      ) {
-        handle.stop();
-        return;
+    this.petEnsurePromise = (async (): Promise<PetHandle | null> => {
+      try {
+        const createPet = await this.loadPetFactory(root);
+        if (
+          generation !== this.petGeneration ||
+          !isPetAvailable(this.petRoot) ||
+          this.quitting
+        )
+          return null;
+        const handle = createPet({
+          root,
+          log: (msg) => console.log(`phi-desktop: pet: ${msg}`),
+          zoom: {
+            minPercent: PET_ZOOM_MIN_PERCENT,
+            maxPercent: PET_ZOOM_MAX_PERCENT,
+            defaultPercent: PET_ZOOM_DEFAULT_PERCENT,
+            stepPercent: PET_ZOOM_STEP_PERCENT,
+            baseVisualWidth: PET_BASE_VISUAL_WIDTH_DIP,
+          },
+          getZoomPercent: () => ctrl.getPetZoomPercent(),
+          requestZoomPercent: (percent) => {
+            try {
+              const accepted = ctrl.setPetZoomPercent(percent);
+              return { percent: ctrl.getPetZoomPercent(), accepted };
+            } catch (err) {
+              console.log(`phi-desktop: pet zoom request: ${String(err)}`);
+              return { percent: ctrl.getPetZoomPercent(), accepted: false };
+            }
+          },
+          getIdleDwellSeconds: () => ctrl.getPetIdleDwellSeconds(),
+          requestIdleDwellSeconds: (dwellSeconds) => {
+            try {
+              const accepted = ctrl.setPetIdleDwellSeconds(dwellSeconds);
+              return { dwellSeconds: ctrl.getPetIdleDwellSeconds(), accepted };
+            } catch (err) {
+              console.log(`phi-desktop: pet dwell request: ${String(err)}`);
+              return {
+                dwellSeconds: ctrl.getPetIdleDwellSeconds(),
+                accepted: false,
+                error: 'Unable to save pet idle interval.',
+              };
+            }
+          },
+          getParentWindow: () => this.mainWindow,
+        });
+        if (
+          generation !== this.petGeneration ||
+          !isPetAvailable(this.petRoot) ||
+          this.quitting
+        ) {
+          handle.stop();
+          return null;
+        }
+        this.petHandle = handle;
+        this.petRunningUnsubscribe = handle.onRunningChanged((running) => {
+          if (!running) this.petStartRequested = false;
+          this.trayHandle?.rebuildMenu();
+        });
+        return handle;
+      } catch (err) {
+        if (generation === this.petGeneration)
+          console.log(`phi-desktop: pet load failed: ${String(err)}`);
+        return null;
+      } finally {
+        this.petEnsurePromise = null;
       }
-      this.petHandle = handle;
-      this.petRunningUnsubscribe = handle.onRunningChanged(() =>
-        this.trayHandle?.rebuildMenu(),
-      );
-      handle.start();
-    } catch (err) {
-      if (generation === this.petGeneration)
-        console.log(`phi-desktop: pet load failed: ${String(err)}`);
-    }
+    })();
+    return this.petEnsurePromise;
+  }
+
+  async startPet(): Promise<void> {
+    const handle = await this.ensurePetHandle();
+    if (
+      !handle ||
+      this.quitting ||
+      !isPetAvailable(this.petRoot) ||
+      !this.controller?.state().petEnabled
+    )
+      return;
+    if (this.petStartRequested || handle.isRunning()) return;
+    this.petStartRequested = true;
+    handle.start();
+  }
+
+  private async openPetSettings(): Promise<void> {
+    const handle = await this.ensurePetHandle();
+    if (handle && !this.quitting) handle.openSettings?.();
   }
 
   /** Stops the pet window (toggle-off frees the decode surface but retains its IPC listeners). */
   stopPet(): void {
-    this.petGeneration += 1;
+    this.petStartRequested = false;
     this.petHandle?.stop();
   }
 
@@ -1825,7 +1864,7 @@ export class DesktopHost {
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
     // The first tray was constructed before the controller for boot ordering;
-    // rebuild it now so persisted pet state and scale are in the first usable snapshot.
+    // rebuild it now so persisted pet state and zoom are in the first usable snapshot.
     this.trayHandle?.rebuildMenu();
     // Access-auth state — declared here (before any subscribe callback
     // can fire) so a synchronously-emitted active-changed event during
@@ -1893,11 +1932,13 @@ export class DesktopHost {
         this.trayHandle?.rebuildMenu();
         if (this.controller?.state().petEnabled) void this.startPet();
         else this.stopPet();
-      } else if (event.kind === 'pet-scale-changed') {
-        // Renderer-originated scale requests already receive their exact
+      } else if (event.kind === 'pet-idle-dwell-changed') {
+        this.setPetIdleDwellFromController(event.dwellSeconds);
+      } else if (event.kind === 'pet-zoom-changed') {
+        // Renderer-originated zoom requests already receive their exact
         // controller result in pet-main; this subscription only refreshes
         // the tray snapshot and never echoes the event back to the renderer.
-        this.trayHandle?.rebuildMenu();
+        this.refreshPetTrayForZoom(event);
         return;
       } else if (
         event.kind === 'unread-changed' ||
@@ -2769,7 +2810,7 @@ export class DesktopHost {
           requestId: pendingUnlock.requestId,
           profileId: pendingUnlock.profileId,
           origin: pendingUnlock.origin,
-          label: active.name !== '' ? active.name : pendingUnlock.origin,
+          label: active.name === '' ? pendingUnlock.origin : active.name,
         });
         return null; // caller will retry once phi:auth-unlock resolves
       })();
@@ -2941,7 +2982,7 @@ export class DesktopHost {
     if (this.healthInterval === null) {
       this.healthInterval = setInterval(() => {
         void this.controller?.updateHealth(realHealthChecker);
-      }, 30_000);
+      }, 10);
     }
     // Poll every retained view at the remote page's own 2s CPU cadence
     // (never reached in smoke mode — the smoke gate returns before this

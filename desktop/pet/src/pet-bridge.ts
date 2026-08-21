@@ -6,17 +6,8 @@ export interface StageRect {
   height: number;
 }
 
-export interface PetMove {
-  dx: number;
-  dy: number;
-  screenX: number;
-  screenY: number;
-  stage: StageRect;
-  heldDrag: boolean;
-}
-
 export interface PetDragPosition {
-  phase: "move" | "cancel";
+  phase: "move" | "end" | "cancel";
   screenX: number;
   screenY: number;
   anchorX: number;
@@ -24,30 +15,29 @@ export interface PetDragPosition {
   stage: StageRect;
 }
 
-export interface TerritoryBounds {
-  minStageX: number;
-  maxStageX: number;
-  minStageY: number;
-  maxStageY: number;
+export type PetZoomRequest = { percent: number };
+export type PetZoomState = { percent: number; accepted: boolean };
+export type PetStageLayout = { stage: StageRect };
+export type PetIdleDwellRequest = { dwellSeconds: number };
+export type PetIdleDwellState = { dwellSeconds: number };
+export type PetIdleDwellResult = { dwellSeconds: number; accepted: boolean; error?: string };
+
+export interface PetSettingsApi {
+  requestIdleDwellSeconds(dwellSeconds: number): Promise<PetIdleDwellResult>;
+  onIdleDwellState(listener: (state: PetIdleDwellState) => void): () => void;
 }
 
-export type PetScaleRequest = { tick: number };
-export type PetScaleState = { tick: number; accepted: boolean };
-export type PetStageLayout = { stage: StageRect; resetPosition?: boolean };
-
 export interface PetApi {
-  sendHit(inside: boolean): void;
-  sendMove(move: PetMove): void;
   sendDragPosition(position: PetDragPosition): void;
-  requestScaleTick(request: PetScaleRequest): void;
+  requestZoomPercent(request: PetZoomRequest): void;
   reportStageLayout(layout: PetStageLayout): void;
-  onTerritoryBounds(listener: (bounds: TerritoryBounds) => void): () => void;
-  onScaleState(listener: (state: PetScaleState) => void): () => void;
-  onResetPosition(listener: () => void): () => void;
+    onZoomState(listener: (state: PetZoomState) => void): () => void;
+  onIdleDwellState?(listener: (state: PetIdleDwellState) => void): () => void;
 }
 
 declare global {
   interface Window {
     pet: PetApi;
+    petSettings: PetSettingsApi;
   }
 }

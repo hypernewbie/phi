@@ -13,5 +13,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src/pet-preload.ts"]
+  "include": ["src/pet-preload.ts", "src/pet-settings-preload.ts"]
 }

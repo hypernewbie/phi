@@ -70,7 +70,7 @@ export type TrayCommand =
   | { kind: 'pet-zoom-in' }
   | { kind: 'pet-zoom-out' }
   | { kind: 'pet-reset-zoom' }
-  | { kind: 'pet-reset-position' }
+  | { kind: 'pet-settings' }
   | { kind: 'quit' };
 
 /** One saved profile (the rail model's tray-relevant slice). */
@@ -107,10 +107,8 @@ export interface TrayDeps {
   getPetAvailable(): boolean;
   /** The persisted desktop-pet preference (the menu checkbox state). */
   getPetEnabled(): boolean;
-  /** The persisted desktop-pet scale tick. */
-  getPetScaleTick(): number;
-  /** True when the pet has a live native window. */
-  getPetRunning(): boolean;
+  /** The persisted desktop-pet zoom percentage. */
+  getPetZoomPercent(): number;
   /** Posts a TrayCommand on a channel (the host loop bridges intents). */
   ipcSend(channel: string, payload: unknown): void;
   /** Failure/one-time logger (production: console; tests record it). */
@@ -165,7 +163,7 @@ export interface TrayMenuHandlers {
   petZoomIn: () => void;
   petZoomOut: () => void;
   petResetZoom: () => void;
-  petResetPosition: () => void;
+  petSettings?: () => void;
   quit: () => void;
 }
 
@@ -275,8 +273,7 @@ export function buildTrayMenu(
   syncAlerts: boolean,
   petAvailable: boolean,
   petEnabled: boolean,
-  petScaleTick = 2,
-  petRunning = false,
+  petZoomPercent = 100,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -315,24 +312,28 @@ export function buildTrayMenu(
     enabled: petActionsEnabled,
     submenu: [
       {
-        label: 'Zoom in',
-        enabled: petActionsEnabled && petScaleTick < 7,
-        click: handlers.petZoomIn,
-      },
-      {
         label: 'Zoom out',
-        enabled: petActionsEnabled && petScaleTick > 0,
+        enabled: petActionsEnabled && petZoomPercent > 50,
         click: handlers.petZoomOut,
       },
       {
+        label: `Zoom: ${petZoomPercent}%`,
+        enabled: false,
+      },
+      {
+        label: 'Zoom in',
+        enabled: petActionsEnabled && petZoomPercent < 300,
+        click: handlers.petZoomIn,
+      },
+      {
         label: 'Reset zoom',
-        enabled: petActionsEnabled && petScaleTick !== 2,
+        enabled: petActionsEnabled && petZoomPercent !== 100,
         click: handlers.petResetZoom,
       },
       {
-        label: 'Reset position',
-        enabled: petActionsEnabled && petRunning,
-        click: handlers.petResetPosition,
+        label: 'Pet settings…',
+        enabled: petActionsEnabled,
+        click: handlers.petSettings,
       },
     ],
   });
@@ -413,8 +414,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-zoom-out' }),
     petResetZoom: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-reset-zoom' }),
-    petResetPosition: () =>
-      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-reset-position' }),
+    petSettings: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-settings' }),
     quit: () => {
       // The host-loop receiver owns app.quit() since step 5: this
       // handler only posts the intent; main.ts logs, notifies the main
@@ -433,8 +434,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.getSyncAlerts(),
       deps.getPetAvailable(),
       deps.getPetEnabled(),
-      deps.getPetScaleTick(),
-      deps.getPetRunning(),
+      deps.getPetZoomPercent(),
     ),
   );
   wireTrayEvents(tray, () => menu, process.platform);
@@ -450,8 +450,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         deps.getSyncAlerts(),
         deps.getPetAvailable(),
         deps.getPetEnabled(),
-        deps.getPetScaleTick(),
-        deps.getPetRunning(),
+        deps.getPetZoomPercent(),
       ),
     );
   };

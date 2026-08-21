@@ -14,14 +14,13 @@ const srcDir = path.join(here, "..", "src");
 const distDir = path.join(here, "..", "dist");
 const preloadDir = path.join(here, "..", "dist-preload");
 
-const assets = ["pet.html"];
+const assets = ["pet.html", "pet-settings.html"];
 
 mkdirSync(distDir, { recursive: true });
 for (const name of assets) {
   copyFileSync(path.join(srcDir, name), path.join(distDir, name));
 }
-copyFileSync(
-  path.join(preloadDir, "pet-preload.js"),
-  path.join(distDir, "pet-preload.js"),
-);
-console.log(`copied ${assets.join(", ")}, pet-preload.js -> dist/`);
+for (const name of ["pet-preload.js", "pet-settings-preload.js"]) {
+  copyFileSync(path.join(preloadDir, name), path.join(distDir, name));
+}
+console.log(`copied ${assets.join(", ")}, pet preloads -> dist/`);

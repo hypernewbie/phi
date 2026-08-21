@@ -1,39 +1,22 @@
 /**
  * Pet renderer state machine — a vanilla-DOM port of dsh-pet's
- * lib/client.js core (constants/catalog :88-182, dual-buffer switchTo
- * :232-306, chain pickNext/handleEnded :308-341, movement :363-497,
- * click/drag :499-596, geometry :598-668). No React, no fetch(), no
- * remote surface: media loads via relative file:// URLs under the page's
- * own directory.
- *
- * Positioning uses transform:translate (not left/top). customPos stores
- * {rx, ry} ratios of window.innerWidth/innerHeight so a resize keeps the
- * relative position. On drag release the renderer sends the accumulated
- * pointer delta to the main process (which moves the WINDOW), then the
- * pet resets to its pre-drag in-window position — net effect: the pet
- * stays under the cursor while the window follows home.
+ * media catalog, dual-buffer playback, click/drag interaction, and zoom
+ * handling. Media loads through relative file:// URLs under the page's own
+ * directory.
  */
 import type {
   PetApi,
   PetDragPosition,
-  PetScaleState,
   PetStageLayout,
+  PetZoomState,
+  StageRect,
 } from "./pet-bridge.js";
 
-/** The thumb canvas height and the feet baseline (dsh-pet client.js). */
-export const CANVAS_H = 360;
-export const FEET_Y = 330;
-
-/** The click/drag hit rectangle (thumb 640×360 pixel coords). */
-export const HIT_BOX = { x0: 200, y0: 50, x1: 440, y1: 335 };
-
-/** The idle breathing animation (the only recurring one-shot). */
-export const IDLE = "待机呼吸休闲";
-/** The turn animation (ends with a facing flip). */
-export const TURN = "东张西望";
+/** The sentinel "show the static maid image" state — never a webm filename. */
+export const STATIC = "STATIC";
 /** The drag feedback animation (played while the pointer drags). */
 export const DRAG = "被鼠标拖拽悬空反馈";
-/** The random act pool (equal probability). */
+/** The stationary act pool. */
 export const ACTS = [
   "悠闲哼歌",
   "超大伸懒腰",
@@ -78,31 +61,20 @@ export const ACTS = [
   "中秋赏月吃月饼",
   "堆雪人",
 ];
-/** The click-reaction pool (3 of 1). */
+/** The click-reaction pool. */
 export const CLICKS = [
   "点击回应 - 开心跃动",
   "点击回应 - 害羞惊讶",
   "点击回应 - 傲娇生气（侧身展示）",
 ];
-/** The movement pool (gait only; position is driven by rAF). */
-export const MOVES = ["螃蟹走路", "原地漂浮踏步", "原地左转奔跑"];
-
-/** Movement parameters (dsh-pet client.js). */
-export const MOVE_MIN_PX = 60;
-export const MOVE_MAX_PX = 240;
-export const MOVE_MARGIN = 20;
-export const MOVE_LEAD_SEC = 2;
-export const MOVE_TAIL_SEC = 2;
-/** Drag-vs-click pointer threshold (px). */
+/** Pointer distance at which a click becomes a drag. */
 export const DRAG_THRESHOLD = 5;
-/** Default bottom-right margin (upstream .dsh-pet-root[data-corner] CSS). */
-export const DEFAULT_RIGHT_MARGIN = 24;
 
-export const PET_SCALE_MIN_TICK = 0;
-export const PET_SCALE_MAX_TICK = 7;
-export const PET_SCALE_DEFAULT_TICK = 2;
-export const PET_SCALE_MIN_FACTOR = 0.4;
-export const PET_SCALE_STEP_FACTOR = 0.05;
+export const PET_ZOOM_MIN_PERCENT = 50;
+export const PET_ZOOM_MAX_PERCENT = 300;
+export const PET_ZOOM_DEFAULT_PERCENT = 100;
+export const PET_ZOOM_STEP_PERCENT = 25;
+export const PET_BASE_VISUAL_WIDTH_DIP = 192;
 
 const strictDecimal = (value: string | null): number | null => {
   if (value === null || !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value))
@@ -111,65 +83,84 @@ const strictDecimal = (value: string | null): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-function queryScaleConfig(): {
-  tick: number;
-  minTick: number;
-  maxTick: number;
-  defaultTick: number;
-  minFactor: number;
-  stepFactor: number;
+function queryZoomConfig(): {
+  percent: number;
+  minPercent: number;
+  maxPercent: number;
+  defaultPercent: number;
+  stepPercent: number;
+  baseVisualWidth: number;
 } {
   const fallback = {
-    tick: PET_SCALE_DEFAULT_TICK,
-    minTick: PET_SCALE_MIN_TICK,
-    maxTick: PET_SCALE_MAX_TICK,
-    defaultTick: PET_SCALE_DEFAULT_TICK,
-    minFactor: PET_SCALE_MIN_FACTOR,
-    stepFactor: PET_SCALE_STEP_FACTOR,
+    percent: PET_ZOOM_DEFAULT_PERCENT,
+    minPercent: PET_ZOOM_MIN_PERCENT,
+    maxPercent: PET_ZOOM_MAX_PERCENT,
+    defaultPercent: PET_ZOOM_DEFAULT_PERCENT,
+    stepPercent: PET_ZOOM_STEP_PERCENT,
+    baseVisualWidth: PET_BASE_VISUAL_WIDTH_DIP,
   };
-  const query = new URLSearchParams(window.location.search);
   const values = [
-    strictDecimal(query.get("petScaleTick")),
-    strictDecimal(query.get("petScaleMinTick")),
-    strictDecimal(query.get("petScaleMaxTick")),
-    strictDecimal(query.get("petScaleDefaultTick")),
-    strictDecimal(query.get("petScaleMinFactor")),
-    strictDecimal(query.get("petScaleStepFactor")),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petZoomPercent"),
+    ),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petZoomMinPercent"),
+    ),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petZoomMaxPercent"),
+    ),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petZoomDefaultPercent"),
+    ),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petZoomStepPercent"),
+    ),
+    strictDecimal(
+      new URLSearchParams(window.location.search).get("petBaseVisualWidth"),
+    ),
   ];
   if (values.some((value) => value === null)) return fallback;
-  const [tick, minTick, maxTick, defaultTick, minFactor, stepFactor] =
-    values as number[];
+  const [
+    percent,
+    minPercent,
+    maxPercent,
+    defaultPercent,
+    stepPercent,
+    baseVisualWidth,
+  ] = values as number[];
   if (
-    !Number.isInteger(tick) ||
-    !Number.isInteger(minTick) ||
-    !Number.isInteger(maxTick) ||
-    !Number.isInteger(defaultTick) ||
-    minTick > maxTick ||
-    defaultTick < minTick ||
-    defaultTick > maxTick ||
-    tick < minTick ||
-    tick > maxTick ||
-    minFactor <= 0 ||
-    stepFactor <= 0
+    !Number.isInteger(percent) ||
+    !Number.isInteger(minPercent) ||
+    !Number.isInteger(maxPercent) ||
+    !Number.isInteger(defaultPercent) ||
+    !Number.isInteger(stepPercent) ||
+    minPercent > maxPercent ||
+    defaultPercent < minPercent ||
+    defaultPercent > maxPercent ||
+    percent < minPercent ||
+    percent > maxPercent ||
+    stepPercent <= 0 ||
+    (percent - minPercent) % stepPercent !== 0 ||
+    (defaultPercent - minPercent) % stepPercent !== 0 ||
+    baseVisualWidth <= 0
   )
     return fallback;
-  return { tick, minTick, maxTick, defaultTick, minFactor, stepFactor };
+  return {
+    percent,
+    minPercent,
+    maxPercent,
+    defaultPercent,
+    stepPercent,
+    baseVisualWidth,
+  };
 }
 
 /** The media directory under the package root (dist/ → ../assets/thumb/). */
 const MEDIA_PREFIX = "../assets/thumb/";
 
-/** The chain-model decision for a given random roll (client.js pickNext). */
-export type AnimKind = "IDLE" | "TURN" | "ACTS" | "MOVE";
+/** The chain decision for a given random roll. */
 
-export function pickNextKind(roll: number): AnimKind {
-  if (roll < 0.3) return "IDLE";
-  if (roll < 0.4) return "TURN";
-  if (roll < 0.8) return "ACTS";
-  return "MOVE";
-}
-
-/** Equal-probability pool pick with an optional exclude (client.js pick). */
+/** Equal-probability pool pick with an optional exclude. */
 export function pick(
   pool: readonly string[],
   exclude: string | null,
@@ -179,58 +170,13 @@ export function pick(
   return entries[Math.floor(rng() * entries.length)] ?? pool[0] ?? "";
 }
 
-/** [min, max) random integer (client.js randomBetween). */
-export function randomBetween(
-  min: number,
-  max: number,
-  rng: () => number,
-): number {
-  return Math.floor(min + rng() * (max - min));
-}
-
-/** A planned move, or null when the target is out of bounds. */
-export interface MovePlan {
-  startRatio: number;
-  startYRatio: number;
-  targetRatio: number;
-  dir: 1 | -1;
-  totalRatio: number;
-}
-
-/** Plans a walk toward the actual facing, rejecting it when the target
- *  leaves the safe margin (client.js tryMove bounds check). */
-export function planMove(opts: {
-  cx: number;
-  cy: number;
-  W: number;
-  H: number;
-  halfW: number;
-  facing: "left" | "right";
-  turning: boolean;
-  distance: number;
-}): MovePlan | null {
-  // Direction from the ACTUAL facing: if TURN just ended, facing is about
-  // to flip, so invert (client.js tryMove dir calc).
-  const dir: 1 | -1 = (opts.facing === "right") === opts.turning ? -1 : 1;
-  const target = opts.cx + dir * opts.distance;
-  const leftBound = MOVE_MARGIN + opts.halfW;
-  const rightBound = opts.W - MOVE_MARGIN - opts.halfW;
-  if (target < leftBound || target > rightBound) return null;
-  return {
-    startRatio: opts.cx / opts.W,
-    startYRatio: opts.cy / opts.H,
-    targetRatio: target / opts.W,
-    dir,
-    totalRatio: Math.abs(target - opts.cx) / opts.W,
-  };
-}
-
 /** The injected DOM + bridge the controller drives. */
 export interface PetInitOptions {
   root: HTMLElement;
   stage: HTMLElement;
   videoA: HTMLVideoElement;
   videoB: HTMLVideoElement;
+  staticImg: HTMLImageElement;
   hit: HTMLElement;
   bridge: PetApi;
   rng?: () => number;
@@ -243,7 +189,6 @@ export interface PetState {
   once: boolean;
   facing: "left" | "right";
   dragging: boolean;
-  customPos: { rx: number; ry: number } | null;
 }
 
 export interface PetController {
@@ -252,148 +197,63 @@ export interface PetController {
 }
 
 export function initPet(opts: PetInitOptions): PetController {
-  const { root, stage, videoA, videoB, hit, bridge } = opts;
+  const { root, stage, videoA, videoB, staticImg, hit, bridge } = opts;
   const rng = opts.rng ?? Math.random;
   const raf =
     opts.raf ?? ((cb: FrameRequestCallback) => requestAnimationFrame(cb));
   const caf = opts.caf ?? ((id: number) => cancelAnimationFrame(id));
-  const scaleConfig = queryScaleConfig();
-  let scaleTick = scaleConfig.tick;
-  let desiredScaleTick = scaleTick;
-  let scaleRequestInFlight: number | null = null;
+  const zoomConfig = queryZoomConfig();
+  const validDwellSeconds = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 3600;
+  const queryDwell = (): number => {
+    const value = Number(
+      new URLSearchParams(window.location.search).get("petIdleDwellSeconds"),
+    );
+    return validDwellSeconds(value) ? value : 10;
+  };
+  let dwellSeconds = queryDwell(); // canonical seconds (1..3600) for the next rest
+  let zoomPercent = zoomConfig.percent;
+  let desiredZoomPercent = zoomPercent;
+  let zoomRequestInFlight: number | null = null;
   let wheelRemainder = 0;
-
-  let size = 0;
-  let halfW = 0;
-  let stageH = 0;
-  let halfH = 0;
-  let bottomPad = 0;
-  let territory: {
-    minStageX: number;
-    maxStageX: number;
-    minStageY: number;
-    maxStageY: number;
-  } | null = null;
+  let stageWidth = 0;
+  let stageHeight = 0;
 
   const layout = (): void => {
-    size = Math.floor(
-      window.innerWidth *
-        (scaleConfig.minFactor + scaleTick * scaleConfig.stepFactor),
-    );
-    halfW = size / 2;
-    stageH = (size * 9) / 16;
-    halfH = stageH / 2;
-    bottomPad = (stageH * (CANVAS_H - FEET_Y)) / CANVAS_H;
-    root.style.width = `${size}px`;
-    root.style.height = `${stageH}px`;
-    stage.style.transform = `translateY(${bottomPad}px)`;
-    hit.style.left = `${(HIT_BOX.x0 / 640) * 100}%`;
-    hit.style.top = `${(HIT_BOX.y0 / 360) * 100}%`;
-    hit.style.width = `${((HIT_BOX.x1 - HIT_BOX.x0) / 640) * 100}%`;
-    hit.style.height = `${((HIT_BOX.y1 - HIT_BOX.y0) / 360) * 100}%`;
+    stageWidth = Math.floor((zoomConfig.baseVisualWidth * zoomPercent) / 100);
+    stageHeight = Math.floor((stageWidth * 9) / 16);
+    root.style.width = `${stageWidth}px`;
+    root.style.height = `${stageHeight}px`;
+    root.style.transform = "none";
+    stage.style.width = `${stageWidth}px`;
+    stage.style.height = `${stageHeight}px`;
+    stage.style.transform = "none";
+    hit.style.inset = "0px";
   };
 
-  let anim = IDLE;
-  let once = true;
-  let facing: "left" | "right" = "left";
+  let anim = STATIC;
+  let once = false;
+  const facing: "left" | "right" = "left";
   let dragging = false;
-  let customPos: { rx: number; ry: number } | null = null;
 
   let front = 0; // 0 = videoA front, 1 = videoB front
-  let pending: { anim: string; once: boolean; gen: number } | null = null;
+  let pending: {
+    anim: string;
+    once: boolean;
+    gen: number;
+  } | null = null;
   let gen = 0;
+  let restTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearRestTimer = (): void => {
+    if (restTimer !== null) clearTimeout(restTimer);
+    restTimer = null;
+  };
 
   let drag = { active: false, dragging: false, sx: 0, sy: 0 };
   let justDragged = false;
-  let preDragCustomPos: { rx: number; ry: number } | null = null;
   let dragAnchor: { x: number; y: number } | null = null;
-  let dragStageRect: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  } | null = null;
+  let dragStageRect: StageRect | null = null;
   let pendingDragPosition: PetDragPosition | null = null;
   let pendingDragFrame: number | null = null;
-  let deferredLayout = false;
-  let deferredTerritory: {
-    minStageX: number;
-    maxStageX: number;
-    minStageY: number;
-    maxStageY: number;
-  } | null = null;
-  let deferredScaleState: PetScaleState | null = null;
-  let deferredResetPosition = false;
-  let terminalDrag = false;
-
-  let moveId: number | null = null;
-  let moveToken = 0;
-  let pendingMove: MovePlan | null = null;
-
-  let lastHitInside: boolean | null = null;
-
-  const rootBounds = (): {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-  } => {
-    const cellMaxX = Math.max(0, window.innerWidth - size);
-    const cellMaxY = Math.max(0, window.innerHeight - stageH);
-    if (!territory) return { minX: 0, maxX: cellMaxX, minY: 0, maxY: cellMaxY };
-    const intersectAxis = (
-      territoryMin: number,
-      territoryMax: number,
-      cellMax: number,
-    ): [number, number] => {
-      const min = Math.max(0, territoryMin);
-      const max = Math.min(cellMax, territoryMax);
-      if (min <= max) return [min, max];
-      const edge = min > cellMax ? cellMax : 0;
-      return [edge, edge];
-    };
-    const [minX, maxX] = intersectAxis(
-      territory.minStageX,
-      territory.maxStageX,
-      cellMaxX,
-    );
-    const [minY, maxY] = intersectAxis(
-      territory.minStageY - bottomPad,
-      territory.maxStageY - bottomPad,
-      cellMaxY,
-    );
-    return { minX, maxX, minY, maxY };
-  };
-
-  const setRootPosition = (x: number, y: number): void => {
-    const bounds = rootBounds();
-    root.style.transform = `translate(${Math.min(Math.max(x, bounds.minX), bounds.maxX)}px, ${Math.min(Math.max(y, bounds.minY), bounds.maxY)}px)`;
-  };
-
-  const renderPosition = (): void => {
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    const left = customPos
-      ? customPos.rx * W - halfW
-      : W - size - DEFAULT_RIGHT_MARGIN;
-    const top = customPos ? customPos.ry * H - halfH : H - stageH;
-    setRootPosition(left, top);
-  };
-
-  const captureBottomCenter = (): { x: number; y: number } => {
-    const rect = stage.getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
-  };
-
-  const restoreBottomCenter = (anchor: { x: number; y: number }): void => {
-    const left = anchor.x - size / 2;
-    const top = anchor.y - bottomPad - stageH;
-    customPos = {
-      rx: (left + halfW) / Math.max(window.innerWidth, 1),
-      ry: (top + halfH) / Math.max(window.innerHeight, 1),
-    };
-    renderPosition();
-  };
 
   const setAnim = (next: string, nextOnce: boolean): void => {
     anim = next;
@@ -401,110 +261,31 @@ export function initPet(opts: PetInitOptions): PetController {
     switchTo(anim, once);
   };
 
+  const startStatic = (): void => {
+    anim = STATIC;
+    once = false;
+    staticImg.src = MEDIA_PREFIX + "maid-static.png";
+    staticImg.classList.add("is-front");
+    videoA.classList.remove("is-front");
+    videoB.classList.remove("is-front");
+    clearRestTimer();
+    restTimer = setTimeout(playRandomAct, dwellSeconds * 1000);
+  };
+
   const handleEnded = (): void => {
-    if (drag.active) return; // mid-drag: keep the drag animation
-    if (anim === TURN) facing = facing === "left" ? "right" : "left";
-    if (anim === DRAG || CLICKS.includes(anim)) {
-      // Click/drag interruptions end with an idle buffer; that idle
-      // one-shot then re-enters the chain.
-      setAnim(IDLE, true);
-      return;
-    }
-    pickNextChain();
+    if (drag.active) return;
+    startStatic();
   };
 
-  const pickNextChain = (): void => {
-    const kind = pickNextKind(rng());
-    if (kind === "IDLE") {
-      setAnim(IDLE, true);
-    } else if (kind === "TURN") {
-      setAnim(TURN, true);
-    } else if (kind === "ACTS") {
-      setAnim(pick(ACTS, anim, rng), true);
-    } else if (!tryMove()) {
-      // No room to walk → fall back to a random act.
-      setAnim(pick(ACTS, anim, rng), true);
-    }
-    // else: tryMove already set the movement animation.
-  };
-
-  const tryMove = (): boolean => {
-    if (moveId !== null || pendingMove) return true; // already moving/planned
-    const plan = planMove({
-      cx: currentCenterX(),
-      cy: currentCenterY(),
-      W: window.innerWidth,
-      H: window.innerHeight,
-      halfW,
-      facing,
-      turning: anim === TURN,
-      distance: randomBetween(MOVE_MIN_PX, MOVE_MAX_PX, rng),
-    });
-    if (plan === null) return false;
-    const bounds = rootBounds();
-    const targetLeft = plan.targetRatio * window.innerWidth - halfW;
-    if (targetLeft < bounds.minX || targetLeft > bounds.maxX) return false;
-    pendingMove = plan;
-    setAnim(pick(MOVES, null, rng), true);
-    return true;
-  };
-
-  const currentCenterX = (): number => {
-    if (customPos) return customPos.rx * window.innerWidth;
-    return root.getBoundingClientRect().left + halfW;
-  };
-
-  const currentCenterY = (): number => {
-    if (customPos) return customPos.ry * window.innerHeight;
-    return root.getBoundingClientRect().top + halfH;
-  };
-
-  const stopMove = (): void => {
-    pendingMove = null;
-    moveToken += 1;
-    if (moveId !== null) {
-      caf(moveId);
-      moveId = null;
-    }
-  };
-
-  const startMoveDrive = (el: HTMLVideoElement): void => {
-    const plan = pendingMove;
-    if (!plan || moveId !== null) return;
-    pendingMove = null;
-    const duration =
-      Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 10.09;
-    const travelWindow = Math.max(
-      0.1,
-      duration - MOVE_LEAD_SEC - MOVE_TAIL_SEC,
-    );
-    const token = ++moveToken;
-    const step = (): void => {
-      if (moveToken !== token) return;
-      const t = el.currentTime || 0;
-      let ratioX: number;
-      if (t <= MOVE_LEAD_SEC) ratioX = plan.startRatio;
-      else if (t >= duration - MOVE_TAIL_SEC) ratioX = plan.targetRatio;
-      else
-        ratioX =
-          plan.startRatio +
-          plan.dir * plan.totalRatio * ((t - MOVE_LEAD_SEC) / travelWindow);
-      setRootPosition(
-        ratioX * window.innerWidth - halfW,
-        plan.startYRatio * window.innerHeight - halfH,
-      );
-      if (t < duration - MOVE_TAIL_SEC) {
-        moveId = raf(step);
-      } else {
-        moveId = null;
-        customPos = { rx: plan.targetRatio, ry: plan.startYRatio };
-      }
-    };
-    moveId = raf(step);
+  const playRandomAct = (): void => {
+    switchTo(pick(ACTS, null, rng), true);
   };
 
   const switchTo = (next: string, nextOnce: boolean): void => {
     if (pending && pending.anim === next && pending.once === nextOnce) return;
+    clearRestTimer();
+    anim = next;
+    once = nextOnce;
     const currentGen = ++gen;
     pending = { anim: next, once: nextOnce, gen: currentGen };
 
@@ -515,10 +296,16 @@ export function initPet(opts: PetInitOptions): PetController {
     el.autoplay = true;
     el.playsInline = true;
     el.onended = null;
+    const onError = (): void => {
+      el.removeEventListener("error", onError);
+      if (pending?.gen === currentGen) startStatic();
+    };
+    el.addEventListener("error", onError);
     el.load();
 
     const onReady = (): void => {
       el.removeEventListener("loadeddata", onReady);
+      el.removeEventListener("error", onError);
       if (pending?.gen !== currentGen) return;
       const old = front === 0 ? videoA : videoB;
       if (old && old !== el) {
@@ -526,34 +313,28 @@ export function initPet(opts: PetInitOptions): PetController {
         old.pause();
         old.classList.remove("is-front");
       }
+      staticImg.classList.remove("is-front");
       el.classList.add("is-front");
       front = front === 0 ? 1 : 0;
       pending = null;
-      el.onended = nextOnce ? handleEnded : null;
-      el.style.transform = facing === "right" ? "scaleX(-1)" : "";
-      void Promise.resolve(el.play()).catch(() => {});
-      if (pendingMove) startMoveDrive(el);
+      el.onended = nextOnce
+        ? () => {
+            // Clear the one-shot callback before transitioning so duplicate
+            // ended notifications cannot re-enter startStatic.
+            el.onended = null;
+            handleEnded();
+          }
+        : null;
+      el.style.transform = "";
+      void Promise.resolve(el.play()).catch(() => {
+        if (gen === currentGen) startStatic();
+      });
     };
     el.addEventListener("loadeddata", onReady);
     if (el.readyState >= 2) onReady();
   };
 
-  const handlePointerDown = (e: PointerEvent): void => {
-    hit.classList.add("dragging");
-    stopMove();
-    if (typeof hit.setPointerCapture === "function")
-      hit.setPointerCapture(e.pointerId);
-    drag = {
-      active: true,
-      dragging: false,
-      sx: e.clientX,
-      sy: e.clientY,
-    };
-    preDragCustomPos = customPos ? { ...customPos } : null;
-  };
-
   const captureDragAnchor = (e: PointerEvent): void => {
-    stage.style.transform = "none";
     const rect = stage.getBoundingClientRect();
     dragStageRect = {
       x: rect.x,
@@ -584,6 +365,27 @@ export function initPet(opts: PetInitOptions): PetController {
     if (position) bridge.sendDragPosition(position);
   };
 
+  const clearDrag = (): void => {
+    drag.active = false;
+    drag.dragging = false;
+    hit.classList.remove("dragging");
+    dragging = false;
+    dragAnchor = null;
+    dragStageRect = null;
+  };
+
+  const handlePointerDown = (e: PointerEvent): void => {
+    hit.classList.add("dragging");
+    if (typeof hit.setPointerCapture === "function")
+      hit.setPointerCapture(e.pointerId);
+    drag = {
+      active: true,
+      dragging: false,
+      sx: e.clientX,
+      sy: e.clientY,
+    };
+  };
+
   const handlePointerMove = (e: PointerEvent): void => {
     if (!drag.active) return;
     const dx = e.clientX - drag.sx;
@@ -607,59 +409,11 @@ export function initPet(opts: PetInitOptions): PetController {
     scheduleDragPosition();
   };
 
-  const restoreDrag = (): void => {
-    drag.active = false;
-    drag.dragging = false;
-    hit.classList.remove("dragging");
-    dragging = false;
-    customPos = preDragCustomPos;
-    dragAnchor = null;
-    dragStageRect = null;
-    stage.style.transform = `translateY(${bottomPad}px)`;
-    renderPosition();
-  };
-
-  const isInHitRect = (clientX: number, clientY: number): boolean => {
-    const rect = hit.getBoundingClientRect();
-    return (
-      clientX >= rect.left &&
-      clientX <= rect.right &&
-      clientY >= rect.top &&
-      clientY <= rect.bottom
-    );
-  };
-
-  const reportHit = (inside: boolean, force = false): void => {
-    if (force || inside !== lastHitInside) {
-      lastHitInside = inside;
-      bridge.sendHit(inside);
-    }
-  };
-
-  const applyDeferredLayout = (): void => {
-    if (!deferredLayout) return;
-    deferredLayout = false;
-    layout();
-    renderPosition();
-    reportLayout();
-  };
-
-  const applyDeferredInbound = (): void => {
-    const nextTerritory = deferredTerritory;
-    const nextScaleState = deferredScaleState;
-    const resetPosition = deferredResetPosition;
-    deferredTerritory = null;
-    deferredScaleState = null;
-    deferredResetPosition = false;
-    if (nextTerritory) applyTerritory(nextTerritory);
-    if (nextScaleState) applyScaleState(nextScaleState);
-    if (resetPosition) applyResetPosition();
-  };
-
   const handlePointerUp = (e: PointerEvent): void => {
+    if (!drag.active) return;
     const wasDragging = drag.dragging;
     if (wasDragging && dragAnchor && dragStageRect) {
-      pendingDragPosition = {
+      const finalPosition: PetDragPosition = {
         phase: "move",
         screenX: e.screenX,
         screenY: e.screenY,
@@ -667,79 +421,44 @@ export function initPet(opts: PetInitOptions): PetController {
         anchorY: dragAnchor.y,
         stage: dragStageRect,
       };
+      pendingDragPosition = finalPosition;
       flushDragPosition();
+      bridge.sendDragPosition({ ...finalPosition, phase: "end" });
     }
-    restoreDrag();
-    reportHit(isInHitRect(e.clientX, e.clientY), true);
+    clearDrag();
     if (!wasDragging) return;
     justDragged = true;
     setTimeout(() => {
       justDragged = false;
     }, 100);
-    const rect = stage.getBoundingClientRect();
-    terminalDrag = true;
-    try {
-      bridge.sendMove({
-        dx: e.clientX - drag.sx,
-        dy: e.clientY - drag.sy,
-        screenX: e.screenX,
-        screenY: e.screenY,
-        stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        heldDrag: true,
-      });
-    } finally {
-      terminalDrag = false;
-    }
-    setAnim(IDLE, true);
-    applyDeferredInbound();
-    applyDeferredLayout();
+    startStatic();
   };
 
   const handlePointerCancel = (): void => {
+    if (!drag.active) return;
     const wasDragging = drag.dragging;
     if (pendingDragFrame !== null) {
       caf(pendingDragFrame);
       pendingDragFrame = null;
     }
     pendingDragPosition = null;
-    restoreDrag();
-    reportHit(false, true);
-    if (wasDragging) {
-      const rect = stage.getBoundingClientRect();
-      terminalDrag = true;
-      try {
-        bridge.sendDragPosition({
-          phase: "cancel",
-          screenX: 0,
-          screenY: 0,
-          anchorX: 0,
-          anchorY: 0,
-          stage: {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-          },
-        });
-      } finally {
-        terminalDrag = false;
-      }
-      setAnim(IDLE, true);
+    if (wasDragging && dragStageRect && dragAnchor) {
+      bridge.sendDragPosition({
+        phase: "cancel",
+        screenX: 0,
+        screenY: 0,
+        anchorX: dragAnchor.x,
+        anchorY: dragAnchor.y,
+        stage: dragStageRect,
+      });
     }
-    applyDeferredInbound();
-    applyDeferredLayout();
+    clearDrag();
+    if (wasDragging) startStatic();
   };
 
   const handleClick = (): void => {
     if (drag.active || drag.dragging || justDragged) return;
-    if (once && anim !== IDLE) return; // busy one-shot
-    stopMove();
     setAnim(pick(CLICKS, null, rng), true);
-  };
-
-  const onDocMouseMove = (e: MouseEvent): void => {
-    if (drag.active) return; // keep the window interactive during a drag
-    reportHit(isInHitRect(e.clientX, e.clientY));
   };
 
   hit.addEventListener("pointerdown", handlePointerDown);
@@ -747,73 +466,70 @@ export function initPet(opts: PetInitOptions): PetController {
   hit.addEventListener("pointerup", handlePointerUp);
   hit.addEventListener("pointercancel", handlePointerCancel);
   hit.addEventListener("click", handleClick);
-  document.addEventListener("mousemove", onDocMouseMove);
 
-  // Verify mode: log once the first video actually starts playing (the
-  // empirical sandbox+webSecurity file:// video check). The initial IDLE
-  // plays on the NON-front buffer (videoB — front starts at 0), so listen
-  // on both buffers and report whichever fires first.
+  // Verify mode: log once the first video actually starts playing, or once
+  // the static image loads (whichever happens first — the new STATIC initial
+  // state means no <video> plays for 30s).
   if (new URLSearchParams(window.location.search).get("verify") === "1") {
     let verified = false;
-    const onPlaying = (el: HTMLVideoElement): void => {
+    const verifyLog = (source: string, detail: string): void => {
       if (verified) return;
       verified = true;
-      console.log(`pet-verify-ok readyState=${el.readyState}`);
+      console.log(`pet-verify-ok ${source} ${detail}`);
+    };
+    const onPlaying = (el: HTMLVideoElement): void => {
+      verifyLog("video-readyState", String(el.readyState));
     };
     videoA.addEventListener("playing", () => onPlaying(videoA));
     videoB.addEventListener("playing", () => onPlaying(videoB));
+    staticImg.addEventListener("load", () => verifyLog("static", "loaded"));
   }
 
-  const reportLayout = (resetPosition = false): void => {
+  const reportLayout = (): void => {
     const rect = stage.getBoundingClientRect();
     const payload: PetStageLayout = {
-      stage: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      ...(resetPosition ? { resetPosition: true } : {}),
+      stage: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      },
     };
     bridge.reportStageLayout(payload);
   };
 
-  const requestScale = (): void => {
-    if (scaleRequestInFlight !== null || desiredScaleTick === scaleTick) return;
-    scaleRequestInFlight = desiredScaleTick;
-    bridge.requestScaleTick({ tick: desiredScaleTick });
+  const requestZoom = (): void => {
+    if (zoomRequestInFlight !== null || desiredZoomPercent === zoomPercent)
+      return;
+    zoomRequestInFlight = desiredZoomPercent;
+    bridge.requestZoomPercent({ percent: desiredZoomPercent });
   };
 
-  const applyScaleState = (state: PetScaleState): void => {
+  const applyZoomState = (state: PetZoomState): void => {
     if (
-      !Number.isInteger(state.tick) ||
-      state.tick < scaleConfig.minTick ||
-      state.tick > scaleConfig.maxTick ||
+      !Number.isInteger(state.percent) ||
+      state.percent < zoomConfig.minPercent ||
+      state.percent > zoomConfig.maxPercent ||
+      (state.percent - zoomConfig.minPercent) % zoomConfig.stepPercent !== 0 ||
       typeof state.accepted !== "boolean"
     )
       return;
     const responseMatchesWheelRequest =
-      scaleRequestInFlight !== null && state.tick === scaleRequestInFlight;
-    scaleRequestInFlight = null;
+      zoomRequestInFlight !== null && state.percent === zoomRequestInFlight;
+    zoomRequestInFlight = null;
     if (!state.accepted || !responseMatchesWheelRequest) {
-      desiredScaleTick = state.tick;
+      desiredZoomPercent = state.percent;
       wheelRemainder = 0;
     }
-    stopMove();
-    const anchor = captureBottomCenter();
-    scaleTick = state.tick;
+    zoomPercent = state.percent;
     layout();
-    restoreBottomCenter(anchor);
     reportLayout();
     if (
       state.accepted &&
       responseMatchesWheelRequest &&
-      desiredScaleTick !== scaleTick
+      desiredZoomPercent !== zoomPercent
     )
-      requestScale();
-  };
-
-  const applyResetPosition = (): void => {
-    stopMove();
-    customPos = null;
-    stage.style.transform = `translateY(${bottomPad}px)`;
-    renderPosition();
-    reportLayout(true);
+      requestZoom();
   };
 
   const handleWheel = (event: WheelEvent): void => {
@@ -839,69 +555,36 @@ export function initPet(opts: PetInitOptions): PetController {
         : Math.ceil(wheelRemainder / 100);
     wheelRemainder -= steps * 100;
     if (steps === 0) return;
-    desiredScaleTick = Math.min(
-      Math.max(desiredScaleTick - steps, scaleConfig.minTick),
-      scaleConfig.maxTick,
+    desiredZoomPercent = Math.min(
+      Math.max(
+        desiredZoomPercent - steps * zoomConfig.stepPercent,
+        zoomConfig.minPercent,
+      ),
+      zoomConfig.maxPercent,
     );
-    requestScale();
+    requestZoom();
   };
 
-  const applyTerritory = (bounds: {
-    minStageX: number;
-    maxStageX: number;
-    minStageY: number;
-    maxStageY: number;
-  }): void => {
-    if (!Object.values(bounds).every(Number.isFinite)) return;
-    territory = bounds;
-    renderPosition();
-  };
-  const receiveTerritory = (bounds: {
-    minStageX: number;
-    maxStageX: number;
-    minStageY: number;
-    maxStageY: number;
-  }): void => {
-    if (terminalDrag || (drag.active && drag.dragging)) {
-      deferredTerritory = bounds;
-      return;
-    }
-    applyTerritory(bounds);
-  };
-  const receiveScaleState = (state: PetScaleState): void => {
-    if (terminalDrag || (drag.active && drag.dragging)) {
-      deferredScaleState = state;
-      return;
-    }
-    applyScaleState(state);
-  };
-  const receiveResetPosition = (): void => {
-    if (terminalDrag || (drag.active && drag.dragging)) {
-      deferredResetPosition = true;
-      return;
-    }
-    applyResetPosition();
-  };
-  // Subscribe before reporting the first layout so the hidden-first main
-  // process reply cannot be missed.
-  const removeTerritoryListener = bridge.onTerritoryBounds(receiveTerritory);
-  const removeScaleListener = bridge.onScaleState(receiveScaleState);
-  const removeResetListener = bridge.onResetPosition(receiveResetPosition);
+  // Subscribe before reporting the first layout so the initial main-process
+  // response cannot be missed.
+  const removeZoomListener = bridge.onZoomState(applyZoomState);
+  const removeDwellListener =
+    bridge.onIdleDwellState?.((state) => {
+      if (
+        Number.isInteger(state.dwellSeconds) &&
+        (state.dwellSeconds as unknown as number) >= 1 && (state.dwellSeconds as unknown as number) <= 3600
+      )
+        dwellSeconds = state.dwellSeconds;
+    }) ?? (() => {});
   hit.addEventListener("wheel", handleWheel, { passive: false });
   const onResize = (): void => {
-    if (drag.active && drag.dragging) {
-      deferredLayout = true;
-      return;
-    }
     layout();
-    renderPosition();
     reportLayout();
   };
   window.addEventListener("resize", onResize);
   layout();
-  renderPosition();
   reportLayout();
-  switchTo(IDLE, true);
+  startStatic();
 
   const destroy = (): void => {
     hit.removeEventListener("pointerdown", handlePointerDown);
@@ -910,25 +593,17 @@ export function initPet(opts: PetInitOptions): PetController {
     hit.removeEventListener("pointercancel", handlePointerCancel);
     hit.removeEventListener("click", handleClick);
     hit.removeEventListener("wheel", handleWheel);
-    document.removeEventListener("mousemove", onDocMouseMove);
     window.removeEventListener("resize", onResize);
-    removeTerritoryListener();
-    removeScaleListener();
-    removeResetListener();
+    removeZoomListener();
+    removeDwellListener();
+    clearRestTimer();
     if (pendingDragFrame !== null) caf(pendingDragFrame);
     pendingDragFrame = null;
     pendingDragPosition = null;
-    stopMove();
   };
 
   return {
-    getState: () => ({
-      anim,
-      once,
-      facing,
-      dragging,
-      customPos: customPos ? { ...customPos } : null,
-    }),
+    getState: () => ({ anim, once, facing, dragging }),
     destroy,
   };
 }
@@ -942,6 +617,7 @@ if (bootRoot) {
     stage: document.getElementById("pet-stage") as HTMLElement,
     videoA: document.getElementById("pet-video-a") as HTMLVideoElement,
     videoB: document.getElementById("pet-video-b") as HTMLVideoElement,
+    staticImg: document.getElementById("pet-static") as HTMLImageElement,
     hit: document.getElementById("pet-hit") as HTMLElement,
     bridge: window.pet,
   });

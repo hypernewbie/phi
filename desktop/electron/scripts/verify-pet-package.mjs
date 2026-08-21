@@ -26,6 +26,9 @@ const resources = walk(out);
 const pets = resources.map((resource) => path.join(resource, 'pet')).filter((pet) => existsSync(pet) && statSync(pet).isDirectory());
 const complete = pets.filter((pet) =>
   existsSync(path.join(pet, 'dist', 'pet-main.js')) &&
+  existsSync(path.join(pet, 'dist', 'pet-settings.html')) &&
+  existsSync(path.join(pet, 'dist', 'pet-settings-view.js')) &&
+  existsSync(path.join(pet, 'dist', 'pet-settings-preload.js')) &&
   existsSync(path.join(pet, 'assets')) &&
   statSync(path.join(pet, 'assets')).isDirectory() &&
   existsSync(path.join(pet, 'package.json')) &&

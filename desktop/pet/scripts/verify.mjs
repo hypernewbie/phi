@@ -4,10 +4,10 @@
  * Run via `pnpm verify` (= `electron scripts/verify.mjs`). Exits 0 when
  * the renderer logs `pet-verify-ok`, 1 on timeout or did-fail-load.
  */
-import { app } from "electron";
+import { app, screen } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPetWindow } from "../dist/pet-window.js";
+import { createPetWindow, defaultStageBounds } from "../dist/pet-window.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const petRoot = path.join(here, "..");
@@ -19,6 +19,7 @@ app.whenReady().then(() => {
     win = createPetWindow({
       root: petRoot,
       log: (msg) => console.log(`[verify] ${msg}`),
+      bounds: defaultStageBounds(screen.getPrimaryDisplay().workArea, 192, 108),
       query: { verify: "1" },
     });
   } catch (err) {

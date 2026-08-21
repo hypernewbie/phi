@@ -2,55 +2,72 @@
 import { type BrowserWindow, ipcMain, screen } from "electron";
 import type {
   PetDragPosition,
-  PetMove,
-  PetScaleRequest,
   PetStageLayout,
+  PetZoomRequest,
+  PetIdleDwellState,
   StageRect,
 } from "./pet-bridge.js";
 import {
-  candidateMoveStage,
-  clampStage,
+  defaultStageBounds,
   createPetWindow,
-  deriveTerritoryBounds,
-  finalCellOrigin,
+  createPetSettingsWindow,
+  type PetBounds,
 } from "./pet-window.js";
 
-export type ScaleResult = { tick: number; accepted: boolean };
-export type PetScaleConfig = {
-  minTick: number;
-  maxTick: number;
-  defaultTick: number;
-  minFactor: number;
-  stepFactor: number;
+export type ZoomResult = { percent: number; accepted: boolean };
+export type PetZoomConfig = {
+  minPercent: number;
+  maxPercent: number;
+  defaultPercent: number;
+  stepPercent: number;
+  baseVisualWidth: number;
 };
 export interface PetDeps {
   root: string;
   log: (msg: string) => void;
-  scale: PetScaleConfig;
-  getScaleTick(): number;
-  requestScaleTick(tick: number): ScaleResult;
+  zoom: PetZoomConfig;
+  getZoomPercent(): number;
+  requestZoomPercent(percent: number): ZoomResult;
+  getIdleDwellSeconds?(): number;
+  requestIdleDwellSeconds?(dwellSeconds: number): {
+    dwellSeconds: number;
+    accepted: boolean;
+    error?: string;
+  };
+  getParentWindow?(): unknown;
 }
 export interface PetHandle {
   start(): void;
   stop(): void;
   isRunning(): boolean;
-  setScaleTick(tick: number): void;
-  resetPosition(): void;
+  setZoomPercent(percent: number): void;
+  setIdleDwellSeconds(dwellSeconds: number): void;
+  openSettings(): void;
   onRunningChanged(listener: (running: boolean) => void): () => void;
 }
 
-type PetDisplay = { id?: number; workArea: Electron.Rectangle };
-
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
-const validTick = (value: unknown, scale: PetScaleConfig): value is number =>
+const validPercent = (value: unknown, zoom: PetZoomConfig): value is number =>
   typeof value === "number" &&
   Number.isInteger(value) &&
-  Number.isFinite(value) &&
-  value >= scale.minTick &&
-  value <= scale.maxTick;
-const canonicalTick = (value: unknown, scale: PetScaleConfig): number =>
-  validTick(value, scale) ? value : scale.defaultTick;
+  value >= zoom.minPercent &&
+  value <= zoom.maxPercent &&
+  (value - zoom.minPercent) % zoom.stepPercent === 0;
+const canonicalPercent = (value: unknown, zoom: PetZoomConfig): number =>
+  validPercent(value, zoom) ? value : zoom.defaultPercent;
+const validDwellSeconds = (value: unknown): value is number =>
+  typeof value === "number" &&
+  Number.isInteger(value) && value >= 1 && value <= 3600;
+
+/** Returns the fixed-base, 16:9 native stage dimensions for one zoom value. */
+export function stageDimensions(
+  zoom: Pick<PetZoomConfig, "baseVisualWidth">,
+  percent: number,
+): Pick<PetBounds, "width" | "height"> {
+  const width = Math.floor((zoom.baseVisualWidth * percent) / 100);
+  return { width, height: Math.floor((width * 9) / 16) };
+}
 
 const stageRect = (value: unknown): value is StageRect => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -60,6 +77,8 @@ const stageRect = (value: unknown): value is StageRect => {
     finite(stage.y) &&
     finite(stage.width) &&
     finite(stage.height) &&
+    Number.isInteger(stage.width) &&
+    Number.isInteger(stage.height) &&
     stage.width > 0 &&
     stage.height > 0
   );
@@ -68,23 +87,9 @@ const stageRect = (value: unknown): value is StageRect => {
 const stageLayout = (value: unknown): value is PetStageLayout => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
-  if (!stageRect(payload.stage)) return false;
   return (
-    !Object.hasOwn(payload, "resetPosition") ||
-    typeof payload.resetPosition === "boolean"
-  );
-};
-
-const movePayload = (value: unknown): value is PetMove => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const move = value as Record<string, unknown>;
-  return (
-    finite(move.dx) &&
-    finite(move.dy) &&
-    finite(move.screenX) &&
-    finite(move.screenY) &&
-    stageRect(move.stage) &&
-    typeof move.heldDrag === "boolean"
+    Object.keys(payload).every((key) => key === "stage") &&
+    stageRect(payload.stage)
   );
 };
 
@@ -92,7 +97,9 @@ const dragPositionPayload = (value: unknown): value is PetDragPosition => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const position = value as Record<string, unknown>;
   return (
-    (position.phase === "move" || position.phase === "cancel") &&
+    (position.phase === "move" ||
+      position.phase === "end" ||
+      position.phase === "cancel") &&
     finite(position.screenX) &&
     finite(position.screenY) &&
     finite(position.anchorX) &&
@@ -101,31 +108,32 @@ const dragPositionPayload = (value: unknown): value is PetDragPosition => {
   );
 };
 
-const scaleRequest = (
+const zoomRequest = (
   value: unknown,
-  scale: PetScaleConfig,
-): value is PetScaleRequest => {
+  zoom: PetZoomConfig,
+): value is PetZoomRequest => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  return validTick((value as Record<string, unknown>).tick, scale);
+  return validPercent((value as Record<string, unknown>).percent, zoom);
 };
 
 export function createPet(deps: PetDeps): PetHandle {
   let win: BrowserWindow | null = null;
+  let settingsWin: BrowserWindow | null = null;
+  let settingsParent: BrowserWindow | null = null;
+  let settingsParentClosedListener: (() => void) | null = null;
   let petCreating = false;
   let shown = false;
   let rendererReady = false;
-  let awaitingInitialScaleLayout = false;
-  let pendingReset = false;
-  let awaitingResetLayout = false;
-  let desiredTick = canonicalTick(deps.getScaleTick(), deps.scale);
-  let pendingScaleState: ScaleResult | null = null;
-  let latestDisplayId: number | null = null;
-  let latestGlobalStageCenter = { x: 0, y: 0 };
+  let desiredPercent = canonicalPercent(deps.getZoomPercent(), deps.zoom);
+  let pendingZoomState: ZoomResult | null = null;
+  const initialDwell = deps.getIdleDwellSeconds?.() ?? 10;
+  let desiredDwellSeconds = validDwellSeconds(initialDwell) ? initialDwell : 10;
+  let pendingDwellSeconds: number | null = null;
   let running = false;
   const runningListeners = new Set<(running: boolean) => void>();
   let activeDrag = false;
   let dragOrigin: { x: number; y: number } | null = null;
-  let lastRoundedCell: { x: number; y: number } | null = null;
+  let lastRoundedPosition: { x: number; y: number } | null = null;
 
   const notifyRunning = (next: boolean): void => {
     if (running === next) return;
@@ -137,221 +145,233 @@ export function createPet(deps: PetDeps): PetHandle {
     win !== null && !win.isDestroyed() && sender === win.webContents;
   const liveWindow = (): BrowserWindow | null =>
     win && !win.isDestroyed() ? win : null;
+  const liveSettingsWindow = (): BrowserWindow | null =>
+    settingsWin && !settingsWin.isDestroyed() ? settingsWin : null;
+  const detachSettingsParentListener = (): void => {
+    if (settingsParent && settingsParentClosedListener) {
+      settingsParent.removeListener("closed", settingsParentClosedListener);
+    }
+    settingsParent = null;
+    settingsParentClosedListener = null;
+  };
+  const sendOverlayDwellState = (dwellSeconds: number): void => {
+    liveWindow()?.webContents.send("phi:pet-idle-dwell-state", {
+      dwellSeconds,
+    } satisfies PetIdleDwellState);
+  };
+  const sendDwellState = (dwellSeconds: number): void => {
+    const state: PetIdleDwellState = { dwellSeconds };
+    sendOverlayDwellState(dwellSeconds);
+    liveSettingsWindow()?.webContents.send("phi:pet-idle-dwell-state", state);
+  };
   const clearDragState = (): void => {
     activeDrag = false;
     dragOrigin = null;
-    lastRoundedCell = null;
+    lastRoundedPosition = null;
   };
 
-  const sendScaleState = (state: ScaleResult): void => {
+  const sendZoomState = (state: ZoomResult): void => {
     const current = liveWindow();
     if (!current || !rendererReady) return;
-    current.webContents.send("phi:pet-scale-state", {
-      tick: state.tick,
+    current.webContents.send("phi:pet-zoom-state", {
+      percent: state.percent,
       accepted: state.accepted,
     });
   };
 
-  const sendReset = (): void => {
-    const current = liveWindow();
-    if (!current || !rendererReady) return;
-    current.webContents.send("phi:pet-reset-position");
-  };
-
-  const displayForRetainedPlacement = (): PetDisplay => {
-    if (
-      latestDisplayId !== null &&
-      typeof screen.getAllDisplays === "function"
-    ) {
-      const retained = screen
-        .getAllDisplays()
-        .find((display) => display.id === latestDisplayId);
-      if (retained) return retained;
-    }
-    return screen.getDisplayNearestPoint(latestGlobalStageCenter);
-  };
-
-  const positionStage = (
-    localStage: StageRect,
-    globalStage: StageRect,
-    display: PetDisplay,
-  ): void => {
+  const resizeStage = (stage: StageRect, initial: boolean): void => {
     const current = liveWindow();
     if (!current) return;
-    const clamped = clampStage(globalStage, display.workArea);
-    const cell = finalCellOrigin(clamped, localStage);
-    const x = Math.round(cell.x);
-    const y = Math.round(cell.y);
-    current.setPosition(x, y);
-    latestDisplayId = typeof display.id === "number" ? display.id : null;
-    latestGlobalStageCenter = {
-      x: clamped.x + clamped.width / 2,
-      y: clamped.y + clamped.height / 2,
-    };
-    current.webContents.send(
-      "phi:pet-territory-bounds",
-      deriveTerritoryBounds({ x, y }, localStage, display.workArea),
+    const bounds = current.getBounds();
+    if (bounds.width === stage.width && bounds.height === stage.height) return;
+    current.setBounds(
+      initial
+        ? {
+            x: bounds.x,
+            y: bounds.y,
+            width: stage.width,
+            height: stage.height,
+          }
+        : {
+            x: bounds.x + Math.round((bounds.width - stage.width) / 2),
+            y: bounds.y + bounds.height - stage.height,
+            width: stage.width,
+            height: stage.height,
+          },
     );
   };
 
-  const homeStage = (localStage: StageRect): void => {
-    const display = displayForRetainedPlacement();
-    const target = {
-      x: display.workArea.x + display.workArea.width - localStage.width,
-      y: display.workArea.y + display.workArea.height - localStage.height,
-      width: localStage.width,
-      height: localStage.height,
-    };
-    positionStage(localStage, target, display);
-  };
-
-  const positionHeldDrag = (position: PetDragPosition): void => {
-    const current = liveWindow();
-    if (!current) return;
-    const globalStage = {
-      x: position.screenX - position.anchorX,
-      y: position.screenY - position.anchorY,
-      width: position.stage.width,
-      height: position.stage.height,
-    };
-    const cell = finalCellOrigin(globalStage, position.stage);
-    const x = Math.round(cell.x);
-    const y = Math.round(cell.y);
-    if (lastRoundedCell?.x === x && lastRoundedCell.y === y) return;
-    lastRoundedCell = { x, y };
-    current.setPosition(x, y);
-  };
-
-  ipcMain.on("phi:pet-hit", (event, inside: unknown) => {
-    if (!isPetSender(event.sender) || typeof inside !== "boolean") return;
-    liveWindow()?.setIgnoreMouseEvents(!inside, { forward: !inside });
-  });
-
-  ipcMain.on("phi:pet-scale-request", (event, payload: unknown) => {
-    if (!isPetSender(event.sender) || !scaleRequest(payload, deps.scale))
-      return;
-    const result = deps.requestScaleTick(payload.tick);
-    const response: ScaleResult = {
-      tick: canonicalTick(result.tick, deps.scale),
+  ipcMain.on("phi:pet-zoom-request", (event, payload: unknown) => {
+    if (!isPetSender(event.sender) || !zoomRequest(payload, deps.zoom)) return;
+    const result = deps.requestZoomPercent(payload.percent);
+    const response: ZoomResult = {
+      percent: canonicalPercent(result.percent, deps.zoom),
       accepted: result.accepted === true,
     };
-    desiredTick = response.tick;
+    desiredPercent = response.percent;
     if (!rendererReady) {
-      pendingScaleState = response;
+      pendingZoomState = response;
       return;
     }
-    sendScaleState(response);
+    sendZoomState(response);
   });
 
+  if (
+    typeof (ipcMain as unknown as { handle?: Function }).handle === "function"
+  ) {
+    ipcMain.handle(
+      "phi:pet-settings-idle-dwell-request",
+      (event, payload: unknown) => {
+        const current = liveSettingsWindow();
+        if (
+          !current ||
+          event.sender !== current.webContents ||
+          !payload ||
+          typeof payload !== "object" ||
+          Array.isArray(payload)
+        ) {
+          return {
+            dwellSeconds: desiredDwellSeconds,
+            accepted: false,
+            error: "Invalid pet settings request.",
+          };
+        }
+        const record = payload as Record<string, unknown>;
+        if (Object.keys(record).length !== 1 || !validDwellSeconds(record.dwellSeconds)) {
+          return {
+            dwellSeconds: desiredDwellSeconds,
+            accepted: false,
+            error: "Invalid pet settings request.",
+          };
+        }
+        try {
+          const result = deps.requestIdleDwellSeconds?.(record.dwellSeconds) ?? {
+            dwellSeconds: desiredDwellSeconds,
+            accepted: false,
+            error: "Unable to save pet idle interval.",
+          };
+          const canonical = validDwellSeconds(result.dwellSeconds)
+            ? result.dwellSeconds
+            : desiredDwellSeconds;
+          if (result.accepted && canonical !== desiredDwellSeconds) {
+            desiredDwellSeconds = canonical;
+          }
+          return {
+            dwellSeconds: canonical,
+            accepted: result.accepted === true,
+            ...(result.error ? { error: result.error } : {}),
+          };
+        } catch {
+          return {
+            dwellSeconds: desiredDwellSeconds,
+            accepted: false,
+            error: "Unable to save pet idle interval.",
+          };
+        }
+      },
+    );
+  }
+
   ipcMain.on("phi:pet-stage-layout", (event, payload: unknown) => {
-    if (!isPetSender(event.sender) || !stageLayout(payload) || activeDrag)
-      return;
+    if (!isPetSender(event.sender) || !stageLayout(payload)) return;
+    const stage = payload.stage;
+    if (stage.x !== 0 || stage.y !== 0) return;
     const current = liveWindow();
     if (!current) return;
-    const stage = payload.stage;
-    const bounds = current.getBounds();
-    const globalStage = {
-      x: bounds.x + stage.x,
-      y: bounds.y + stage.y,
-      width: stage.width,
-      height: stage.height,
-    };
-    const nearestDisplay = (): PetDisplay =>
-      screen.getDisplayNearestPoint({
-        x: globalStage.x + globalStage.width / 2,
-        y: globalStage.y + globalStage.height / 2,
-      });
-
-    if (!rendererReady) {
-      positionStage(stage, globalStage, nearestDisplay());
-      rendererReady = true;
-      awaitingInitialScaleLayout = true;
-      const initial = pendingScaleState ?? {
-        tick: desiredTick,
-        accepted: true,
-      };
-      pendingScaleState = null;
-      sendScaleState(initial);
+    const dimensions = stageDimensions(deps.zoom, desiredPercent);
+    if (
+      stage.width !== dimensions.width ||
+      stage.height !== dimensions.height
+    ) {
+      if (!rendererReady && pendingZoomState !== null) {
+        current.webContents.send("phi:pet-zoom-state", {
+          percent: pendingZoomState.percent,
+          accepted: pendingZoomState.accepted,
+        });
+      }
       return;
     }
-
-    if (awaitingInitialScaleLayout) {
-      positionStage(stage, globalStage, nearestDisplay());
-      awaitingInitialScaleLayout = false;
-      if (pendingReset) {
-        awaitingResetLayout = true;
-        sendReset();
-      } else if (!shown) {
+    const initial = !rendererReady;
+    resizeStage({ ...stage, ...dimensions }, initial);
+    if (initial) {
+      rendererReady = true;
+      const initialZoom = pendingZoomState ?? {
+        percent: desiredPercent,
+        accepted: true,
+      };
+      pendingZoomState = null;
+      sendZoomState(initialZoom);
+      if (pendingDwellSeconds !== null) {
+        sendOverlayDwellState(pendingDwellSeconds);
+        pendingDwellSeconds = null;
+      }
+      if (!shown) {
         shown = true;
         current.show();
       }
-      return;
     }
-
-    if (awaitingResetLayout) {
-      if (payload.resetPosition === true) {
-        homeStage(stage);
-        pendingReset = false;
-        awaitingResetLayout = false;
-        if (!shown) {
-          shown = true;
-          current.show();
-        }
-      } else {
-        positionStage(stage, globalStage, nearestDisplay());
-      }
-      return;
-    }
-
-    positionStage(stage, globalStage, nearestDisplay());
   });
 
   ipcMain.on("phi:pet-drag-position", (event, payload: unknown) => {
     const current = liveWindow();
     if (!isPetSender(event.sender) || !current || !dragPositionPayload(payload))
       return;
+
+    if (payload.phase === "end") {
+      if (!activeDrag) return;
+      try {
+        const bounds = current.getBounds();
+        const workArea = screen.getDisplayNearestPoint({
+          x: payload.screenX,
+          y: payload.screenY,
+        }).workArea;
+        const x =
+          bounds.width >= workArea.width
+            ? workArea.x
+            : Math.min(
+                Math.max(bounds.x, workArea.x),
+                workArea.x + workArea.width - bounds.width,
+              );
+        const y =
+          bounds.height >= workArea.height
+            ? workArea.y
+            : Math.min(
+                Math.max(bounds.y, workArea.y),
+                workArea.y + workArea.height - bounds.height,
+              );
+        if (x !== bounds.x || y !== bounds.y) {
+          current.setPosition(x, y);
+        }
+      } catch {
+        // Native coordinate conversion can reject a transient drag position.
+      } finally {
+        clearDragState();
+      }
+      return;
+    }
+
     if (payload.phase === "cancel") {
       if (!activeDrag || !dragOrigin) return;
       current.setPosition(dragOrigin.x, dragOrigin.y);
-      const display = screen.getDisplayNearestPoint({
-        x: dragOrigin.x + payload.stage.x + payload.stage.width / 2,
-        y: dragOrigin.y + payload.stage.y + payload.stage.height / 2,
-      });
-      current.webContents.send(
-        "phi:pet-territory-bounds",
-        deriveTerritoryBounds(dragOrigin, payload.stage, display.workArea),
-      );
       clearDragState();
       return;
     }
+
     if (!activeDrag) {
       const bounds = current.getBounds();
       activeDrag = true;
       dragOrigin = { x: bounds.x, y: bounds.y };
-      lastRoundedCell = { x: bounds.x, y: bounds.y };
+      lastRoundedPosition = null;
     }
-    positionHeldDrag(payload);
-  });
-
-  ipcMain.on("phi:pet-window-move", (event, payload: unknown) => {
-    const current = liveWindow();
-    if (!isPetSender(event.sender) || !current || !movePayload(payload)) return;
-    if (payload.heldDrag && !activeDrag) return;
-    const bounds = current.getBounds();
-    const candidate = payload.heldDrag
-      ? {
-          x: bounds.x + payload.stage.x,
-          y: bounds.y + payload.stage.y,
-          width: payload.stage.width,
-          height: payload.stage.height,
-        }
-      : candidateMoveStage(bounds, payload);
-    const target = screen.getDisplayNearestPoint({
-      x: payload.screenX,
-      y: payload.screenY,
-    });
-    positionStage(payload.stage, candidate, target);
-    clearDragState();
+    const x = Math.round(payload.screenX - payload.anchorX);
+    const y = Math.round(payload.screenY - payload.anchorY);
+    if (lastRoundedPosition?.x === x && lastRoundedPosition.y === y) return;
+    lastRoundedPosition = { x, y };
+    try {
+      current.setPosition(x, y);
+    } catch {
+      // Native coordinate conversion can reject a transient drag position.
+    }
   });
 
   return {
@@ -361,35 +381,38 @@ export function createPet(deps: PetDeps): PetHandle {
       if (win?.isDestroyed()) win = null;
       petCreating = true;
       try {
-        desiredTick = canonicalTick(deps.getScaleTick(), deps.scale);
+        desiredPercent = canonicalPercent(deps.getZoomPercent(), deps.zoom);
+        const dimensions = stageDimensions(deps.zoom, desiredPercent);
+        const bounds = defaultStageBounds(
+          screen.getPrimaryDisplay().workArea,
+          dimensions.width,
+          dimensions.height,
+        );
         const created = createPetWindow({
           root: deps.root,
           log: deps.log,
+          bounds,
           query: {
-            petScaleTick: String(desiredTick),
-            petScaleMinTick: String(deps.scale.minTick),
-            petScaleMaxTick: String(deps.scale.maxTick),
-            petScaleDefaultTick: String(deps.scale.defaultTick),
-            petScaleMinFactor: String(deps.scale.minFactor),
-            petScaleStepFactor: String(deps.scale.stepFactor),
+            petZoomPercent: String(desiredPercent),
+            petZoomMinPercent: String(deps.zoom.minPercent),
+            petZoomMaxPercent: String(deps.zoom.maxPercent),
+            petZoomDefaultPercent: String(deps.zoom.defaultPercent),
+            petZoomStepPercent: String(deps.zoom.stepPercent),
+            petBaseVisualWidth: String(deps.zoom.baseVisualWidth),
+            petIdleDwellSeconds: String(desiredDwellSeconds),
           },
         });
         win = created;
         shown = false;
         rendererReady = false;
-        awaitingInitialScaleLayout = false;
-        pendingReset = false;
-        awaitingResetLayout = false;
+        pendingZoomState = null;
         clearDragState();
         created.once("closed", () => {
           if (win !== created) return;
           win = null;
           shown = false;
           rendererReady = false;
-          awaitingInitialScaleLayout = false;
-          pendingScaleState = null;
-          pendingReset = false;
-          awaitingResetLayout = false;
+          pendingZoomState = null;
           clearDragState();
           notifyRunning(false);
         });
@@ -404,29 +427,68 @@ export function createPet(deps: PetDeps): PetHandle {
       if (win === current) win = null;
       shown = false;
       rendererReady = false;
-      awaitingInitialScaleLayout = false;
-      pendingScaleState = null;
-      pendingReset = false;
-      awaitingResetLayout = false;
+      pendingZoomState = null;
       clearDragState();
       notifyRunning(false);
     },
     isRunning: (): boolean => running && win !== null && !win.isDestroyed(),
-    setScaleTick(tick: number): void {
-      if (!validTick(tick, deps.scale)) return;
-      desiredTick = tick;
-      pendingScaleState = { tick, accepted: true };
+    setZoomPercent(percent: number): void {
+      if (!validPercent(percent, deps.zoom)) return;
+      desiredPercent = percent;
+      pendingZoomState = { percent, accepted: true };
       if (rendererReady) {
-        pendingScaleState = null;
-        sendScaleState({ tick, accepted: true });
+        pendingZoomState = null;
+        sendZoomState({ percent, accepted: true });
       }
     },
-    resetPosition(): void {
-      if (!liveWindow() || pendingReset || awaitingResetLayout) return;
-      pendingReset = true;
-      if (!rendererReady || awaitingInitialScaleLayout || !shown) return;
-      awaitingResetLayout = true;
-      sendReset();
+    setIdleDwellSeconds(dwellSeconds: number): void {
+      if (!validDwellSeconds(dwellSeconds)) return;
+      desiredDwellSeconds = dwellSeconds;
+      pendingDwellSeconds = dwellSeconds;
+      if (rendererReady) {
+        pendingDwellSeconds = null;
+        sendDwellState(dwellSeconds);
+      } else {
+        liveSettingsWindow()?.webContents.send("phi:pet-idle-dwell-state", {
+          dwellSeconds,
+        } satisfies PetIdleDwellState);
+      }
+    },
+    openSettings(): void {
+      const parent = deps.getParentWindow?.();
+      if (
+        !parent ||
+        typeof parent !== "object" ||
+        (parent as BrowserWindow).isDestroyed()
+      )
+        return;
+      const existing = liveSettingsWindow();
+      if (existing) {
+        existing.focus();
+        return;
+      }
+      const parentWindow = parent as BrowserWindow;
+      settingsWin = createPetSettingsWindow({
+        root: deps.root,
+        log: deps.log,
+        parent: parentWindow,
+        dwellSeconds: desiredDwellSeconds,
+        onClosed: (closed) => {
+          if (settingsWin === closed) {
+            settingsWin = null;
+            detachSettingsParentListener();
+          }
+        },
+      });
+      const onParentClosed = (): void => {
+        const current = liveSettingsWindow();
+        detachSettingsParentListener();
+        if (current) current.destroy();
+        settingsWin = null;
+      };
+      settingsParent = parentWindow;
+      settingsParentClosedListener = onParentClosed;
+      parentWindow.once("closed", onParentClosed);
     },
     onRunningChanged(listener: (running: boolean) => void): () => void {
       runningListeners.add(listener);

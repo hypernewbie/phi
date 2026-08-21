@@ -1,86 +1,132 @@
-/** Native pet-cell construction and visible-stage geometry helpers. */
-import { BrowserWindow, screen } from "electron";
+/** Native stage-window construction and visible-stage geometry helpers. */
+import { BrowserWindow } from "electron";
 import path from "node:path";
-import type { PetMove, StageRect, TerritoryBounds } from "./pet-bridge.js";
 
-export const GRID_COLS = 4;
-export const GRID_ROWS = 2;
 const PET_HTML_FILE = "pet.html";
 const PET_PRELOAD_FILE = "pet-preload.js";
+const SETTINGS_HTML_FILE = "pet-settings.html";
+const SETTINGS_PRELOAD_FILE = "pet-settings-preload.js";
 
-export interface PetCell { x: number; y: number; width: number; height: number; }
-export interface WorkArea { x: number; y: number; width: number; height: number; }
-
-export function computeDefaultCell(workArea: WorkArea): PetCell {
-  const width = Math.floor(workArea.width / GRID_COLS);
-  const height = Math.floor(workArea.height / GRID_ROWS);
-  return { x: workArea.x + workArea.width - width, y: workArea.y + workArea.height - height, width, height };
+export interface PetBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-/** Applies a renderer drag delta to the visible stage, not the transparent cell. */
-export function candidateMoveStage(cell: Pick<PetCell, "x" | "y">, move: PetMove): StageRect {
-  return { x: cell.x + move.dx + move.stage.x, y: cell.y + move.dy + move.stage.y, width: move.stage.width, height: move.stage.height };
+export interface WorkArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export function clampStage(stage: StageRect, workArea: WorkArea): StageRect {
-  const clampAxis = (value: number, size: number, start: number, extent: number): number => {
-    if (size >= extent) return start;
-    return Math.min(Math.max(value, start), start + extent - size);
-  };
+export function defaultStageBounds(
+  workArea: WorkArea,
+  stageWidth: number,
+  stageHeight: number,
+): PetBounds {
   return {
-    x: clampAxis(stage.x, stage.width, workArea.x, workArea.width),
-    y: clampAxis(stage.y, stage.height, workArea.y, workArea.height),
-    width: stage.width,
-    height: stage.height,
+    x: workArea.x + workArea.width - stageWidth,
+    y: workArea.y + workArea.height - stageHeight,
+    width: stageWidth,
+    height: stageHeight,
   };
 }
 
-export function finalCellOrigin(stage: StageRect, localStage: Pick<StageRect, "x" | "y">): Pick<PetCell, "x" | "y"> {
-  return { x: stage.x - localStage.x, y: stage.y - localStage.y };
+export interface PetWindowOptions {
+  root: string;
+  log: (msg: string) => void;
+  bounds: PetBounds;
+  query?: Record<string, string>;
 }
 
-/** Local stage positions which keep its visible footprint in the work area. */
-export function deriveTerritoryBounds(cell: Pick<PetCell, "x" | "y">, stage: StageRect, workArea: WorkArea): TerritoryBounds {
-  const axis = (cellOrigin: number, local: number, size: number, start: number, extent: number): [number, number] => {
-    const anchor = start - cellOrigin;
-    if (!Number.isFinite(anchor) || !Number.isFinite(size) || !Number.isFinite(extent) || size >= extent) return [Number.isFinite(anchor) ? anchor : local, Number.isFinite(anchor) ? anchor : local];
-    const min = start - cellOrigin;
-    const max = start + extent - size - cellOrigin;
-    return [Math.min(min, max), Math.max(min, max)];
+export interface PetSettingsWindowOptions {
+  root: string;
+  log: (msg: string) => void;
+  parent: BrowserWindow;
+  dwellSeconds: number;
+  onClosed: (win: BrowserWindow) => void;
+}
+
+export function createPetSettingsWindow(opts: PetSettingsWindowOptions): BrowserWindow {
+  const file = path.join(opts.root, "dist", SETTINGS_HTML_FILE);
+  const win = new BrowserWindow({
+    width: 360,
+    height: 180,
+    parent: opts.parent,
+    show: false,
+    resizable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      preload: path.join(opts.root, "dist", SETTINGS_PRELOAD_FILE),
+    },
+  });
+  const allowedPath = path.resolve(file);
+  const expected = new URL(`file://${allowedPath}`);
+  expected.searchParams.set("petIdleDwellSeconds", String(opts.dwellSeconds));
+  const allowed = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return parsed.href === expected.href;
+    } catch {
+      return false;
+    }
   };
-  const [minStageX, maxStageX] = axis(cell.x, stage.x, stage.width, workArea.x, workArea.width);
-  const [minStageY, maxStageY] = axis(cell.y, stage.y, stage.height, workArea.y, workArea.height);
-  return { minStageX, maxStageX, minStageY, maxStageY };
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-redirect", (event, url) => {
+    if (!allowed(url)) event.preventDefault();
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!allowed(url)) event.preventDefault();
+  });
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.show();
+  });
+  win.once("closed", () => opts.onClosed(win));
+  void win.loadFile(file, { query: { petIdleDwellSeconds: String(opts.dwellSeconds) } }).catch((err: unknown) => {
+    opts.log(`settings loadFile failed: ${String(err)}`);
+    if (!win.isDestroyed()) win.destroy();
+  });
+  return win;
 }
-
-/** Picks the nearest display to a stage center for layout placement. */
-export function nearestDisplayForStage<T extends { workArea: WorkArea }>(stage: StageRect, displays: readonly T[]): T | null {
-  const cx = stage.x + stage.width / 2;
-  const cy = stage.y + stage.height / 2;
-  const distance = (area: WorkArea): number => {
-    const dx = Math.max(area.x - cx, 0, cx - (area.x + area.width));
-    const dy = Math.max(area.y - cy, 0, cy - (area.y + area.height));
-    return dx * dx + dy * dy;
-  };
-  return displays.reduce<T | null>((nearest, display) => !nearest || distance(display.workArea) < distance(nearest.workArea) ? display : nearest, null);
-}
-
-export interface PetWindowOptions { root: string; log: (msg: string) => void; query?: Record<string, string>; }
 
 export function createPetWindow(opts: PetWindowOptions): BrowserWindow {
-  const cell = computeDefaultCell(screen.getPrimaryDisplay().workArea);
+  const { bounds } = opts;
   const win = new BrowserWindow({
-    x: cell.x, y: cell.y, width: cell.width, height: cell.height,
-    transparent: true, frame: false, resizable: false, focusable: false, skipTaskbar: true,
-    show: false, backgroundColor: "#00000000",
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: false, preload: path.join(opts.root, "dist", PET_PRELOAD_FILE) },
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    show: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      backgroundThrottling: false,
+      preload: path.join(opts.root, "dist", PET_PRELOAD_FILE),
+    },
   });
   win.setAlwaysOnTop(true, "screen-saver");
   win.setVisibleOnAllWorkspaces(true);
-  win.setIgnoreMouseEvents(true, { forward: true });
-  void win.loadFile(path.join(opts.root, "dist", PET_HTML_FILE), opts.query ? { query: opts.query } : undefined).catch((err: unknown) => {
-    opts.log(`loadFile failed: ${String(err)}`);
-    if (!win.isDestroyed()) win.destroy();
-  });
+  void win
+    .loadFile(
+      path.join(opts.root, "dist", PET_HTML_FILE),
+      opts.query ? { query: opts.query } : undefined,
+    )
+    .catch((err: unknown) => {
+      opts.log(`loadFile failed: ${String(err)}`);
+      if (!win.isDestroyed()) win.destroy();
+    });
   return win;
 }

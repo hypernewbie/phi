@@ -16,14 +16,13 @@
         user-select: none;
         cursor: default;
       }
-      /* The pet box: fixed, positioned entirely by transform:translate. */
+      /* The native window and renderer stage have the same viewport bounds. */
       .pet-root {
         position: fixed;
         top: 0;
         left: 0;
         user-select: none;
       }
-      /* The inner stage: 16:9, translated down by the foot pad. */
       .pet-stage {
         position: relative;
         width: 100%;
@@ -44,9 +43,10 @@
       .pet-video.is-front {
         opacity: 1;
       }
-      /* The hit layer covers HIT_BOX (percentages set by pet-view.ts). */
+      /* The full visible stage is interactive. */
       .pet-hit {
         position: absolute;
+        inset: 0;
         pointer-events: auto;
         cursor: grab;
         z-index: 1;
@@ -54,9 +54,26 @@
       .pet-hit.dragging {
         cursor: grabbing;
       }
+      /* The still maid image shown in the STATIC state (replaces the
+         looping IDLE breathing webm). */
+      .pet-static {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.18s ease;
+        transform-origin: center;
+      }
+      .pet-static.is-front {
+        opacity: 1;
+      }
       /* Respect the user's reduced-motion preference (no cross-fade). */
       @media (prefers-reduced-motion: reduce) {
-        .pet-video {
+        .pet-video,
+        .pet-static {
           transition: none;
         }
       }
@@ -65,6 +82,7 @@
   <body>
     <div id="pet-root" class="pet-root">
       <div id="pet-stage" class="pet-stage">
+        <img id="pet-static" class="pet-static" alt="" />
         <video
           id="pet-video-a"
           class="pet-video is-front"

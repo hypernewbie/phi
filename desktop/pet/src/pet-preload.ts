@@ -1,35 +1,34 @@
 /** Sandboxed, context-isolated bridge for the local pet renderer. */
 import { contextBridge, ipcRenderer } from "electron";
-import type { PetDragPosition, PetMove, PetScaleRequest, PetScaleState, PetStageLayout, TerritoryBounds } from "./pet-bridge.js";
+import type {
+  PetDragPosition,
+  PetStageLayout,
+  PetZoomRequest,
+  PetZoomState,
+  PetIdleDwellState,
+} from "./pet-bridge.js";
 
-const HIT = "phi:pet-hit";
-const MOVE = "phi:pet-window-move";
 const DRAG_POSITION = "phi:pet-drag-position";
-const SCALE_REQUEST = "phi:pet-scale-request";
-const SCALE_STATE = "phi:pet-scale-state";
-const RESET_POSITION = "phi:pet-reset-position";
+const ZOOM_REQUEST = "phi:pet-zoom-request";
+const ZOOM_STATE = "phi:pet-zoom-state";
 const LAYOUT = "phi:pet-stage-layout";
-const TERRITORY = "phi:pet-territory-bounds";
+const DWELL_STATE = "phi:pet-idle-dwell-state";
 
 contextBridge.exposeInMainWorld("pet", {
-  sendHit: (inside: boolean): void => ipcRenderer.send(HIT, inside),
-  sendMove: (move: PetMove): void => ipcRenderer.send(MOVE, move),
-  sendDragPosition: (position: PetDragPosition): void => ipcRenderer.send(DRAG_POSITION, position),
-  requestScaleTick: (request: PetScaleRequest): void => ipcRenderer.send(SCALE_REQUEST, request),
-  reportStageLayout: (layout: PetStageLayout): void => ipcRenderer.send(LAYOUT, layout),
-  onTerritoryBounds: (listener: (bounds: TerritoryBounds) => void): (() => void) => {
-    const wrapped = (_event: unknown, bounds: TerritoryBounds): void => listener(bounds);
-    ipcRenderer.on(TERRITORY, wrapped);
-    return () => ipcRenderer.removeListener(TERRITORY, wrapped);
+  sendDragPosition: (position: PetDragPosition): void =>
+    ipcRenderer.send(DRAG_POSITION, position),
+  requestZoomPercent: (request: PetZoomRequest): void =>
+    ipcRenderer.send(ZOOM_REQUEST, request),
+  reportStageLayout: (layout: PetStageLayout): void =>
+    ipcRenderer.send(LAYOUT, layout),
+  onZoomState: (listener: (state: PetZoomState) => void): (() => void) => {
+    const wrapped = (_event: unknown, state: PetZoomState): void => listener(state);
+    ipcRenderer.on(ZOOM_STATE, wrapped);
+    return () => ipcRenderer.removeListener(ZOOM_STATE, wrapped);
   },
-  onScaleState: (listener: (state: PetScaleState) => void): (() => void) => {
-    const wrapped = (_event: unknown, state: PetScaleState): void => listener(state);
-    ipcRenderer.on(SCALE_STATE, wrapped);
-    return () => ipcRenderer.removeListener(SCALE_STATE, wrapped);
-  },
-  onResetPosition: (listener: () => void): (() => void) => {
-    const wrapped = (): void => listener();
-    ipcRenderer.on(RESET_POSITION, wrapped);
-    return () => ipcRenderer.removeListener(RESET_POSITION, wrapped);
+  onIdleDwellState: (listener: (state: PetIdleDwellState) => void): (() => void) => {
+    const wrapped = (_event: unknown, state: PetIdleDwellState): void => listener(state);
+    ipcRenderer.on(DWELL_STATE, wrapped);
+    return () => ipcRenderer.removeListener(DWELL_STATE, wrapped);
   },
 });

@@ -137,8 +137,7 @@ function setupTrayForTest(
     getSyncAlerts: () => false,
     getPetAvailable: () => false,
     getPetEnabled: () => false,
-    getPetScaleTick: () => 2,
-    getPetRunning: () => false,
+    getPetZoomPercent: () => 100,
     ipcSend,
     log,
     ...opts.deps,
@@ -165,7 +164,6 @@ describe('buildTrayMenu (pure menu builder)', () => {
     petZoomIn: () => {},
     petZoomOut: () => {},
     petResetZoom: () => {},
-    petResetPosition: () => {},
     quit: () => {},
     ...over,
   });
@@ -316,27 +314,20 @@ describe('buildTrayMenu (pure menu builder)', () => {
     expect(togglePet).toHaveBeenCalledTimes(1);
   });
 
-  it('builds Pet zoom commands in order with scale and running-state enablement', () => {
-    const menu = buildTrayMenu(
-      [],
-      mkHandlers(),
-      true,
-      false,
-      true,
-      false,
-      2,
-      true,
-    );
+  it('builds Pet zoom commands in browser-style order with readout and boundary enablement', () => {
+    const menu = buildTrayMenu([], mkHandlers(), true, false, true, false, 100);
     const pet = menu.find((entry) => entry.label === 'Pet');
     expect(pet?.enabled).toBe(true);
     expect(pet?.submenu?.map((entry) => entry.label)).toEqual([
-      'Zoom in',
       'Zoom out',
+      'Zoom: 100%',
+      'Zoom in',
       'Reset zoom',
-      'Reset position',
+      'Pet settings…',
     ]);
     expect(pet?.submenu?.map((entry) => entry.enabled)).toEqual([
       true,
+      false,
       true,
       false,
       true,
@@ -348,14 +339,14 @@ describe('buildTrayMenu (pure menu builder)', () => {
       false,
       true,
       false,
-      0,
-      false,
+      50,
     ).find((entry) => entry.label === 'Pet');
     expect(minimum?.submenu?.map((entry) => entry.enabled)).toEqual([
-      true,
+      false,
       false,
       true,
-      false,
+      true,
+      true,
     ]);
   });
 
@@ -367,8 +358,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       false,
       false,
       true,
-      3,
-      true,
+      125,
     ).find((entry) => entry.label === 'Pet');
     expect(pet?.enabled).toBe(false);
     expect(pet?.submenu?.every((entry) => entry.enabled === false)).toBe(true);
@@ -379,35 +369,26 @@ describe('buildTrayMenu (pure menu builder)', () => {
       petZoomIn: vi.fn(),
       petZoomOut: vi.fn(),
       petResetZoom: vi.fn(),
-      petResetPosition: vi.fn(),
     });
-    const pet = buildTrayMenu(
-      [],
-      handlers,
-      true,
-      false,
-      true,
-      false,
-      3,
-      true,
-    ).find((entry) => entry.label === 'Pet');
-    pet?.submenu?.forEach((entry) => clickEntry(entry));
+    const pet = buildTrayMenu([], handlers, true, false, true, false, 125).find(
+      (entry) => entry.label === 'Pet',
+    );
+    pet?.submenu?.forEach((entry) => {
+      if (entry.click) clickEntry(entry);
+    });
     expect(handlers.petZoomIn).toHaveBeenCalledTimes(1);
     expect(handlers.petZoomOut).toHaveBeenCalledTimes(1);
     expect(handlers.petResetZoom).toHaveBeenCalledTimes(1);
-    expect(handlers.petResetPosition).toHaveBeenCalledTimes(1);
   });
 
   it('posts Pet commands through setupTray', () => {
     const { ipcSend } = setupTrayForTest({
-      deps: {
-        getPetAvailable: () => true,
-        getPetScaleTick: () => 3,
-        getPetRunning: () => true,
-      },
+      deps: { getPetAvailable: () => true, getPetZoomPercent: () => 125 },
     });
     const pet = lastTemplate().find((entry) => entry.label === 'Pet');
-    pet?.submenu?.forEach((entry) => clickEntry(entry));
+    pet?.submenu?.forEach((entry) => {
+      if (entry.click) clickEntry(entry);
+    });
     expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
       kind: 'pet-zoom-in',
     });
@@ -416,9 +397,6 @@ describe('buildTrayMenu (pure menu builder)', () => {
     });
     expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
       kind: 'pet-reset-zoom',
-    });
-    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
-      kind: 'pet-reset-position',
     });
   });
 

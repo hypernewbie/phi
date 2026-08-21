@@ -14,9 +14,17 @@ describe('verify-pet-package', () => {
   it('accepts one complete resource pet and rejects it in absent mode', () => {
     const out = fixture(); const pet = path.join(out, 'Phi.app', 'Contents', 'Resources', 'pet');
     mkdirSync(path.join(pet, 'dist'), { recursive: true }); mkdirSync(path.join(pet, 'assets'));
-    for (const file of ['dist/pet-main.js', 'package.json', 'LICENSE-dsh-pet.txt']) writeFileSync(path.join(pet, file), 'x');
+    for (const file of ['dist/pet-main.js', 'dist/pet-settings.html', 'dist/pet-settings-view.js', 'dist/pet-settings-preload.js', 'package.json', 'LICENSE-dsh-pet.txt']) writeFileSync(path.join(pet, file), 'x');
     expect(verify(out, 'present').status).toBe(0);
     expect(verify(out, 'absent').status).toBe(1);
+  });
+
+  it.each(['dist/pet-settings.html', 'dist/pet-settings-view.js', 'dist/pet-settings-preload.js'])('rejects a package missing only %s', (missing) => {
+    const out = fixture(); const pet = path.join(out, 'Phi.app', 'Contents', 'Resources', 'pet');
+    mkdirSync(path.join(pet, 'dist'), { recursive: true }); mkdirSync(path.join(pet, 'assets'));
+    for (const file of ['dist/pet-main.js', 'dist/pet-settings.html', 'dist/pet-settings-view.js', 'dist/pet-settings-preload.js', 'package.json', 'LICENSE-dsh-pet.txt']) writeFileSync(path.join(pet, file), 'x');
+    rmSync(path.join(pet, missing));
+    expect(verify(out, 'present').status).toBe(1);
   });
   it('rejects a present package whose assets path is a file', () => {
     const out = fixture(); const pet = path.join(out, 'Phi.app', 'Contents', 'Resources', 'pet');

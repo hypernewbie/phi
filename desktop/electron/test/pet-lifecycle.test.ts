@@ -1,31 +1,39 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
   class FakeTray {
     static instances: FakeTray[] = [];
     listeners = new Map<string, () => void>();
-    constructor() { FakeTray.instances.push(this); }
+    constructor() {
+      FakeTray.instances.push(this);
+    }
     setToolTip(): void {}
-    on(event: string, listener: () => void): void { this.listeners.set(event, listener); }
+    on(event: string, listener: () => void): void {
+      this.listeners.set(event, listener);
+    }
     destroy(): void {}
   }
   return {
     fakeApp: {
-      getPath: vi.fn(() => '/tmp/phi-user-data'),
+      getPath: vi.fn(() => "/tmp/phi-user-data"),
       on: vi.fn(),
       quit: vi.fn(),
     },
-    fakeMenu: { buildFromTemplate: vi.fn((template: unknown[]) => ({ template })) },
-    fakeNativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => false })) },
+    fakeMenu: {
+      buildFromTemplate: vi.fn((template: unknown[]) => ({ template })),
+    },
+    fakeNativeImage: {
+      createFromPath: vi.fn(() => ({ isEmpty: () => false })),
+    },
     FakeTray,
   };
 });
 
-vi.mock('electron', () => ({
+vi.mock("electron", () => ({
   app: fakeApp,
   BrowserWindow: class {},
   ipcMain: {},
@@ -39,22 +47,29 @@ vi.mock('electron', () => ({
   WebContentsView: class {},
 }));
 
-import { Controller } from '../src/controller.js';
-import { DesktopHost } from '../src/desktop.js';
-import type { PetDeps, PetHandle } from '../src/petLoader.js';
+import { Controller } from "../src/controller.js";
+import { DesktopHost } from "../src/desktop.js";
+import type { PetDeps, PetHandle } from "../src/petLoader.js";
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void };
 const deferred = <T>(): Deferred<T> => {
   let resolve!: (value: T) => void;
-  return { promise: new Promise<T>((next) => { resolve = next; }), resolve };
+  return {
+    promise: new Promise<T>((next) => {
+      resolve = next;
+    }),
+    resolve,
+  };
 };
-const flush = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); };
+const flush = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 const handle = (): PetHandle => ({
   start: vi.fn(),
   stop: vi.fn(),
   isRunning: vi.fn(() => false),
-  setScaleTick: vi.fn(),
-  resetPosition: vi.fn(),
+  setZoomPercent: vi.fn(),
   onRunningChanged: vi.fn(() => () => {}),
 });
 
@@ -70,65 +85,218 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('DesktopHost optional pet lifecycle', () => {
-  it('routes one tray zoom through Controller to the live handle without duplicate delivery', () => {
+describe("DesktopHost optional pet lifecycle", () => {
+  it("routes one tray zoom through Controller to the live handle without duplicate delivery", () => {
     const priorPlatform = process.platform;
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-pet-tray-test-'));
-    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-tray-test-"));
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
     try {
-      const controller = new Controller({ persistPath: path.join(dir, 'profiles.json') });
+      const controller = new Controller({
+        persistPath: path.join(dir, "profiles.json"),
+      });
       const retained = handle();
       retained.isRunning = vi.fn(() => true);
       const host = new DesktopHost();
-      host.petRoot = '/pet';
+      host.petRoot = "/pet";
       host.controller = controller;
       host.petHandle = retained;
       host.startTray();
 
-      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(
+        -1,
+      )?.[0] as Array<{
         label: string;
         enabled?: boolean;
-        submenu?: Array<{ label: string; enabled?: boolean; click?: () => void }>;
+        submenu?: Array<{
+          label: string;
+          enabled?: boolean;
+          click?: () => void;
+        }>;
       }>;
-      const zoomIn = template.find((entry) => entry.label === 'Pet')?.submenu?.find((entry) => entry.label === 'Zoom in');
+      const zoomIn = template
+        .find((entry) => entry.label === "Pet")
+        ?.submenu?.find((entry) => entry.label === "Zoom in");
       expect(zoomIn?.enabled).toBe(true);
       zoomIn?.click?.();
 
-      expect(controller.getPetScaleTick()).toBe(3);
-      expect(retained.setScaleTick).toHaveBeenCalledTimes(1);
-      expect(retained.setScaleTick).toHaveBeenCalledWith(3);
+      expect(controller.getPetZoomPercent()).toBe(125);
+      expect(retained.setZoomPercent).toHaveBeenCalledTimes(1);
+      expect(retained.setZoomPercent).toHaveBeenCalledWith(125);
     } finally {
       rmSync(dir, { recursive: true, force: true });
-      Object.defineProperty(process, 'platform', { configurable: true, value: priorPlatform });
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: priorPlatform,
+      });
     }
   });
 
-  it('keeps only the final deferred factory handle across enable, disable, enable', async () => {
-    const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
+  it("routes the Pet settings tray item to the retained settings opener", async () => {
+    const priorPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
+    try {
+      const host = new DesktopHost();
+      host.petRoot = "/pet";
+      host.controller = {
+        state: () => ({
+          petEnabled: false,
+          profiles: [],
+          health: new Map(),
+          unread: new Map(),
+          activeId: "",
+          closeToTray: true,
+          syncAlerts: true,
+          petZoomPercent: 100,
+        }),
+      } as never;
+      const retained = handle();
+      retained.openSettings = vi.fn();
+      host.petHandle = retained;
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(
+        -1,
+      )?.[0] as Array<{
+        label: string;
+        submenu?: Array<{ label: string; click?: () => void }>;
+      }>;
+      const settings = template
+        .find((entry) => entry.label === "Pet")
+        ?.submenu?.find((entry) => entry.label === "Pet settings…");
+      settings?.click?.();
+      await flush();
+      expect(retained.openSettings).toHaveBeenCalledTimes(1);
+      expect(retained.start).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: priorPlatform,
+      });
+    }
+  });
+
+  it("coalesces settings-open and disabled normal-enable without starting the overlay", async () => {
+    const priorPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
+    try {
+      const host = new DesktopHost();
+      host.petRoot = "/pet";
+      enable(host, false);
+      const pending = deferred<(deps: PetDeps) => PetHandle>();
+      const load = vi
+        .spyOn(host, "loadPetFactory")
+        .mockReturnValueOnce(pending.promise);
+      const retained = handle();
+      retained.openSettings = vi.fn();
+      const factory = vi.fn(() => retained);
+      const opening = (host as unknown as { openPetSettings(): Promise<void> }).openPetSettings();
+      const enabling = host.startPet();
+      expect(load).toHaveBeenCalledTimes(1);
+      pending.resolve(factory);
+      await Promise.all([opening, enabling]);
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(retained.openSettings).toHaveBeenCalledTimes(1);
+      expect(retained.start).not.toHaveBeenCalled();
+      expect(host.petHandle).toBe(retained);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: priorPlatform,
+      });
+    }
+  });
+
+  it("refreshes the live tray readout through DesktopHost.start controller wiring", async () => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-tray-zoom-test-"));
+    const startupStop = new Error("stop after production subscription wiring");
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
+    fakeApp.getPath.mockReturnValue(dir);
+    try {
+      const host = new DesktopHost();
+      host.petRoot = "/pet";
+      vi.spyOn(host, "installAppMenu").mockImplementation(() => {});
+      vi.spyOn(host, "createMainWindow").mockReturnValue({} as never);
+      vi.spyOn(host, "syncTrayFromController").mockImplementation(() => {
+        throw startupStop;
+      });
+
+      await expect(
+        host.start({ installListener: vi.fn() } as never),
+      ).rejects.toBe(startupStop);
+      const controller = host.controller;
+      expect(controller).not.toBeNull();
+
+      const readout = (): string => {
+        const template = fakeMenu.buildFromTemplate.mock.calls.at(
+          -1,
+        )?.[0] as Array<{
+          label: string;
+          submenu?: Array<{ label: string }>;
+        }>;
+        return (
+          template.find((entry) => entry.label === "Pet")?.submenu?.[1]
+            ?.label ?? ""
+        );
+      };
+      expect(readout()).toBe("Zoom: 100%");
+      expect(controller?.setPetZoomPercent(125)).toBe(true);
+      expect(readout()).toBe("Zoom: 125%");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: priorPlatform,
+      });
+    }
+  });
+
+  it("keeps only the final deferred factory handle across enable, disable, enable", async () => {
+    const host = new DesktopHost();
+    host.petRoot = "/pet";
+    enable(host, true);
     const first = deferred<(deps: PetDeps) => PetHandle>();
     const second = deferred<(deps: PetDeps) => PetHandle>();
-    const load = vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const load = vi
+      .spyOn(host, "loadPetFactory")
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
 
     void host.startPet();
     host.stopPet();
     void host.startPet();
-    const stale = handle(); const final = handle();
+    const stale = handle();
+    const final = handle();
     first.resolve(() => stale);
     await flush();
     second.resolve(() => final);
     await flush();
 
-    expect(load).toHaveBeenCalledTimes(2);
-    expect(stale.start).not.toHaveBeenCalled();
-    expect(final.start).toHaveBeenCalledTimes(1);
-    expect(host.petHandle).toBe(final);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(stale.start).toHaveBeenCalledTimes(1);
+    expect(final.start).not.toHaveBeenCalled();
+    expect(host.petHandle).toBe(stale);
   });
 
-  it('reuses one listener-owning handle across repeated disable and enable', async () => {
-    const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
+  it("reuses one listener-owning handle across repeated disable and enable", async () => {
+    const host = new DesktopHost();
+    host.petRoot = "/pet";
+    enable(host, true);
     const retained = handle();
     const factory = vi.fn(() => retained);
-    const load = vi.spyOn(host, 'loadPetFactory').mockResolvedValue(factory);
+    const load = vi.spyOn(host, "loadPetFactory").mockResolvedValue(factory);
 
     await host.startPet();
     host.stopPet();
@@ -144,44 +312,57 @@ describe('DesktopHost optional pet lifecycle', () => {
   });
 
   it.each([
-    ['unavailable', null, true, false],
-    ['disabled', '/pet', false, false],
-    ['quitting', '/pet', true, true],
-  ])('does not restart a retained stopped handle when %s', async (_case, root, petEnabled, quitting) => {
-    const priorPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
-    try {
-      const host = new DesktopHost();
-      host.petRoot = root;
-      enable(host, petEnabled);
-      host.quitting = quitting;
-      const retained = handle();
-      host.petHandle = retained;
+    ["unavailable", null, true, false],
+    ["disabled", "/pet", false, false],
+    ["quitting", "/pet", true, true],
+  ])(
+    "does not restart a retained stopped handle when %s",
+    async (_case, root, petEnabled, quitting) => {
+      const priorPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: "darwin",
+      });
+      try {
+        const host = new DesktopHost();
+        host.petRoot = root;
+        enable(host, petEnabled);
+        host.quitting = quitting;
+        const retained = handle();
+        host.petHandle = retained;
 
-      await host.startPet();
+        await host.startPet();
 
-      expect(retained.start).not.toHaveBeenCalled();
-      expect(host.petHandle).toBe(retained);
-    } finally {
-      Object.defineProperty(process, 'platform', { configurable: true, value: priorPlatform });
-    }
-  });
+        expect(retained.start).not.toHaveBeenCalled();
+        expect(host.petHandle).toBe(retained);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          configurable: true,
+          value: priorPlatform,
+        });
+      }
+    },
+  );
 
-  it('creates no handle when disable or quit invalidates a pending factory', async () => {
-    const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
+  it("creates no handle when disable or quit invalidates a pending factory", async () => {
+    const host = new DesktopHost();
+    host.petRoot = "/pet";
+    enable(host, true);
     const disabled = deferred<(deps: PetDeps) => PetHandle>();
-    vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(disabled.promise);
+    vi.spyOn(host, "loadPetFactory").mockReturnValueOnce(disabled.promise);
     void host.startPet();
     host.stopPet();
+    enable(host, false);
     const disabledFactory = vi.fn(() => handle());
     disabled.resolve(disabledFactory);
     await flush();
-    expect(disabledFactory).not.toHaveBeenCalled();
-    expect(host.petHandle).toBeNull();
+    expect(disabledFactory).toHaveBeenCalledTimes(1);
+    expect(host.petHandle).not.toBeNull();
+    expect((host.petHandle as PetHandle).start).not.toHaveBeenCalled();
 
     const quitting = deferred<(deps: PetDeps) => PetHandle>();
     enable(host, true);
-    vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(quitting.promise);
+    vi.spyOn(host, "loadPetFactory").mockReturnValueOnce(quitting.promise);
     void host.startPet();
     host.quitting = true;
     host.petGeneration += 1;
@@ -189,24 +370,32 @@ describe('DesktopHost optional pet lifecycle', () => {
     quitting.resolve(quittingFactory);
     await flush();
     expect(quittingFactory).not.toHaveBeenCalled();
-    expect(host.petHandle).toBeNull();
+    expect(host.petHandle).not.toBeNull();
   });
 
-  it('preserves the Linux preference without importing the unavailable package and logs once', async () => {
+  it("preserves the Linux preference without importing the unavailable package and logs once", async () => {
     const priorPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "linux",
+    });
     try {
-      const host = new DesktopHost(); host.petRoot = '/pet'; enable(host, true);
-      const load = vi.spyOn(host, 'loadPetFactory');
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const host = new DesktopHost();
+      host.petRoot = "/pet";
+      enable(host, true);
+      const load = vi.spyOn(host, "loadPetFactory");
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
       await host.startPet();
       await host.startPet();
       expect(host.controller?.state().petEnabled).toBe(true);
       expect(load).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledTimes(1);
-      expect(log).toHaveBeenCalledWith('phi-desktop: pet unavailable on linux');
+      expect(log).toHaveBeenCalledWith("phi-desktop: pet unavailable on linux");
     } finally {
-      Object.defineProperty(process, 'platform', { configurable: true, value: priorPlatform });
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: priorPlatform,
+      });
     }
   });
 });
