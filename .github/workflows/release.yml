@@ -228,6 +228,11 @@ jobs:
 
   npm-publish:
     needs: [goreleaser, desktop-release]
+    # Pre-release tags exercise the pipeline (pet signing, desktop
+    # packaging) without publishing: an npm publish of a prerelease
+    # version would take over the `latest` dist-tag. Cut a real semver
+    # tag to publish.
+    if: ${{ !contains(github.ref_name, '-alpha') }}
     runs-on: ubuntu-latest
     # actions/setup-node's built-in registry-url auth uses NODE_AUTH_TOKEN
     # when set, but with `registry-url` + OIDC it picks up the auto-minted
