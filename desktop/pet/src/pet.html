@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phi pet</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+        cursor: default;
+      }
+      /* The native window and renderer stage have the same viewport bounds. */
+      .pet-root {
+        position: fixed;
+        top: 0;
+        left: 0;
+        user-select: none;
+      }
+      .pet-stage {
+        position: relative;
+        width: 100%;
+        height: 100%;
+      }
+      /* Dual-buffer videos, cross-faded via opacity (no blank frames). */
+      .pet-video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.18s ease;
+        transform-origin: center;
+      }
+      .pet-video.is-front {
+        opacity: 1;
+      }
+      /* The full visible stage is interactive. */
+      .pet-hit {
+        position: absolute;
+        inset: 0;
+        pointer-events: auto;
+        cursor: grab;
+        z-index: 1;
+      }
+      .pet-hit.dragging {
+        cursor: grabbing;
+      }
+      /* The still maid image shown in the STATIC state (replaces the
+         looping IDLE breathing webm). */
+      .pet-static {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.18s ease;
+        transform-origin: center;
+      }
+      .pet-static.is-front {
+        opacity: 1;
+      }
+      /* Respect the user's reduced-motion preference (no cross-fade). */
+      @media (prefers-reduced-motion: reduce) {
+        .pet-video,
+        .pet-static {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pet-root" class="pet-root">
+      <div id="pet-stage" class="pet-stage">
+        <img id="pet-static" class="pet-static" alt="" />
+        <video
+          id="pet-video-a"
+          class="pet-video is-front"
+          muted
+          playsinline
+          autoplay
+        ></video>
+        <video
+          id="pet-video-b"
+          class="pet-video"
+          muted
+          playsinline
+          autoplay
+        ></video>
+        <div id="pet-hit" class="pet-hit"></div>
+      </div>
+    </div>
+    <noscript>phi-desktop: the pet requires JavaScript</noscript>
+    <script type="module" src="./pet-view.js"></script>
+  </body>
+</html>

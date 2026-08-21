@@ -1,0 +1,10 @@
+# desktop/pet is its own pnpm project with an independent lockfile — it is
+# NOT a member of the repo-root workspace (the root workspace has no
+# packages list, so only the root is a member; this file makes the
+# boundary explicit and carries this project's build-approval settings).
+#
+# pnpm blocks dependency build scripts by default. The electron postinstall
+# downloads the prebuilt binary (the package is useless without it), so it
+# is approved here.
+allowBuilds:
+  electron: true

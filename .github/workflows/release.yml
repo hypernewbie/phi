@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 # OIDC trusted publishing needs id-token: write for the npm-publish job.
 # Long-lived NPM_TOKEN secret is being phased out by npm (2FA-bypass tokens
@@ -23,12 +23,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -37,13 +37,13 @@ jobs:
       # all:web) reflects the current web-src/*.ts, not whatever compiled JS
       # happened to be committed. Keeps release artifacts authoritative.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '24'
-          cache: 'pnpm'
+          node-version: "24"
+          cache: "pnpm"
 
       - name: Build web assets
         run: |
@@ -52,13 +52,99 @@ jobs:
           go run ./tools/webdist
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: >- # v7
+          goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
           version: latest
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pet-package:
+    name: Pet package
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: desktop/pet/pnpm-lock.yaml
+
+      - name: Install pet dependencies
+        run: pnpm --dir desktop/pet install --frozen-lockfile
+
+      - name: Typecheck pet
+        run: pnpm --dir desktop/pet typecheck
+
+      - name: Test pet
+        run: pnpm --dir desktop/pet test
+
+      - name: Build pet
+        run: pnpm --dir desktop/pet build
+
+      - name: Package and compare pet archive members
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          archive="phi-pet-${version}.tar.gz"
+          for input in dist assets package.json LICENSE-dsh-pet.txt; do
+            test -e "desktop/pet/$input"
+            test ! -L "desktop/pet/$input"
+          done
+          if find desktop/pet/dist desktop/pet/assets -type l -print -quit \
+            | grep -q .; then
+            echo 'Pet package inputs must not contain symlinks.' >&2
+            exit 1
+          fi
+          tar -czf "$archive" -C desktop/pet \
+            dist assets package.json LICENSE-dsh-pet.txt
+          expected=$(mktemp)
+          actual=$(mktemp)
+          trap 'rm -f "$expected" "$actual"' EXIT
+          (cd desktop/pet && {
+            find dist assets -type f -print
+            printf '%s\n' package.json LICENSE-dsh-pet.txt
+          }) | LC_ALL=C sort -u > "$expected"
+          tar -tzf "$archive" | sed '/\/$/d' | LC_ALL=C sort -u > "$actual"
+          diff -u "$expected" "$actual"
+          # The sorted comparison above is the complete archive-content gate.
+
+      - name: Verify pet signing key
+        working-directory: desktop/electron
+        env:
+          PHI_PET_ED25519_PRIVATE_KEY: >-
+            ${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}
+        run: node scripts/verify-pet-signing-key.mjs
+
+      - name: Sign pet archive
+        working-directory: desktop/electron
+        env:
+          PHI_PET_ED25519_PRIVATE_KEY: >-
+            ${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}
+        run: |
+          node scripts/sign-pet-package.mjs \
+            --archive "../../phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+            --out "../../phi-pet-${GITHUB_REF_NAME#v}.manifest.json"
+
+      - name: Upload signed pet assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
+            "phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+            "phi-pet-${GITHUB_REF_NAME#v}.manifest.json" --clobber
 
   desktop-package:
     name: Desktop package (${{ matrix.os }})
@@ -69,15 +155,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '24'
+          node-version: "24"
           cache: pnpm
           cache-dependency-path: desktop/electron/pnpm-lock.yaml
 
@@ -91,7 +177,9 @@ jobs:
       - name: Set release version
         shell: bash
         working-directory: desktop/electron
-        run: pnpm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+        run: |
+          pnpm version "${GITHUB_REF_NAME#v}" --no-git-tag-version \
+            --allow-same-version
 
       - name: Build desktop app
         working-directory: desktop/electron
@@ -99,10 +187,14 @@ jobs:
 
       - name: Package desktop app
         working-directory: desktop/electron
-        run: pnpm exec electron-builder --config electron-builder.json --publish never
+        shell: bash
+        run: |
+          pnpm exec electron-builder --config electron-builder.json \
+            --publish never
 
       - name: Upload desktop package
-        uses: actions/upload-artifact@v4
+        uses: >- # v4
+          actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phi-client-desktop-${{ matrix.os }}
           path: |
@@ -120,13 +212,14 @@ jobs:
 
   desktop-release:
     name: Attach desktop packages to release
-    needs: [goreleaser, desktop-package]
+    needs: [goreleaser, pet-package, desktop-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Download desktop packages
-        uses: actions/download-artifact@v4
+        uses: >- # v4
+          actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: phi-client-desktop-*
           path: desktop-release
@@ -139,7 +232,8 @@ jobs:
         run: |
           uploaded=0
           while IFS= read -r -d '' file; do
-            gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$file" --clobber
+            gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
+              "$file" --clobber
             uploaded=1
           done < <(find desktop-release -type f -print0)
           if [ "$uploaded" -eq 0 ]; then
@@ -149,6 +243,10 @@ jobs:
 
   npm-publish:
     needs: [goreleaser, desktop-release]
+    # Pre-release tags exercise the pipeline (pet signing, desktop
+    # packaging) without publishing: an npm publish of a prerelease
+    # version would take over the `latest` dist-tag. Cut a real semver
+    # tag to publish.
     runs-on: ubuntu-latest
     # actions/setup-node's built-in registry-url auth uses NODE_AUTH_TOKEN
     # when set, but with `registry-url` + OIDC it picks up the auto-minted
@@ -158,13 +256,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
           # The repo root pins `packageManager: pnpm`, and setup-node's
           # dependency cache is on by default -- it reads that field and shells
           # out to pnpm, which is not installed in this job. That failed the
@@ -177,8 +275,15 @@ jobs:
       - name: Publish to NPM
         run: |
           version=${GITHUB_REF_NAME#v}
-          if npm view "@hypernewbie/phi-code@${version}" version --silent >/dev/null 2>&1; then
-            echo "@hypernewbie/phi-code@${version} is already published; skipping duplicate publish"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping npm publication: $GITHUB_REF_NAME is not a stable" \
+              "release tag."
+            exit 0
+          fi
+          if npm view "@hypernewbie/phi-code@${version}" version --silent \
+            >/dev/null 2>&1; then
+            echo "@hypernewbie/phi-code@${version} is already published; \
+              skipping duplicate publish"
             exit 0
           fi
           cd npm
@@ -191,3 +296,19 @@ jobs:
           # token minted for this job. Override with NODE_AUTH_TOKEN secret only
           # for emergency rollback if trusted publishing is misconfigured.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # GoReleaser creates this as a draft so a failed asset build never exposes an
+  # incomplete release. This is the sole publication step after all assets and
+  # the stable npm package (when applicable) have completed successfully.
+  publish-release:
+    needs: [desktop-release, npm-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release edit --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          --draft=false

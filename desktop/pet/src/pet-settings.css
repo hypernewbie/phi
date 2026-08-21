@@ -1,0 +1,244 @@
+/* Phi pet settings — restyled to match the existing Phi config modal.
+   Self-contained subset of web/style.css (the BrowserWindow does not share
+   the web tree's stylesheet). Variables and class names are preserved so
+   the look stays native to the Phi house. */
+
+:root {
+    --bg-base:      #08080a;
+    --bg-panel:     #0d0d10;
+    --bg-elevated:  #141418;
+    --bg-border:    #1f1f26;
+    --accent:       #7c6af7;
+    --accent-glow:  rgba(124, 106, 247, 0.15);
+    --accent-edge:  color-mix(in srgb, var(--accent) 35%, transparent);
+    --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
+    --accent-bright:#9a8dfa;
+    --text-primary: #e4e3e9;
+    --text-muted:   #78768a;
+    --text-dim:     #424052;
+    --red:          #ef4444;
+    --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono:    'JetBrains Mono', "Courier New", Courier, monospace;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+::selection {
+    background: var(--accent-edge);
+    color: #ffffff;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 0%, #16161c 0%, #08080a 70%);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Settings modal (the BrowserWindow's own content) ─────────────── */
+
+.settings-modal {
+    width: 100%;
+    height: 100vh;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 0 24px var(--accent-trace);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.settings-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--bg-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.settings-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+
+.settings-logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--accent);
+    text-shadow: 0 0 12px var(--accent-glow);
+    flex-shrink: 0;
+}
+
+.settings-identity h3 {
+    margin: 0 0 2px 0;
+    font-size: 16px;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.settings-version {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono, monospace);
+}
+
+.settings-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.settings-group {
+    margin-bottom: 18px;
+}
+
+.settings-group:last-child {
+    margin-bottom: 0;
+}
+
+.settings-group-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin: 0 0 10px 0;
+    border-bottom: 1px solid var(--bg-border);
+    padding-bottom: 6px;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.settings-row:last-child {
+    margin-bottom: 0;
+}
+
+.settings-row label {
+    font-size: 13px;
+    color: var(--text-primary);
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.settings-row input[type="number"] {
+    flex: 0 0 96px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    text-align: right;
+}
+
+.settings-row input[type="number"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.settings-row input.is-invalid {
+    border-color: var(--red);
+    box-shadow: 0 0 0 2px rgba(255, 80, 80, 0.2);
+}
+
+.settings-error {
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 6px;
+    min-height: 14px;
+    line-height: 1.3;
+}
+
+.settings-error:empty {
+    display: none;
+}
+
+.settings-footer {
+    padding: 14px 18px;
+    border-top: 1px solid var(--bg-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background-color: rgba(255, 255, 255, 0.01);
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: none;
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    height: 32px;
+    padding: 0 16px;
+}
+
+.btn:hover {
+    transform: translateY(-1px) scale(1.01);
+}
+
+.btn:active {
+    transform: translateY(1px) scale(0.98);
+}
+
+.btn-accent {
+    background-color: var(--accent);
+    color: #ffffff;
+}
+
+.btn-accent:hover {
+    background-color: var(--accent-bright);
+    box-shadow: 0 0 16px var(--accent-glow);
+}
+
+:where(button, input):focus-visible {
+    outline: none;
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 18px var(--accent-glow);
+}
+
+/* Respect prefers-reduced-motion (Tao: only suppress motion, keep colors). */
+@media (prefers-reduced-motion: reduce) {
+    .btn,
+    .settings-row input[type="number"] {
+        transition: none;
+    }
+}
