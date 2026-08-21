@@ -33,7 +33,10 @@ describe("pet settings preload contract", () => {
   });
 
   it("invokes the bounded IPC request payload", async () => {
-    ipcRenderer.invoke.mockResolvedValue({ dwellSeconds: 60_000, accepted: true });
+    ipcRenderer.invoke.mockResolvedValue({
+      dwellSeconds: 60_000,
+      accepted: true,
+    });
     await expect(api.requestIdleDwellSeconds(60_000)).resolves.toEqual({
       dwellSeconds: 60_000,
       accepted: true,

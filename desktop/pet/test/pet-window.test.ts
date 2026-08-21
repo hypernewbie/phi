@@ -1,5 +1,6 @@
 // @vitest-environment node
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { FakeBrowserWindow } = vi.hoisted(() => {
@@ -92,7 +93,12 @@ describe("stage-sized native window", () => {
       192,
       108,
     );
-    createPetWindow({ root: "/tmp/pet", log: () => {}, bounds });
+    createPetWindow({
+      root: "/tmp/pet #1",
+      log: () => {},
+      bounds,
+      query: { petZoomPercent: "100" },
+    });
     const win = FakeBrowserWindow.instances[0];
 
     expect(win.opts).toMatchObject({
@@ -111,11 +117,32 @@ describe("stage-sized native window", () => {
       sandbox: true,
       webSecurity: true,
       backgroundThrottling: false,
-      preload: path.join("/tmp/pet", "dist", "pet-preload.js"),
+      preload: path.join("/tmp/pet #1", "dist", "pet-preload.js"),
     });
     expect(win.alwaysOnTopArgs).toEqual([true, "screen-saver"]);
     expect(win.visibleOnAllWorkspacesArgs).toEqual([true]);
-    expect(win.loadArgs[0]).toBe(path.join("/tmp/pet", "dist", "pet.html"));
+    expect(win.loadArgs[0]).toBe(path.join("/tmp/pet #1", "dist", "pet.html"));
+    expect(win.loadArgs[1]).toEqual({ query: { petZoomPercent: "100" } });
+    expect(
+      win.webContents.setWindowOpenHandler.mock.calls[0][0](
+        "https://example.com",
+      ),
+    ).toEqual({ action: "deny" });
+    const guards = new Map<
+      string,
+      (event: { preventDefault(): void }, url: string) => void
+    >();
+    for (const [event, listener] of win.webContents.on.mock.calls)
+      guards.set(event, listener);
+    const expected = `${pathToFileURL(path.join("/tmp/pet #1", "dist", "pet.html")).href}?petZoomPercent=100`;
+    for (const event of ["will-redirect", "will-navigate"]) {
+      const accepted = vi.fn();
+      guards.get(event)?.({ preventDefault: accepted }, expected);
+      expect(accepted).not.toHaveBeenCalled();
+      const rejected = vi.fn();
+      guards.get(event)?.({ preventDefault: rejected }, "https://example.com/");
+      expect(rejected).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("destroys a newly-created window after load failure", async () => {
@@ -141,7 +168,13 @@ describe("stage-sized native window", () => {
 describe("local pet settings window", () => {
   it("uses the exact local query, secure preload, and denies popup/redirect/remote navigation", () => {
     const parent = new FakeBrowserWindow({});
-    createPetSettingsWindow({ root: "/tmp/pet", log: () => {}, parent: parent as unknown as import("electron").BrowserWindow, dwellSeconds: 60_000, onClosed: () => {} });
+    createPetSettingsWindow({
+      root: "/tmp/pet",
+      log: () => {},
+      parent: parent as unknown as import("electron").BrowserWindow,
+      dwellSeconds: 60_000,
+      onClosed: () => {},
+    });
     const win = FakeBrowserWindow.instances[1];
     expect(win.opts).toMatchObject({ show: false, resizable: false, parent });
     expect(win.opts.webPreferences).toMatchObject({
@@ -155,23 +188,49 @@ describe("local pet settings window", () => {
       path.join("/tmp/pet", "dist", "pet-settings.html"),
       { query: { petIdleDwellSeconds: "60000" } },
     ]);
-    expect(win.webContents.setWindowOpenHandler).toHaveBeenCalledWith(expect.any(Function));
-    expect(win.webContents.setWindowOpenHandler.mock.calls[0][0]("https://example.com")).toEqual({ action: "deny" });
-    const guards = new Map<string, (event: { preventDefault(): void }, url: string) => void>();
-    for (const [event, listener] of win.webContents.on.mock.calls) guards.set(event, listener);
+    expect(win.webContents.setWindowOpenHandler).toHaveBeenCalledWith(
+      expect.any(Function),
+    );
+    expect(
+      win.webContents.setWindowOpenHandler.mock.calls[0][0](
+        "https://example.com",
+      ),
+    ).toEqual({ action: "deny" });
+    const guards = new Map<
+      string,
+      (event: { preventDefault(): void }, url: string) => void
+    >();
+    for (const [event, listener] of win.webContents.on.mock.calls)
+      guards.set(event, listener);
+    const expected = `${pathToFileURL(path.join("/tmp/pet", "dist", "pet-settings.html")).href}?petIdleDwellSeconds=60000`;
     for (const event of ["will-redirect", "will-navigate"]) {
+      const accepted = vi.fn();
+      guards.get(event)?.({ preventDefault: accepted }, expected);
+      expect(accepted).not.toHaveBeenCalled();
       const preventDefault = vi.fn();
       guards.get(event)?.({ preventDefault }, "https://example.com/");
       expect(preventDefault).toHaveBeenCalledTimes(1);
     }
-    expect(win.webContents.on).toHaveBeenCalledWith("will-redirect", expect.any(Function));
-    expect(win.webContents.on).toHaveBeenCalledWith("will-navigate", expect.any(Function));
+    expect(win.webContents.on).toHaveBeenCalledWith(
+      "will-redirect",
+      expect.any(Function),
+    );
+    expect(win.webContents.on).toHaveBeenCalledWith(
+      "will-navigate",
+      expect.any(Function),
+    );
   });
 
   it("shows on ready-to-show and reports close exactly once", () => {
     const parent = new FakeBrowserWindow({});
     const onClosed = vi.fn();
-    createPetSettingsWindow({ root: "/tmp/pet", log: () => {}, parent: parent as unknown as import("electron").BrowserWindow, dwellSeconds: 10, onClosed });
+    createPetSettingsWindow({
+      root: "/tmp/pet",
+      log: () => {},
+      parent: parent as unknown as import("electron").BrowserWindow,
+      dwellSeconds: 10,
+      onClosed,
+    });
     const win = FakeBrowserWindow.instances[1];
     win.emit("ready-to-show");
     expect(win.show).toHaveBeenCalledTimes(1);

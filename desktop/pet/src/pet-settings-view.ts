@@ -4,7 +4,9 @@ const MIN = 1;
 const MAX = 3600;
 const DEFAULT = 10;
 const validDwellSeconds = (value: unknown): value is number =>
-  Number.isInteger(value) && (value as number) >= MIN && (value as number) <= MAX;
+  Number.isInteger(value) &&
+  (value as number) >= MIN &&
+  (value as number) <= MAX;
 // clamp is unused at module top-level — covered inside onChange
 
 const queryValue = (): number => {
@@ -35,19 +37,16 @@ const onChange = async (): Promise<void> => {
     showError("Invalid pet idle interval.");
     return;
   }
-  const integer = Math.trunc(parsed);
-  const clamped = Math.min(MAX, Math.max(MIN, integer));
-  const clampedIsInteger = Number.isInteger(clamped) && clamped >= MIN && clamped <= MAX;
-  if (!clampedIsInteger) {
+  if (!validDwellSeconds(parsed)) {
     input.value = String(confirmed);
     showError("Invalid pet idle interval.");
     return;
   }
   try {
-    const result = await window.petSettings.requestIdleDwellSeconds(clamped);
-    if (result.accepted && result.dwellSeconds === clamped) {
-      confirmed = clamped;
-      input.value = String(clamped);
+    const result = await window.petSettings.requestIdleDwellSeconds(parsed);
+    if (result.accepted && result.dwellSeconds === parsed) {
+      confirmed = parsed;
+      input.value = String(parsed);
       showError("");
     } else {
       input.value = String(confirmed);

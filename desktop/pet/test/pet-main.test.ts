@@ -173,7 +173,10 @@ const deps = () => ({
   getZoomPercent: () => 100,
   requestZoomPercent: (percent: number) => ({ percent, accepted: true }),
   getIdleDwellSeconds: () => 10,
-  requestIdleDwellSeconds: (dwellSeconds: number) => ({ dwellSeconds, accepted: true }),
+  requestIdleDwellSeconds: (dwellSeconds: number) => ({
+    dwellSeconds,
+    accepted: true,
+  }),
   getParentWindow: () => null,
 });
 

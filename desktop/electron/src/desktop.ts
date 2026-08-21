@@ -36,7 +36,7 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -104,7 +104,64 @@ import {
 } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
 import { discoverPetRoot, type PetDeps, type PetHandle } from './petLoader.js';
-import { installPet } from './petInstaller.js';
+import { installPet, PET_INSTALL_LIMITS } from './petInstaller.js';
+import { verifyInstalledRoot } from './petPackageTrust.js';
+
+/**
+ * Reads `response.body` chunks into a Uint8Array. The body is cancelled
+ * as soon as cumulative bytes exceed `maxBytes`, regardless of any
+ * declared `content-length`, and the call aborts after a 30-second
+ * timeout to keep the tray from getting stuck on a stalled fetch.
+ */
+async function fetchWithBounds(
+  url: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(
+      new Error(
+        `pet fetch exceeded ${PET_INSTALL_LIMITS.fetchTimeoutMs}ms timeout`,
+      ),
+    );
+  }, PET_INSTALL_LIMITS.fetchTimeoutMs);
+  try {
+    const response = await net.fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`pet download failed: HTTP ${response.status}`);
+    }
+    const declared = Number.parseInt(
+      response.headers?.get?.('content-length') ?? '',
+      10,
+    );
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(
+        `pet download declared content-length ${declared} exceeds limit ${maxBytes}`,
+      );
+    }
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('pet download response body is not streamable');
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel(
+          new Error(`pet download exceeded ${maxBytes} byte limit`),
+        );
+        throw new Error(`pet download exceeded ${maxBytes} byte limit`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return new Uint8Array(Buffer.concat(chunks));
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -486,20 +543,14 @@ export class DesktopHost {
         userDataPath: app.getPath('userData'),
         appVersion: app.getVersion(),
         repo: 'hypernewbie/phi',
-        fetchBytes: async (url) => {
-          const response = await net.fetch(url);
-          if (!response.ok)
-            throw new Error(`pet download failed: HTTP ${response.status}`);
-          return new Uint8Array(await response.arrayBuffer());
-        },
+        fetchBytes: (url, maxBytes) => fetchWithBounds(url, maxBytes),
         log: (msg) => console.log(msg),
       });
       this.petInstalling = false;
-      this.petRoot = discoverPetRoot(app, SMOKE);
+      this.petRoot = root;
       this.trayHandle?.rebuildMenu();
       if (ctrl.getPetEnabled()) void this.startPet();
       else ctrl.setPetEnabled(true);
-      void root;
     } catch (err) {
       this.petInstalling = false;
       this.trayHandle?.rebuildMenu();
@@ -568,6 +619,25 @@ export class DesktopHost {
     if (!isPetAvailable(root) || root === null || !ctrl || this.quitting) {
       this.logPetUnavailable();
       return Promise.resolve(null);
+    }
+    // Re-verify the installed root against the embedded public key on
+    // every load. A tampered or missing pet-manifest.json disables the
+    // overlay before we ever call the dynamic factory.
+    if (app.isPackaged) {
+      try {
+        verifyInstalledRoot(
+          root,
+          app.getVersion(),
+          undefined,
+          (p) => readFileSync(p),
+          (p) => statSync(p),
+        );
+      } catch (err) {
+        console.log(`phi-desktop: pet installed root rejected: ${String(err)}`);
+        this.petRoot = null;
+        this.trayHandle?.rebuildMenu();
+        return Promise.resolve(null);
+      }
     }
     const generation = ++this.petGeneration;
     this.petEnsurePromise = (async (): Promise<PetHandle | null> => {
@@ -3053,7 +3123,7 @@ export class DesktopHost {
     if (this.healthInterval === null) {
       this.healthInterval = setInterval(() => {
         void this.controller?.updateHealth(realHealthChecker);
-      }, 10);
+      }, 30_000);
     }
     // Poll every retained view at the remote page's own 2s CPU cadence
     // (never reached in smoke mode — the smoke gate returns before this

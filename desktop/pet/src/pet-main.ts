@@ -63,7 +63,9 @@ const canonicalPercent = (value: unknown, zoom: PetZoomConfig): number =>
   validPercent(value, zoom) ? value : zoom.defaultPercent;
 const validDwellSeconds = (value: unknown): value is number =>
   typeof value === "number" &&
-  Number.isInteger(value) && value >= 1 && value <= 3600;
+  Number.isInteger(value) &&
+  value >= 1 &&
+  value <= 3600;
 
 /** Returns the fixed-base, 16:9 native stage dimensions for one zoom value. */
 export function stageDimensions(
@@ -125,7 +127,9 @@ const hitTestResult = (value: unknown): value is PetHitTestResult => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
   return (
-    Object.keys(result).every((key) => key === "requestId" || key === "visible") &&
+    Object.keys(result).every(
+      (key) => key === "requestId" || key === "visible",
+    ) &&
     Object.keys(result).length === 2 &&
     typeof result.requestId === "number" &&
     Number.isSafeInteger(result.requestId) &&
@@ -262,7 +266,8 @@ export function createPet(deps: PetDeps): PetHandle {
     const current = liveWindow();
     if (!current) return false;
     const bounds = current.getBounds();
-    if (bounds.width === stage.width && bounds.height === stage.height) return false;
+    if (bounds.width === stage.width && bounds.height === stage.height)
+      return false;
     current.setBounds(
       initial
         ? {
@@ -303,7 +308,8 @@ export function createPet(deps: PetDeps): PetHandle {
 
   ipcMain.on(HIT_TEST_RESULT, (event, payload: unknown) => {
     const current = liveWindow();
-    if (!isPetSender(event.sender) || !current || !hitTestResult(payload)) return;
+    if (!isPetSender(event.sender) || !current || !hitTestResult(payload))
+      return;
     const pending = pendingHitTest;
     if (!pending || pending.requestId !== payload.requestId) return;
     try {
@@ -358,7 +364,10 @@ export function createPet(deps: PetDeps): PetHandle {
           };
         }
         const record = payload as Record<string, unknown>;
-        if (Object.keys(record).length !== 1 || !validDwellSeconds(record.dwellSeconds)) {
+        if (
+          Object.keys(record).length !== 1 ||
+          !validDwellSeconds(record.dwellSeconds)
+        ) {
           return {
             dwellSeconds: desiredDwellSeconds,
             accepted: false,
@@ -366,7 +375,9 @@ export function createPet(deps: PetDeps): PetHandle {
           };
         }
         try {
-          const result = deps.requestIdleDwellSeconds?.(record.dwellSeconds) ?? {
+          const result = deps.requestIdleDwellSeconds?.(
+            record.dwellSeconds,
+          ) ?? {
             dwellSeconds: desiredDwellSeconds,
             accepted: false,
             error: "Unable to save pet idle interval.",

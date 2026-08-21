@@ -54,10 +54,17 @@ vi.mock('electron', () => ({
   WebContentsView: class {},
 }));
 
-vi.mock('../src/petInstaller.js', () => ({ installPet: vi.fn() }));
+vi.mock('../src/petInstaller.js', () => ({
+  installPet: vi.fn(),
+  PET_INSTALL_LIMITS: { fetchTimeoutMs: 30_000 },
+}));
+vi.mock('../src/petPackageTrust.js', () => ({
+  verifyInstalledRoot: vi.fn(),
+}));
 
 import { Controller } from '../src/controller.js';
 import { installPet } from '../src/petInstaller.js';
+import { verifyInstalledRoot } from '../src/petPackageTrust.js';
 import { DesktopHost, isPetInstallable } from '../src/desktop.js';
 import type { PetDeps, PetHandle } from '../src/petLoader.js';
 
@@ -93,10 +100,62 @@ beforeEach(() => {
   fakeDialog.showErrorBox.mockClear();
   fakeNet.fetch.mockReset();
   vi.mocked(installPet).mockReset();
+  vi.mocked(verifyInstalledRoot).mockReset();
   FakeTray.instances.length = 0;
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+type FetchImplementation = (
+  url: string,
+  options: { signal: AbortSignal },
+) => Promise<unknown>;
+
+const triggerFetchFailure = async (
+  fetchImpl: FetchImplementation,
+  message: string,
+  advanceTimers?: () => Promise<void>,
+): Promise<void> => {
+  const priorPlatform = process.platform;
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-pet-fetch-bounds-'));
+  Object.defineProperty(process, 'platform', {
+    configurable: true,
+    value: 'darwin',
+  });
+  fakeApp.isPackaged = true;
+  fakeApp.getPath.mockReturnValue(dir);
+  fakeNet.fetch.mockImplementation(fetchImpl);
+  try {
+    const host = new DesktopHost();
+    host.controller = new Controller({
+      persistPath: path.join(dir, 'profiles.json'),
+    });
+    vi.mocked(installPet).mockImplementation(async (deps) => {
+      await deps.fetchBytes('https://example.test/pet.tar.gz', 1024);
+      return { root: path.join(dir, 'pet', '1.2.3') };
+    });
+    host.startTray();
+    const template = fakeMenu.buildFromTemplate.mock.calls.at(
+      -1,
+    )?.[0] as Array<{ label: string; click?: () => void }>;
+    template.find((entry) => entry.label === 'Install Pet…')?.click?.();
+    await advanceTimers?.();
+    await flush();
+    await flush();
+    expect(fakeDialog.showErrorBox).toHaveBeenCalledWith(
+      'Pet installation failed',
+      message,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    fakeApp.getPath.mockReturnValue('/tmp/phi-user-data');
+    fakeApp.isPackaged = false;
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: priorPlatform,
+    });
+  }
+};
 
 describe('DesktopHost optional pet lifecycle', () => {
   it.each([
@@ -460,6 +519,35 @@ describe('DesktopHost optional pet lifecycle', () => {
     }
   });
 
+  it('rejects a tampered cached root before calling loadPetFactory', async () => {
+    const priorPlatform = process.platform;
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: 'darwin',
+    });
+    fakeApp.isPackaged = true;
+    try {
+      const host = new DesktopHost();
+      host.petRoot = '/cached-pet';
+      enable(host, true);
+      const load = vi.spyOn(host, 'loadPetFactory');
+      vi.mocked(verifyInstalledRoot).mockImplementation(() => {
+        throw new Error('tampered cached root');
+      });
+
+      await host.startPet();
+
+      expect(load).not.toHaveBeenCalled();
+      expect(host.petRoot).toBeNull();
+    } finally {
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, 'platform', {
+        configurable: true,
+        value: priorPlatform,
+      });
+    }
+  });
+
   it('restarts the pet when installation succeeds with preference already enabled', async () => {
     const priorPlatform = process.platform;
     const dir = mkdtempSync(path.join(os.tmpdir(), 'phi-pet-install-flow-'));
@@ -543,13 +631,12 @@ describe('DesktopHost optional pet lifecycle', () => {
       'pet download failed: HTTP 503',
     ],
     [
-      'arrayBuffer rejection',
+      'non-streamable body',
       {
         ok: true,
         status: 200,
-        arrayBuffer: () => Promise.reject(new Error('body unavailable')),
       },
-      'body unavailable',
+      'pet download response body is not streamable',
     ],
   ])(
     'surfaces Electron fetch bridge %s failures and restores the tray',
@@ -571,7 +658,7 @@ describe('DesktopHost optional pet lifecycle', () => {
         });
         fakeNet.fetch.mockResolvedValue(response);
         vi.mocked(installPet).mockImplementation(async (deps) => {
-          await deps.fetchBytes('https://example.test/pet.tar.gz');
+          await deps.fetchBytes('https://example.test/pet.tar.gz', 1024);
           return { root: path.join(dir, 'pet', '1.2.3') };
         });
         host.startTray();
@@ -602,6 +689,68 @@ describe('DesktopHost optional pet lifecycle', () => {
       }
     },
   );
+
+  it('cancels a chunked response as soon as it exceeds the byte limit', async () => {
+    const cancel = vi.fn(async () => {});
+    let reads = 0;
+    await triggerFetchFailure(
+      async () => ({
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              reads += 1;
+              return {
+                done: false,
+                value: new Uint8Array(reads === 1 ? 600 : 500),
+              };
+            },
+            cancel,
+          }),
+        },
+      }),
+      'pet download exceeded 1024 byte limit',
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an oversized declared content length before reading the body', async () => {
+    const getReader = vi.fn();
+    await triggerFetchFailure(
+      async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => '2048' },
+        body: { getReader },
+      }),
+      'pet download declared content-length 2048 exceeds limit 1024',
+    );
+    expect(getReader).not.toHaveBeenCalled();
+  });
+
+  it('observes the fetch timeout and aborts the pending request', async () => {
+    vi.useFakeTimers();
+    const abortObserved = vi.fn();
+    try {
+      await triggerFetchFailure(
+        async (_url, { signal }) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              abortObserved();
+              reject(signal.reason);
+            });
+          }),
+        'pet fetch exceeded 30000ms timeout',
+        async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        },
+      );
+      expect(abortObserved).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('ignores a concurrent install command', async () => {
     const priorPlatform = process.platform;

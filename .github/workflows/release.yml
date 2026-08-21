@@ -83,37 +83,58 @@ jobs:
       - name: Install pet dependencies
         run: pnpm --dir desktop/pet install --frozen-lockfile
 
+      - name: Typecheck pet
+        run: pnpm --dir desktop/pet typecheck
+
+      - name: Test pet
+        run: pnpm --dir desktop/pet test
+
       - name: Build pet
         run: pnpm --dir desktop/pet build
 
-      - name: Package and upload pet
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package and compare pet archive members
         shell: bash
         run: |
+          set -euo pipefail
           version=${GITHUB_REF_NAME#v}
           archive="phi-pet-${version}.tar.gz"
+          for input in dist assets package.json LICENSE-dsh-pet.txt; do
+            test -e "desktop/pet/$input"
+            test ! -L "desktop/pet/$input"
+          done
+          if find desktop/pet/dist desktop/pet/assets -type l -print -quit \
+            | grep -q .; then
+            echo 'Pet package inputs must not contain symlinks.' >&2
+            exit 1
+          fi
           tar -czf "$archive" -C desktop/pet \
             dist assets package.json LICENSE-dsh-pet.txt
-          for member in \
-            dist/pet-main.js \
-            dist/pet-settings.html \
-            dist/pet-settings-view.js \
-            dist/pet-settings-preload.js \
-            assets/ \
-            package.json \
-            LICENSE-dsh-pet.txt; do
-            tar -tzf "$archive" | grep -Fx "$member" >/dev/null || {
-              echo "Missing required pet archive member: $member" >&2
-              exit 1
-            }
-          done
-          tar -tzf "$archive" | grep -q '^assets/.\+' || {
-            echo 'Pet archive assets directory is empty.' >&2
-            exit 1
-          }
-          gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
-            "phi-pet-${version}.tar.gz" --clobber
+          expected=$(mktemp)
+          actual=$(mktemp)
+          trap 'rm -f "$expected" "$actual"' EXIT
+          (cd desktop/pet && {
+            find dist assets -type f -print
+            printf '%s\n' package.json LICENSE-dsh-pet.txt
+          }) | LC_ALL=C sort -u > "$expected"
+          tar -tzf "$archive" | sed '/\/$/d' | LC_ALL=C sort -u > "$actual"
+          diff -u "$expected" "$actual"
+          # The sorted comparison above is the complete archive-content gate.
+
+      - name: Sign pet archive
+        working-directory: desktop/electron
+        env:
+          PHI_PET_ED25519_PRIVATE_KEY: >-
+            ${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}
+        run: node scripts/sign-pet-package.mjs \
+          --archive "../../phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+          --out "../../phi-pet-${GITHUB_REF_NAME#v}.manifest.json"
+
+      - name: Upload signed pet assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
+          "phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+          "phi-pet-${GITHUB_REF_NAME#v}.manifest.json" --clobber
 
   desktop-package:
     name: Desktop package (${{ matrix.os }})
@@ -177,7 +198,7 @@ jobs:
 
   desktop-release:
     name: Attach desktop packages to release
-    needs: [goreleaser, desktop-package]
+    needs: [goreleaser, pet-package, desktop-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -32,7 +32,7 @@ async function loadView(query: string): Promise<HTMLInputElement> {
   vi.resetModules();
   await import("../src/pet-settings-view.js");
   return document.getElementById("pet-idle-dwell") as HTMLInputElement;
-};
+}
 
 beforeEach(() => {
   document.body.replaceChildren();
@@ -55,22 +55,21 @@ describe("pet settings renderer", () => {
     expect((await loadView("?petIdleDwellSeconds=bad")).value).toBe("10");
   });
 
-  it("clamps typed values 0..3600 to the nearest in-range and requests the clamped value", async () => {
-    const input = await loadView("?petIdleDwellSeconds=10");
-    input.value = "0";
-    input.dispatchEvent(new Event("change"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(1);
-    expect(input.value).toBe("1");
-    request.mockClear();
-    input.value = "3601";
-    input.dispatchEvent(new Event("change"));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(3600);
-    expect(input.value).toBe("3600");
-  });
+  it.each(["0", "3601", "10.5", "Infinity"])(
+    "rejects invalid typed value %s without sending save IPC",
+    async (value) => {
+      const input = await loadView("?petIdleDwellSeconds=10");
+      input.value = value;
+      input.dispatchEvent(new Event("change"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(request).not.toHaveBeenCalled();
+      expect(input.value).toBe("10");
+      expect(
+        document.getElementById("pet-settings-error")?.textContent,
+      ).toContain("Invalid pet idle interval.");
+    },
+  );
 
   it("restores the confirmed selection and shows a non-blocking error for non-numeric input", async () => {
     const input = await loadView("?petIdleDwellSeconds=10");

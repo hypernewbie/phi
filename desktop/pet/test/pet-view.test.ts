@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACTS, STATIC, initPet, pick } from "../src/pet-view.js";
+import { ACTS, CLICKS, DRAG, STATIC, initPet, pick } from "../src/pet-view.js";
 
 function buildDom() {
   const root = document.createElement("div");
@@ -145,6 +147,17 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("pet media catalog", () => {
+  it("ships every hard-coded animation and static asset", () => {
+    const thumb = path.resolve(import.meta.dirname, "../assets/thumb");
+    for (const name of [...ACTS, ...CLICKS, DRAG]) {
+      expect(existsSync(path.join(thumb, `${name}.webm`))).toBe(true);
+    }
+    expect(existsSync(path.join(thumb, "maid-static.png"))).toBe(true);
+    expect(STATIC).toBe("STATIC");
+  });
 });
 
 describe("stationary animation chain", () => {
@@ -482,7 +495,10 @@ describe("full-stage drag reporting", () => {
       ...dom,
       bridge,
       rng: () => 0.5,
-      raf: (cb) => (frames.push(cb), frames.length),
+      raf: (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
       caf: () => {},
     });
     dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
@@ -563,7 +579,13 @@ describe("full-stage drag reporting", () => {
     const bridge = makeBridge();
     const caf = vi.fn();
     mockStageRect(dom.stage);
-    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5, raf: () => 7, caf });
+    const pet = initTestPet({
+      ...dom,
+      bridge,
+      rng: () => 0.5,
+      raf: () => 7,
+      caf,
+    });
     dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
     dom.hit.dispatchEvent(
       pointer("pointermove", {
@@ -678,11 +700,19 @@ describe("full-stage drag reporting", () => {
       alphaSampler: () => visible,
       rng: () => 0.5,
     });
-    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20, clientY: 40 }));
-    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 21, clientY: 41 }));
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { clientX: 20, clientY: 40 }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { clientX: 21, clientY: 41 }),
+    );
     visible = true;
-    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 22, clientY: 42 }));
-    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 23, clientY: 43 }));
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { clientX: 22, clientY: 42 }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { clientX: 23, clientY: 43 }),
+    );
     expect(bridge.setMousePassthrough).toHaveBeenCalledTimes(1);
     expect(bridge.setMousePassthrough).toHaveBeenCalledWith(false);
     pet.destroy();
@@ -726,7 +756,11 @@ describe("full-stage drag reporting", () => {
     const bridge = makeBridge();
     const samples: Array<{
       point: { x: number; y: number };
-      layers: readonly { element: Element; intrinsicX: number; intrinsicY: number }[];
+      layers: readonly {
+        element: Element;
+        intrinsicX: number;
+        intrinsicY: number;
+      }[];
     }> = [];
     let hitRequest: ((request: unknown) => void) | undefined;
     bridge.onHitTestRequest.mockImplementation((listener) => {
@@ -741,7 +775,11 @@ describe("full-stage drag reporting", () => {
     const alphaSampler = vi.fn(
       (
         point: { x: number; y: number },
-        layers: readonly { element: Element; intrinsicX: number; intrinsicY: number }[],
+        layers: readonly {
+          element: Element;
+          intrinsicX: number;
+          intrinsicY: number;
+        }[],
       ) => {
         samples.push({ point, layers });
         return layers.some((layer) => layer.element === dom.staticImg);
@@ -811,9 +849,12 @@ describe("full-stage drag reporting", () => {
     mockStageRect(dom.stage);
     defineImageDimensions(dom.staticImg, 640, 360);
     dom.staticImg.style.opacity = "1";
-    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => ({
-      opacity: (element as HTMLElement).style.opacity || "1",
-    }) as CSSStyleDeclaration);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element) =>
+        ({
+          opacity: (element as HTMLElement).style.opacity || "1",
+        }) as CSSStyleDeclaration,
+    );
     const alphaValues = [1, 17, 17];
     const context = {
       clearRect: vi.fn(),
@@ -879,9 +920,12 @@ describe("full-stage drag reporting", () => {
     dom.staticImg.style.opacity = "0.25";
     dom.videoA.style.opacity = "0.5";
     dom.videoB.style.opacity = "0.5";
-    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => ({
-      opacity: (element as HTMLElement).style.opacity || "1",
-    }) as CSSStyleDeclaration);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element) =>
+        ({
+          opacity: (element as HTMLElement).style.opacity || "1",
+        }) as CSSStyleDeclaration,
+    );
     const alphaValues = [0, 128, 0];
     const context = {
       clearRect: vi.fn(),
@@ -941,7 +985,9 @@ describe("full-stage drag reporting", () => {
       alphaSampler: () => visible,
       rng: () => 0,
     });
-    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20, clientY: 40 }));
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { clientX: 20, clientY: 40 }),
+    );
     dom.hit.dispatchEvent(pointer("click", { clientX: 20, clientY: 40 }));
     defineVideoDimensions(dom.videoB, 640, 360);
     dom.videoB.dispatchEvent(new Event("loadeddata"));
@@ -1026,7 +1072,13 @@ describe("zoom and cleanup", () => {
     bridge.onZoomState.mockImplementation(() => removeZoom);
     bridge.onHitTestRequest.mockImplementation(() => removeHitTest);
     mockStageRect(dom.stage);
-    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5, raf: () => 9, caf });
+    const pet = initTestPet({
+      ...dom,
+      bridge,
+      rng: () => 0.5,
+      raf: () => 9,
+      caf,
+    });
     dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
     dom.hit.dispatchEvent(pointer("pointermove", { clientX: 30, clientY: 40 }));
     pet.destroy();

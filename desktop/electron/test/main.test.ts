@@ -1584,6 +1584,14 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     ).toBeGreaterThan(handlerIdx);
   });
 
+  it('polls health every 30 seconds as documented', () => {
+    const intervalIdx = desktopSource.indexOf('healthInterval = setInterval');
+    expect(intervalIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf('30_000', intervalIdx)).toBeGreaterThan(
+      intervalIdx,
+    );
+  });
+
   it('clears the CPU poll interval on before-quit alongside the health poll', () => {
     const beforeQuitIdx = desktopSource.indexOf("app.on('before-quit'");
     expect(beforeQuitIdx).toBeGreaterThan(-1);
@@ -1971,10 +1979,9 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
   });
 
   it('resolves the bell asset as an absolute file:// URL beside the tray icon asset', () => {
-    expect(desktopSource).toContain('fileURLToPath');
-    expect(desktopSource).toContain('pathToFileURL');
-    expect(desktopSource).toContain('assets');
-    expect(desktopSource).toContain('bell.wav');
+    expect(desktopSource).toMatch(
+      /const ALARM_CHIME_URL = pathToFileURL\(\s*path\.join\(here, '\.\.', 'assets', 'bell\.wav'\),\s*\)\.href;/,
+    );
   });
 
   it('guards a destroyed rail view and rate-limits rapid re-fires to one burst at a time', () => {

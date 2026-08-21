@@ -32,66 +32,28 @@ afterEach(() => {
 });
 
 describe('discoverPetRoot', () => {
-  it('prefers a complete current-version userData pet over resourcesPath', () => {
+  it('returns the current-version userData pet when present', () => {
     const userData = tempDir();
-    const resources = tempDir();
     markPet(path.join(userData, 'pet', '1.2.3'));
-    markPet(path.join(resources, 'pet'));
-    const prior = (process as { resourcesPath?: string }).resourcesPath;
-    Object.defineProperty(process, 'resourcesPath', {
-      configurable: true,
-      value: resources,
-    });
-    try {
-      expect(discoverPetRoot(app({ getPath: () => userData }), false)).toBe(
-        path.join(userData, 'pet', '1.2.3'),
-      );
-    } finally {
-      Object.defineProperty(process, 'resourcesPath', {
-        configurable: true,
-        value: prior,
-      });
-    }
+    expect(
+      discoverPetRoot(
+        app({ getPath: () => userData }),
+        false,
+        undefined,
+        () => true,
+      ),
+    ).toBe(path.join(userData, 'pet', '1.2.3'));
   });
 
-  it('falls through to resourcesPath when the current userData version is missing', () => {
+  it('rejects a present packaged candidate when its signed root is invalid', () => {
     const userData = tempDir();
-    const resources = tempDir();
-    markPet(path.join(resources, 'pet'));
-    const prior = (process as { resourcesPath?: string }).resourcesPath;
-    Object.defineProperty(process, 'resourcesPath', {
-      configurable: true,
-      value: resources,
-    });
-    try {
-      expect(discoverPetRoot(app({ getPath: () => userData }), false)).toBe(
-        path.join(resources, 'pet'),
-      );
-    } finally {
-      Object.defineProperty(process, 'resourcesPath', {
-        configurable: true,
-        value: prior,
-      });
-    }
+    markPet(path.join(userData, 'pet', '1.2.3'));
+    expect(discoverPetRoot(app({ getPath: () => userData }), false)).toBeNull();
   });
 
   it('returns null when no packaged candidate exists', () => {
     const userData = tempDir();
-    const prior = (process as { resourcesPath?: string }).resourcesPath;
-    Object.defineProperty(process, 'resourcesPath', {
-      configurable: true,
-      value: tempDir(),
-    });
-    try {
-      expect(
-        discoverPetRoot(app({ getPath: () => userData }), false),
-      ).toBeNull();
-    } finally {
-      Object.defineProperty(process, 'resourcesPath', {
-        configurable: true,
-        value: prior,
-      });
-    }
+    expect(discoverPetRoot(app({ getPath: () => userData }), false)).toBeNull();
   });
 
   it('keeps dev discovery filesystem-independent and smoke null', () => {

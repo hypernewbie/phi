@@ -2,9 +2,9 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test-go:
@@ -81,11 +81,41 @@ jobs:
       # which a plain git diff --exit-code would not.
       - name: Verify Emitted Artifacts Clean
         run: |
-          if [ -n "$(git status --porcelain --untracked-files=all -- web)" ]; then
+          if [ -n "$(git status --porcelain --untracked-files=all -- web)" ]; \
+            then
             echo "::error::Emitted web/ tree is out of sync with web-src/."
             git status --porcelain --untracked-files=all -- web
             exit 1
           fi
+
+  test-pet:
+    name: Pet Type Check + Tests + Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: desktop/pet/pnpm-lock.yaml
+
+      - name: Install Pet Dependencies
+        run: pnpm --dir desktop/pet install --frozen-lockfile
+
+      - name: Type Check Pet
+        run: pnpm --dir desktop/pet typecheck
+
+      - name: Test Pet
+        run: pnpm --dir desktop/pet test
+
+      - name: Build Pet
+        run: pnpm --dir desktop/pet build
 
   test-js:
     name: JS Frontend Tests

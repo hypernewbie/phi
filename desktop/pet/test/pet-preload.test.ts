@@ -115,10 +115,7 @@ describe("reduced pet preload bridge", () => {
     wrapped({}, state);
     unsubscribe();
     expect(listener).toHaveBeenCalledWith(state);
-    expect(ipcRenderer.on).toHaveBeenCalledWith(
-      "phi:pet-zoom-state",
-      wrapped,
-    );
+    expect(ipcRenderer.on).toHaveBeenCalledWith("phi:pet-zoom-state", wrapped);
     expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
       "phi:pet-zoom-state",
       wrapped,

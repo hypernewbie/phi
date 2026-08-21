@@ -14,9 +14,11 @@
             "desktop/electron/test/**/*.ts",
             "desktop/electron/scripts/**/*.mjs",
             "desktop/electron/vitest.config.ts",
-            "desktop/pet/dist/**/*.js",
-            "desktop/pet/dist-preload/**/*.js",
-            "!web/vendor/**",
+            "desktop/pet/src/**/*.ts",
+            "desktop/pet/test/**/*.ts",
+            "desktop/pet/scripts/**/*.mjs",
+            "desktop/pet/vitest.config.ts",
+            "!web/vendor",
             "!web/attachments.js",
             "!web/desktop.js",
             "!web/diff.js",
@@ -72,11 +74,26 @@
                 "npm/scripts/install.js",
                 "desktop/electron/**/*.ts",
                 "desktop/electron/**/*.mjs",
-                "desktop/electron/vitest.config.ts"
+                "desktop/electron/vitest.config.ts",
+                "desktop/pet/**/*.ts",
+                "desktop/pet/**/*.mjs"
             ],
             "formatter": {
                 "indentStyle": "space",
                 "indentWidth": 2
+            }
+        },
+        {
+            "includes": ["desktop/pet/**/*.ts", "desktop/pet/**/*.mjs"],
+            "formatter": {
+                "enabled": true,
+                "indentStyle": "space",
+                "indentWidth": 2
+            },
+            "javascript": {
+                "formatter": {
+                    "quoteStyle": "double"
+                }
             }
         }
     ]

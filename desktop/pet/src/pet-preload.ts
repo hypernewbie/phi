@@ -40,12 +40,16 @@ contextBridge.exposeInMainWorld("pet", {
     return () => ipcRenderer.removeListener(HIT_TEST_REQUEST, wrapped);
   },
   onZoomState: (listener: (state: PetZoomState) => void): (() => void) => {
-    const wrapped = (_event: unknown, state: PetZoomState): void => listener(state);
+    const wrapped = (_event: unknown, state: PetZoomState): void =>
+      listener(state);
     ipcRenderer.on(ZOOM_STATE, wrapped);
     return () => ipcRenderer.removeListener(ZOOM_STATE, wrapped);
   },
-  onIdleDwellState: (listener: (state: PetIdleDwellState) => void): (() => void) => {
-    const wrapped = (_event: unknown, state: PetIdleDwellState): void => listener(state);
+  onIdleDwellState: (
+    listener: (state: PetIdleDwellState) => void,
+  ): (() => void) => {
+    const wrapped = (_event: unknown, state: PetIdleDwellState): void =>
+      listener(state);
     ipcRenderer.on(DWELL_STATE, wrapped);
     return () => ipcRenderer.removeListener(DWELL_STATE, wrapped);
   },

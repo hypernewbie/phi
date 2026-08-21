@@ -20,7 +20,11 @@ export type PetZoomState = { percent: number; accepted: boolean };
 export type PetStageLayout = { stage: StageRect };
 export type PetIdleDwellRequest = { dwellSeconds: number };
 export type PetIdleDwellState = { dwellSeconds: number };
-export type PetIdleDwellResult = { dwellSeconds: number; accepted: boolean; error?: string };
+export type PetIdleDwellResult = {
+  dwellSeconds: number;
+  accepted: boolean;
+  error?: string;
+};
 export type PetMousePassthrough = boolean;
 
 export interface PetHitTestRequest {

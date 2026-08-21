@@ -4,15 +4,12 @@
  * Electron import): the shell passes the real `app` in, mirroring the
  * tray.ts DI convention (Electron surfaces only inside functions).
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import process from 'node:process';
+import { verifyInstalledRoot } from './petPackageTrust.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-
-/** The pet package directory name under the packaged resourcesPath. */
-const PACKAGED_PET_DIR = 'pet';
 
 /** The built pet package entry (relative to the pet package root). */
 const PET_MAIN_ENTRY = path.join('dist', 'pet-main.js');
@@ -26,6 +23,16 @@ export interface PetAppLike {
 
 /** Injectable filesystem seam for discovery tests. */
 export type PetPathExists = (path: string) => boolean;
+export type PetRootValidator = (root: string, version: string) => boolean;
+
+const validateInstalledRoot: PetRootValidator = (root, version) => {
+  try {
+    verifyInstalledRoot(root, version, undefined, readFileSync, statSync);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Result returned by a controller-backed zoom request. */
 export type ZoomResult = { percent: number; accepted: boolean };
@@ -68,14 +75,15 @@ export interface PetDeps {
 
 /**
  * Discovers the optional desktop/pet package root, or null when absent
- * or in smoke mode. Packaged: userData/pet/<version> first, then
- * <resourcesPath>/pet. Dev: <dist>/../../pet = desktop/pet. Presence is
- * the flag: the directory must contain dist/pet-main.js (the built entry).
+ * or in smoke mode. Packaged: userData/pet/<version>, with its signed
+ * manifest and files revalidated before returning. Dev: <dist>/../../pet =
+ * desktop/pet, local-source-only.
  */
 export function discoverPetRoot(
   app: PetAppLike,
   smoke: boolean,
   pathExists: PetPathExists = existsSync,
+  validateRoot: PetRootValidator = validateInstalledRoot,
 ): string | null {
   if (smoke) return null;
   if (app.isPackaged) {
@@ -84,15 +92,11 @@ export function discoverPetRoot(
       'pet',
       app.getVersion(),
     );
-    if (pathExists(path.join(userDataCandidate, PET_MAIN_ENTRY)))
+    if (
+      pathExists(path.join(userDataCandidate, PET_MAIN_ENTRY)) &&
+      validateRoot(userDataCandidate, app.getVersion())
+    )
       return userDataCandidate;
-    const resourcesPath: string | undefined = (
-      process as { resourcesPath?: string }
-    ).resourcesPath;
-    if (!resourcesPath) return null;
-    const bundledCandidate = path.join(resourcesPath, PACKAGED_PET_DIR);
-    if (pathExists(path.join(bundledCandidate, PET_MAIN_ENTRY)))
-      return bundledCandidate;
     return null;
   }
   const devCandidate = path.join(here, '..', '..', 'pet');

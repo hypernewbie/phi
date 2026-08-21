@@ -267,7 +267,10 @@ export function initPet(opts: PetInitOptions): PetController {
     opts.raf ?? ((cb: FrameRequestCallback) => requestAnimationFrame(cb));
   const caf = opts.caf ?? ((id: number) => cancelAnimationFrame(id));
   const zoomConfig = queryZoomConfig();
-  const validDwellSeconds = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 3600;
+  const validDwellSeconds = (value: unknown): value is number =>
+    Number.isInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= 3600;
   const queryDwell = (): number => {
     const value = Number(
       new URLSearchParams(window.location.search).get("petIdleDwellSeconds"),
@@ -350,9 +353,10 @@ export function initPet(opts: PetInitOptions): PetController {
     if (rect.width > 0 && rect.height > 0) return rect;
     return fallback;
   };
-  const hitLayers = (
-    point: { x: number; y: number },
-  ): { decoded: boolean; layers: PetHitLayer[] } => {
+  const hitLayers = (point: {
+    x: number;
+    y: number;
+  }): { decoded: boolean; layers: PetHitLayer[] } => {
     const stageRect = stageClientRect();
     const layers: PetHitLayer[] = [];
     let decoded = false;
@@ -375,13 +379,9 @@ export function initPet(opts: PetInitOptions): PetController {
       const sourceAspect = usableDimensions.width / usableDimensions.height;
       const rectAspect = rect.width / rect.height;
       const contentWidth =
-        rectAspect > sourceAspect
-          ? rect.height * sourceAspect
-          : rect.width;
+        rectAspect > sourceAspect ? rect.height * sourceAspect : rect.width;
       const contentHeight =
-        rectAspect > sourceAspect
-          ? rect.height
-          : rect.width / sourceAspect;
+        rectAspect > sourceAspect ? rect.height : rect.width / sourceAspect;
       const contentLeft =
         rect.left - stageRect.left + (rect.width - contentWidth) / 2;
       const contentTop =
@@ -492,7 +492,10 @@ export function initPet(opts: PetInitOptions): PetController {
       lastPoint = null;
       lastVisible = false;
       ignoreMouseEvents = true;
-      bridge.reportHitTestResult({ requestId: request.requestId, visible: false });
+      bridge.reportHitTestResult({
+        requestId: request.requestId,
+        visible: false,
+      });
       return;
     }
     lastPoint = point;
@@ -518,7 +521,8 @@ export function initPet(opts: PetInitOptions): PetController {
     pendingFrameFallback = null;
   };
   const scheduleVideoFrameSampling = (element: HTMLVideoElement): void => {
-    if (destroyed || !lastPoint || !element.classList.contains("is-front")) return;
+    if (destroyed || !lastPoint || !element.classList.contains("is-front"))
+      return;
     const generation = mediaSampleGeneration;
     const requestVideoFrameCallback = (
       element as HTMLVideoElement & {
@@ -908,7 +912,8 @@ export function initPet(opts: PetInitOptions): PetController {
     bridge.onIdleDwellState?.((state) => {
       if (
         Number.isInteger(state.dwellSeconds) &&
-        (state.dwellSeconds as unknown as number) >= 1 && (state.dwellSeconds as unknown as number) <= 3600
+        (state.dwellSeconds as unknown as number) >= 1 &&
+        (state.dwellSeconds as unknown as number) <= 3600
       )
         dwellSeconds = state.dwellSeconds;
     }) ?? (() => {});

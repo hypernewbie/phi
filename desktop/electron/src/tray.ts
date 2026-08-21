@@ -41,6 +41,11 @@
  * resources.
  */
 import { Menu, nativeImage, Tray } from 'electron';
+import {
+  PET_ZOOM_DEFAULT_PERCENT,
+  PET_ZOOM_MAX_PERCENT,
+  PET_ZOOM_MIN_PERCENT,
+} from './controller.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -281,7 +286,7 @@ export function buildTrayMenu(
   petInstallable: boolean = false,
   petInstalling: boolean = false,
   petEnabled: boolean = false,
-  petZoomPercent = 100,
+  petZoomPercent = PET_ZOOM_DEFAULT_PERCENT,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -328,7 +333,7 @@ export function buildTrayMenu(
       submenu: [
         {
           label: 'Zoom out',
-          enabled: petActionsEnabled && petZoomPercent > 50,
+          enabled: petActionsEnabled && petZoomPercent > PET_ZOOM_MIN_PERCENT,
           click: handlers.petZoomOut,
         },
         {
@@ -337,12 +342,13 @@ export function buildTrayMenu(
         },
         {
           label: 'Zoom in',
-          enabled: petActionsEnabled && petZoomPercent < 300,
+          enabled: petActionsEnabled && petZoomPercent < PET_ZOOM_MAX_PERCENT,
           click: handlers.petZoomIn,
         },
         {
           label: 'Reset zoom',
-          enabled: petActionsEnabled && petZoomPercent !== 100,
+          enabled:
+            petActionsEnabled && petZoomPercent !== PET_ZOOM_DEFAULT_PERCENT,
           click: handlers.petResetZoom,
         },
         {
