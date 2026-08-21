@@ -32,6 +32,7 @@ function fakeWindow(
 ): SingleInstanceWindow {
   return {
     webContents: { send: vi.fn(), isDestroyed: () => false },
+    isDestroyed: () => false,
     restore: vi.fn(),
     focus: vi.fn(),
     isMinimized: () => false,
@@ -289,6 +290,26 @@ describe('setupSingleInstance', () => {
     });
   });
 
+  it('hands second-instance payloads to a host-owned lifecycle callback', () => {
+    fakeApp.requestSingleInstanceLock.mockReturnValue(true);
+    const handleLaunch = vi.fn();
+    const handle = setupSingleInstance(
+      fakeWindow(),
+      FORWARD_CHANNEL,
+      undefined,
+      handleLaunch,
+    );
+    handle.installListener();
+    secondInstanceListener()({}, [
+      'phi://profile/home',
+      'https://example.com/',
+    ]);
+    expect(handleLaunch).toHaveBeenCalledWith([
+      { kind: 'deep-link', value: 'phi://profile/home' },
+      { kind: 'server', value: 'https://example.com/' },
+    ]);
+  });
+
   it('forwards server payloads too when onServerUrl is absent (phase-2 contract)', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const send = vi.fn();
@@ -346,6 +367,20 @@ describe('setupSingleInstance', () => {
     handle.installListener();
     secondInstanceListener()({}, ['phi://profile/home']);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not dereference a destroyed BrowserWindow', () => {
+    fakeApp.requestSingleInstanceLock.mockReturnValue(true);
+    const isMinimized = vi.fn(() => false);
+    const focus = vi.fn();
+    const win = fakeWindow({ isDestroyed: () => true, isMinimized, focus });
+    const handle = setupSingleInstance(win, FORWARD_CHANNEL);
+    handle.installListener();
+    expect(() =>
+      secondInstanceListener()({}, ['phi://profile/home']),
+    ).not.toThrow();
+    expect(isMinimized).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
   });
 
   it('losing side: acquire classifies argv and quits, installing no listener', () => {

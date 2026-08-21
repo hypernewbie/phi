@@ -69,10 +69,22 @@ const SNAPSHOT: RailState = {
 };
 
 afterEach(() => {
-  // Remove the recording-fake bridge (the withPage helper restores the
-  // global document itself).
+  // Restore any withPage-managed document before the recording-fake
+  // bridge is cleared (the bridge and the swap are independent).
+  const pending = pendingDocRestore;
+  pendingDocRestore = null;
+  if (pending) Object.defineProperty(globalThis, 'document', pending);
   delete (window as { electron?: unknown }).electron;
 });
+
+// Pending withPage swap: when the helper closes over JSDOM globals that
+// renderer handlers also read at dispatch time, the global document must
+// remain pointed at the JSDOM document for the whole test, not be
+// reverted on withPage's frame exit. The previous implementation
+// reverted immediately, which broke the contextmenu / drag-and-drop
+// suites (event handlers captured globalThis.document, queried #rail-menu,
+// and got back the vitest-jsdom env document with no rail).
+let pendingDocRestore: PropertyDescriptor | null = null;
 
 /** Points the jsdom globals at a parsed page for the duration of a test. */
 function withPage<T>(html: string, fn: (doc: Document) => T): T {
@@ -83,10 +95,15 @@ function withPage<T>(html: string, fn: (doc: Document) => T): T {
     configurable: true,
     writable: true,
   });
+  // Restore from afterEach instead of fn's finally so dispatched event
+  // listeners (which read globalThis.document) see the same JSDOM doc.
+  pendingDocRestore = prevDoc ?? null;
   try {
     return fn(dom.window.document);
-  } finally {
+  } catch (err) {
+    pendingDocRestore = null;
     if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    throw err;
   }
 }
 

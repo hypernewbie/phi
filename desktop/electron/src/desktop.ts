@@ -31,8 +31,10 @@ import {
   session,
   shell,
   WebContentsView,
+  type IpcMainEvent,
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
+  type WebContents,
 } from 'electron';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -50,9 +52,11 @@ import type {
 import {
   classifyArgv,
   FORWARD_CHANNEL,
+  type ForwardPayload,
   type SingleInstanceHandle,
 } from './single-instance.js';
 import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
+import { parseMainArgs } from './argv.js';
 import {
   Controller,
   parseEndpoint,
@@ -133,12 +137,46 @@ const SYNC_ALARM_MARKER = 'PHI_ALARM ';
 /** Random unguessable id bound to one in-flight access-auth prompt. */
 const randomRequestId = (): string => randomBytes(16).toString('hex');
 
+/** Startup argv has one explicit --server winner; all other URL payloads keep order. */
+function classifyInitialLaunch(argv: string[]): ForwardPayload[] {
+  let explicit: string | undefined;
+  const skipped = new Set<number>();
+  const equals = argv.findIndex((arg) => arg.startsWith('--server='));
+  if (equals >= 0) {
+    explicit = argv[equals].slice('--server='.length);
+    argv.forEach((arg, index) => {
+      if (arg.startsWith('--server=')) skipped.add(index);
+      if (arg === '--server') {
+        skipped.add(index);
+        if (index + 1 < argv.length) skipped.add(index + 1);
+      }
+    });
+  } else {
+    const spaced = argv.indexOf('--server');
+    if (spaced >= 0) explicit = argv[spaced + 1];
+    argv.forEach((arg, index) => {
+      if (arg === '--server') {
+        skipped.add(index);
+        if (index + 1 < argv.length) skipped.add(index + 1);
+      }
+    });
+  }
+  const payloads: ForwardPayload[] = [];
+  if (explicit !== undefined)
+    payloads.push({ kind: 'server', value: explicit });
+  payloads.push(
+    ...classifyArgv(argv.filter((_arg, index) => !skipped.has(index))),
+  );
+  return payloads;
+}
+
 /** Main-view auth-required push payload — main process -> renderer. */
 interface AuthRequired {
   requestId: string;
   profileId: string;
   origin: string;
   label: string;
+  generation: number;
 }
 
 /** Fixed page-observation expression for remote Phi pages (never interpolated). */
@@ -213,6 +251,24 @@ const realHealthChecker: HealthChecker = {
 export class DesktopHost {
   // --- Host-loop state ---
   mainWindow: BrowserWindow | null = null;
+  /** Current native-shell generation; async work from old shells is ignored. */
+  private sessionGeneration = 0;
+  /** Fenced at real-close initiation; never usable for launch delivery. */
+  private closingWindow: BrowserWindow | null = null;
+  private sessionChain: Promise<void> = Promise.resolve();
+  /** These promises are native-shell scoped: old completions never join or clear a replacement's work. */
+  private configOpInFlight = new Map<string, Promise<unknown>>();
+  private bodyReauthInFlight = new Map<string, Promise<void>>();
+  private buildWindowSession: ((win: BrowserWindow) => Promise<void>) | null =
+    null;
+  private readonly pendingLaunchPayloads: ForwardPayload[] = [];
+  private launchForegroundPending = false;
+  private mainPageReady = false;
+  private readonly sessionChildren = new Set<BrowserWindow>();
+  /** Local current-session renderers permitted to mutate host state. */
+  private readonly trustedSessionSenders = new Set<WebContents>();
+  private abortCurrentAuth: (() => void) | null = null;
+  private layoutCurrentSession: () => void = () => {};
   // The tray is a pure DI surface (src/tray.ts); the controller is a pure
   // TS surface (src/controller.ts). The host loop is the bridge: the tray
   // never imports the controller and the controller never imports
@@ -292,6 +348,152 @@ export class DesktopHost {
     return this.mainWindow;
   }
 
+  private liveMainWindow(): BrowserWindow | null {
+    const win = this.mainWindow;
+    return win && win !== this.closingWindow && !win.isDestroyed() ? win : null;
+  }
+
+  private isCurrentWindowSession(
+    win: BrowserWindow,
+    generation: number,
+  ): boolean {
+    return (
+      generation === this.sessionGeneration &&
+      this.mainWindow === win &&
+      this.closingWindow !== win &&
+      !win.isDestroyed()
+    );
+  }
+
+  /** Queues launch work until the current fresh shell and local preload exist. */
+  handleLaunch(payloads: ForwardPayload[]): void {
+    this.pendingLaunchPayloads.push(...payloads);
+    this.launchForegroundPending = true;
+    void this.ensureMainWindow().then(() => this.drainLaunchPayloads());
+  }
+
+  private async ensureMainWindow(): Promise<BrowserWindow> {
+    const live = this.liveMainWindow();
+    if (live) return live;
+    const work = this.sessionChain.then(async () => {
+      const existing = this.liveMainWindow();
+      if (existing) return existing;
+      const build = this.buildWindowSession;
+      if (!build) throw new Error('desktop session builder is not ready');
+      const win = this.createMainWindow();
+      this.mainWindow = win;
+      this.mainPageReady = false;
+      this.sessionGeneration++;
+      await build(win);
+      return win;
+    });
+    this.sessionChain = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    return work;
+  }
+
+  /** Fence a true close before Electron has finished native teardown. */
+  private beginWindowSessionTeardown(win: BrowserWindow): void {
+    if (this.closingWindow === win) return;
+    // Stale closed event for a window whose disposal already completed and
+    // whose replacement now owns the host state. Touching mainPageReady,
+    // railView, profileViews, ... here would corrupt the live session.
+    // Reference equality on `win` (not just `mainWindow`) is the fence:
+    // this window is destroyed and no longer the closing fence key.
+    if (win.isDestroyed() && this.mainWindow !== win) return;
+    this.closingWindow = win;
+    if (this.mainWindow === win) {
+      this.mainWindow = null;
+      this.mainPageReady = false;
+      this.sessionGeneration++;
+      this.abortCurrentAuth?.();
+    }
+    void this.disposeWindowSession(win);
+  }
+
+  private async disposeWindowSession(win: BrowserWindow): Promise<void> {
+    const work = this.sessionChain.then(async () => {
+      if (this.closingWindow !== win) return;
+      this.mainPageReady = false;
+      // The close fence above invalidated all old asynchronous work before
+      // this serialized native-child teardown begins.
+      for (const child of this.sessionChildren) {
+        try {
+          if (!child.isDestroyed()) child.close();
+        } catch {
+          /* best effort during native teardown */
+        }
+      }
+      this.sessionChildren.clear();
+      this.trustedSessionSenders.clear();
+      const views = this.profileViews;
+      const rail = this.railView;
+      this.profileViews = null;
+      this.railView = null;
+      this.viewByOrigin.clear();
+      this.loadedViews = new WeakSet<WebContentsView>();
+      this.markerPresent = new WeakMap<WebContentsView, boolean>();
+      this.pendingDividers = null;
+      this.lastHeaderState = null;
+      this.observedTitle.clear();
+      this.observedIdentity.clear();
+      this.observedCpu.clear();
+      this.observedActivity.clear();
+      this.firedSyncKeys.clear();
+      this.layoutCurrentSession = () => {};
+      if (views) await views.destroyAll();
+      if (rail) {
+        try {
+          if (!rail.webContents.isDestroyed()) rail.webContents.close();
+          if (win.contentView) win.contentView.removeChildView(rail);
+        } catch (err) {
+          console.log(`phi-desktop: rail session teardown: ${String(err)}`);
+        }
+      }
+      if (this.closingWindow === win) this.closingWindow = null;
+    });
+    this.sessionChain = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    await work;
+  }
+
+  private drainLaunchPayloads(): void {
+    const win = this.liveMainWindow();
+    if (
+      !win ||
+      !this.profileViews ||
+      !this.mainPageReady ||
+      win.webContents.isDestroyed()
+    )
+      return;
+    const payloads = this.pendingLaunchPayloads.splice(0);
+    if (this.launchForegroundPending) {
+      this.launchForegroundPending = false;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    for (const payload of payloads) {
+      if (payload.kind === 'server') this.activateServerUrl(payload.value);
+      else win.webContents.send(FORWARD_CHANNEL, payload);
+    }
+  }
+
+  /** Ensures then foregrounds the current shell; safe for tray/hotkey/activate. */
+  foreground(): void {
+    void this.ensureMainWindow().then((win) => {
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+      this.drainLaunchPayloads();
+    });
+  }
+
   /**
    * Builds the system tray and starts its host loop. Never called in smoke
    * mode.
@@ -321,13 +523,10 @@ export class DesktopHost {
         const cmd = payload as TrayCommand;
         switch (cmd.kind) {
           case 'show':
-            // Bring the main window to the foreground. A close-to-tray
-            // window is hidden, not minimized — show() brings it back.
-            if (this.mainWindow) {
-              if (this.mainWindow.isMinimized()) this.mainWindow.restore();
-              this.mainWindow.show();
-              this.mainWindow.focus();
-            }
+            // foreground() performs mainWindow.restore() + mainWindow.focus();
+            // a real close creates a fresh shell while a tray-hidden shell
+            // is simply shown again.
+            this.foreground();
             break;
           case 'select-profile': {
             // The Profiles submenu posts {kind:'select-profile', id};
@@ -482,9 +681,15 @@ export class DesktopHost {
   async observeProfileIdentity(
     view: WebContentsView,
     origin: string,
+    generation = this.sessionGeneration,
   ): Promise<{ hostname: string; accent: string } | null> {
     const ctrl = this.controller;
-    if (!ctrl || view.webContents.isDestroyed()) return null;
+    if (
+      !ctrl ||
+      generation !== this.sessionGeneration ||
+      view.webContents.isDestroyed()
+    )
+      return null;
     try {
       const observed = (await view.webContents.executeJavaScript(
         REMOTE_IDENTITY_SCRIPT,
@@ -492,6 +697,7 @@ export class DesktopHost {
         hostname?: unknown;
         accent?: unknown;
       };
+      if (generation !== this.sessionGeneration) return null;
       const profile =
         ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
       if (!profile) return null;
@@ -530,9 +736,10 @@ export class DesktopHost {
    * rail snapshot is re-pushed only when CPU changes.
    */
   pollCpu(): void {
-    const win = this.mainWindow;
+    const win = this.liveMainWindow();
+    const generation = this.sessionGeneration;
     const ctrl = this.controller;
-    if (!win || win.isDestroyed() || !ctrl) return;
+    if (!win || !ctrl) return;
     const st = ctrl.state();
     for (const profile of st.profiles) {
       const view = this.viewByOrigin.get(profile.origin);
@@ -555,6 +762,7 @@ export class DesktopHost {
           .executeJavaScript(READ_WORKSPACE_SCRIPT)
           .catch(() => null),
       ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
+        if (!this.isCurrentWindowSession(win, generation)) return;
         const cpu =
           typeof rawCpu === 'number' && Number.isFinite(rawCpu)
             ? Math.min(100, Math.max(0, rawCpu))
@@ -824,7 +1032,9 @@ export class DesktopHost {
   private persistVerifierAfterUnlock(
     origin: string,
     accessAuth: AccessAuth,
+    generation: number,
   ): void {
+    if (generation !== this.sessionGeneration) return;
     const cred = accessAuth.getLastCredential(origin);
     if (cred) {
       this.storedCredentials.set(origin, {
@@ -840,7 +1050,7 @@ export class DesktopHost {
     const verifier = accessAuth.getLastVerifier(origin);
     if (!verifier) return;
     void this.fetchAuthStatusForPersistence(origin).then((status) => {
-      if (!status) return;
+      if (!status || generation !== this.sessionGeneration) return;
       this.storedCredentials.set(origin, {
         version: 'v1',
         algorithm: 'pbkdf2-sha256',
@@ -897,10 +1107,13 @@ export class DesktopHost {
   private async tryReauthWithStoredCredential(
     origin: string,
     accessAuth: AccessAuth,
+    generation: number,
   ): Promise<boolean> {
+    if (generation !== this.sessionGeneration) return false;
     const cred = this.getOrRecoverCredential(origin);
     if (!cred) return false;
     const status = await this.fetchAuthStatusForPersistence(origin);
+    if (generation !== this.sessionGeneration) return false;
     if (!status) {
       // Server is offline, starting up, or transient network hiccup.
       // Do not clear the credential!
@@ -919,6 +1132,7 @@ export class DesktopHost {
         origin,
         verifierCopy,
       );
+      if (generation !== this.sessionGeneration) return false;
       if (result.kind === 'invalid-password') {
         this.clearStoredCredential(origin);
         return false;
@@ -933,7 +1147,11 @@ export class DesktopHost {
    *  any that have a persisted credential. Called once during
    *  `start()` after the view manager is ready and before the first
    *  `/api/config` poll. */
-  async bootstrapStoredCredentials(accessAuth: AccessAuth): Promise<void> {
+  async bootstrapStoredCredentials(
+    accessAuth: AccessAuth,
+    generation: number,
+  ): Promise<void> {
+    if (generation !== this.sessionGeneration) return;
     this.loadStoredCredentials();
     const profiles = this.controller?.state().profiles ?? [];
     for (const p of profiles) {
@@ -944,7 +1162,8 @@ export class DesktopHost {
     if (this.storedCredentials.size === 0) return;
     const origins = Array.from(this.storedCredentials.keys());
     for (const origin of origins) {
-      await this.tryReauthWithStoredCredential(origin, accessAuth);
+      if (generation !== this.sessionGeneration) return;
+      await this.tryReauthWithStoredCredential(origin, accessAuth, generation);
     }
   }
 
@@ -993,8 +1212,9 @@ export class DesktopHost {
    */
   pollFileAction(): void {
     const ctrl = this.controller;
-    const win = this.mainWindow;
-    if (!ctrl || !win || win.isDestroyed()) return;
+    const win = this.liveMainWindow();
+    const generation = this.sessionGeneration;
+    if (!ctrl || !win) return;
     const st = ctrl.state();
     const profile = st.profiles.find((p) => p.id === st.activeId) ?? null;
     if (!profile) return;
@@ -1002,6 +1222,7 @@ export class DesktopHost {
     if (!view || view.webContents.isDestroyed()) return;
     void view.webContents.executeJavaScript(READ_FILE_ACTION_SCRIPT).then(
       (raw) => {
+        if (!this.isCurrentWindowSession(win, generation)) return;
         const action = parseFileAction(raw);
         if (action) void this.runFileAction(action, view);
       },
@@ -1051,6 +1272,7 @@ export class DesktopHost {
    *  divider widths before the switch hides it, so the incoming retained
    *  view adopts the same layout once the read resolves (after setActive). */
   syncDividersOnSwitch(incomingId: string): void {
+    const generation = this.sessionGeneration;
     this.pendingDividers = null;
     const outgoingId = this.profileViews?.getActive() ?? null;
     const outgoing =
@@ -1060,6 +1282,7 @@ export class DesktopHost {
     if (!outgoing || outgoing.webContents.isDestroyed()) return;
     void outgoing.webContents.executeJavaScript(READ_DIVIDERS_SCRIPT).then(
       (raw) => {
+        if (generation !== this.sessionGeneration) return;
         this.pendingDividers = parseDividers(raw);
         this.applyPendingDividers(incomingId);
       },
@@ -1077,11 +1300,9 @@ export class DesktopHost {
 
   /** Foregrounds the main window and activates the profile (notification click contract). */
   focusProfile(profile: ProfileMeta): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      if (this.mainWindow.isMinimized()) this.mainWindow.restore();
-      this.mainWindow.show();
-      this.mainWindow.focus();
-    }
+    // A notification can outlive a true close; foreground() serializes a
+    // fresh shell behind its teardown instead of focusing a fenced native window.
+    this.foreground();
     const ctrl = this.controller;
     if (!ctrl) return;
     try {
@@ -1311,9 +1532,9 @@ export class DesktopHost {
         dom.bodyAreaClass.includes('desktop-body-area');
       // The smoke run uses the normal argv (no --register-protocol /
       // --unregister-protocol); the CLI flags exit before any window.
+      const smokeArgs = parseMainArgs(process.argv.slice(1));
       result.registrationNotExercised =
-        !process.argv.slice(1).includes('--register-protocol') &&
-        !process.argv.slice(1).includes('--unregister-protocol');
+        !smokeArgs.registerProtocol && !smokeArgs.unregisterProtocol;
       // The smoke path returns before startTray(), so no real Tray is ever
       // instantiated by the harness.
       result.trayNotExercised = this.trayHandle === null;
@@ -1352,7 +1573,7 @@ export class DesktopHost {
       result.headerHeight = HEADER_HEIGHT;
       // Argv routing: classify this launch's positional args exactly like a
       // real launch, and dispatch the harness's deep-link test arg.
-      const argvPayloads = classifyArgv(process.argv.slice(1));
+      const argvPayloads = classifyArgv(smokeArgs.positional);
       result.argvRouted = argvPayloads.length > 0;
       result.argvDeepLinkParsed = false;
       const deepLinkArg = argvPayloads.find((p) => p.kind === 'deep-link');
@@ -1478,6 +1699,10 @@ export class DesktopHost {
       if (!this.quitting && (this.controller?.state().closeToTray ?? true)) {
         event.preventDefault();
         win.hide();
+      } else if (!this.quitting) {
+        // `closed` can be delayed by the native window server. Fence now so
+        // launches cannot drain into a shell whose close has begun.
+        this.beginWindowSessionTeardown(win);
       }
     });
     // Plain F11 toggles fullscreen on the BrowserWindow (any view — main
@@ -1521,10 +1746,11 @@ export class DesktopHost {
       }
     });
     win.on('blur', () => this.pushWindowState());
-    // The main view page (the vendored header + local caption controls +
-    // the empty body area). Local page only — never loadURL to an
-    // external origin here.
-    void win.loadFile(path.join(here, '..', 'web', 'index.html'));
+    // The session builder installs its did-finish-load handler before this
+    // local page starts loading, so launch payloads cannot race the preload.
+    win.on('closed', () => {
+      if (!this.quitting) this.beginWindowSessionTeardown(win);
+    });
     return win;
   }
 
@@ -1602,6 +1828,7 @@ export class DesktopHost {
     this.installAppMenu();
     const win = this.createMainWindow();
     this.mainWindow = win;
+    this.sessionGeneration++;
     if (SMOKE) {
       // Smoke gate (the same no-real-GUI convention as the tray and hotkey
       // gates): the ProfileViewManager is built with a recording-fake
@@ -1629,6 +1856,7 @@ export class DesktopHost {
       win.webContents.once('did-finish-load', () => {
         void this.runSmokeChecks(win);
       });
+      void win.loadFile(path.join(here, '..', 'web', 'index.html'));
       return;
     }
     // The tray is built before the second-instance listener, so a second
@@ -1659,10 +1887,20 @@ export class DesktopHost {
       origin: string;
       abort: AbortController;
       epoch: number;
+      generation: number;
+      auth: AccessAuth;
     } | null = null;
     let unlockInFlight = false;
     let promptSuppressedFor: string | null = null;
-    const accessAuth = new AccessAuth();
+    let accessAuth = new AccessAuth();
+    /** Reinstalled for each fresh native shell; cancels its prior auth work. */
+    const armAuthCancellation = (): void => {
+      this.abortCurrentAuth = () => {
+        activeEpoch++;
+        pendingUnlock?.abort.abort();
+        pendingUnlock = null;
+      };
+    };
     // Tray receiver wiring: active-changed -> setActiveProfile,
     // unread-changed -> setUnread, profiles-changed -> rebuildMenu;
     // syncTrayFromController() then pushes the store's pre-existing state
@@ -1684,7 +1922,8 @@ export class DesktopHost {
         this.pushActiveServer();
         // Deactivate the previous server's taskbar progress; the CPU poll
         // re-applies it from the newly selected view on its next tick.
-        if (!win.isDestroyed()) win.setProgressBar(-1);
+        const current = this.liveMainWindow();
+        if (current) current.setProgressBar(-1);
         // Cancels any in-flight access-auth prompt: the active origin
         // changed and the pending requestId is no longer for this
         // server. The renderer also closes any modal it had open.
@@ -1723,7 +1962,7 @@ export class DesktopHost {
       this.pushRailState();
       // A first activation appends a new profile view to the content view;
       // re-assert the rail's bounds and the active view's size.
-      layoutChildren();
+      this.layoutCurrentSession();
     });
     this.syncTrayFromController();
     // Retained per-profile views + rail renderer. The manager (src/views.ts)
@@ -1733,252 +1972,365 @@ export class DesktopHost {
     // tears everything down on before-quit. The factories are closures
     // over `win` so defaultBounds() is re-read on every
     // setActive/onWindowResize (the window bounds change during use).
-    const sharedSession = session.defaultSession;
-    const makeView = (origin: string): WebContentsView => {
-      const view = new WebContentsView({
+    const buildWindowSession = async (win: BrowserWindow): Promise<void> => {
+      const generation = this.sessionGeneration;
+      const isCurrent = (): boolean =>
+        this.isCurrentWindowSession(win, generation);
+      // Auth and coalescing state belong to this native shell. A late old
+      // promise retains its old map/auth object and cannot clear or mutate
+      // replacement-session state.
+      accessAuth = new AccessAuth();
+      this.configOpInFlight = new Map<string, Promise<unknown>>();
+      this.bodyReauthInFlight = new Map<string, Promise<void>>();
+      activeEpoch++;
+      pendingUnlock = null;
+      unlockInFlight = false;
+      promptSuppressedFor = null;
+      armAuthCancellation();
+      void this.bootstrapStoredCredentials(accessAuth, generation);
+      const sharedSession = session.defaultSession;
+      const makeView = (origin: string): WebContentsView => {
+        const view = new WebContentsView({
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webSecurity: true,
+            session: sharedSession,
+          },
+        });
+        // The CPU poll resolves the selected server's view from this lookup
+        // (the retained views are owned by ProfileViewManager).
+        this.viewByOrigin.set(origin, view);
+        // The normalized comparison origin: computed once per view so both
+        // guard paths (window-open and will-navigate) compare the same
+        // canonical origin string.
+        const allowedOrigin = new URL(origin).origin;
+        const popupSize = (
+          features: string,
+        ): { width: number; height: number } => {
+          const token = (name: string): number | null => {
+            const m = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*(\\d+)`, 'i').exec(
+              features,
+            );
+            return m ? Number(m[1]) : null;
+          };
+          return {
+            width: token('width') ?? 860,
+            height: token('height') ?? 1000,
+          };
+        };
+        view.webContents.setWindowOpenHandler(({ url, features }) => {
+          if (!isCurrent()) return { action: 'deny' };
+          try {
+            const target = new URL(url);
+            if (target.origin === allowedOrigin) {
+              const size = popupSize(features);
+              return {
+                action: 'allow',
+                createWindow: (options) => {
+                  const child = new BrowserWindow({
+                    ...options,
+                    width: size.width,
+                    height: size.height,
+                    show: false,
+                    webPreferences: {
+                      ...options.webPreferences,
+                      sandbox: true,
+                      contextIsolation: true,
+                      nodeIntegration: false,
+                      webSecurity: true,
+                      session: sharedSession,
+                    },
+                  });
+                  child.once('ready-to-show', () => {
+                    if (isCurrent() && !child.isDestroyed()) child.show();
+                  });
+                  attachNavGuard(child.webContents);
+                  installFullscreenToggle(child.webContents, child);
+                  installReloadShortcut(child.webContents);
+                  installZoomShortcuts(child.webContents);
+                  this.sessionChildren.add(child);
+                  child.once('closed', () =>
+                    this.sessionChildren.delete(child),
+                  );
+                  return child.webContents;
+                },
+              };
+            }
+            if (target.protocol === 'http:' || target.protocol === 'https:')
+              void shell.openExternal(url);
+          } catch {
+            /* deny malformed URLs */
+          }
+          return { action: 'deny' };
+        });
+        // Navigation guard (security): a retained profile view may only
+        // navigate within its own origin — the same same-origin rule as the
+        // window-open guard above. Same-origin navigations are allowed;
+        // http(s) targets are handed to the OS browser via
+        // shell.openExternal; everything else is denied. The main process's
+        // own loadURL calls do not emit will-navigate, so the view manager's
+        // initial page loads are unaffected.
+        const attachNavGuard = (contents: typeof view.webContents): void => {
+          contents.on('will-navigate', (event, url) => {
+            try {
+              const target = new URL(url);
+              if (target.origin === allowedOrigin) return; // same-origin: allow
+              if (target.protocol === 'http:' || target.protocol === 'https:') {
+                void shell.openExternal(url);
+              }
+            } catch {
+              /* malformed URL: deny below */
+            }
+            event.preventDefault();
+          });
+        };
+        attachNavGuard(view.webContents);
+        // Rail-selection shortcuts: before-input-event runs in the browser
+        // process, so a chord is caught before the renderer. The always-safe
+        // digits (Ctrl+1/2/9) produce no PTY byte and switch synchronously.
+        // The conditional chords (Ctrl+3..8, Tab/Shift+Tab) are live
+        // terminal bytes, so they are never preventDefaulted; the terminal-
+        // focus probe runs after the dispatch and switches only when the
+        // page is not focused in a terminal.
+        view.webContents.on('before-input-event', (event, input) => {
+          if (!isCurrent() || input.type !== 'keyDown') return;
+          if (!input.control || input.alt || input.meta) return;
+          const ctrl = this.controller;
+          if (!ctrl) return;
+          const profiles = ctrl.state().profiles;
+          const target = resolveRailChord(input, profiles.length);
+          if (!target) return;
+          const select = (): void => {
+            try {
+              if (target.kind === 'index') {
+                ctrl.setActive(profiles[target.index].id);
+                return;
+              }
+              const activeIdx = profiles.findIndex(
+                (p) => p.id === ctrl.state().activeId,
+              );
+              const step = target.kind === 'next' ? 1 : -1;
+              const base = activeIdx < 0 ? (step === 1 ? -1 : 0) : activeIdx;
+              ctrl.setActive(
+                profiles[(base + step + profiles.length) % profiles.length].id,
+              );
+            } catch (err) {
+              console.log(
+                `phi-desktop: rail select ${input.key}: ${String(err)}`,
+              );
+            }
+          };
+          if (
+            target.kind === 'index' &&
+            ALWAYS_SAFE_RAIL_CHORDS.has(input.key)
+          ) {
+            event.preventDefault();
+            select();
+            return;
+          }
+          void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(
+            (raw) => {
+              if (!isCurrent()) return;
+              if (raw === true) return;
+              select();
+            },
+            () => {},
+          );
+        });
+        view.webContents.on('page-title-updated', (_event, title) => {
+          if (!isCurrent()) return;
+          this.onProfileTitleUpdated(view, origin, title);
+          this.pollCpu();
+          // The remote app titles its page only once the hostname/accent are
+          // live, so identity observation rides this event; the rail snapshot
+          // is repushed only after a real result.
+          void this.observeProfileIdentity(view, origin).then((identity) => {
+            if (!isCurrent()) return;
+            if (identity !== null) {
+              this.pushRailState();
+              this.refreshWindowTitle();
+              // The observed accent drives the header's chrome; re-push the
+              // active server so the main view page picks it up.
+              this.pushActiveServer();
+            }
+          });
+        });
+        // Fresh rail snapshot after a view finishes loading, plus the
+        // desktop-local file-action listener install (executeJavaScript only
+        // — no preload or IPC on remote origins).
+        view.webContents.on('did-finish-load', () => {
+          if (!isCurrent()) return;
+          this.loadedViews.add(view);
+          this.pushRailState();
+          void view.webContents
+            .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
+            .catch(() => {});
+          // A first activation can request header config before this body has
+          // populated its workspace selector. Re-push the active server after
+          // load so the main header reads this server's actual selected project.
+          const state = this.controller?.state();
+          const active = state?.profiles.find(
+            (profile) => profile.id === state.activeId,
+          );
+          if (active?.origin === origin) this.pushActiveServer();
+        });
+        return view;
+      };
+      const defaultBounds = (): {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } => {
+        // WebContentsView bounds are relative to the window's CONTENT area,
+        // so the content bounds drive the active view's size — never the
+        // outer frame bounds. The retained bodies start below the main view
+        // page's vendored header row (HEADER_HEIGHT) and sit right of the
+        // rail gutter; the header is never covered.
+        const b = win.getContentBounds();
+        return {
+          x: RAIL_WIDTH,
+          y: HEADER_HEIGHT,
+          width: b.width - RAIL_WIDTH,
+          height: b.height - HEADER_HEIGHT,
+        };
+      };
+      this.profileViews = new ProfileViewManager({
+        win,
+        makeView,
+        defaultBounds,
+        railWidth: RAIL_WIDTH,
+        log: (msg) => console.log(`phi-desktop: views: ${msg}`),
+      });
+      // Sync every persisted profile into the view manager so setActive
+      // can find the origin to loadURL. Without this, setActive returns
+      // silently (the profile was never registered with the manager).
+      for (const p of this.controller?.state().profiles ?? []) {
+        this.profileViews.addProfile(p.id, p.origin);
+      }
+      // A real close retains controller metadata, not native views: reload only
+      // the persisted active profile in this new manager.
+      this.profileViews.setActive(this.controller?.state().activeId || null);
+      // The rail begins below the main view page's header row. Its top edge
+      // sits at HEADER_HEIGHT so the vendored header is never overlapped by
+      // a rail entry.
+      const layoutRail = (): void => {
+        if (
+          isCurrent() &&
+          this.railView &&
+          !this.railView.webContents.isDestroyed()
+        ) {
+          const b = win.getContentBounds();
+          this.railView.setBounds({
+            x: 0,
+            y: HEADER_HEIGHT,
+            width: RAIL_WIDTH,
+            height: Math.max(0, b.height - HEADER_HEIGHT),
+          });
+        }
+      };
+      // Recomputes the two child regions (active profile body + rail) from
+      // the content bounds. The main view page's header row occupies
+      // y=0..HEADER_HEIGHT as the window's own webContents; the children
+      // live below it.
+      const layoutChildren = (): void => {
+        if (!isCurrent()) return;
+        this.profileViews?.onWindowResize();
+        layoutRail();
+      };
+      this.layoutCurrentSession = layoutChildren;
+      // Window resize: recompute the children from the content bounds.
+      win.on('resize', () => layoutChildren());
+      // Maximize/restore change the content bounds; the window-state icon follows.
+      win.on('maximize', () => {
+        if (!isCurrent()) return;
+        layoutChildren();
+        this.pushWindowState();
+      });
+      win.on('unmaximize', () => {
+        if (!isCurrent()) return;
+        layoutChildren();
+        this.pushWindowState();
+      });
+      // Rail renderer: a never-hidden child view spanning the left rail
+      // gutter (RAIL_WIDTH px), loading the local rail page
+      // (renderer.html + renderer.js) via loadFile. Destroyed only at quit
+      // (the before-quit teardown, alongside profileViews.destroyAll()). The
+      // rail page is LOCAL and needs the typed preload bridge, so the preload
+      // is attached to THIS view only; the makeView factory above stays
+      // unpreloaded — remote profile origins never run the bridge.
+      const rail = new WebContentsView({
         webPreferences: {
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,
           webSecurity: true,
+          preload: path.join(here, 'preload.js'),
           session: sharedSession,
         },
       });
-      // The CPU poll resolves the selected server's view from this lookup
-      // (the retained views are owned by ProfileViewManager).
-      this.viewByOrigin.set(origin, view);
-      // The normalized comparison origin: computed once per view so both
-      // guard paths (window-open and will-navigate) compare the same
-      // canonical origin string.
-      const allowedOrigin = new URL(origin).origin;
-      const popupSize = (
-        features: string,
-      ): { width: number; height: number } => {
-        const token = (name: string): number | null => {
-          const m = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*(\\d+)`, 'i').exec(
-            features,
-          );
-          return m ? Number(m[1]) : null;
-        };
-        return {
-          width: token('width') ?? 860,
-          height: token('height') ?? 1000,
-        };
-      };
-      view.webContents.setWindowOpenHandler(({ url, features }) => {
-        try {
-          const target = new URL(url);
-          if (target.origin === allowedOrigin) {
-            const size = popupSize(features);
-            return {
-              action: 'allow',
-              createWindow: (options) => {
-                const child = new BrowserWindow({
-                  ...options,
-                  width: size.width,
-                  height: size.height,
-                  show: false,
-                  webPreferences: {
-                    ...options.webPreferences,
-                    sandbox: true,
-                    contextIsolation: true,
-                    nodeIntegration: false,
-                    webSecurity: true,
-                    session: sharedSession,
-                  },
-                });
-                child.once('ready-to-show', () => {
-                  if (!child.isDestroyed()) child.show();
-                });
-                attachNavGuard(child.webContents);
-                installFullscreenToggle(child.webContents, child);
-                installReloadShortcut(child.webContents);
-                installZoomShortcuts(child.webContents);
-                return child.webContents;
-              },
-            };
-          }
-          if (target.protocol === 'http:' || target.protocol === 'https:')
-            void shell.openExternal(url);
-        } catch {
-          /* deny malformed URLs */
-        }
-        return { action: 'deny' };
-      });
-      // Navigation guard (security): a retained profile view may only
-      // navigate within its own origin — the same same-origin rule as the
-      // window-open guard above. Same-origin navigations are allowed;
-      // http(s) targets are handed to the OS browser via
-      // shell.openExternal; everything else is denied. The main process's
-      // own loadURL calls do not emit will-navigate, so the view manager's
-      // initial page loads are unaffected.
-      const attachNavGuard = (contents: typeof view.webContents): void => {
-        contents.on('will-navigate', (event, url) => {
-          try {
-            const target = new URL(url);
-            if (target.origin === allowedOrigin) return; // same-origin: allow
-            if (target.protocol === 'http:' || target.protocol === 'https:') {
-              void shell.openExternal(url);
-            }
-          } catch {
-            /* malformed URL: deny below */
-          }
-          event.preventDefault();
-        });
-      };
-      attachNavGuard(view.webContents);
-      // Rail-selection shortcuts: before-input-event runs in the browser
-      // process, so a chord is caught before the renderer. The always-safe
-      // digits (Ctrl+1/2/9) produce no PTY byte and switch synchronously.
-      // The conditional chords (Ctrl+3..8, Tab/Shift+Tab) are live
-      // terminal bytes, so they are never preventDefaulted; the terminal-
-      // focus probe runs after the dispatch and switches only when the
-      // page is not focused in a terminal.
-      view.webContents.on('before-input-event', (event, input) => {
-        if (input.type !== 'keyDown') return;
-        if (!input.control || input.alt || input.meta) return;
-        const ctrl = this.controller;
-        if (!ctrl) return;
-        const profiles = ctrl.state().profiles;
-        const target = resolveRailChord(input, profiles.length);
-        if (!target) return;
-        const select = (): void => {
-          try {
-            if (target.kind === 'index') {
-              ctrl.setActive(profiles[target.index].id);
-              return;
-            }
-            const activeIdx = profiles.findIndex(
-              (p) => p.id === ctrl.state().activeId,
-            );
-            const step = target.kind === 'next' ? 1 : -1;
-            const base = activeIdx < 0 ? (step === 1 ? -1 : 0) : activeIdx;
-            ctrl.setActive(
-              profiles[(base + step + profiles.length) % profiles.length].id,
-            );
-          } catch (err) {
-            console.log(
-              `phi-desktop: rail select ${input.key}: ${String(err)}`,
-            );
-          }
-        };
-        if (target.kind === 'index' && ALWAYS_SAFE_RAIL_CHORDS.has(input.key)) {
-          event.preventDefault();
-          select();
-          return;
-        }
-        void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(
-          (raw) => {
-            if (raw === true) return;
-            select();
-          },
-          () => {},
-        );
-      });
-      view.webContents.on('page-title-updated', (_event, title) => {
-        this.onProfileTitleUpdated(view, origin, title);
-        this.pollCpu();
-        // The remote app titles its page only once the hostname/accent are
-        // live, so identity observation rides this event; the rail snapshot
-        // is repushed only after a real result.
-        void this.observeProfileIdentity(view, origin).then((identity) => {
-          if (identity !== null) {
-            this.pushRailState();
-            this.refreshWindowTitle();
-            // The observed accent drives the header's chrome; re-push the
-            // active server so the main view page picks it up.
-            this.pushActiveServer();
-          }
-        });
-      });
-      // Fresh rail snapshot after a view finishes loading, plus the
-      // desktop-local file-action listener install (executeJavaScript only
-      // — no preload or IPC on remote origins).
-      view.webContents.on('did-finish-load', () => {
-        this.loadedViews.add(view);
+      this.railView = rail;
+      this.trustedSessionSenders.add(rail.webContents);
+      win.contentView.addChildView(rail);
+      // Re-apply the bounds once the page loads, then push a fresh rail
+      // snapshot.
+      rail.webContents.on('did-finish-load', () => {
+        if (!isCurrent()) return;
+        layoutRail();
         this.pushRailState();
-        void view.webContents
-          .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
-          .catch(() => {});
-        // A first activation can request header config before this body has
-        // populated its workspace selector. Re-push the active server after
-        // load so the main header reads this server's actual selected project.
-        const state = this.controller?.state();
-        const active = state?.profiles.find(
-          (profile) => profile.id === state.activeId,
-        );
-        if (active?.origin === origin) this.pushActiveServer();
       });
-      return view;
-    };
-    const defaultBounds = (): {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    } => {
-      // WebContentsView bounds are relative to the window's CONTENT area,
-      // so the content bounds drive the active view's size — never the
-      // outer frame bounds. The retained bodies start below the main view
-      // page's vendored header row (HEADER_HEIGHT) and sit right of the
-      // rail gutter; the header is never covered.
-      const b = win.getContentBounds();
-      return {
-        x: RAIL_WIDTH,
-        y: HEADER_HEIGHT,
-        width: b.width - RAIL_WIDTH,
-        height: b.height - HEADER_HEIGHT,
-      };
-    };
-    this.profileViews = new ProfileViewManager({
-      win,
-      makeView,
-      defaultBounds,
-      railWidth: RAIL_WIDTH,
-      log: (msg) => console.log(`phi-desktop: views: ${msg}`),
-    });
-    // Sync every persisted profile into the view manager so setActive
-    // can find the origin to loadURL. Without this, setActive returns
-    // silently (the profile was never registered with the manager).
-    for (const p of this.controller.state().profiles) {
-      this.profileViews.addProfile(p.id, p.origin);
-    }
-    // The rail begins below the main view page's header row. Its top edge
-    // sits at HEADER_HEIGHT so the vendored header is never overlapped by
-    // a rail entry.
-    const layoutRail = (): void => {
-      if (this.railView && !this.railView.webContents.isDestroyed()) {
-        const b = win.getContentBounds();
-        this.railView.setBounds({
-          x: 0,
-          y: HEADER_HEIGHT,
-          width: RAIL_WIDTH,
-          height: Math.max(0, b.height - HEADER_HEIGHT),
-        });
-      }
-    };
-    // Recomputes the two child regions (active profile body + rail) from
-    // the content bounds. The main view page's header row occupies
-    // y=0..HEADER_HEIGHT as the window's own webContents; the children
-    // live below it.
-    const layoutChildren = (): void => {
-      this.profileViews?.onWindowResize();
       layoutRail();
+      try {
+        await rail.webContents.loadFile(
+          path.join(app.getAppPath(), 'dist', 'renderer.html'),
+        );
+      } catch (err) {
+        console.log(`phi-desktop: rail loadFile failed: ${String(err)}`);
+      }
+      if (!isCurrent()) return;
+      if (!rail.webContents.isDestroyed()) this.pushRailState();
+      // The main view page IS the window's own webContents (the vendored
+      // header + caption controls + empty body area); the rail and the
+      // retained profile views are the only child views. Push the current
+      // window state and active server once the page is live.
+      win.webContents.on('did-finish-load', () => {
+        if (!isCurrent()) return;
+        this.mainPageReady = true;
+        this.pushWindowState();
+        this.pushActiveServer();
+        this.drainLaunchPayloads();
+      });
+      // Install readiness before the local page can synchronously finish loading.
+      void win.loadFile(path.join(here, '..', 'web', 'index.html'));
     };
-    // Window resize: recompute the children from the content bounds.
-    win.on('resize', () => layoutChildren());
-    // Maximize/restore change the content bounds; the window-state icon follows.
-    win.on('maximize', () => {
-      layoutChildren();
-      this.pushWindowState();
-    });
-    win.on('unmaximize', () => {
-      layoutChildren();
-      this.pushWindowState();
-    });
+    this.buildWindowSession = buildWindowSession;
+    const initialBuild = buildWindowSession(win);
+    this.sessionChain = initialBuild.then(
+      () => undefined,
+      () => undefined,
+    );
+    await initialBuild;
+    /** Only local renderers owned by the current shell may mutate host state. */
+    const isCurrentSessionSender = (
+      event: IpcMainEvent | IpcMainInvokeEvent,
+    ): boolean => {
+      const current = this.liveMainWindow();
+      return (
+        current !== null &&
+        (event.sender === current.webContents ||
+          this.trustedSessionSenders.has(event.sender))
+      );
+    };
+    const isMainViewSender = (event: IpcMainInvokeEvent): boolean => {
+      const current = this.liveMainWindow();
+      return current !== null && event.sender === current.webContents;
+    };
     // Rail renderer click handler (window.electron.postSelectProfile):
     // activate the clicked profile.
-    ipcMain.on('phi:select-profile', (_event, id: unknown) => {
+    ipcMain.on('phi:select-profile', (event, id: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const ctrl = this.controller;
       if (!ctrl || typeof id !== 'string' || id === '') return;
       try {
@@ -1989,7 +2341,8 @@ export class DesktopHost {
     });
     // Activate the profile, then open its own hostname/session selector on
     // its retained view (the guarded #hostname-display click).
-    ipcMain.on('phi:open-server-sessions', (_event, id: unknown) => {
+    ipcMain.on('phi:open-server-sessions', (event, id: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const ctrl = this.controller;
       if (!ctrl || typeof id !== 'string' || id === '') return;
       try {
@@ -2004,11 +2357,14 @@ export class DesktopHost {
     });
     // A modal child window hosting the local picker.html form via loadFile
     // with the sandboxed preload.
-    ipcMain.on('phi:open-picker', () => {
+    ipcMain.on('phi:open-picker', (event) => {
+      if (!isCurrentSessionSender(event)) return;
+      const parent = this.liveMainWindow();
+      if (!parent) return;
       const picker = new BrowserWindow({
         width: 500,
         height: 420,
-        parent: win,
+        parent,
         modal: true,
         show: false,
         resizable: false,
@@ -2020,8 +2376,14 @@ export class DesktopHost {
           preload: path.join(here, 'preload.js'),
         },
       });
+      this.sessionChildren.add(picker);
+      this.trustedSessionSenders.add(picker.webContents);
+      picker.once('closed', () => {
+        this.sessionChildren.delete(picker);
+        this.trustedSessionSenders.delete(picker.webContents);
+      });
       void picker.loadFile(path.join(here, 'picker.html'));
-      installFullscreenToggle(picker.webContents, win);
+      installFullscreenToggle(picker.webContents, parent);
       installReloadShortcut(picker.webContents);
       installZoomShortcuts(picker.webContents);
       picker.once('ready-to-show', () => {
@@ -2032,6 +2394,7 @@ export class DesktopHost {
     // conflict throws and is logged); the profile is registered with the
     // retained view manager, then activated.
     ipcMain.on('phi:add-server', (event, url: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const ctrl = this.controller;
       if (!ctrl || typeof url !== 'string' || url === '') return;
       try {
@@ -2055,7 +2418,8 @@ export class DesktopHost {
     });
     // Requires a nonempty profile id and a nonempty name; controller.rename
     // throws on unknown ids — logged, no reply channel.
-    ipcMain.on('phi:rename-profile', (_event, id: unknown, name: unknown) => {
+    ipcMain.on('phi:rename-profile', (event, id: unknown, name: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const ctrl = this.controller;
       if (
         !ctrl ||
@@ -2077,7 +2441,8 @@ export class DesktopHost {
     // setActive(activeId) when one remains, setActive(null) when the store
     // is empty (the controller's active-changed fallback to '' would not
     // clear the view manager).
-    ipcMain.on('phi:remove-profile', (_event, id: unknown) => {
+    ipcMain.on('phi:remove-profile', (event, id: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const ctrl = this.controller;
       if (!ctrl || typeof id !== 'string' || id === '') return;
       const origin =
@@ -2103,7 +2468,8 @@ export class DesktopHost {
     });
     ipcMain.on(
       'phi:reorder-profile',
-      (_event, id: unknown, beforeId: unknown) => {
+      (event, id: unknown, beforeId: unknown) => {
+        if (!isCurrentSessionSender(event)) return;
         const ctrl = this.controller;
         if (!ctrl || typeof id !== 'string' || id === '') return;
         if (
@@ -2118,72 +2484,33 @@ export class DesktopHost {
         }
       },
     );
-    ipcMain.on('phi:reload-profile', (_event, id: unknown) => {
+    ipcMain.on('phi:reload-profile', (event, id: unknown) => {
+      if (!isCurrentSessionSender(event)) return;
       const targetId = typeof id === 'string' && id !== '' ? id : undefined;
       this.profileViews?.reloadActive(targetId);
     });
-    ipcMain.on('phi:reload-all-servers', () => {
+    ipcMain.on('phi:reload-all-servers', (event) => {
+      if (!isCurrentSessionSender(event)) return;
       this.profileViews?.reloadAll();
-    });
-    // Rail renderer: a never-hidden child view spanning the left rail
-    // gutter (RAIL_WIDTH px), loading the local rail page
-    // (renderer.html + renderer.js) via loadFile. Destroyed only at quit
-    // (the before-quit teardown, alongside profileViews.destroyAll()). The
-    // rail page is LOCAL and needs the typed preload bridge, so the preload
-    // is attached to THIS view only; the makeView factory above stays
-    // unpreloaded — remote profile origins never run the bridge.
-    const rail = new WebContentsView({
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-        preload: path.join(here, 'preload.js'),
-        session: sharedSession,
-      },
-    });
-    this.railView = rail;
-    win.contentView.addChildView(rail);
-    // Re-apply the bounds once the page loads, then push a fresh rail
-    // snapshot.
-    rail.webContents.on('did-finish-load', () => {
-      layoutRail();
-      this.pushRailState();
-    });
-    layoutRail();
-    try {
-      await rail.webContents.loadFile(
-        path.join(app.getAppPath(), 'dist', 'renderer.html'),
-      );
-    } catch (err) {
-      console.log(`phi-desktop: rail loadFile failed: ${String(err)}`);
-    }
-    if (!rail.webContents.isDestroyed()) this.pushRailState();
-    // The main view page IS the window's own webContents (the vendored
-    // header + caption controls + empty body area); the rail and the
-    // retained profile views are the only child views. Push the current
-    // window state and active server once the page is live.
-    win.webContents.on('did-finish-load', () => {
-      this.pushWindowState();
-      this.pushActiveServer();
     });
     // Window-control IPC: only the main view page may drive the window;
     // any other sender (a remote profile origin, the rail, the picker) is
     // rejected.
-    const isMainViewSender = (event: IpcMainInvokeEvent): boolean =>
-      event.sender === win.webContents;
     ipcMain.handle('phi:window-minimize', (event) => {
-      if (!isMainViewSender(event)) return;
-      win.minimize();
+      const current = this.liveMainWindow();
+      if (!current || !isMainViewSender(event)) return;
+      current.minimize();
     });
     ipcMain.handle('phi:window-toggle-maximize', (event) => {
-      if (!isMainViewSender(event)) return;
-      if (win.isMaximized()) win.unmaximize();
-      else win.maximize();
+      const current = this.liveMainWindow();
+      if (!current || !isMainViewSender(event)) return;
+      if (current.isMaximized()) current.unmaximize();
+      else current.maximize();
     });
     ipcMain.handle('phi:window-close', (event) => {
-      if (!isMainViewSender(event)) return;
-      win.close();
+      const current = this.liveMainWindow();
+      if (!current || !isMainViewSender(event)) return;
+      current.close();
     });
     // The main view page resolves the ACTIVE server's /api/config through
     // the main process (a file:// page must not fetch a remote origin
@@ -2206,18 +2533,30 @@ export class DesktopHost {
     // user with valid persisted credentials never sees the unlock
     // modal. Failures (server rotation, corrupted file, etc.) silently
     // fall back to a prompt on the first 401.
-    void this.bootstrapStoredCredentials(accessAuth);
-
     const sendAuthRequired = (info: AuthRequired): void => {
-      if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-      win.webContents.send('phi:auth-required', info);
+      const current = this.liveMainWindow();
+      if (
+        info.generation !== this.sessionGeneration ||
+        !current ||
+        current.webContents.isDestroyed()
+      )
+        return;
+      current.webContents.send('phi:auth-required', info);
     };
-    const sendBodyObscuring = (obscured: boolean): void => {
-      if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-      win.webContents.send('phi:body-obscuring', obscured);
+    const sendBodyObscuring = (
+      obscured: boolean,
+      generation = this.sessionGeneration,
+    ): void => {
+      const current = this.liveMainWindow();
+      if (
+        generation !== this.sessionGeneration ||
+        !current ||
+        current.webContents.isDestroyed()
+      )
+        return;
+      current.webContents.send('phi:body-obscuring', obscured);
       this.profileViews?.setObscured(obscured);
     };
-
     /** Waits for one main-frame load without exposing a timer or callback to
      *  the remote page. Used both before the one-time login and after reload. */
     const waitForBodyLoad = (
@@ -2256,6 +2595,8 @@ export class DesktopHost {
       origin: string;
       abort: AbortController;
       epoch: number;
+      generation: number;
+      auth: AccessAuth;
     }): Promise<
       | { ok: true }
       | { ok: false; code: 'stale' | 'unavailable'; message: string }
@@ -2264,7 +2605,8 @@ export class DesktopHost {
       if (
         !ctrl ||
         ctrl.state().activeId !== pending.profileId ||
-        pending.abort.signal.aborted
+        pending.abort.signal.aborted ||
+        pending.generation !== this.sessionGeneration
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
       }
@@ -2288,7 +2630,9 @@ export class DesktopHost {
           message: 'The server view did not finish loading.',
         };
       }
-      const login = await accessAuth.createLoginProof(
+      if (pending.generation !== this.sessionGeneration)
+        return { ok: false, code: 'stale', message: 'Prompt expired.' };
+      const login = await pending.auth.createLoginProof(
         pending.origin,
         pending.abort.signal,
       );
@@ -2308,6 +2652,7 @@ export class DesktopHost {
       if (
         (pendingUnlock !== null && pendingUnlock !== pending) ||
         pending.epoch !== activeEpoch ||
+        pending.generation !== this.sessionGeneration ||
         ctrl.state().activeId !== pending.profileId
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
@@ -2336,6 +2681,7 @@ export class DesktopHost {
       if (
         (pendingUnlock !== null && pendingUnlock !== pending) ||
         pending.epoch !== activeEpoch ||
+        pending.generation !== this.sessionGeneration ||
         ctrl.state().activeId !== pending.profileId
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
@@ -2350,6 +2696,7 @@ export class DesktopHost {
       if (
         (pendingUnlock !== null && pendingUnlock !== pending) ||
         pending.epoch !== activeEpoch ||
+        pending.generation !== this.sessionGeneration ||
         ctrl.state().activeId !== pending.profileId
       ) {
         return { ok: false, code: 'stale', message: 'Prompt expired.' };
@@ -2369,19 +2716,26 @@ export class DesktopHost {
      *  the silent path through while the active-id check still aborts on
      *  a rail switch. */
     const silentBodyReauth = async (
+      auth: AccessAuth,
       origin: string,
       profileId: string,
+      generation: number,
     ): Promise<
       | { ok: true }
       | { ok: false; code: 'stale' | 'unavailable'; message: string }
-    > =>
-      authenticateBodyView({
+    > => {
+      if (generation !== this.sessionGeneration)
+        return { ok: false, code: 'stale', message: 'Session expired.' };
+      return authenticateBodyView({
         requestId: '',
         profileId,
         origin,
         abort: new AbortController(),
         epoch: activeEpoch,
+        generation,
+        auth,
       });
+    };
 
     /** Per-origin coalescing for the full config fetch + reauth +
      *  retry sequence. Two concurrent 10s polls for the same origin
@@ -2393,7 +2747,6 @@ export class DesktopHost {
      *  credential and prompts. Joining the in-flight Promise prevents
      *  the second fetchConfig from issuing until the first finishes.
      *  Cleared when the operation resolves. */
-    const configOpInFlight = new Map<string, Promise<unknown>>();
     /** Independent body-reauth retry chain. silentBodyReauth can fail
      *  for transient reasons (the body view tearing down from a
      *  server restart); the next config poll uses the fresh main
@@ -2401,31 +2754,42 @@ export class DesktopHost {
      *  would otherwise stay stuck on its own auth UI. Up to 3
      *  attempts with 2s/4s/6s backoff. Per-origin dedup; cleared when
      *  the chain resolves. */
-    const bodyReauthInFlight = new Map<string, Promise<void>>();
     /** Fire-and-forget body-reauth retry with backoff. Coalesces
      *  concurrent requests for the same origin. Stops early when
      *  the active profile switches away from this origin. */
     const scheduleBodyReauthRetry = (
+      auth: AccessAuth,
       origin: string,
       profileId: string,
+      generation: number,
     ): void => {
-      const existing = bodyReauthInFlight.get(origin);
+      const bodyOps = this.bodyReauthInFlight;
+      const existing = bodyOps.get(origin);
       if (existing) return;
       const p = (async (): Promise<void> => {
         for (let attempt = 1; attempt <= 3; attempt++) {
           if (attempt > 1) {
             await new Promise((r) => setTimeout(r, 2000 * (attempt - 1)));
           }
-          if (this.controller?.state().activeId !== profileId) return;
-          const result = await silentBodyReauth(origin, profileId);
+          if (
+            generation !== this.sessionGeneration ||
+            this.controller?.state().activeId !== profileId
+          )
+            return;
+          const result = await silentBodyReauth(
+            auth,
+            origin,
+            profileId,
+            generation,
+          );
           if (result.ok) return;
           console.log(
             `phi-desktop: silent body reauth retry ${attempt}/3 ${origin}: ${result.message}`,
           );
         }
       })();
-      bodyReauthInFlight.set(origin, p);
-      p.finally(() => bodyReauthInFlight.delete(origin));
+      bodyOps.set(origin, p);
+      p.finally(() => bodyOps.delete(origin));
     };
 
     ipcMain.handle('phi:server-config', async (event) => {
@@ -2441,11 +2805,19 @@ export class DesktopHost {
       // before any per-call gate could run; the outer coalescing
       // prevents two stale fetches from both clobbering a
       // freshly-installed cookie.
+      const configOpInFlight = this.configOpInFlight;
       const cached = configOpInFlight.get(origin);
       if (cached !== undefined) return cached;
+      const auth = accessAuth;
       const promise = (async (): Promise<unknown> => {
-        const capture = { profileId: active.id, origin, ts: Date.now() };
-        const result = await accessAuth.fetchConfig(origin);
+        const capture = {
+          profileId: active.id,
+          origin,
+          generation: this.sessionGeneration,
+          ts: Date.now(),
+        };
+        const result = await auth.fetchConfig(origin);
+        if (capture.generation !== this.sessionGeneration) return null;
         // A config response for the outgoing server must never repaint the
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
@@ -2454,18 +2826,27 @@ export class DesktopHost {
         // result.kind === 'unauthorized': the server requires access.
         // Validate the status before prompting. Re-check active profile at
         // every await point to avoid A-response-after-switch races.
-        if (ctrl.state().activeId !== active.id) return null;
-        const status = await accessAuth
+        if (
+          capture.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== active.id
+        )
+          return null;
+        const status = await auth
           .fetchStatus(
             origin,
             pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
           )
           .catch(() => null);
-        if (status === null) return null;
+        if (capture.generation !== this.sessionGeneration || status === null)
+          return null;
         if (status.kind === 'no-auth') {
           // Server reports no auth protection — the unlock is moot.
-          const cfg = await accessAuth.fetchConfig(origin).catch(() => null);
-          if (ctrl.state().activeId !== capture.profileId) return null;
+          const cfg = await auth.fetchConfig(origin).catch(() => null);
+          if (
+            capture.generation !== this.sessionGeneration ||
+            ctrl.state().activeId !== capture.profileId
+          )
+            return null;
           return cfg?.kind === 'ok' ? cfg.config : null;
         }
         if (status.kind === 'unavailable') return null;
@@ -2493,26 +2874,29 @@ export class DesktopHost {
             status.iterations === cred.iterations &&
             status.salt.equals(cred.salt);
           let unlock: Awaited<
-            ReturnType<typeof accessAuth.tryUnlockWithVerifier>
+            ReturnType<typeof auth.tryUnlockWithVerifier>
           > | null = null;
           if (trustMatches) {
             const verifierCopy = Buffer.from(cred.verifier);
             try {
-              unlock = await accessAuth.tryUnlockWithVerifier(
-                origin,
-                verifierCopy,
-              );
+              unlock = await auth.tryUnlockWithVerifier(origin, verifierCopy);
             } finally {
               verifierCopy.fill(0);
             }
           }
+          if (capture.generation !== this.sessionGeneration) return null;
           if (unlock?.kind === 'ok' && ctrl.state().activeId === active.id) {
             // Main-process cookie is fresh; the body's Chromium cookie
             // is still stale, so silently re-login + reload it via the
             // verifier cached in AccessAuth.lastVerifier (the typed
             // password never enters the renderer — the trust model is
             // unchanged).
-            const bodyResult = await silentBodyReauth(origin, active.id);
+            const bodyResult = await silentBodyReauth(
+              auth,
+              origin,
+              active.id,
+              capture.generation,
+            );
             if (!bodyResult.ok) {
               console.log(
                 `phi-desktop: silent body reauth ${origin}: ${bodyResult.message}`,
@@ -2521,10 +2905,18 @@ export class DesktopHost {
               // never re-enters the 401 branch, so the body would
               // otherwise stay stuck on its own auth UI. Schedule an
               // independent retry with backoff (coalesced per origin).
-              scheduleBodyReauthRetry(origin, active.id);
+              scheduleBodyReauthRetry(
+                auth,
+                origin,
+                active.id,
+                capture.generation,
+              );
             }
-            const retry = await accessAuth.fetchConfig(origin);
-            if (ctrl.state().activeId === active.id) {
+            const retry = await auth.fetchConfig(origin);
+            if (
+              capture.generation === this.sessionGeneration &&
+              ctrl.state().activeId === active.id
+            ) {
               if (retry.kind === 'ok') return retry.config;
               if (retry.kind === 'unauthorized') {
                 // Re-auth said ok but the server still rejects — the
@@ -2559,19 +2951,23 @@ export class DesktopHost {
           // unreachable it surfaces 'unavailable' which the renderer
           // never paints as a real prompt.
         }
+        if (capture.generation !== this.sessionGeneration) return null;
         pendingUnlock = {
           requestId: randomRequestId(),
           profileId: capture.profileId,
           origin: capture.origin,
           abort: new AbortController(),
           epoch: activeEpoch,
+          generation: capture.generation,
+          auth,
         };
-        sendBodyObscuring(true);
+        sendBodyObscuring(true, pendingUnlock.generation);
         sendAuthRequired({
           requestId: pendingUnlock.requestId,
           profileId: pendingUnlock.profileId,
           origin: pendingUnlock.origin,
           label: active.name !== '' ? active.name : pendingUnlock.origin,
+          generation: pendingUnlock.generation,
         });
         return null; // caller will retry once phi:auth-unlock resolves
       })();
@@ -2632,7 +3028,7 @@ export class DesktopHost {
       if (unlockInFlight) return { ok: false, code: 'stale', message: 'busy' };
       unlockInFlight = true;
       try {
-        const result = await accessAuth.tryUnlock(
+        const result = await pending.auth.tryUnlock(
           pending.origin,
           password,
           pending.abort.signal,
@@ -2653,7 +3049,11 @@ export class DesktopHost {
           // the browser itself stores in `localStorage` under the same
           // shape). Without this, every launch prompts for the
           // password even though the user already proved ownership.
-          this.persistVerifierAfterUnlock(pending.origin, accessAuth);
+          this.persistVerifierAfterUnlock(
+            pending.origin,
+            pending.auth,
+            pending.generation,
+          );
           return { ok: true, config: result.config };
         }
         // Wrong-password, rate-limit, and transient failures keep the same
@@ -2713,19 +3113,19 @@ export class DesktopHost {
           .catch(() => {});
       }
     });
-    // --server <url>: ensure the server exists as a profile — added only
-    // when no profile matches the URL — then activate it, via the shared
-    // activateServerUrl helper.
-    const serverArg = (() => {
-      const eqIdx = process.argv.findIndex((a) => a.startsWith('--server='));
-      if (eqIdx >= 0) return process.argv[eqIdx].slice('--server='.length);
-      const spIdx = process.argv.indexOf('--server');
-      return spIdx >= 0 ? process.argv[spIdx + 1] : undefined;
-    })();
-    if (serverArg !== undefined) this.activateServerUrl(serverArg);
-    // Startup restore: when the store already has profiles and no explicit
-    // selection (--server) activated one, the MRU profile becomes active.
+    // Queue startup arguments through the same readiness gate as a forwarded launch.
+    const bootArgs = parseMainArgs(process.argv.slice(1));
+    const initialPayloads = classifyInitialLaunch(
+      bootArgs.argvForInitialLaunch,
+    );
+    this.handleLaunch(initialPayloads);
+    // A queued explicit --server is the startup winner. Do not eagerly load
+    // MRU first: launch delivery activates only the selected profile lazily.
+    const initialServerWins = initialPayloads.some(
+      (payload) => payload.kind === 'server',
+    );
     if (
+      !initialServerWins &&
       this.controller.state().activeId === '' &&
       this.controller.state().profiles.length > 0
     ) {
@@ -2769,33 +3169,14 @@ export class DesktopHost {
       registerHotkey(
         resolveAccelerator(),
         () => {
-          if (this.mainWindow) {
-            if (this.mainWindow.isMinimized()) this.mainWindow.restore();
-            // A close-to-tray window is hidden, not minimized — show() brings it back.
-            this.mainWindow.show();
-            this.mainWindow.focus();
-          }
+          this.foreground();
         },
         { log: (msg) => console.log(msg) },
       ),
     );
-    // Route this instance's own positional phi:// and http(s):// args
-    // exactly like a forwarded second launch, after the page is loaded so
-    // the preload's listeners exist. Server payloads go to
-    // activateServerUrl; deep links keep the FORWARD_CHANNEL path.
-    const ownPayloads = classifyArgv(process.argv.slice(1));
-    win.webContents.once('did-finish-load', () => {
-      for (const payload of ownPayloads) {
-        if (payload.kind === 'server') this.activateServerUrl(payload.value);
-        else win.webContents.send(FORWARD_CHANNEL, payload);
-      }
-    });
     app.on('activate', () => {
-      // macOS convention: re-create a window when the dock icon is clicked
-      // and none are open.
-      if (BrowserWindow.getAllWindows().length === 0) {
-        this.mainWindow = this.createMainWindow();
-      }
+      // Picker/popup windows do not count as a live main session.
+      this.foreground();
     });
   }
 }
