@@ -21,6 +21,7 @@
     "smoke": "vitest run test/smoke.test.ts"
   },
   "devDependencies": {
+    "commander": "^12.1.0",
     "electron": "33.4.11",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20.19.43",

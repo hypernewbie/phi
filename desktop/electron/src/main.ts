@@ -21,11 +21,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopHost } from './desktop.js';
 import { setupSingleInstance, FORWARD_CHANNEL } from './single-instance.js';
-import {
-  parseDeepLink,
-  dispatchDeepLink,
-  DEEPLINK_CHANNEL,
-} from './deeplink.js';
+import { parseDeepLink, DEEPLINK_CHANNEL } from './deeplink.js';
+import { parseMainArgs } from './argv.js';
 import {
   installProtocol,
   uninstallProtocol,
@@ -74,7 +71,8 @@ export function migrateUserData(targetDir: string, appDataDir: string): void {
 // smoke mode. When both are given, --register-protocol runs and
 // --unregister-protocol is ignored. classifyArgv drops every flag, so a
 // second launch carrying these flags is never forwarded.
-if (process.argv.slice(1).includes('--register-protocol')) {
+const bootArgs = parseMainArgs(process.argv.slice(1));
+if (bootArgs.registerProtocol) {
   try {
     const reg = await installProtocol(realPlatform, [
       path.join(here, 'main.js'),
@@ -86,7 +84,7 @@ if (process.argv.slice(1).includes('--register-protocol')) {
     console.error(`phi-desktop: protocol registration failed: ${String(err)}`);
     app.exit(1);
   }
-} else if (process.argv.slice(1).includes('--unregister-protocol')) {
+} else if (bootArgs.unregisterProtocol) {
   try {
     const unreg = await uninstallProtocol(realPlatform);
     console.log(`uninstalled at ${unreg.path}, exe ${unreg.exe}`);
@@ -127,12 +125,13 @@ const host = new DesktopHost();
 const singleInstance = setupSingleInstance(
   () => host.window(),
   FORWARD_CHANNEL,
-  (url) => host.activateServerUrl(url),
+  undefined,
+  (payloads) => host.handleLaunch(payloads),
 );
 if (!singleInstance.primary) {
-  // Losing side: classify this launch's args and quit; app.quit()
-  // happens inside acquire().
-  singleInstance.acquire(process.argv.slice(1));
+  // Losing side: classify this launch's positional args and quit;
+  // app.quit() happens inside acquire().
+  singleInstance.acquire(bootArgs.positional);
 }
 
 // Renderer-encountered phi:// strings come back to the main process on
@@ -141,7 +140,9 @@ if (!singleInstance.primary) {
 ipcMain.on(DEEPLINK_CHANNEL, (_event, raw: unknown) => {
   if (typeof raw !== 'string') return;
   const parsed = parseDeepLink(raw);
-  if (parsed.ok) dispatchDeepLink(host.window(), parsed);
+  if (parsed.ok) {
+    host.handleLaunch([{ kind: 'deep-link', value: raw }]);
+  }
 });
 
 app.whenReady().then(() => {

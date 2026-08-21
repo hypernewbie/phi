@@ -51,6 +51,7 @@ export interface SingleInstanceWindow {
     send(channel: string, payload: unknown): void;
     isDestroyed(): boolean;
   };
+  isDestroyed(): boolean;
   restore(): void;
   focus(): void;
   isMinimized(): boolean;
@@ -97,6 +98,8 @@ export interface SingleInstanceHandle {
  * phase-2 contract, unchanged).
  */
 export type ServerUrlHandler = (url: string) => void;
+/** Host-owned delivery is asynchronous-safe across a destroyed shell. */
+export type LaunchPayloadHandler = (payloads: ForwardPayload[]) => void;
 
 /**
  * Classifies positional launch args into forward payloads. phi:// args
@@ -157,14 +160,14 @@ function forwardToWindow(
   channel: string,
   win: SingleInstanceWindow | null,
 ): void {
-  if (!win) return;
+  if (!win || win.isDestroyed()) return;
   for (const payload of payloads) {
     if (!win.webContents.isDestroyed()) win.webContents.send(channel, payload);
   }
 }
 
 function foregroundWindow(win: SingleInstanceWindow | null): void {
-  if (!win) return;
+  if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
   win.focus();
 }
@@ -182,6 +185,7 @@ export function setupSingleInstance(
   window: WindowProvider,
   forwardChannel: string = FORWARD_CHANNEL,
   onServerUrl?: ServerUrlHandler,
+  onLaunchPayloads?: LaunchPayloadHandler,
 ): SingleInstanceHandle {
   const primary = app.requestSingleInstanceLock();
   let listenerInstalled = false;
@@ -199,10 +203,13 @@ export function setupSingleInstance(
       app.on('second-instance', (_event: unknown, argv: string[]) => {
         const win = resolveWindow(window);
         const payloads = classifyArgv(argv);
-        if (onServerUrl) {
-          // Exact incoming-server routing: every classified server payload
-          // goes to the running main process (the profile controller
-          // activates it); deep links keep the forward-to-window path.
+        if (onLaunchPayloads) {
+          // The host queues, recreates if necessary, and foregrounds only
+          // the current shell after it is ready.
+          onLaunchPayloads(payloads);
+          return;
+        } else if (onServerUrl) {
+          // Compatibility path for existing provider-based callers/tests.
           for (const payload of payloads) {
             if (payload.kind === 'server') onServerUrl(payload.value);
           }

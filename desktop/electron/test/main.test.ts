@@ -94,7 +94,7 @@ describe('src/main.ts (phase-2 single-instance + argv routing)', () => {
     expect(gateIdx).toBeLessThan(mainSource.indexOf('app.whenReady()'));
     expect(desktopSource.indexOf('new BrowserWindow(')).toBeGreaterThan(-1);
     expect(mainSource).toContain('host.window()');
-    expect(mainSource).toContain('host.activateServerUrl(');
+    expect(mainSource).toContain('host.handleLaunch(payloads)');
   });
 
   it('forwards on the documented channel with the exact payload shape and quits the loser', () => {
@@ -127,13 +127,16 @@ describe('src/main.ts (phase-2 single-instance + argv routing)', () => {
     expect(DEEPLINK_CHANNEL).toBe('phi:deeplink');
     expect(mainSource).toContain('ipcMain.on(DEEPLINK_CHANNEL');
     expect(mainSource).toContain('parseDeepLink');
-    expect(mainSource).toContain('dispatchDeepLink');
+    expect(mainSource).toContain('host.handleLaunch');
   });
 });
 
 describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
   it('handles --register-protocol before the single-instance gate, the window and whenReady', () => {
-    const flagIdx = mainSource.indexOf("'--register-protocol'");
+    // Commander-backed parsing: parseMainArgs() must run before the gate
+    // and before whenReady so the flag branch can app.exit() without
+    // acquiring the lock or opening a window.
+    const flagIdx = mainSource.indexOf('parseMainArgs(');
     const gateIdx = mainSource.indexOf('setupSingleInstance(');
     expect(flagIdx).toBeGreaterThan(-1);
     // The flag is parsed before the gate is acquired and before any
@@ -158,7 +161,8 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
   });
 
   it('handles --unregister-protocol before the gate, logging the result and exiting 0', () => {
-    const flagIdx = mainSource.indexOf("'--unregister-protocol'");
+    // Commander-backed parsing: parseMainArgs() must run before the gate.
+    const flagIdx = mainSource.indexOf('parseMainArgs(');
     const gateIdx = mainSource.indexOf('setupSingleInstance(');
     expect(flagIdx).toBeGreaterThan(-1);
     expect(flagIdx).toBeLessThan(gateIdx);
@@ -171,10 +175,8 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
 
   it('makes --register-protocol win when both flags are given (Wails parity)', () => {
     // The register branch is the if, the unregister branch the else-if.
-    const registerIdx = mainSource.indexOf("includes('--register-protocol')");
-    const unregisterIdx = mainSource.indexOf(
-      "includes('--unregister-protocol')",
-    );
+    const registerIdx = mainSource.indexOf('bootArgs.registerProtocol');
+    const unregisterIdx = mainSource.indexOf('bootArgs.unregisterProtocol');
     expect(registerIdx).toBeGreaterThan(-1);
     expect(unregisterIdx).toBeGreaterThan(registerIdx);
   });
@@ -182,9 +184,10 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
   it('reports registrationNotExercised in the smoke self-check payload', () => {
     expect(desktopSource).toContain('registrationNotExercised');
     // The smoke harness runs with the normal argv: both registration flags
-    // must be absent in the payload assertion.
-    expect(desktopSource).toContain("includes('--register-protocol')");
-    expect(desktopSource).toContain("includes('--unregister-protocol')");
+    // must be absent in the payload assertion. Commander-backed parsing
+    // exposes them as boolean fields on the parsed args.
+    expect(desktopSource).toContain('smokeArgs.registerProtocol');
+    expect(desktopSource).toContain('smokeArgs.unregisterProtocol');
   });
 });
 
@@ -334,11 +337,15 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
 
   it('routes --server and incoming server URLs through activateServerUrl (add when unmatched, then activate)', () => {
     expect(desktopSource).toContain("'--server'");
-    // The --server value is consumed through the shared helper.
-    expect(desktopSource).toContain('activateServerUrl(serverArg)');
+    // The --server value is consumed through the shared helper. Commander
+    // exposes --server as `bootArgs.argvForInitialLaunch` so classifyInitialLaunch's
+    // (unchanged) --server first-wins extraction still sees the flag.
+    expect(desktopSource).toMatch(
+      /classifyInitialLaunch\(\s*bootArgs\.argvForInitialLaunch\s*,?\s*\)/,
+    );
     // The gate in main.ts hands classified second-launch server payloads
     // to the host's helper (exact incoming-server routing).
-    expect(mainSource).toContain('host.activateServerUrl(');
+    expect(mainSource).toContain('host.handleLaunch(payloads)');
     // The helper guards the controller/view manager and logs failures.
     expect(desktopSource).toContain('activateServerUrl(raw: string): void');
     expect(desktopSource).toContain('controller not ready');
@@ -372,10 +379,10 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
   it('restores and focuses the main window from the hotkey action (Show Phi parity)', () => {
     const hotkeyIdx = desktopSource.indexOf('registerHotkey(');
     expect(
-      desktopSource.indexOf('mainWindow.restore()', hotkeyIdx),
+      desktopSource.indexOf('this.foreground()', hotkeyIdx),
     ).toBeGreaterThan(hotkeyIdx);
     expect(
-      desktopSource.indexOf('mainWindow.focus()', hotkeyIdx),
+      desktopSource.indexOf('this.foreground()', hotkeyIdx),
     ).toBeGreaterThan(hotkeyIdx);
   });
 
@@ -892,12 +899,12 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
 
   it('restores a hidden (close-to-tray) window from the tray Show Phi and the hotkey actions', () => {
     const showIdx = desktopSource.indexOf("case 'show'");
-    expect(desktopSource.indexOf('mainWindow.show()', showIdx)).toBeGreaterThan(
+    expect(desktopSource.indexOf('this.foreground()', showIdx)).toBeGreaterThan(
       showIdx,
     );
     const hotkeyIdx = desktopSource.indexOf('registerHotkey(');
     expect(
-      desktopSource.indexOf('mainWindow.show()', hotkeyIdx),
+      desktopSource.indexOf('this.foreground()', hotkeyIdx),
     ).toBeGreaterThan(hotkeyIdx);
   });
 });
@@ -1043,22 +1050,22 @@ describe('src/desktop.ts (main view page + window controls)', () => {
       "ipcMain.handle('phi:window-minimize'",
     );
     expect(
-      desktopSource.indexOf('win.minimize()', minimizeIdx),
+      desktopSource.indexOf('current.minimize()', minimizeIdx),
     ).toBeGreaterThan(minimizeIdx);
     const toggleIdx = desktopSource.indexOf(
       "ipcMain.handle('phi:window-toggle-maximize'",
     );
     expect(
-      desktopSource.indexOf('win.isMaximized()', toggleIdx),
+      desktopSource.indexOf('current.isMaximized()', toggleIdx),
     ).toBeGreaterThan(toggleIdx);
     expect(
-      desktopSource.indexOf('win.unmaximize()', toggleIdx),
+      desktopSource.indexOf('current.unmaximize()', toggleIdx),
     ).toBeGreaterThan(toggleIdx);
-    expect(desktopSource.indexOf('win.maximize()', toggleIdx)).toBeGreaterThan(
-      toggleIdx,
-    );
+    expect(
+      desktopSource.indexOf('current.maximize()', toggleIdx),
+    ).toBeGreaterThan(toggleIdx);
     const closeIdx = desktopSource.indexOf("ipcMain.handle('phi:window-close'");
-    expect(desktopSource.indexOf('win.close()', closeIdx)).toBeGreaterThan(
+    expect(desktopSource.indexOf('current.close()', closeIdx)).toBeGreaterThan(
       closeIdx,
     );
   });
@@ -1087,7 +1094,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     const guardIdx = desktopSource.indexOf('const isMainViewSender');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('event.sender === win.webContents', guardIdx),
+      desktopSource.indexOf('event.sender === current.webContents', guardIdx),
     ).toBeGreaterThan(guardIdx);
   });
 
@@ -1101,7 +1108,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(pickerIdx).toBeGreaterThan(-1);
     expect(
       desktopSource.indexOf(
-        'installFullscreenToggle(picker.webContents, win)',
+        'installFullscreenToggle(picker.webContents, parent)',
         pickerIdx,
       ),
     ).toBeGreaterThan(pickerIdx);
@@ -1253,7 +1260,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // The native-fetch cookie stays isolated. The body receives only a
     // fresh one-time challenge/proof and obtains its own cookie by making
     // its same-origin login request before reload.
-    expect(desktopSource).toContain('accessAuth.createLoginProof(');
+    expect(desktopSource).toContain('pending.auth.createLoginProof(');
     expect(desktopSource).toContain('bodyAuthLoginScript(');
     expect(desktopSource).not.toContain('sharedSession.cookies.set(');
     expect(desktopSource).not.toContain('session.defaultSession.cookies');
@@ -1293,7 +1300,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
       desktopSource.indexOf('this.storedCredentials.has(origin)', trustedIdx),
     ).toBeLessThan(promptIdx);
     expect(
-      desktopSource.indexOf('accessAuth.tryUnlockWithVerifier', trustedIdx),
+      desktopSource.indexOf('auth.tryUnlockWithVerifier', trustedIdx),
     ).toBeLessThan(promptIdx);
     // Conservative clearing: ONLY on a server-evaluated proof rejection
     // (invalid-password) or a confirmed salt/iteration rotation.
@@ -1325,16 +1332,18 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     // auth UI: schedule an independent retry with backoff (the next
     // config poll uses the fresh main cookie and never re-enters the
     // 401 branch, so the body needs its own retry chain).
-    expect(desktopSource).toContain(
-      'scheduleBodyReauthRetry(origin, active.id)',
+    expect(desktopSource).toMatch(
+      /scheduleBodyReauthRetry\(\s*\n?\s*auth,\s*\n?\s*origin,\s*\n?\s*active\.id,\s*\n?\s*capture\.generation,\s*\n?\s*\)/,
     );
-    expect(desktopSource).toContain('const bodyReauthInFlight = new Map');
+    expect(desktopSource).toContain('bodyReauthInFlight = new Map');
     expect(desktopSource).toContain('const scheduleBodyReauthRetry');
     // After a successful silent re-auth the body view is also re-logged-
     // in and reloaded via the cached verifier (B2): the body's Chromium
     // shared-session cookie is stale even when the main-process jar is
     // fresh.
-    expect(desktopSource).toContain('silentBodyReauth(origin, active.id)');
+    expect(desktopSource).toContain(
+      'silentBodyReauth(\n              auth,\n              origin,\n              active.id,\n              capture.generation,',
+    );
     // The helper itself wraps authenticateBodyView with a synthetic
     // pending; the relaxed pendingUnlock check inside
     // authenticateBodyView is the contract tweak that lets the silent
@@ -1507,7 +1516,7 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     // progress before the poll re-applies it from the new view.
     const subscribeIdx = desktopSource.indexOf('controller.subscribe(');
     expect(
-      desktopSource.indexOf('win.setProgressBar(-1)', subscribeIdx),
+      desktopSource.indexOf('current.setProgressBar(-1)', subscribeIdx),
     ).toBeGreaterThan(subscribeIdx);
     // A destroyed/no view and a failed or non-finite read clear too.
     const pollIdx = desktopSource.indexOf('pollCpu(): void');
@@ -1721,7 +1730,10 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
       readyIdx,
     );
     const installIdx = desktopSource.indexOf('installAppMenu()');
-    const createIdx = desktopSource.indexOf('createMainWindow()');
+    const createIdx = desktopSource.indexOf(
+      'const win = this.createMainWindow()',
+      installIdx,
+    );
     expect(installIdx).toBeGreaterThan(-1);
     expect(installIdx).toBeLessThan(createIdx);
   });
