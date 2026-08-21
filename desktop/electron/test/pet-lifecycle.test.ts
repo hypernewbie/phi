@@ -57,7 +57,7 @@ vi.mock("../src/petInstaller.js", () => ({ installPet: vi.fn() }));
 
 import { Controller } from "../src/controller.js";
 import { installPet } from "../src/petInstaller.js";
-import { DesktopHost } from "../src/desktop.js";
+import { DesktopHost, isPetInstallable } from "../src/desktop.js";
 import type { PetDeps, PetHandle } from "../src/petLoader.js";
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void };
@@ -90,7 +90,7 @@ beforeEach(() => {
   fakeMenu.buildFromTemplate.mockClear();
   fakeNativeImage.createFromPath.mockClear();
   fakeDialog.showErrorBox.mockClear();
-  fakeNet.fetch.mockClear();
+  fakeNet.fetch.mockReset();
   vi.mocked(installPet).mockReset();
   FakeTray.instances.length = 0;
 });
@@ -98,6 +98,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("DesktopHost optional pet lifecycle", () => {
+  it.each([
+    ["clean dev build", false, null, false, false, "darwin", false],
+    ["smoke build", true, null, true, false, "darwin", false],
+    ["Linux", true, null, false, false, "linux", false],
+    ["pet already present", true, "/pet", false, false, "darwin", false],
+    ["released supported build", true, null, false, false, "darwin", true],
+  ])("offers installation only for a %s", (_case, packaged, root, smoke, installing, platform, expected) => {
+    expect(isPetInstallable(packaged, root, smoke, installing, platform as NodeJS.Platform)).toBe(expected);
+  });
+
   it("routes one tray zoom through Controller to the live handle without duplicate delivery", () => {
     const priorPlatform = process.platform;
     const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-tray-test-"));
@@ -385,27 +395,35 @@ describe("DesktopHost optional pet lifecycle", () => {
     expect(host.petHandle).not.toBeNull();
   });
 
-  it("installs and starts the pet when the preference is initially disabled", async () => {
+  it("installs and starts through the production controller subscription when initially disabled", async () => {
     const priorPlatform = process.platform;
     const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
+    const startupStop = new Error("stop after production pet subscription wiring");
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
     fakeApp.isPackaged = true;
     fakeApp.getPath.mockReturnValue(dir);
-    mkdirSync(path.join(dir, "pet", "1.2.3", "dist"), { recursive: true });
-    writeFileSync(path.join(dir, "pet", "1.2.3", "dist", "pet-main.js"), "");
     try {
       const host = new DesktopHost();
-      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
-      vi.mocked(installPet).mockResolvedValue({ root: path.join(dir, "pet", "1.2.3") });
-      const start = vi.spyOn(host, "startPet").mockResolvedValue();
-      host.startTray();
+      const retained = handle();
+      vi.spyOn(host, "installAppMenu").mockImplementation(() => {});
+      vi.spyOn(host, "createMainWindow").mockReturnValue({} as never);
+      vi.spyOn(host, "syncTrayFromController").mockImplementation(() => { throw startupStop; });
+      vi.spyOn(host, "loadPetFactory").mockResolvedValue(() => retained);
+      vi.mocked(installPet).mockImplementation(async () => {
+        const root = path.join(dir, "pet", "1.2.3");
+        mkdirSync(path.join(root, "dist"), { recursive: true });
+        writeFileSync(path.join(root, "dist", "pet-main.js"), "");
+        return { root };
+      });
+      await expect(host.start({ installListener: vi.fn() } as never)).rejects.toBe(startupStop);
       const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
       template.find((entry) => entry.label === "Install Pet…")?.click?.();
       await flush();
+      await flush();
       expect(installPet).toHaveBeenCalledTimes(1);
       expect(host.petRoot).toBe(path.join(dir, "pet", "1.2.3"));
-      expect(host.controller.getPetEnabled()).toBe(true);
-      expect(start).not.toHaveBeenCalled();
+      expect(host.controller?.getPetEnabled()).toBe(true);
+      expect(retained.start).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
@@ -445,6 +463,7 @@ describe("DesktopHost optional pet lifecycle", () => {
     const priorPlatform = process.platform;
     const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.isPackaged = true;
     fakeApp.getPath.mockReturnValue(dir);
     try {
       const host = new DesktopHost();
@@ -464,10 +483,44 @@ describe("DesktopHost optional pet lifecycle", () => {
     }
   });
 
+  it.each([
+    ["non-OK HTTP", { ok: false, status: 503 }, "pet download failed: HTTP 503"],
+    ["arrayBuffer rejection", { ok: true, status: 200, arrayBuffer: () => Promise.reject(new Error("body unavailable")) }, "body unavailable"],
+  ])("surfaces Electron fetch bridge %s failures and restores the tray", async (_case, response, message) => {
+    const priorPlatform = process.platform;
+    const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-bridge-"));
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.isPackaged = true;
+    fakeApp.getPath.mockReturnValue(dir);
+    try {
+      const host = new DesktopHost();
+      host.controller = new Controller({ persistPath: path.join(dir, "profiles.json") });
+      fakeNet.fetch.mockResolvedValue(response);
+      vi.mocked(installPet).mockImplementation(async (deps) => {
+        await deps.fetchBytes("https://example.test/pet.tar.gz");
+        return { root: path.join(dir, "pet", "1.2.3") };
+      });
+      host.startTray();
+      const template = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; click?: () => void }>;
+      template.find((entry) => entry.label === "Install Pet…")?.click?.();
+      await flush();
+      await flush();
+      expect(fakeDialog.showErrorBox).toHaveBeenCalledWith("Pet installation failed", message);
+      const restored = fakeMenu.buildFromTemplate.mock.calls.at(-1)?.[0] as Array<{ label: string; enabled?: boolean }>;
+      expect(restored.find((entry) => entry.label === "Install Pet…")).toMatchObject({ enabled: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      fakeApp.getPath.mockReturnValue("/tmp/phi-user-data");
+      fakeApp.isPackaged = false;
+      Object.defineProperty(process, "platform", { configurable: true, value: priorPlatform });
+    }
+  });
+
   it("ignores a concurrent install command", async () => {
     const priorPlatform = process.platform;
     const dir = mkdtempSync(path.join(os.tmpdir(), "phi-pet-install-flow-"));
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    fakeApp.isPackaged = true;
     fakeApp.getPath.mockReturnValue(dir);
     const pending = deferred<{ root: string }>();
     try {

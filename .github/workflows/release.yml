@@ -92,8 +92,26 @@ jobs:
         shell: bash
         run: |
           version=${GITHUB_REF_NAME#v}
-          tar -czf "phi-pet-${version}.tar.gz" -C desktop/pet \
+          archive="phi-pet-${version}.tar.gz"
+          tar -czf "$archive" -C desktop/pet \
             dist assets package.json LICENSE-dsh-pet.txt
+          for member in \
+            dist/pet-main.js \
+            dist/pet-settings.html \
+            dist/pet-settings-view.js \
+            dist/pet-settings-preload.js \
+            assets/ \
+            package.json \
+            LICENSE-dsh-pet.txt; do
+            tar -tzf "$archive" | grep -Fx "$member" >/dev/null || {
+              echo "Missing required pet archive member: $member" >&2
+              exit 1
+            }
+          done
+          tar -tzf "$archive" | grep -q '^assets/.\+' || {
+            echo 'Pet archive assets directory is empty.' >&2
+            exit 1
+          }
           gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
             "phi-pet-${version}.tar.gz" --clobber
 

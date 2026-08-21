@@ -129,6 +129,17 @@ export function isPetAvailable(root: string | null): boolean {
   return process.platform !== 'linux' && root !== null;
 }
 
+/** Only released, supported builds with no installed pet may offer installation. */
+export function isPetInstallable(
+  appIsPackaged: boolean,
+  root: string | null,
+  smoke: boolean,
+  installing: boolean,
+  platform = process.platform,
+): boolean {
+  return appIsPackaged && platform !== 'linux' && root === null && !smoke && !installing;
+}
+
 /** The rail gutter width (px) — the rail view's width. */
 export const RAIL_WIDTH = 72;
 
@@ -339,7 +350,7 @@ export class DesktopHost {
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getPetAvailable: () => isPetAvailable(this.petRoot),
-      getPetInstallable: () => process.platform !== 'linux' && this.petRoot === null && !SMOKE && !this.petInstalling,
+      getPetInstallable: () => isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling),
       getPetInstalling: () => this.petInstalling,
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       getPetZoomPercent: () =>
@@ -450,7 +461,7 @@ export class DesktopHost {
   }
 
   private async handleInstallPet(): Promise<void> {
-    if (this.petInstalling || this.petRoot !== null || SMOKE || process.platform === 'linux') return;
+    if (!isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling)) return;
     const ctrl = this.controller;
     if (!ctrl) return;
     this.petInstalling = true;

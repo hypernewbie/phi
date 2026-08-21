@@ -2,7 +2,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverPetRoot, type PetAppLike } from "../src/petLoader.js";
 
 const tempDirs: string[] = [];
@@ -92,10 +92,16 @@ describe("discoverPetRoot", () => {
   }
  });
 
- it("keeps dev discovery precedence and smoke null behavior", () => {
-  expect(discoverPetRoot(app({ isPackaged: false }), false)).toBe(
+ it("keeps dev discovery filesystem-independent and smoke null", () => {
+  const pathExists = vi.fn(() => true);
+  expect(discoverPetRoot(app({ isPackaged: false }), false, pathExists)).toBe(
    path.resolve(import.meta.dirname, "../../pet"),
   );
-  expect(discoverPetRoot(app({ isPackaged: false }), true)).toBeNull();
+  expect(pathExists).toHaveBeenCalledWith(
+   path.join(path.resolve(import.meta.dirname, "../../pet"), "dist", "pet-main.js"),
+  );
+  pathExists.mockClear();
+  expect(discoverPetRoot(app({ isPackaged: false }), true, pathExists)).toBeNull();
+  expect(pathExists).not.toHaveBeenCalled();
  });
 });

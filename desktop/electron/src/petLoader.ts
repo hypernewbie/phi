@@ -24,6 +24,9 @@ export interface PetAppLike {
  getVersion(): string;
 }
 
+/** Injectable filesystem seam for discovery tests. */
+export type PetPathExists = (path: string) => boolean;
+
 /** Result returned by a controller-backed zoom request. */
 export type ZoomResult = { percent: number; accepted: boolean };
 
@@ -72,6 +75,7 @@ export interface PetDeps {
 export function discoverPetRoot(
  app: PetAppLike,
  smoke: boolean,
+ pathExists: PetPathExists = existsSync,
 ): string | null {
  if (smoke) return null;
  if (app.isPackaged) {
@@ -80,18 +84,18 @@ export function discoverPetRoot(
    "pet",
    app.getVersion(),
   );
-  if (existsSync(path.join(userDataCandidate, PET_MAIN_ENTRY)))
+  if (pathExists(path.join(userDataCandidate, PET_MAIN_ENTRY)))
    return userDataCandidate;
   const resourcesPath: string | undefined = (
    process as { resourcesPath?: string }
   ).resourcesPath;
   if (!resourcesPath) return null;
   const bundledCandidate = path.join(resourcesPath, PACKAGED_PET_DIR);
-  if (existsSync(path.join(bundledCandidate, PET_MAIN_ENTRY)))
+  if (pathExists(path.join(bundledCandidate, PET_MAIN_ENTRY)))
    return bundledCandidate;
   return null;
  }
  const devCandidate = path.join(here, "..", "..", "pet");
- if (existsSync(path.join(devCandidate, PET_MAIN_ENTRY))) return devCandidate;
+ if (pathExists(path.join(devCandidate, PET_MAIN_ENTRY))) return devCandidate;
  return null;
 }

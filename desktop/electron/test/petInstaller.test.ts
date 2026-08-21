@@ -1,16 +1,6 @@
 // @vitest-environment node
-import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import {
- existsSync,
- mkdirSync,
- mkdtempSync,
- readFileSync,
- readdirSync,
- rmSync,
- statSync,
- writeFileSync,
-} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,35 +12,15 @@ const tempDir = (): string => {
  tempDirs.push(dir);
  return dir;
 };
-const required = (root: string, includeLicense = true): void => {
- for (const file of [
-  'dist/pet-main.js',
-  'dist/pet-settings.html',
-  'dist/pet-settings-view.js',
-  'dist/pet-settings-preload.js',
-  'package.json',
- ]) {
-  mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-  writeFileSync(path.join(root, file), file);
- }
- mkdirSync(path.join(root, 'assets', 'thumb'), { recursive: true });
- writeFileSync(path.join(root, 'assets', 'thumb', '点击回应 - 傲娇生气（侧身展示）.webm'), 'pet');
- if (includeLicense) writeFileSync(path.join(root, 'LICENSE-dsh-pet.txt'), 'license');
-};
-const archiveFor = (includeLicense = true): Uint8Array => {
- const source = tempDir();
- required(source, includeLicense);
- const tarPath = path.join(tempDir(), 'pet.tar');
- execFileSync('tar', ['-cf', tarPath, '--format=ustar', '-C', source, 'dist', 'assets', 'package.json', ...(includeLicense ? ['LICENSE-dsh-pet.txt'] : [])]);
- return gzipSync(readFileSync(tarPath));
-};
-const depsFor = (root: string, bytes: Uint8Array, version = '1.2.3') => ({
+const depsFor = (root: string, bytes: Uint8Array, version = '1.2.3', repo = 'hypernewbie/phi') => ({
  userDataPath: root,
  appVersion: version,
- repo: 'example/repo',
+ repo,
  fetchBytes: vi.fn(async () => bytes),
  log: vi.fn(),
 });
+
+/** Hand-built ustar blocks keep this suite portable and pin UTF-8 decoding. */
 const block = (name: string, type = '0', size = 0): Uint8Array => {
  const header = Buffer.alloc(512);
  Buffer.from(name, 'utf8').copy(header, 0, 0, 100);
@@ -63,24 +33,24 @@ const block = (name: string, type = '0', size = 0): Uint8Array => {
  Buffer.from('ustar\0').copy(header, 257);
  return header;
 };
-const tar = (...entries: Uint8Array[]): Uint8Array => {
- const end = Buffer.alloc(1024);
- return Buffer.concat([...entries.map((entry) => Buffer.from(entry)), end]);
-};
+const tar = (...entries: Uint8Array[]): Uint8Array => Buffer.concat([
+ ...entries.map((entry) => Buffer.from(entry)),
+ Buffer.alloc(1024),
+]);
 const fileEntry = (name: string, contents = ''): Uint8Array => {
  const data = Buffer.from(contents);
  const padded = Buffer.alloc(Math.ceil(data.length / 512) * 512);
  data.copy(padded);
  return Buffer.concat([block(name, '0', data.length), padded]);
 };
-const completeArchive = (): Uint8Array => gzipSync(tar(
+const validArchive = (includeLicense = true): Uint8Array => gzipSync(tar(
  fileEntry('dist/pet-main.js'),
  fileEntry('dist/pet-settings.html'),
  fileEntry('dist/pet-settings-view.js'),
  fileEntry('dist/pet-settings-preload.js'),
- fileEntry('assets/.keep'),
+ fileEntry('assets/thumb/点击回应 - 傲娇生气（侧身展示）.webm', 'pet'),
  fileEntry('package.json', '{}'),
- fileEntry('LICENSE-dsh-pet.txt'),
+ ...(includeLicense ? [fileEntry('LICENSE-dsh-pet.txt')] : []),
 ));
 
 afterEach(() => {
@@ -88,10 +58,13 @@ afterEach(() => {
 });
 
 describe('installPet', () => {
- it('installs a system-tar ustar fixture including a CJK asset at the versioned root', async () => {
+ it('installs a hand-built ustar fixture including a CJK asset at the versioned root', async () => {
   const root = tempDir();
-  const deps = depsFor(root, archiveFor());
+  const deps = depsFor(root, validArchive());
   await expect(installPet(deps)).resolves.toEqual({ root: path.join(root, 'pet', '1.2.3') });
+  expect(deps.fetchBytes).toHaveBeenCalledWith(
+   'https://github.com/hypernewbie/phi/releases/download/v1.2.3/phi-pet-1.2.3.tar.gz',
+  );
   expect(existsSync(path.join(root, 'pet', '1.2.3', 'dist', 'pet-main.js'))).toBe(true);
   expect(existsSync(path.join(root, 'pet', '1.2.3', 'assets', 'thumb', '点击回应 - 傲娇生气（侧身展示）.webm'))).toBe(true);
  });
@@ -99,24 +72,26 @@ describe('installPet', () => {
  it.each([
   ['traversal', tar(fileEntry('../evil'))],
   ['absolute', tar(fileEntry('/evil'))],
+  ['dot-segment duplicate', tar(fileEntry('dist/./pet-main.js'), fileEntry('dist/pet-main.js'))],
   ['symlink', tar(block('dist/link', '2'))],
   ['duplicate', tar(fileEntry('dist/one'), fileEntry('dist/one'))],
-  ['truncated', gzipSync(Buffer.concat([block('dist/one', '0', 10), Buffer.from('x')]))],
- ])('rejects malformed %s archive entries', async (_name, bytes) => {
+  // Raw incomplete tar data: this test gzips exactly once below.
+  ['truncated', Buffer.concat([block('dist/one', '0', 10), Buffer.from('x')])],
+ ])('rejects malformed %s archive entries', async (_name, archive) => {
   const root = tempDir();
-  await expect(installPet(depsFor(root, gzipSync(bytes)))).rejects.toThrow();
+  await expect(installPet(depsFor(root, gzipSync(archive)))).rejects.toThrow();
   expect(readdirSync(path.join(root, 'pet'))).toEqual([]);
  });
 
  it('rejects an incomplete package and cleans staging', async () => {
   const root = tempDir();
-  await expect(installPet(depsFor(root, archiveFor(false)))).rejects.toThrow('incomplete');
+  await expect(installPet(depsFor(root, validArchive(false)))).rejects.toThrow('incomplete');
   expect(readdirSync(path.join(root, 'pet'))).toEqual([]);
  });
 
  it('short-circuits an idempotent install without fetching or rewriting', async () => {
   const root = tempDir();
-  const first = depsFor(root, completeArchive());
+  const first = depsFor(root, validArchive());
   await installPet(first);
   const target = path.join(root, 'pet', '1.2.3', 'dist', 'pet-main.js');
   const before = statSync(target).mtimeMs;
@@ -130,21 +105,24 @@ describe('installPet', () => {
   const root = tempDir();
   mkdirSync(path.join(root, 'pet', '0.9.0', 'dist'), { recursive: true });
   mkdirSync(path.join(root, 'pet', '.staging-old-123'), { recursive: true });
-  await installPet(depsFor(root, completeArchive()));
+  await installPet(depsFor(root, validArchive()));
   expect(existsSync(path.join(root, 'pet', '0.9.0'))).toBe(false);
   expect(existsSync(path.join(root, 'pet', '.staging-old-123'))).toBe(false);
  });
 
- it('rejects a bad version before fetching', async () => {
-  const deps = depsFor(tempDir(), completeArchive(), '../bad');
-  await expect(installPet(deps)).rejects.toThrow('invalid pet app version');
-  expect(deps.fetchBytes).not.toHaveBeenCalled();
+ it('rejects a bad version or repository before fetching', async () => {
+  const badVersion = depsFor(tempDir(), validArchive(), '../bad');
+  await expect(installPet(badVersion)).rejects.toThrow('invalid pet app version');
+  expect(badVersion.fetchBytes).not.toHaveBeenCalled();
+  const badRepo = depsFor(tempDir(), validArchive(), '1.2.3', 'hypernewbie/phi/releases');
+  await expect(installPet(badRepo)).rejects.toThrow('invalid pet release repository');
+  expect(badRepo.fetchBytes).not.toHaveBeenCalled();
  });
 
  it('propagates fetch errors and cleans staging', async () => {
   const root = tempDir();
   const error = new Error('network unavailable');
-  const deps = { ...depsFor(root, completeArchive()), fetchBytes: vi.fn(async () => { throw error; }) };
+  const deps = { ...depsFor(root, validArchive()), fetchBytes: vi.fn(async () => { throw error; }) };
   await expect(installPet(deps)).rejects.toBe(error);
   expect(readdirSync(path.join(root, 'pet'))).toEqual([]);
  });
