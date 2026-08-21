@@ -81,6 +81,7 @@ import {
   type TrayHandle,
   type TrayLike,
   type TrayMenuEntry,
+  type TrayMenuHandlers,
   type TrayProfile,
 } from '../src/tray.js';
 
@@ -134,6 +135,11 @@ function setupTrayForTest(
     getUnread: () => 0,
     getCloseToTray: () => true,
     getSyncAlerts: () => false,
+    getPetAvailable: () => false,
+    getPetInstallable: () => false,
+    getPetInstalling: () => false,
+    getPetEnabled: () => false,
+    getPetZoomPercent: () => 100,
     ipcSend,
     log,
     ...opts.deps,
@@ -149,7 +155,23 @@ beforeEach(() => {
 });
 
 describe('buildTrayMenu (pure menu builder)', () => {
-  it('renders Show Phi, Profiles, the Close to tray and Sync board alerts checkboxes and Quit in order with one submenu entry per profile', () => {
+  const mkHandlers = (
+    over: Partial<TrayMenuHandlers> = {},
+  ): TrayMenuHandlers => ({
+    show: () => {},
+    selectProfile: () => {},
+    toggleCloseToTray: () => {},
+    toggleSyncAlerts: () => {},
+    togglePet: () => {},
+    installPet: () => {},
+    petZoomIn: () => {},
+    petZoomOut: () => {},
+    petResetZoom: () => {},
+    quit: () => {},
+    ...over,
+  });
+
+  it('renders Show Phi, Profiles, the Close to tray, Sync board alerts and Show pet checkboxes and Quit in order with one submenu entry per profile', () => {
     const alpha: TrayProfile = {
       id: 'alpha',
       name: 'alpha',
@@ -159,21 +181,22 @@ describe('buildTrayMenu (pure menu builder)', () => {
     };
     const menu = buildTrayMenu(
       [home, work, alpha],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     expect(menu.map((e) => e.label)).toEqual([
       'Show Phi',
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Show pet',
+      'Pet',
       'Quit',
     ]);
     const profiles = menu[1].submenu;
@@ -185,23 +208,24 @@ describe('buildTrayMenu (pure menu builder)', () => {
     ]);
   });
 
-  it('always includes Show Phi, the Close to tray and Sync board alerts checkboxes and Quit and omits Profiles when no profiles exist', () => {
+  it('always includes Show Phi, the checkboxes and Quit and omits Profiles when no profiles exist', () => {
     const menu = buildTrayMenu(
       [],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     expect(menu.map((e) => e.label)).toEqual([
       'Show Phi',
       'Close to tray',
       'Sync board alerts',
+      'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(menu.some((e) => e.label === 'Profiles')).toBe(false);
@@ -210,27 +234,25 @@ describe('buildTrayMenu (pure menu builder)', () => {
   it('renders the Close to tray entry as a checkbox carrying the preference state', () => {
     const on = buildTrayMenu(
       [],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     const off = buildTrayMenu(
       [],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       false,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     const entryOn = on.find((e) => e.label === 'Close to tray');
     const entryOff = off.find((e) => e.label === 'Close to tray');
@@ -245,15 +267,14 @@ describe('buildTrayMenu (pure menu builder)', () => {
     const quit = vi.fn();
     const menu = buildTrayMenu(
       [home],
-      {
-        show,
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit,
-      },
+      mkHandlers({ show, quit }),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     clickEntry(menu.find((e) => e.label === 'Show Phi'));
     clickEntry(menu.find((e) => e.label === 'Quit'));
@@ -265,15 +286,14 @@ describe('buildTrayMenu (pure menu builder)', () => {
     const toggleCloseToTray = vi.fn();
     const menu = buildTrayMenu(
       [home],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray,
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers({ toggleCloseToTray }),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     clickEntry(menu.find((e) => e.label === 'Close to tray'));
     expect(toggleCloseToTray).toHaveBeenCalledTimes(1);
@@ -282,27 +302,25 @@ describe('buildTrayMenu (pure menu builder)', () => {
   it('renders the Sync board alerts entry as a checkbox carrying the preference state', () => {
     const on = buildTrayMenu(
       [],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       true,
       true,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     const off = buildTrayMenu(
       [],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers(),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     const entryOn = on.find((e) => e.label === 'Sync board alerts');
     const entryOff = off.find((e) => e.label === 'Sync board alerts');
@@ -316,33 +334,263 @@ describe('buildTrayMenu (pure menu builder)', () => {
     const toggleSyncAlerts = vi.fn();
     const menu = buildTrayMenu(
       [home],
-      {
-        show: () => {},
-        selectProfile: () => {},
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts,
-        quit: () => {},
-      },
+      mkHandlers({ toggleSyncAlerts }),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     clickEntry(menu.find((e) => e.label === 'Sync board alerts'));
     expect(toggleSyncAlerts).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the Show pet entry as a checkbox carrying petEnabled, enabled only when petAvailable', () => {
+    const available = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      100,
+    );
+    const unavailable = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      100,
+    );
+    const entryOn = available.find((e) => e.label === 'Show pet');
+    const entryOff = unavailable.find((e) => e.label === 'Show pet');
+    expect(entryOn?.type).toBe('checkbox');
+    expect(entryOn?.checked).toBe(true);
+    expect(entryOn?.enabled).toBe(true);
+    expect(entryOff?.enabled).toBe(false);
+  });
+
+  it('preserves new-style pet state when the optional zoom is omitted', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+    );
+    expect(menu.find((e) => e.label === 'Show pet')).toMatchObject({
+      checked: true,
+    });
+    expect(menu.find((e) => e.label === 'Pet')?.submenu?.[1]).toMatchObject({
+      label: 'Zoom: 100%',
+    });
+  });
+
+  it('calls the togglePet handler from the Show pet checkbox', () => {
+    const togglePet = vi.fn();
+    const menu = buildTrayMenu(
+      [home],
+      mkHandlers({ togglePet }),
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    clickEntry(menu.find((e) => e.label === 'Show pet'));
+    expect(togglePet).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Install Pet when installable and posts the install command', () => {
+    const installPet = vi.fn();
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers({ installPet }),
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      100,
+    );
+    const entry = menu.find((e) => e.label === 'Install Pet…');
+    expect(entry?.enabled).toBe(true);
+    clickEntry(entry);
+    expect(installPet).toHaveBeenCalledTimes(1);
+    expect(menu.some((e) => e.label === 'Show pet' || e.label === 'Pet')).toBe(
+      false,
+    );
+  });
+
+  it('shows disabled Installing… while installable installation is in flight', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      100,
+    );
+    expect(menu.find((e) => e.label === 'Installing…')).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it('never offers installation when the pet is available', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      100,
+    );
+    expect(
+      menu.some((e) => e.label === 'Install Pet…' || e.label === 'Installing…'),
+    ).toBe(false);
+    expect(menu.find((e) => e.label === 'Show pet')).toBeDefined();
+  });
+
+  it('builds Pet zoom commands in browser-style order with readout and boundary enablement', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    const pet = menu.find((entry) => entry.label === 'Pet');
+    expect(pet?.enabled).toBe(true);
+    expect(pet?.submenu?.map((entry) => entry.label)).toEqual([
+      'Zoom out',
+      'Zoom: 100%',
+      'Zoom in',
+      'Reset zoom',
+      'Pet settings…',
+    ]);
+    expect(pet?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      false,
+      true,
+      false,
+      true,
+    ]);
+    const minimum = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      50,
+    ).find((entry) => entry.label === 'Pet');
+    expect(minimum?.submenu?.map((entry) => entry.enabled)).toEqual([
+      false,
+      false,
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it('disables the Pet parent and every child when unavailable', () => {
+    const pet = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      125,
+    ).find((entry) => entry.label === 'Pet');
+    expect(pet?.enabled).toBe(false);
+    expect(pet?.submenu?.every((entry) => entry.enabled === false)).toBe(true);
+  });
+
+  it('calls each Pet command handler', () => {
+    const handlers = mkHandlers({
+      petZoomIn: vi.fn(),
+      petZoomOut: vi.fn(),
+      petResetZoom: vi.fn(),
+    });
+    const pet = buildTrayMenu(
+      [],
+      handlers,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      125,
+    ).find((entry) => entry.label === 'Pet');
+    pet?.submenu?.forEach((entry) => {
+      if (entry.click) clickEntry(entry);
+    });
+    expect(handlers.petZoomIn).toHaveBeenCalledTimes(1);
+    expect(handlers.petZoomOut).toHaveBeenCalledTimes(1);
+    expect(handlers.petResetZoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts Pet commands through setupTray', () => {
+    const { ipcSend } = setupTrayForTest({
+      deps: { getPetAvailable: () => true, getPetZoomPercent: () => 125 },
+    });
+    const pet = lastTemplate().find((entry) => entry.label === 'Pet');
+    pet?.submenu?.forEach((entry) => {
+      if (entry.click) clickEntry(entry);
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-zoom-in',
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-zoom-out',
+    });
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'pet-reset-zoom',
+    });
   });
 
   it('posts the select-profile intent with the profile id from a submenu click', () => {
     const selectProfile = vi.fn();
     const menu = buildTrayMenu(
       [home, work],
-      {
-        show: () => {},
-        selectProfile,
-        toggleCloseToTray: () => {},
-        toggleSyncAlerts: () => {},
-        quit: () => {},
-      },
+      mkHandlers({ selectProfile }),
       true,
       false,
+      true,
+      false,
+      false,
+      false,
+      100,
     );
     const profiles = menu.find((e) => e.label === 'Profiles')?.submenu ?? [];
     clickEntry(profiles.find((e) => e.label === 'Work Phi'));
@@ -403,6 +651,8 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -447,6 +697,8 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Show pet',
+      'Pet',
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -479,6 +731,8 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Show Phi',
       'Close to tray',
       'Sync board alerts',
+      'Show pet',
+      'Pet',
       'Quit',
     ]);
   });

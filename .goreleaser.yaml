@@ -1,4 +1,4 @@
-version: 1
+version: 2
 project_name: phi
 
 before:
@@ -22,25 +22,30 @@ builds:
       - -trimpath
       - -tags=embedassets
     ldflags:
-      - -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}} -X main.Date={{.Date}} -X main.BuildSource=release
+      - >-
+        -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
+        -X main.Date={{.Date}} -X main.BuildSource=release
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
 
+# Keep the GitHub release private until every independently-built asset has
+# uploaded successfully; publish-release flips the draft after that final gate.
 release:
+  draft: true
   replace_existing_artifacts: true
 
 changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
+      - "^docs:"
+      - "^test:"

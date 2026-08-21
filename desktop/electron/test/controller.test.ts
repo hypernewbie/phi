@@ -26,6 +26,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Controller,
   ControllerError,
+  PET_ZOOM_DEFAULT_PERCENT,
+  PET_ZOOM_MAX_PERCENT,
+  PET_ZOOM_MIN_PERCENT,
+  PET_IDLE_DWELL_DEFAULT_SECONDS,
+  PET_IDLE_DWELL_MAX_SECONDS,
+  PET_IDLE_DWELL_MIN_SECONDS,
   InvalidNameError,
   InvalidUrlError,
   UnknownProfileError,
@@ -760,5 +766,216 @@ describe('Controller: sync-alerts preference', () => {
     const st = c.state();
     st.syncAlerts = false;
     expect(c.state().syncAlerts).toBe(true);
+  });
+});
+
+describe('Controller: pet-zoom preference', () => {
+  it('defaults malformed, fractional, out-of-range, and off-step values to 100%', () => {
+    for (const value of [undefined, null, '100', 101, 49, 301, 125.5]) {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({
+          profiles: [],
+          ...(value === undefined ? {} : { petZoomPercent: value }),
+        }),
+        'utf8',
+      );
+      expect(makeController().getPetZoomPercent()).toBe(
+        PET_ZOOM_DEFAULT_PERCENT,
+      );
+    }
+    expect(makeController().state().petZoomPercent).toBe(
+      PET_ZOOM_DEFAULT_PERCENT,
+    );
+  });
+
+  it('migrates every legacy scale tick to the nearest 25-point zoom step', () => {
+    const expected = [75, 100, 100, 100, 125, 125, 150, 150];
+    expected.forEach((percent, tick) => {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({ profiles: [], petScaleTick: tick }),
+        'utf8',
+      );
+      expect(makeController().getPetZoomPercent()).toBe(percent);
+    });
+  });
+
+  it('round trips a valid percentage and emits only for a changed value', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    expect(c.setPetZoomPercent(PET_ZOOM_DEFAULT_PERCENT)).toBe(true);
+    expect(events).toEqual([]);
+    expect(c.setPetZoomPercent(PET_ZOOM_MAX_PERCENT)).toBe(true);
+    expect(events).toEqual([{ kind: 'pet-zoom-changed' }]);
+    expect(
+      new Controller({ persistPath: persistPath() }).getPetZoomPercent(),
+    ).toBe(PET_ZOOM_MAX_PERCENT);
+    expect(c.setPetZoomPercent(PET_ZOOM_MIN_PERCENT - 1)).toBe(false);
+    expect(c.getPetZoomPercent()).toBe(PET_ZOOM_MAX_PERCENT);
+    expect(events).toHaveLength(1);
+  });
+
+  it('rolls back a changed percentage when persistence fails without emitting an event', () => {
+    const c = makeController();
+    c.setPetZoomPercent(125);
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    rmSync(persistPath());
+    mkdirSync(persistPath());
+    expect(() => c.setPetZoomPercent(150)).toThrowError(ControllerError);
+    expect(c.getPetZoomPercent()).toBe(125);
+    expect(events).toEqual([]);
+  });
+
+  it('preserves the percentage through every unrelated preference and profile save path', () => {
+    const c = makeController();
+    c.setPetZoomPercent(125);
+    const p = c.add('http://127.0.0.1:7070/');
+    const q = c.add('http://10.0.0.5:7070/');
+    c.reorder(q.id, p.id);
+    c.rename(p.id, 'Home');
+    c.setLastUsed(p.id);
+    c.setActive(p.id);
+    c.setCloseToTray(false);
+    c.setSyncAlerts(false);
+    c.setPetEnabled(true);
+    c.remove(q.id);
+    const reloaded = new Controller({ persistPath: persistPath() });
+    expect(reloaded.getPetZoomPercent()).toBe(125);
+    expect(reloaded.state().petZoomPercent).toBe(125);
+    const saved = JSON.parse(readFileSync(persistPath(), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(saved.petZoomPercent).toBe(125);
+    expect(saved).not.toHaveProperty('petScaleTick');
+  });
+});
+
+describe('Controller: pet-enabled preference', () => {
+  it('defaults to false (empty store and legacy stores without the field)', () => {
+    const c = makeController();
+    expect(c.getPetEnabled()).toBe(false);
+    expect(c.state().petEnabled).toBe(false);
+    // A legacy store file (profiles only, no petEnabled) loads with the default.
+    writeFileSync(
+      persistPath(),
+      JSON.stringify({
+        profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }],
+      }),
+      'utf8',
+    );
+    expect(makeController().getPetEnabled()).toBe(false);
+  });
+
+  it('persists a toggle through the store file (a fresh controller reads it back)', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    expect(c.getPetEnabled()).toBe(true);
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as {
+      petEnabled?: boolean;
+    };
+    expect(onDisk.petEnabled).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(
+      true,
+    );
+    c.setPetEnabled(false);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(
+      false,
+    );
+  });
+
+  it('emits pet-enabled-changed on a change and stays silent on a no-op', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((e) => events.push(e));
+    c.setPetEnabled(true);
+    c.setPetEnabled(true); // unchanged: no event, no extra save
+    expect(events).toEqual([{ kind: 'pet-enabled-changed' }]);
+    expect(c.getPetEnabled()).toBe(true);
+  });
+
+  it('survives profile mutations (add/remove/rename do not reset it)', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    const p = c.add('http://127.0.0.1:7070/');
+    c.rename(p.id, 'Home');
+    c.remove(p.id);
+    expect(c.getPetEnabled()).toBe(true);
+    expect(new Controller({ persistPath: persistPath() }).getPetEnabled()).toBe(
+      true,
+    );
+  });
+
+  it('state() carries the preference and the deep copy protects it', () => {
+    const c = makeController();
+    c.setPetEnabled(true);
+    const st = c.state();
+    st.petEnabled = false;
+    expect(c.state().petEnabled).toBe(true);
+  });
+});
+
+describe('Controller: configurable pet idle dwell (seconds)', () => {
+  it('defaults missing, malformed, and unsupported persisted values to 10 seconds', () => {
+    for (const value of [undefined, '10', 0, -1, 3601, 1.5, null]) {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({
+          profiles: [],
+          ...(value === undefined ? {} : { petIdleDwellSeconds: value }),
+        }),
+        'utf8',
+      );
+      expect(makeController().getPetIdleDwellSeconds()).toBe(
+        PET_IDLE_DWELL_DEFAULT_SECONDS,
+      );
+    }
+  });
+
+  it('round trips min, default, and max values and emits only for a changed value', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    expect(c.setPetIdleDwellSeconds(PET_IDLE_DWELL_DEFAULT_SECONDS)).toBe(true);
+    expect(events).toEqual([]);
+    expect(c.setPetIdleDwellSeconds(PET_IDLE_DWELL_MAX_SECONDS)).toBe(true);
+    expect(events.at(-1)).toEqual({
+      kind: 'pet-idle-dwell-changed',
+      dwellSeconds: PET_IDLE_DWELL_MAX_SECONDS,
+    });
+    expect(c.setPetIdleDwellSeconds(PET_IDLE_DWELL_MIN_SECONDS)).toBe(true);
+    expect(events.at(-1)).toEqual({
+      kind: 'pet-idle-dwell-changed',
+      dwellSeconds: PET_IDLE_DWELL_MIN_SECONDS,
+    });
+    expect(
+      new Controller({ persistPath: persistPath() }).getPetIdleDwellSeconds(),
+    ).toBe(PET_IDLE_DWELL_MIN_SECONDS);
+  });
+
+  it('rejects out-of-range values without mutation or emission', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    for (const value of [0, -1, 3601, 1.5, Number.NaN, '10']) {
+      expect(c.setPetIdleDwellSeconds(value as number)).toBe(false);
+    }
+    expect(c.getPetIdleDwellSeconds()).toBe(PET_IDLE_DWELL_DEFAULT_SECONDS);
+    expect(events).toEqual([]);
+  });
+
+  it('rolls back on persistence failure without emitting', () => {
+    const c = makeController();
+    c.setPetIdleDwellSeconds(60);
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    rmSync(persistPath());
+    mkdirSync(persistPath());
+    expect(() => c.setPetIdleDwellSeconds(180)).toThrowError(ControllerError);
+    expect(c.getPetIdleDwellSeconds()).toBe(60);
+    expect(events).toEqual([]);
   });
 });

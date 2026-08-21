@@ -41,6 +41,11 @@
  * resources.
  */
 import { Menu, nativeImage, Tray } from 'electron';
+import {
+  PET_ZOOM_DEFAULT_PERCENT,
+  PET_ZOOM_MAX_PERCENT,
+  PET_ZOOM_MIN_PERCENT,
+} from './controller.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -66,6 +71,12 @@ export type TrayCommand =
   | { kind: 'select-profile'; id: string }
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
+  | { kind: 'toggle-pet' }
+  | { kind: 'install-pet' }
+  | { kind: 'pet-zoom-in' }
+  | { kind: 'pet-zoom-out' }
+  | { kind: 'pet-reset-zoom' }
+  | { kind: 'pet-settings' }
   | { kind: 'quit' };
 
 /** One saved profile (the rail model's tray-relevant slice). */
@@ -98,6 +109,16 @@ export interface TrayDeps {
   getCloseToTray(): boolean;
   /** The persisted sync-board desktop-alert preference (the menu checkbox state). */
   getSyncAlerts(): boolean;
+  /** True when the optional desktop/pet package was discovered (enables the checkbox). */
+  getPetAvailable(): boolean;
+  /** True when a released build may offer the pet installer. */
+  getPetInstallable(): boolean;
+  /** True while a pet download/install is in progress. */
+  getPetInstalling(): boolean;
+  /** The persisted desktop-pet preference (the menu checkbox state). */
+  getPetEnabled(): boolean;
+  /** The persisted desktop-pet zoom percentage. */
+  getPetZoomPercent(): number;
   /** Posts a TrayCommand on a channel (the host loop bridges intents). */
   ipcSend(channel: string, payload: unknown): void;
   /** Failure/one-time logger (production: console; tests record it). */
@@ -139,6 +160,8 @@ export interface TrayMenuEntry {
   type?: 'checkbox';
   /** The checkbox state — only meaningful when type === 'checkbox'. */
   checked?: boolean;
+  /** Disabled state (the Show pet checkbox is disabled when the package is absent). */
+  enabled?: boolean;
 }
 /** The menu action handlers the pure menu builder calls. */
 export interface TrayMenuHandlers {
@@ -146,6 +169,12 @@ export interface TrayMenuHandlers {
   selectProfile: (id: string) => void;
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
+  togglePet: () => void;
+  installPet: () => void;
+  petZoomIn: () => void;
+  petZoomOut: () => void;
+  petResetZoom: () => void;
+  petSettings?: () => void;
   quit: () => void;
 }
 
@@ -253,6 +282,11 @@ export function buildTrayMenu(
   handlers: TrayMenuHandlers,
   closeToTray: boolean,
   syncAlerts: boolean,
+  petAvailable: boolean,
+  petInstallable: boolean = false,
+  petInstalling: boolean = false,
+  petEnabled: boolean = false,
+  petZoomPercent = PET_ZOOM_DEFAULT_PERCENT,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -278,6 +312,53 @@ export function buildTrayMenu(
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
   });
+  const petActionsEnabled = petAvailable;
+  if (!petAvailable && (petInstallable || petInstalling)) {
+    entries.push({
+      label: petInstalling ? 'Installing…' : 'Install Pet…',
+      enabled: !petInstalling,
+      click: handlers.installPet,
+    });
+  } else {
+    entries.push({
+      label: 'Show pet',
+      type: 'checkbox',
+      checked: petEnabled,
+      enabled: petAvailable,
+      click: handlers.togglePet,
+    });
+    entries.push({
+      label: 'Pet',
+      enabled: petActionsEnabled,
+      submenu: [
+        {
+          label: 'Zoom out',
+          enabled: petActionsEnabled && petZoomPercent > PET_ZOOM_MIN_PERCENT,
+          click: handlers.petZoomOut,
+        },
+        {
+          label: `Zoom: ${petZoomPercent}%`,
+          enabled: false,
+        },
+        {
+          label: 'Zoom in',
+          enabled: petActionsEnabled && petZoomPercent < PET_ZOOM_MAX_PERCENT,
+          click: handlers.petZoomIn,
+        },
+        {
+          label: 'Reset zoom',
+          enabled:
+            petActionsEnabled && petZoomPercent !== PET_ZOOM_DEFAULT_PERCENT,
+          click: handlers.petResetZoom,
+        },
+        {
+          label: 'Pet settings…',
+          enabled: petActionsEnabled,
+          click: handlers.petSettings,
+        },
+      ],
+    });
+  }
   entries.push({ label: 'Quit', click: handlers.quit });
   return entries;
 }
@@ -315,19 +396,17 @@ export function setupTray(deps: TrayDeps): TrayHandle {
     // Windows ICO only: other platforms fall back to the sibling PNG.
     icon = nativeImage.createFromPath(iconPath.replace(/\.ico$/, '.png'));
   }
-  if (!icon.isEmpty()) {
-    if (process.platform === 'darwin') {
-      if (typeof icon.resize === 'function') {
-        icon = icon.resize({ width: 16, height: 16 });
-      }
-      if (typeof icon.setTemplateImage === 'function') {
-        icon.setTemplateImage(true);
-      }
-    }
-  } else {
+  if (icon.isEmpty()) {
     deps.log(
       `phi-desktop: tray icon missing at ${iconPath}; continuing with the default empty icon`,
     );
+  } else if (process.platform === 'darwin') {
+    if (typeof icon.resize === 'function') {
+      icon = icon.resize({ width: 16, height: 16 });
+    }
+    if (typeof icon.setTemplateImage === 'function') {
+      icon.setTemplateImage(true);
+    }
   }
   const tray = new Tray(icon);
   tray.setToolTip('Phi');
@@ -348,6 +427,17 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
     toggleSyncAlerts: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
+    togglePet: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-pet' }),
+    installPet: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'install-pet' }),
+    petZoomIn: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-zoom-in' }),
+    petZoomOut: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-zoom-out' }),
+    petResetZoom: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-reset-zoom' }),
+    petSettings: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-settings' }),
     quit: () => {
       // The host-loop receiver owns app.quit() since step 5: this
       // handler only posts the intent; main.ts logs, notifies the main
@@ -364,6 +454,11 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       handlers,
       deps.getCloseToTray(),
       deps.getSyncAlerts(),
+      deps.getPetAvailable(),
+      deps.getPetInstallable(),
+      deps.getPetInstalling(),
+      deps.getPetEnabled(),
+      deps.getPetZoomPercent(),
     ),
   );
   wireTrayEvents(tray, () => menu, process.platform);
@@ -377,6 +472,11 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         handlers,
         deps.getCloseToTray(),
         deps.getSyncAlerts(),
+        deps.getPetAvailable(),
+        deps.getPetInstallable(),
+        deps.getPetInstalling(),
+        deps.getPetEnabled(),
+        deps.getPetZoomPercent(),
       ),
     );
   };

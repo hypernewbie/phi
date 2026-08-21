@@ -11,6 +11,9 @@ coverage/
 *.out
 node_modules/
 
+# MacOS
+.DS_store
+
 # TypeScript build cache (one per tsconfig.build.json invocation).
 *.tsbuildinfo
 *.vsix

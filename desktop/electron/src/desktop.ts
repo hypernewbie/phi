@@ -24,6 +24,8 @@
 import {
   app,
   BrowserWindow,
+  dialog,
+  net,
   ipcMain,
   Menu,
   Notification,
@@ -36,7 +38,7 @@ import {
   type MenuItemConstructorOptions,
   type WebContents,
 } from 'electron';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -60,6 +62,11 @@ import { parseMainArgs } from './argv.js';
 import {
   Controller,
   parseEndpoint,
+  PET_BASE_VISUAL_WIDTH_DIP,
+  PET_ZOOM_DEFAULT_PERCENT,
+  PET_ZOOM_MAX_PERCENT,
+  PET_ZOOM_MIN_PERCENT,
+  PET_ZOOM_STEP_PERCENT,
   type HealthChecker,
   type ProfileMeta,
 } from './controller.js';
@@ -100,6 +107,65 @@ import {
   resolveRailChord,
 } from './shortcuts.js';
 import { iconResolver } from './appicon.js';
+import { discoverPetRoot, type PetDeps, type PetHandle } from './petLoader.js';
+import { installPet, PET_INSTALL_LIMITS } from './petInstaller.js';
+import { verifyInstalledRoot } from './petPackageTrust.js';
+
+/**
+ * Reads `response.body` chunks into a Uint8Array. The body is cancelled
+ * as soon as cumulative bytes exceed `maxBytes`, regardless of any
+ * declared `content-length`, and the call aborts after a 30-second
+ * timeout to keep the tray from getting stuck on a stalled fetch.
+ */
+async function fetchWithBounds(
+  url: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(
+      new Error(
+        `pet fetch exceeded ${PET_INSTALL_LIMITS.fetchTimeoutMs}ms timeout`,
+      ),
+    );
+  }, PET_INSTALL_LIMITS.fetchTimeoutMs);
+  try {
+    const response = await net.fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`pet download failed: HTTP ${response.status}`);
+    }
+    const declared = Number.parseInt(
+      response.headers?.get?.('content-length') ?? '',
+      10,
+    );
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(
+        `pet download declared content-length ${declared} exceeds limit ${maxBytes}`,
+      );
+    }
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('pet download response body is not streamable');
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel(
+          new Error(`pet download exceeded ${maxBytes} byte limit`),
+        );
+        throw new Error(`pet download exceeded ${maxBytes} byte limit`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return new Uint8Array(Buffer.concat(chunks));
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -118,6 +184,28 @@ const APP_ICON_PATH =
 
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';
+
+/** Linux deliberately has no supported click-through pet implementation. */
+export function isPetAvailable(root: string | null): boolean {
+  return process.platform !== 'linux' && root !== null;
+}
+
+/** Only released, supported builds with no installed pet may offer installation. */
+export function isPetInstallable(
+  appIsPackaged: boolean,
+  root: string | null,
+  smoke: boolean,
+  installing: boolean,
+  platform = process.platform,
+): boolean {
+  return (
+    appIsPackaged &&
+    platform !== 'linux' &&
+    root === null &&
+    !smoke &&
+    !installing
+  );
+}
 
 /** The rail gutter width (px) — the rail view's width. */
 export const RAIL_WIDTH = 72;
@@ -275,6 +363,17 @@ export class DesktopHost {
   // Electron.
   trayHandle: TrayHandle | null = null;
   controller: Controller | null = null;
+  // Optional desktop/pet overlay package root (null when absent or smoke).
+  petRoot: string | null = null;
+  // The retained pet handle (null until the user first enables it).
+  petHandle: PetHandle | null = null;
+  private petRunningUnsubscribe: (() => void) | null = null;
+  /** Invalidates an outstanding optional-package import on every toggle/quit. */
+  petGeneration = 0;
+  private petUnavailableLogged = false;
+  private petInstalling = false;
+  private petEnsurePromise: Promise<PetHandle | null> | null = null;
+  private petStartRequested = false;
   // Interval handles (cleared in before-quit so no pending probe outlives
   // the retained views).
   healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -515,6 +614,18 @@ export class DesktopHost {
       getUnread: (id) => this.controller?.state().unread.get(id) ?? 0,
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
+      getPetAvailable: () => isPetAvailable(this.petRoot),
+      getPetInstallable: () =>
+        isPetInstallable(
+          app.isPackaged,
+          this.petRoot,
+          SMOKE,
+          this.petInstalling,
+        ),
+      getPetInstalling: () => this.petInstalling,
+      getPetEnabled: () => this.controller?.state().petEnabled ?? false,
+      getPetZoomPercent: () =>
+        this.controller?.state().petZoomPercent ?? PET_ZOOM_DEFAULT_PERCENT,
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
       // (log, notify the main window's renderer, then app.quit()).
@@ -571,6 +682,33 @@ export class DesktopHost {
             }
             break;
           }
+          case 'toggle-pet': {
+            // Flip the persisted preference; pet-enabled-changed rebuilds
+            // the menu and mirrors the window (start/stop).
+            this.togglePet();
+            break;
+          }
+          case 'install-pet':
+            void this.handleInstallPet();
+            break;
+          case 'pet-zoom-in':
+            this.setPetZoomFromTray(
+              (this.controller?.getPetZoomPercent() ??
+                PET_ZOOM_DEFAULT_PERCENT) + PET_ZOOM_STEP_PERCENT,
+            );
+            break;
+          case 'pet-zoom-out':
+            this.setPetZoomFromTray(
+              (this.controller?.getPetZoomPercent() ??
+                PET_ZOOM_DEFAULT_PERCENT) - PET_ZOOM_STEP_PERCENT,
+            );
+            break;
+          case 'pet-reset-zoom':
+            this.setPetZoomFromTray(PET_ZOOM_DEFAULT_PERCENT);
+            break;
+          case 'pet-settings':
+            void this.openPetSettings();
+            break;
           case 'quit':
             // Log, notify the main window's renderer on the tray channel,
             // then quit.
@@ -588,6 +726,224 @@ export class DesktopHost {
     const tray = setupTray(deps);
     this.trayHandle = tray;
     return tray;
+  }
+
+  private async handleInstallPet(): Promise<void> {
+    if (
+      !isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling)
+    )
+      return;
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    this.petInstalling = true;
+    this.trayHandle?.rebuildMenu();
+    try {
+      const { root } = await installPet({
+        userDataPath: app.getPath('userData'),
+        appVersion: app.getVersion(),
+        repo: 'hypernewbie/phi',
+        fetchBytes: (url, maxBytes) => fetchWithBounds(url, maxBytes),
+        log: (msg) => console.log(msg),
+      });
+      this.petInstalling = false;
+      this.petRoot = root;
+      this.trayHandle?.rebuildMenu();
+      if (ctrl.getPetEnabled()) void this.startPet();
+      else ctrl.setPetEnabled(true);
+    } catch (err) {
+      this.petInstalling = false;
+      this.trayHandle?.rebuildMenu();
+      console.log(`phi-desktop: pet installation failed: ${String(err)}`);
+      dialog.showErrorBox(
+        'Pet installation failed',
+        String(err instanceof Error ? err.message : err),
+      );
+    }
+  }
+
+  private refreshPetTrayForZoom(event: { kind: string }): void {
+    if (event.kind === 'pet-zoom-changed') this.trayHandle?.rebuildMenu();
+  }
+
+  private setPetIdleDwellFromController(dwellSeconds: number): void {
+    if (
+      !Number.isInteger(dwellSeconds) ||
+      dwellSeconds < 1 ||
+      dwellSeconds > 3600
+    )
+      return;
+    this.petHandle?.setIdleDwellSeconds?.(dwellSeconds);
+  }
+
+  private setPetZoomFromTray(nextPercent: number): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    try {
+      if (!ctrl.setPetZoomPercent(nextPercent)) return;
+      const savedPercent = ctrl.getPetZoomPercent();
+      this.petHandle?.setZoomPercent(savedPercent);
+    } catch (err) {
+      console.log(`phi-desktop: tray pet zoom: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Starts the pet overlay from the discovered package root (no-op when
+   * absent, already running, or mid-creation). The factory is imported
+   * once per enable via a file:// URL so the optional package is never a
+   * static dependency of the shell (avoids Node ESM double-instantiation).
+   */
+  /** Narrow, mockable seam around the optional named pet factory import. */
+  async loadPetFactory(root: string): Promise<(deps: PetDeps) => PetHandle> {
+    const mod = (await import(
+      pathToFileURL(path.join(root, 'dist', 'pet-main.js')).href
+    )) as {
+      createPet: (deps: PetDeps) => PetHandle;
+    };
+    return mod.createPet;
+  }
+
+  private logPetUnavailable(): void {
+    if (process.platform === 'linux' && !this.petUnavailableLogged) {
+      this.petUnavailableLogged = true;
+      console.log('phi-desktop: pet unavailable on linux');
+    }
+  }
+
+  private ensurePetHandle(): Promise<PetHandle | null> {
+    if (this.petHandle) return Promise.resolve(this.petHandle);
+    if (this.petEnsurePromise) return this.petEnsurePromise;
+    const root = this.petRoot;
+    const ctrl = this.controller;
+    if (!isPetAvailable(root) || root === null || !ctrl || this.quitting) {
+      this.logPetUnavailable();
+      return Promise.resolve(null);
+    }
+    // Re-verify the installed root against the embedded public key on
+    // every load. A tampered or missing pet-manifest.json disables the
+    // overlay before we ever call the dynamic factory.
+    if (app.isPackaged) {
+      try {
+        verifyInstalledRoot(
+          root,
+          app.getVersion(),
+          undefined,
+          (p) => readFileSync(p),
+          (p) => statSync(p),
+        );
+      } catch (err) {
+        console.log(`phi-desktop: pet installed root rejected: ${String(err)}`);
+        this.petRoot = null;
+        this.trayHandle?.rebuildMenu();
+        return Promise.resolve(null);
+      }
+    }
+    const generation = ++this.petGeneration;
+    this.petEnsurePromise = (async (): Promise<PetHandle | null> => {
+      try {
+        const createPet = await this.loadPetFactory(root);
+        if (
+          generation !== this.petGeneration ||
+          !isPetAvailable(this.petRoot) ||
+          this.quitting
+        )
+          return null;
+        const handle = createPet({
+          root,
+          log: (msg) => console.log(`phi-desktop: pet: ${msg}`),
+          zoom: {
+            minPercent: PET_ZOOM_MIN_PERCENT,
+            maxPercent: PET_ZOOM_MAX_PERCENT,
+            defaultPercent: PET_ZOOM_DEFAULT_PERCENT,
+            stepPercent: PET_ZOOM_STEP_PERCENT,
+            baseVisualWidth: PET_BASE_VISUAL_WIDTH_DIP,
+          },
+          getZoomPercent: () => ctrl.getPetZoomPercent(),
+          requestZoomPercent: (percent) => {
+            try {
+              const accepted = ctrl.setPetZoomPercent(percent);
+              return { percent: ctrl.getPetZoomPercent(), accepted };
+            } catch (err) {
+              console.log(`phi-desktop: pet zoom request: ${String(err)}`);
+              return { percent: ctrl.getPetZoomPercent(), accepted: false };
+            }
+          },
+          getIdleDwellSeconds: () => ctrl.getPetIdleDwellSeconds(),
+          requestIdleDwellSeconds: (dwellSeconds) => {
+            try {
+              const accepted = ctrl.setPetIdleDwellSeconds(dwellSeconds);
+              return { dwellSeconds: ctrl.getPetIdleDwellSeconds(), accepted };
+            } catch (err) {
+              console.log(`phi-desktop: pet dwell request: ${String(err)}`);
+              return {
+                dwellSeconds: ctrl.getPetIdleDwellSeconds(),
+                accepted: false,
+                error: 'Unable to save pet idle interval.',
+              };
+            }
+          },
+          getParentWindow: () => this.mainWindow,
+        });
+        if (
+          generation !== this.petGeneration ||
+          !isPetAvailable(this.petRoot) ||
+          this.quitting
+        ) {
+          handle.stop();
+          return null;
+        }
+        this.petHandle = handle;
+        this.petRunningUnsubscribe = handle.onRunningChanged((running) => {
+          if (!running) this.petStartRequested = false;
+          this.trayHandle?.rebuildMenu();
+        });
+        return handle;
+      } catch (err) {
+        if (generation === this.petGeneration)
+          console.log(`phi-desktop: pet load failed: ${String(err)}`);
+        return null;
+      } finally {
+        this.petEnsurePromise = null;
+      }
+    })();
+    return this.petEnsurePromise;
+  }
+
+  async startPet(): Promise<void> {
+    const handle = await this.ensurePetHandle();
+    if (
+      !handle ||
+      this.quitting ||
+      !isPetAvailable(this.petRoot) ||
+      !this.controller?.state().petEnabled
+    )
+      return;
+    if (this.petStartRequested || handle.isRunning()) return;
+    this.petStartRequested = true;
+    handle.start();
+  }
+
+  private async openPetSettings(): Promise<void> {
+    const handle = await this.ensurePetHandle();
+    if (handle && !this.quitting) handle.openSettings?.();
+  }
+
+  /** Stops the pet window (toggle-off frees the decode surface but retains its IPC listeners). */
+  stopPet(): void {
+    this.petStartRequested = false;
+    this.petHandle?.stop();
+  }
+
+  /** Toggles the persisted pet preference; pet-enabled-changed mirrors the
+   *  window state (start/stop) and rebuilds the tray checkbox. */
+  togglePet(): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    try {
+      ctrl.setPetEnabled(!ctrl.getPetEnabled());
+    } catch (err) {
+      console.log(`phi-desktop: tray toggle-pet: ${String(err)}`);
+    }
   }
 
   /**
@@ -1765,6 +2121,7 @@ export class DesktopHost {
       // before-quit fires before windows close, so setting the flag here
       // lets every real quit (tray Quit, Cmd+Q, window-all-closed) through.
       this.quitting = true;
+      this.petGeneration += 1;
       // Stop the polls before the view teardown below (no pending probe or
       // executeJavaScript may outlive the retained views).
       if (this.healthInterval !== null) {
@@ -1785,6 +2142,9 @@ export class DesktopHost {
       this.hotkeyRegistrations.length = 0;
       this.trayHandle?.close();
       this.trayHandle = null;
+      this.petRunningUnsubscribe?.();
+      this.petRunningUnsubscribe = null;
+      this.petHandle?.stop();
       // Tear every retained view down before the app quits. The first
       // before-quit defers the quit until destroyAll() (and the rail view
       // teardown) completes, then re-quits; the guard flag keeps the
@@ -1861,6 +2221,9 @@ export class DesktopHost {
     }
     // The tray is built before the second-instance listener, so a second
     // launch that foregrounds the window always finds the tray ready.
+    // Discover the optional desktop/pet package once at host start (the
+    // tray's "Show pet" checkbox is enabled only when the probe succeeds).
+    this.petRoot = discoverPetRoot(app, SMOKE);
     this.startTray();
     singleInstance.installListener();
     // The controller is built after the tray and the listener: a persisted,
@@ -1869,6 +2232,9 @@ export class DesktopHost {
       persistPath: app.getPath('userData') + '/profiles.json',
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
+    // The first tray was constructed before the controller for boot ordering;
+    // rebuild it now so persisted pet state and zoom are in the first usable snapshot.
+    this.trayHandle?.rebuildMenu();
     // Access-auth state — declared here (before any subscribe callback
     // can fire) so a synchronously-emitted active-changed event during
     // initial state doesn't trigger a ReferenceError trying to read
@@ -1942,6 +2308,18 @@ export class DesktopHost {
         // again after B, and the proof has already been injected into
         // the B view).
         activeEpoch++;
+      } else if (event.kind === 'pet-enabled-changed') {
+        this.trayHandle?.rebuildMenu();
+        if (this.controller?.state().petEnabled) void this.startPet();
+        else this.stopPet();
+      } else if (event.kind === 'pet-idle-dwell-changed') {
+        this.setPetIdleDwellFromController(event.dwellSeconds);
+      } else if (event.kind === 'pet-zoom-changed') {
+        // Renderer-originated zoom requests already receive their exact
+        // controller result in pet-main; this subscription only refreshes
+        // the tray snapshot and never echoes the event back to the renderer.
+        this.refreshPetTrayForZoom(event);
+        return;
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||
@@ -1965,6 +2343,8 @@ export class DesktopHost {
       this.layoutCurrentSession();
     });
     this.syncTrayFromController();
+    // Restore a previously-enabled pet on launch.
+    if (this.controller.state().petEnabled) void this.startPet();
     // Retained per-profile views + rail renderer. The manager (src/views.ts)
     // owns the per-profile WebContentsView lifecycle (lazy creation,
     // retain-on-switch, hide-when-inactive, single shared persistent

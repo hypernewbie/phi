@@ -63,6 +63,16 @@ import path from 'node:path';
 /** Health status of one profile origin (mirrors the Wails health package). */
 export type HealthStatus = 'up' | 'down' | 'unknown';
 
+/** Canonical persisted desktop-pet zoom configuration. */
+export const PET_ZOOM_MIN_PERCENT = 50;
+export const PET_ZOOM_MAX_PERCENT = 300;
+export const PET_ZOOM_DEFAULT_PERCENT = 100;
+export const PET_ZOOM_STEP_PERCENT = 25;
+export const PET_BASE_VISUAL_WIDTH_DIP = 192;
+export const PET_IDLE_DWELL_MIN_SECONDS = 1;
+export const PET_IDLE_DWELL_MAX_SECONDS = 3600;
+export const PET_IDLE_DWELL_DEFAULT_SECONDS = 10;
+
 /** One saved, non-secret Phi server profile (the tray/rail-relevant slice). */
 export interface ProfileMeta {
   /** Stable local id derived from the origin (IDForOrigin parity). */
@@ -87,6 +97,12 @@ export interface ControllerState {
   closeToTray: boolean;
   /** The persisted sync-board desktop-alert preference (default true). */
   syncAlerts: boolean;
+  /** The persisted desktop-pet preference (default false). */
+  petEnabled: boolean;
+  /** The persisted desktop-pet zoom percentage (default 100). */
+  petZoomPercent: number;
+  /** The persisted unattended-rest interval in milliseconds. */
+  petIdleDwellSeconds: number;
 }
 
 /** One controller event (posted to subscribers after every mutation). */
@@ -96,7 +112,10 @@ export type ControllerEvent =
   | { kind: 'profiles-changed' }
   | { kind: 'health-changed' }
   | { kind: 'close-to-tray-changed' }
-  | { kind: 'sync-alerts-changed' };
+  | { kind: 'sync-alerts-changed' }
+  | { kind: 'pet-enabled-changed' }
+  | { kind: 'pet-zoom-changed' }
+  | { kind: 'pet-idle-dwell-changed'; dwellSeconds: number };
 
 /** A subscription callback (fire-and-forget; never awaited by the controller). */
 export type ControllerListener = (event: ControllerEvent) => void;
@@ -359,7 +378,7 @@ export function parseEndpoint(raw: string): ParsedEndpoint {
   const scheme = u.protocol.slice(0, -1) as 'http' | 'https';
   // WHATWG lowercases hostnames; Go keeps the raw casing but the task rule
   // is "lowercase host", so the WHATWG normalization is the desired one.
-  const host = u.hostname + (port !== null ? `:${port}` : '');
+  const host = u.hostname + (port === null ? '' : `:${port}`);
   const hostname = (() => {
     let h = u.hostname.toLowerCase();
     if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
@@ -383,6 +402,52 @@ interface LoadedStore {
   profiles: InternalProfile[];
   closeToTray: boolean;
   syncAlerts: boolean;
+  petEnabled: boolean;
+  petZoomPercent: number;
+  petIdleDwellSeconds: number;
+}
+
+function isPetIdleDwellSeconds(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= PET_IDLE_DWELL_MIN_SECONDS &&
+    value <= PET_IDLE_DWELL_MAX_SECONDS
+  );
+}
+
+function isPetZoomPercent(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= PET_ZOOM_MIN_PERCENT &&
+    value <= PET_ZOOM_MAX_PERCENT &&
+    (value - PET_ZOOM_MIN_PERCENT) % PET_ZOOM_STEP_PERCENT === 0
+  );
+}
+
+function isLegacyPetScaleTick(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 7
+  );
+}
+
+function migrateLegacyPetScaleTick(value: unknown): number {
+  if (!isLegacyPetScaleTick(value)) return PET_ZOOM_DEFAULT_PERCENT;
+  const legacyPercent = 80 + value * 10;
+  const snapped =
+    PET_ZOOM_MIN_PERCENT +
+    PET_ZOOM_STEP_PERCENT *
+      Math.round(
+        (legacyPercent - PET_ZOOM_MIN_PERCENT) / PET_ZOOM_STEP_PERCENT,
+      );
+  return Math.min(
+    PET_ZOOM_MAX_PERCENT,
+    Math.max(PET_ZOOM_MIN_PERCENT, snapped),
+  );
 }
 
 /**
@@ -403,7 +468,14 @@ function readStore(
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       log(`controller: cannot read ${filePath}: ${String(err)}`);
     }
-    return { profiles: [], closeToTray: true, syncAlerts: true };
+    return {
+      profiles: [],
+      closeToTray: true,
+      syncAlerts: true,
+      petEnabled: false,
+      petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+      petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+    };
   }
   let parsed: unknown;
   try {
@@ -414,7 +486,14 @@ function readStore(
         `controller: ${filePath} is corrupt (${String(err)}); starting with an empty store`,
       );
       setAsideCorrupt(filePath, log);
-      return { profiles: [], closeToTray: true, syncAlerts: true };
+      return {
+        profiles: [],
+        closeToTray: true,
+        syncAlerts: true,
+        petEnabled: false,
+        petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+        petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+      };
     }
     log(
       `controller: ${filePath} is corrupt (${String(err)}); trying ${filePath}.bak`,
@@ -426,6 +505,10 @@ function readStore(
     profiles?: unknown;
     closeToTray?: unknown;
     syncAlerts?: unknown;
+    petEnabled?: unknown;
+    petZoomPercent?: unknown;
+    petIdleDwellSeconds?: unknown;
+    petScaleTick?: unknown;
   } | null;
   if (obj === null || typeof obj !== 'object' || !Array.isArray(obj.profiles)) {
     if (isBackup) {
@@ -433,7 +516,14 @@ function readStore(
         `controller: ${filePath} has an unusable schema; starting with an empty store`,
       );
       setAsideCorrupt(filePath, log);
-      return { profiles: [], closeToTray: true, syncAlerts: true };
+      return {
+        profiles: [],
+        closeToTray: true,
+        syncAlerts: true,
+        petEnabled: false,
+        petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+        petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
+      };
     }
     log(
       `controller: ${filePath} has an unusable schema; trying ${filePath}.bak`,
@@ -443,6 +533,17 @@ function readStore(
   }
   const syncAlerts =
     typeof obj.syncAlerts === 'boolean' ? obj.syncAlerts : true;
+  const petEnabled =
+    typeof obj.petEnabled === 'boolean' ? obj.petEnabled : false;
+  const hasZoomPercent = Object.hasOwn(obj, 'petZoomPercent');
+  const petZoomPercent = isPetZoomPercent(obj.petZoomPercent)
+    ? obj.petZoomPercent
+    : hasZoomPercent
+      ? PET_ZOOM_DEFAULT_PERCENT
+      : migrateLegacyPetScaleTick(obj.petScaleTick);
+  const petIdleDwellSeconds = isPetIdleDwellSeconds(obj.petIdleDwellSeconds)
+    ? obj.petIdleDwellSeconds
+    : PET_IDLE_DWELL_DEFAULT_SECONDS;
   const profiles: InternalProfile[] = [];
   const seen = new Set<string>();
   for (const entry of obj.profiles) {
@@ -483,6 +584,9 @@ function readStore(
     profiles,
     closeToTray: typeof obj.closeToTray === 'boolean' ? obj.closeToTray : true,
     syncAlerts,
+    petEnabled,
+    petZoomPercent,
+    petIdleDwellSeconds,
   };
 }
 
@@ -497,6 +601,9 @@ function saveStore(
   profiles: InternalProfile[],
   closeToTray: boolean,
   syncAlerts: boolean,
+  petEnabled: boolean,
+  petZoomPercent: number,
+  petIdleDwellSeconds: number,
 ): void {
   const dir = path.dirname(persistPath);
   mkdirSync(dir, { recursive: true });
@@ -524,10 +631,13 @@ function saveStore(
             id: p.id,
             name: p.name,
             origin: p.origin,
-            ...(p.lastUsed !== null ? { lastUsed: p.lastUsed } : {}),
+            ...(p.lastUsed === null ? {} : { lastUsed: p.lastUsed }),
           })),
           closeToTray,
           syncAlerts,
+          petEnabled,
+          petZoomPercent,
+          petIdleDwellSeconds,
         },
         null,
         2,
@@ -600,6 +710,9 @@ export class Controller {
   private unread = new Map<string, number>();
   private closeToTray = true;
   private syncAlerts = true;
+  private petEnabled = false;
+  private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
+  private petIdleDwellSeconds = PET_IDLE_DWELL_DEFAULT_SECONDS;
   private listeners = new Set<ControllerListener>();
 
   constructor(opts: ControllerOptions) {
@@ -608,6 +721,9 @@ export class Controller {
     const store = readStore(this.persistPath, false, this.log);
     this.closeToTray = store.closeToTray;
     this.syncAlerts = store.syncAlerts;
+    this.petEnabled = store.petEnabled;
+    this.petZoomPercent = store.petZoomPercent;
+    this.petIdleDwellSeconds = store.petIdleDwellSeconds;
     for (const p of store.profiles) {
       this.profiles.push(p);
       this.byID.set(p.id, p);
@@ -648,6 +764,9 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
       );
     } catch (err) {
       this.profiles.pop();
@@ -684,6 +803,9 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
       );
     } catch (err) {
       this.profiles.splice(idx, 0, removed);
@@ -715,6 +837,9 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -753,6 +878,9 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
       );
     } catch (err) {
       this.profiles.splice(insertAt, 1);
@@ -773,6 +901,9 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'profiles-changed' });
   }
@@ -794,6 +925,9 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
       );
     } catch (err) {
       this.log(`controller: record last-used: ${String(err)}`);
@@ -838,6 +972,9 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'close-to-tray-changed' });
   }
@@ -865,8 +1002,99 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'sync-alerts-changed' });
+  }
+
+  /**
+   * The persisted desktop-pet preference (default false): whether the
+   * optional pet overlay window is shown.
+   */
+  getPetEnabled(): boolean {
+    return this.petEnabled;
+  }
+
+  /**
+   * Persists the desktop-pet preference and emits
+   * `{kind:'pet-enabled-changed'}` (the host loop rebuilds the tray
+   * checkbox and mirrors the window state). A no-op when unchanged.
+   */
+  setPetEnabled(value: boolean): void {
+    if (value === this.petEnabled) return;
+    this.petEnabled = value;
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
+    );
+    this.emit({ kind: 'pet-enabled-changed' });
+  }
+
+  /** The canonical persisted desktop-pet zoom percentage. */
+  getPetZoomPercent(): number {
+    return this.petZoomPercent;
+  }
+
+  /**
+   * Persists the desktop-pet zoom percentage. Invalid values are rejected
+   * without mutation; persistence failures restore the prior percentage and
+   * rethrow.
+   */
+  setPetZoomPercent(percent: number): boolean {
+    if (!isPetZoomPercent(percent)) return false;
+    if (percent === this.petZoomPercent) return true;
+    const oldPercent = this.petZoomPercent;
+    this.petZoomPercent = percent;
+    try {
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
+      );
+    } catch (err) {
+      this.petZoomPercent = oldPercent;
+      throw err;
+    }
+    this.emit({ kind: 'pet-zoom-changed' });
+    return true;
+  }
+
+  getPetIdleDwellSeconds(): number {
+    return this.petIdleDwellSeconds;
+  }
+
+  setPetIdleDwellSeconds(value: number): boolean {
+    if (!isPetIdleDwellSeconds(value)) return false;
+    if (value === this.petIdleDwellSeconds) return true;
+    const oldValue = this.petIdleDwellSeconds;
+    this.petIdleDwellSeconds = value;
+    try {
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.petIdleDwellSeconds,
+      );
+    } catch (err) {
+      this.petIdleDwellSeconds = oldValue;
+      throw err;
+    }
+    this.emit({ kind: 'pet-idle-dwell-changed', dwellSeconds: value });
+    return true;
   }
 
   /**
@@ -912,6 +1140,9 @@ export class Controller {
       unread: new Map(this.unread),
       closeToTray: this.closeToTray,
       syncAlerts: this.syncAlerts,
+      petEnabled: this.petEnabled,
+      petZoomPercent: this.petZoomPercent,
+      petIdleDwellSeconds: this.petIdleDwellSeconds,
     };
   }
 

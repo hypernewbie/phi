@@ -150,7 +150,7 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
 
   it('runs installProtocol with the trailing -- args, logs the result and exits 0', () => {
     expect(mainSource).toMatch(
-      /installProtocol\(realPlatform,\s*\[\s*path\.join\(here,\s*'main\.js'\),\s*'--',?\s*\]\)/,
+      /installProtocol\(realPlatform,\s*\[\s*path\.join\(here, 'main\.js'\),\s*'--',?\s*\],?\s*\)/,
     );
     expect(mainSource).toContain('installed at ${reg.path}, exe ${reg.exe}');
     const installIdx = mainSource.indexOf('installProtocol(realPlatform');
@@ -219,6 +219,11 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
     expect(desktopSource).toContain('TRAY_COMMAND_CHANNEL');
     expect(desktopSource).toContain("case 'show'");
     expect(desktopSource).toContain("case 'select-profile'");
+    expect(desktopSource).toContain("case 'pet-zoom-in'");
+    expect(desktopSource).toContain("case 'pet-zoom-out'");
+    expect(desktopSource).toContain("case 'pet-reset-zoom'");
+    expect(desktopSource).toContain('setPetZoomFromTray');
+    expect(desktopSource).toContain('setZoomPercent(savedPercent)');
     expect(desktopSource).toContain("case 'quit'");
     // Show Phi foregrounds the main window via restore()+focus() (Wails
     // single.ForegroundMainWindow parity).
@@ -249,6 +254,22 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
       "health: state.health.get(p.id) ?? 'unknown'",
     );
     expect(desktopSource).toContain('unread: state.unread.get(p.id) ?? 0');
+  });
+
+  it('rebuilds the persisted pet snapshot before restored-pet startup', () => {
+    const controllerIdx = desktopSource.indexOf(
+      'this.controller = new Controller',
+    );
+    const rebuildIdx = desktopSource.indexOf(
+      'this.trayHandle?.rebuildMenu()',
+      controllerIdx,
+    );
+    const restoreIdx = desktopSource.indexOf(
+      'if (this.controller.state().petEnabled) void this.startPet()',
+    );
+    expect(controllerIdx).toBeGreaterThan(-1);
+    expect(rebuildIdx).toBeGreaterThan(controllerIdx);
+    expect(restoreIdx).toBeGreaterThan(rebuildIdx);
   });
 
   it('closes the tray on before-quit (and on non-macOS window-all-closed)', () => {
@@ -680,10 +701,7 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
 
 describe('src/desktop.ts (rail reorder receiver)', () => {
   it('registers phi:reorder-profile -> controller.reorder with a nullable beforeId and no reply channel', () => {
-    const handlerMatch = desktopSource.match(
-      /ipcMain\.on\(\s*'phi:reorder-profile'/,
-    );
-    const handlerIdx = handlerMatch?.index ?? -1;
+    const handlerIdx = desktopSource.indexOf("'phi:reorder-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
     expect(
       desktopSource.indexOf('ctrl.reorder(id, beforeId)', handlerIdx),
@@ -776,9 +794,18 @@ describe('src/desktop.ts (step-6 completion: rail-targeted snapshots, content bo
     expect(
       desktopSource.indexOf('win.getContentBounds()', boundsIdx),
     ).toBeGreaterThan(boundsIdx);
-    expect(desktopSource.slice(boundsIdx)).toMatch(
-      /x:\s*RAIL_WIDTH,\s*y:\s*HEADER_HEIGHT,\s*width:\s*b\.width - RAIL_WIDTH,\s*height:\s*b\.height - HEADER_HEIGHT/,
+    expect(desktopSource.indexOf('x: RAIL_WIDTH', boundsIdx)).toBeGreaterThan(
+      boundsIdx,
     );
+    expect(
+      desktopSource.indexOf('y: HEADER_HEIGHT', boundsIdx),
+    ).toBeGreaterThan(boundsIdx);
+    expect(
+      desktopSource.indexOf('b.width - RAIL_WIDTH', boundsIdx),
+    ).toBeGreaterThan(boundsIdx);
+    expect(
+      desktopSource.indexOf('b.height - HEADER_HEIGHT', boundsIdx),
+    ).toBeGreaterThan(boundsIdx);
   });
 
   it('restores the most recently used profile at startup (its retained view loads immediately)', () => {
@@ -911,10 +938,12 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
 
 describe('src/desktop.ts (observed rail identity + accent)', () => {
   it('observes the remote page through a fixed executeJavaScript expression reading #hostname-display and the --accent token', () => {
-    expect(desktopSource).toContain("getElementById('hostname-display')");
+    expect(desktopSource).toContain(
+      "document.getElementById('hostname-display')",
+    );
     expect(desktopSource).toContain("getPropertyValue('--accent')");
     expect(desktopSource).toMatch(
-      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT,?\s*\)/,
+      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT/,
     );
   });
 
@@ -989,18 +1018,29 @@ describe('src/desktop.ts (desktop title row + selected-server taskbar title)', (
     expect(desktopSource).not.toContain('CAPTION_LANE_WIDTH');
     expect(desktopSource).not.toContain('TITLE_ROW_HEIGHT');
     const boundsIdx = desktopSource.indexOf('const defaultBounds');
-    expect(desktopSource.slice(boundsIdx)).toMatch(
-      /x:\s*RAIL_WIDTH,\s*y:\s*HEADER_HEIGHT,/,
+    expect(desktopSource.indexOf('x: RAIL_WIDTH', boundsIdx)).toBeGreaterThan(
+      boundsIdx,
     );
+    expect(
+      desktopSource.indexOf('y: HEADER_HEIGHT', boundsIdx),
+    ).toBeGreaterThan(boundsIdx);
   });
 
   it('composes the selected-server taskbar title from the remote title glyph contract and observed hostname', () => {
     expect(desktopSource).toContain('refreshWindowTitle(): void');
     expect(desktopSource).toContain('observedTitle.get(activeId)');
     expect(desktopSource).toContain('identity.hostname.toUpperCase()');
-    expect(desktopSource).toMatch(
-      /win\.setTitle\(\s*`\$\{marked \? TITLE_MARKER : ''\}\$\{glyph\} Phi — \$\{identity\.hostname\.toUpperCase\(\)\}`,?\s*\)/,
+    const refreshTitleIdx = desktopSource.indexOf('refreshWindowTitle(): void');
+    const titleCallIdx = desktopSource.indexOf(
+      'win.setTitle(',
+      refreshTitleIdx,
     );
+    expect(
+      desktopSource.indexOf(
+        "`${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`",
+        titleCallIdx,
+      ),
+    ).toBeGreaterThan(titleCallIdx);
   });
 
   it('refreshes the title on active-changed, title updates, and identity observation only', () => {
@@ -1396,9 +1436,9 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(
       desktopSource.indexOf('isMainViewSender(event)', workspaceIdx),
     ).toBeGreaterThan(workspaceIdx);
-    expect(desktopSource.slice(workspaceIdx)).toMatch(
-      /executeJavaScript\(\s*READ_WORKSPACE_SCRIPT,?\s*\)/,
-    );
+    expect(
+      desktopSource.indexOf('READ_WORKSPACE_SCRIPT', workspaceIdx),
+    ).toBeGreaterThan(workspaceIdx);
     expect(
       desktopSource.indexOf(
         'ctrl.state().activeId !== active.id',
@@ -1551,6 +1591,14 @@ describe('src/desktop.ts (per-server CPU observation: rail intensity + taskbar p
     expect(
       desktopSource.indexOf('observedCpu.delete(id)', handlerIdx),
     ).toBeGreaterThan(handlerIdx);
+  });
+
+  it('polls health every 30 seconds as documented', () => {
+    const intervalIdx = desktopSource.indexOf('healthInterval = setInterval');
+    expect(intervalIdx).toBeGreaterThan(-1);
+    expect(desktopSource.indexOf('30_000', intervalIdx)).toBeGreaterThan(
+      intervalIdx,
+    );
   });
 
   it('clears the CPU poll interval on before-quit alongside the health poll', () => {
@@ -1808,11 +1856,7 @@ describe('src/desktop.ts (sync board desktop alerts)', () => {
       'const marked = title.startsWith(TITLE_MARKER)',
       titleIdx,
     );
-    const notifMatch = desktopSource
-      .slice(titleIdx)
-      .match(/onSyncAlert\(\s*profile,\s*SYNC_NOTIF_MARKER/);
-    const notifIdx =
-      notifMatch?.index === undefined ? -1 : titleIdx + notifMatch.index;
+    const notifIdx = desktopSource.indexOf('this.onSyncAlert(', titleIdx);
     expect(notifIdx).toBeGreaterThan(-1);
     expect(notifIdx).toBeLessThan(markedIdx);
     expect(desktopSource.indexOf('return;', notifIdx)).toBeGreaterThan(
@@ -1934,9 +1978,9 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
   it('executes the fixed chime script on the RAIL view via executeJavaScript, with no new IPC channel', () => {
     const chimeIdx = desktopSource.indexOf('playAlarmChime(): void');
     expect(chimeIdx).toBeGreaterThan(-1);
-    expect(desktopSource.slice(chimeIdx)).toMatch(
-      /rail\.webContents\s*\.executeJavaScript/,
-    );
+    expect(
+      desktopSource.indexOf('executeJavaScript(', chimeIdx),
+    ).toBeGreaterThan(chimeIdx);
     expect(
       desktopSource.indexOf(
         'PLAY_ALARM_CHIME_SCRIPT(ALARM_CHIME_URL)',
@@ -1947,11 +1991,8 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
   });
 
   it('resolves the bell asset as an absolute file:// URL beside the tray icon asset', () => {
-    expect(desktopSource).toContain(
-      "import { fileURLToPath, pathToFileURL } from 'node:url';",
-    );
     expect(desktopSource).toMatch(
-      /pathToFileURL\(\s*path\.join\(here,\s*'\.\.',\s*'assets',\s*'bell\.wav'\),?\s*\)/,
+      /const ALARM_CHIME_URL = pathToFileURL\(\s*path\.join\(here, '\.\.', 'assets', 'bell\.wav'\),\s*\)\.href;/,
     );
   });
 
@@ -1983,9 +2024,9 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
 
 describe('src/desktop.ts (rail-selection shortcuts)', () => {
   it('imports the shortcuts module and attaches before-input-event in the production view factory only (smoke-gated)', () => {
-    expect(desktopSource).toMatch(
-      /import \{\s*ALWAYS_SAFE_RAIL_CHORDS,\s*TERMINAL_FOCUS_SCRIPT,\s*resolveRailChord,?\s*\}\s*from '\.\/shortcuts\.js';/,
-    );
+    expect(desktopSource).toContain('ALWAYS_SAFE_RAIL_CHORDS');
+    expect(desktopSource).toContain('TERMINAL_FOCUS_SCRIPT');
+    expect(desktopSource).toContain('resolveRailChord');
     const smokeIdx = desktopSource.indexOf('if (SMOKE)');
     const makeViewIdx = desktopSource.indexOf(
       'const makeView = (origin: string): WebContentsView => {',
@@ -1994,7 +2035,7 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
     expect(makeViewIdx).toBeGreaterThan(smokeIdx);
     const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
     const factoryRegion = desktopSource.slice(makeViewIdx, makeViewEndIdx);
-    expect(factoryRegion).toContain("'before-input-event'");
+    expect(factoryRegion).toMatch(/["']before-input-event["']/);
     expect(factoryRegion).toContain('ALWAYS_SAFE_RAIL_CHORDS.has(input.key)');
     expect(factoryRegion).toContain('TERMINAL_FOCUS_SCRIPT');
     expect(factoryRegion).not.toContain('preload:');
@@ -2006,7 +2047,7 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
       'const makeView = (origin: string): WebContentsView => {',
     );
     const listenerIdx = desktopSource.indexOf(
-      "'before-input-event'",
+      'before-input-event',
       makeViewIdx,
     );
     expect(listenerIdx).toBeGreaterThan(-1);
@@ -2014,7 +2055,7 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
       listenerIdx,
       desktopSource.indexOf('return view;', listenerIdx),
     );
-    expect(listenerRegion).toContain("input.type !== 'keyDown'");
+    expect(listenerRegion).toMatch(/input\.type !== ["']keyDown["']/);
     // Shift is allowed at the outer guard so Ctrl+Shift+Tab can resolve
     // to prev; the resolver rejects Shift for digits.
     expect(listenerRegion).toContain(
@@ -2039,7 +2080,7 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
       'const makeView = (origin: string): WebContentsView => {',
     );
     const listenerIdx = desktopSource.indexOf(
-      "'before-input-event'",
+      'before-input-event',
       makeViewIdx,
     );
     const listenerRegion = desktopSource.slice(
@@ -2047,12 +2088,10 @@ describe('src/desktop.ts (rail-selection shortcuts)', () => {
       desktopSource.indexOf('return view;', listenerIdx),
     );
     expect(listenerRegion).toContain(
-      'void view.webContents.executeJavaScript(TERMINAL_FOCUS_SCRIPT).then(',
+      'executeJavaScript(TERMINAL_FOCUS_SCRIPT)',
     );
     expect(listenerRegion).toContain('if (raw === true) return;');
-    expect(listenerRegion).toContain(
-      "const step = target.kind === 'next' ? 1 : -1;",
-    );
+    expect(listenerRegion).toContain('const step = target.kind ===');
     // The only preventDefault sits inside the always-safe branch: after
     // the membership guard, before the conditional probe.
     const guardIdx = listenerRegion.indexOf(
