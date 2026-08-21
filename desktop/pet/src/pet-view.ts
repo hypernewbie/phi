@@ -7,6 +7,7 @@
 import type {
   PetApi,
   PetDragPosition,
+  PetHitTestRequest,
   PetStageLayout,
   PetZoomState,
   StageRect,
@@ -170,6 +171,67 @@ export function pick(
   return entries[Math.floor(rng() * entries.length)] ?? pool[0] ?? "";
 }
 
+export type PetHitLayer = {
+  element: HTMLImageElement | HTMLVideoElement;
+  intrinsicX: number;
+  intrinsicY: number;
+};
+
+export type PetAlphaSampler = (
+  stagePoint: { x: number; y: number },
+  layers: readonly PetHitLayer[],
+) => boolean | null;
+
+// The canvas probe measured 1/255 alpha noise across the transparent background.
+const PET_HIT_ALPHA_THRESHOLD = 16 / 255;
+
+const createDefaultAlphaSampler = (): PetAlphaSampler => {
+  let canvas: HTMLCanvasElement | null = null;
+  let context: CanvasRenderingContext2D | null = null;
+  return (_stagePoint, layers) => {
+    if (layers.length === 0) return false;
+    try {
+      if (!canvas) {
+        canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        context = canvas.getContext("2d", { willReadFrequently: true });
+      }
+      if (!context) return null;
+      let compositedAlpha = 0;
+      for (const layer of layers) {
+        const opacityValue = Number.parseFloat(
+          getComputedStyle(layer.element).opacity,
+        );
+        const opacity = Number.isFinite(opacityValue)
+          ? Math.min(Math.max(opacityValue, 0), 1)
+          : 1;
+        if (opacity === 0) continue;
+        context.clearRect(0, 0, 1, 1);
+        context.globalAlpha = 1;
+        context.drawImage(
+          layer.element,
+          Math.floor(layer.intrinsicX),
+          Math.floor(layer.intrinsicY),
+          1,
+          1,
+          0,
+          0,
+          1,
+          1,
+        );
+        const sourceAlpha = context.getImageData(0, 0, 1, 1).data[3] / 255;
+        const effectiveAlpha = sourceAlpha * opacity;
+        compositedAlpha =
+          effectiveAlpha + compositedAlpha * (1 - effectiveAlpha);
+      }
+      return compositedAlpha > PET_HIT_ALPHA_THRESHOLD;
+    } catch {
+      return null;
+    }
+  };
+};
+
 /** The injected DOM + bridge the controller drives. */
 export interface PetInitOptions {
   root: HTMLElement;
@@ -179,6 +241,7 @@ export interface PetInitOptions {
   staticImg: HTMLImageElement;
   hit: HTMLElement;
   bridge: PetApi;
+  alphaSampler?: PetAlphaSampler;
   rng?: () => number;
   raf?: (cb: FrameRequestCallback) => number;
   caf?: (id: number) => void;
@@ -198,6 +261,7 @@ export interface PetController {
 
 export function initPet(opts: PetInitOptions): PetController {
   const { root, stage, videoA, videoB, staticImg, hit, bridge } = opts;
+  const alphaSampler = opts.alphaSampler ?? createDefaultAlphaSampler();
   const rng = opts.rng ?? Math.random;
   const raf =
     opts.raf ?? ((cb: FrameRequestCallback) => requestAnimationFrame(cb));
@@ -217,6 +281,15 @@ export function initPet(opts: PetInitOptions): PetController {
   let wheelRemainder = 0;
   let stageWidth = 0;
   let stageHeight = 0;
+  let lastPoint: { x: number; y: number } | null = null;
+  let lastVisible: boolean | null = null;
+  let ignoreMouseEvents = true;
+  let gestureOwned = false;
+  let clickEligible = false;
+  let pendingHitTestRequest: PetHitTestRequest | null = null;
+  let mediaSampleGeneration = 0;
+  let pendingFrameFallback: number | null = null;
+  let destroyed = false;
 
   const layout = (): void => {
     stageWidth = Math.floor((zoomConfig.baseVisualWidth * zoomPercent) / 100);
@@ -248,6 +321,184 @@ export function initPet(opts: PetInitOptions): PetController {
     restTimer = null;
   };
 
+  const mediaElements = [staticImg, videoA, videoB] as const;
+  const stageClientRect = (): DOMRect => stage.getBoundingClientRect();
+  const mediaDimensions = (
+    element: HTMLImageElement | HTMLVideoElement,
+  ): { width: number; height: number } | null => {
+    if (
+      element instanceof HTMLVideoElement &&
+      element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+    )
+      return null;
+    const width =
+      element instanceof HTMLImageElement
+        ? element.naturalWidth
+        : element.videoWidth;
+    const height =
+      element instanceof HTMLImageElement
+        ? element.naturalHeight
+        : element.videoHeight;
+    if (width > 0 && height > 0) return { width, height };
+    return null;
+  };
+  const mediaClientRect = (
+    element: HTMLImageElement | HTMLVideoElement,
+    fallback: DOMRect,
+  ): DOMRect => {
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return rect;
+    return fallback;
+  };
+  const hitLayers = (
+    point: { x: number; y: number },
+  ): { decoded: boolean; layers: PetHitLayer[] } => {
+    const stageRect = stageClientRect();
+    const layers: PetHitLayer[] = [];
+    let decoded = false;
+    for (const element of mediaElements) {
+      const rect = mediaClientRect(element, stageRect);
+      const dimensions = mediaDimensions(element);
+      // Injected samplers use stage-sized fallback dimensions so JSDOM can
+      // exercise coordinate mapping without decoding media; production never
+      // treats an undecoded image/video as eligible.
+      const usableDimensions =
+        dimensions ??
+        (opts.alphaSampler
+          ? {
+              width: Math.max(1, Math.round(rect.width)),
+              height: Math.max(1, Math.round(rect.height)),
+            }
+          : null);
+      if (!usableDimensions) continue;
+      decoded = true;
+      const sourceAspect = usableDimensions.width / usableDimensions.height;
+      const rectAspect = rect.width / rect.height;
+      const contentWidth =
+        rectAspect > sourceAspect
+          ? rect.height * sourceAspect
+          : rect.width;
+      const contentHeight =
+        rectAspect > sourceAspect
+          ? rect.height
+          : rect.width / sourceAspect;
+      const contentLeft =
+        rect.left - stageRect.left + (rect.width - contentWidth) / 2;
+      const contentTop =
+        rect.top - stageRect.top + (rect.height - contentHeight) / 2;
+      if (
+        point.x < contentLeft ||
+        point.x > contentLeft + contentWidth ||
+        point.y < contentTop ||
+        point.y > contentTop + contentHeight
+      )
+        continue;
+      const intrinsicX = Math.min(
+        Math.max(
+          ((point.x - contentLeft) / contentWidth) * usableDimensions.width,
+          0,
+        ),
+        usableDimensions.width - 1,
+      );
+      const intrinsicY = Math.min(
+        Math.max(
+          ((point.y - contentTop) / contentHeight) * usableDimensions.height,
+          0,
+        ),
+        usableDimensions.height - 1,
+      );
+      layers.push({ element, intrinsicX, intrinsicY });
+    }
+    return { decoded, layers };
+  };
+  const sampleAt = (point: { x: number; y: number }): boolean | null => {
+    const mapped = hitLayers(point);
+    if (!mapped.decoded) return null;
+    return alphaSampler(point, mapped.layers);
+  };
+  const setMousePassthrough = (ignore: boolean): void => {
+    if (ignoreMouseEvents === ignore) return;
+    bridge.setMousePassthrough(ignore);
+    ignoreMouseEvents = ignore;
+  };
+  const resampleLastPoint = (): boolean | null => {
+    if (destroyed || !lastPoint) return null;
+    const visible = sampleAt(lastPoint);
+    if (visible === null) return null;
+    const previous = lastVisible;
+    lastVisible = visible;
+    if (pendingHitTestRequest) {
+      const request = pendingHitTestRequest;
+      pendingHitTestRequest = null;
+      ignoreMouseEvents = !visible;
+      bridge.reportHitTestResult({ requestId: request.requestId, visible });
+    } else if (!gestureOwned && previous !== visible) {
+      setMousePassthrough(!visible);
+    }
+    return visible;
+  };
+  const stagePointFromClient = (
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } | null => {
+    const rect = stageClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  };
+  const stagePointFromRequest = (
+    request: PetHitTestRequest,
+  ): { x: number; y: number } | null => {
+    if (
+      request.window.width <= 0 ||
+      request.window.height <= 0 ||
+      !Number.isFinite(request.window.x) ||
+      !Number.isFinite(request.window.y) ||
+      !Number.isFinite(request.screenX) ||
+      !Number.isFinite(request.screenY)
+    )
+      return null;
+    const rect = stageClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x:
+        ((request.screenX - request.window.x) / request.window.width) *
+        rect.width,
+      y:
+        ((request.screenY - request.window.y) / request.window.height) *
+        rect.height,
+    };
+  };
+  const sampleClientPoint = (
+    clientX: number,
+    clientY: number,
+    publish: boolean,
+  ): boolean | null => {
+    const point = stagePointFromClient(clientX, clientY);
+    if (!point) return null;
+    lastPoint = point;
+    const visible = sampleAt(point);
+    if (visible === null) return null;
+    const previous = lastVisible;
+    lastVisible = visible;
+    if (publish && !gestureOwned && previous !== visible)
+      setMousePassthrough(!visible);
+    return visible;
+  };
+  const handleHitTestRequest = (request: PetHitTestRequest): void => {
+    pendingHitTestRequest = request;
+    const point = stagePointFromRequest(request);
+    if (!point) {
+      pendingHitTestRequest = null;
+      lastPoint = null;
+      lastVisible = false;
+      ignoreMouseEvents = true;
+      bridge.reportHitTestResult({ requestId: request.requestId, visible: false });
+      return;
+    }
+    lastPoint = point;
+    resampleLastPoint();
+  };
+
   let drag = { active: false, dragging: false, sx: 0, sy: 0 };
   let justDragged = false;
   let dragAnchor: { x: number; y: number } | null = null;
@@ -261,13 +512,56 @@ export function initPet(opts: PetInitOptions): PetController {
     switchTo(anim, once);
   };
 
+  const cancelVideoFrameSampling = (): void => {
+    mediaSampleGeneration += 1;
+    if (pendingFrameFallback !== null) caf(pendingFrameFallback);
+    pendingFrameFallback = null;
+  };
+  const scheduleVideoFrameSampling = (element: HTMLVideoElement): void => {
+    if (destroyed || !lastPoint || !element.classList.contains("is-front")) return;
+    const generation = mediaSampleGeneration;
+    const requestVideoFrameCallback = (
+      element as HTMLVideoElement & {
+        requestVideoFrameCallback?: (
+          callback: (now: number, metadata: VideoFrameCallbackMetadata) => void,
+        ) => number;
+      }
+    ).requestVideoFrameCallback;
+    if (typeof requestVideoFrameCallback === "function") {
+      requestVideoFrameCallback.call(element, () => {
+        if (
+          destroyed ||
+          generation !== mediaSampleGeneration ||
+          !element.classList.contains("is-front")
+        )
+          return;
+        resampleLastPoint();
+        scheduleVideoFrameSampling(element);
+      });
+      return;
+    }
+    pendingFrameFallback = raf(() => {
+      pendingFrameFallback = null;
+      if (
+        destroyed ||
+        generation !== mediaSampleGeneration ||
+        !element.classList.contains("is-front")
+      )
+        return;
+      resampleLastPoint();
+      scheduleVideoFrameSampling(element);
+    });
+  };
+
   const startStatic = (): void => {
+    cancelVideoFrameSampling();
     anim = STATIC;
     once = false;
     staticImg.src = MEDIA_PREFIX + "maid-static.png";
     staticImg.classList.add("is-front");
     videoA.classList.remove("is-front");
     videoB.classList.remove("is-front");
+    resampleLastPoint();
     clearRestTimer();
     restTimer = setTimeout(playRandomAct, dwellSeconds * 1000);
   };
@@ -283,6 +577,7 @@ export function initPet(opts: PetInitOptions): PetController {
 
   const switchTo = (next: string, nextOnce: boolean): void => {
     if (pending && pending.anim === next && pending.once === nextOnce) return;
+    cancelVideoFrameSampling();
     clearRestTimer();
     anim = next;
     once = nextOnce;
@@ -298,13 +593,14 @@ export function initPet(opts: PetInitOptions): PetController {
     el.onended = null;
     const onError = (): void => {
       el.removeEventListener("error", onError);
-      if (pending?.gen === currentGen) startStatic();
+      if (!destroyed && pending?.gen === currentGen) startStatic();
     };
     el.addEventListener("error", onError);
     el.load();
 
     const onReady = (): void => {
       el.removeEventListener("loadeddata", onReady);
+      if (destroyed) return;
       el.removeEventListener("error", onError);
       if (pending?.gen !== currentGen) return;
       const old = front === 0 ? videoA : videoB;
@@ -326,8 +622,10 @@ export function initPet(opts: PetInitOptions): PetController {
           }
         : null;
       el.style.transform = "";
+      resampleLastPoint();
+      scheduleVideoFrameSampling(el);
       void Promise.resolve(el.play()).catch(() => {
-        if (gen === currentGen) startStatic();
+        if (!destroyed && gen === currentGen) startStatic();
       });
     };
     el.addEventListener("loadeddata", onReady);
@@ -373,8 +671,22 @@ export function initPet(opts: PetInitOptions): PetController {
     dragAnchor = null;
     dragStageRect = null;
   };
+  const rearmMousePassthrough = (): void => {
+    if (!gestureOwned && lastVisible !== null)
+      setMousePassthrough(!lastVisible);
+  };
 
   const handlePointerDown = (e: PointerEvent): void => {
+    if (clickEligible && !drag.active) {
+      clickEligible = false;
+      gestureOwned = false;
+      rearmMousePassthrough();
+    }
+    const sampled = sampleClientPoint(e.clientX, e.clientY, false);
+    if (sampled !== true && lastVisible !== true) return;
+    setMousePassthrough(false);
+    gestureOwned = true;
+    clickEligible = true;
     hit.classList.add("dragging");
     if (typeof hit.setPointerCapture === "function")
       hit.setPointerCapture(e.pointerId);
@@ -388,6 +700,8 @@ export function initPet(opts: PetInitOptions): PetController {
 
   const handlePointerMove = (e: PointerEvent): void => {
     if (!drag.active) return;
+    const point = stagePointFromClient(e.clientX, e.clientY);
+    if (point) lastPoint = point;
     const dx = e.clientX - drag.sx;
     const dy = e.clientY - drag.sy;
     if (!drag.dragging) {
@@ -412,6 +726,7 @@ export function initPet(opts: PetInitOptions): PetController {
   const handlePointerUp = (e: PointerEvent): void => {
     if (!drag.active) return;
     const wasDragging = drag.dragging;
+    sampleClientPoint(e.clientX, e.clientY, false);
     if (wasDragging && dragAnchor && dragStageRect) {
       const finalPosition: PetDragPosition = {
         phase: "move",
@@ -427,11 +742,14 @@ export function initPet(opts: PetInitOptions): PetController {
     }
     clearDrag();
     if (!wasDragging) return;
+    gestureOwned = false;
+    clickEligible = false;
     justDragged = true;
     setTimeout(() => {
       justDragged = false;
     }, 100);
     startStatic();
+    rearmMousePassthrough();
   };
 
   const handlePointerCancel = (): void => {
@@ -453,19 +771,37 @@ export function initPet(opts: PetInitOptions): PetController {
       });
     }
     clearDrag();
+    gestureOwned = false;
+    clickEligible = false;
     if (wasDragging) startStatic();
+    resampleLastPoint();
+    rearmMousePassthrough();
   };
 
-  const handleClick = (): void => {
+  const handleClick = (e: MouseEvent): void => {
+    sampleClientPoint(e.clientX, e.clientY, false);
     if (drag.active || drag.dragging || justDragged) return;
+    if (!clickEligible && lastVisible !== true) return;
     setAnim(pick(CLICKS, null, rng), true);
+    clickEligible = false;
+    gestureOwned = false;
+    rearmMousePassthrough();
   };
 
+  const onWindowMouseMove = (event: MouseEvent): void => {
+    sampleClientPoint(event.clientX, event.clientY, true);
+  };
+  const onStaticLoad = (): void => {
+    resampleLastPoint();
+  };
+  const removeHitTestRequest = bridge.onHitTestRequest(handleHitTestRequest);
   hit.addEventListener("pointerdown", handlePointerDown);
   hit.addEventListener("pointermove", handlePointerMove);
   hit.addEventListener("pointerup", handlePointerUp);
   hit.addEventListener("pointercancel", handlePointerCancel);
   hit.addEventListener("click", handleClick);
+  staticImg.addEventListener("load", onStaticLoad);
+  window.addEventListener("mousemove", onWindowMouseMove);
 
   // Verify mode: log once the first video actually starts playing, or once
   // the static image loads (whichever happens first — the new STATIC initial
@@ -587,13 +923,18 @@ export function initPet(opts: PetInitOptions): PetController {
   startStatic();
 
   const destroy = (): void => {
+    destroyed = true;
     hit.removeEventListener("pointerdown", handlePointerDown);
     hit.removeEventListener("pointermove", handlePointerMove);
     hit.removeEventListener("pointerup", handlePointerUp);
     hit.removeEventListener("pointercancel", handlePointerCancel);
     hit.removeEventListener("click", handleClick);
     hit.removeEventListener("wheel", handleWheel);
+    staticImg.removeEventListener("load", onStaticLoad);
+    window.removeEventListener("mousemove", onWindowMouseMove);
     window.removeEventListener("resize", onResize);
+    removeHitTestRequest();
+    cancelVideoFrameSampling();
     removeZoomListener();
     removeDwellListener();
     clearRestTimer();

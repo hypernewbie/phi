@@ -86,7 +86,7 @@ describe("stage-sized native window", () => {
     ).toEqual({ x: 528, y: 1012, width: 192, height: 108 });
   });
 
-  it("constructs a transparent secure always-on-top interactive window", () => {
+  it("constructs a transparent secure always-on-top pet window", () => {
     const bounds = defaultStageBounds(
       { x: 0, y: 0, width: 1920, height: 1080 },
       192,
@@ -115,7 +115,6 @@ describe("stage-sized native window", () => {
     });
     expect(win.alwaysOnTopArgs).toEqual([true, "screen-saver"]);
     expect(win.visibleOnAllWorkspacesArgs).toEqual([true]);
-    expect("setIgnoreMouseEvents" in win).toBe(false);
     expect(win.loadArgs[0]).toBe(path.join("/tmp/pet", "dist", "pet.html"));
   });
 

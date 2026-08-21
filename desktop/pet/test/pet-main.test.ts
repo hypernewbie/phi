@@ -15,6 +15,7 @@ const { fakeIpcMain, fakeScreen, FakeBrowserWindow } = vi.hoisted(() => {
   >();
   class FakeBrowserWindow {
     static instances: FakeBrowserWindow[] = [];
+    static throwIgnoreMouseEvents = false;
     destroyed = false;
     closedListener: (() => void) | null = null;
     eventListeners = new Map<string, Set<() => void>>();
@@ -25,6 +26,10 @@ const { fakeIpcMain, fakeScreen, FakeBrowserWindow } = vi.hoisted(() => {
       on: vi.fn(),
     };
     show = vi.fn();
+    setIgnoreMouseEvents = vi.fn(() => {
+      if (FakeBrowserWindow.throwIgnoreMouseEvents)
+        throw new Error("native ignore unavailable");
+    });
 
     constructor(opts: {
       x: number;
@@ -115,6 +120,7 @@ const { fakeIpcMain, fakeScreen, FakeBrowserWindow } = vi.hoisted(() => {
     fakeScreen: {
       getPrimaryDisplay: vi.fn(() => primaryDisplay),
       getDisplayNearestPoint: vi.fn(() => primaryDisplay),
+      getCursorScreenPoint: vi.fn(() => ({ x: 1728, y: 972 })),
     },
     FakeBrowserWindow,
   };
@@ -177,6 +183,7 @@ beforeEach(() => {
   fakeIpcMain.invokeHandlers.clear();
   fakeIpcMain.invokeSender = undefined;
   FakeBrowserWindow.instances.length = 0;
+  FakeBrowserWindow.throwIgnoreMouseEvents = false;
 });
 
 const started = () => {
@@ -187,11 +194,209 @@ const started = () => {
 const handler = (channel: string) => fakeIpcMain.handlers.get(channel);
 const layoutHandler = () => handler("phi:pet-stage-layout");
 const dragHandler = () => handler("phi:pet-drag-position");
+const hitTestResultHandler = () => handler("phi:pet-hit-test-result");
+const passthroughHandler = () => handler("phi:pet-mouse-passthrough");
+const hitTestRequest = (win: InstanceType<typeof FakeBrowserWindow>) =>
+  win.webContents.send.mock.calls
+    .filter(([channel]) => channel === "phi:pet-hit-test-request")
+    .at(-1)?.[1] as { requestId: number } | undefined;
 
 describe("createPet stage layout", () => {
   it("creates a default bottom-right stage-sized native window", () => {
     const { win } = started();
     expect(win.bounds).toEqual({ x: 1728, y: 972, width: 192, height: 108 });
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, {
+      forward: true,
+    });
+  });
+
+  it("starts ignored before showing and applies a validated visible result", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const request = hitTestRequest(win);
+    expect(request).toBeDefined();
+    expect(win.setIgnoreMouseEvents.mock.invocationCallOrder[0]).toBeLessThan(
+      win.show.mock.invocationCallOrder[0],
+    );
+    win.setIgnoreMouseEvents.mockClear();
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: request?.requestId, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(false, {
+      forward: true,
+    });
+    pet.stop();
+  });
+
+  it("keeps ignored mode and retries when the cursor moved during sampling", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const first = hitTestRequest(win);
+    fakeScreen.getCursorScreenPoint.mockReturnValueOnce({ x: 1700, y: 950 });
+    win.setIgnoreMouseEvents.mockClear();
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: first?.requestId, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+    expect(hitTestRequest(win)?.requestId).not.toBe(first?.requestId);
+    pet.stop();
+  });
+
+  it("rejects malformed and wrong-sender passthrough requests", () => {
+    const { pet, win } = started();
+    win.setIgnoreMouseEvents.mockClear();
+    passthroughHandler()?.({ sender: {} }, false);
+    passthroughHandler()?.({ sender: win.webContents }, "false");
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+    passthroughHandler()?.({ sender: win.webContents }, false);
+    passthroughHandler()?.({ sender: win.webContents }, false);
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledTimes(1);
+    pet.stop();
+  });
+
+  it("contains a native ignore failure during startup", () => {
+    FakeBrowserWindow.throwIgnoreMouseEvents = true;
+    const log = vi.fn();
+    const pet = createPet({ ...deps(), log });
+    expect(() => pet.start()).not.toThrow();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("setIgnoreMouseEvents failed"),
+    );
+    pet.stop();
+  });
+
+  it("rejects bounds changes, stale ids, malformed results, and wrong senders", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const first = hitTestRequest(win);
+    expect(first).toBeDefined();
+    win.setIgnoreMouseEvents.mockClear();
+
+    win.setBounds({ ...win.bounds, x: win.bounds.x - 10 });
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: first?.requestId, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+    const retried = hitTestRequest(win);
+    expect(retried?.requestId).not.toBe(first?.requestId);
+
+    hitTestResultHandler()?.(
+      { sender: {} },
+      { requestId: retried?.requestId, visible: true },
+    );
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: retried?.requestId },
+    );
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: retried?.requestId, visible: true, extra: true },
+    );
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: (retried?.requestId ?? 0) + 1, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: retried?.requestId, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(false, {
+      forward: true,
+    });
+    pet.stop();
+  });
+
+  it("drops a hit-test result after the window closes", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const request = hitTestRequest(win);
+    win.setIgnoreMouseEvents.mockClear();
+    win.destroy();
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: request?.requestId, visible: true },
+    );
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+    expect(pet.isRunning()).toBe(false);
+  });
+
+  it("resets native ignore state for the next session after stop", () => {
+    const pet = createPet(deps());
+    pet.start();
+    const first = FakeBrowserWindow.instances[0];
+    layoutHandler()?.({ sender: first.webContents }, layoutPayload());
+    const request = hitTestRequest(first);
+    hitTestResultHandler()?.(
+      { sender: first.webContents },
+      { requestId: request?.requestId, visible: true },
+    );
+    expect(first.setIgnoreMouseEvents).toHaveBeenCalledWith(false, {
+      forward: true,
+    });
+    pet.stop();
+
+    pet.start();
+    const second = FakeBrowserWindow.instances[1];
+    expect(second.setIgnoreMouseEvents).toHaveBeenCalledWith(true, {
+      forward: true,
+    });
+    pet.stop();
+  });
+
+  it("reissues hit testing after a native resize", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const first = hitTestRequest(win);
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: first?.requestId, visible: true },
+    );
+    win.webContents.send.mockClear();
+    win.setIgnoreMouseEvents.mockClear();
+
+    pet.setZoomPercent(125);
+    layoutHandler()?.(
+      { sender: win.webContents },
+      layoutPayload({ stage: { x: 0, y: 0, width: 240, height: 135 } }),
+    );
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, {
+      forward: true,
+    });
+    expect(hitTestRequest(win)?.requestId).not.toBe(first?.requestId);
+    pet.stop();
+  });
+
+  it("defers resize rehandshake until an owned drag ends", () => {
+    const { pet, win } = started();
+    layoutHandler()?.({ sender: win.webContents }, layoutPayload());
+    const first = hitTestRequest(win);
+    hitTestResultHandler()?.(
+      { sender: win.webContents },
+      { requestId: first?.requestId, visible: true },
+    );
+    dragHandler()?.({ sender: win.webContents }, dragMove());
+    win.webContents.send.mockClear();
+    win.setIgnoreMouseEvents.mockClear();
+
+    pet.setZoomPercent(125);
+    layoutHandler()?.(
+      { sender: win.webContents },
+      layoutPayload({ stage: { x: 0, y: 0, width: 240, height: 135 } }),
+    );
+    expect(win.setIgnoreMouseEvents).not.toHaveBeenCalled();
+    expect(hitTestRequest(win)).toBeUndefined();
+
+    dragHandler()?.({ sender: win.webContents }, dragTerminal("end"));
+    expect(win.setIgnoreMouseEvents).toHaveBeenCalledWith(true, {
+      forward: true,
+    });
+    expect(hitTestRequest(win)?.requestId).not.toBe(first?.requestId);
+    pet.stop();
   });
 
   it("rejects a noncanonical initial layout before showing", () => {

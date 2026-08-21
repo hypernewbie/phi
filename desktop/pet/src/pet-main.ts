@@ -2,6 +2,7 @@
 import { type BrowserWindow, ipcMain, screen } from "electron";
 import type {
   PetDragPosition,
+  PetHitTestResult,
   PetStageLayout,
   PetZoomRequest,
   PetIdleDwellState,
@@ -13,6 +14,10 @@ import {
   createPetSettingsWindow,
   type PetBounds,
 } from "./pet-window.js";
+
+const MOUSE_PASSTHROUGH = "phi:pet-mouse-passthrough";
+const HIT_TEST_REQUEST = "phi:pet-hit-test-request";
+const HIT_TEST_RESULT = "phi:pet-hit-test-result";
 
 export type ZoomResult = { percent: number; accepted: boolean };
 export type PetZoomConfig = {
@@ -116,6 +121,25 @@ const zoomRequest = (
   return validPercent((value as Record<string, unknown>).percent, zoom);
 };
 
+const hitTestResult = (value: unknown): value is PetHitTestResult => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  return (
+    Object.keys(result).every((key) => key === "requestId" || key === "visible") &&
+    Object.keys(result).length === 2 &&
+    typeof result.requestId === "number" &&
+    Number.isSafeInteger(result.requestId) &&
+    result.requestId > 0 &&
+    typeof result.visible === "boolean"
+  );
+};
+
+const sameStageRect = (left: StageRect, right: StageRect): boolean =>
+  left.x === right.x &&
+  left.y === right.y &&
+  left.width === right.width &&
+  left.height === right.height;
+
 export function createPet(deps: PetDeps): PetHandle {
   let win: BrowserWindow | null = null;
   let settingsWin: BrowserWindow | null = null;
@@ -134,6 +158,14 @@ export function createPet(deps: PetDeps): PetHandle {
   let activeDrag = false;
   let dragOrigin: { x: number; y: number } | null = null;
   let lastRoundedPosition: { x: number; y: number } | null = null;
+  let nextHitTestRequestId = 1;
+  let pendingHitTest: {
+    requestId: number;
+    screen: { x: number; y: number };
+    window: StageRect;
+  } | null = null;
+  let ignoreMouseEvents: boolean | null = null;
+  let deferredHitTest = false;
 
   const notifyRunning = (next: boolean): void => {
     if (running === next) return;
@@ -170,6 +202,53 @@ export function createPet(deps: PetDeps): PetHandle {
     lastRoundedPosition = null;
   };
 
+  // Electron ignores the whole window and forwards only mouse movement while
+  // ignored, so a cursor can cross the sampled edge before native state flips.
+  // Keep unknown or stale state ignored; this is safe but not atomic per-pixel.
+  const applyIgnoreMouseEvents = (ignore: boolean): void => {
+    const current = liveWindow();
+    if (!current || ignoreMouseEvents === ignore) return;
+    try {
+      current.setIgnoreMouseEvents(ignore, { forward: true });
+      ignoreMouseEvents = ignore;
+    } catch (error) {
+      ignoreMouseEvents = null;
+      deps.log(`setIgnoreMouseEvents failed: ${String(error)}`);
+    }
+  };
+
+  const issueHitTest = (): void => {
+    const current = liveWindow();
+    if (!current) return;
+    try {
+      const point = screen.getCursorScreenPoint();
+      const bounds = current.getBounds();
+      const windowRect: StageRect = {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      };
+      const requestId = nextHitTestRequestId;
+      nextHitTestRequestId += 1;
+      pendingHitTest = {
+        requestId,
+        screen: { x: point.x, y: point.y },
+        window: windowRect,
+      };
+      current.webContents.send(HIT_TEST_REQUEST, {
+        requestId,
+        screenX: point.x,
+        screenY: point.y,
+        window: windowRect,
+      });
+    } catch (error) {
+      pendingHitTest = null;
+      applyIgnoreMouseEvents(true);
+      deps.log(`hit-test request failed: ${String(error)}`);
+    }
+  };
+
   const sendZoomState = (state: ZoomResult): void => {
     const current = liveWindow();
     if (!current || !rendererReady) return;
@@ -179,11 +258,11 @@ export function createPet(deps: PetDeps): PetHandle {
     });
   };
 
-  const resizeStage = (stage: StageRect, initial: boolean): void => {
+  const resizeStage = (stage: StageRect, initial: boolean): boolean => {
     const current = liveWindow();
-    if (!current) return;
+    if (!current) return false;
     const bounds = current.getBounds();
-    if (bounds.width === stage.width && bounds.height === stage.height) return;
+    if (bounds.width === stage.width && bounds.height === stage.height) return false;
     current.setBounds(
       initial
         ? {
@@ -199,6 +278,7 @@ export function createPet(deps: PetDeps): PetHandle {
             height: stage.height,
           },
     );
+    return true;
   };
 
   ipcMain.on("phi:pet-zoom-request", (event, payload: unknown) => {
@@ -214,6 +294,47 @@ export function createPet(deps: PetDeps): PetHandle {
       return;
     }
     sendZoomState(response);
+  });
+
+  ipcMain.on(MOUSE_PASSTHROUGH, (event, payload: unknown) => {
+    if (!isPetSender(event.sender) || typeof payload !== "boolean") return;
+    applyIgnoreMouseEvents(activeDrag ? false : payload);
+  });
+
+  ipcMain.on(HIT_TEST_RESULT, (event, payload: unknown) => {
+    const current = liveWindow();
+    if (!isPetSender(event.sender) || !current || !hitTestResult(payload)) return;
+    const pending = pendingHitTest;
+    if (!pending || pending.requestId !== payload.requestId) return;
+    try {
+      const bounds = current.getBounds();
+      if (
+        !sameStageRect(pending.window, {
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+        })
+      ) {
+        pendingHitTest = null;
+        applyIgnoreMouseEvents(true);
+        issueHitTest();
+        return;
+      }
+      const point = screen.getCursorScreenPoint();
+      if (point.x !== pending.screen.x || point.y !== pending.screen.y) {
+        pendingHitTest = null;
+        applyIgnoreMouseEvents(true);
+        issueHitTest();
+        return;
+      }
+      pendingHitTest = null;
+      applyIgnoreMouseEvents(activeDrag ? false : !payload.visible);
+    } catch (error) {
+      pendingHitTest = null;
+      applyIgnoreMouseEvents(true);
+      deps.log(`hit-test result validation failed: ${String(error)}`);
+    }
   });
 
   if (
@@ -292,7 +413,7 @@ export function createPet(deps: PetDeps): PetHandle {
       return;
     }
     const initial = !rendererReady;
-    resizeStage({ ...stage, ...dimensions }, initial);
+    const resized = resizeStage({ ...stage, ...dimensions }, initial);
     if (initial) {
       rendererReady = true;
       const initialZoom = pendingZoomState ?? {
@@ -308,6 +429,15 @@ export function createPet(deps: PetDeps): PetHandle {
       if (!shown) {
         shown = true;
         current.show();
+      }
+      issueHitTest();
+    } else if (resized) {
+      if (activeDrag) {
+        deferredHitTest = true;
+      } else {
+        pendingHitTest = null;
+        applyIgnoreMouseEvents(true);
+        issueHitTest();
       }
     }
   });
@@ -347,6 +477,11 @@ export function createPet(deps: PetDeps): PetHandle {
       } finally {
         clearDragState();
       }
+      if (deferredHitTest) {
+        deferredHitTest = false;
+        applyIgnoreMouseEvents(true);
+        issueHitTest();
+      }
       return;
     }
 
@@ -354,6 +489,11 @@ export function createPet(deps: PetDeps): PetHandle {
       if (!activeDrag || !dragOrigin) return;
       current.setPosition(dragOrigin.x, dragOrigin.y);
       clearDragState();
+      if (deferredHitTest) {
+        deferredHitTest = false;
+        applyIgnoreMouseEvents(true);
+        issueHitTest();
+      }
       return;
     }
 
@@ -403,8 +543,17 @@ export function createPet(deps: PetDeps): PetHandle {
           },
         });
         win = created;
+        ignoreMouseEvents = null;
+        try {
+          created.setIgnoreMouseEvents(true, { forward: true });
+          ignoreMouseEvents = true;
+        } catch (error) {
+          deps.log(`setIgnoreMouseEvents failed: ${String(error)}`);
+        }
         shown = false;
         rendererReady = false;
+        pendingHitTest = null;
+        deferredHitTest = false;
         pendingZoomState = null;
         clearDragState();
         created.once("closed", () => {
@@ -413,6 +562,9 @@ export function createPet(deps: PetDeps): PetHandle {
           shown = false;
           rendererReady = false;
           pendingZoomState = null;
+          pendingHitTest = null;
+          deferredHitTest = false;
+          ignoreMouseEvents = null;
           clearDragState();
           notifyRunning(false);
         });
@@ -428,6 +580,9 @@ export function createPet(deps: PetDeps): PetHandle {
       shown = false;
       rendererReady = false;
       pendingZoomState = null;
+      pendingHitTest = null;
+      deferredHitTest = false;
+      ignoreMouseEvents = null;
       clearDragState();
       notifyRunning(false);
     },

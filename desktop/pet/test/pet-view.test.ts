@@ -26,6 +26,11 @@ function makeBridge() {
     sendDragPosition: vi.fn(),
     requestZoomPercent: vi.fn(),
     reportStageLayout: vi.fn(),
+    setMousePassthrough: vi.fn(),
+    reportHitTestResult: vi.fn(),
+    onHitTestRequest: vi.fn(
+      (_listener: (request: unknown) => void) => () => {},
+    ),
     onZoomState: vi.fn(
       (_listener: (state: { percent: number; accepted: boolean }) => void) =>
         () => {},
@@ -34,6 +39,13 @@ function makeBridge() {
       (_listener: (state: { dwellSeconds: number }) => void) => () => {},
     ),
   };
+}
+
+function initTestPet(options: Parameters<typeof initPet>[0]) {
+  // The injected sampler still needs a decoded static layer for mapping tests;
+  // production eligibility is covered separately with real intrinsic media data.
+  defineImageDimensions(options.staticImg, 192, 108);
+  return initPet({ alphaSampler: () => true, ...options });
 }
 
 function mockStageRect(stage: HTMLElement): void {
@@ -52,6 +64,59 @@ function mockStageRect(stage: HTMLElement): void {
       toJSON: () => ({}),
     } as DOMRect;
   });
+}
+
+function defineImageDimensions(
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+): void {
+  Object.defineProperty(image, "naturalWidth", {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(image, "naturalHeight", {
+    configurable: true,
+    value: height,
+  });
+}
+
+function defineVideoDimensions(
+  video: HTMLVideoElement,
+  width: number,
+  height: number,
+): void {
+  Object.defineProperty(video, "videoWidth", {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(video, "videoHeight", {
+    configurable: true,
+    value: height,
+  });
+  Object.defineProperty(video, "readyState", {
+    configurable: true,
+    value: HTMLMediaElement.HAVE_CURRENT_DATA,
+  });
+}
+
+function rect(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): DOMRect {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    toJSON: () => ({}),
+  } as DOMRect;
 }
 
 function setZoomQuery(percent: number): void {
@@ -102,7 +167,7 @@ describe("stationary animation chain", () => {
       dwellListener = listener;
       return () => {};
     });
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge,
       rng: () => 0,
@@ -137,7 +202,7 @@ describe("stationary animation chain", () => {
     vi.useFakeTimers();
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0,
@@ -157,7 +222,7 @@ describe("stationary animation chain", () => {
     mockStageRect(dom.stage);
     const bridge = makeBridge();
     vi.spyOn(dom.videoB, "play").mockRejectedValueOnce(new Error("blocked"));
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge,
       rng: () => 0,
@@ -177,7 +242,7 @@ describe("stationary animation chain", () => {
     vi.useFakeTimers();
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0,
@@ -198,7 +263,7 @@ describe("stationary animation chain", () => {
   it("starts in STATIC with the image visible", () => {
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({ ...dom, bridge: makeBridge(), rng: () => 0.5 });
+    const pet = initTestPet({ ...dom, bridge: makeBridge(), rng: () => 0.5 });
     expect(pet.getState().anim).toBe(STATIC);
     expect(pet.getState().once).toBe(false);
     expect(dom.staticImg.classList.contains("is-front")).toBe(true);
@@ -212,7 +277,7 @@ describe("stationary animation chain", () => {
   it("sets the static image src to ../assets/thumb/maid-static.png", () => {
     const dom = buildDom();
     mockStageRect(dom.stage);
-    initPet({ ...dom, bridge: makeBridge(), rng: () => 0.5 });
+    initTestPet({ ...dom, bridge: makeBridge(), rng: () => 0.5 });
     expect(dom.staticImg.src).toMatch(/maid-static\.png$/);
   });
 
@@ -220,7 +285,7 @@ describe("stationary animation chain", () => {
     vi.useFakeTimers();
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0,
@@ -245,7 +310,7 @@ describe("stationary animation chain", () => {
   it("returns to STATIC after a click reaction ends", () => {
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0.5,
@@ -264,7 +329,7 @@ describe("stationary animation chain", () => {
   it("returns to STATIC after a drag ends", () => {
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0.5,
@@ -297,7 +362,7 @@ describe("stationary animation chain", () => {
     vi.useFakeTimers();
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0,
@@ -320,7 +385,7 @@ describe("stationary animation chain", () => {
     vi.useFakeTimers();
     const dom = buildDom();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0,
@@ -343,7 +408,7 @@ describe("stationary animation chain", () => {
     mockStageRect(dom.stage);
     window.history.replaceState({}, "", "/?verify=1");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge: makeBridge(),
       rng: () => 0.5,
@@ -360,12 +425,12 @@ describe("stationary animation chain", () => {
   });
 });
 
-describe("viewport layout and full-stage input", () => {
+describe("viewport layout and alpha-aware input", () => {
   it("reports exact fixed-base dimensions with viewport-aligned transforms", () => {
     const dom = buildDom();
     const bridge = makeBridge();
     mockStageRect(dom.stage);
-    const pet = initPet({ ...dom, bridge, rng: () => 0.5 });
+    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5 });
     expect(dom.root.style.width).toBe("192px");
     expect(dom.root.style.height).toBe("108px");
     expect(dom.stage.style.width).toBe("192px");
@@ -376,7 +441,7 @@ describe("viewport layout and full-stage input", () => {
     expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({
       stage: { x: 0, y: 0, width: 192, height: 108 },
     });
-    expect("sendHit" in bridge).toBe(false);
+    expect(bridge.setMousePassthrough).not.toHaveBeenCalled();
     pet.destroy();
   });
 
@@ -385,7 +450,7 @@ describe("viewport layout and full-stage input", () => {
     const dom = buildDom();
     mockStageRect(dom.stage);
     const bridge = makeBridge();
-    initPet({ ...dom, bridge, rng: () => 0.5 });
+    initTestPet({ ...dom, bridge, rng: () => 0.5 });
     expect(dom.root.style.width).toBe("384px");
     expect(dom.root.style.height).toBe("216px");
     expect(bridge.reportStageLayout).toHaveBeenLastCalledWith({
@@ -397,7 +462,7 @@ describe("viewport layout and full-stage input", () => {
     const dom = buildDom();
     const bridge = makeBridge();
     mockStageRect(dom.stage);
-    const pet = initPet({ ...dom, bridge, rng: () => 0.5 });
+    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5 });
     const reports = bridge.reportStageLayout.mock.calls.length;
     window.dispatchEvent(new Event("resize"));
     expect(bridge.reportStageLayout).toHaveBeenCalledTimes(reports + 1);
@@ -413,7 +478,7 @@ describe("full-stage drag reporting", () => {
     const bridge = makeBridge();
     const frames: FrameRequestCallback[] = [];
     mockStageRect(dom.stage);
-    initPet({
+    initTestPet({
       ...dom,
       bridge,
       rng: () => 0.5,
@@ -453,7 +518,7 @@ describe("full-stage drag reporting", () => {
     const dom = buildDom();
     const bridge = makeBridge();
     mockStageRect(dom.stage);
-    const pet = initPet({
+    const pet = initTestPet({
       ...dom,
       bridge,
       rng: () => 0.5,
@@ -498,7 +563,7 @@ describe("full-stage drag reporting", () => {
     const bridge = makeBridge();
     const caf = vi.fn();
     mockStageRect(dom.stage);
-    const pet = initPet({ ...dom, bridge, rng: () => 0.5, raf: () => 7, caf });
+    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5, raf: () => 7, caf });
     dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
     dom.hit.dispatchEvent(
       pointer("pointermove", {
@@ -523,20 +588,382 @@ describe("full-stage drag reporting", () => {
     pet.destroy();
   });
 
-  it("uses the complete hit viewport for click and drag input", () => {
+  it("does not react to a transparent initial click or drag", () => {
     const dom = buildDom();
     const bridge = makeBridge();
+    mockStageRect(dom.stage);
     const pet = initPet({
       ...dom,
       bridge,
+      alphaSampler: () => false,
       rng: () => 0.5,
       raf: () => 0,
       caf: () => {},
     });
-    dom.hit.dispatchEvent(pointer("click"));
+    dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
+    dom.hit.dispatchEvent(pointer("click", { clientX: 20, clientY: 40 }));
+    expect(pet.getState().anim).toBe(STATIC);
     expect(bridge.sendDragPosition).not.toHaveBeenCalled();
-    expect(dom.hit.style.inset).toBe("0px");
+    expect(bridge.setMousePassthrough).not.toHaveBeenCalled();
     pet.destroy();
+  });
+
+  it("keeps a visible-origin click owned through a transparent release", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let visible = true;
+    mockStageRect(dom.stage);
+    const pet = initPet({
+      ...dom,
+      bridge,
+      alphaSampler: () => visible,
+      rng: () => 0.5,
+    });
+    dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
+    visible = false;
+    dom.hit.dispatchEvent(pointer("pointerup", { clientX: 35, clientY: 45 }));
+    dom.hit.dispatchEvent(pointer("click", { clientX: 35, clientY: 45 }));
+    expect(pet.getState().anim).not.toBe(STATIC);
+    expect(bridge.setMousePassthrough).toHaveBeenCalledWith(true);
+    pet.destroy();
+  });
+
+  it("retains a visible-origin drag across transparent pixels and re-arms passthrough", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let visible = true;
+    mockStageRect(dom.stage);
+    const pet = initPet({
+      ...dom,
+      bridge,
+      alphaSampler: () => visible,
+      rng: () => 0.5,
+      raf: () => 0,
+      caf: () => {},
+    });
+    dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
+    dom.hit.dispatchEvent(
+      pointer("pointermove", {
+        clientX: 30,
+        clientY: 40,
+        screenX: 100,
+        screenY: 200,
+      }),
+    );
+    visible = false;
+    dom.hit.dispatchEvent(
+      pointer("pointerup", {
+        clientX: 35,
+        clientY: 45,
+        screenX: 130,
+        screenY: 230,
+      }),
+    );
+    expect(bridge.sendDragPosition).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "end" }),
+    );
+    expect(bridge.setMousePassthrough).toHaveBeenCalledWith(true);
+    expect(pet.getState().dragging).toBe(false);
+    pet.destroy();
+  });
+
+  it("updates passthrough from forwarded mouse movement only when visibility changes", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let visible = false;
+    mockStageRect(dom.stage);
+    const pet = initPet({
+      ...dom,
+      bridge,
+      alphaSampler: () => visible,
+      rng: () => 0.5,
+    });
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20, clientY: 40 }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 21, clientY: 41 }));
+    visible = true;
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 22, clientY: 42 }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 23, clientY: 43 }));
+    expect(bridge.setMousePassthrough).toHaveBeenCalledTimes(1);
+    expect(bridge.setMousePassthrough).toHaveBeenCalledWith(false);
+    pet.destroy();
+  });
+
+  it("answers a deferred hit-test request after media readiness", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let hitRequest: ((request: unknown) => void) | undefined;
+    bridge.onHitTestRequest.mockImplementation((listener) => {
+      hitRequest = listener;
+      return () => {};
+    });
+    let visible: boolean | null = null;
+    mockStageRect(dom.stage);
+    const pet = initPet({
+      ...dom,
+      bridge,
+      alphaSampler: () => visible,
+      rng: () => 0.5,
+    });
+    hitRequest?.({
+      requestId: 7,
+      screenX: 20,
+      screenY: 30,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).not.toHaveBeenCalled();
+    visible = true;
+    dom.staticImg.dispatchEvent(new Event("load"));
+    expect(bridge.reportHitTestResult).toHaveBeenCalledWith({
+      requestId: 7,
+      visible: true,
+    });
+    pet.destroy();
+  });
+
+  it("maps negative-display DIP coordinates through zoom and rejects letterbox space", () => {
+    setZoomQuery(200);
+    const dom = buildDom();
+    const bridge = makeBridge();
+    const samples: Array<{
+      point: { x: number; y: number };
+      layers: readonly { element: Element; intrinsicX: number; intrinsicY: number }[];
+    }> = [];
+    let hitRequest: ((request: unknown) => void) | undefined;
+    bridge.onHitTestRequest.mockImplementation((listener) => {
+      hitRequest = listener;
+      return () => {};
+    });
+    mockStageRect(dom.stage);
+    defineImageDimensions(dom.staticImg, 600, 360);
+    vi.spyOn(dom.staticImg, "getBoundingClientRect").mockReturnValue(
+      rect(0, 0, 300, 216),
+    );
+    const alphaSampler = vi.fn(
+      (
+        point: { x: number; y: number },
+        layers: readonly { element: Element; intrinsicX: number; intrinsicY: number }[],
+      ) => {
+        samples.push({ point, layers });
+        return layers.some((layer) => layer.element === dom.staticImg);
+      },
+    );
+    const pet = initPet({ ...dom, bridge, alphaSampler, rng: () => 0.5 });
+
+    hitRequest?.({
+      requestId: 1,
+      screenX: 0,
+      screenY: -150,
+      window: { x: -100, y: -200, width: 384, height: 216 },
+    });
+    const mapped = samples[0];
+    const staticLayer = mapped?.layers.find(
+      (layer) => layer.element === dom.staticImg,
+    );
+    expect(mapped?.point).toEqual({ x: 100, y: 50 });
+    expect(staticLayer?.intrinsicX).toBeCloseTo(200);
+    expect(staticLayer?.intrinsicY).toBeCloseTo(64);
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 1,
+      visible: true,
+    });
+
+    alphaSampler.mockClear();
+    hitRequest?.({
+      requestId: 2,
+      screenX: 0,
+      screenY: -190,
+      window: { x: -100, y: -200, width: 384, height: 216 },
+    });
+    expect(alphaSampler).toHaveBeenCalledWith(
+      { x: 100, y: 10 },
+      expect.not.arrayContaining([
+        expect.objectContaining({ element: dom.staticImg }),
+      ]),
+    );
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 2,
+      visible: false,
+    });
+
+    alphaSampler.mockClear();
+    hitRequest?.({
+      requestId: 3,
+      screenX: 0,
+      screenY: -150,
+      window: { x: Number.POSITIVE_INFINITY, y: -200, width: 384, height: 216 },
+    });
+    expect(alphaSampler).not.toHaveBeenCalled();
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 3,
+      visible: false,
+    });
+    pet.destroy();
+  });
+
+  it("treats alpha noise as transparent and applies CSS opacity to the hit threshold", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let hitRequest: ((request: unknown) => void) | undefined;
+    bridge.onHitTestRequest.mockImplementation((listener) => {
+      hitRequest = listener;
+      return () => {};
+    });
+    mockStageRect(dom.stage);
+    defineImageDimensions(dom.staticImg, 640, 360);
+    dom.staticImg.style.opacity = "1";
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => ({
+      opacity: (element as HTMLElement).style.opacity || "1",
+    }) as CSSStyleDeclaration);
+    const alphaValues = [1, 17, 17];
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({
+        data: Uint8ClampedArray.from([0, 0, 0, alphaValues.shift() ?? 0]),
+      })),
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context,
+    );
+    const pet = initPet({ ...dom, bridge, rng: () => 0.5 });
+
+    hitRequest?.({
+      requestId: 1,
+      screenX: 96,
+      screenY: 54,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 1,
+      visible: false,
+    });
+
+    hitRequest?.({
+      requestId: 2,
+      screenX: 96,
+      screenY: 54,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 2,
+      visible: true,
+    });
+
+    dom.staticImg.style.opacity = "0.5";
+    hitRequest?.({
+      requestId: 3,
+      screenX: 96,
+      screenY: 54,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 3,
+      visible: false,
+    });
+    pet.destroy();
+  });
+
+  it("composites decoded media alpha with effective cross-fade opacity", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let hitRequest: ((request: unknown) => void) | undefined;
+    bridge.onHitTestRequest.mockImplementation((listener) => {
+      hitRequest = listener;
+      return () => {};
+    });
+    mockStageRect(dom.stage);
+    defineImageDimensions(dom.staticImg, 640, 360);
+    defineVideoDimensions(dom.videoA, 640, 360);
+    defineVideoDimensions(dom.videoB, 640, 360);
+    dom.staticImg.style.opacity = "0.25";
+    dom.videoA.style.opacity = "0.5";
+    dom.videoB.style.opacity = "0.5";
+    vi.spyOn(window, "getComputedStyle").mockImplementation((element) => ({
+      opacity: (element as HTMLElement).style.opacity || "1",
+    }) as CSSStyleDeclaration);
+    const alphaValues = [0, 128, 0];
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({
+        data: Uint8ClampedArray.from([0, 0, 0, alphaValues.shift() ?? 0]),
+      })),
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      context,
+    );
+    const pet = initPet({ ...dom, bridge, rng: () => 0.5 });
+
+    hitRequest?.({
+      requestId: 1,
+      screenX: 96,
+      screenY: 54,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 1,
+      visible: true,
+    });
+
+    alphaValues.push(0, 0, 0);
+    hitRequest?.({
+      requestId: 2,
+      screenX: 96,
+      screenY: 54,
+      window: { x: 0, y: 0, width: 192, height: 108 },
+    });
+    expect(bridge.reportHitTestResult).toHaveBeenLastCalledWith({
+      requestId: 2,
+      visible: false,
+    });
+    expect(context.drawImage).toHaveBeenCalled();
+    pet.destroy();
+  });
+
+  it("resamples video frames and ignores stale callbacks after transition and destroy", () => {
+    const dom = buildDom();
+    const bridge = makeBridge();
+    let visible = true;
+    let frameCallback: (() => void) | undefined;
+    mockStageRect(dom.stage);
+    Object.defineProperty(dom.videoB, "requestVideoFrameCallback", {
+      configurable: true,
+      value: vi.fn((callback: () => void) => {
+        frameCallback = callback;
+        return 1;
+      }),
+    });
+    const pet = initPet({
+      ...dom,
+      bridge,
+      alphaSampler: () => visible,
+      rng: () => 0,
+    });
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 20, clientY: 40 }));
+    dom.hit.dispatchEvent(pointer("click", { clientX: 20, clientY: 40 }));
+    defineVideoDimensions(dom.videoB, 640, 360);
+    dom.videoB.dispatchEvent(new Event("loadeddata"));
+    expect(frameCallback).toBeDefined();
+
+    visible = false;
+    frameCallback?.();
+    expect(bridge.setMousePassthrough).toHaveBeenLastCalledWith(true);
+
+    const callsAfterFrame = bridge.setMousePassthrough.mock.calls.length;
+    dom.videoB.dispatchEvent(new Event("ended"));
+    const callsAfterTransition = bridge.setMousePassthrough.mock.calls.length;
+    expect(callsAfterTransition).toBeGreaterThanOrEqual(callsAfterFrame);
+    frameCallback?.();
+    expect(bridge.setMousePassthrough.mock.calls.length).toBe(
+      callsAfterTransition,
+    );
+    pet.destroy();
+    frameCallback?.();
+    expect(bridge.setMousePassthrough.mock.calls.length).toBe(
+      callsAfterTransition,
+    );
   });
 });
 
@@ -552,7 +979,7 @@ describe("zoom and cleanup", () => {
       return () => {};
     });
     mockStageRect(dom.stage);
-    initPet({ ...dom, bridge, rng: () => 0.5 });
+    initTestPet({ ...dom, bridge, rng: () => 0.5 });
     zoomListener?.({ percent: 125, accepted: true });
     expect(dom.root.style.width).toBe("240px");
     expect(dom.root.style.height).toBe("135px");
@@ -574,7 +1001,7 @@ describe("zoom and cleanup", () => {
       return () => {};
     });
     mockStageRect(dom.stage);
-    initPet({ ...dom, bridge, rng: () => 0.5 });
+    initTestPet({ ...dom, bridge, rng: () => 0.5 });
     const first = new WheelEvent("wheel", { deltaY: -50, cancelable: true });
     dom.hit.dispatchEvent(first);
     expect(first.defaultPrevented).toBe(true);
@@ -593,13 +1020,22 @@ describe("zoom and cleanup", () => {
     const dom = buildDom();
     const bridge = makeBridge();
     const removeZoom = vi.fn();
+    const removeHitTest = vi.fn();
+    const removeMouseMove = vi.spyOn(window, "removeEventListener");
     const caf = vi.fn();
     bridge.onZoomState.mockImplementation(() => removeZoom);
-    const pet = initPet({ ...dom, bridge, rng: () => 0.5, raf: () => 9, caf });
+    bridge.onHitTestRequest.mockImplementation(() => removeHitTest);
+    mockStageRect(dom.stage);
+    const pet = initTestPet({ ...dom, bridge, rng: () => 0.5, raf: () => 9, caf });
     dom.hit.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 40 }));
     dom.hit.dispatchEvent(pointer("pointermove", { clientX: 30, clientY: 40 }));
     pet.destroy();
     expect(removeZoom).toHaveBeenCalledTimes(1);
+    expect(removeHitTest).toHaveBeenCalledTimes(1);
+    expect(removeMouseMove).toHaveBeenCalledWith(
+      "mousemove",
+      expect.any(Function),
+    );
     expect(caf).toHaveBeenCalledWith(9);
   });
 });

@@ -21,6 +21,19 @@ export type PetStageLayout = { stage: StageRect };
 export type PetIdleDwellRequest = { dwellSeconds: number };
 export type PetIdleDwellState = { dwellSeconds: number };
 export type PetIdleDwellResult = { dwellSeconds: number; accepted: boolean; error?: string };
+export type PetMousePassthrough = boolean;
+
+export interface PetHitTestRequest {
+  requestId: number;
+  screenX: number;
+  screenY: number;
+  window: StageRect;
+}
+
+export interface PetHitTestResult {
+  requestId: number;
+  visible: boolean;
+}
 
 export interface PetSettingsApi {
   requestIdleDwellSeconds(dwellSeconds: number): Promise<PetIdleDwellResult>;
@@ -31,7 +44,10 @@ export interface PetApi {
   sendDragPosition(position: PetDragPosition): void;
   requestZoomPercent(request: PetZoomRequest): void;
   reportStageLayout(layout: PetStageLayout): void;
-    onZoomState(listener: (state: PetZoomState) => void): () => void;
+  setMousePassthrough(ignore: PetMousePassthrough): void;
+  reportHitTestResult(result: PetHitTestResult): void;
+  onHitTestRequest(listener: (request: PetHitTestRequest) => void): () => void;
+  onZoomState(listener: (state: PetZoomState) => void): () => void;
   onIdleDwellState?(listener: (state: PetIdleDwellState) => void): () => void;
 }
 
