@@ -137,7 +137,13 @@ export function isPetInstallable(
   installing: boolean,
   platform = process.platform,
 ): boolean {
-  return appIsPackaged && platform !== 'linux' && root === null && !smoke && !installing;
+  return (
+    appIsPackaged &&
+    platform !== 'linux' &&
+    root === null &&
+    !smoke &&
+    !installing
+  );
 }
 
 /** The rail gutter width (px) — the rail view's width. */
@@ -350,7 +356,13 @@ export class DesktopHost {
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getPetAvailable: () => isPetAvailable(this.petRoot),
-      getPetInstallable: () => isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling),
+      getPetInstallable: () =>
+        isPetInstallable(
+          app.isPackaged,
+          this.petRoot,
+          SMOKE,
+          this.petInstalling,
+        ),
       getPetInstalling: () => this.petInstalling,
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       getPetZoomPercent: () =>
@@ -461,7 +473,10 @@ export class DesktopHost {
   }
 
   private async handleInstallPet(): Promise<void> {
-    if (!isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling)) return;
+    if (
+      !isPetInstallable(app.isPackaged, this.petRoot, SMOKE, this.petInstalling)
+    )
+      return;
     const ctrl = this.controller;
     if (!ctrl) return;
     this.petInstalling = true;
@@ -473,7 +488,8 @@ export class DesktopHost {
         repo: 'hypernewbie/phi',
         fetchBytes: async (url) => {
           const response = await net.fetch(url);
-          if (!response.ok) throw new Error(`pet download failed: HTTP ${response.status}`);
+          if (!response.ok)
+            throw new Error(`pet download failed: HTTP ${response.status}`);
           return new Uint8Array(await response.arrayBuffer());
         },
         log: (msg) => console.log(msg),
@@ -481,13 +497,17 @@ export class DesktopHost {
       this.petInstalling = false;
       this.petRoot = discoverPetRoot(app, SMOKE);
       this.trayHandle?.rebuildMenu();
-      if (ctrl.getPetEnabled()) void this.startPet(); else ctrl.setPetEnabled(true);
+      if (ctrl.getPetEnabled()) void this.startPet();
+      else ctrl.setPetEnabled(true);
       void root;
     } catch (err) {
       this.petInstalling = false;
       this.trayHandle?.rebuildMenu();
       console.log(`phi-desktop: pet installation failed: ${String(err)}`);
-      dialog.showErrorBox('Pet installation failed', String(err instanceof Error ? err.message : err));
+      dialog.showErrorBox(
+        'Pet installation failed',
+        String(err instanceof Error ? err.message : err),
+      );
     }
   }
 

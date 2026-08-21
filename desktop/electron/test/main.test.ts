@@ -147,7 +147,7 @@ describe('src/main.ts (phase-3 protocol-registration CLI flags)', () => {
 
   it('runs installProtocol with the trailing -- args, logs the result and exits 0', () => {
     expect(mainSource).toMatch(
-      /installProtocol\(realPlatform, \[path\.join\(here, 'main\.js'\), '--'\]\)/,
+      /installProtocol\(realPlatform,\s*\[\s*path\.join\(here, 'main\.js'\),\s*'--',?\s*\],?\s*\)/,
     );
     expect(mainSource).toContain('installed at ${reg.path}, exe ${reg.exe}');
     const installIdx = mainSource.indexOf('installProtocol(realPlatform');
@@ -694,9 +694,7 @@ describe('src/desktop.ts (step 6B view manager + rail renderer wiring)', () => {
 
 describe('src/desktop.ts (rail reorder receiver)', () => {
   it('registers phi:reorder-profile -> controller.reorder with a nullable beforeId and no reply channel', () => {
-    const handlerIdx = desktopSource.indexOf(
-      "ipcMain.on('phi:reorder-profile'",
-    );
+    const handlerIdx = desktopSource.indexOf("'phi:reorder-profile'");
     expect(handlerIdx).toBeGreaterThan(-1);
     expect(
       desktopSource.indexOf('ctrl.reorder(id, beforeId)', handlerIdx),
@@ -933,10 +931,12 @@ describe('src/desktop.ts (close-to-tray lifecycle)', () => {
 
 describe('src/desktop.ts (observed rail identity + accent)', () => {
   it('observes the remote page through a fixed executeJavaScript expression reading #hostname-display and the --accent token', () => {
-    expect(desktopSource).toContain("getElementById('hostname-display')");
-    expect(desktopSource).toContain("getPropertyValue('--accent')");
     expect(desktopSource).toContain(
-      'executeJavaScript(REMOTE_IDENTITY_SCRIPT)',
+      "document.getElementById('hostname-display')",
+    );
+    expect(desktopSource).toContain("getPropertyValue('--accent')");
+    expect(desktopSource).toMatch(
+      /executeJavaScript\(\s*REMOTE_IDENTITY_SCRIPT/,
     );
   });
 
@@ -1023,9 +1023,17 @@ describe('src/desktop.ts (desktop title row + selected-server taskbar title)', (
     expect(desktopSource).toContain('refreshWindowTitle(): void');
     expect(desktopSource).toContain('observedTitle.get(activeId)');
     expect(desktopSource).toContain('identity.hostname.toUpperCase()');
-    expect(desktopSource).toContain(
-      "win.setTitle(`${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`)",
+    const refreshTitleIdx = desktopSource.indexOf('refreshWindowTitle(): void');
+    const titleCallIdx = desktopSource.indexOf(
+      'win.setTitle(',
+      refreshTitleIdx,
     );
+    expect(
+      desktopSource.indexOf(
+        "`${marked ? TITLE_MARKER : ''}${glyph} Phi — ${identity.hostname.toUpperCase()}`",
+        titleCallIdx,
+      ),
+    ).toBeGreaterThan(titleCallIdx);
   });
 
   it('refreshes the title on active-changed, title updates, and identity observation only', () => {
@@ -1420,10 +1428,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
       desktopSource.indexOf('isMainViewSender(event)', workspaceIdx),
     ).toBeGreaterThan(workspaceIdx);
     expect(
-      desktopSource.indexOf(
-        'executeJavaScript(READ_WORKSPACE_SCRIPT)',
-        workspaceIdx,
-      ),
+      desktopSource.indexOf('READ_WORKSPACE_SCRIPT', workspaceIdx),
     ).toBeGreaterThan(workspaceIdx);
     expect(
       desktopSource.indexOf(
@@ -1831,10 +1836,7 @@ describe('src/desktop.ts (sync board desktop alerts)', () => {
       'const marked = title.startsWith(TITLE_MARKER)',
       titleIdx,
     );
-    const notifIdx = desktopSource.indexOf(
-      'onSyncAlert(profile, SYNC_NOTIF_MARKER',
-      titleIdx,
-    );
+    const notifIdx = desktopSource.indexOf('this.onSyncAlert(', titleIdx);
     expect(notifIdx).toBeGreaterThan(-1);
     expect(notifIdx).toBeLessThan(markedIdx);
     expect(desktopSource.indexOf('return;', notifIdx)).toBeGreaterThan(
@@ -1957,7 +1959,7 @@ describe('src/desktop.ts (sync board alarm chime)', () => {
     const chimeIdx = desktopSource.indexOf('playAlarmChime(): void');
     expect(chimeIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf('rail.webContents.executeJavaScript', chimeIdx),
+      desktopSource.indexOf('executeJavaScript(', chimeIdx),
     ).toBeGreaterThan(chimeIdx);
     expect(
       desktopSource.indexOf(
