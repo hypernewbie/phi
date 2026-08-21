@@ -378,6 +378,12 @@ describe('buildTrayMenu (pure menu builder)', () => {
     expect(entryOff?.enabled).toBe(false);
   });
 
+  it('preserves new-style pet state when the optional zoom is omitted', () => {
+    const menu = buildTrayMenu([], mkHandlers(), true, false, true, false, false, true);
+    expect(menu.find((e) => e.label === 'Show pet')).toMatchObject({ checked: true });
+    expect(menu.find((e) => e.label === 'Pet')?.submenu?.[1]).toMatchObject({ label: 'Zoom: 100%' });
+  });
+
   it('calls the togglePet handler from the Show pet checkbox', () => {
     const togglePet = vi.fn();
     const menu = buildTrayMenu(

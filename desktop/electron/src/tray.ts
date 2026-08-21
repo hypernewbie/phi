@@ -279,22 +279,10 @@ export function buildTrayMenu(
   syncAlerts: boolean,
   petAvailable: boolean,
   petInstallable: boolean = false,
-  petInstalling: boolean | number = false,
+  petInstalling: boolean = false,
   petEnabled: boolean = false,
   petZoomPercent = 100,
 ): TrayMenuEntry[] {
-  // Keep older embedders source-compatible while they adopt the two
-  // installation-state arguments.
-  if (typeof petInstalling === 'number') {
-    petZoomPercent = petInstalling;
-    petEnabled = petInstallable;
-    petInstallable = false;
-    petInstalling = false;
-  } else if (arguments.length <= 8) {
-    petEnabled = petInstallable;
-    petInstallable = false;
-    petInstalling = false;
-  }
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
   ];
