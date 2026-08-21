@@ -16,6 +16,11 @@ const workflow = readFileSync(
   'utf8',
 );
 
+const goreleaserConfig = readFileSync(
+  path.join(import.meta.dirname, '..', '..', '..', '.goreleaser.yaml'),
+  'utf8',
+);
+
 const pinnedActions = {
   'actions/checkout': {
     tag: 'v5',
@@ -171,5 +176,18 @@ describe('release workflow pet signing and release uploads', () => {
     expect(workflow).toContain(
       'gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"',
     );
+  });
+
+  it('publishes the draft only after every release asset is ready', () => {
+    const publishRelease = workflow.indexOf('  publish-release:');
+    const publishBlock = workflow.slice(publishRelease);
+
+    expect(publishRelease).toBeGreaterThanOrEqual(0);
+    expect(goreleaserConfig).toContain('release:\n  draft: true');
+    expect(publishBlock).toContain('needs: [desktop-release, npm-publish]');
+    expect(publishBlock).toContain(
+      'gh release edit --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"',
+    );
+    expect(publishBlock).toContain('--draft=false');
   });
 });

@@ -52,7 +52,8 @@ jobs:
           go run ./tools/webdist
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: >- # v7
+          goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
           version: latest
@@ -295,3 +296,19 @@ jobs:
           # token minted for this job. Override with NODE_AUTH_TOKEN secret only
           # for emergency rollback if trusted publishing is misconfigured.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # GoReleaser creates this as a draft so a failed asset build never exposes an
+  # incomplete release. This is the sole publication step after all assets and
+  # the stable npm package (when applicable) have completed successfully.
+  publish-release:
+    needs: [desktop-release, npm-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release edit --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          --draft=false
