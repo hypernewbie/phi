@@ -179,6 +179,7 @@ jobs:
 
       - name: Package desktop app
         working-directory: desktop/electron
+        shell: bash
         run: |
           pnpm exec electron-builder --config electron-builder.json \
             --publish never
