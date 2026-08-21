@@ -61,6 +61,11 @@ export const ACTS = [
   "被落叶淹没",
   "中秋赏月吃月饼",
   "堆雪人",
+  "东张西望",
+  "原地左转奔跑",
+  "原地漂浮踏步",
+  "待机呼吸休闲",
+  "螃蟹走路",
 ];
 /** The click-reaction pool. */
 export const CLICKS = [
