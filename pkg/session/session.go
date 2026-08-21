@@ -12,6 +12,7 @@ type Session struct {
 	Title       string    `json:"title"`
 	Cwd         string    `json:"cwd"`
 	Coder       string    `json:"coder"`
+	SessionPath string    `json:"session_path,omitempty"`
 	TimeUpdated time.Time `json:"time_updated"`
 }
 

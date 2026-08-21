@@ -1,5 +1,6 @@
 import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, } from './util.js';
-import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
+import { openPiRpcChatTab } from './chat-pi/tab.js';
+import { createReviewTranscriptView } from './review-transcript.js';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -539,7 +540,8 @@ export class SessionsManager {
         container.innerHTML =
             '<div class="scanning-sessions">Scanning sessions...</div>';
         try {
-            const res = await fetch(`/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`);
+            const requestCoder = this.activeCoder === 'pi-rpc' ? 'pi' : this.activeCoder;
+            const res = await fetch(`/api/sessions?coder=${requestCoder}&cwd=${encodeURIComponent(wtPath)}`);
             if (!res.ok) {
                 const errMsg = await res.text();
                 throw new Error(errMsg || 'Failed to scan sessions');
@@ -549,6 +551,9 @@ export class SessionsManager {
             if (!sessions || sessions.length === 0) {
                 container.innerHTML =
                     '<div class="no-sessions-found">No sessions found</div>';
+                if (this.activeCoder === 'pi-rpc') {
+                    this._renderRpcChatSection(wtPath, container);
+                }
                 return;
             }
             sessions.forEach((sess) => {
@@ -612,7 +617,7 @@ export class SessionsManager {
                         ${this.activeCoder === 'opencode' ||
                     this.activeCoder === 'pi'
                     ? `
-                        <button class="session-action-btn review-btn" title="Review Transcript">
+                        <button class="session-action-btn review-btn" title="${this.activeCoder === 'pi' ? 'Open Pi RPC' : 'Review Transcript'}" aria-label="${this.activeCoder === 'pi' ? 'Open Pi RPC' : 'Review Transcript'}">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                         </button>
                         `
@@ -627,27 +632,53 @@ export class SessionsManager {
                     : ''}
                     </div>
                 `;
-                item.addEventListener('click', (e) => {
-                    if (e.target.closest('.session-action-btn'))
-                        return;
-                    this.launchSession(sess.id, sess.title);
-                    const sidebar = document.getElementById('sidebar-panel');
-                    if (sidebar) {
-                        sidebar.classList.remove('drawer-open');
+                if (this.activeCoder === 'pi-rpc') {
+                    item.addEventListener('click', (e) => {
+                        if (e.target.closest('.session-action-btn'))
+                            return;
+                        openPiRpcChatTab(this.app.tabManager, sess.cwd ?? wtPath, sess.session_path, sess.title);
+                    });
+                }
+                else {
+                    if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
+                        const link = document.createElement('a');
+                        link.href = '#';
+                        link.className = 'session-action-btn';
+                        link.textContent = 'Pi chat';
+                        link.addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            openPiRpcChatTab(this.app.tabManager, sess.cwd ?? '', sess.session_path, sess.title);
+                        });
+                        item.querySelector('.session-actions')?.appendChild(link);
                     }
-                });
-                item.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this._showSessionContextMenu(e, item, sess);
-                });
+                    item.addEventListener('click', (e) => {
+                        if (e.target.closest('.session-action-btn'))
+                            return;
+                        this.launchSession(sess.id, sess.title);
+                        const sidebar = document.getElementById('sidebar-panel');
+                        if (sidebar) {
+                            sidebar.classList.remove('drawer-open');
+                        }
+                    });
+                    item.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this._showSessionContextMenu(e, item, sess);
+                    });
+                }
                 if (this.activeCoder === 'opencode' ||
                     this.activeCoder === 'pi') {
                     const reviewBtn = item.querySelector('.review-btn');
                     if (reviewBtn) {
                         reviewBtn.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            this.openReviewTab(sess);
+                            if (this.activeCoder === 'pi') {
+                                openPiRpcChatTab(this.app.tabManager, sess.cwd ?? wtPath, sess.session_path, sess.title);
+                            }
+                            else {
+                                this.openReviewTab(sess);
+                            }
                             const sidebar = document.getElementById('sidebar-panel');
                             if (sidebar) {
                                 sidebar.classList.remove('drawer-open');
@@ -667,6 +698,9 @@ export class SessionsManager {
                 }
                 container.appendChild(item);
             });
+            if (this.activeCoder === 'pi-rpc') {
+                this._renderRpcChatSection(wtPath, container);
+            }
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab && activeTab.coder === this.activeCoder) {
                 this.highlightActiveSession(activeTab.sessionId);
@@ -707,7 +741,22 @@ export class SessionsManager {
             }
         });
     }
+    _renderRpcChatSection(wtPath, container) {
+        const item = document.createElement('div');
+        item.className = 'session-item';
+        item.setAttribute('data-worktree-path', wtPath);
+        const button = document.createElement('button');
+        button.className = 'session-action-btn';
+        button.textContent = 'New pi chat';
+        button.addEventListener('click', () => openPiRpcChatTab(this.app.tabManager, wtPath));
+        item.appendChild(button);
+        container.appendChild(item);
+    }
     async spawnNewSession() {
+        if (this.activeCoder === 'pi-rpc') {
+            openPiRpcChatTab(this.app.tabManager, this.activeCWD);
+            return;
+        }
         try {
             let coderName = 'Shell';
             if (this.activeCoder === 'opencode')
@@ -998,26 +1047,14 @@ export class SessionsManager {
         const activeTab = this.app.tabManager.tabs.get(paneId);
         if (!activeTab)
             return;
-        const container = activeTab.termContainer;
-        container.innerHTML = `
-            <div class="review-header-bar">
-                <div class="review-header-left">
-                    <span class="review-header-title">Review: ${sess.title}</span>
-                    <span class="review-header-coder">${sess.coder}</span>
-                </div>
-                <button class="review-refresh-btn" title="Refresh Transcript">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                    </svg>
-                    <span>Refresh</span>
-                </button>
-            </div>
-            <div class="review-content-body"></div>
-        `;
-        const refreshBtn = container.querySelector('.review-refresh-btn');
-        const contentBody = container.querySelector('.review-content-body');
+        const view = createReviewTranscriptView(activeTab.termContainer, {
+            title: `Review: ${sess.title}`,
+            coder: sess.coder,
+            refresh: true,
+            copyText: (text) => this.app.tabManager.copyTextRobustly(text, true),
+        });
         const loadData = async () => {
-            contentBody.innerHTML = `
+            view.contentBody.innerHTML = `
                 <div class="review-loading">
                     <span class="spinner"></span>
                     <span>Loading session transcript...</span>
@@ -1028,72 +1065,20 @@ export class SessionsManager {
                 if (!res.ok)
                     throw new Error('Failed to load transcript');
                 const messages = await res.json();
-                contentBody.innerHTML = '';
-                const chatWrapper = document.createElement('div');
-                chatWrapper.className = 'review-chat-wrapper';
-                if (!messages || messages.length === 0) {
-                    chatWrapper.innerHTML =
-                        '<div class="review-empty">No messages found in this session.</div>';
+                if (!Array.isArray(messages) || messages.length === 0) {
+                    view.showEmpty();
+                    return;
                 }
-                else {
-                    messages.forEach((msg) => {
-                        const bubble = document.createElement('div');
-                        bubble.className = `review-bubble role-${msg.role}`;
-                        const header = document.createElement('div');
-                        header.className = 'review-bubble-header';
-                        const roleSpan = document.createElement('span');
-                        if (msg.role === 'user') {
-                            roleSpan.innerText = 'User';
-                        }
-                        else if (msg.role === 'assistant') {
-                            roleSpan.innerText = 'Assistant';
-                        }
-                        else if (msg.role === 'toolResult') {
-                            roleSpan.innerText = 'Tool Output';
-                        }
-                        else {
-                            roleSpan.innerText =
-                                msg.role.charAt(0).toUpperCase() +
-                                    msg.role.slice(1);
-                        }
-                        header.appendChild(roleSpan);
-                        const copyBtn = document.createElement('button');
-                        copyBtn.className = 'copy-bubble-btn';
-                        copyBtn.title = 'Copy message markdown';
-                        copyBtn.innerHTML = `
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                            </svg>
-                            <span>Copy</span>
-                        `;
-                        copyBtn.addEventListener('click', () => {
-                            this.app.tabManager.copyTextRobustly(msg.text, true);
-                            const btnText = copyBtn.querySelector('span');
-                            btnText.innerText = 'Copied!';
-                            copyBtn.classList.add('copied');
-                            setTimeout(() => {
-                                btnText.innerText = 'Copy';
-                                copyBtn.classList.remove('copied');
-                            }, 2000);
-                        });
-                        header.appendChild(copyBtn);
-                        bubble.appendChild(header);
-                        const content = document.createElement('div');
-                        content.className = 'review-bubble-content';
-                        content.innerHTML = renderMarkdownSafe(msg.text);
-                        highlightCodeIn(content);
-                        bubble.appendChild(content);
-                        chatWrapper.appendChild(bubble);
-                    });
-                }
-                contentBody.appendChild(chatWrapper);
+                view.setMessages(messages.map((message) => ({
+                    role: String(message.role || 'assistant'),
+                    text: String(message.text || ''),
+                })));
                 setTimeout(() => {
-                    chatWrapper.scrollTop = chatWrapper.scrollHeight;
+                    view.transcript.scrollTop = view.transcript.scrollHeight;
                 }, 150);
             }
             catch (e) {
-                contentBody.innerHTML = `
+                view.contentBody.innerHTML = `
                     <div class="review-error">
                         <h3>Error loading transcript</h3>
                         <p>${e.message}</p>
@@ -1101,7 +1086,7 @@ export class SessionsManager {
                 `;
             }
         };
-        refreshBtn.addEventListener('click', loadData);
+        view.refreshButton?.addEventListener('click', loadData);
         await loadData();
     }
 }

@@ -50,7 +50,7 @@ function makeFakeView(): RecordingView {
   const loadHandlers: Array<() => void> = [];
   const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> =
     [];
-  let webContentsDestroyed = false;
+  const webContentsDestroyed = false;
   let zoomLevel = 0;
   const rec: RecordingView = {
     view: {

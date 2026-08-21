@@ -27,6 +27,7 @@ import (
 	"github.com/hypernewbie/phi/pkg/prompt_history"
 	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/restart"
+	"github.com/hypernewbie/phi/pkg/rpc"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
@@ -129,6 +130,7 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
+	rpcMgr := rpc.NewManager()
 	// Do NOT call LoadState() here. tabs.json holds PTYInstance
 	// metadata for tabs the server was managing in its previous life,
 	// but in this codebase the underlying PTY process is always a
@@ -350,6 +352,7 @@ func main() {
 	http.HandleFunc("/healthz", handleLivez) // alias
 	http.HandleFunc("/readyz", handleReadyz)
 	http.HandleFunc("/", handleFallback)
+	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old

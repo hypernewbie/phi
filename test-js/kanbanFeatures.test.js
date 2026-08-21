@@ -502,6 +502,10 @@ describe('Feature surface', () => {
         document.documentElement.style.setProperty('--bg-border', '#333333');
         document.documentElement.style.setProperty('--bg-panel', '#111111');
         document.documentElement.style.setProperty('--text-primary', '#eeeeee');
+        // A plain function (not an arrow) so `new Chart(canvas, config)`
+        // in renderBoardLayout constructs the mock; the returned object
+        // literal wins over the default `this` under constructor semantics.
+        // biome-ignore lint/complexity/useArrowFunction: arrows cannot be constructed; production calls new Chart(canvas, config)
         const Chart = vi.fn(function () {
             return { destroy: vi.fn() };
         });

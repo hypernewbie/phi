@@ -21,5 +21,15 @@ declare global {
         Sortable: any;
         DOMPurify: any;
         Chart: any;
+        Diff: {
+            diffWords(
+                oldStr: string,
+                newStr: string,
+            ): Array<{
+                value: string;
+                added?: boolean;
+                removed?: boolean;
+            }>;
+        };
     }
 }

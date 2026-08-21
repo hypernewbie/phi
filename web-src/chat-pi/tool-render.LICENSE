@@ -1,0 +1,36 @@
+Adapted from:
+  @earendil-works/pi-coding-agent (https://github.com/earendil-works/pi)
+  Source file: dist/modes/interactive/components/diff.js:1-132
+  Source file: dist/core/export-html/template.js:558-569
+
+Upstream license: MIT
+Copyright (c) Mario Zechner / earendil-works
+
+The browser adaptation keeps Pi's display-diff parsing, three-space tab
+expansion, replacement-group detection, and diffWords behavior. Terminal
+theme/ANSI rendering is replaced with DOM rows and spans created with
+createElement and textContent. The adaptation is limited to the settled edit
+result renderer; it does not copy Pi's filesystem preview or interactive TUI.
+
+The word-diff primitive is copied from:
+  diff/jsdiff 8.0.4 browser UMD build: dist/diff.min.js
+  Source asset: web/vendor/jsdiff.min.js
+  License: BSD-3-Clause; complete notice is in web/vendor/jsdiff.LICENSE.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

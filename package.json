@@ -9,7 +9,7 @@
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build:web": "tsc -p tsconfig.build.json",
+    "build:web": "tsc -p tsconfig.build.json && pnpm format",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -18,7 +18,7 @@
     "build:desktop": "pnpm --dir desktop/electron run build",
     "dev:desktop": "pnpm --dir desktop/electron run build && pnpm --dir desktop/electron run dev",
     "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
-    "lint:web": "stylelint web/style.css && html-validate web/index.html web/md.html",
+    "lint:web": "stylelint web/style.css && biome lint web/index.html web/md.html web/config.html web/style.css",
     "lint:code": "biome lint .",
     "format:check": "biome format .",
     "format": "biome format --write .",
@@ -30,7 +30,6 @@
     "@noble/hashes": "^2.2.0",
     "@vitest/coverage-v8": "4.1.10",
     "dompurify": "^3.4.12",
-    "html-validate": "11.6.2",
     "jsdom": "^30.0.1",
     "stylelint": "17.14.1",
     "stylelint-config-standard": "40.0.0",

@@ -30,7 +30,7 @@ import { TabManager } from '../web/terminal.js';
 //     app.showToast, _spamScrollToBottom, focusActiveTerminal, inputTextArea.
 
 setupDomHarness();
-HTMLElement.prototype.scrollIntoView = function () {};
+HTMLElement.prototype.scrollIntoView = () => {};
 
 // Build a TabManager-shaped ctx whose prototype methods are REAL.
 // Wire up the DOM containers renderModelDropup / renderSlashDropup /

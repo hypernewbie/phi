@@ -31,7 +31,8 @@ function ruleBody(css: string, selector: string): string | null {
   // must NOT be followed by other selector characters (so
   // `.header-btn:hover` matches but `.header-btn:hover::before`
   // doesn't).
-  const re = new RegExp(`(^|[\\s}])${escapeRegex(selector)}\\s*\\{`, '');
+  const selectorPattern = escapeRegex(selector).replace(/\s+/g, '\\s+');
+  const re = new RegExp(`(^|[\\s}])${selectorPattern}\\s*\\{`, '');
   const m = re.exec(css);
   if (!m) return null;
   return extractBody(css, m.index + m[1].length);

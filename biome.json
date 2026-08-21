@@ -2,7 +2,6 @@
     "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
     "files": {
         "includes": [
-            ".htmlvalidate.js",
             ".stylelintrc.js",
             "vite.config.js",
             "vitest.config.js",
@@ -10,6 +9,8 @@
             "web-src/**/*.ts",
             "test-js/**/*.js",
             "web/**/*.js",
+            "web/**/*.html",
+            "web/**/*.css",
             "desktop/electron/src/**/*.ts",
             "desktop/electron/test/**/*.ts",
             "desktop/electron/scripts/**/*.mjs",
@@ -35,6 +36,14 @@
             "!desktop/pet/**/*.js.map"
         ]
     },
+    "html": {
+        "experimentalFullSupportEnabled": true,
+        "formatter": {
+            "enabled": true,
+            "selfCloseVoidElements": "never",
+            "whitespaceSensitivity": "css"
+        }
+    },
     "formatter": {
         "enabled": true,
         "indentStyle": "space",
@@ -48,13 +57,30 @@
     "linter": {
         "enabled": true,
         "rules": {
-            "recommended": true
+            "recommended": true,
+            "complexity": {
+                "noImportantStyles": "off"
+            },
+            "style": {
+                "noDescendingSpecificity": "off"
+            }
         }
     },
     "assist": {
         "enabled": false
     },
     "overrides": [
+        {
+            "includes": ["web/*.html"],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "useButtonType": "off",
+                        "noSvgWithoutTitle": "warn"
+                    }
+                }
+            }
+        },
         {
             "includes": ["desktop/electron/test/injected.test.ts"],
             "formatter": {

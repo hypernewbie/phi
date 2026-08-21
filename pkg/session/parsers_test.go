@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,35 @@ func setupMockHome(t *testing.T) string {
 	})
 
 	return tempDir
+}
+
+func setupPiTestSessions(t *testing.T) (string, string) {
+	t.Helper()
+	home := setupMockHome(t)
+	cwd, err := filepath.Abs(filepath.Clean(filepath.Join(t.TempDir(), "worktree")))
+	if err != nil {
+		t.Fatalf("canonicalize Pi test CWD: %v", err)
+	}
+	normalized := filepath.ToSlash(cwd)
+	normalized = strings.ReplaceAll(strings.Trim(normalized, "/"), ":", "-")
+	projectDirName := "--" + strings.ReplaceAll(normalized, "/", "-") + "--"
+	return cwd, filepath.Join(home, ".pi", "agent", "sessions", projectDirName)
+}
+
+func piSessionHeader(id, cwd string) string {
+	return fmt.Sprintf(`{"type":"session","version":3,"id":%q,"cwd":%q}`, id, cwd)
+}
+
+func writePiFixture(t *testing.T, sessionsDir, name string, records ...string) string {
+	t.Helper()
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		t.Fatalf("mkdir Pi sessions directory: %v", err)
+	}
+	path := filepath.Join(sessionsDir, name)
+	if err := os.WriteFile(path, []byte(strings.Join(records, "\n")+"\n"), 0644); err != nil {
+		t.Fatalf("write Pi fixture: %v", err)
+	}
+	return path
 }
 
 func TestListAgySessions_AuthoritativeParsing(t *testing.T) {
@@ -98,29 +129,30 @@ func TestListAgySessions_AuthoritativeParsing(t *testing.T) {
 }
 
 func TestListPiSessions_TitleParsing(t *testing.T) {
-	mockHome := setupMockHome(t)
+	cwd, sessionsDir := setupPiTestSessions(t)
 
 	// Set up folder structure for pi sessions.
-	sessionsDir := filepath.Join(mockHome, ".pi", "agent", "sessions", "--mock-cwd--")
 	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
 		t.Fatalf("Failed to create mock pi sessions directory: %v", err)
 	}
 
 	// Write session 1 with custom session_info name.
 	sess1Path := filepath.Join(sessionsDir, "sess1.jsonl")
-	sess1Content := `{"type":"session_info","name":"A premium Pi Session"}` + "\n"
+	sess1Content := piSessionHeader("sess1", cwd) + "\n" +
+		`{"type":"session_info","name":"A premium Pi Session"}` + "\n"
 	if err := os.WriteFile(sess1Path, []byte(sess1Content), 0644); err != nil {
 		t.Fatalf("Failed to write mock session 1: %v", err)
 	}
 
 	// Write session 2 with user prompt fallback.
 	sess2Path := filepath.Join(sessionsDir, "sess2.jsonl")
-	sess2Content := `{"type":"msg","message":{"role":"user","content":[{"type":"text","text":"Show me antigravity code preset"}]}}` + "\n"
+	sess2Content := piSessionHeader("sess2", cwd) + "\n" +
+		`{"type":"msg","message":{"role":"user","content":[{"type":"text","text":"Show me antigravity code preset"}]}}` + "\n"
 	if err := os.WriteFile(sess2Path, []byte(sess2Content), 0644); err != nil {
 		t.Fatalf("Failed to write mock session 2: %v", err)
 	}
 
-	sessions, err := ListPiSessions("/mock/cwd")
+	sessions, err := ListPiSessions(cwd)
 	if err != nil {
 		t.Fatalf("ListPiSessions failed: %v", err)
 	}
@@ -146,6 +178,60 @@ func TestListPiSessions_TitleParsing(t *testing.T) {
 
 	if !foundSess1 || !foundSess2 {
 		t.Error("Did not find both expected sessions in results")
+	}
+}
+
+func TestListPiSessions_ValidatesCandidates(t *testing.T) {
+	cwd, sessionsDir := setupPiTestSessions(t)
+	otherCwd, err := filepath.Abs(filepath.Clean(filepath.Join(t.TempDir(), "other-worktree")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	validPath := writePiFixture(t, sessionsDir, "valid.jsonl",
+		piSessionHeader("valid-id", cwd),
+		`{"type":"message","id":"root","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"valid"}]}}`,
+	)
+	if err := os.WriteFile(filepath.Join(sessionsDir, "empty.jsonl"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "malformed.jsonl"), []byte("not json\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writePiFixture(t, sessionsDir, "wrong-cwd.jsonl", piSessionHeader("wrong-cwd", otherCwd))
+	writePiFixture(t, sessionsDir, "another-worktree.jsonl", piSessionHeader("another-worktree", otherCwd))
+	writePiFixture(t, sessionsDir, "case.jsonl", piSessionHeader("case", strings.ToUpper(cwd)))
+	if err := os.Mkdir(filepath.Join(sessionsDir, "directory.jsonl"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	symlinkTarget := filepath.Join(sessionsDir, "symlink-target.txt")
+	if err := os.WriteFile(symlinkTarget, []byte(piSessionHeader("symlink", cwd)+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(sessionsDir, "symlink.jsonl")
+	if err := os.Symlink(symlinkTarget, symlinkPath); err != nil {
+		t.Logf("skipping symlink candidate: %v", err)
+	}
+
+	sessions, err := ListPiSessions(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected only valid session, got %+v", sessions)
+	}
+	if sessions[0].ID != "valid-id" || sessions[0].SessionPath != validPath {
+		t.Fatalf("unexpected validated session: %+v", sessions[0])
+	}
+	if !filepath.IsAbs(sessions[0].SessionPath) || sessions[0].Cwd != cwd {
+		t.Fatalf("session path/CWD were not canonical: %+v", sessions[0])
+	}
+
+	for _, invalidCwd := range []string{"", "relative/worktree"} {
+		if _, err := ListPiSessions(invalidCwd); err == nil {
+			t.Fatalf("ListPiSessions(%q) should reject a non-absolute CWD", invalidCwd)
+		}
 	}
 }
 
