@@ -25,6 +25,20 @@ import {
     uploadClipboardImage,
     formatChipName,
 } from './attachments.js';
+import {
+    rpcChatSend,
+    destroyRpcChat,
+    getPiRpcStatus,
+    getPiRpcControls,
+    rpcChatModels,
+    rpcChatThinkingLevels,
+    rpcChatSetModel,
+    rpcChatSetThinking,
+    rpcChatReset,
+    rpcChatInterrupt,
+    subscribePiRpcStatus,
+} from './chat-pi/controller.js';
+import { formatPiRpcStatus } from './chat-pi/render.js';
 
 // Shared "session done" chime. Constructing a new Audio per chime
 // re-fetches bell.wav; one object per page is enough.
@@ -35,6 +49,7 @@ const CODER_FAVICONS = {
     claude: 'vendor/logos/claude.png',
     agy: 'vendor/logos/agy.png',
     pi: 'vendor/logos/pi.png',
+    'pi-rpc': 'vendor/logos/pi.png',
     bash: 'vendor/logos/bash.jpg',
     review: 'vendor/logos/review.png',
 };
@@ -84,6 +99,16 @@ export class TabManager {
         this.copyInputBtn = document.getElementById('copy-input-btn');
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
+        this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
+        this._piRpcResetPending = new Set();
+        this._piRpcMenuRequest = 0;
+        this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId) => {
+            this.renderPiRpcStatusBar();
+            const activeTab = this.getActiveTab();
+            if (activeTab?.paneId === paneId && activeTab.coder === 'pi-rpc') {
+                this.renderPresets('pi-rpc');
+            }
+        });
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
 
@@ -653,9 +678,11 @@ export class TabManager {
             // shortcuts to control PTY directly. The map lives in
             // _forwardKeyToPty, shared with the terminal-focused and mobile
             // paths; the emptiness gate is this caller's concern.
+            const inputTab = this.getActiveTab();
             if (
                 this.inputTextArea.value === '' &&
-                this._forwardKeyToPty(e, this.getActiveTab())
+                inputTab?.coder !== 'pi-rpc' &&
+                this._forwardKeyToPty(e, inputTab)
             ) {
                 return;
             }
@@ -664,6 +691,7 @@ export class TabManager {
                 e.preventDefault();
                 this.sendStagedInput();
             } else if (e.key === 'Escape') {
+                if (this._handlePiRpcEscape(e)) return;
                 // Return focus to terminal in Hybrid mode
                 e.preventDefault();
                 this.inputTextArea.blur();
@@ -829,7 +857,7 @@ export class TabManager {
         // Direct Mode toggle
         this.directModeToggle.addEventListener('click', () => {
             const activeTab = this.getActiveTab();
-            if (!activeTab) return;
+            if (!activeTab || activeTab.coder === 'pi-rpc') return;
 
             activeTab.directMode = !activeTab.directMode;
             this.updateDirectModeUI(activeTab);
@@ -878,6 +906,10 @@ export class TabManager {
             });
         }
 
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') this._handlePiRpcEscape(e);
+        });
+
         // Close dropups and dropdowns on clicking outside
         document.addEventListener('click', (e) => {
             const modelDropup = document.getElementById('model-presets-dropup');
@@ -907,6 +939,33 @@ export class TabManager {
                     !e.target.closest('.slash-trigger-btn')
                 ) {
                     slashDropup.classList.add('hidden');
+                }
+            }
+
+            const piModelDropup = document.getElementById(
+                'pi-rpc-model-dropup',
+            );
+            if (piModelDropup && !piModelDropup.classList.contains('hidden')) {
+                if (
+                    !e.target.closest('#pi-rpc-model-dropup') &&
+                    !e.target.closest('.pi-rpc-model-trigger')
+                ) {
+                    piModelDropup.classList.add('hidden');
+                }
+            }
+
+            const piThinkingDropup = document.getElementById(
+                'pi-rpc-thinking-dropup',
+            );
+            if (
+                piThinkingDropup &&
+                !piThinkingDropup.classList.contains('hidden')
+            ) {
+                if (
+                    !e.target.closest('#pi-rpc-thinking-dropup') &&
+                    !e.target.closest('.pi-rpc-thinking-trigger')
+                ) {
+                    piThinkingDropup.classList.add('hidden');
                 }
             }
 
@@ -1075,6 +1134,8 @@ export class TabManager {
     }
 
     updateDirectModeUI(tab) {
+        this._setPiRpcActionVisibility(tab);
+
         // Save scroll state before DOM changes alter the terminal height
         if (tab && !tab.isDead && tab.isAtBottom === undefined) {
             const buffer = tab.term.buffer.active;
@@ -1082,7 +1143,13 @@ export class TabManager {
             tab.lastScrollY = buffer.viewportY;
         }
 
-        if (tab.directMode) {
+        if (tab.coder === 'pi-rpc') {
+            tab.directMode = false;
+            this.directModeToggle.classList.remove('active');
+            this.inputBarContainer.classList.remove('direct-mode-active');
+            this.inputBarContainer.classList.remove('hidden');
+            this._renderPiRpcPresets();
+        } else if (tab.directMode) {
             this.directModeToggle.classList.add('active');
             this.inputBarContainer.classList.add('direct-mode-active');
             this.inputBarContainer.classList.remove('hidden');
@@ -1169,7 +1236,7 @@ export class TabManager {
         termContainer.id = `term-${paneId}`;
 
         let loaderEl = null;
-        if (coder !== 'review' && coder !== 'kanban') {
+        if (coder !== 'review' && coder !== 'kanban' && coder !== 'pi-rpc') {
             loaderEl = document.createElement('div');
             loaderEl.className = 'tab-loader';
             loaderEl.innerHTML = `
@@ -1221,8 +1288,8 @@ export class TabManager {
             this.openTabRenamer(currentPaneId, titleEl);
         });
 
-        if (coder === 'review' || coder === 'kanban') {
-            if (coder === 'review') {
+        if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc') {
+            if (coder === 'review' || coder === 'pi-rpc') {
                 termContainer.classList.add('review-panel');
             } else if (coder === 'kanban') {
                 termContainer.classList.add('kanban-panel');
@@ -1239,6 +1306,7 @@ export class TabManager {
                 isDead: true,
                 isReview: coder === 'review',
                 isKanban: coder === 'kanban',
+                isChatRpc: coder === 'pi-rpc',
                 pinned: !!pinned,
                 marked: !!marked,
             };
@@ -1806,7 +1874,8 @@ export class TabManager {
             if (
                 tabInfo.isDead ||
                 tabInfo.coder === 'review' ||
-                tabInfo.coder === 'kanban'
+                tabInfo.coder === 'kanban' ||
+                tabInfo.coder === 'pi-rpc'
             ) {
                 scrollToBottomBtn.classList.add('hidden');
                 return;
@@ -1973,7 +2042,408 @@ export class TabManager {
         }
     }
 
+    renderPiRpcStatusBar() {
+        const bar = this.piRpcStatusBar;
+        if (!bar) return;
+        const activeTab = this.getActiveTab();
+        if (!activeTab || activeTab.coder !== 'pi-rpc') {
+            bar.classList.add('hidden');
+            bar.replaceChildren();
+            return;
+        }
+        const display = formatPiRpcStatus(getPiRpcStatus(activeTab.paneId));
+        const fields = [
+            ['CWD', display.cwd],
+            ['Model', display.model],
+            ['Thinking', display.thinking],
+            ['Input', display.input],
+            ['Output', display.output],
+            ['Context', display.context],
+            ['Cache read', display.cacheRead],
+            ['Cache write', display.cacheWrite],
+        ];
+        bar.classList.remove('hidden');
+        bar.replaceChildren(
+            ...fields.map(([label, value]) => {
+                const item = document.createElement('span');
+                item.className = 'pi-rpc-status-item';
+                const labelEl = document.createElement('span');
+                labelEl.className = 'pi-rpc-status-label';
+                labelEl.textContent = label;
+                const valueEl = document.createElement('span');
+                valueEl.className = 'pi-rpc-status-value';
+                valueEl.textContent = value;
+                item.append(labelEl, valueEl);
+                return item;
+            }),
+        );
+    }
+
+    _setPiRpcActionVisibility(tab) {
+        const hidden = tab?.coder === 'pi-rpc';
+        for (const element of [
+            this.cancelInputBtn,
+            this.copyInputBtn,
+            this.directModeToggle,
+        ]) {
+            element?.classList.toggle('hidden', hidden);
+        }
+        if (hidden) this.directModeToggle?.classList.remove('active');
+    }
+
+    _closePiRpcDropups(clear = false) {
+        let changed = false;
+        for (const id of ['pi-rpc-model-dropup', 'pi-rpc-thinking-dropup']) {
+            const dropup = document.getElementById(id);
+            if (!dropup) continue;
+            if (!dropup.classList.contains('hidden')) changed = true;
+            dropup.classList.add('hidden');
+            if (clear) dropup.replaceChildren();
+        }
+        return changed;
+    }
+
+    _interruptActivePiRpc() {
+        const tab = this.getActiveTab();
+        if (!tab || tab.coder !== 'pi-rpc') return false;
+        const controls = this._piRpcControlsFor(tab);
+        if (!controls.ready || controls.exited || !controls.busy) return false;
+        void rpcChatInterrupt(tab.paneId).catch((error) =>
+            this._piRpcError(error, 'Pi interrupt'),
+        );
+        return true;
+    }
+
+    _handlePiRpcEscape(e) {
+        if (e.isComposing) return true;
+        if (this._closePiRpcDropups()) {
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+        }
+        if (this._interruptActivePiRpc()) {
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+        }
+        return false;
+    }
+
+    _piRpcControlsFor(tab) {
+        const state = tab ? getPiRpcControls(tab.paneId) : null;
+        return {
+            ready: state?.ready === true,
+            exited: state?.exited === true,
+            busy: state?.busy === true,
+            queueDepth:
+                Number.isFinite(state?.queueDepth) && state.queueDepth >= 0
+                    ? Math.trunc(state.queueDepth)
+                    : 0,
+            hasTranscript: state?.hasTranscript === true,
+            model: typeof state?.model === 'string' ? state.model : '',
+            thinking: typeof state?.thinking === 'string' ? state.thinking : '',
+        };
+    }
+
+    _piRpcError(error, title = 'Pi RPC') {
+        const message =
+            error instanceof Error
+                ? error.message
+                : String(error ?? 'Control failed');
+        if (this.app && typeof this.app.showToast === 'function') {
+            this.app.showToast(message, { type: 'error', title });
+        } else {
+            console.error(`[${title}]`, message);
+        }
+    }
+
+    _setPiRpcDropupButtonsDisabled(dropup, disabled) {
+        for (const button of dropup.querySelectorAll('button'))
+            button.disabled = disabled;
+    }
+
+    _renderPiRpcModelsDropup() {
+        const dropup = document.getElementById('pi-rpc-model-dropup');
+        const activeTab = this.getActiveTab();
+        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
+        const paneId = activeTab.paneId;
+        const request = ++this._piRpcMenuRequest;
+        const state = this._piRpcControlsFor(activeTab);
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.textContent = `Model · ${state.model || '—'}`;
+        dropup.replaceChildren(header);
+        const loading = document.createElement('div');
+        loading.className = 'dropup-row pi-rpc-dropup-message';
+        loading.textContent = 'Loading Pi models…';
+        dropup.appendChild(loading);
+
+        let requestResult;
+        try {
+            requestResult = rpcChatModels(paneId);
+        } catch (error) {
+            this._piRpcError(error, 'Pi models');
+            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            return;
+        }
+        Promise.resolve(requestResult)
+            .then((models) => {
+                if (
+                    request !== this._piRpcMenuRequest ||
+                    this.getActiveTab()?.paneId !== paneId
+                )
+                    return;
+                dropup.replaceChildren(header);
+                if (!Array.isArray(models) || models.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'dropup-row pi-rpc-dropup-message';
+                    empty.textContent = 'No Pi models available';
+                    dropup.appendChild(empty);
+                    return;
+                }
+                const pending = this._piRpcModelPending?.paneId === paneId;
+                for (const model of models) {
+                    if (
+                        !model ||
+                        typeof model.provider !== 'string' ||
+                        typeof model.id !== 'string'
+                    )
+                        continue;
+                    const row = document.createElement('div');
+                    row.className = 'dropup-row';
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'dropup-model-btn';
+                    button.textContent = model.name || model.id;
+                    button.title = `${model.provider}/${model.id}`;
+                    button.disabled = pending;
+                    button.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        const operation = {
+                            paneId,
+                            provider: model.provider,
+                            modelId: model.id,
+                        };
+                        this._piRpcModelPending = operation;
+                        this._setPiRpcDropupButtonsDisabled(dropup, true);
+                        let setterResult;
+                        try {
+                            setterResult = rpcChatSetModel(
+                                paneId,
+                                model.provider,
+                                model.id,
+                            );
+                        } catch (error) {
+                            setterResult = Promise.reject(error);
+                        }
+                        Promise.resolve(setterResult)
+                            .then(() => {
+                                if (this._piRpcModelPending === operation)
+                                    this._piRpcModelPending = null;
+                                if (this.getActiveTab()?.paneId === paneId) {
+                                    this.renderPresets('pi-rpc');
+                                    this._closePiRpcDropups(true);
+                                }
+                            })
+                            .catch((error) => {
+                                if (this._piRpcModelPending === operation)
+                                    this._piRpcModelPending = null;
+                                this._piRpcError(error, 'Pi model');
+                                if (this.getActiveTab()?.paneId === paneId)
+                                    this._renderPiRpcModelsDropup();
+                            });
+                    });
+                    const meta = document.createElement('span');
+                    meta.className = 'pi-rpc-dropup-meta';
+                    meta.textContent = `${model.provider}/${model.id}`;
+                    row.append(button, meta);
+                    dropup.appendChild(row);
+                }
+            })
+            .catch((error) => {
+                if (
+                    request !== this._piRpcMenuRequest ||
+                    this.getActiveTab()?.paneId !== paneId
+                )
+                    return;
+                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+                this._piRpcError(error, 'Pi models');
+            });
+    }
+
+    _renderPiRpcThinkingDropup() {
+        const dropup = document.getElementById('pi-rpc-thinking-dropup');
+        const activeTab = this.getActiveTab();
+        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
+        const paneId = activeTab.paneId;
+        const request = ++this._piRpcMenuRequest;
+        const state = this._piRpcControlsFor(activeTab);
+        const header = document.createElement('div');
+        header.className = 'dropup-header';
+        header.textContent = `Thinking · ${state.thinking || '—'}`;
+        dropup.replaceChildren(header);
+        const loading = document.createElement('div');
+        loading.className = 'dropup-row pi-rpc-dropup-message';
+        loading.textContent = 'Loading Pi thinking levels…';
+        dropup.appendChild(loading);
+
+        let requestResult;
+        try {
+            requestResult = rpcChatThinkingLevels(paneId);
+        } catch (error) {
+            this._piRpcError(error, 'Pi thinking');
+            loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            return;
+        }
+        Promise.resolve(requestResult)
+            .then((levels) => {
+                if (
+                    request !== this._piRpcMenuRequest ||
+                    this.getActiveTab()?.paneId !== paneId
+                )
+                    return;
+                dropup.replaceChildren(header);
+                if (!Array.isArray(levels) || levels.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'dropup-row pi-rpc-dropup-message';
+                    empty.textContent = 'No Pi thinking levels available';
+                    dropup.appendChild(empty);
+                    return;
+                }
+                const pending = this._piRpcThinkingPending?.paneId === paneId;
+                for (const level of levels) {
+                    if (typeof level !== 'string') continue;
+                    const row = document.createElement('div');
+                    row.className = 'dropup-row';
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'dropup-model-btn';
+                    button.textContent = level;
+                    button.disabled = pending;
+                    button.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        const operation = { paneId, level };
+                        this._piRpcThinkingPending = operation;
+                        this._setPiRpcDropupButtonsDisabled(dropup, true);
+                        let setterResult;
+                        try {
+                            setterResult = rpcChatSetThinking(paneId, level);
+                        } catch (error) {
+                            setterResult = Promise.reject(error);
+                        }
+                        Promise.resolve(setterResult)
+                            .then(() => {
+                                if (this._piRpcThinkingPending === operation)
+                                    this._piRpcThinkingPending = null;
+                                if (this.getActiveTab()?.paneId === paneId) {
+                                    this.renderPresets('pi-rpc');
+                                    this._closePiRpcDropups(true);
+                                }
+                            })
+                            .catch((error) => {
+                                if (this._piRpcThinkingPending === operation)
+                                    this._piRpcThinkingPending = null;
+                                this._piRpcError(error, 'Pi thinking');
+                                if (this.getActiveTab()?.paneId === paneId)
+                                    this._renderPiRpcThinkingDropup();
+                            });
+                    });
+                    row.appendChild(button);
+                    dropup.appendChild(row);
+                }
+            })
+            .catch((error) => {
+                if (
+                    request !== this._piRpcMenuRequest ||
+                    this.getActiveTab()?.paneId !== paneId
+                )
+                    return;
+                loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+                this._piRpcError(error, 'Pi thinking');
+            });
+    }
+
+    _renderPiRpcPresets() {
+        if (!this.presetsContainer) return;
+        const activeTab = this.getActiveTab();
+        this.presetsContainer.replaceChildren();
+        if (!activeTab || activeTab.coder !== 'pi-rpc') {
+            this.presetsContainer.classList.add('hidden');
+            return;
+        }
+        this._setPiRpcActionVisibility(activeTab);
+        this.presetsContainer.classList.remove('hidden');
+        const state = this._piRpcControlsFor(activeTab);
+        const paneId = activeTab.paneId;
+        const menuDisabled = !state.ready || state.exited;
+
+        const modelButton = document.createElement('button');
+        modelButton.type = 'button';
+        modelButton.className =
+            'preset-btn model-trigger-btn pi-rpc-model-trigger';
+        modelButton.textContent = 'Model ▾';
+        modelButton.disabled =
+            menuDisabled || this._piRpcModelPending?.paneId === paneId;
+        modelButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._toggleDropup('pi-rpc-model-dropup', modelButton, () =>
+                this._renderPiRpcModelsDropup(),
+            );
+        });
+
+        const thinkingButton = document.createElement('button');
+        thinkingButton.type = 'button';
+        thinkingButton.className =
+            'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
+        thinkingButton.textContent = 'Thinking ▾';
+        thinkingButton.disabled =
+            menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
+        thinkingButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () =>
+                this._renderPiRpcThinkingDropup(),
+            );
+        });
+
+        const resetButton = document.createElement('button');
+        resetButton.type = 'button';
+        resetButton.className = 'preset-btn pi-rpc-reset-btn';
+        resetButton.textContent = 'Reset Chat';
+        const resetPending = this._piRpcResetPending?.has(paneId) === true;
+        resetButton.disabled =
+            menuDisabled || state.busy || state.queueDepth > 0 || resetPending;
+        resetButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (resetButton.disabled) return;
+            if (
+                state.hasTranscript &&
+                !confirm(
+                    'Reset Chat starts a fresh conversation and cannot be undone. Continue?',
+                )
+            )
+                return;
+            if (!this._piRpcResetPending) this._piRpcResetPending = new Set();
+            this._piRpcResetPending.add(paneId);
+            this.renderPresets('pi-rpc');
+            let resetResult;
+            try {
+                resetResult = rpcChatReset(paneId);
+            } catch (error) {
+                resetResult = Promise.reject(error);
+            }
+            Promise.resolve(resetResult)
+                .catch((error) => this._piRpcError(error, 'Reset Chat'))
+                .finally(() => {
+                    this._piRpcResetPending.delete(paneId);
+                    if (this.getActiveTab()?.paneId === paneId)
+                        this.renderPresets('pi-rpc');
+                });
+        });
+        this.presetsContainer.append(modelButton, thinkingButton, resetButton);
+    }
+
     switchTab(paneId, { userInitiated = false } = {}) {
+        this._closePiRpcDropups();
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
             if (activeTab) {
@@ -1989,6 +2459,7 @@ export class TabManager {
                     force: userInitiated,
                 });
             }
+            this.renderPiRpcStatusBar();
             return;
         }
 
@@ -2020,9 +2491,11 @@ export class TabManager {
         this.activePaneId = paneId;
         const newTab = this.getActiveTab();
         if (!newTab) return;
+        this._setPiRpcActionVisibility(newTab);
 
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
+        this.renderPiRpcStatusBar();
 
         // Show/hide staged input & direct mode based on tab settings
         if (newTab.coder === 'review' || newTab.coder === 'kanban') {
@@ -2199,7 +2672,7 @@ export class TabManager {
             if (next && next !== current) {
                 tab.title = next;
                 span.textContent = next;
-                if (!tab.isReview && !tab.isKanban)
+                if (!tab.isReview && !tab.isKanban && !tab.isChatRpc)
                     this.syncBackendTitle(paneId, next);
             } else {
                 span.textContent = current;
@@ -2540,25 +3013,27 @@ export class TabManager {
         // be alive on the server (e.g. a race with another tab close,
         // network blip, or 5xx). The 30-min detach grace timer is the
         // server-side backstop either way.
-        fetch(`/api/terminals/${paneId}`, { method: 'DELETE' })
-            .then((res) => {
-                if (!res.ok && res.status !== 404) {
-                    // 404 is fine — it just means another caller already
-                    // killed the instance. Anything else (5xx, network,
-                    // CORS) is worth telling the user about.
-                    throw new Error(`DELETE returned ${res.status}`);
-                }
-            })
-            .catch((err) => {
-                console.error('[tab] failed to kill PTY for', paneId, err);
-                if (this.app && this.app.showToast) {
-                    this.app.showToast(
-                        `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
-                        { type: 'error', duration: 8000 },
-                    );
-                }
-            });
+        if (tab.coder !== 'pi-rpc')
+            fetch(`/api/terminals/${paneId}`, { method: 'DELETE' })
+                .then((res) => {
+                    if (!res.ok && res.status !== 404) {
+                        // 404 is fine — it just means another caller already
+                        // killed the instance. Anything else (5xx, network,
+                        // CORS) is worth telling the user about.
+                        throw new Error(`DELETE returned ${res.status}`);
+                    }
+                })
+                .catch((err) => {
+                    console.error('[tab] failed to kill PTY for', paneId, err);
+                    if (this.app && this.app.showToast) {
+                        this.app.showToast(
+                            `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
+                            { type: 'error', duration: 8000 },
+                        );
+                    }
+                });
 
+        if (tab.coder === 'pi-rpc') destroyRpcChat(tab.paneId);
         try {
             if (tab.ws) tab.ws.close();
         } catch (e) {
@@ -2585,6 +3060,10 @@ export class TabManager {
             this.app.reviewManager.cleanup?.();
         }
 
+        if (tab.coder === 'pi-rpc' && this.activePaneId === paneId) {
+            this._piRpcResetPending?.delete(paneId);
+            this._closePiRpcDropups(true);
+        }
         this.tabs.delete(paneId);
         this.updateDocumentTitle();
         this.updateDisconnectBanner();
@@ -2597,8 +3076,12 @@ export class TabManager {
         // (no overlay was up because grace expired without undo).
         if (this.tabs.size === 0) {
             this.activePaneId = null;
+            this._setPiRpcActionVisibility(null);
+            this._closePiRpcDropups(true);
             this.inputBarContainer.classList.add('hidden');
+            this.presetsContainer.replaceChildren();
             this.presetsContainer.classList.add('hidden');
+            this.renderPiRpcStatusBar();
             this.showEmptyState();
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({ force: true });
@@ -3499,7 +3982,7 @@ export class TabManager {
         // CPU-driven emphasis class on the popover so the cpu line tints
         // when load climbs. Matches the brand-logo class names.
         const level =
-            hud.cpuPercent != null ? cpuLevel(hud.cpuPercent) : 'cpu-idle';
+            hud.cpuPercent == null ? 'cpu-idle' : cpuLevel(hud.cpuPercent);
         for (const cls of [
             'cpu-idle',
             'cpu-moderate',
@@ -3582,15 +4065,22 @@ export class TabManager {
         }
         let payload = lines.join('\n');
 
-        // Wrap in bracketed paste markers for large prompts or multiline text
-        // to prevent TUI trickle-rendering / autocomplete lagging.
-        if (payload.length > 16 || payload.includes('\n')) {
-            payload = '\x1b[200~' + payload + '\x1b[201~';
-        }
+        if (coder === 'pi-rpc') {
+            if (!rpcChatSend(activeTab.paneId, payload)) {
+                this.app.showToast('pi chat: not ready', { type: 'error' });
+                return;
+            }
+        } else {
+            // Wrap in bracketed paste markers for large prompts or multiline text
+            // to prevent TUI trickle-rendering / autocomplete lagging.
+            if (payload.length > 16 || payload.includes('\n')) {
+                payload = '\x1b[200~' + payload + '\x1b[201~';
+            }
 
-        // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
-        const sent = this.sendInput(activeTab, payload + '\r');
-        if (!sent) return;
+            // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
+            const sent = this.sendInput(activeTab, payload + '\r');
+            if (!sent) return;
+        }
 
         // Record this prompt into ~/.phi/prompt_history.json BEFORE
         // clearing the textarea. Fire-and-forget so a slow disk
@@ -3633,7 +4123,7 @@ export class TabManager {
 
     sendRawInput(bytes) {
         const activeTab = this.getActiveTab();
-        if (!activeTab) return;
+        if (!activeTab || activeTab.coder === 'pi-rpc') return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
         // bundled with preceding text fails to register as Enter — see pkg/pty.
         const sent = this.sendInput(activeTab, bytes);
@@ -3680,6 +4170,7 @@ export class TabManager {
      * Emptiness/modifier gates are caller concerns, not decided here.
      */
     _forwardKeyToPty(e, tab) {
+        if (tab?.coder === 'pi-rpc') return false;
         if (e.isComposing) return false; // never emit bytes mid-IME composition
         let sendChar = null;
         // Shift+Tab (Backtab) — also prevents the browser focus shift.
@@ -3734,6 +4225,7 @@ export class TabManager {
      * preserves sendRawInput's focus behavior.
      */
     sendSlashCommand(tabInfo, cmd) {
+        if (tabInfo?.coder === 'pi-rpc') return false;
         const sent = this.sendToTab(tabInfo, `\x1b[200~${cmd}\x1b[201~\r`);
         if (!sent) return false;
         const isMobile = window.innerWidth <= 768;
@@ -3869,7 +4361,7 @@ export class TabManager {
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {
-        if (tabInfo.reconnectInFlight) return;
+        if (tabInfo.coder === 'pi-rpc' || tabInfo.reconnectInFlight) return;
         tabInfo.reconnectInFlight = true;
         tabInfo.exitCode = null;
 
@@ -3919,7 +4411,14 @@ export class TabManager {
                     // reset so this attempt still counts against the backoff.
                     clearTimeout(tabInfo.reconnectStableTimer);
                     tabInfo.reconnectStableTimer = null;
-                    if (!opened) {
+                    if (opened) {
+                        tabInfo.isDead = true;
+                        tabInfo.tabEl.classList.add('dead');
+                        this.updateDocumentTitle();
+                        this._showReconnectOverlay(tabInfo);
+                        this.updateDisconnectBanner();
+                        this.maybeAutoReconnect(tabInfo);
+                    } else {
                         if (msgEl)
                             msgEl.innerText = 'Session expired (PTY gone)';
                         if (btnEl) {
@@ -3927,13 +4426,6 @@ export class TabManager {
                             btnEl.innerText = '⟳ Retry';
                         }
                         if (restartBtn) restartBtn.disabled = false;
-                        this.updateDisconnectBanner();
-                        this.maybeAutoReconnect(tabInfo);
-                    } else {
-                        tabInfo.isDead = true;
-                        tabInfo.tabEl.classList.add('dead');
-                        this.updateDocumentTitle();
-                        this._showReconnectOverlay(tabInfo);
                         this.updateDisconnectBanner();
                         this.maybeAutoReconnect(tabInfo);
                     }
@@ -3993,6 +4485,7 @@ export class TabManager {
     }
 
     restartTab(tabInfo) {
+        if (tabInfo.coder === 'pi-rpc') return;
         const overlay =
             tabInfo.termContainer.querySelector('.reconnect-overlay');
         const msgEl = overlay?.querySelector('.reconnect-msg');
@@ -4059,17 +4552,17 @@ export class TabManager {
                         this.handleControlMessage(tabInfo, control);
                     },
                     () => {
-                        if (!opened) {
-                            if (msgEl)
-                                msgEl.innerText = 'Session expired (PTY gone)';
-                            if (reconnectBtn) reconnectBtn.disabled = false;
-                            if (restartBtn) restartBtn.disabled = false;
-                            this.updateDisconnectBanner();
-                        } else {
+                        if (opened) {
                             tabInfo.isDead = true;
                             tabInfo.tabEl.classList.add('dead');
                             this.updateDocumentTitle();
                             this._showReconnectOverlay(tabInfo);
+                            this.updateDisconnectBanner();
+                        } else {
+                            if (msgEl)
+                                msgEl.innerText = 'Session expired (PTY gone)';
+                            if (reconnectBtn) reconnectBtn.disabled = false;
+                            if (restartBtn) restartBtn.disabled = false;
                             this.updateDisconnectBanner();
                         }
                     },
@@ -4117,7 +4610,8 @@ export class TabManager {
                 tabInfo.isDead &&
                 (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
                 tabInfo.coder !== 'review' &&
-                tabInfo.coder !== 'kanban'
+                tabInfo.coder !== 'kanban' &&
+                tabInfo.coder !== 'pi-rpc'
             ) {
                 deadTabs.push(tabInfo);
             }
@@ -4167,7 +4661,8 @@ export class TabManager {
                 tabInfo.isDead &&
                 (tabInfo.exitCode === undefined || tabInfo.exitCode === null) &&
                 tabInfo.coder !== 'review' &&
-                tabInfo.coder !== 'kanban'
+                tabInfo.coder !== 'kanban' &&
+                tabInfo.coder !== 'pi-rpc'
             ) {
                 this.reconnectTab(tabInfo, { auto: false });
                 count++;
@@ -4199,7 +4694,7 @@ export class TabManager {
             } else {
                 this.app.showToast(
                     'info',
-                    `Refreshed ${total} tab${total !== 1 ? 's' : ''}`,
+                    `Refreshed ${total} tab${total === 1 ? '' : 's'}`,
                 );
             }
         }
@@ -4217,13 +4712,19 @@ export class TabManager {
         if (document.visibilityState !== 'visible') return;
         const tabInfo = this.getActiveTab();
         if (!tabInfo || !tabInfo.isDead || tabInfo.reconnectInFlight) return;
-        if (tabInfo.coder === 'review' || tabInfo.coder === 'kanban') return;
+        if (
+            tabInfo.coder === 'review' ||
+            tabInfo.coder === 'kanban' ||
+            tabInfo.coder === 'pi-rpc'
+        )
+            return;
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return;
         tabInfo.reconnectAttempts = 0;
         this.reconnectTab(tabInfo, { auto: true });
     }
 
     maybeAutoReconnect(tabInfo) {
+        if (tabInfo.coder === 'pi-rpc') return false;
         const autoReconnect = this.app.config && this.app.config.auto_reconnect;
         if (autoReconnect !== 'visible') return false;
 
@@ -4241,7 +4742,7 @@ export class TabManager {
         tabInfo.reconnectAttempts++;
         const backoff = Math.min(
             AUTO_RECONNECT_MAX_DELAY_MS,
-            Math.pow(2, tabInfo.reconnectAttempts - 1) * 1000,
+            2 ** (tabInfo.reconnectAttempts - 1) * 1000,
         );
         const delay = AUTO_RECONNECT_GRACE_MS + Math.random() * backoff;
 
@@ -4418,7 +4919,7 @@ export class TabManager {
             e.key === 'Enter'
         ) {
             const activeTab = this.getActiveTab();
-            if (activeTab) {
+            if (activeTab && activeTab.coder !== 'pi-rpc') {
                 e.preventDefault();
                 this.sendInput(activeTab, '\x1b[A');
                 setTimeout(() => {
@@ -4445,7 +4946,8 @@ export class TabManager {
             if (
                 activeTab &&
                 activeTab.coder !== 'review' &&
-                activeTab.coder !== 'kanban'
+                activeTab.coder !== 'kanban' &&
+                activeTab.coder !== 'pi-rpc'
             ) {
                 e.preventDefault();
                 this.sendInput(activeTab, '\x10');
@@ -4695,13 +5197,13 @@ export class TabManager {
             // If we are resizing continuously, cache these stable coordinates on the tab
             if (this.isResizing) {
                 isAtBottom =
-                    activeTab.isAtBottom !== undefined
-                        ? activeTab.isAtBottom
-                        : buffer.viewportY >= buffer.baseY;
+                    activeTab.isAtBottom === undefined
+                        ? buffer.viewportY >= buffer.baseY
+                        : activeTab.isAtBottom;
                 scrollY =
-                    activeTab.lastScrollY !== undefined
-                        ? activeTab.lastScrollY
-                        : buffer.viewportY;
+                    activeTab.lastScrollY === undefined
+                        ? buffer.viewportY
+                        : activeTab.lastScrollY;
                 activeTab.isAtBottom = isAtBottom;
                 activeTab.lastScrollY = scrollY;
             } else if (
@@ -4784,6 +5286,7 @@ export class TabManager {
             tabInfo.isDead &&
             tabInfo.coder !== 'review' &&
             tabInfo.coder !== 'kanban' &&
+            tabInfo.coder !== 'pi-rpc' &&
             !tabInfo.reconnectInFlight
         ) {
             if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
@@ -4809,9 +5312,11 @@ export class TabManager {
         });
         if (wasHidden) {
             const btnRect = triggerBtn.getBoundingClientRect();
-            const containerRect = document
-                .querySelector('.terminal-content')
-                .getBoundingClientRect();
+            const container = document.querySelector('.terminal-content');
+            const containerRect = container?.getBoundingClientRect?.() || {
+                left: 0,
+                width: window.innerWidth,
+            };
             let left = btnRect.left - containerRect.left;
             const dropupWidth =
                 window.innerWidth <= 768
@@ -4828,6 +5333,12 @@ export class TabManager {
     }
 
     renderPresets(coderId) {
+        const activeTab = this.getActiveTab();
+        if (activeTab?.coder === 'pi-rpc') {
+            this._renderPiRpcPresets();
+            return;
+        }
+        if (!this.presetsContainer) return;
         this.presetsContainer.innerHTML = '';
 
         const coderPresetInfo = this.app.codersPresetRegistry[coderId];
@@ -4837,7 +5348,6 @@ export class TabManager {
             coderPresetInfo.presets.length > 0;
 
         // If direct mode, do not render presets
-        const activeTab = this.getActiveTab();
         if (activeTab && activeTab.directMode) {
             this.presetsContainer.classList.add('hidden');
             return;
@@ -5546,7 +6056,7 @@ export class TabManager {
             btn.title = cmd.command;
             btn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                if (!activeTab) return;
+                if (!activeTab || activeTab.coder === 'pi-rpc') return;
                 const prefix = this.inputTextArea.value.trim();
                 const combined =
                     prefix && cmd.command.includes('{}')

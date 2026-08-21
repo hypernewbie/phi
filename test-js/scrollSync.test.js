@@ -38,7 +38,7 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
             // the rAF/write, per terminal.js:932-933) observable: capturing
             // it late (after write) would see the new, taller baseY and
             // wrongly conclude the user isn't at bottom.
-            write: vi.fn(function (data, cb) {
+            write: vi.fn(function (_data, cb) {
                 this.buffer.active.baseY += 1;
                 if (cb) cb();
             }),
@@ -121,6 +121,10 @@ function stubXtermGlobals() {
         },
     });
     vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
+    // A plain function (not an arrow) so `new window.Terminal(...)` in
+    // createTab constructs it; the returned object literal wins over the
+    // default `this` under constructor semantics.
+    // biome-ignore lint/complexity/useArrowFunction: arrows cannot be constructed; createTab calls new window.Terminal(...)
     vi.stubGlobal('Terminal', function () {
         // Mirrors real xterm.js DOM shape: term.element with a
         // .xterm-viewport child, which is what both listeners query.
@@ -145,7 +149,7 @@ function stubXtermGlobals() {
             onScroll: () => {},
             onData: () => {},
             getSelection: () => '',
-            write: vi.fn((data, cb) => {
+            write: vi.fn((_data, cb) => {
                 if (cb) cb();
             }),
             scrollToBottom: vi.fn(),

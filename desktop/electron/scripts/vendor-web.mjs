@@ -41,6 +41,7 @@ const WEB_JS_MODULES = [
   'util.js',
   'attachments.js',
   'md-render.js',
+  'review-transcript.js',
   'diff.js',
   'markdown.js',
   'filetree.js',
@@ -60,6 +61,9 @@ const WEB_JS_MODULES = [
  *  './vendor/noble-hashes/...', so the relative layout is preserved under
  *  web/vendor/). */
 const WEB_JS_VENDOR_DIRS = ['noble-hashes'];
+
+/** Browser app subdirectories the module graph imports. */
+const WEB_JS_MODULE_DIRS = ['chat-pi'];
 
 /** The main-view-page placeholder the vendored header is inlined into. */
 const HEADER_PLACEHOLDER = '<!--VENDORED_HEADER-->';
@@ -152,6 +156,14 @@ for (const name of WEB_JS_MODULES) {
 for (const dir of WEB_JS_VENDOR_DIRS) {
   const src = path.join(webRoot, 'vendor', dir);
   const dest = path.join(vendorJsDir, 'vendor', dir);
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(src)) {
+    copyFileSync(path.join(src, entry), path.join(dest, entry));
+  }
+}
+for (const dir of WEB_JS_MODULE_DIRS) {
+  const src = path.join(webRoot, dir);
+  const dest = path.join(vendorJsDir, dir);
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src)) {
     copyFileSync(path.join(src, entry), path.join(dest, entry));

@@ -92,6 +92,10 @@ function loadAddon(file) {
     return fn(sandbox, sandbox);
 }
 
+function loadJsDiff() {
+    return loadAddon('jsdiff.min.js');
+}
+
 // All vendor scripts must parse without syntax errors. Uses Node's strict
 // parser, which is stricter than the browser's - so any file that fails
 // here would also fail in the browser.
@@ -100,6 +104,7 @@ describe('web/vendor/*.js - parse integrity', () => {
         'Sortable.min.js',
         'chart.umd.js',
         'diff2html.min.js',
+        'jsdiff.min.js',
         'highlight.min.js',
         'marked.min.js',
         'purify.min.js',
@@ -148,6 +153,42 @@ describe('web/vendor/*.js - parse integrity', () => {
 // that don't need a DOM at module-load time are exercised here; the
 // webgl addon touches `document` on load and is verified by the static
 // namespace-assignment check below.
+describe('jsdiff vendor exposes the expected browser primitive', () => {
+    it('evaluates the UMD and exposes globalThis.Diff.diffWords', () => {
+        const result = loadJsDiff();
+        expect(result.Diff).toBeDefined();
+        expect(typeof result.Diff.diffWords).toBe('function');
+        expect(result.Diff.diffWords('old', 'new')).toEqual([
+            { count: 1, added: false, removed: true, value: 'old' },
+            { count: 1, added: true, removed: false, value: 'new' },
+        ]);
+    });
+
+    it('loads jsdiff before the app module entry', () => {
+        const html = readFileSync(
+            join(process.cwd(), 'web', 'index.html'),
+            'utf8',
+        );
+        const jsdiff = html.indexOf(
+            '<script src="vendor/jsdiff.min.js"></script>',
+        );
+        const app = html.indexOf(
+            '<script type="module" src="app.js"></script>',
+        );
+        expect(jsdiff).toBeGreaterThanOrEqual(0);
+        expect(app).toBeGreaterThan(jsdiff);
+    });
+
+    it('ships the complete BSD-3-Clause notice beside the asset', () => {
+        const notice = readFileSync(join(VENDOR_DIR, 'jsdiff.LICENSE'), 'utf8');
+        expect(notice).toContain('BSD 3-Clause License');
+        expect(notice).toContain('Copyright (c) 2009-2015, Kevin Decker');
+        expect(notice).toContain(
+            'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS',
+        );
+    });
+});
+
 describe('xterm addons expose the expected constructor on globalThis', () => {
     const RUNTIME_ADDONS = XTERM_ADDONS.filter(
         (a) => a.file !== 'xterm-addon-webgl.js',

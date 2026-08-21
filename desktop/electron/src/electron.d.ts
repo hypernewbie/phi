@@ -182,5 +182,3 @@ declare global {
     electron: ElectronApi;
   }
 }
-
-export {};

@@ -63,7 +63,7 @@ describe('front-end ES modules parse cleanly', () => {
 describe('no TDZ trap between term.open() and the next const tabInfo in createTab()', () => {
     it('terminal.js: tabInfo.X = ... assignments only come after both const tabInfo declarations', () => {
         const src = fs.readFileSync('web/terminal.js', 'utf8');
-        const startMatch = src.match(/\n    createTab\(/);
+        const startMatch = src.match(/\n {4}createTab\(/);
         expect(startMatch, 'createTab() not found').toBeTruthy();
         const createStart = startMatch.index + 1;
         const openIdx = src.indexOf('{', createStart);

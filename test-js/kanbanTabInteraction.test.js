@@ -77,7 +77,7 @@ function makeApp(fx) {
 }
 
 // jsdom elements don't implement scrollIntoView; stub it on every test's tabEls
-HTMLElement.prototype.scrollIntoView = function () {};
+HTMLElement.prototype.scrollIntoView = () => {};
 
 beforeEach(() => {
     vi.clearAllMocks();

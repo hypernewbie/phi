@@ -1,30 +1,32 @@
 /* Φ phi — Custom Design System Stylesheet */
 
 :root {
-    --bg-base:      #08080a;   /* Pure dark space */
-    --bg-panel:     #0d0d10;   /* Obsidian panel background */
-    --bg-elevated:  #141418;   /* Input boxes, button actions, active items */
-    --bg-border:    #1f1f26;   /* Clean sleek borders */
-    
-    --accent:       #7c6af7;   /* Purple Phi primary */
-    --accent-glow:  rgba(124, 106, 247, 0.15);
-    --accent-dim:   #5b4ec2;
-    --accent-bright:#9a8dfa;
-    --accent-edge:  color-mix(in srgb, var(--accent) 35%, transparent);
-    --accent-soft:  color-mix(in srgb, var(--accent) 22%, transparent);
-    --accent-wash:  color-mix(in srgb, var(--accent) 10%, transparent);
+    --bg-base: #08080a; /* Pure dark space */
+    --bg-panel: #0d0d10; /* Obsidian panel background */
+    --bg-elevated: #141418; /* Input boxes, button actions, active items */
+    --bg-border: #1f1f26; /* Clean sleek borders */
+
+    --accent: #7c6af7; /* Purple Phi primary */
+    --accent-glow: rgba(124, 106, 247, 0.15);
+    --accent-dim: #5b4ec2;
+    --accent-bright: #9a8dfa;
+    --accent-edge: color-mix(in srgb, var(--accent) 35%, transparent);
+    --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+    --accent-wash: color-mix(in srgb, var(--accent) 10%, transparent);
     --accent-trace: color-mix(in srgb, var(--accent) 6%, transparent);
-    
-    --text-primary: #e4e3e9;   /* High readability text */
-    --text-muted:   #78768a;   /* Subtle labels */
-    --text-dim:     #424052;   /* Dark background helper */
-    
-    --green:        #38bdf8;   /* Teal/blue-green active status */
-    --green-glow:   rgba(56, 189, 248, 0.2);
-    --red:          #ef4444;   /* Exit/termination operations */
-    
-    --font-ui:      'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-mono:    'JetBrains Mono', "Courier New", Courier, monospace;
+
+    --text-primary: #e4e3e9; /* High readability text */
+    --text-muted: #78768a; /* Subtle labels */
+    --text-dim: #424052; /* Dark background helper */
+
+    --green: #38bdf8; /* Teal/blue-green active status */
+    --green-glow: rgba(56, 189, 248, 0.2);
+    --red: #ef4444; /* Exit/termination operations */
+
+    --font-ui:
+        "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        sans-serif;
+    --font-mono: "JetBrains Mono", "Courier New", Courier, monospace;
 }
 
 * {
@@ -38,7 +40,8 @@
     color: #ffffff;
 }
 
-html, body {
+html,
+body {
     margin: 0;
     padding: 0;
     width: 100%;
@@ -118,7 +121,10 @@ html[data-phi-desktop-root] .app-header {
     font-size: 22px;
     font-weight: 600;
     text-shadow: 0 0 10px var(--accent-glow);
-    transition: color 0.2s ease, text-shadow 0.2s ease, opacity 0.2s ease;
+    transition:
+        color 0.2s ease,
+        text-shadow 0.2s ease,
+        opacity 0.2s ease;
 }
 
 /* ── CPU-state classes on the phi brand ──────────────────────────────────────── */
@@ -130,7 +136,7 @@ html[data-phi-desktop-root] .app-header {
 }
 
 .logo-glow-wrapper::after {
-    content: '';
+    content: "";
     position: absolute;
     top: 50%;
     left: 50%;
@@ -181,7 +187,10 @@ html[data-phi-desktop-root] .app-header {
    periods was not perceptible on an idle desktop but was billed 60fps.
    Change is expressed by .cpu-flourish, a finite burst on tier entry. */
 .brand .logo.cpu-moderate {
-    text-shadow: 0 0 8px var(--accent), 0 0 18px var(--accent-glow), 0 0 30px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent),
+        0 0 18px var(--accent-glow),
+        0 0 30px var(--accent-glow);
 }
 
 .brand .brand-name.cpu-moderate {
@@ -192,7 +201,10 @@ html[data-phi-desktop-root] .app-header {
 .brand .logo.cpu-high {
     color: var(--accent-bright);
     /* Chromatic split kept -- it is the tier's signature and reads instantly. */
-    text-shadow: 1.75px 0 0 rgba(0, 220, 255, 0.8), -1.75px 0 0 rgba(255, 0, 100, 0.7), 0 0 18px var(--accent-glow);
+    text-shadow:
+        1.75px 0 0 rgba(0, 220, 255, 0.8),
+        -1.75px 0 0 rgba(255, 0, 100, 0.7),
+        0 0 18px var(--accent-glow);
 }
 
 .brand .brand-name.cpu-high {
@@ -203,7 +215,7 @@ html[data-phi-desktop-root] .app-header {
 
 .brand .logo.cpu-critical {
     color: #fff;
-    filter: brightness(1.5) saturate(2.0);
+    filter: brightness(1.5) saturate(2);
     text-shadow:
         0 0 3px #fff,
         0 0 12px var(--accent-bright),
@@ -214,7 +226,9 @@ html[data-phi-desktop-root] .app-header {
 
 .brand .brand-name.cpu-critical {
     color: var(--accent-bright);
-    text-shadow: 0 0 9px var(--accent-bright), 0 0 18px var(--accent);
+    text-shadow:
+        0 0 9px var(--accent-bright),
+        0 0 18px var(--accent);
 }
 
 /* ── Finite flourish on tier change ───────────────────────────────────
@@ -229,8 +243,9 @@ html[data-phi-desktop-root] .app-header {
 }
 
 .brand .logo.cpu-critical.cpu-flourish {
-    animation: cpu-tier-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1) 1,
-               logo-shiver-hard 0.08s 6;
+    animation:
+        cpu-tier-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1) 1,
+        logo-shiver-hard 0.08s 6;
 }
 
 .brand:has(.cpu-critical.cpu-flourish) .logo-glow-wrapper::after {
@@ -238,14 +253,20 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes cpu-tier-pop {
-    0%   { transform: scale(1); }
-    35%  { transform: scale(1.18); }
-    100% { transform: scale(1); }
+    0% {
+        transform: scale(1);
+    }
+    35% {
+        transform: scale(1.18);
+    }
+    100% {
+        transform: scale(1);
+    }
 }
 
 @keyframes logo-nuclear {
     0% {
-        text-shadow: 
+        text-shadow:
             0 0 2px #fff,
             0 0 8px var(--accent-bright),
             0 0 16px var(--accent),
@@ -253,7 +274,7 @@ html[data-phi-desktop-root] .app-header {
             0 0 64px var(--accent-glow);
     }
     100% {
-        text-shadow: 
+        text-shadow:
             0 0 4px #fff,
             0 0 16px var(--accent-bright),
             0 0 32px var(--accent),
@@ -264,20 +285,36 @@ html[data-phi-desktop-root] .app-header {
 
 @keyframes brand-nuclear {
     0% {
-        text-shadow: 0 0 6px var(--accent-bright), 0 0 12px var(--accent);
+        text-shadow:
+            0 0 6px var(--accent-bright),
+            0 0 12px var(--accent);
     }
     100% {
-        text-shadow: 0 0 12px var(--accent-bright), 0 0 24px var(--accent);
+        text-shadow:
+            0 0 12px var(--accent-bright),
+            0 0 24px var(--accent);
     }
 }
 
 @keyframes logo-shiver-hard {
-    0% { transform: translate(0, 0); }
-    20% { transform: translate(-1.2px, 0.6px); }
-    40% { transform: translate(1.2px, -0.6px); }
-    60% { transform: translate(-0.8px, -0.8px); }
-    80% { transform: translate(0.8px, 0.8px); }
-    100% { transform: translate(0, 0); }
+    0% {
+        transform: translate(0, 0);
+    }
+    20% {
+        transform: translate(-1.2px, 0.6px);
+    }
+    40% {
+        transform: translate(1.2px, -0.6px);
+    }
+    60% {
+        transform: translate(-0.8px, -0.8px);
+    }
+    80% {
+        transform: translate(0.8px, 0.8px);
+    }
+    100% {
+        transform: translate(0, 0);
+    }
 }
 
 /* ── Compositor promotion, only while a flourish is playing ────────────
@@ -374,18 +411,18 @@ html[data-phi-desktop-root] .app-header {
     box-shadow:
         /* outer accent halo — the obsidian glow */
         0 0 24px var(--accent-glow),
-        /* inset top edge — carved-from-stone feel */
-        inset 0 1px 0 var(--accent-edge),
-        /* inset bottom shadow — depth */
-        inset 0 -1px 0 rgba(0, 0, 0, 0.4),
-        /* outer drop */
-        0 8px 24px rgba(0, 0, 0, 0.55);
+        /* inset top edge — carved-from-stone feel */ inset 0 1px 0
+        var(--accent-edge),
+        /* inset bottom shadow — depth */ inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+        /* outer drop */ 0 8px 24px rgba(0, 0, 0, 0.55);
     /* Subtle fractal-noise grain overlay via inline SVG filter — gives
        the surface a premium material feel without bloating CSS. */
     background-image:
-        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06)),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.06)),
         url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-    background-size: auto, 160px 160px;
+    background-size:
+        auto,
+        160px 160px;
     background-blend-mode: normal, overlay;
     /* fade + slight rise on open */
     opacity: 0;
@@ -403,7 +440,9 @@ html[data-phi-desktop-root] .app-header {
     pointer-events: auto;
 }
 
-.self-hud.hidden { display: none; }
+.self-hud.hidden {
+    display: none;
+}
 
 /* Header row: hostname + version, with the brand glyph mirrored. */
 .self-hud .self-hud-header {
@@ -488,21 +527,41 @@ html[data-phi-desktop-root] .app-header {
     font-size: 10px;
     letter-spacing: 0.02em;
 }
-.self-hud .self-hud-footer .dim { color: var(--text-dim); }
+.self-hud .self-hud-footer .dim {
+    color: var(--text-dim);
+}
 
 /* CPU-aware emphasis: tint the cpu number when load climbs. */
-.self-hud.cpu-moderate .self-hud-footer .cpu { color: var(--text-primary); }
-.self-hud.cpu-high     .self-hud-footer .cpu { color: var(--accent-bright); text-shadow: 0 0 6px var(--accent-glow); }
-.self-hud.cpu-critical .self-hud-footer .cpu { color: var(--accent-bright); text-shadow: 0 0 10px var(--accent-glow); animation: self-hud-cpu-pulse 1.2s ease-in-out infinite; }
+.self-hud.cpu-moderate .self-hud-footer .cpu {
+    color: var(--text-primary);
+}
+.self-hud.cpu-high .self-hud-footer .cpu {
+    color: var(--accent-bright);
+    text-shadow: 0 0 6px var(--accent-glow);
+}
+.self-hud.cpu-critical .self-hud-footer .cpu {
+    color: var(--accent-bright);
+    text-shadow: 0 0 10px var(--accent-glow);
+    animation: self-hud-cpu-pulse 1.2s ease-in-out infinite;
+}
 @keyframes self-hud-cpu-pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.65; }
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.65;
+    }
 }
 
 /* Reduced-motion: kill the entry animation, keep state visible. */
 @media (prefers-reduced-motion: reduce) {
-    .self-hud { transition: none; }
-    .self-hud.cpu-critical .self-hud-footer .cpu { animation: none; }
+    .self-hud {
+        transition: none;
+    }
+    .self-hud.cpu-critical .self-hud-footer .cpu {
+        animation: none;
+    }
 }
 
 /* The self-HUD is a brand element — its identity is fixed across themes.
@@ -518,7 +577,9 @@ html[data-phi-desktop-root] .app-header {
     font-weight: 500;
     letter-spacing: 0.5px;
     color: var(--text-primary);
-    transition: color 0.2s ease, text-shadow 0.2s ease;
+    transition:
+        color 0.2s ease,
+        text-shadow 0.2s ease;
 }
 
 .hostname-wrapper {
@@ -545,7 +606,10 @@ html[data-phi-desktop-root] .app-header {
     line-height: 1;
     opacity: 0.72;
     pointer-events: none;
-    transition: color 180ms ease, opacity 180ms ease, text-shadow 180ms ease;
+    transition:
+        color 180ms ease,
+        opacity 180ms ease,
+        text-shadow 180ms ease;
 }
 
 /* Active state is static. The blink here used to cost 35.4% of a core (+25
@@ -566,9 +630,20 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes terminal-activity-wake {
-    0%   { opacity: 0.62; text-shadow: 0 0 2px var(--accent-glow); }
-    45%  { opacity: 1; text-shadow: 0 0 14px var(--accent-bright), 0 0 26px var(--accent-glow); }
-    100% { opacity: 1; text-shadow: 0 0 8px var(--accent-glow); }
+    0% {
+        opacity: 0.62;
+        text-shadow: 0 0 2px var(--accent-glow);
+    }
+    45% {
+        opacity: 1;
+        text-shadow:
+            0 0 14px var(--accent-bright),
+            0 0 26px var(--accent-glow);
+    }
+    100% {
+        opacity: 1;
+        text-shadow: 0 0 8px var(--accent-glow);
+    }
 }
 
 .brand .hostname-display {
@@ -627,10 +702,14 @@ html[data-phi-desktop-root] .app-header {
 }
 
 .header-btn::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at center, var(--accent-glow) 0%, transparent 75%);
+    background: radial-gradient(
+        circle at center,
+        var(--accent-glow) 0%,
+        transparent 75%
+    );
     opacity: 0;
     transition: opacity 0.25s ease;
     pointer-events: none;
@@ -655,7 +734,9 @@ html[data-phi-desktop-root] .app-header {
     background-color: var(--accent-glow);
     border-color: var(--accent);
     color: var(--accent-bright);
-    box-shadow: inset 0 0 0 1px var(--accent-trace), 0 0 16px var(--accent-glow);
+    box-shadow:
+        inset 0 0 0 1px var(--accent-trace),
+        0 0 16px var(--accent-glow);
 }
 
 .header-btn.success {
@@ -717,7 +798,9 @@ html[data-phi-desktop-root] .app-header {
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    transition: color 0.15s, background-color 0.15s;
+    transition:
+        color 0.15s,
+        background-color 0.15s;
 }
 
 .workspace-area button:hover {
@@ -784,6 +867,7 @@ html[data-phi-desktop-root] .app-header {
 
 .coder-selector {
     display: flex;
+    flex-wrap: wrap;
     padding: 8px 16px;
     gap: 4px;
     border-bottom: 1px solid var(--bg-border);
@@ -847,7 +931,13 @@ html[data-phi-desktop-root] .app-header {
     box-shadow:
         inset 0 0 0 1px var(--accent-trace),
         0 0 6px var(--accent-glow);
-    background-image: linear-gradient(to bottom, transparent 70%, var(--accent-trace) 70%, var(--accent-trace) 85%, transparent 85%);
+    background-image: linear-gradient(
+        to bottom,
+        transparent 70%,
+        var(--accent-trace) 70%,
+        var(--accent-trace) 85%,
+        transparent 85%
+    );
     background-repeat: no-repeat;
 }
 
@@ -898,7 +988,10 @@ html[data-phi-desktop-root] .app-header {
 .session-item.active {
     background-color: var(--accent-glow);
     border-color: var(--accent);
-    box-shadow: inset 3px 0 0 var(--accent), inset -1px 0 0 var(--accent-trace), 0 0 18px var(--accent-trace);
+    box-shadow:
+        inset 3px 0 0 var(--accent),
+        inset -1px 0 0 var(--accent-trace),
+        0 0 18px var(--accent-trace);
 }
 
 .session-meta-top {
@@ -1058,7 +1151,9 @@ html[data-phi-desktop-root] .app-header {
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: opacity 0.15s ease, color 0.15s ease;
+    transition:
+        opacity 0.15s ease,
+        color 0.15s ease;
     line-height: 1;
 }
 .sidebar-version-btn:hover {
@@ -1078,7 +1173,7 @@ html[data-phi-desktop-root] .app-header {
     padding-right: 14px;
 }
 .sidebar-version-btn.has-update::after {
-    content: '';
+    content: "";
     position: absolute;
     right: 2px;
     top: 50%;
@@ -1218,7 +1313,7 @@ html[data-phi-desktop-root] .app-header {
    Subtle: accent at 20% opacity. Sets the Hellenic geometric frame
    without motion or weight. */
 .terminal-panel::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
@@ -1324,7 +1419,7 @@ html[data-phi-desktop-root] .app-header {
     background: rgba(20, 20, 25, 0.78);
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
     padding: 16px 20px 14px;
     box-shadow:
@@ -1337,7 +1432,9 @@ html[data-phi-desktop-root] .app-header {
     pointer-events: none;
     opacity: 0;
     transform: translateY(-6px) scale(0.96);
-    transition: opacity 0.14s ease, transform 0.14s ease;
+    transition:
+        opacity 0.14s ease,
+        transform 0.14s ease;
     z-index: 10000;
     font-family: var(--font-ui, system-ui, sans-serif);
     font-size: 12px;
@@ -1383,9 +1480,21 @@ html[data-phi-desktop-root] .app-header {
     animation: hiero-shimmer 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes hiero-shimmer {
-    0%   { transform: scale(0.78); filter: blur(6px); opacity: 0.4; }
-    60%  { transform: scale(1.08); filter: blur(0); opacity: 1; }
-    100% { transform: scale(1); filter: blur(0); opacity: 1; }
+    0% {
+        transform: scale(0.78);
+        filter: blur(6px);
+        opacity: 0.4;
+    }
+    60% {
+        transform: scale(1.08);
+        filter: blur(0);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        filter: blur(0);
+        opacity: 1;
+    }
 }
 /* Tab title - the primary line on tab hover (full, untruncated name of
    the session; the tab strip clips at 240px). Empty for worktree-header
@@ -1399,7 +1508,9 @@ html[data-phi-desktop-root] .app-header {
     word-break: break-word;
     line-height: 1.35;
 }
-.tab-hiero-preview-title:empty { display: none; }
+.tab-hiero-preview-title:empty {
+    display: none;
+}
 .tab-hiero-preview-label {
     font-weight: 600;
     text-align: center;
@@ -1410,7 +1521,13 @@ html[data-phi-desktop-root] .app-header {
 .tab-hiero-preview-path {
     font-size: 10px;
     color: var(--text-muted);
-    font-family: var(--font-mono, ui-monospace, "Cascadia Code", Menlo, monospace);
+    font-family: var(
+        --font-mono,
+        ui-monospace,
+        "Cascadia Code",
+        Menlo,
+        monospace
+    );
     text-align: center;
     word-break: break-all;
     line-height: 1.4;
@@ -1438,14 +1555,18 @@ html[data-phi-desktop-root] .app-header {
     text-transform: uppercase;
     letter-spacing: 0.6px;
 }
-.tab-hiero-preview-status:empty { display: none; }
+.tab-hiero-preview-status:empty {
+    display: none;
+}
 .tab-hiero-preview.is-busy .tab-hiero-preview-status {
     color: var(--accent-bright);
 }
 /* Mobile: tabs bar hidden at <=768px so the preview would never
    fire, but be explicit anyway. */
 @media (max-width: 768px) {
-    .tab-hiero-preview { display: none !important; }
+    .tab-hiero-preview {
+        display: none !important;
+    }
 }
 
 /* Dropdown anchored to the +N chip. Mirrors the hostname dropdown
@@ -1540,7 +1661,11 @@ html[data-phi-desktop-root] .app-header {
     height: 38px;
     min-width: 120px;
     max-width: 240px;
-    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
 }
 
 .tab-favicon {
@@ -1551,7 +1676,9 @@ html[data-phi-desktop-root] .app-header {
     flex-shrink: 0;
     filter: grayscale(100%);
     opacity: 0.7;
-    transition: filter 0.15s, opacity 0.15s;
+    transition:
+        filter 0.15s,
+        opacity 0.15s;
 }
 
 .tab:hover .tab-favicon,
@@ -1581,21 +1708,25 @@ html[data-phi-desktop-root] .app-header {
     font-size: 13px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 6px var(--accent-glow),
-                 0 0 12px var(--accent-glow);
+    text-shadow:
+        0 0 6px var(--accent-glow),
+        0 0 12px var(--accent-glow);
     user-select: none;
     font-family: var(--font-mono);
     transition: text-shadow 0.2s ease;
 }
 
 .tab.active .tab-worktree-icon {
-    text-shadow: 0 0 8px var(--accent-glow),
-                 0 0 18px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 18px var(--accent-glow);
 }
 
 .tab-title.marked {
     color: var(--accent-bright);
-    text-shadow: 0 0 8px var(--accent-glow), 0 0 12px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 12px var(--accent-glow);
 }
 
 .tab:hover {
@@ -1614,7 +1745,9 @@ html[data-phi-desktop-root] .app-header {
     position: relative;
     z-index: 1;
     margin-bottom: -1px;
-    box-shadow: 0 -6px 18px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+    box-shadow:
+        0 -6px 18px var(--accent-trace),
+        inset 0 1px 0 var(--accent-edge);
 }
 
 .tab.active:hover {
@@ -1633,10 +1766,16 @@ html[data-phi-desktop-root] .app-header {
 }
 /* Drop indicator rendered as an inset box-shadow so it doesn't shift layout. */
 .tab.drop-before {
-    box-shadow: inset 2px 0 0 var(--accent), 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+    box-shadow:
+        inset 2px 0 0 var(--accent),
+        0 -8px 24px var(--accent-trace),
+        inset 0 1px 0 var(--accent-edge);
 }
 .tab.drop-after {
-    box-shadow: inset -2px 0 0 var(--accent), 0 -8px 24px var(--accent-trace), inset 0 1px 0 var(--accent-edge);
+    box-shadow:
+        inset -2px 0 0 var(--accent),
+        0 -8px 24px var(--accent-trace),
+        inset 0 1px 0 var(--accent-edge);
 }
 .tab.active.drop-before,
 .tab.active.drop-after {
@@ -1692,9 +1831,11 @@ html[data-phi-desktop-root] .app-header {
     font-size: 10px;
     line-height: 1;
     color: var(--accent-bright);
-    background: linear-gradient(180deg,
+    background: linear-gradient(
+        180deg,
         rgba(124, 106, 247, 0.12),
-        rgba(124, 106, 247, 0.06));
+        rgba(124, 106, 247, 0.06)
+    );
     border: 1px solid var(--accent-soft);
     border-radius: 8px;
     padding: 2px 7px;
@@ -1721,8 +1862,14 @@ html[data-phi-desktop-root] .app-header {
     letter-spacing: 0.02em;
 }
 @keyframes tab-soft-close-pill-drain {
-    from { opacity: 0.85; transform: scale(1); }
-    to   { opacity: 0.15; transform: scale(0.7); }
+    from {
+        opacity: 0.85;
+        transform: scale(1);
+    }
+    to {
+        opacity: 0.15;
+        transform: scale(0.7);
+    }
 }
 
 /* Content-area overlay when the active tab is soft-closing: stays on
@@ -1765,8 +1912,12 @@ html[data-phi-desktop-root] .app-header {
     text-shadow: 0 0 80px var(--accent-glow);
 }
 @keyframes tab-soft-close-fade-in {
-    from { opacity: 0; }
-    to   { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 .tab-soft-close-ring {
@@ -1781,7 +1932,7 @@ html[data-phi-desktop-root] .app-header {
 }
 .tab-soft-close-ring-bg {
     fill: none;
-    stroke: rgba(255, 255, 255, 0.10);
+    stroke: rgba(255, 255, 255, 0.1);
     stroke-width: 3;
 }
 .tab-soft-close-ring-fg {
@@ -1792,8 +1943,12 @@ html[data-phi-desktop-root] .app-header {
     animation: tab-soft-close-drain 5s linear forwards;
 }
 @keyframes tab-soft-close-drain {
-    from { stroke-dashoffset: 0; }
-    to   { stroke-dashoffset: 100; }
+    from {
+        stroke-dashoffset: 0;
+    }
+    to {
+        stroke-dashoffset: 100;
+    }
 }
 /* Continuous spinner overlaid in the center of the drain ring, so
    the ring visually communicates both progress (drain) and activity.
@@ -1810,7 +1965,9 @@ html[data-phi-desktop-root] .app-header {
     animation: tab-soft-close-spin 0.9s linear infinite;
 }
 @keyframes tab-soft-close-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 /* Hieroglyph at the center of the drain ring (replaces spinner). */
 .tab-soft-close-ring-center {
@@ -1822,7 +1979,9 @@ html[data-phi-desktop-root] .app-header {
     font-size: 18px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 10px var(--accent-glow), 0 0 18px var(--accent-glow);
+    text-shadow:
+        0 0 10px var(--accent-glow),
+        0 0 18px var(--accent-glow);
     z-index: 1;
 }
 
@@ -1853,12 +2012,23 @@ html[data-phi-desktop-root] .app-header {
     opacity: 0.25;
     animation: tab-soft-close-ellipsis 1.5s ease-in-out infinite;
 }
-.tab-soft-close-ellipsis .d2 { animation-delay: 0.2s; }
-.tab-soft-close-ellipsis .d3 { animation-delay: 0.4s; }
+.tab-soft-close-ellipsis .d2 {
+    animation-delay: 0.2s;
+}
+.tab-soft-close-ellipsis .d3 {
+    animation-delay: 0.4s;
+}
 @keyframes tab-soft-close-ellipsis {
-    0%, 100% { opacity: 0.25; }
-    40%      { opacity: 1; }
-    80%      { opacity: 0.25; }
+    0%,
+    100% {
+        opacity: 0.25;
+    }
+    40% {
+        opacity: 1;
+    }
+    80% {
+        opacity: 0.25;
+    }
 }
 .tab-soft-close-hint {
     font-size: 11px;
@@ -1886,7 +2056,7 @@ html[data-phi-desktop-root] .app-header {
     -webkit-backdrop-filter: blur(8px);
 }
 .tab-soft-close-undo:hover {
-    background: rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.1);
     border-color: var(--accent);
     box-shadow: 0 0 12px var(--accent-glow);
     transform: translateY(-1px);
@@ -1909,7 +2079,9 @@ html[data-phi-desktop-root] .app-header {
     width: 14px;
     height: 14px;
     border-radius: 3px;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition:
+        background-color 0.15s ease,
+        color 0.15s ease;
 }
 .tab-reopen:hover {
     background-color: var(--bg-border);
@@ -1931,9 +2103,16 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes tab-pulse {
-    0% { opacity: 0.8; }
-    50% { opacity: 1; text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); }
-    100% { opacity: 0.8; }
+    0% {
+        opacity: 0.8;
+    }
+    50% {
+        opacity: 1;
+        text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+    100% {
+        opacity: 0.8;
+    }
 }
 
 .tab-pin {
@@ -1947,7 +2126,10 @@ html[data-phi-desktop-root] .app-header {
     margin: 0;
     opacity: 0.35;
     color: var(--text-muted);
-    transition: opacity 0.15s, transform 0.15s, color 0.15s;
+    transition:
+        opacity 0.15s,
+        transform 0.15s,
+        color 0.15s;
 }
 
 .tab:hover .tab-pin {
@@ -1978,7 +2160,9 @@ html[data-phi-desktop-root] .app-header {
     width: 14px;
     height: 14px;
     line-height: 14px;
-    transition: background-color 0.1s, color 0.1s;
+    transition:
+        background-color 0.1s,
+        color 0.1s;
 }
 
 .tab-close:hover {
@@ -2026,7 +2210,11 @@ html[data-phi-desktop-root] .app-header {
     width: 100%;
     height: 100%;
     color: var(--text-primary);
-    background: radial-gradient(circle at 50% 50%, var(--bg-elevated) 0%, var(--bg-base) 100%);
+    background: radial-gradient(
+        circle at 50% 50%,
+        var(--bg-elevated) 0%,
+        var(--bg-base) 100%
+    );
     z-index: 10;
     /* emptyBgPulse animated background-size over a 15s period -- a resize of
        a full-screen gradient every frame, to produce a change no eye can
@@ -2036,8 +2224,14 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes emptyBgPulse {
-    0% { background-size: 100% 100%; background-position: 50% 50%; }
-    100% { background-size: 120% 120%; background-position: 45% 55%; }
+    0% {
+        background-size: 100% 100%;
+        background-position: 50% 50%;
+    }
+    100% {
+        background-size: 120% 120%;
+        background-position: 45% 55%;
+    }
 }
 
 .empty-state.hidden {
@@ -2060,9 +2254,21 @@ html[data-phi-desktop-root] .app-header {
        felt as mood, not seen as a hard light source. The vignette adds
        depth so the hieroglyphs fade into the edges naturally. */
     background:
-        radial-gradient(ellipse 900px 700px at 12% 18%, rgba(255, 188, 110, 0.07), transparent 55%),
-        radial-gradient(ellipse 700px 500px at 88% 82%, rgba(200, 150, 80, 0.04), transparent 60%),
-        radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
+        radial-gradient(
+            ellipse 900px 700px at 12% 18%,
+            rgba(255, 188, 110, 0.07),
+            transparent 55%
+        ),
+        radial-gradient(
+            ellipse 700px 500px at 88% 82%,
+            rgba(200, 150, 80, 0.04),
+            transparent 60%
+        ),
+        radial-gradient(
+            ellipse at center,
+            transparent 45%,
+            rgba(0, 0, 0, 0.35) 100%
+        );
     /* torchflicker dipped opacity between 1.0 and 0.94 over 6s. Below the
        perceptual threshold, billed 60fps. The torchlight gradients above are
        what actually carry the mood, and they are static. */
@@ -2072,10 +2278,19 @@ html[data-phi-desktop-root] .app-header {
     padding: 5% 4% 6%;
 }
 @keyframes torchflicker {
-    0%, 100% { opacity: 1; }
-    35%      { opacity: 0.94; }
-    50%      { opacity: 1; }
-    65%      { opacity: 0.97; }
+    0%,
+    100% {
+        opacity: 1;
+    }
+    35% {
+        opacity: 0.94;
+    }
+    50% {
+        opacity: 1;
+    }
+    65% {
+        opacity: 0.97;
+    }
     /* Tiny breathing on the warm wash, no jank - opacity only, never
        layout. */
 }
@@ -2154,16 +2369,34 @@ html[data-phi-desktop-root] .app-header {
 .empty-state-content > * {
     animation: emptyFadeSlide 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.empty-state-content > :nth-child(1) { animation-delay: 0.1s; }
-.empty-state-content > :nth-child(2) { animation-delay: 0.2s; }
-.empty-state-content > :nth-child(3) { animation-delay: 0.3s; }
-.empty-state-content > :nth-child(4) { animation-delay: 0.4s; }
-.empty-state-content > :nth-child(5) { animation-delay: 0.5s; }
-.empty-state-content > :nth-child(6) { animation-delay: 0.6s; }
+.empty-state-content > :nth-child(1) {
+    animation-delay: 0.1s;
+}
+.empty-state-content > :nth-child(2) {
+    animation-delay: 0.2s;
+}
+.empty-state-content > :nth-child(3) {
+    animation-delay: 0.3s;
+}
+.empty-state-content > :nth-child(4) {
+    animation-delay: 0.4s;
+}
+.empty-state-content > :nth-child(5) {
+    animation-delay: 0.5s;
+}
+.empty-state-content > :nth-child(6) {
+    animation-delay: 0.6s;
+}
 
 @keyframes emptyFadeSlide {
-    from { opacity: 0; transform: translateY(12px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* The breath here ran forever at a 4s period on the screen shown when
@@ -2183,7 +2416,7 @@ html[data-phi-desktop-root] .app-header {
     color: var(--accent);
     text-shadow:
         1px 0 0 rgba(0, 220, 255, 0.25),
-       -1px 0 0 rgba(255, 0, 100, 0.2),
+        -1px 0 0 rgba(255, 0, 100, 0.2),
         0 0 30px var(--accent-glow);
     filter: drop-shadow(0 0 18px var(--accent-glow));
     user-select: none;
@@ -2273,7 +2506,9 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes loader-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* Individual terminal instance */
@@ -2327,11 +2562,15 @@ html[data-phi-desktop-root] .app-header {
     z-index: 5;
     /* Glow-only — no dark-rgba drop shadow. The aesthetic is luminous
        surface floating in dark space, not material on a desk. */
-    box-shadow: 0 0 6px var(--accent-trace),
-                0 0 12px var(--accent-glow);
+    box-shadow:
+        0 0 6px var(--accent-trace),
+        0 0 12px var(--accent-glow);
     opacity: 1;
     transform: translateY(0);
-    transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.15s ease;
+    transition:
+        opacity 0.18s ease,
+        transform 0.18s ease,
+        background-color 0.15s ease;
 }
 .scroll-to-bottom-btn.hidden {
     opacity: 0;
@@ -2341,8 +2580,9 @@ html[data-phi-desktop-root] .app-header {
 .scroll-to-bottom-btn:hover {
     background-color: rgba(20, 20, 25, 0.95);
     border-color: var(--accent);
-    box-shadow: 0 0 10px var(--accent-glow),
-                0 0 20px var(--accent-glow);
+    box-shadow:
+        0 0 10px var(--accent-glow),
+        0 0 20px var(--accent-glow);
 }
 
 /* Force helper textarea to be fixed relative to screen so browser focusing does not scroll the viewport */
@@ -2364,7 +2604,9 @@ html[data-phi-desktop-root] .app-header {
     flex-direction: column;
     gap: 8px;
     flex-shrink: 0;
-    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    transition:
+        box-shadow 0.15s ease,
+        border-color 0.15s ease;
     /* Inset obsidian edge on the top mirrors the app-header's
        bottom edge — glass panels feel 'carved from stone'. */
     box-shadow: inset 0 1px 0 var(--accent-trace);
@@ -2424,7 +2666,9 @@ html[data-phi-desktop-root] .app-header {
     font-size: 11px;
     line-height: 1.2;
     max-width: 320px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
 }
 .attachment-chip:hover {
     border-color: var(--accent-soft);
@@ -2457,7 +2701,9 @@ html[data-phi-desktop-root] .app-header {
     padding: 2px 4px;
     border-radius: 3px;
     cursor: pointer;
-    transition: color 0.15s, background-color 0.15s;
+    transition:
+        color 0.15s,
+        background-color 0.15s;
 }
 .attachment-chip .attachment-remove:hover {
     color: var(--red, #ef4444);
@@ -2478,12 +2724,16 @@ html[data-phi-desktop-root] .app-header {
     max-height: 160px;
     resize: none;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
 }
 
 .input-bar-container textarea:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent-edge), 0 0 18px var(--accent-glow);
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 18px var(--accent-glow);
 }
 
 .input-actions {
@@ -2527,7 +2777,9 @@ html[data-phi-desktop-root] .app-header {
     color: var(--accent-bright);
     background-color: var(--accent-glow);
     border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent-wash), 0 0 16px var(--accent-glow);
+    box-shadow:
+        inset 0 0 0 1px var(--accent-wash),
+        0 0 16px var(--accent-glow);
 }
 
 .cancel-btn-icon {
@@ -2552,6 +2804,41 @@ html[data-phi-desktop-root] .app-header {
     padding: 4px 12px;
 }
 
+/* PI RPC STATUS BAR */
+.pi-rpc-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    gap: 4px 8px;
+    align-items: center;
+    padding: 4px 12px;
+    border-top: 1px solid var(--bg-border);
+    background-color: var(--bg-panel);
+    color: var(--text-secondary);
+    font: inherit;
+    overflow: hidden;
+}
+
+.pi-rpc-status-item {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    gap: 4px;
+    align-items: baseline;
+    white-space: nowrap;
+}
+
+.pi-rpc-status-label {
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.pi-rpc-status-value {
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
 /* PRESETS PANEL */
 .presets-container {
     display: flex;
@@ -2564,7 +2851,7 @@ html[data-phi-desktop-root] .app-header {
     border-top: 1px solid var(--bg-border);
     flex-shrink: 0;
     scrollbar-width: none; /* Hide scrollbar Firefox */
-    -ms-overflow-style: none;  /* Hide scrollbar IE/Edge */
+    -ms-overflow-style: none; /* Hide scrollbar IE/Edge */
 }
 
 .presets-container::-webkit-scrollbar {
@@ -2689,6 +2976,20 @@ html[data-phi-desktop-root] .app-header {
     color: var(--accent-bright);
 }
 
+.pi-rpc-dropup-meta {
+    flex-shrink: 0;
+    padding: 0 10px 0 4px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.pi-rpc-dropup-message {
+    padding: 8px 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
 .dropup-row-actions {
     display: flex;
     align-items: center;
@@ -2762,7 +3063,6 @@ html[data-phi-desktop-root] .app-header {
     background-color: var(--accent-glow);
     color: var(--text-primary);
 }
-
 
 /* RIGHT PANEL: DIFF / LOG VIEW */
 .diff-panel {
@@ -2937,7 +3237,9 @@ html[data-phi-desktop-root] .app-header {
     border-radius: 8px;
     width: 480px;
     max-width: 90vw;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 24px var(--accent-trace);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 0 24px var(--accent-trace);
     display: flex;
     flex-direction: column;
     overflow: visible;
@@ -2948,8 +3250,14 @@ html[data-phi-desktop-root] .app-header {
 }
 
 @keyframes modalRise {
-    from { opacity: 0; transform: translateY(4px) scale(0.99); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from {
+        opacity: 0;
+        transform: translateY(4px) scale(0.99);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
 
 .modal-header {
@@ -2999,12 +3307,16 @@ html[data-phi-desktop-root] .app-header {
     border-radius: 6px;
     padding: 10px 14px;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
 }
 
 .input-autocomplete-wrapper input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent-edge), 0 0 18px var(--accent-glow);
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 18px var(--accent-glow);
 }
 
 .autocomplete-suggestions {
@@ -3319,7 +3631,9 @@ html[data-phi-desktop-root] .app-header {
     cursor: pointer;
     padding: 4px 6px;
     border-radius: 4px;
-    transition: color 0.15s ease, background-color 0.15s ease;
+    transition:
+        color 0.15s ease,
+        background-color 0.15s ease;
 }
 .settings-access-remove-link:hover {
     color: var(--red);
@@ -3360,7 +3674,9 @@ html[data-phi-desktop-root] .app-header {
     background: var(--swatch, var(--accent));
     cursor: pointer;
     padding: 0;
-    transition: transform 0.12s ease, border-color 0.12s ease;
+    transition:
+        transform 0.12s ease,
+        border-color 0.12s ease;
 }
 
 .settings-swatch:hover {
@@ -3466,7 +3782,10 @@ html[data-phi-config-page] .settings-modal {
     line-height: 1.45;
     outline: none;
     padding: 10px 12px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease,
+        background 0.15s ease;
 }
 
 .config-editor-field textarea {
@@ -3483,7 +3802,9 @@ html[data-phi-config-page] .settings-modal {
 .config-editor-field textarea:focus {
     background: rgba(255, 255, 255, 0.025);
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent-edge), 0 0 18px var(--accent-glow);
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 18px var(--accent-glow);
 }
 
 .config-editor-footer {
@@ -3502,13 +3823,16 @@ html[data-phi-config-page] .settings-modal {
 
 /* MOBILE RESPONSIVE DRAWERS */
 @media (max-width: 768px) {
-    html, body {
+    html,
+    body {
         position: fixed;
         overscroll-behavior: none;
     }
 
     /* Prevent iOS WebKit auto-zoom on input focus */
-    input, select, textarea {
+    input,
+    select,
+    textarea {
         font-size: 16px !important;
     }
 
@@ -3566,12 +3890,12 @@ html[data-phi-config-page] .settings-modal {
         box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
         border-left: 1px solid var(--bg-border);
     }
-    
+
     .diff-panel:not(.hidden).mobile-open {
         display: flex !important;
         transform: translateX(0);
     }
-    
+
     .diff-panel.hidden {
         transform: translateX(100%);
         display: flex !important; /* Keep it flex so transition works */
@@ -3581,7 +3905,7 @@ html[data-phi-config-page] .settings-modal {
     .mobile-only-btn {
         display: flex !important;
     }
-    
+
     /* Workspace Area responsiveness - compact display showing only last folder name */
     .workspace-area {
         flex: 0 1 auto;
@@ -3600,12 +3924,12 @@ html[data-phi-config-page] .settings-modal {
     .workspace-area button {
         font-size: 13px;
     }
-    
+
     /* Hide config backup/restore pill on mobile to save critical screen space */
     .header-config-pill {
         display: none !important;
     }
-    
+
     /* Show hostname on mobile next to brand logo */
     .brand .hostname-display {
         display: inline-block !important;
@@ -3618,13 +3942,13 @@ html[data-phi-config-page] .settings-modal {
         font-size: 11px;
         margin-left: 1px;
     }
-    
+
     /* Panel headings styling for mobile layout */
     .app-header {
         padding: 0 8px;
         gap: 6px;
     }
-    
+
     .header-actions {
         gap: 6px;
         overflow-x: auto;
@@ -3660,17 +3984,17 @@ html[data-phi-config-page] .settings-modal {
     .header-btn span {
         display: none; /* Hide label to save space, icon is enough on mobile */
     }
-    
+
     .coder-tab span {
         display: none;
     }
-    
+
     /* Make the staged input bar and action buttons compact for small screens */
     .input-bar-container {
         padding: 6px 10px;
         gap: 8px;
     }
-    
+
     .input-bar-container textarea {
         font-size: 16px;
         height: 36px;
@@ -3679,22 +4003,22 @@ html[data-phi-config-page] .settings-modal {
         overflow-y: auto !important;
         padding: 6px 10px;
     }
-    
+
     .input-actions {
         gap: 4px;
     }
-    
+
     .input-actions .btn {
         padding: 0 10px;
         height: 36px;
         font-size: 12px;
     }
-    
+
     .direct-mode-btn {
         width: 36px;
         height: 36px;
     }
-    
+
     /* Preset buttons container styling for mobile - swipeable capsule pills */
     .presets-container {
         display: flex !important;
@@ -3706,11 +4030,11 @@ html[data-phi-config-page] .settings-modal {
         border-top: 1px solid var(--bg-border);
         scrollbar-width: none; /* Hide Firefox scrollbar */
     }
-    
+
     .presets-container::-webkit-scrollbar {
         display: none; /* Hide Chrome/Safari scrollbar */
     }
-    
+
     .preset-btn {
         flex-shrink: 0;
         height: 30px;
@@ -3724,15 +4048,15 @@ html[data-phi-config-page] .settings-modal {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         margin: 0 !important;
     }
-    
+
     .preset-btn:hover {
         border-color: var(--accent);
         background-color: var(--accent-trace);
     }
-    
+
     .preset-btn.mobile-nav-btn {
         background-color: var(--accent-wash) !important;
         border-color: var(--accent) !important;
@@ -3785,7 +4109,7 @@ html[data-phi-config-page] .settings-modal {
     .tab.active {
         padding-top: 5px !important;
     }
-    
+
     /* Reconnect/Close All square icon-only buttons */
     .reconnect-all-tabs-btn,
     .close-all-tabs-btn,
@@ -3818,7 +4142,7 @@ html[data-phi-config-page] .settings-modal {
     .modal-overlay,
     .md-modal-overlay {
         height: var(--vv-height, 100dvh) !important;
-        bottom: auto !important;          /* base uses inset:0 / bottom:0; ignore it */
+        bottom: auto !important; /* base uses inset:0 / bottom:0; ignore it */
         align-items: flex-end !important;
     }
     .modal-content,
@@ -3826,7 +4150,7 @@ html[data-phi-config-page] .settings-modal {
         width: 100% !important;
         max-width: 100% !important;
         border-radius: 16px 16px 0 0 !important;
-        box-shadow: 0 -8px 24px rgba(0,0,0,0.4) !important;
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4) !important;
         border-bottom: none !important;
         animation: slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         max-height: var(--vv-height, 100dvh) !important;
@@ -3841,8 +4165,12 @@ html[data-phi-config-page] .settings-modal {
         border-radius: 16px 16px 0 0 !important;
     }
     @keyframes slide-up {
-        from { transform: translateY(100%); }
-        to { transform: translateY(0); }
+        from {
+            transform: translateY(100%);
+        }
+        to {
+            transform: translateY(0);
+        }
     }
     .modal-header,
     .md-modal-header {
@@ -3878,7 +4206,7 @@ html[data-phi-config-page] .settings-modal {
     .modal-body,
     .md-modal-body {
         flex: 1 1 auto !important;
-        min-height: 0 !important;          /* lets flex actually shrink */
+        min-height: 0 !important; /* lets flex actually shrink */
         overflow-y: auto !important;
         -webkit-overflow-scrolling: touch;
     }
@@ -3899,7 +4227,7 @@ html[data-phi-config-page] .settings-modal {
        panel, focus the textarea, footer sits behind the keyboard. */
     .kanban-detail-panel {
         height: var(--vv-height, 100dvh) !important;
-        bottom: auto !important;          /* base: top:0; bottom:0; — pin top, vv-height */
+        bottom: auto !important; /* base: top:0; bottom:0; — pin top, vv-height */
     }
 
     /* Access password prompt. Dialog is small + centered; just make the
@@ -4027,7 +4355,9 @@ html[data-phi-config-page] .settings-modal {
 
     #model-presets-dropup,
     #quick-commands-dropup,
-    #slash-presets-dropup {
+    #slash-presets-dropup,
+    #pi-rpc-model-dropup,
+    #pi-rpc-thinking-dropup {
         width: min(280px, calc(100vw - 24px)) !important;
         max-height: 42vh;
         overflow-y: auto;
@@ -4037,7 +4367,9 @@ html[data-phi-config-page] .settings-modal {
 
     #model-presets-dropup .dropup-header,
     #quick-commands-dropup .dropup-header,
-    #slash-presets-dropup .dropup-header {
+    #slash-presets-dropup .dropup-header,
+    #pi-rpc-model-dropup .dropup-header,
+    #pi-rpc-thinking-dropup .dropup-header {
         position: sticky;
         top: 0;
         z-index: 1;
@@ -4078,14 +4410,14 @@ html[data-phi-config-page] .settings-modal {
    between groups. Sits in the margin-bottom gap of the previous
    section. */
 .worktree-section + .worktree-section::before {
-    content: '';
+    content: "";
     position: absolute;
     top: -5px;
     left: 14px;
     right: 14px;
     height: 4px;
     pointer-events: none;
-    opacity: 0.10;
+    opacity: 0.1;
     color: var(--accent);
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6'><path d='M0 0 H6 V3 H3 V0 M0 0 V3 H3 V0 M9 0 V6 H15 V0 H12 V3 H9 M18 0 V6 H24 V0' fill='none' stroke='currentColor' stroke-width='0.7'/></svg>");
     background-repeat: repeat-x;
@@ -4149,8 +4481,9 @@ html[data-phi-config-page] .settings-modal {
     font-size: 13px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 6px var(--accent-glow),
-                 0 0 12px var(--accent-glow);
+    text-shadow:
+        0 0 6px var(--accent-glow),
+        0 0 12px var(--accent-glow);
     user-select: none;
     transition: text-shadow 0.2s ease;
 }
@@ -4160,8 +4493,9 @@ html[data-phi-config-page] .settings-modal {
     flex: 0 0 auto;
 }
 .worktree-section.active .worktree-section-glyph {
-    text-shadow: 0 0 8px var(--accent-glow),
-                 0 0 18px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 18px var(--accent-glow);
 }
 
 /* Live-tab indicator for a worktree. Previous versions tried a
@@ -4179,13 +4513,14 @@ html[data-phi-config-page] .settings-modal {
         left edge via box-shadow inset, distinct from the .active
         state which uses an outer glow. */
 .worktree-section.has-live-tab .worktree-section-glyph {
-    text-shadow: 0 0 10px var(--accent-glow),
-                 0 0 22px var(--accent-glow);
+    text-shadow:
+        0 0 10px var(--accent-glow),
+        0 0 22px var(--accent-glow);
 }
 .worktree-section.has-live-tab .worktree-glyph-cell::before {
     /* 2px-wide accent bar on the left of the glyph cell. Sized and
        positioned to read as a marker, not a UI button. */
-    content: '';
+    content: "";
     display: inline-block;
     width: 2px;
     height: 12px;
@@ -4295,7 +4630,9 @@ html[data-phi-config-page] .settings-modal {
     line-height: 1.45;
     opacity: 0;
     transform: translateX(12px);
-    transition: opacity 0.18s ease, transform 0.18s ease;
+    transition:
+        opacity 0.18s ease,
+        transform 0.18s ease;
 }
 
 .toast.show {
@@ -4374,7 +4711,9 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-mono);
 }
 
-.md-list-error { color: var(--red); }
+.md-list-error {
+    color: var(--red);
+}
 
 .md-file-group {
     margin-bottom: 8px;
@@ -4461,7 +4800,9 @@ html[data-phi-config-page] .settings-modal {
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
-    transition: background 0.1s, color 0.1s;
+    transition:
+        background 0.1s,
+        color 0.1s;
 }
 
 .md-file-action-btn:hover {
@@ -4485,13 +4826,20 @@ html[data-phi-config-page] .settings-modal {
     height: 14px;
     opacity: 0.6;
     color: var(--text-muted);
-    transition: color 0.15s, opacity 0.15s;
+    transition:
+        color 0.15s,
+        opacity 0.15s;
 }
 .md-file-row:hover .md-file-icon-doc {
     color: var(--accent);
     opacity: 0.95;
 }
-.md-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .md-context-menu {
     position: fixed;
@@ -4516,7 +4864,9 @@ html[data-phi-config-page] .settings-modal {
     padding: 10px 12px;
     text-align: left;
     cursor: pointer;
-    transition: background 0.1s, color 0.1s;
+    transition:
+        background 0.1s,
+        color 0.1s;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -4547,7 +4897,7 @@ html[data-phi-config-page] .settings-modal {
 }
 
 .md-context-action.delete:hover {
-    background: rgba(239, 68, 68, 0.10);
+    background: rgba(239, 68, 68, 0.1);
     color: var(--red);
 }
 
@@ -4569,7 +4919,9 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
-    transition: color 0.1s, border-color 0.1s;
+    transition:
+        color 0.1s,
+        border-color 0.1s;
 }
 
 .md-manage-btn:hover {
@@ -4720,7 +5072,9 @@ html[data-phi-config-page] .settings-modal {
     max-height: 88vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 24px 80px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.05);
+    box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
     overflow: hidden;
 }
 
@@ -4776,7 +5130,9 @@ html[data-phi-config-page] .settings-modal {
     flex-shrink: 0;
 }
 
-.md-modal-close:hover { color: var(--text-primary); }
+.md-modal-close:hover {
+    color: var(--text-primary);
+}
 
 .md-modal-body {
     overflow-y: auto;
@@ -4814,15 +5170,35 @@ html[data-phi-config-page] .settings-modal {
     line-height: 1.3;
 }
 
-.md-rendered h1 { font-size: 1.7em; border-bottom: 1px solid var(--bg-border); padding-bottom: 0.3em; }
-.md-rendered h2 { font-size: 1.35em; border-bottom: 1px solid var(--bg-border); padding-bottom: 0.2em; }
-.md-rendered h3 { font-size: 1.1em; }
-.md-rendered h4 { font-size: 1em; color: var(--text-muted); }
+.md-rendered h1 {
+    font-size: 1.7em;
+    border-bottom: 1px solid var(--bg-border);
+    padding-bottom: 0.3em;
+}
+.md-rendered h2 {
+    font-size: 1.35em;
+    border-bottom: 1px solid var(--bg-border);
+    padding-bottom: 0.2em;
+}
+.md-rendered h3 {
+    font-size: 1.1em;
+}
+.md-rendered h4 {
+    font-size: 1em;
+    color: var(--text-muted);
+}
 
-.md-rendered p { margin: 0.8em 0; }
+.md-rendered p {
+    margin: 0.8em 0;
+}
 
-.md-rendered a { color: var(--accent-bright); text-decoration: none; }
-.md-rendered a:hover { text-decoration: underline; }
+.md-rendered a {
+    color: var(--accent-bright);
+    text-decoration: none;
+}
+.md-rendered a:hover {
+    text-decoration: underline;
+}
 
 .md-rendered code {
     font-family: var(--font-mono);
@@ -4867,7 +5243,9 @@ html[data-phi-config-page] .settings-modal {
     margin: 0.6em 0;
 }
 
-.md-rendered li { margin: 0.25em 0; }
+.md-rendered li {
+    margin: 0.25em 0;
+}
 
 .md-rendered hr {
     border: none;
@@ -4895,14 +5273,18 @@ html[data-phi-config-page] .settings-modal {
     color: var(--accent-bright);
 }
 
-.md-rendered tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.md-rendered tr:nth-child(even) td {
+    background: rgba(255, 255, 255, 0.02);
+}
 
 .md-rendered img {
     max-width: 100%;
     border-radius: 6px;
 }
 
-.md-rendered input[type="checkbox"] { margin-right: 6px; }
+.md-rendered input[type="checkbox"] {
+    margin-right: 6px;
+}
 
 /* ═══════════════════════════════════════════════════════════
    RECONNECT OVERLAY (shown on dead tabs)
@@ -4929,7 +5311,7 @@ html[data-phi-config-page] .settings-modal {
     border: 1px solid var(--bg-border);
     border-radius: 8px;
     padding: 8px 14px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
     white-space: nowrap;
 }
 
@@ -4951,8 +5333,13 @@ html[data-phi-config-page] .settings-modal {
     transition: background 0.15s;
 }
 
-.reconnect-btn:hover:not(:disabled) { background: var(--accent-bright); }
-.reconnect-btn:disabled { opacity: 0.5; cursor: default; }
+.reconnect-btn:hover:not(:disabled) {
+    background: var(--accent-bright);
+}
+.reconnect-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
 
 .reconnect-buttons {
     display: flex;
@@ -4990,7 +5377,7 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 6px;
     padding: 4px 0;
     min-width: 170px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
     user-select: none;
 }
 .session-ctx-item {
@@ -5154,11 +5541,13 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-mono) !important;
 }
 
-.d2h-code-line, .d2h-code-side-line {
+.d2h-code-line,
+.d2h-code-side-line {
     padding: 0 8px !important;
 }
 
-.d2h-code-linenumber, .d2h-code-side-linenumber {
+.d2h-code-linenumber,
+.d2h-code-side-linenumber {
     position: relative !important;
     background-color: var(--bg-elevated) !important;
     border-right: 1px solid var(--bg-border) !important;
@@ -5178,11 +5567,18 @@ html[data-phi-config-page] .settings-modal {
 
 /* Inserted lines */
 .d2h-ins {
-    background-color: rgba(56, 189, 248, 0.1) !important; /* Teal accent tinted */
+    background-color: rgba(
+        56,
+        189,
+        248,
+        0.1
+    ) !important; /* Teal accent tinted */
+
     color: #e4e3e9 !important;
 }
 
-.d2h-code-line ins, .d2h-code-side-line ins {
+.d2h-code-line ins,
+.d2h-code-side-line ins {
     background-color: rgba(56, 189, 248, 0.3) !important;
     text-decoration: none !important;
 }
@@ -5193,7 +5589,8 @@ html[data-phi-config-page] .settings-modal {
     color: #e4e3e9 !important;
 }
 
-.d2h-code-line del, .d2h-code-side-line del {
+.d2h-code-line del,
+.d2h-code-side-line del {
     background-color: rgba(239, 68, 68, 0.3) !important;
     text-decoration: none !important;
 }
@@ -5209,8 +5606,11 @@ html[data-phi-config-page] .settings-modal {
     gap: 4px;
     height: 28px;
     user-select: none;
-    transition: background-color 0.18s ease, border-color 0.18s ease,
-                box-shadow 0.18s ease, backdrop-filter 0.18s ease;
+    transition:
+        background-color 0.18s ease,
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        backdrop-filter 0.18s ease;
 }
 
 /* Hover: glassmorphism lift. Unhovered state stays byte-equivalent to
@@ -5283,7 +5683,7 @@ html[data-phi-config-page] .settings-modal {
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--line-height, 16px);
     scrollbar-width: thin;
     scrollbar-color: var(--bg-border) transparent;
 }
@@ -5312,7 +5712,8 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
-.review-empty, .review-error {
+.review-empty,
+.review-error {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -5382,7 +5783,7 @@ html[data-phi-config-page] .settings-modal {
     margin: 8px 0;
 }
 .review-bubble-content code {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     font-size: 12px;
 }
 
@@ -5452,6 +5853,7 @@ html[data-phi-config-page] .settings-modal {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
 }
 .review-header-bar {
     display: flex;
@@ -5477,7 +5879,7 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 4px;
     background-color: var(--bg-border);
     color: var(--text-muted);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     text-transform: uppercase;
 }
 .review-refresh-btn {
@@ -5832,8 +6234,14 @@ html[data-phi-config-page] .settings-modal {
 }
 
 @keyframes slideDown {
-    from { opacity: 0; transform: translateY(-4px) scale(0.99); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from {
+        opacity: 0;
+        transform: translateY(-4px) scale(0.99);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
 
 .hostname-tabs-dropdown.hidden {
@@ -5877,21 +6285,25 @@ html[data-phi-config-page] .settings-modal {
     font-size: 13px;
     line-height: 1;
     color: var(--accent-bright);
-    text-shadow: 0 0 6px var(--accent-glow),
-                 0 0 12px var(--accent-glow);
+    text-shadow:
+        0 0 6px var(--accent-glow),
+        0 0 12px var(--accent-glow);
     user-select: none;
     font-family: var(--font-mono);
 }
 .hostname-dropdown-row.active .hostname-dropdown-glyph {
-    text-shadow: 0 0 8px var(--accent-glow),
-                 0 0 18px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 18px var(--accent-glow);
 }
 
 .hostname-dropdown-item.active {
     background-color: var(--accent-glow);
     color: var(--accent);
     font-weight: 500;
-    box-shadow: inset 2px 0 0 var(--accent), 0 0 14px var(--accent-trace);
+    box-shadow:
+        inset 2px 0 0 var(--accent),
+        0 0 14px var(--accent-trace);
 }
 
 .hostname-dropdown-title {
@@ -5934,7 +6346,9 @@ html[data-phi-config-page] .settings-modal {
 
 .hostname-dropdown-title.marked {
     color: var(--accent-bright);
-    text-shadow: 0 0 8px var(--accent-glow), 0 0 12px var(--accent-glow);
+    text-shadow:
+        0 0 8px var(--accent-glow),
+        0 0 12px var(--accent-glow);
 }
 
 .brand .hostname-display {
@@ -5952,17 +6366,17 @@ html[data-phi-config-page] .settings-modal {
     .mobile-only {
         display: inline-flex !important;
     }
-    
+
     .terminal-tabs-bar {
         display: none !important; /* Hide tabs bar completely on mobile */
     }
-    
+
     /* Make the presets bar thinner and fonts smaller on mobile to save vertical terminal space */
     .presets-container {
         padding: 4px 8px !important;
         gap: 4px !important;
     }
-    
+
     .preset-btn {
         font-size: 10px !important;
         padding: 0 8px !important;
@@ -5970,7 +6384,7 @@ html[data-phi-config-page] .settings-modal {
         line-height: 22px !important;
         border-radius: 4px !important;
     }
-    
+
     .preset-btn.mobile-nav-btn {
         width: 28px !important;
         height: 24px !important;
@@ -6039,14 +6453,19 @@ html[data-phi-config-page] .settings-modal {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.15s, opacity 0.15s;
+    transition:
+        background-color 0.15s,
+        opacity 0.15s;
     flex-shrink: 0;
 }
 
 .hostname-dropdown-pin-btn {
     opacity: 0.4;
     color: var(--text-muted);
-    transition: background-color 0.15s, opacity 0.15s, color 0.15s;
+    transition:
+        background-color 0.15s,
+        opacity 0.15s,
+        color 0.15s;
 }
 
 .hostname-dropdown-pin-btn.pinned {
@@ -6155,7 +6574,9 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-ui);
     font-size: 14px;
     padding: 10px 14px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
     height: 38px;
     box-sizing: border-box;
 }
@@ -6205,7 +6626,9 @@ html[data-phi-config-page] .settings-modal {
     flex-shrink: 0;
     border-radius: 50%;
     background: transparent;
-    transition: background-color 120ms ease, box-shadow 120ms ease;
+    transition:
+        background-color 120ms ease,
+        box-shadow 120ms ease;
 }
 
 .kanban-sync-indicator.is-syncing {
@@ -6215,15 +6638,24 @@ html[data-phi-config-page] .settings-modal {
 }
 
 @keyframes kanban-sync-pulse {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 1; }
+    0%,
+    100% {
+        opacity: 0.35;
+    }
+    50% {
+        opacity: 1;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .kanban-sync-indicator.is-syncing { animation: none; opacity: 1; }
+    .kanban-sync-indicator.is-syncing {
+        animation: none;
+        opacity: 1;
+    }
 }
 
-.toolbar-left, .toolbar-right {
+.toolbar-left,
+.toolbar-right {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -6257,7 +6689,8 @@ html[data-phi-config-page] .settings-modal {
     background-size: 14px;
 }
 
-.kanban-select:hover, .kanban-select:focus {
+.kanban-select:hover,
+.kanban-select:focus {
     border-color: var(--accent);
 }
 
@@ -6378,7 +6811,9 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 6px;
     padding: 12px;
     cursor: grab;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
     user-select: none;
     display: flex;
     flex-direction: column;
@@ -6586,20 +7021,20 @@ html[data-phi-config-page] .settings-modal {
         padding: 12px;
         gap: 10px;
     }
-    
+
     .toolbar-left {
         justify-content: space-between;
     }
-    
+
     .toolbar-right {
         justify-content: flex-end;
     }
-    
+
     .kanban-columns-wrapper {
         padding: 10px;
         gap: 12px;
     }
-    
+
     .kanban-column {
         flex: 0 0 260px;
         width: 260px;
@@ -6636,13 +7071,21 @@ html[data-phi-config-page] .settings-modal {
 }
 
 @keyframes kanbanFadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 
 @keyframes kanbanSlideInFromRight {
-    from { transform: translateX(100%); }
-    to { transform: translateX(0); }
+    from {
+        transform: translateX(100%);
+    }
+    to {
+        transform: translateX(0);
+    }
 }
 
 .kdp-header {
@@ -6671,7 +7114,9 @@ html[data-phi-config-page] .settings-modal {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s, color 0.15s;
+    transition:
+        background 0.15s,
+        color 0.15s;
 }
 
 .kdp-close-btn:hover {
@@ -6714,7 +7159,9 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-primary);
     border-radius: 6px;
     padding: 8px 12px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
     width: 100%;
     box-sizing: border-box;
 }
@@ -6744,7 +7191,6 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-primary);
 }
 
-
 .kdp-field textarea {
     resize: vertical;
     min-height: 120px;
@@ -6771,29 +7217,84 @@ html[data-phi-config-page] .settings-modal {
     margin-bottom: 6px;
 }
 
-.kdp-description-heading label { margin-bottom: 0; }
-.kdp-description-toggle { width: 24px; height: 24px; padding: 0; }
-.kdp-description-toggle .icon { display: block; width: 13px; height: 13px; }
-.kdp-description-input { height: 160px; font-family: var(--font-mono) !important; font-size: 12px !important; line-height: 1.5 !important; }
-.kanban-desc-empty { color: var(--text-muted); font-style: italic; }
+.kdp-description-heading label {
+    margin-bottom: 0;
+}
+.kdp-description-toggle {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+}
+.kdp-description-toggle .icon {
+    display: block;
+    width: 13px;
+    height: 13px;
+}
+.kdp-description-input {
+    height: 160px;
+    font-family: var(--font-mono) !important;
+    font-size: 12px !important;
+    line-height: 1.5 !important;
+}
+.kanban-desc-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
 
-.kanban-desc-html > :first-child { margin-top: 0; }
-.kanban-desc-html > :last-child { margin-bottom: 0; }
-.kanban-desc-html p { margin: 0 0 10px; }
+.kanban-desc-html > :first-child {
+    margin-top: 0;
+}
+.kanban-desc-html > :last-child {
+    margin-bottom: 0;
+}
+.kanban-desc-html p {
+    margin: 0 0 10px;
+}
 .kanban-desc-html h1,
 .kanban-desc-html h2,
 .kanban-desc-html h3,
-.kanban-desc-html h4 { margin: 14px 0 7px; color: var(--text-primary); line-height: 1.3; }
-.kanban-desc-html h1 { font-size: 18px; }
-.kanban-desc-html h2 { font-size: 16px; }
+.kanban-desc-html h4 {
+    margin: 14px 0 7px;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.kanban-desc-html h1 {
+    font-size: 18px;
+}
+.kanban-desc-html h2 {
+    font-size: 16px;
+}
 .kanban-desc-html h3,
-.kanban-desc-html h4 { font-size: 14px; }
+.kanban-desc-html h4 {
+    font-size: 14px;
+}
 .kanban-desc-html ul,
-.kanban-desc-html ol { margin: 0 0 10px; padding-left: 20px; }
-.kanban-desc-html li { margin-bottom: 4px; }
-.kanban-desc-html a { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 2px; }
-.kanban-desc-html blockquote { margin: 10px 0; padding: 4px 12px; border-left: 2px solid var(--accent); color: var(--text-muted); }
-.kanban-desc-html pre { overflow-x: auto; margin: 10px 0; padding: 10px; border: 1px solid var(--bg-border); border-radius: 5px; background: var(--bg-base); }
+.kanban-desc-html ol {
+    margin: 0 0 10px;
+    padding-left: 20px;
+}
+.kanban-desc-html li {
+    margin-bottom: 4px;
+}
+.kanban-desc-html a {
+    color: var(--accent-bright);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.kanban-desc-html blockquote {
+    margin: 10px 0;
+    padding: 4px 12px;
+    border-left: 2px solid var(--accent);
+    color: var(--text-muted);
+}
+.kanban-desc-html pre {
+    overflow-x: auto;
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid var(--bg-border);
+    border-radius: 5px;
+    background: var(--bg-base);
+}
 .kanban-desc-html code {
     font-family: var(--font-mono);
     background: var(--bg-base);
@@ -6803,12 +7304,35 @@ html[data-phi-config-page] .settings-modal {
     border: 1px solid var(--bg-border);
     color: var(--accent-bright);
 }
-.kanban-desc-html pre code { padding: 0; border: 0; background: transparent; color: var(--text-primary); }
-.kanban-desc-html img { display: block; max-width: 100%; height: auto; margin: 10px 0; border-radius: 5px; }
-.kanban-desc-html table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 12px; }
+.kanban-desc-html pre code {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+}
+.kanban-desc-html img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 10px 0;
+    border-radius: 5px;
+}
+.kanban-desc-html table {
+    width: 100%;
+    margin: 10px 0;
+    border-collapse: collapse;
+    font-size: 12px;
+}
 .kanban-desc-html th,
-.kanban-desc-html td { padding: 6px 8px; border: 1px solid var(--bg-border); text-align: left; }
-.kanban-desc-html th { background: var(--bg-base); color: var(--text-primary); }
+.kanban-desc-html td {
+    padding: 6px 8px;
+    border: 1px solid var(--bg-border);
+    text-align: left;
+}
+.kanban-desc-html th {
+    background: var(--bg-base);
+    color: var(--text-primary);
+}
 
 .kdp-field-row {
     display: flex;
@@ -6941,7 +7465,9 @@ html[data-phi-config-page] .settings-modal {
 
 .tab.active {
     border-bottom: 2px solid var(--accent) !important;
-    box-shadow: inset 0 -4px 10px -4px var(--accent-glow), inset 0 2px 8px -4px var(--accent-glow) !important;
+    box-shadow:
+        inset 0 -4px 10px -4px var(--accent-glow),
+        inset 0 2px 8px -4px var(--accent-glow) !important;
     text-shadow: 0 0 8px var(--accent-glow);
 }
 
@@ -6951,12 +7477,23 @@ html[data-phi-config-page] .settings-modal {
 }
 
 .btn-accent:hover {
-    box-shadow: 0 0 22px var(--accent-glow), 0 0 6px var(--accent);
+    box-shadow:
+        0 0 22px var(--accent-glow),
+        0 0 6px var(--accent);
 }
 
 @keyframes torch-breathe {
-    0%, 100% { box-shadow: 0 0 20px var(--accent-glow), inset 0 0 10px var(--accent-trace); }
-    50%   { box-shadow: 0 0 28px var(--accent-glow), inset 0 0 12px var(--accent-trace); }
+    0%,
+    100% {
+        box-shadow:
+            0 0 20px var(--accent-glow),
+            inset 0 0 10px var(--accent-trace);
+    }
+    50% {
+        box-shadow:
+            0 0 28px var(--accent-glow),
+            inset 0 0 12px var(--accent-trace);
+    }
 }
 
 #input-textarea:focus {
@@ -7100,7 +7637,9 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-mono);
     font-size: 12px;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
     width: 100%;
     box-sizing: border-box;
 }
@@ -7121,7 +7660,9 @@ html[data-phi-config-page] .settings-modal {
     min-height: 80px;
     resize: vertical;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
     width: 100%;
     box-sizing: border-box;
 }
@@ -7144,7 +7685,9 @@ html[data-phi-config-page] .settings-modal {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.15s, transform 0.1s;
+    transition:
+        background-color 0.15s,
+        transform 0.1s;
 }
 
 .sync-btn-primary:hover {
@@ -7164,7 +7707,9 @@ html[data-phi-config-page] .settings-modal {
     cursor: pointer;
     font-family: var(--font-ui);
     font-size: 12px;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+        background-color 0.15s,
+        color 0.15s;
 }
 
 .sync-btn-secondary:hover {
@@ -7201,7 +7746,9 @@ html[data-phi-config-page] .settings-modal {
     padding-right: 4px;
 }
 
-.sync-empty-state, .sync-error-state, .sync-list-loading {
+.sync-empty-state,
+.sync-error-state,
+.sync-list-loading {
     text-align: center;
     color: var(--text-muted);
     font-size: 12px;
@@ -7223,7 +7770,9 @@ html[data-phi-config-page] .settings-modal {
     flex-direction: column;
     gap: 6px;
     position: relative;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
 }
 
 .sync-card:hover {
@@ -7264,7 +7813,9 @@ html[data-phi-config-page] .settings-modal {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: color 0.15s, background-color 0.15s;
+    transition:
+        color 0.15s,
+        background-color 0.15s;
 }
 
 .sync-card-btn:hover {
@@ -7318,13 +7869,14 @@ html[data-phi-config-page] .settings-modal {
     color: #14141a !important;
 }
 
-
 /* ===========================================================
    Kanban feature completeness additions (v0.7.15)
    =========================================================== */
 
 /* Inline card delete button (X top-right, hover-revealed) */
-.kanban-card { position: relative; }
+.kanban-card {
+    position: relative;
+}
 .kanban-card-delete-btn {
     position: absolute;
     top: 4px;
@@ -7341,10 +7893,15 @@ html[data-phi-config-page] .settings-modal {
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+    transition:
+        opacity 0.15s ease,
+        color 0.15s ease,
+        background 0.15s ease;
     z-index: 2;
 }
-.kanban-card:hover .kanban-card-delete-btn { opacity: 0.9; }
+.kanban-card:hover .kanban-card-delete-btn {
+    opacity: 0.9;
+}
 .kanban-card-delete-btn:hover {
     color: #ef4444;
     background: rgba(239, 68, 68, 0.15);
@@ -7352,7 +7909,9 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* Column action buttons (rename / delete) — show on column hover */
-.kanban-column-header { position: relative; }
+.kanban-column-header {
+    position: relative;
+}
 .column-action-btn {
     background: transparent;
     border: 1px solid transparent;
@@ -7366,12 +7925,17 @@ html[data-phi-config-page] .settings-modal {
     align-items: center;
     justify-content: center;
     opacity: 0;
-    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+    transition:
+        opacity 0.15s ease,
+        color 0.15s ease,
+        background 0.15s ease;
 }
-.kanban-column-header:hover .column-action-btn { opacity: 0.8; }
+.kanban-column-header:hover .column-action-btn {
+    opacity: 0.8;
+}
 .column-action-btn:hover {
     opacity: 1;
-    background: var(--accent-trace, rgba(124,106,247,0.15));
+    background: var(--accent-trace, rgba(124, 106, 247, 0.15));
     color: var(--text-primary);
 }
 .column-delete-btn:hover {
@@ -7380,12 +7944,16 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* Column title: clickable to rename + inline-edit input */
-.column-title { cursor: text; flex: 1; min-width: 0; }
+.column-title {
+    cursor: text;
+    flex: 1;
+    min-width: 0;
+}
 .column-title-edit {
     width: 100%;
     font: inherit;
     color: inherit;
-    background: rgba(255,255,255,0.04);
+    background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--accent-soft, #555);
     border-radius: 3px;
     padding: 1px 4px;
@@ -7426,8 +7994,13 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-ui);
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.kdp-delete-btn:hover { background: rgba(239, 68, 68, 0.15); }
-.kdp-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.kdp-delete-btn:hover {
+    background: rgba(239, 68, 68, 0.15);
+}
+.kdp-delete-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 
 /* Label picker row in the detail panel */
 .kdp-labels-add-row {
@@ -7441,7 +8014,7 @@ html[data-phi-config-page] .settings-modal {
     min-width: 0;
     padding: 4px 8px;
     font-size: 12px;
-    background: rgba(255,255,255,0.03);
+    background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--bg-border);
     border-radius: 4px;
     color: var(--text-primary);
@@ -7469,7 +8042,10 @@ html[data-phi-config-page] .settings-modal {
     font-size: 14px;
     font-weight: bold;
 }
-.kdp-label-remove-btn:hover { opacity: 1; color: #ef4444; }
+.kdp-label-remove-btn:hover {
+    opacity: 1;
+    color: #ef4444;
+}
 
 /* Find Bar overlay */
 .find-bar {
@@ -7509,7 +8085,9 @@ html[data-phi-config-page] .settings-modal {
     font-size: 14px;
     padding: 2px 6px;
     border-radius: 4px;
-    transition: background 0.2s, color 0.2s;
+    transition:
+        background 0.2s,
+        color 0.2s;
 }
 .find-btn:hover {
     background: rgba(255, 255, 255, 0.08);
@@ -7602,8 +8180,13 @@ html[data-phi-config-page] .settings-modal {
 }
 
 @keyframes fleet-stale-pulse {
-    0%, 100% { opacity: 0.55; }
-    50%      { opacity: 1; }
+    0%,
+    100% {
+        opacity: 0.55;
+    }
+    50% {
+        opacity: 1;
+    }
 }
 
 .fleet-peer-list {
@@ -7646,9 +8229,15 @@ html[data-phi-config-page] .settings-modal {
     background: var(--color-mute, #6b7280);
     transition: background 0.2s ease;
 }
-.fleet-peer-dot.reachable { background: var(--color-green, #10b981); }
-.fleet-peer-dot.stale     { background: var(--color-amber, #fbbf24); }
-.fleet-peer-dot.unreachable { background: var(--color-red, #f87171); }
+.fleet-peer-dot.reachable {
+    background: var(--color-green, #10b981);
+}
+.fleet-peer-dot.stale {
+    background: var(--color-amber, #fbbf24);
+}
+.fleet-peer-dot.unreachable {
+    background: var(--color-red, #f87171);
+}
 
 .fleet-peer-name {
     font-weight: 600;
@@ -7745,7 +8334,9 @@ html[data-phi-config-page] .settings-modal {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s ease, transform 0.1s ease;
+    transition:
+        background 0.15s ease,
+        transform 0.1s ease;
 }
 
 .update-banner-btn:hover:not(:disabled) {
@@ -7837,10 +8428,17 @@ html[data-phi-config-page] .settings-modal {
     font: 600 11px var(--font-ui);
 }
 
-.kanban-view-btn:hover { color: var(--text-primary); }
-.kanban-view-btn.active { color: var(--text-primary); background: var(--accent-dim); }
+.kanban-view-btn:hover {
+    color: var(--text-primary);
+}
+.kanban-view-btn.active {
+    color: var(--text-primary);
+    background: var(--accent-dim);
+}
 
-.kanban-feature-progress { min-width: 92px; }
+.kanban-feature-progress {
+    min-width: 92px;
+}
 
 .kanban-feature-progress-meta {
     display: flex;
@@ -7850,7 +8448,10 @@ html[data-phi-config-page] .settings-modal {
     font: 10px var(--font-mono);
 }
 
-.kanban-feature-progress-meta strong { color: var(--text-primary); font-weight: 600; }
+.kanban-feature-progress-meta strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
 
 .kanban-feature-progress-track {
     height: 4px;
@@ -7867,7 +8468,9 @@ html[data-phi-config-page] .settings-modal {
     transition: width 0.15s ease;
 }
 
-.kanban-card .kanban-feature-progress { margin-top: -1px; }
+.kanban-card .kanban-feature-progress {
+    margin-top: -1px;
+}
 
 .kanban-features-view {
     width: min(920px, 100%);
@@ -7897,7 +8500,11 @@ html[data-phi-config-page] .settings-modal {
     font: 12px var(--font-ui);
 }
 
-.kanban-features-list { display: flex; flex-direction: column; gap: 8px; }
+.kanban-features-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
 
 .kanban-feature-row {
     display: grid;
@@ -7909,18 +8516,46 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 8px;
     background: var(--bg-panel);
     cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    transition:
+        border-color 0.15s,
+        background 0.15s;
 }
 
 .kanban-feature-row:hover,
-.kanban-feature-row:focus { outline: none; border-color: var(--accent); background: var(--bg-elevated); }
-.kanban-feature-row--done { opacity: 0.64; }
-.kanban-feature-row--done .kanban-feature-title { text-decoration: line-through; }
+.kanban-feature-row:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg-elevated);
+}
+.kanban-feature-row--done {
+    opacity: 0.64;
+}
+.kanban-feature-row--done .kanban-feature-title {
+    text-decoration: line-through;
+}
 
-.kanban-feature-main { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
-.kanban-feature-id { flex: 0 0 auto; color: var(--text-muted); font: 10px var(--font-mono); }
-.kanban-feature-title { overflow: hidden; color: var(--text-primary); font: 500 13px/1.4 var(--font-ui); text-overflow: ellipsis; white-space: nowrap; }
-.kanban-feature-done-btn { min-width: 91px; font-size: 11px; }
+.kanban-feature-main {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    min-width: 0;
+}
+.kanban-feature-id {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    font: 10px var(--font-mono);
+}
+.kanban-feature-title {
+    overflow: hidden;
+    color: var(--text-primary);
+    font: 500 13px / 1.4 var(--font-ui);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kanban-feature-done-btn {
+    min-width: 91px;
+    font-size: 11px;
+}
 
 .kdp-feature-section {
     display: flex;
@@ -7932,11 +8567,28 @@ html[data-phi-config-page] .settings-modal {
     background: var(--bg-elevated);
 }
 
-.kdp-feature-section-heading { display: flex; align-items: center; justify-content: space-between; }
-.kdp-feature-section-heading label { margin: 0; }
-.kdp-feature-section-heading span { color: var(--text-muted); font: 10px var(--font-mono); }
-.kdp-subtasks-list { display: flex; flex-direction: column; gap: 3px; }
-.kdp-subtasks-empty, .kdp-feature-timeline-empty { color: var(--text-muted); font: italic 12px var(--font-ui); }
+.kdp-feature-section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.kdp-feature-section-heading label {
+    margin: 0;
+}
+.kdp-feature-section-heading span {
+    color: var(--text-muted);
+    font: 10px var(--font-mono);
+}
+.kdp-subtasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.kdp-subtasks-empty,
+.kdp-feature-timeline-empty {
+    color: var(--text-muted);
+    font: italic 12px var(--font-ui);
+}
 
 .kdp-subtask-row {
     display: flex;
@@ -7946,10 +8598,16 @@ html[data-phi-config-page] .settings-modal {
     padding: 5px 2px;
     color: var(--text-primary);
     cursor: pointer;
-    font: 12px/1.35 var(--font-ui);
+    font: 12px / 1.35 var(--font-ui);
 }
 
-.kdp-subtask-row input { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.kdp-subtask-row input {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent);
+}
 .kdp-subtask-open {
     min-width: 0;
     overflow: hidden;
@@ -7963,11 +8621,22 @@ html[data-phi-config-page] .settings-modal {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.kdp-subtask-open:hover { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 2px; }
-.kdp-subtask-row.done { color: var(--text-muted); }
-.kdp-subtask-row.done .kdp-subtask-open { text-decoration: line-through; }
+.kdp-subtask-open:hover {
+    color: var(--accent-bright);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.kdp-subtask-row.done {
+    color: var(--text-muted);
+}
+.kdp-subtask-row.done .kdp-subtask-open {
+    text-decoration: line-through;
+}
 
-.kdp-add-subtask-row { display: flex; gap: 6px; }
+.kdp-add-subtask-row {
+    display: flex;
+    gap: 6px;
+}
 .kdp-add-subtask-row input {
     min-width: 0;
     flex: 1;
@@ -7978,28 +8647,86 @@ html[data-phi-config-page] .settings-modal {
     background: var(--bg-input);
     font: 12px var(--font-ui);
 }
-.kdp-add-subtask-row input:focus { outline: none; border-color: var(--accent); }
-.kdp-add-subtask-row .btn { padding: 5px 10px; font-size: 11px; }
+.kdp-add-subtask-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.kdp-add-subtask-row .btn {
+    padding: 5px 10px;
+    font-size: 11px;
+}
 
-.kdp-feature-timeline { padding-top: 3px; }
-.kdp-feature-timeline-legend { display: flex; gap: 12px; margin-bottom: 5px; color: var(--text-muted); font: 10px var(--font-mono); }
-.kdp-feature-timeline-legend i { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; }
-.kdp-feature-timeline-legend .filed { background: var(--text-muted); }
-.kdp-feature-timeline-legend .completed { background: var(--accent); }
-.kdp-feature-timeline svg { display: block; width: 100%; height: 56px; overflow: visible; }
-.kdp-feature-timeline polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.kdp-timeline-filed { stroke: var(--text-muted); stroke-dasharray: 3 3; }
-.kdp-timeline-completed { stroke: var(--accent); }
-.kdp-feature-timeline-dates { display: flex; justify-content: space-between; margin-top: 2px; color: var(--text-muted); font: 9px var(--font-mono); }
+.kdp-feature-timeline {
+    padding-top: 3px;
+}
+.kdp-feature-timeline-legend {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 5px;
+    color: var(--text-muted);
+    font: 10px var(--font-mono);
+}
+.kdp-feature-timeline-legend i {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 4px;
+    border-radius: 50%;
+}
+.kdp-feature-timeline-legend .filed {
+    background: var(--text-muted);
+}
+.kdp-feature-timeline-legend .completed {
+    background: var(--accent);
+}
+.kdp-feature-timeline svg {
+    display: block;
+    width: 100%;
+    height: 56px;
+    overflow: visible;
+}
+.kdp-feature-timeline polyline {
+    fill: none;
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+.kdp-timeline-filed {
+    stroke: var(--text-muted);
+    stroke-dasharray: 3 3;
+}
+.kdp-timeline-completed {
+    stroke: var(--accent);
+}
+.kdp-feature-timeline-dates {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font: 9px var(--font-mono);
+}
 
 @media (max-width: 768px) {
-    .kanban-view-switch { order: 3; }
-    .kanban-features-view { padding: 14px 12px; }
-    .kanban-feature-row { grid-template-columns: 1fr auto; gap: 10px; }
-    .kanban-feature-row .kanban-feature-progress { grid-column: 1 / -1; grid-row: 2; }
+    .kanban-view-switch {
+        order: 3;
+    }
+    .kanban-features-view {
+        padding: 14px 12px;
+    }
+    .kanban-feature-row {
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+    }
+    .kanban-feature-row .kanban-feature-progress {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
 }
-.kdp-timeline-filed-point { fill: var(--text-muted); }
-.kdp-timeline-completed-point { fill: var(--accent); }
+.kdp-timeline-filed-point {
+    fill: var(--text-muted);
+}
+.kdp-timeline-completed-point {
+    fill: var(--accent);
+}
 
 /* Kanban feature portfolio stats. */
 .kanban-features-actions {
@@ -8026,7 +8753,10 @@ html[data-phi-config-page] .settings-modal {
     font: 12px var(--font-ui);
 }
 
-.kanban-features-empty strong { color: var(--text-primary); font-weight: 600; }
+.kanban-features-empty strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
 
 .kanban-stats-view {
     width: min(980px, 100%);
@@ -8037,9 +8767,19 @@ html[data-phi-config-page] .settings-modal {
     box-sizing: border-box;
 }
 
-.kanban-stats-heading { margin-bottom: 18px; }
-.kanban-stats-heading h3 { margin: 0 0 4px; color: var(--text-primary); font: 600 18px var(--font-ui); }
-.kanban-stats-heading p { margin: 0; color: var(--text-muted); font: 12px var(--font-ui); }
+.kanban-stats-heading {
+    margin-bottom: 18px;
+}
+.kanban-stats-heading h3 {
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font: 600 18px var(--font-ui);
+}
+.kanban-stats-heading p {
+    margin: 0;
+    color: var(--text-muted);
+    font: 12px var(--font-ui);
+}
 
 .kanban-stats-grid {
     display: grid;
@@ -8071,24 +8811,71 @@ html[data-phi-config-page] .settings-modal {
     font-style: normal;
 }
 
-.kanban-stat-card > span { text-transform: uppercase; letter-spacing: 0.05em; }
-.kanban-stat-card > strong { color: var(--text-primary); font: 600 23px var(--font-ui); }
-.kanban-stat-card > strong small { color: var(--text-muted); font: 11px var(--font-mono); }
-.kanban-stat-card--forecast > strong { font-size: 15px; line-height: 1.3; }
-.kanban-stat-card--forecast > span { color: var(--text-muted); font: 11px/1.35 var(--font-ui); }
+.kanban-stat-card > span {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.kanban-stat-card > strong {
+    color: var(--text-primary);
+    font: 600 23px var(--font-ui);
+}
+.kanban-stat-card > strong small {
+    color: var(--text-muted);
+    font: 11px var(--font-mono);
+}
+.kanban-stat-card--forecast > strong {
+    font-size: 15px;
+    line-height: 1.3;
+}
+.kanban-stat-card--forecast > span {
+    color: var(--text-muted);
+    font: 11px / 1.35 var(--font-ui);
+}
 
-.kanban-stats-chart-card { padding: 16px; }
-.kanban-stats-chart-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.kanban-stats-chart-heading h4 { margin: 0 0 3px; color: var(--text-primary); font: 600 13px var(--font-ui); }
-.kanban-stats-chart-heading p { margin: 0; color: var(--text-muted); font: 11px var(--font-ui); }
-.kanban-stats-chart-heading > span { align-self: center; color: var(--accent); font: 11px var(--font-mono); white-space: nowrap; }
+.kanban-stats-chart-card {
+    padding: 16px;
+}
+.kanban-stats-chart-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+.kanban-stats-chart-heading h4 {
+    margin: 0 0 3px;
+    color: var(--text-primary);
+    font: 600 13px var(--font-ui);
+}
+.kanban-stats-chart-heading p {
+    margin: 0;
+    color: var(--text-muted);
+    font: 11px var(--font-ui);
+}
+.kanban-stats-chart-heading > span {
+    align-self: center;
+    color: var(--accent);
+    font: 11px var(--font-mono);
+    white-space: nowrap;
+}
 
 @media (max-width: 768px) {
-    .kanban-stats-view { padding: 16px 12px; }
-    .kanban-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .kanban-stat-card { min-height: 94px; padding: 12px; }
-    .kanban-features-heading { gap: 10px; }
-    .kanban-features-actions { align-items: flex-end; flex-direction: column; }
+    .kanban-stats-view {
+        padding: 16px 12px;
+    }
+    .kanban-stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .kanban-stat-card {
+        min-height: 94px;
+        padding: 12px;
+    }
+    .kanban-features-heading {
+        gap: 10px;
+    }
+    .kanban-features-actions {
+        align-items: flex-end;
+        flex-direction: column;
+    }
 }
 
 /* Chart.js portfolio health charts inherit Phi's active accent at creation. */
@@ -8121,8 +8908,12 @@ html[data-phi-config-page] .settings-modal {
 }
 
 @media (max-width: 768px) {
-    .kanban-stats-charts { grid-template-columns: 1fr; }
-    .kanban-chart-wrap { min-height: 200px; }
+    .kanban-stats-charts {
+        grid-template-columns: 1fr;
+    }
+    .kanban-chart-wrap {
+        min-height: 200px;
+    }
 }
 
 /* ── Fast mode (config.fast_mode; forced on mobile): perf crutch ───────
@@ -8197,4 +8988,196 @@ body.md-standalone #md-view-body {
     max-width: 860px;
     margin: 0 auto;
     padding: 24px 32px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PI TEMPLATE BRIDGE (web/vendor/pi-template.css)
+   ═══════════════════════════════════════════════════════════
+
+   The vendored Pi HTML export stylesheet expects a small set of CSS
+   variables to be defined here (the upstream template file uses
+   `{{THEME_VARS}}` substitution at render time; we supply scoped
+   aliases at load time). Mapping chosen so the Pi blocks
+   (.user-message, .assistant-message, .tool-execution, …) blend with
+   phi's existing palette rather than overriding the entire app.
+
+   Only the chat-pi pane uses these classes (and it wraps itself in
+   .pi-export-scope so the vendored body/HTML resets stay scoped).
+
+   The variable names use camelCase because that is the convention used
+   by the upstream Pi HTML export stylesheet (vendored at
+   web/vendor/pi-template.css); renaming would break the `var(--...)`
+   references inside those vendored rules. The lint allow below
+   narrows the exemption to this single block. */
+
+/* stylelint-disable custom-property-pattern -- Pi template uses camelCase */
+.pi-export-scope {
+    --body-bg: var(--bg-base);
+    --container-bg: var(--bg-panel);
+    --info-bg: var(--bg-elevated);
+    --text: var(--text-primary);
+    --muted: var(--text-muted);
+    --dim: var(--text-dim);
+    --thinkingText: var(--text-muted);
+    --userMessageBg: var(--bg-elevated);
+    --userMessageText: var(--text-primary);
+    --toolPendingBg: var(--bg-elevated);
+    --toolSuccessBg: var(--accent-soft);
+    --toolErrorBg: color-mix(in srgb, var(--red) 22%, transparent);
+    --toolOutput: var(--text-muted);
+    --border: var(--bg-border);
+    --borderAccent: var(--accent-dim);
+    --warning: var(--text-muted);
+    --error: var(--red);
+    --success: var(--green);
+    --hover: var(--accent-soft);
+    --selectedBg: var(--accent-soft);
+    --customMessageBg: var(--bg-elevated);
+    --customMessageLabel: var(--accent);
+    --customMessageText: var(--text-primary);
+    --mdCode: var(--accent);
+    --mdHeading: var(--text-primary);
+    --mdHr: var(--bg-border);
+    --mdLink: var(--accent);
+    --mdListBullet: var(--accent);
+    --mdQuote: var(--text-muted);
+    --mdQuoteBorder: var(--bg-border);
+    --mdCodeBlockBorder: var(--bg-border);
+    --toolTitle: var(--text-primary);
+    --toolDiffAdded: var(--green);
+    --toolDiffRemoved: var(--red);
+    --toolDiffContext: var(--text-muted);
+    --diff-word-added: var(--toolDiffAdded);
+    --diff-word-removed: var(--toolDiffRemoved);
+    --syntaxComment: var(--text-muted);
+    --syntaxFunction: var(--accent-bright);
+    --syntaxKeyword: var(--accent);
+    --syntaxNumber: var(--accent-bright);
+    --syntaxOperator: var(--text-primary);
+    --syntaxPunctuation: var(--text-muted);
+    --syntaxString: var(--text-primary);
+    --syntaxType: var(--accent);
+    --syntaxVariable: var(--text-primary);
+}
+/* stylelint-enable custom-property-pattern */
+
+/* Inverse-style emphasis for Pi's one-line word replacements. Reuse the
+   existing added/removed line colors as the background and keep the scope
+   background as the readable foreground. */
+.pi-export-scope .diff-word-change {
+    color: var(--body-bg);
+}
+.pi-export-scope .diff-added .diff-word-change {
+    background: var(--diff-word-added);
+}
+.pi-export-scope .diff-removed .diff-word-change {
+    background: var(--diff-word-removed);
+}
+
+/* Scope the vendored reset (margin/padding/box-sizing) and body font
+   so phi's chrome keeps its existing layout. The chat-pi pane mounts
+   its root inside .pi-export-scope; the selector below only matches
+   descendants of the scope, not the global document.
+
+   The vendored stylesheet hardcodes a monospace stack, 12px, and an
+   18px line-height on .pi-export-scope. The Pi RPC tab sets its parent
+   container to Phi's terminal family/size, so inherit those values and
+   express the Pi spacing unit relative to that terminal size. */
+.pi-export-scope,
+.pi-export-scope * {
+    box-sizing: border-box;
+}
+.pi-export-scope {
+    font-family: inherit;
+    font-size: inherit;
+    --line-height: 1.5em;
+}
+.pi-export-scope .assistant-message > .tool-execution + .tool-execution,
+.pi-export-scope .assistant-message > .assistant-text + .tool-execution,
+.pi-export-scope .assistant-message > .tool-execution + .assistant-text {
+    margin-top: var(--line-height);
+}
+.pi-export-scope .tool-execution {
+    /* stylelint-disable-next-line custom-property-pattern -- vendored Pi variable */
+    border: 1px solid color-mix(in srgb, var(--toolOutput) 35%, transparent);
+    border-radius: 4px;
+}
+.pi-export-scope .tool-header,
+.pi-export-scope .tool-command {
+    cursor: pointer;
+}
+.pi-export-scope .tool-status-footer {
+    /* stylelint-disable-next-line custom-property-pattern -- vendored Pi variable */
+    color: var(--toolOutput);
+    font-style: italic;
+    margin-top: var(--line-height);
+}
+.pi-export-scope .tool-execution.folded > .tool-output,
+.pi-export-scope .tool-execution.folded > .tool-status-footer {
+    display: none;
+}
+
+.pi-active-turn {
+    align-items: center;
+    display: flex;
+    gap: 0.6em;
+    padding: 0.4em 1em;
+    color: var(--text-secondary);
+}
+.pi-active-turn.hidden,
+.pi-active-prompt-overlay.hidden {
+    display: none;
+}
+.pi-working-dots {
+    display: inline-flex;
+    gap: 0.2em;
+}
+.pi-working-dot {
+    width: 0.35em;
+    height: 0.35em;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pi-working-wave 1s ease-in-out infinite;
+}
+.pi-working-dot:nth-child(2) {
+    animation-delay: 0.15s;
+}
+.pi-working-dot:nth-child(3) {
+    animation-delay: 0.3s;
+}
+@keyframes pi-working-wave {
+    0%,
+    60%,
+    100% {
+        opacity: 0.3;
+    }
+    30% {
+        opacity: 1;
+    }
+}
+.pi-working-hint {
+    margin-left: auto;
+}
+.pi-active-prompt-overlay {
+    position: absolute;
+    left: 1em;
+    right: 1em;
+    pointer-events: none;
+    z-index: 2;
+}
+.pi-active-prompt-top {
+    top: 0.5em;
+}
+.pi-active-prompt-bottom {
+    bottom: 0.5em;
+}
+.pi-active-prompt-copy {
+    margin: 0;
+    opacity: 0.95;
+}
+@media (prefers-reduced-motion: reduce) {
+    .pi-working-dot {
+        animation: none;
+        opacity: 0.7;
+    }
 }

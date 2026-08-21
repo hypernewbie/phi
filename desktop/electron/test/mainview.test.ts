@@ -113,18 +113,14 @@ describe('main view page (web/index.html)', () => {
     // `Notifications`); `header-btop-btn` has always been icon-only
     // (no `<span>` in the markup). Regression: any future addition of
     // a `<span>` to these buttons fails this test.
-    expect(headerHtmlSource).toContain(
-      'id="header-clipboard-btn" class="header-btn icon-only"',
-    );
-    expect(headerHtmlSource).toContain(
-      'id="header-ntfy-btn" class="header-btn icon-only"',
-    );
-    expect(headerHtmlSource).not.toMatch(
-      /id="header-clipboard-btn"[\s\S]*?<span>Get Clipboard<\/span>/,
-    );
-    expect(headerHtmlSource).not.toMatch(
-      /id="header-ntfy-btn"[\s\S]*?<span>Notifications<\/span>/,
-    );
+    const headerDocument = new JSDOM(headerHtmlSource).window.document;
+    for (const id of ['header-clipboard-btn', 'header-ntfy-btn']) {
+      const button = headerDocument.getElementById(id);
+      expect(button).not.toBeNull();
+      expect(button?.classList.contains('header-btn')).toBe(true);
+      expect(button?.classList.contains('icon-only')).toBe(true);
+      expect(button?.querySelector('span')).toBeNull();
+    }
   });
 });
 

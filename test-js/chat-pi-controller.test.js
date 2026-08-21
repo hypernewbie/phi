@@ -1,0 +1,1662 @@
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../web/chat-pi/client.js', () => ({
+    connectControl: vi.fn(),
+}));
+vi.mock('../web/chat-pi/persist.js', () => ({
+    savePersisted: vi.fn(),
+}));
+vi.mock('../web/review-transcript.js', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        createReviewTranscriptView: vi.fn(actual.createReviewTranscriptView),
+    };
+});
+
+import { connectControl } from '../web/chat-pi/client.js';
+import { createReviewTranscriptView } from '../web/review-transcript.js';
+import { savePersisted } from '../web/chat-pi/persist.js';
+import {
+    destroyRpcChat,
+    getPiRpcStatus,
+    mountRpcChat,
+    rpcChatInterrupt,
+    subscribePiRpcStatus,
+} from '../web/chat-pi/controller.js';
+import { mountChatPi } from '../web/chat-pi/index.js';
+
+function fakeClient() {
+    const sent = [];
+    let listener = () => {};
+    return {
+        sent,
+        client: {
+            send(frame) {
+                sent.push(frame);
+            },
+            onMessage(callback) {
+                listener = callback;
+                return () => {
+                    listener = () => {};
+                };
+            },
+            close() {},
+        },
+        emit(frame) {
+            listener(frame);
+        },
+    };
+}
+
+describe('Pi RPC transcript controller', () => {
+    it('rejects a blocked slash command, sends prompts, and renders bubbles', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        expect(chat.send('before bootstrap')).toBe(false);
+        expect(wire.sent[0]).toMatchObject({
+            op: 'spawn',
+            args: { cwd: '/work/demo' },
+        });
+        expect(wire.sent[0].args.sessionPath).toBeUndefined();
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                title: 'Pi RPC · demo',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'saved text' }],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain the microtask-coalesced paint()
+        expect(createReviewTranscriptView).toHaveBeenCalledWith(
+            root,
+            expect.objectContaining({ title: 'Pi RPC', coder: '/work/demo' }),
+        );
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setStructuredMessages = vi.spyOn(view, 'setStructuredMessages');
+        const setStructuredPartial = vi.spyOn(view, 'setStructuredPartial');
+
+        expect(root.querySelector('.user-message')?.textContent).toContain(
+            'saved text',
+        );
+        expect(chat.send('/status')).toBe(false);
+        expect(chat.send('hello')).toBe(true);
+        expect(wire.sent.at(-1)).toMatchObject({
+            op: 'prompt',
+            sid: 's1',
+            args: { message: 'hello' },
+        });
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'hello' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'world' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain paint() microtasks
+        expect(
+            [...root.querySelectorAll('.user-message')].some((node) =>
+                node.textContent?.includes('hello'),
+            ),
+        ).toBe(true);
+        expect(root.querySelector('.assistant-message')?.textContent).toContain(
+            'world',
+        );
+        expect(setStructuredMessages).toHaveBeenCalledWith(
+            expect.objectContaining({
+                length: expect.any(Number),
+                slice: expect.any(Function),
+            }),
+            '',
+            expect.any(Map),
+        );
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 4,
+            evt: 'messageUpdate',
+            data: {
+                assistantMessageEvent: {
+                    type: 'text_delta',
+                    delta: 'streaming',
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain paint() microtask
+        // Milestone 2: streaming `text_delta` no longer triggers a full
+        // structured repaint. The narrow live-text path uses
+        // setStructuredPartial instead, leaving setStructuredMessages
+        // untouched for partials.
+        const structuredCallsBeforeStreaming =
+            setStructuredMessages.mock.calls.length;
+        expect(setStructuredPartial).toHaveBeenLastCalledWith('streaming');
+        expect(root.querySelector('.pi-partial')?.textContent).toBe(
+            'streaming',
+        );
+        expect(setStructuredMessages.mock.calls.length).toBe(
+            structuredCallsBeforeStreaming,
+        );
+        // Settling the partial via messageEnd runs the normal full paint
+        // and clears the live block.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 5,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'streaming world' }],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setStructuredMessages.mock.calls.length).toBe(
+            structuredCallsBeforeStreaming + 1,
+        );
+        expect(root.querySelector('.pi-streaming')).toBeNull();
+    });
+
+    it('reconciles an accepted prompt when Pi emits the user event first', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/event-first', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+        expect(chat.send('event first')).toBe(true);
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'event first' } },
+        });
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({ stateLabel: 'Sending' }),
+        );
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({ stateLabel: 'Sent to Pi' }),
+        );
+    });
+
+    it('keeps an accepted prompt sent when its response arrives before the user event', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/response-first', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+        expect(chat.send('response first')).toBe(true);
+        const prompt = wire.sent.find((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'res',
+            id: prompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({ stateLabel: 'Sent to Pi' }),
+        );
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'response first' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({ stateLabel: 'Sent to Pi' }),
+        );
+    });
+
+    it('interrupts an active Pi session through the abort control call', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/interrupt', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        const interrupted = chat.interrupt();
+        const abort = wire.sent.find((frame) => frame.op === 'abort');
+        expect(abort).toMatchObject({ op: 'abort', sid: 's1', args: {} });
+        wire.emit({
+            t: 'res',
+            id: abort.id,
+            ok: true,
+            data: { aborted: true },
+        });
+        await expect(interrupted).resolves.toEqual({ aborted: true });
+    });
+
+    it('publishes CWD synchronously and hydrates after spawn', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        mountChatPi(root, '/work/sync', wire.client, undefined, (status) =>
+            statuses.push(status),
+        );
+
+        expect(statuses).toEqual([{ cwd: '/work/sync' }]);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+            },
+        });
+        await Promise.resolve();
+        expect(wire.sent.at(-1)).toMatchObject({ op: 'hydrate', sid: 's1' });
+    });
+
+    it('merges hydrate state without replacing the transcript snapshot', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        let latestStatus;
+        mountChatPi(root, '/work/demo', wire.client, undefined, (status) => {
+            if (status) latestStatus = status;
+        });
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: {
+                    lastSeq: 0,
+                    messages: [{ role: 'user', content: 'spawned' }],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain spawn paint()
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 1,
+                messages: [{ role: 'assistant', content: 'hydrated' }],
+                state: {
+                    cwd: '/work/other',
+                    model: 'pi-4',
+                    thinking: 'high',
+                    inputTokens: 0,
+                    outputTokens: 1200,
+                    contextUsedTokens: 42000,
+                    contextWindowTokens: 200000,
+                    cacheReadTokens: 0,
+                    cacheWriteTokens: 0,
+                    skills: ['review'],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain hydrate paint()
+
+        expect(latestStatus).toEqual({
+            cwd: '/work/other',
+            model: 'pi-4',
+            thinking: 'high',
+            inputTokens: 0,
+            outputTokens: 1200,
+            contextUsedTokens: 42000,
+            contextWindowTokens: 200000,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            skills: ['review'],
+        });
+        expect(root.textContent).toContain('hydrated');
+        expect(root.textContent).not.toContain('spawned');
+    });
+
+    it('keeps typed metadata across error-only and malformed state events', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        mountChatPi(root, '/work/demo', wire.client, undefined, (status) => {
+            if (status) statuses.push(status);
+        });
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [],
+                state: {
+                    model: 'pi-4',
+                    thinking: 'high',
+                    inputTokens: 10,
+                    outputTokens: 20,
+                    contextUsedTokens: 42000,
+                    contextWindowTokens: 200000,
+                    cacheReadTokens: 30,
+                    cacheWriteTokens: 40,
+                    skills: ['review'],
+                },
+            },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: {
+                contextUsedTokens: null,
+                contextWindowTokens: 200000,
+            },
+        });
+        expect(statuses.at(-1)).toMatchObject({
+            contextUsedTokens: null,
+            contextWindowTokens: 200000,
+        });
+        const valid = statuses.at(-1);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { error: 'temporary failure' },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'stateChanged',
+            data: {
+                model: 42,
+                thinking: null,
+                inputTokens: 'bad',
+                outputTokens: Infinity,
+                contextUsedTokens: {},
+                contextWindowTokens: 'bad',
+                cacheReadTokens: 'bad',
+                cacheWriteTokens: Infinity,
+                skills: ['ok', 7],
+            },
+        });
+
+        expect(statuses.at(-1)).toEqual(valid);
+        expect(statuses.at(-1)).toEqual({
+            cwd: '/work/demo',
+            model: 'pi-4',
+            thinking: 'high',
+            inputTokens: 10,
+            outputTokens: 20,
+            contextUsedTokens: null,
+            contextWindowTokens: 200000,
+            cacheReadTokens: 30,
+            cacheWriteTokens: 40,
+            skills: ['review'],
+        });
+    });
+
+    it('resumes with a session path and hydrates after a sequence gap', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            '/work/demo/.pi/resume.jsonl',
+        );
+
+        expect(wire.sent[0]).toMatchObject({
+            op: 'spawn',
+            args: {
+                cwd: '/work/demo',
+                sessionPath: '/work/demo/.pi/resume.jsonl',
+            },
+        });
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 3, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain spawn paint()
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 5,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'gap' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain paint() + hydrate request
+        expect(wire.sent.at(-1)).toMatchObject({ op: 'hydrate', sid: 's1' });
+
+        const latestHydrate = wire.sent.at(-1);
+        wire.emit({
+            t: 'res',
+            id: latestHydrate.id,
+            ok: true,
+            data: {
+                lastSeq: 5,
+                messages: [{ role: 'assistant', content: 'hydrated' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain hydrate paint()
+        expect(root.querySelector('.assistant-message')?.textContent).toContain(
+            'hydrated',
+        );
+        expect(chat.send('after hydrate')).toBe(true);
+    });
+
+    it('keeps input disabled and shows a bootstrap error without a snapshot', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({ t: 'res', id: 'sp', ok: true, data: { sid: 's1' } });
+        await Promise.resolve();
+
+        expect(chat.send('blocked')).toBe(false);
+        expect(root.textContent).toContain(
+            'bootstrap snapshot missing or malformed',
+        );
+    });
+
+    it('stops accepting sends after rpcExited', () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        wire.emit({ t: 'evt', sid: 's1', seq: 1, evt: 'rpcExited', data: {} });
+        expect(chat.send('after exit')).toBe(false);
+    });
+
+    it('keeps a rejected setter/reset on the ready sid and still sends the next prompt', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+
+        const setter = chat.setModel('provider', 'model');
+        wire.emit({
+            t: 'res',
+            id: 'set-model',
+            ok: false,
+            error: 'setter rejected',
+        });
+        await expect(setter).rejects.toThrow('setter rejected');
+        const reset = chat.resetChat();
+        wire.emit({
+            t: 'res',
+            id: 'reset',
+            ok: false,
+            error: 'reset rejected',
+        });
+        await expect(reset).rejects.toThrow('reset rejected');
+        expect(chat.send('still ready')).toBe(true);
+        expect(wire.sent.at(-1)).toMatchObject({
+            op: 'prompt',
+            sid: 's1',
+            args: { message: 'still ready' },
+        });
+    });
+
+    it('does not let an older overlapping hydrate overwrite the latest snapshot', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'gap-one' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 4,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'gap-two' } },
+        });
+        const hydrateCalls = wire.sent.filter(
+            (frame) => frame.op === 'hydrate',
+        );
+        expect(hydrateCalls.map((frame) => frame.id)).toEqual([
+            'hyd',
+            'hyd-1',
+            'hyd-2',
+        ]);
+        wire.emit({
+            t: 'res',
+            id: 'hyd-1',
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [{ role: 'assistant', content: 'old hydrate' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain hydrate paint()
+        expect(root.textContent).not.toContain('old hydrate');
+        wire.emit({
+            t: 'res',
+            id: 'hyd-2',
+            ok: true,
+            data: {
+                lastSeq: 4,
+                messages: [{ role: 'assistant', content: 'latest hydrate' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve(); // drain hydrate paint()
+        expect(root.textContent).toContain('latest hydrate');
+        expect(root.textContent).not.toContain('old hydrate');
+    });
+
+    it('keeps independent pane status and removes it before destroy notification', async () => {
+        const first = fakeClient();
+        const second = fakeClient();
+        connectControl
+            .mockReturnValueOnce(first.client)
+            .mockReturnValueOnce(second.client);
+        const notifications = [];
+        const unsubscribe = subscribePiRpcStatus((paneId, status) => {
+            notifications.push({
+                paneId,
+                status,
+                observed: getPiRpcStatus(paneId),
+            });
+        });
+
+        mountRpcChat('pane-1', document.createElement('div'), '/work/one');
+        mountRpcChat('pane-2', document.createElement('div'), '/work/two');
+        expect(getPiRpcStatus('pane-1')).toEqual({ cwd: '/work/one' });
+        expect(getPiRpcStatus('pane-2')).toEqual({ cwd: '/work/two' });
+
+        first.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 'one', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        first.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [],
+                state: { model: 'model-one' },
+            },
+        });
+        await Promise.resolve();
+        expect(getPiRpcStatus('pane-1')).toMatchObject({
+            cwd: '/work/one',
+            model: 'model-one',
+        });
+        expect(getPiRpcStatus('pane-2')).toEqual({ cwd: '/work/two' });
+
+        destroyRpcChat('pane-1');
+        expect(getPiRpcStatus('pane-1')).toBeNull();
+        expect(notifications.at(-1)).toEqual({
+            paneId: 'pane-1',
+            status: null,
+            observed: null,
+        });
+        expect(getPiRpcStatus('pane-2')).toEqual({ cwd: '/work/two' });
+        unsubscribe();
+        destroyRpcChat('pane-2');
+    });
+
+    it('interrupt() rejects when sessionActive is false and sends no abort frame', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/idle', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        await expect(chat.interrupt()).rejects.toThrow('Pi RPC is not active');
+        expect(wire.sent.some((frame) => frame.op === 'abort')).toBe(false);
+    });
+
+    it('interrupt() dedupes a concurrent second abort while the first is in flight and clears after completion', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/dedupe', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const first = chat.interrupt();
+        const aborts = wire.sent.filter((frame) => frame.op === 'abort');
+        expect(aborts).toHaveLength(1);
+        // Second concurrent call must be deduped — abortInFlight is true.
+        await expect(chat.interrupt()).rejects.toThrow(
+            'Pi interrupt is already pending',
+        );
+        expect(wire.sent.filter((frame) => frame.op === 'abort')).toHaveLength(
+            1,
+        );
+
+        wire.emit({
+            t: 'res',
+            id: aborts[0].id,
+            ok: true,
+            data: { aborted: true },
+        });
+        await expect(first).resolves.toEqual({ aborted: true });
+
+        // After the first abort completes, abortInFlight is cleared and a
+        // fresh interrupt can send a new abort frame.
+        const second = chat.interrupt();
+        expect(wire.sent.filter((frame) => frame.op === 'abort')).toHaveLength(
+            2,
+        );
+        const followUp = wire.sent.filter((frame) => frame.op === 'abort');
+        wire.emit({
+            t: 'res',
+            id: followUp[1].id,
+            ok: true,
+            data: { aborted: true },
+        });
+        await expect(second).resolves.toEqual({ aborted: true });
+    });
+
+    it('interrupt() clears abortInFlight after the abort call fails', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/fail', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const first = chat.interrupt();
+        const [abort] = wire.sent.filter((frame) => frame.op === 'abort');
+        wire.emit({
+            t: 'res',
+            id: abort.id,
+            ok: false,
+            error: 'Pi rejected abort',
+        });
+        await expect(first).rejects.toThrow('Pi rejected abort');
+
+        // After failure, abortInFlight must be cleared so a retry can run.
+        const second = chat.interrupt();
+        expect(wire.sent.filter((frame) => frame.op === 'abort')).toHaveLength(
+            2,
+        );
+        const [, followUp] = wire.sent.filter((frame) => frame.op === 'abort');
+        wire.emit({
+            t: 'res',
+            id: followUp.id,
+            ok: true,
+            data: { aborted: true },
+        });
+        await expect(second).resolves.toEqual({ aborted: true });
+    });
+
+    it('rpcChatInterrupt forwards to mountChatPi.interrupt and rejects missing panes', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        connectControl.mockReturnValueOnce(wire.client);
+        mountRpcChat('pane-1', root, '/work/forward');
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const promise = rpcChatInterrupt('pane-1');
+        const [abort] = wire.sent.filter((frame) => frame.op === 'abort');
+        expect(abort).toMatchObject({ op: 'abort', sid: 's1', args: {} });
+        wire.emit({
+            t: 'res',
+            id: abort.id,
+            ok: true,
+            data: { aborted: true },
+        });
+        await expect(promise).resolves.toEqual({ aborted: true });
+
+        await expect(rpcChatInterrupt('unknown-pane')).rejects.toThrow(
+            'unknown or destroyed Pi RPC pane: unknown-pane',
+        );
+    });
+
+    it('non-accepted prompt response removes only the matching optimistic record, surfaces an error, and falls back to the next one', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reject', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('first')).toBe(true);
+        expect(chat.send('second')).toBe(true);
+        const prompts = wire.sent.filter((frame) => frame.op === 'prompt');
+        expect(prompts).toHaveLength(2);
+        const [firstPrompt, secondPrompt] = prompts;
+
+        wire.emit({
+            t: 'res',
+            id: firstPrompt.id,
+            ok: true,
+            data: { accepted: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(root.textContent).toContain('Error: prompt was not accepted');
+        // The first prompt was rejected, the second is still in flight.
+        // A second user event for the surviving prompt must still reconcile.
+        wire.emit({
+            t: 'res',
+            id: secondPrompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'second' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('second');
+        // And after the second prompt reconciles, no optimistic marker remains.
+        expect(
+            root.querySelector('[data-pi-optimistic-prompt="true"]'),
+        ).toBeNull();
+    });
+
+    it('non-matching authoritative user text leaves the optimistic record; identical texts reconcile via renderedUserText', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/reconcile', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // 1. Non-matching authoritative user text does NOT consume the
+        //    optimistic record. Distinct prompt text makes the
+        //    optimistic marker unique, so we can track it across events.
+        expect(chat.send('alpha')).toBe(true);
+        const [firstPrompt] = wire.sent.filter(
+            (frame) => frame.op === 'prompt',
+        );
+        wire.emit({
+            t: 'res',
+            id: firstPrompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-prompt="true"]'),
+        ).toHaveLength(1);
+        // A different authoritative user text must not reconcile.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'beta' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-prompt="true"]'),
+        ).toHaveLength(1);
+
+        // 2. Identical-text reconciliation: a matching authoritative
+        //    user event consumes the optimistic record via the
+        //    renderedUserText path.
+        expect(chat.send('alpha')).toBe(true);
+        const prompts = wire.sent.filter((frame) => frame.op === 'prompt');
+        const [, secondPrompt] = prompts;
+        wire.emit({
+            t: 'res',
+            id: secondPrompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-prompt="true"]'),
+        ).toHaveLength(2);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'alpha' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        // One matching event reconciles ONE prompt (the oldest match by
+        // renderedUserText). The second identical prompt remains
+        // optimistic in the DOM.
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-prompt="true"]'),
+        ).toHaveLength(1);
+    });
+
+    it('stranded optimistic records clear on agent_settled and on prompt control failure', async () => {
+        // 1. agent_settled (busy: false) clears the entire outgoing queue.
+        const settledRoot = document.createElement('div');
+        const settledWire = fakeClient();
+        const settledChat = mountChatPi(
+            settledRoot,
+            '/work/stranded-settled',
+            settledWire.client,
+        );
+        settledWire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(settledChat.send('alpha')).toBe(true);
+        expect(settledChat.send('beta')).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        // Two stranded optimistic records are in the DOM before the
+        // settled boundary. They differ by text but share the optimistic
+        // prefix; the LATEST is the only one with the active marker.
+        // Query the transcript only — the active-prompt overlay lives
+        // in a sibling of the transcript and would inflate the count.
+        const transcriptEl = settledRoot.querySelector('.review-chat-wrapper');
+        const transcript = transcriptEl;
+        const transcriptOptimisticCount = () =>
+            [...transcript.querySelectorAll('.user-message')].filter((node) =>
+                /^(Sending|Sent to Pi): /u.test(node.textContent ?? ''),
+            ).length;
+        expect(transcriptOptimisticCount()).toBe(2);
+        // Busy transitions to false (agent_settled). The chat must clear
+        // ALL stranded optimistic records; both prefixes disappear.
+        settledWire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(transcriptOptimisticCount()).toBe(0);
+        // sessionActive is now false — interrupt() rejects.
+        await expect(settledChat.interrupt()).rejects.toThrow(
+            'Pi RPC is not active',
+        );
+
+        // 2. Prompt control failure (rejected prompt) clears only the
+        //    matching optimistic record; surviving prompts are kept.
+        const failRoot = document.createElement('div');
+        const failWire = fakeClient();
+        const failChat = mountChatPi(
+            failRoot,
+            '/work/stranded-fail',
+            failWire.client,
+        );
+        failWire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(failChat.send('alpha')).toBe(true);
+        expect(failChat.send('beta')).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        const prompts = failWire.sent.filter((frame) => frame.op === 'prompt');
+        const [firstPrompt, secondPrompt] = prompts;
+        // Reject the first prompt; the second must remain optimistic.
+        failWire.emit({
+            t: 'res',
+            id: firstPrompt.id,
+            ok: false,
+            error: 'control connection closed',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(failRoot.textContent).toContain(
+            'Error: control connection closed',
+        );
+        // Exactly one optimistic record is left: the surviving "beta".
+        const failTranscript = failRoot.querySelector('.review-chat-wrapper');
+        const optimistics = failTranscript.querySelectorAll(
+            '[data-pi-optimistic-prompt="true"]',
+        );
+        expect(optimistics).toHaveLength(1);
+        expect(optimistics[0].textContent).toContain('beta');
+        expect(optimistics[0].textContent).not.toContain('alpha');
+        // And the second prompt can still reconcile via renderedUserText.
+        failWire.emit({
+            t: 'res',
+            id: secondPrompt.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        failWire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'beta' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            failTranscript.querySelector('[data-pi-optimistic-prompt="true"]'),
+        ).toBeNull();
+    });
+
+    // Milestone 2: a long burst of streaming `text_delta` events must
+    // NOT call setStructuredMessages at all. The live-text path uses
+    // setStructuredPartial so each token avoids a full transcript
+    // rebuild + savePersisted serialize+write. The settling messageEnd
+    // runs the full structured repaint exactly once and clears the
+    // .pi-streaming block.
+    it('streams 100 text_delta events through setStructuredPartial without repainting', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/stream', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setStructuredMessages = vi.spyOn(view, 'setStructuredMessages');
+        const setStructuredPartial = vi.spyOn(view, 'setStructuredPartial');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        // messageStart with no prior partial is a 'none' disposition.
+        expect(setStructuredPartial).not.toHaveBeenCalled();
+
+        for (let i = 0; i < 100; i++) {
+            wire.emit({
+                t: 'evt',
+                sid: 's1',
+                seq: 2 + i,
+                evt: 'messageUpdate',
+                data: {
+                    assistantMessageEvent: {
+                        type: 'text_delta',
+                        contentIndex: 0,
+                        delta: ` t${i}`,
+                    },
+                },
+            });
+            await Promise.resolve();
+            await Promise.resolve();
+        }
+        // No full repaint happened during the burst.
+        expect(setStructuredMessages).not.toHaveBeenCalled();
+        expect(setStructuredPartial).toHaveBeenCalledTimes(100);
+        const livePartial = root.querySelector('.pi-partial');
+        expect(livePartial).not.toBeNull();
+        const expected =
+            ' t0 t1 t2 t3 t4 t5 t6 t7 t8 t9' +
+            Array.from({ length: 90 }, (_, i) => ` t${i + 10}`).join('');
+        expect(livePartial.textContent).toBe(expected);
+        expect(root.querySelectorAll('.pi-streaming')).toHaveLength(1);
+
+        // Settle: one messageEnd runs the full repaint and clears the
+        // live block.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 102,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: expected }],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setStructuredMessages).toHaveBeenCalledTimes(1);
+        // setStructuredPartial is not called with '' on messageEnd; the
+        // live block is cleared by the setStructuredMessages rebuild.
+        // partial-clear only fires on a subsequent messageStart with a
+        // still-open partial, which is not part of this burst.
+        expect(
+            setStructuredPartial.mock.calls.some(([text]) => text === ''),
+        ).toBe(false);
+        expect(root.querySelector('.pi-streaming')).toBeNull();
+
+        // chat variable referenced to keep lint happy and to exercise
+        // the early-return on destroyed state.
+        void chat;
+    });
+
+    it('renders at most 100 settled messages and pages older history without duplicates', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/window', wire.client);
+        const messages = Array.from({ length: 101 }, (_, i) => ({
+            role: i % 2 === 0 ? 'user' : 'assistant',
+            content: `m-${i}`,
+        }));
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const transcript = root.querySelector('.review-chat-wrapper');
+        const blocks = () => [
+            ...transcript.querySelectorAll(
+                '.user-message, .assistant-message:not(.pi-streaming)',
+            ),
+        ];
+        expect(blocks()).toHaveLength(100);
+        expect(transcript.textContent).not.toContain('m-0');
+
+        transcript.dispatchEvent(new Event('scroll'));
+        const older = blocks();
+        expect(older).toHaveLength(100);
+        expect(older.map((node) => node.textContent)).toContain('m-0');
+        expect(new Set(older.map((node) => node.textContent)).size).toBe(100);
+    });
+
+    it('batches settled persistence, skips streaming deltas, and flushes on teardown', async () => {
+        vi.useFakeTimers();
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/persist', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrate = wire.sent.find((frame) => frame.op === 'hydrate');
+        wire.emit({
+            t: 'res',
+            id: hydrate.id,
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.runAllTimersAsync();
+        savePersisted.mockClear();
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'messageUpdate',
+            data: {
+                assistantMessageEvent: { type: 'text_delta', delta: 'a' },
+            },
+        });
+        expect(savePersisted).not.toHaveBeenCalled();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'a' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 4,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'next' } },
+        });
+        await vi.advanceTimersByTimeAsync(249);
+        expect(savePersisted).not.toHaveBeenCalled();
+        chat.destroy();
+        expect(savePersisted).toHaveBeenCalledTimes(1);
+        expect(savePersisted).toHaveBeenLastCalledWith(
+            's1',
+            expect.arrayContaining([
+                expect.objectContaining({ content: 'a' }),
+                expect.objectContaining({ content: 'next' }),
+            ]),
+        );
+        await vi.advanceTimersByTimeAsync(1);
+        expect(savePersisted).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('flushes a pending settled transcript once when Pi exits', async () => {
+        vi.useFakeTimers();
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/exit-persist', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrate = wire.sent.find((frame) => frame.op === 'hydrate');
+        wire.emit({
+            t: 'res',
+            id: hydrate.id,
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.runAllTimersAsync();
+        savePersisted.mockClear();
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'saved on exit' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'rpcExited',
+            data: {},
+        });
+        expect(savePersisted).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(250);
+        expect(savePersisted).toHaveBeenCalledTimes(1);
+        vi.useRealTimers();
+    });
+
+    it('persists reset hydrates once and cancels stale pending saves for gap hydrates', async () => {
+        vi.useFakeTimers();
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/reset-persist', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const initialHydrate = wire.sent.find(
+            (frame) => frame.op === 'hydrate',
+        );
+        wire.emit({
+            t: 'res',
+            id: initialHydrate.id,
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.runAllTimersAsync();
+        savePersisted.mockClear();
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'before-reset' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'transcriptReset',
+            data: {},
+        });
+        const resetHydrate = wire.sent.at(-1);
+        expect(resetHydrate).toMatchObject({ op: 'hydrate', sid: 's1' });
+        wire.emit({
+            t: 'res',
+            id: resetHydrate.id,
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [{ role: 'assistant', content: 'after-reset' }],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(savePersisted).toHaveBeenCalledTimes(1);
+        expect(savePersisted).toHaveBeenLastCalledWith('s1', [
+            expect.objectContaining({ content: 'after-reset' }),
+        ]);
+
+        savePersisted.mockClear();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'messageEnd',
+            data: { message: { role: 'assistant', content: 'pending' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 5,
+            evt: 'stateChanged',
+            data: {},
+        });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(savePersisted).not.toHaveBeenCalled();
+        vi.useRealTimers();
+    });
+
+    it('ignores a stale stateChanged event before applying UI state', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const controls = [];
+        mountChatPi(
+            root,
+            '/work/stale-state',
+            wire.client,
+            undefined,
+            undefined,
+            (state) => controls.push(state),
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: true },
+        });
+        expect(controls.at(-1)).toEqual(
+            expect.objectContaining({ busy: true }),
+        );
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        expect(controls.at(-1)).toEqual(
+            expect.objectContaining({ busy: true }),
+        );
+    });
+
+    it('does not reconcile an optimistic prompt from a stale user messageEnd', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/stale-user', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(chat.send('keep optimistic')).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 0,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'keep optimistic' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelector('[data-pi-optimistic-prompt="true"]'),
+        ).not.toBeNull();
+    });
+
+    it('does not request reset hydrate for a stale transcriptReset event', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/stale-reset', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydratesBefore = wire.sent.filter(
+            (frame) => frame.op === 'hydrate',
+        ).length;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 0,
+            evt: 'transcriptReset',
+            data: {},
+        });
+        expect(
+            wire.sent.filter((frame) => frame.op === 'hydrate'),
+        ).toHaveLength(hydratesBefore);
+    });
+
+    it('uses the active-turn update path when valid stateChanged becomes idle', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/idle-state', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setStructuredMessages = vi.spyOn(view, 'setStructuredMessages');
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+        const replaceChildren = vi.spyOn(view.transcript, 'replaceChildren');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setStructuredMessages).not.toHaveBeenCalled();
+        expect(replaceChildren).not.toHaveBeenCalled();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(null);
+    });
+
+    it('updates optimistic prompt send and response state without rebuilding the transcript', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/narrow-prompt', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setStructuredMessages = vi.spyOn(view, 'setStructuredMessages');
+        const replaceChildren = vi.spyOn(view.transcript, 'replaceChildren');
+
+        expect(chat.send('accepted prompt')).toBe(true);
+        expect(root.textContent).toContain('Sending: accepted prompt');
+        expect(setStructuredMessages).not.toHaveBeenCalled();
+        expect(replaceChildren).not.toHaveBeenCalled();
+        const accepted = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: accepted.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Sent to Pi: accepted prompt');
+        expect(setStructuredMessages).not.toHaveBeenCalled();
+        expect(replaceChildren).not.toHaveBeenCalled();
+
+        expect(chat.send('rejected prompt')).toBe(true);
+        const rejected = wire.sent
+            .filter((frame) => frame.op === 'prompt')
+            .at(-1);
+        wire.emit({
+            t: 'res',
+            id: rejected.id,
+            ok: true,
+            data: { accepted: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.textContent).toContain('Error: prompt was not accepted');
+        expect(root.textContent).not.toContain('rejected prompt');
+        expect(setStructuredMessages).not.toHaveBeenCalled();
+        expect(replaceChildren).not.toHaveBeenCalled();
+    });
+});
