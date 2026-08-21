@@ -23,12 +23,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -37,10 +37,10 @@ jobs:
       # all:web) reflects the current web-src/*.ts, not whatever compiled JS
       # happened to be committed. Keeps release artifacts authoritative.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
           cache: "pnpm"
@@ -52,7 +52,7 @@ jobs:
           go run ./tools/webdist
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           distribution: goreleaser
           version: latest
@@ -68,13 +68,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
           cache: pnpm
@@ -120,6 +120,13 @@ jobs:
           diff -u "$expected" "$actual"
           # The sorted comparison above is the complete archive-content gate.
 
+      - name: Verify pet signing key
+        working-directory: desktop/electron
+        env:
+          PHI_PET_ED25519_PRIVATE_KEY: >-
+            ${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}
+        run: node scripts/verify-pet-signing-key.mjs
+
       - name: Sign pet archive
         working-directory: desktop/electron
         env:
@@ -147,13 +154,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
           cache: pnpm
@@ -185,7 +192,8 @@ jobs:
             --publish never
 
       - name: Upload desktop package
-        uses: actions/upload-artifact@v4
+        uses: >- # v4
+          actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phi-client-desktop-${{ matrix.os }}
           path: |
@@ -209,7 +217,8 @@ jobs:
       contents: write
     steps:
       - name: Download desktop packages
-        uses: actions/download-artifact@v4
+        uses: >- # v4
+          actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: phi-client-desktop-*
           path: desktop-release
@@ -237,7 +246,6 @@ jobs:
     # packaging) without publishing: an npm publish of a prerelease
     # version would take over the `latest` dist-tag. Cut a real semver
     # tag to publish.
-    if: ${{ !contains(github.ref_name, '-alpha') }}
     runs-on: ubuntu-latest
     # actions/setup-node's built-in registry-url auth uses NODE_AUTH_TOKEN
     # when set, but with `registry-url` + OIDC it picks up the auto-minted
@@ -247,10 +255,10 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -266,6 +274,11 @@ jobs:
       - name: Publish to NPM
         run: |
           version=${GITHUB_REF_NAME#v}
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping npm publication: $GITHUB_REF_NAME is not a stable" \
+              "release tag."
+            exit 0
+          fi
           if npm view "@hypernewbie/phi-code@${version}" version --silent \
             >/dev/null 2>&1; then
             echo "@hypernewbie/phi-code@${version} is already published; \
