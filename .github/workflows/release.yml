@@ -125,16 +125,18 @@ jobs:
         env:
           PHI_PET_ED25519_PRIVATE_KEY: >-
             ${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}
-        run: node scripts/sign-pet-package.mjs \
-          --archive "../../phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
-          --out "../../phi-pet-${GITHUB_REF_NAME#v}.manifest.json"
+        run: |
+          node scripts/sign-pet-package.mjs \
+            --archive "../../phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+            --out "../../phi-pet-${GITHUB_REF_NAME#v}.manifest.json"
 
       - name: Upload signed pet assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
-          "phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
-          "phi-pet-${GITHUB_REF_NAME#v}.manifest.json" --clobber
+        run: |
+          gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" \
+            "phi-pet-${GITHUB_REF_NAME#v}.tar.gz" \
+            "phi-pet-${GITHUB_REF_NAME#v}.manifest.json" --clobber
 
   desktop-package:
     name: Desktop package (${{ matrix.os }})
@@ -167,8 +169,9 @@ jobs:
       - name: Set release version
         shell: bash
         working-directory: desktop/electron
-        run: pnpm version "${GITHUB_REF_NAME#v}" --no-git-tag-version \
-          --allow-same-version
+        run: |
+          pnpm version "${GITHUB_REF_NAME#v}" --no-git-tag-version \
+            --allow-same-version
 
       - name: Build desktop app
         working-directory: desktop/electron
@@ -176,8 +179,9 @@ jobs:
 
       - name: Package desktop app
         working-directory: desktop/electron
-        run: pnpm exec electron-builder --config electron-builder.json \
-          --publish never
+        run: |
+          pnpm exec electron-builder --config electron-builder.json \
+            --publish never
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v4

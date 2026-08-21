@@ -17,6 +17,20 @@ const workflow = readFileSync(
 );
 
 describe('release workflow pet signing and release uploads', () => {
+  it('keeps shell continuations inside literal block scalars', () => {
+    // A plain (non-block) YAML run scalar folds "\\\n" into a literal
+    // "\\ " which the shell reads as an escaped space: v0.20.0-alpha.1
+    // failed with sign-pet-package usage errors and electron-builder
+    // printing help. Multi-line run steps must use "run: |".
+    for (const line of workflow.split('\n')) {
+      const match = line.match(/^\s*run: (.*)$/);
+      if (!match) continue;
+      const value = match[1];
+      if (value === '|' || value.startsWith('>')) continue;
+      expect(value.endsWith('\\')).toBe(false);
+    }
+  });
+
   it('maps the signing secret into the signer environment', () => {
     expect(workflow).toContain('PHI_PET_ED25519_PRIVATE_KEY: >-');
     expect(workflow).toContain('${{ secrets.PHI_PET_ED25519_PRIVATE_KEY }}');
