@@ -79,7 +79,8 @@ export class MessageBuffer {
                     settled.toolCallId = m.toolCallId;
                 if (typeof m?.toolName === 'string' && m.toolName)
                     settled.toolName = m.toolName;
-                if (m?.isError === true) settled.isError = true;
+                if (m?.isError === true)
+                    settled.isError = true;
                 if (m && typeof m === 'object' && Object.hasOwn(m, 'details'))
                     settled.details = m.details;
                 this.messages.push(settled);
@@ -160,7 +161,8 @@ export class MessageBuffer {
     rebuildToolResultIndex() {
         const next = new Map();
         for (const message of this.messages) {
-            if (message.role !== 'toolResult') continue;
+            if (message.role !== 'toolResult')
+                continue;
             const id = extractToolCallId(message);
             if (typeof id === 'string' && id) {
                 next.set(id, {
@@ -178,23 +180,28 @@ export function extractToolCallId(message) {
     if (typeof message.toolCallId === 'string' && message.toolCallId)
         return message.toolCallId;
     const content = message.content;
-    if (!content) return undefined;
+    if (!content)
+        return undefined;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const id = item.toolCallId;
-                if (typeof id === 'string') return id;
+                if (typeof id === 'string')
+                    return id;
                 const idSnake = item.tool_call_id;
-                if (typeof idSnake === 'string') return idSnake;
+                if (typeof idSnake === 'string')
+                    return idSnake;
             }
         }
         return undefined;
     }
     if (typeof content === 'object') {
         const id = content.toolCallId;
-        if (typeof id === 'string') return id;
+        if (typeof id === 'string')
+            return id;
         const idSnake = content.tool_call_id;
-        if (typeof idSnake === 'string') return idSnake;
+        if (typeof idSnake === 'string')
+            return idSnake;
     }
     return undefined;
 }
@@ -205,18 +212,22 @@ export function extractToolCallId(message) {
  */
 function extractIsError(message) {
     const envelope = message;
-    if (envelope.isError === true) return true;
+    if (envelope.isError === true)
+        return true;
     const content = message.content;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const flag = item.isError;
-                if (flag === true) return true;
+                if (flag === true)
+                    return true;
             }
         }
-    } else if (content && typeof content === 'object') {
+    }
+    else if (content && typeof content === 'object') {
         const flag = content.isError;
-        if (flag === true) return true;
+        if (flag === true)
+            return true;
     }
     return false;
 }

@@ -3,11 +3,9 @@ import { getLastFolderName } from '../util.js';
 function applyTerminalFont(container, app) {
     const configuredSize = app?.terminalFontSize;
     let fontSize = window.innerWidth <= 768 ? 10 : 14;
-    if (
-        typeof configuredSize === 'number' &&
+    if (typeof configuredSize === 'number' &&
         configuredSize >= 8 &&
-        configuredSize <= 32
-    ) {
+        configuredSize <= 32) {
         fontSize = configuredSize;
     }
     container.style.fontFamily =
@@ -22,18 +20,19 @@ export function openPiRpcChatTab(tabManager, cwd, sessionPath, sessionTitle) {
         tabManager.switchTab(paneId);
         return;
     }
-    const title =
-        sessionPath && sessionTitle
-            ? sessionTitle
-            : `Pi RPC · ${getLastFolderName(cwd) || cwd}`;
+    const title = sessionPath && sessionTitle
+        ? sessionTitle
+        : `Pi RPC · ${getLastFolderName(cwd) || cwd}`;
     const workspace = tabManager.app?.sessionsManager?.activeWorkspace ?? '';
     tabManager.createTab(paneId, '', title, 'pi-rpc', workspace, cwd);
     const tab = tabManager.tabs.get(paneId);
-    if (!tab) return;
+    if (!tab)
+        return;
     applyTerminalFont(tab.termContainer, tabManager.app);
     if (sessionPath) {
         mountRpcChat(paneId, tab.termContainer, cwd, sessionPath);
-    } else {
+    }
+    else {
         mountRpcChat(paneId, tab.termContainer, cwd);
     }
 }

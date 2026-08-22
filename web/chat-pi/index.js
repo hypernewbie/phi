@@ -10,7 +10,8 @@ function cloneStatus(status) {
     };
 }
 function mergeState(status, state) {
-    if (!state || typeof state !== 'object') return false;
+    if (!state || typeof state !== 'object')
+        return false;
     const source = state;
     let changed = false;
     const strings = ['cwd', 'model', 'thinking'];
@@ -29,23 +30,20 @@ function mergeState(status, state) {
         'cacheWriteTokens',
     ];
     for (const field of numbers) {
-        if (!Object.hasOwn(source, field)) continue;
+        if (!Object.hasOwn(source, field))
+            continue;
         const value = source[field];
-        if (
-            value === null ||
-            (typeof value === 'number' && Number.isFinite(value))
-        ) {
+        if (value === null ||
+            (typeof value === 'number' && Number.isFinite(value))) {
             status[field] = value;
             changed = true;
         }
     }
     if (Object.hasOwn(source, 'skills')) {
         const value = source.skills;
-        if (
-            value === null ||
+        if (value === null ||
             (Array.isArray(value) &&
-                value.every((item) => typeof item === 'string'))
-        ) {
+                value.every((item) => typeof item === 'string'))) {
             status.skills = value === null ? null : [...value];
             changed = true;
         }
@@ -53,25 +51,28 @@ function mergeState(status, state) {
     return changed;
 }
 function isSnapshot(value) {
-    if (!value || typeof value !== 'object') return false;
+    if (!value || typeof value !== 'object')
+        return false;
     const snapshot = value;
-    return (
-        typeof snapshot.lastSeq === 'number' &&
+    return (typeof snapshot.lastSeq === 'number' &&
         Number.isFinite(snapshot.lastSeq) &&
-        Array.isArray(snapshot.messages)
-    );
+        Array.isArray(snapshot.messages));
 }
 function rejected(message) {
     return Promise.reject(new Error(message));
 }
 function validModels(value) {
     const models = value?.models;
-    if (!Array.isArray(models)) throw new Error('Pi model list is malformed');
+    if (!Array.isArray(models))
+        throw new Error('Pi model list is malformed');
     return models.flatMap((item) => {
-        if (!item || typeof item !== 'object') return [];
+        if (!item || typeof item !== 'object')
+            return [];
         const model = item;
-        if (typeof model.provider !== 'string' || !model.provider) return [];
-        if (typeof model.id !== 'string' || !model.id) return [];
+        if (typeof model.provider !== 'string' || !model.provider)
+            return [];
+        if (typeof model.id !== 'string' || !model.id)
+            return [];
         return [
             {
                 provider: model.provider,
@@ -85,18 +86,19 @@ function validModels(value) {
 }
 function validThinkingLevels(value) {
     const levels = value?.levels;
-    if (
-        !Array.isArray(levels) ||
-        !levels.every((level) => typeof level === 'string')
-    )
+    if (!Array.isArray(levels) ||
+        !levels.every((level) => typeof level === 'string'))
         throw new Error('Pi thinking level list is malformed');
     return [...levels];
 }
 function invokeControl(client, op, sid, args, legacyId, legacyResponses) {
-    if (typeof client.call === 'function') return client.call(op, sid, args);
+    if (typeof client.call === 'function')
+        return client.call(op, sid, args);
     const frame = { t: 'call', id: legacyId, op };
-    if (sid !== undefined) frame.sid = sid;
-    if (args !== undefined) frame.args = args;
+    if (sid !== undefined)
+        frame.sid = sid;
+    if (args !== undefined)
+        frame.args = args;
     return new Promise((resolve, reject) => {
         if (legacyResponses) {
             legacyResponses.set(legacyId, { resolve, reject });
@@ -104,22 +106,18 @@ function invokeControl(client, op, sid, args, legacyId, legacyResponses) {
             return;
         }
         const off = client.onMessage((env) => {
-            if (env?.t !== 'res' || env.id !== legacyId) return;
+            if (env?.t !== 'res' || env.id !== legacyId)
+                return;
             off();
-            if (env.ok) resolve(env.data);
-            else reject(new Error(String(env.error ?? 'control call failed')));
+            if (env.ok)
+                resolve(env.data);
+            else
+                reject(new Error(String(env.error ?? 'control call failed')));
         });
         client.send(frame);
     });
 }
-export function mountChatPi(
-    root,
-    cwd,
-    client,
-    sessionPath,
-    onStatusChange = () => {},
-    onControlChange = () => {},
-) {
+export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () => { }, onControlChange = () => { }) {
     const wire = client;
     const buffer = new MessageBuffer();
     const localStatus = { cwd };
@@ -143,16 +141,15 @@ export function mountChatPi(
     let legacyHydrateId = 0;
     const legacyResponses = new Map();
     const notifyStatus = () => onStatusChange(cloneStatus(localStatus));
-    const notifyControls = () =>
-        onControlChange({
-            ready,
-            exited,
-            busy,
-            queueDepth,
-            hasTranscript: buffer.getMessageCount() > 0,
-            model: localStatus.model ?? '',
-            thinking: localStatus.thinking ?? '',
-        });
+    const notifyControls = () => onControlChange({
+        ready,
+        exited,
+        busy,
+        queueDepth,
+        hasTranscript: buffer.getMessageCount() > 0,
+        model: localStatus.model ?? '',
+        thinking: localStatus.thinking ?? '',
+    });
     const applyState = (state) => {
         const source = state;
         const statusChanged = mergeState(localStatus, state);
@@ -168,18 +165,18 @@ export function mountChatPi(
                     syncActiveTurn();
                 }
             }
-            if (
-                typeof source.queueDepth === 'number' &&
+            if (typeof source.queueDepth === 'number' &&
                 Number.isFinite(source.queueDepth) &&
                 source.queueDepth >= 0 &&
-                source.queueDepth !== queueDepth
-            ) {
+                source.queueDepth !== queueDepth) {
                 queueDepth = Math.trunc(source.queueDepth);
                 controlsChanged = true;
             }
         }
-        if (statusChanged) notifyStatus();
-        if (controlsChanged) notifyControls();
+        if (statusChanged)
+            notifyStatus();
+        if (controlsChanged)
+            notifyControls();
     };
     const failBootstrap = (message) => {
         sid = '';
@@ -199,15 +196,12 @@ export function mountChatPi(
         // the current window. State-only updates use this same narrow setter
         // without re-rendering the transcript.
         syncActiveTurn();
-        view.setStructuredMessages(
-            buffer.getStructuredTranscript(),
-            buffer.getPartial(),
-            buffer.getToolResultMap(),
-        );
+        view.setStructuredMessages(buffer.getStructuredTranscript(), buffer.getPartial(), buffer.getToolResultMap());
         notifyControls();
     };
     const paint = () => {
-        if (paintQueued) return;
+        if (paintQueued)
+            return;
         paintQueued = true;
         void Promise.resolve().then(flushPaint);
     };
@@ -233,24 +227,23 @@ export function mountChatPi(
     const syncActiveTurn = () => {
         const active = activePrompt
             ? {
-                  active: true,
-                  promptText: activePrompt.text,
-                  promptOrigin: activePrompt.origin,
-                  stateLabel:
-                      activePrompt.state === 'sending'
-                          ? 'Sending'
-                          : 'Sent to Pi',
-                  outgoing: outgoing.map((item) => ({
-                      text: item.text,
-                      stateLabel:
-                          item.state === 'sending' ? 'Sending' : 'Sent to Pi',
-                  })),
-              }
+                active: true,
+                promptText: activePrompt.text,
+                promptOrigin: activePrompt.origin,
+                stateLabel: activePrompt.state === 'sending'
+                    ? 'Sending'
+                    : 'Sent to Pi',
+                outgoing: outgoing.map((item) => ({
+                    text: item.text,
+                    stateLabel: item.state === 'sending' ? 'Sending' : 'Sent to Pi',
+                })),
+            }
             : null;
         view.setActiveTurn(active);
     };
     const cancelPendingSave = () => {
-        if (pendingSaveTimer !== null) clearTimeout(pendingSaveTimer);
+        if (pendingSaveTimer !== null)
+            clearTimeout(pendingSaveTimer);
         pendingSaveTimer = null;
         pendingImmediateSave = false;
     };
@@ -261,7 +254,8 @@ export function mountChatPi(
     const schedulePersist = (delay) => {
         cancelPendingSave();
         const currentSid = sid;
-        if (!currentSid) return;
+        if (!currentSid)
+            return;
         pendingSaveTimer = setTimeout(() => {
             pendingSaveTimer = null;
             persistIfCurrent(currentSid);
@@ -270,21 +264,25 @@ export function mountChatPi(
     const scheduleImmediatePersist = () => {
         cancelPendingSave();
         const currentSid = sid;
-        if (!currentSid) return;
+        if (!currentSid)
+            return;
         pendingImmediateSave = true;
         queueMicrotask(() => {
-            if (!pendingImmediateSave) return;
+            if (!pendingImmediateSave)
+                return;
             pendingImmediateSave = false;
             persistIfCurrent(currentSid);
         });
     };
     const flushPendingSave = () => {
-        if (pendingSaveTimer === null && !pendingImmediateSave) return;
+        if (pendingSaveTimer === null && !pendingImmediateSave)
+            return;
         cancelPendingSave();
         persistIfCurrent(sid);
     };
     const requestHydrate = (forReset = false) => {
-        if (destroyed || !sid) return;
+        if (destroyed || !sid)
+            return;
         if (forReset && activeHydrate?.reset && activeHydrate.sid === sid)
             return;
         hydrateInFlight = true;
@@ -294,58 +292,52 @@ export function mountChatPi(
         activeHydrate = { sid: currentSid, generation, reset: forReset };
         const hydrateNumber = legacyHydrateId++;
         const legacyId = hydrateNumber === 0 ? 'hyd' : `hyd-${hydrateNumber}`;
-        void invokeControl(
-            wire,
-            'hydrate',
-            currentSid,
-            {},
-            legacyId,
-            legacyResponses,
-        )
+        void invokeControl(wire, 'hydrate', currentSid, {}, legacyId, legacyResponses)
             .then((data) => {
-                if (
-                    destroyed ||
-                    activeHydrate?.generation !== generation ||
-                    currentSid !== sid
-                )
-                    return;
-                const wasReset = activeHydrate.reset;
-                activeHydrate = null;
-                if (!isSnapshot(data)) {
-                    hydrateInFlight = false;
-                    status.textContent =
-                        'Error: Pi RPC hydrate snapshot missing or malformed';
-                    if (!wasReset) {
-                        ready = false;
-                        notifyControls();
-                    }
-                    return;
-                }
-                buffer.applySnapshot(data);
-                applyState(data.state);
+            if (destroyed ||
+                activeHydrate?.generation !== generation ||
+                currentSid !== sid)
+                return;
+            const wasReset = activeHydrate.reset;
+            activeHydrate = null;
+            if (!isSnapshot(data)) {
                 hydrateInFlight = false;
-                paint();
-                // A hydrate replaces the authoritative settled transcript.
-                // Reset completion flushes in the next microtask; initial and
-                // gap hydrates retain the existing 0 ms timer behavior.
-                if (wasReset) scheduleImmediatePersist();
-                else schedulePersist(0);
-            })
-            .catch((error) => {
-                if (destroyed || activeHydrate?.generation !== generation)
-                    return;
-                const wasReset = activeHydrate.reset;
-                activeHydrate = null;
-                hydrateInFlight = false;
-                status.textContent = `Error: ${String(error)}`;
+                status.textContent =
+                    'Error: Pi RPC hydrate snapshot missing or malformed';
                 if (!wasReset) {
                     ready = false;
                     notifyControls();
                 }
-            });
+                return;
+            }
+            buffer.applySnapshot(data);
+            applyState(data.state);
+            hydrateInFlight = false;
+            paint();
+            // A hydrate replaces the authoritative settled transcript.
+            // Reset completion flushes in the next microtask; initial and
+            // gap hydrates retain the existing 0 ms timer behavior.
+            if (wasReset)
+                scheduleImmediatePersist();
+            else
+                schedulePersist(0);
+        })
+            .catch((error) => {
+            if (destroyed || activeHydrate?.generation !== generation)
+                return;
+            const wasReset = activeHydrate.reset;
+            activeHydrate = null;
+            hydrateInFlight = false;
+            status.textContent = `Error: ${String(error)}`;
+            if (!wasReset) {
+                ready = false;
+                notifyControls();
+            }
+        });
     };
     const send = (text) => {
-        if (!sid || !ready || exited) return false;
+        if (!sid || !ready || exited)
+            return false;
         const dispatch = dispatchComposer(text, busy);
         if (dispatch.kind === 'rejected') {
             status.textContent = dispatch.reason;
@@ -360,189 +352,158 @@ export function mountChatPi(
         outgoing.push(local);
         activePrompt = { ...local, origin: 'optimistic' };
         syncActiveTurn();
-        void invokeControl(
-            wire,
-            'prompt',
-            currentSid,
-            {
-                message: dispatch.message,
-                ...(dispatch.streamingBehavior
-                    ? { streamingBehavior: dispatch.streamingBehavior }
-                    : {}),
-            },
-            `p${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            legacyResponses,
-        )
+        void invokeControl(wire, 'prompt', currentSid, {
+            message: dispatch.message,
+            ...(dispatch.streamingBehavior
+                ? { streamingBehavior: dispatch.streamingBehavior }
+                : {}),
+        }, `p${Date.now()}-${Math.random().toString(16).slice(2)}`, legacyResponses)
             .then((data) => {
-                const index = outgoing.indexOf(local);
-                if (data?.accepted !== true) {
-                    if (index >= 0) outgoing.splice(index, 1);
-                    if (activePrompt?.id === local.id)
-                        activePrompt = outgoing.at(-1)
-                            ? { ...outgoing.at(-1), origin: 'optimistic' }
-                            : null;
-                    if (!destroyed && currentSid === sid)
-                        status.textContent = 'Error: prompt was not accepted';
-                } else if (index >= 0) {
-                    local.state = 'sent';
-                    if (activePrompt?.id === local.id)
-                        activePrompt.state = 'sent';
-                } else if (activePrompt?.id === local.id) {
-                    // Pi may reconcile the outgoing record before the
-                    // prompt response arrives. Keep the retained marker's
-                    // state in sync with the accepted response.
-                    activePrompt.state = 'sent';
-                }
-                syncActiveTurn();
-            })
-            .catch((error) => {
-                const index = outgoing.indexOf(local);
-                if (index >= 0) outgoing.splice(index, 1);
+            const index = outgoing.indexOf(local);
+            if (data?.accepted !== true) {
+                if (index >= 0)
+                    outgoing.splice(index, 1);
                 if (activePrompt?.id === local.id)
                     activePrompt = outgoing.at(-1)
                         ? { ...outgoing.at(-1), origin: 'optimistic' }
                         : null;
                 if (!destroyed && currentSid === sid)
-                    status.textContent = `Error: ${String(error)}`;
-                syncActiveTurn();
-            });
+                    status.textContent = 'Error: prompt was not accepted';
+            }
+            else if (index >= 0) {
+                local.state = 'sent';
+                if (activePrompt?.id === local.id)
+                    activePrompt.state = 'sent';
+            }
+            else if (activePrompt?.id === local.id) {
+                // Pi may reconcile the outgoing record before the
+                // prompt response arrives. Keep the retained marker's
+                // state in sync with the accepted response.
+                activePrompt.state = 'sent';
+            }
+            syncActiveTurn();
+        })
+            .catch((error) => {
+            const index = outgoing.indexOf(local);
+            if (index >= 0)
+                outgoing.splice(index, 1);
+            if (activePrompt?.id === local.id)
+                activePrompt = outgoing.at(-1)
+                    ? { ...outgoing.at(-1), origin: 'optimistic' }
+                    : null;
+            if (!destroyed && currentSid === sid)
+                status.textContent = `Error: ${String(error)}`;
+            syncActiveTurn();
+        });
         return true;
     };
     const getModels = () => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'getAvailableModels',
-            currentSid,
-            {},
-            'models',
-            legacyResponses,
-        ).then(validModels);
+        return invokeControl(wire, 'getAvailableModels', currentSid, {}, 'models', legacyResponses).then(validModels);
     };
     const getThinkingLevels = () => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'getAvailableThinkingLevels',
-            currentSid,
-            {},
-            'thinking',
-            legacyResponses,
-        ).then(validThinkingLevels);
+        return invokeControl(wire, 'getAvailableThinkingLevels', currentSid, {}, 'thinking', legacyResponses).then(validThinkingLevels);
     };
     const setModel = (provider, modelId) => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'setModel',
-            currentSid,
-            { provider, modelId },
-            'set-model',
-            legacyResponses,
-        ).then((data) => {
-            if (currentSid === sid) applyState(data?.state);
+        return invokeControl(wire, 'setModel', currentSid, { provider, modelId }, 'set-model', legacyResponses).then((data) => {
+            if (currentSid === sid)
+                applyState(data?.state);
             return data;
         });
     };
     const setThinking = (level) => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'setThinking',
-            currentSid,
-            { level },
-            'set-thinking',
-            legacyResponses,
-        ).then((data) => {
-            if (currentSid === sid) applyState(data?.state);
+        return invokeControl(wire, 'setThinking', currentSid, { level }, 'set-thinking', legacyResponses).then((data) => {
+            if (currentSid === sid)
+                applyState(data?.state);
             return data;
         });
     };
     const interrupt = () => {
         if (!sid || !ready || exited || !sessionActive)
             return rejected('Pi RPC is not active');
-        if (abortInFlight) return rejected('Pi interrupt is already pending');
+        if (abortInFlight)
+            return rejected('Pi interrupt is already pending');
         abortInFlight = true;
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'abort',
-            currentSid,
-            {},
-            'abort',
-            legacyResponses,
-        )
+        return invokeControl(wire, 'abort', currentSid, {}, 'abort', legacyResponses)
             .catch((error) => {
-                if (!destroyed && currentSid === sid)
-                    status.textContent = `Error: ${String(error)}`;
-                throw error;
-            })
+            if (!destroyed && currentSid === sid)
+                status.textContent = `Error: ${String(error)}`;
+            throw error;
+        })
             .finally(() => {
-                abortInFlight = false;
-            });
+            abortInFlight = false;
+        });
     };
     const resetChat = () => {
-        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
-        if (busy || queueDepth > 0) return rejected('Pi RPC is busy');
-        if (resetInFlight) return rejected('Pi RPC reset is already pending');
+        if (!sid || !ready || exited)
+            return rejected('Pi RPC is not ready');
+        if (busy || queueDepth > 0)
+            return rejected('Pi RPC is busy');
+        if (resetInFlight)
+            return rejected('Pi RPC reset is already pending');
         resetInFlight = true;
         notifyControls();
         const currentSid = sid;
-        return invokeControl(
-            wire,
-            'newSession',
-            currentSid,
-            {},
-            'reset',
-            legacyResponses,
-        )
+        return invokeControl(wire, 'newSession', currentSid, {}, 'reset', legacyResponses)
             .then((data) => {
-                if (currentSid !== sid) return data;
-                if (data?.cancelled === true) return data;
-                if (data?.reset !== true)
-                    throw new Error('Pi reset was not accepted');
-                if (typeof data.stateWarning === 'string' && data.stateWarning)
-                    status.textContent = `Warning: ${data.stateWarning}`;
-                // The sequenced transcriptReset event is the only successful clear
-                // trigger. Its handler starts the hydrate barrier below.
+            if (currentSid !== sid)
                 return data;
-            })
+            if (data?.cancelled === true)
+                return data;
+            if (data?.reset !== true)
+                throw new Error('Pi reset was not accepted');
+            if (typeof data.stateWarning === 'string' && data.stateWarning)
+                status.textContent = `Warning: ${data.stateWarning}`;
+            // The sequenced transcriptReset event is the only successful clear
+            // trigger. Its handler starts the hydrate barrier below.
+            return data;
+        })
             .catch((error) => {
-                if (!destroyed && currentSid === sid)
-                    status.textContent = `Error: ${String(error)}`;
-                throw error;
-            })
+            if (!destroyed && currentSid === sid)
+                status.textContent = `Error: ${String(error)}`;
+            throw error;
+        })
             .finally(() => {
-                resetInFlight = false;
-                notifyControls();
-            });
+            resetInFlight = false;
+            notifyControls();
+        });
     };
     const off = client.onMessage((env) => {
         if (env?.t === 'res' && typeof env.id === 'string') {
             const response = legacyResponses.get(env.id);
             if (response) {
                 legacyResponses.delete(env.id);
-                if (env.ok) response.resolve(env.data);
+                if (env.ok)
+                    response.resolve(env.data);
                 else
-                    response.reject(
-                        new Error(String(env.error ?? 'control call failed')),
-                    );
+                    response.reject(new Error(String(env.error ?? 'control call failed')));
                 return;
             }
         }
-        if (destroyed) return;
-        if (env?.t !== 'evt' || env?.sid !== sid) return;
+        if (destroyed)
+            return;
+        if (env?.t !== 'evt' || env?.sid !== sid)
+            return;
         const result = buffer.applyEvent({
             seq: env.seq,
             evt: env.evt,
             data: env.data,
         });
         if (!result.applied) {
-            if (result.gap && sid) requestHydrate(false);
+            if (result.gap && sid)
+                requestHydrate(false);
             return;
         }
         if (env.evt === 'stateChanged') {
@@ -559,9 +520,7 @@ export function mountChatPi(
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
             const text = renderedUserText(env.data.message.content);
-            const match = outgoing.find(
-                (item) => renderedUserText(item.text) === text,
-            );
+            const match = outgoing.find((item) => renderedUserText(item.text) === text);
             if (match) {
                 outgoing.splice(outgoing.indexOf(match), 1);
                 if (activePrompt?.id === match.id) {
@@ -574,7 +533,8 @@ export function mountChatPi(
         }
         if (env.evt === 'transcriptReset') {
             requestHydrate(true);
-        } else {
+        }
+        else {
             // Hot-path branching on the render disposition avoids full
             // structured repaints during streaming `text_delta` events and
             // avoids the expensive full-history serialize-and-write on
@@ -584,7 +544,8 @@ export function mountChatPi(
             switch (result.renderDisposition) {
                 case 'full':
                     paint();
-                    if (!hydrateInFlight) schedulePersist(250);
+                    if (!hydrateInFlight)
+                        schedulePersist(250);
                     break;
                 case 'partial':
                     view.setStructuredPartial(buffer.getPartial());
@@ -600,40 +561,37 @@ export function mountChatPi(
         }
     });
     const spawnArgs = { cwd };
-    if (sessionPath) spawnArgs.sessionPath = sessionPath;
-    void invokeControl(
-        wire,
-        'spawn',
-        undefined,
-        spawnArgs,
-        'sp',
-        legacyResponses,
-    )
+    if (sessionPath)
+        spawnArgs.sessionPath = sessionPath;
+    void invokeControl(wire, 'spawn', undefined, spawnArgs, 'sp', legacyResponses)
         .then((data) => {
-            if (destroyed) return;
-            const nextSid = typeof data?.sid === 'string' ? data.sid : '';
-            if (!nextSid || !isSnapshot(data?.snapshot)) {
-                failBootstrap('Pi RPC bootstrap snapshot missing or malformed');
-                return;
-            }
-            sid = nextSid;
-            view.title.textContent =
-                typeof data.title === 'string' ? data.title : 'Pi RPC';
-            buffer.applySnapshot(data.snapshot);
-            applyState(data.state);
-            ready = true;
-            exited = false;
-            status.textContent = 'Ready';
-            notifyControls();
-            paint();
-            requestHydrate(false);
-        })
+        if (destroyed)
+            return;
+        const nextSid = typeof data?.sid === 'string' ? data.sid : '';
+        if (!nextSid || !isSnapshot(data?.snapshot)) {
+            failBootstrap('Pi RPC bootstrap snapshot missing or malformed');
+            return;
+        }
+        sid = nextSid;
+        view.title.textContent =
+            typeof data.title === 'string' ? data.title : 'Pi RPC';
+        buffer.applySnapshot(data.snapshot);
+        applyState(data.state);
+        ready = true;
+        exited = false;
+        status.textContent = 'Ready';
+        notifyControls();
+        paint();
+        requestHydrate(false);
+    })
         .catch((error) => {
-            if (!destroyed) failBootstrap(error);
-        });
+        if (!destroyed)
+            failBootstrap(error);
+    });
     return {
         destroy: () => {
-            if (destroyed) return;
+            if (destroyed)
+                return;
             flushPendingSave();
             destroyed = true;
             off();
