@@ -1460,3 +1460,220 @@ func TestControlConnectionCloseReleasesManagerSubscription(t *testing.T) {
 	}
 	t.Fatalf("connection close left manager subscription count at %d", mgr.SubscriptionCount(inst))
 }
+
+// newControlRenameManager returns a manager backed by a single fake child
+// whose respond callback handles the bootstrap triple plus set_session_name.
+// rejectName, when non-nil, makes set_session_name fail with that message.
+func newControlRenameManager(t *testing.T, rejectName string) (*rpc.Manager, *controlFakeChild, chan string) {
+	t.Helper()
+	child := newControlFakeChild()
+	commands := make(chan string, 8)
+	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
+		kind, _ := command["type"].(string)
+		commands <- kind
+		switch kind {
+		case "get_state":
+			return map[string]any{
+				"model":               map[string]any{"name": "pi-4"},
+				"thinkingLevel":       "high",
+				"isStreaming":         false,
+				"isCompacting":        false,
+				"pendingMessageCount": 0,
+			}, true, ""
+		case "get_session_stats":
+			return map[string]any{
+				"tokens": map[string]any{"input": 0, "output": 0},
+			}, true, ""
+		case "get_commands":
+			return map[string]any{"commands": []map[string]any{}}, true, ""
+		case "set_session_name":
+			if rejectName != "" {
+				return nil, false, rejectName
+			}
+			return nil, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	return mgr, child, commands
+}
+
+// readBootstrapCommands drains the bootstrap triple from the commands
+// channel so the test sees only the set_session_name command afterwards.
+func readBootstrapCommands(commands <-chan string) {
+	for i := 0; i < 3; i++ {
+		<-commands
+	}
+}
+
+func TestControlSetSessionNameForwardsAndUpdatesTitle(t *testing.T) {
+	mgr, _, commands := newControlRenameManager(t, "")
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/demo")
+	readBootstrapCommands(commands)
+
+	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	res := readResponse(t, c, "snm")
+	if res.Ok == nil || !*res.Ok {
+		t.Fatalf("setSessionName failed: %+v", res)
+	}
+	var payload struct {
+		State rpc.State `json:"state"`
+	}
+	if err := json.Unmarshal(res.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.State.Title != "Audit auth module" {
+		t.Fatalf("state.title = %q, want %q", payload.State.Title, "Audit auth module")
+	}
+
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inst.TitleCopy(); got != "Audit auth module" {
+		t.Fatalf("inst.TitleCopy = %q, want %q", got, "Audit auth module")
+	}
+	var listPayload []map[string]any
+	listArgs, _ := json.Marshal(struct{}{})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "ls", Op: rpc.OpListSessions, Args: listArgs}); err != nil {
+		t.Fatal(err)
+	}
+	list := readResponse(t, c, "ls")
+	if list.Ok == nil || !*list.Ok {
+		t.Fatalf("listSessions failed: %+v", list)
+	}
+	if err := json.Unmarshal(list.Data, &listPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(listPayload) != 1 || listPayload[0]["title"] != "Audit auth module" {
+		t.Fatalf("listSessions title = %+v, want %q", listPayload, "Audit auth module")
+	}
+
+	// The child received the set_session_name command with the name.
+	select {
+	case got := <-commands:
+		if got != "set_session_name" {
+			t.Fatalf("captured command = %q, want set_session_name", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not observe set_session_name command on the child")
+	}
+}
+
+func TestControlSetSessionNamePiRejectionSurfacesError(t *testing.T) {
+	mgr, _, commands := newControlRenameManager(t, "name not allowed")
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/demo")
+	readBootstrapCommands(commands)
+
+	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	res := readResponse(t, c, "snm")
+	if res.Ok == nil || *res.Ok {
+		t.Fatalf("setSessionName should reject Pi failure: %+v", res)
+	}
+	if !strings.Contains(res.Error, "name not allowed") {
+		t.Fatalf("error = %q, want it to contain %q", res.Error, "name not allowed")
+	}
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inst.TitleCopy(); got == "Audit auth module" {
+		t.Fatalf("inst.TitleCopy unexpectedly updated to %q on Pi rejection", got)
+	}
+}
+
+func TestControlSetSessionNameUnknownSidReturnsError(t *testing.T) {
+	mgr, _, _ := newControlRenameManager(t, "")
+	c := helloDial(t, mgr)
+	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: "does-not-exist", Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	res := readResponse(t, c, "snm")
+	if res.Ok == nil || *res.Ok {
+		t.Fatalf("setSessionName with unknown sid should reject: %+v", res)
+	}
+}
+
+func TestControlSetSessionNameStrictDecode(t *testing.T) {
+	mgr, _, _ := newControlRenameManager(t, "")
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/demo")
+
+	// Empty name is rejected.
+	empty, _ := json.Marshal(map[string]string{"name": "   "})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: empty}); err != nil {
+		t.Fatal(err)
+	}
+	if res := readResponse(t, c, "snm"); res.Ok == nil || *res.Ok {
+		t.Fatalf("empty name should reject: %+v", res)
+	}
+
+	// Unknown field rejected by decodeStrict.
+	unknown, _ := json.Marshal(map[string]string{"name": "x", "title": "y"})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: unknown}); err != nil {
+		t.Fatal(err)
+	}
+	if res := readResponse(t, c, "snm"); res.Ok == nil || *res.Ok {
+		t.Fatalf("unknown field should reject: %+v", res)
+	}
+}
+
+func TestControlSetSessionNameEmitsStateChangedEvent(t *testing.T) {
+	mgr, _, commands := newControlRenameManager(t, "")
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/demo")
+	readBootstrapCommands(commands)
+
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := mgr.Subscribe(inst)
+	if sub == nil {
+		t.Fatal("subscribe returned nil")
+	}
+	defer sub.CloseThis()
+
+	args, _ := json.Marshal(map[string]string{"name": "Audit auth module"})
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "snm", Op: rpc.OpSetSessionName, Sid: sid, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	if res := readResponse(t, c, "snm"); res.Ok == nil || !*res.Ok {
+		t.Fatalf("setSessionName failed: %+v", res)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev, ok := <-sub.Channel():
+			if !ok {
+				t.Fatal("subscription channel closed before event arrived")
+			}
+			if ev.Evt != rpc.EvtStateChanged {
+				continue
+			}
+			raw, _ := json.Marshal(ev.Data)
+			var st rpc.State
+			if err := json.Unmarshal(raw, &st); err != nil {
+				continue
+			}
+			if st.Title == "Audit auth module" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("did not observe stateChanged event with new title")
+		}
+	}
+}

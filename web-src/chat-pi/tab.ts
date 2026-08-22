@@ -43,9 +43,12 @@ export function openPiRpcChatTab(
     sessionPath?: string,
     sessionTitle?: string,
 ): void {
+    // Fresh chats get a phi-minted UUID so each "New session" opens a
+    // distinct pi --mode rpc child. Resumed chats keep their session-path
+    // key so reopening the same session dedupes to the existing tab.
     const paneId = sessionPath
         ? `pi-rpc:session:${encodeURIComponent(sessionPath)}`
-        : `pi-rpc:${cwd}`;
+        : `pi-rpc:${crypto.randomUUID()}`;
     if (tabManager.tabs.has(paneId)) {
         tabManager.switchTab(paneId);
         return;

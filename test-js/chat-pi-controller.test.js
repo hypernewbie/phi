@@ -23,6 +23,7 @@ import {
     getPiRpcStatus,
     mountRpcChat,
     rpcChatInterrupt,
+    rpcChatSetName,
     subscribePiRpcStatus,
 } from '../web/chat-pi/controller.js';
 import { mountChatPi } from '../web/chat-pi/index.js';
@@ -867,6 +868,68 @@ describe('Pi RPC transcript controller', () => {
         await expect(rpcChatInterrupt('unknown-pane')).rejects.toThrow(
             'unknown or destroyed Pi RPC pane: unknown-pane',
         );
+    });
+
+    it('rpcChatSetName forwards to mountChatPi.setName and rejects missing panes and rejections', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        connectControl.mockReturnValueOnce(wire.client);
+        mountRpcChat('pane-1', root, '/work/rename');
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const promise = rpcChatSetName('pane-1', '  Audit auth module  ');
+        const [rename] = wire.sent.filter(
+            (frame) => frame.op === 'setSessionName',
+        );
+        expect(rename).toMatchObject({
+            op: 'setSessionName',
+            sid: 's1',
+            args: { name: 'Audit auth module' },
+        });
+        wire.emit({
+            t: 'res',
+            id: rename.id,
+            ok: true,
+            data: { state: { title: 'Audit auth module' } },
+        });
+        await expect(promise).resolves.toEqual({
+            state: { title: 'Audit auth module' },
+        });
+
+        await expect(
+            rpcChatSetName('unknown-pane', 'anything'),
+        ).rejects.toThrow('unknown or destroyed Pi RPC pane: unknown-pane');
+
+        // Rejection from the backend surfaces to the caller.
+        const rejectWire = fakeClient();
+        connectControl.mockReturnValueOnce(rejectWire.client);
+        mountRpcChat('pane-2', root, '/work/rename-reject');
+        rejectWire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's2', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const rejected = rpcChatSetName('pane-2', 'Forbidden');
+        const [rejectCall] = rejectWire.sent.filter(
+            (frame) => frame.op === 'setSessionName',
+        );
+        rejectWire.emit({
+            t: 'res',
+            id: rejectCall.id,
+            ok: false,
+            error: 'name not allowed',
+        });
+        await expect(rejected).rejects.toThrow('name not allowed');
     });
 
     it('non-accepted prompt response removes only the matching optimistic record, surfaces an error, and falls back to the next one', async () => {

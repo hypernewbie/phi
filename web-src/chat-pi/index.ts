@@ -33,6 +33,7 @@ export interface ChatPiHandle {
     setThinking(level: string): Promise<unknown>;
     resetChat(): Promise<unknown>;
     interrupt(): Promise<unknown>;
+    setName(name: string): Promise<unknown>;
 }
 
 export type PiRpcStatusChange = (status: PiRpcStatus | null) => void;
@@ -635,6 +636,20 @@ export function mountChatPi(
             });
     };
 
+    const setName = (name: string): Promise<unknown> => {
+        const trimmed = name.trim();
+        if (!trimmed) return rejected('name is required');
+        if (!sid) return rejected('Pi RPC is not ready');
+        return invokeControl(
+            wire,
+            'setSessionName',
+            sid,
+            { name: trimmed },
+            'snm',
+            legacyResponses,
+        );
+    };
+
     const off = client.onMessage((env: any) => {
         if (env?.t === 'res' && typeof env.id === 'string') {
             const response = legacyResponses.get(env.id);
@@ -885,5 +900,6 @@ export function mountChatPi(
         setThinking,
         resetChat,
         interrupt,
+        setName,
     };
 }
