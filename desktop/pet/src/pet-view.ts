@@ -6,73 +6,33 @@
  */
 import type {
   PetApi,
+  PetConfig,
   PetDragPosition,
   PetHitTestRequest,
   PetStageLayout,
   PetZoomState,
   StageRect,
 } from "./pet-bridge.js";
+import { PET_CONFIG } from "./pet-config.js";
 
 /** The sentinel "show the static maid image" state — never a webm filename. */
 export const STATIC = "STATIC";
 /** The drag feedback animation (played while the pointer drags). */
 export const DRAG = "被鼠标拖拽悬空反馈";
-/** The stationary act pool. */
-export const ACTS = [
-  "悠闲哼歌",
-  "超大伸懒腰",
-  "原地专心玩魔方",
-  "原地敲击桌面互动",
-  "原地重力下蹲压缩",
-  "哈欠连天",
-  "原地小憩沉眠",
-  "原地蹲下玩玩具汽车",
-  "鲸鱼吐泡泡特效",
-  "女仆屈膝礼仪",
-  "被吓一跳（炸毛）",
-  "原地跳跃抓碎头顶物品",
-  "小幅度原地 360 度旋转展示",
-  "偷吃零食被抓住",
-  "玩游戏气急败坏",
-  "用鲸鱼尾巴拍打地面",
-  "打瞌睡被惊醒",
-  "玩水枪",
-  "小提琴演奏",
-  "蓝鲸现世",
-  "吃白饭",
-  "照镜子",
-  "优雅女仆舞",
-  "轻快摇摆舞",
-  "可爱宅舞",
-  "整体换装试色",
-  "大口吃零食",
-  "吹气球",
-  "动物环绕",
-  "深度思考碎碎念",
-  "轻快记录",
-  "写代码",
-  "吃Token",
-  "吃早餐",
-  "吃午餐",
-  "吃晚餐",
-  "放风筝",
-  "摇扇纳凉",
-  "吃冰淇淋融化",
-  "被落叶淹没",
-  "中秋赏月吃月饼",
-  "堆雪人",
-  "东张西望",
-  "原地左转奔跑",
-  "原地漂浮踏步",
-  "待机呼吸休闲",
-  "螃蟹走路",
+/** Runtime config: test-injected via globalThis.petConfig, else embedded. */
+const activeConfig = (): PetConfig =>
+  (globalThis as { petConfig?: PetConfig }).petConfig ?? PET_CONFIG;
+
+const lastActRef = { current: null as string | null };
+
+/** The stationary act pool: category actions plus the idle animation. */
+export const ACTS = (): readonly string[] => [
+  ...activeConfig().animations.categories.flatMap((c) => c.actions),
+  ...activeConfig().animations.idle,
 ];
+
 /** The click-reaction pool. */
-export const CLICKS = [
-  "点击回应 - 开心跃动",
-  "点击回应 - 害羞惊讶",
-  "点击回应 - 傲娇生气（侧身展示）",
-];
+export const CLICKS = (): readonly string[] => activeConfig().animations.clicks;
 /** Pointer distance at which a click becomes a drag. */
 export const DRAG_THRESHOLD = 5;
 
@@ -175,6 +135,80 @@ export function pick(
   const entries = exclude === null ? pool : pool.filter((n) => n !== exclude);
   return entries[Math.floor(rng() * entries.length)] ?? pool[0] ?? "";
 }
+
+/** Weighted category roll; noMirror categories excluded when facing right. */
+export const pickWeightedCategory = (
+  cats: ReadonlyArray<{
+    id: string;
+    weight: number;
+    noMirror?: boolean;
+    actions: string[];
+  }>,
+  facing: "left" | "right",
+  rng: () => number,
+): { id: string; actions: string[] } | null => {
+  const eligible = cats.filter((c) => !(facing === "right" && c.noMirror));
+  if (eligible.length === 0) return null;
+  const total = eligible.reduce((s, c) => s + c.weight, 0);
+  if (total <= 0) return null;
+  let roll = rng() * total;
+  for (const c of eligible) {
+    roll -= c.weight;
+    if (roll < 0) return { id: c.id, actions: c.actions };
+  }
+  return {
+    id: eligible[eligible.length - 1].id,
+    actions: eligible[eligible.length - 1].actions,
+  };
+};
+
+/** Roll idle vs weighted category. Turn/move weights are forward hooks
+ *  (dsh items 5/6) and are not yet played. Guarantees the returned name
+ *  is never equal to `lastAct` (falls through pools when excluded). */
+export const pickNext = (
+  config: PetConfig,
+  lastAct: string | null,
+  facing: "left" | "right" = "left",
+  rng: () => number = Math.random,
+): { kind: "idle" | "act"; name: string } | null => {
+  const idleWeight = config.animationWeights.idle;
+  const catTotal = config.animations.categories.reduce(
+    (s, c) => s + c.weight,
+    0,
+  );
+  const total = idleWeight + catTotal;
+  if (total <= 0) return null;
+  const roll = rng() * total;
+  const exclude = (name: string | null) => name;
+
+  const pickFromIdle = (): string | null => {
+    const idle = config.animations.idle.filter((n) => n !== exclude(lastAct));
+    if (idle.length === 0) return null;
+    return idle[Math.floor(rng() * idle.length)]!;
+  };
+  const pickFromCat = (): string | null => {
+    const cat = pickWeightedCategory(config.animations.categories, facing, rng);
+    if (!cat) return null;
+    const eligible =
+      lastAct === null ? cat.actions : cat.actions.filter((n) => n !== lastAct);
+    if (eligible.length === 0) return null;
+    return eligible[Math.floor(rng() * eligible.length)]!;
+  };
+
+  if (roll < idleWeight) {
+    const name = pickFromIdle();
+    if (name !== null) return { kind: "idle", name };
+    const fall = pickFromCat();
+    return fall === null ? null : { kind: "act", name: fall };
+  }
+  {
+    const name = pickFromCat();
+    if (name !== null) return { kind: "act", name };
+    const fall = pickFromIdle();
+    if (fall !== null) return { kind: "idle", name: fall };
+    return lastAct === null ? null : { kind: "act", name: lastAct };
+  }
+};
 
 export type PetHitLayer = {
   element: HTMLImageElement | HTMLVideoElement;
@@ -581,7 +615,11 @@ export function initPet(opts: PetInitOptions): PetController {
   };
 
   const playRandomAct = (): void => {
-    switchTo(pick(ACTS, null, rng), true);
+    const cfg = activeConfig();
+    const next = pickNext(cfg, lastActRef.current, "left", rng);
+    if (!next) return;
+    lastActRef.current = next.name;
+    switchTo(next.name, true);
   };
 
   const switchTo = (next: string, nextOnce: boolean): void => {
@@ -791,7 +829,7 @@ export function initPet(opts: PetInitOptions): PetController {
     sampleClientPoint(e.clientX, e.clientY, false);
     if (drag.active || drag.dragging || justDragged) return;
     if (!clickEligible && lastVisible !== true) return;
-    setAnim(pick(CLICKS, null, rng), true);
+    setAnim(pick(CLICKS(), null, rng), true);
     clickEligible = false;
     gestureOwned = false;
     rearmMousePassthrough();
@@ -917,8 +955,8 @@ export function initPet(opts: PetInitOptions): PetController {
     bridge.onIdleDwellState?.((state) => {
       if (
         Number.isInteger(state.dwellSeconds) &&
-        (state.dwellSeconds as unknown as number) >= 1 &&
-        (state.dwellSeconds as unknown as number) <= 3600
+        state.dwellSeconds >= 1 &&
+        state.dwellSeconds <= 3600
       )
         dwellSeconds = state.dwellSeconds;
     }) ?? (() => {});

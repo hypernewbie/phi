@@ -1,7 +1,17 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACTS, CLICKS, DRAG, STATIC, initPet, pick } from "../src/pet-view.js";
+import type { PetConfig } from "../src/pet-bridge.js";
+import {
+  ACTS,
+  CLICKS,
+  DRAG,
+  STATIC,
+  initPet,
+  pick,
+  pickNext,
+  pickWeightedCategory,
+} from "../src/pet-view.js";
 
 function buildDom() {
   const root = document.createElement("div");
@@ -152,7 +162,7 @@ afterEach(() => {
 describe("pet media catalog", () => {
   it("ships every hard-coded animation and static asset", () => {
     const thumb = path.resolve(import.meta.dirname, "../assets/thumb");
-    for (const name of [...ACTS, ...CLICKS, DRAG]) {
+    for (const name of [...ACTS(), ...CLICKS(), DRAG]) {
       expect(existsSync(path.join(thumb, `${name}.webm`))).toBe(true);
     }
     expect(existsSync(path.join(thumb, "maid-static.png"))).toBe(true);
@@ -162,8 +172,8 @@ describe("pet media catalog", () => {
 
 describe("stationary animation chain", () => {
   it("retains the act catalog and excludes the current animation when requested", () => {
-    expect(ACTS).toHaveLength(47);
-    expect(new Set(ACTS).size).toBe(47);
+    expect(ACTS()).toHaveLength(81);
+    expect(new Set(ACTS()).size).toBe(81);
     const rng = vi.fn().mockReturnValue(0.5);
     expect(pick(["a", "b"], null, rng)).toBe("b");
     expect(pick(["a", "b", "c"], "b", rng)).toBe("c");
@@ -194,7 +204,7 @@ describe("stationary animation chain", () => {
     expect(pet.getState().anim).toBe(STATIC);
     vi.advanceTimersByTime(1);
     expect(pet.getState().once).toBe(true);
-    expect(ACTS).toContain(pet.getState().anim);
+    expect(ACTS()).toContain(pet.getState().anim);
     // First act goes to videoB (initial front=0, el=videoB).
     dom.videoB.dispatchEvent(new Event("loadeddata"));
     dom.videoB.dispatchEvent(new Event("ended"));
@@ -203,8 +213,8 @@ describe("stationary animation chain", () => {
     vi.advanceTimersByTime(59_999);
     expect(pet.getState().anim).toBe(STATIC);
     vi.advanceTimersByTime(1);
-    expect(ACTS).toContain(pet.getState().anim);
-    expect(ACTS).toContain(pet.getState().anim);
+    expect(ACTS()).toContain(pet.getState().anim);
+    expect(ACTS()).toContain(pet.getState().anim);
     // Second act goes to videoA (front=1 after first onReady).
     dom.videoA.dispatchEvent(new Event("loadeddata"));
     dom.videoA.dispatchEvent(new Event("ended"));
@@ -306,7 +316,7 @@ describe("stationary animation chain", () => {
       caf: () => {},
     });
     vi.advanceTimersByTime(10_000);
-    expect(ACTS).toContain(pet.getState().anim);
+    expect(ACTS()).toContain(pet.getState().anim);
     expect(pet.getState().once).toBe(true);
     // The static image still shows until loadeddata fires onReady (which
     // removes .is-front from staticImg). Dispatch loadeddata first, then
@@ -331,7 +341,7 @@ describe("stationary animation chain", () => {
       caf: () => {},
     });
     dom.hit.dispatchEvent(pointer("click"));
-    expect(ACTS).not.toContain(pet.getState().anim);
+    expect(ACTS()).not.toContain(pet.getState().anim);
     dom.videoB.dispatchEvent(new Event("loadeddata"));
     dom.videoB.dispatchEvent(new Event("ended"));
     expect(pet.getState().anim).toBe(STATIC);
@@ -1089,5 +1099,124 @@ describe("zoom and cleanup", () => {
       expect.any(Function),
     );
     expect(caf).toHaveBeenCalledWith(9);
+  });
+});
+
+describe("weighted animation chain", () => {
+  const cfg: PetConfig = {
+    animations: {
+      idle: ["idle-A"],
+      turn: [],
+      drag: [],
+      moves: [],
+      clicks: [],
+      categories: [
+        { id: "small", weight: 20, actions: ["s1", "s2"] },
+        { id: "play", weight: 20, actions: ["p1", "p2", "p3"] },
+        { id: "food", weight: 16, actions: ["f1"] },
+        { id: "fest", weight: 14, actions: ["fe1", "fe2"] },
+        { id: "txt", weight: 10, noMirror: true, actions: ["t1"] },
+      ],
+    },
+    animationWeights: { idle: 10, turn: 0, move: 0 },
+  };
+
+  // mulberry32 seeded RNG — deterministic distribution tests.
+  const seededRng = (() => {
+    let s = 0xdeadbeef;
+    return () => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  })();
+
+  it("matches the weight distribution over 10000 picks", () => {
+    // Total weight = 10 idle + 80 categories = 90. Shares are x/90.
+    const counts: Record<string, number> = {
+      idle: 0,
+      small: 0,
+      play: 0,
+      food: 0,
+      fest: 0,
+      txt: 0,
+    };
+    const N = 10000;
+    for (let i = 0; i < N; i++) {
+      const p = pickNext(cfg, null, "left", seededRng);
+      if (!p) continue;
+      if (p.kind === "idle") counts.idle++;
+      else {
+        const cat = cfg.animations.categories.find((c) =>
+          c.actions.includes(p.name),
+        );
+        if (cat) counts[cat.id]++;
+      }
+    }
+    expect(Math.abs(counts.idle / N - 10 / 90)).toBeLessThan(0.015);
+    expect(Math.abs(counts.small / N - 20 / 90)).toBeLessThan(0.015);
+    expect(Math.abs(counts.play / N - 20 / 90)).toBeLessThan(0.015);
+    expect(Math.abs(counts.food / N - 16 / 90)).toBeLessThan(0.015);
+    expect(Math.abs(counts.fest / N - 14 / 90)).toBeLessThan(0.015);
+    expect(Math.abs(counts.txt / N - 10 / 90)).toBeLessThan(0.015);
+  });
+
+  it("never repeats the same act twice in a row across 1000 picks", () => {
+    let last: string | null = null;
+    let repeats = 0;
+    for (let i = 0; i < 1000; i++) {
+      const p = pickNext(cfg, last, "left", seededRng);
+      if (!p) continue;
+      if (p.name === last) repeats++;
+      last = p.name;
+    }
+    expect(repeats).toBe(0);
+  });
+
+  it("pickWeightedCategory returns null when all categories are noMirror and facing=right", () => {
+    expect(
+      pickWeightedCategory(
+        [{ id: "x", weight: 1, noMirror: true, actions: ["x"] }],
+        "right",
+        seededRng,
+      ),
+    ).toBeNull();
+  });
+
+  it("pickWeightedCategory returns a noMirror category when facing=left", () => {
+    expect(
+      pickWeightedCategory(
+        [{ id: "x", weight: 1, noMirror: true, actions: ["x"] }],
+        "left",
+        seededRng,
+      ),
+    ).toEqual({ id: "x", actions: ["x"] });
+  });
+
+  it("excludes noMirror categories when facing=right via the chain", () => {
+    const cfgNoMirror: PetConfig = {
+      animations: {
+        idle: [],
+        turn: [],
+        drag: [],
+        moves: [],
+        clicks: [],
+        categories: [
+          { id: "ok", weight: 1, actions: ["a"] },
+          { id: "txt", weight: 1, noMirror: true, actions: ["t"] },
+        ],
+      },
+      animationWeights: { idle: 0, turn: 0, move: 0 },
+    };
+    let sawOk = false;
+    for (let i = 0; i < 1000; i++) {
+      const p = pickNext(cfgNoMirror, null, "right", seededRng);
+      if (!p) continue;
+      expect(p.name).not.toBe("t");
+      if (p.name === "a") sawOk = true;
+    }
+    expect(sawOk).toBe(true);
   });
 });

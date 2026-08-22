@@ -55,9 +55,28 @@ export interface PetApi {
   onIdleDwellState?(listener: (state: PetIdleDwellState) => void): () => void;
 }
 
+export interface PetConfig {
+  animations: {
+    idle: string[];
+    turn: string[];
+    drag: string[];
+    clicks: string[];
+    /** Forward hook (dsh item 6): movement animation names. Not yet played. */
+    moves: string[];
+    categories: Array<{
+      id: string;
+      weight: number;
+      noMirror?: boolean;
+      actions: string[];
+    }>;
+  };
+  animationWeights: { idle: number; turn: number; move: number };
+}
+
 declare global {
   interface Window {
     pet: PetApi;
     petSettings: PetSettingsApi;
+    petConfig: PetConfig;
   }
 }
