@@ -17,9 +17,16 @@ const PREVIEW_LINES = 20;
  * Exported for tool-render.ts so every tool block shares the exact
  * upstream `.tool-output` structure the vendored CSS targets.
  */
-export function expandableOutputElement(text, maxLines = PREVIEW_LINES, previewFromTail = false) {
+export function expandableOutputElement(
+    text,
+    maxLines = PREVIEW_LINES,
+    previewFromTail = false,
+) {
     const html = formatExpandableOutput(text, maxLines, previewFromTail);
-    const parsed = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+    const parsed = new DOMParser().parseFromString(
+        `<div>${html}</div>`,
+        'text/html',
+    );
     const inner = parsed.body.firstElementChild?.firstElementChild;
     return inner instanceof HTMLElement ? inner : null;
 }
@@ -40,7 +47,8 @@ function formatExpandableOutput(text, maxLines, previewFromTail = false) {
         : lines.slice(0, maxLines);
     const remaining = lines.length - maxLines;
     if (remaining > 0) {
-        let out = '<div class="tool-output expandable" onclick="if(window.getSelection().toString())return;this.classList.toggle(\'expanded\')">';
+        let out =
+            '<div class="tool-output expandable" onclick="if(window.getSelection().toString())return;this.classList.toggle(\'expanded\')">';
         out += '<div class="output-preview">';
         for (const line of displayLines) {
             out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
@@ -82,12 +90,9 @@ export function renderBashExecution(input) {
     const syncHints = () => {
         const expandable = wrapper.querySelector('.tool-output.expandable');
         const expanded = expandable?.classList.contains('expanded') ?? false;
-        wrapper
-            .querySelectorAll('.expand-hint')
-            .forEach((hint) => {
+        wrapper.querySelectorAll('.expand-hint').forEach((hint) => {
             const remaining = hint.getAttribute('data-remaining');
-            if (remaining === null)
-                return;
+            if (remaining === null) return;
             hint.textContent = expanded
                 ? '(↵ to collapse)'
                 : `... ${remaining} more lines (↵ to expand)`;
@@ -102,8 +107,7 @@ export function renderBashExecution(input) {
             return;
         }
         const target = wrapper.querySelector('.tool-output.expandable');
-        if (!target)
-            return;
+        if (!target) return;
         target.classList.toggle('expanded');
         syncHints();
     };
@@ -129,15 +133,20 @@ export function renderBashExecution(input) {
         // instead of innerHTML to satisfy the no-innerHTML lint while
         // preserving the upstream `.tool-output` / `.output-preview` /
         // `.output-full` structure.
-        const inner = expandableOutputElement(output.trim(), PREVIEW_LINES, true);
-        if (inner)
-            wrapper.appendChild(inner);
+        const inner = expandableOutputElement(
+            output.trim(),
+            PREVIEW_LINES,
+            true,
+        );
+        if (inner) wrapper.appendChild(inner);
     }
     const details = input.details;
-    if (status === 'error' &&
+    if (
+        status === 'error' &&
         details &&
         typeof details === 'object' &&
-        typeof details.exitCode === 'number') {
+        typeof details.exitCode === 'number'
+    ) {
         const footer = document.createElement('div');
         footer.className = 'tool-status-footer';
         footer.textContent = `(exit ${details.exitCode})`;

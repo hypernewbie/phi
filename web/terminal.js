@@ -688,6 +688,33 @@ export class TabManager {
                 return;
             }
 
+            // Plain Up/Down on a Pi RPC chat tab cycles the per-chat prompt
+            // history (see _cycleChatHistory). Modifiers stay reserved
+            // (Alt+Up/Down owns the global cross-cwd history); multiline
+            // editing keeps the arrows — Up cycles only from the first line,
+            // Down only from the last, and only with a collapsed selection.
+            if (
+                (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+                inputTab?.coder === 'pi-rpc' &&
+                !e.altKey &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.shiftKey &&
+                !e.isComposing &&
+                this.inputTextArea.selectionStart ===
+                    this.inputTextArea.selectionEnd &&
+                (e.key === 'ArrowUp'
+                    ? this._caretOnFirstLine()
+                    : this._caretOnLastLine())
+            ) {
+                e.preventDefault();
+                this._cycleChatHistory(
+                    e.key === 'ArrowUp' ? 'older' : 'newer',
+                    inputTab,
+                );
+                return;
+            }
+
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 this.sendStagedInput();
@@ -2109,10 +2136,55 @@ export class TabManager {
         if (!tab || tab.coder !== 'pi-rpc') return false;
         const controls = this._piRpcControlsFor(tab);
         if (!controls.ready || controls.exited || !controls.busy) return false;
-        void rpcChatInterrupt(tab.paneId).catch((error) =>
-            this._piRpcError(error, 'Pi interrupt'),
-        );
+        void rpcChatInterrupt(tab.paneId)
+            .then((result) => this._restoreInterruptedPrompt(tab, result))
+            .catch((error) => this._piRpcError(error, 'Pi interrupt'));
         return true;
+    }
+
+    // _restoreInterruptedPrompt puts the interrupted turn's prompt texts back
+    // into the composer after a successful abort, mirroring pi's TUI
+    // restoreQueuedMessagesToEditor. `result.restored` is captured by the
+    // chat controller before the abort request (its optimistic state is
+    // cleared by the busy=false event first). The user may have switched
+    // tabs while the abort was in flight: park the text on the tab's draft
+    // instead of touching the shared textarea.
+    _restoreInterruptedPrompt(tab, result) {
+        const texts = Array.isArray(result?.restored)
+            ? result.restored.filter(
+                  (text) => typeof text === 'string' && text.trim() !== '',
+              )
+            : [];
+        if (texts.length === 0) return;
+        const restored = texts.join('\n\n');
+        if (this.getActiveTab()?.paneId !== tab.paneId) {
+            tab.draft = tab.draft?.trim()
+                ? `${restored}\n\n${tab.draft}`
+                : restored;
+            return;
+        }
+        const draft = this.inputTextArea.value;
+        this.inputTextArea.value = draft.trim()
+            ? `${restored}\n\n${draft}`
+            : restored;
+        this.lastInputValue = this.inputTextArea.value;
+        this._historyCursor = -1;
+        this._historyPreCycleValue = undefined;
+        tab.chatHistoryCursor = -1;
+        tab.chatHistoryPreCycleValue = undefined;
+        this.adjustInputHeight();
+        this.inputTextArea.focus({ preventScroll: true });
+        this._placeCursorAtEnd();
+        if (texts.length > 1) {
+            // Pi keeps its own steering queue across aborts (no RPC clear op
+            // exists), so a verbatim resend would deliver the steers twice.
+            this.app.showToast(
+                `Pi kept ${texts.length - 1} queued steering message${
+                    texts.length > 2 ? 's' : ''
+                }; edit before resending to avoid duplicates`,
+                { type: 'info', title: 'Pi interrupt' },
+            );
+        }
     }
 
     _handlePiRpcEscape(e) {
@@ -2433,6 +2505,16 @@ export class TabManager {
                 resetResult = Promise.reject(error);
             }
             Promise.resolve(resetResult)
+                .then((data) => {
+                    if (data?.cancelled === true) return;
+                    // A fresh session has no per-chat history.
+                    const resetTab = this.tabs.get(paneId);
+                    if (resetTab) {
+                        resetTab.promptHistory = [];
+                        resetTab.chatHistoryCursor = -1;
+                        resetTab.chatHistoryPreCycleValue = undefined;
+                    }
+                })
                 .catch((error) => this._piRpcError(error, 'Reset Chat'))
                 .finally(() => {
                     this._piRpcResetPending.delete(paneId);
@@ -2515,6 +2597,10 @@ export class TabManager {
                 this.adjustInputHeight();
                 this._historyCursor = -1;
                 this._historyPreCycleValue = undefined;
+                if (newTab.coder === 'pi-rpc') {
+                    newTab.chatHistoryCursor = -1;
+                    newTab.chatHistoryPreCycleValue = undefined;
+                }
             }
         }
 
@@ -3722,6 +3808,9 @@ export class TabManager {
         // most-recent stored entry.
         this.inputTextArea.addEventListener('input', () => {
             this._historyCursor = -1;
+            // Typed input also breaks the per-chat cycle on Pi RPC tabs.
+            const typedTab = this.getActiveTab();
+            if (typedTab?.coder === 'pi-rpc') typedTab.chatHistoryCursor = -1;
         });
     }
 
@@ -4101,6 +4190,19 @@ export class TabManager {
                 this.app.showToast('pi chat: not ready', { type: 'error' });
                 return;
             }
+            // Per-chat, in-memory, current-session history for plain Up/Down
+            // recall. Newest-first, consecutive duplicates skipped, capped at
+            // 100 like the server-side store. Lives on the tab, dies with it;
+            // Reset Chat clears it (see the reset handler in _renderPiRpcPresets).
+            if (!Array.isArray(activeTab.promptHistory))
+                activeTab.promptHistory = [];
+            if (activeTab.promptHistory[0] !== payload) {
+                activeTab.promptHistory.unshift(payload);
+                if (activeTab.promptHistory.length > 100)
+                    activeTab.promptHistory.length = 100;
+            }
+            activeTab.chatHistoryCursor = -1;
+            activeTab.chatHistoryPreCycleValue = undefined;
         } else {
             // Wrap in bracketed paste markers for large prompts or multiline text
             // to prevent TUI trickle-rendering / autocomplete lagging.
@@ -6476,6 +6578,68 @@ export class TabManager {
         const entry = this._historyCache[this._historyCursor];
         if (entry) {
             this.inputTextArea.value = entry.text;
+            this._placeCursorAtEnd();
+            this.adjustInputHeight();
+        }
+    }
+
+    // _caretOnFirstLine / _caretOnLastLine gate per-chat history cycling so
+    // plain arrows still move the caret inside multiline drafts. True when no
+    // newline sits before (after) the caret; the caller guarantees a
+    // collapsed selection.
+    _caretOnFirstLine() {
+        if (!this.inputTextArea) return false;
+        return !this.inputTextArea.value
+            .slice(0, this.inputTextArea.selectionStart)
+            .includes('\n');
+    }
+
+    _caretOnLastLine() {
+        if (!this.inputTextArea) return false;
+        return !this.inputTextArea.value
+            .slice(this.inputTextArea.selectionEnd)
+            .includes('\n');
+    }
+
+    // _cycleChatHistory walks the active Pi RPC tab's per-chat prompt history
+    // (recorded in sendStagedInput). Mirrors _cyclePromptHistory's cursor
+    // semantics — -1 = free-form draft, non-negative = index into
+    // tab.promptHistory, the first 'older' saves the draft in
+    // tab.chatHistoryPreCycleValue and 'newer' past 0 restores it — minus the
+    // async server load.
+    _cycleChatHistory(direction, tab) {
+        if (!this.inputTextArea || !tab) return;
+        const history = Array.isArray(tab.promptHistory)
+            ? tab.promptHistory
+            : [];
+        if (history.length === 0) return;
+        if (tab.chatHistoryCursor === undefined) tab.chatHistoryCursor = -1;
+        if (direction === 'newer' && tab.chatHistoryCursor === -1) return;
+        if (
+            tab.chatHistoryPreCycleValue === undefined &&
+            tab.chatHistoryCursor === -1
+        ) {
+            tab.chatHistoryPreCycleValue = this.inputTextArea.value;
+        }
+        if (direction === 'older') {
+            tab.chatHistoryCursor = Math.min(
+                tab.chatHistoryCursor < 0 ? 0 : tab.chatHistoryCursor + 1,
+                history.length - 1,
+            );
+        } else {
+            if (tab.chatHistoryCursor <= 0) {
+                this.inputTextArea.value = tab.chatHistoryPreCycleValue || '';
+                tab.chatHistoryCursor = -1;
+                tab.chatHistoryPreCycleValue = undefined;
+                this._placeCursorAtEnd();
+                this.adjustInputHeight();
+                return;
+            }
+            tab.chatHistoryCursor -= 1;
+        }
+        const entry = history[tab.chatHistoryCursor];
+        if (entry !== undefined) {
+            this.inputTextArea.value = entry;
             this._placeCursorAtEnd();
             this.adjustInputHeight();
         }

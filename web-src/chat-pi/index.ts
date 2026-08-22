@@ -458,7 +458,7 @@ export function mountChatPi(
 
     const send = (text: string): boolean => {
         if (!sid || !ready || exited) return false;
-        const dispatch = dispatchComposer(text, busy);
+        const dispatch = dispatchComposer(text);
         if (dispatch.kind === 'rejected') {
             status.textContent = dispatch.reason;
             return false;
@@ -579,6 +579,15 @@ export function mountChatPi(
         if (!sid || !ready || exited || !sessionActive)
             return rejected('Pi RPC is not active');
         if (abortInFlight) return rejected('Pi interrupt is already pending');
+        // Capture the in-flight prompt texts BEFORE the abort request:
+        // applyState() clears activePrompt/outgoing on the busy=false state
+        // change, which lands before the abort response resolves.
+        const restored: string[] = [];
+        if (activePrompt?.text) restored.push(activePrompt.text);
+        for (const item of outgoing) {
+            if (item.text && !restored.includes(item.text))
+                restored.push(item.text);
+        }
         abortInFlight = true;
         const currentSid = sid;
         return invokeControl(
@@ -589,6 +598,7 @@ export function mountChatPi(
             'abort',
             legacyResponses,
         )
+            .then((data: any) => ({ ...(data ?? {}), restored }))
             .catch((error: unknown) => {
                 if (!destroyed && currentSid === sid)
                     status.textContent = `Error: ${String(error)}`;
