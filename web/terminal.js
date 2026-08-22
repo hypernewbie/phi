@@ -36,6 +36,7 @@ import {
     rpcChatSetThinking,
     rpcChatReset,
     rpcChatInterrupt,
+    rpcChatSetName,
     subscribePiRpcStatus,
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
@@ -2672,8 +2673,38 @@ export class TabManager {
             if (next && next !== current) {
                 tab.title = next;
                 span.textContent = next;
-                if (!tab.isReview && !tab.isKanban && !tab.isChatRpc)
+                if (tab.isReview || tab.isKanban) {
+                    // Review and Kanban tabs own their own titles; no
+                    // backend sync.
+                } else if (tab.isChatRpc) {
+                    // Pi-RPC: forward the new name to the child via the
+                    // control op so the underlying Pi session file gets
+                    // the session_info entry.
+                    rpcChatSetName(paneId, next).catch((error) =>
+                        console.error(
+                            '[term] Failed to rename Pi RPC session:',
+                            error,
+                        ),
+                    );
+                    this.app?.sessionsManager?.loadSessions?.();
+                } else if (tab.coder === 'pi') {
+                    // Pi TUI: inject /name into the PTY so Pi itself
+                    // writes the session_info entry. Also update the
+                    // PTY label via the existing backend title sync.
+                    // Known limit: while Pi is busy or the user is
+                    // mid-draft in the prompt editor, the keystrokes
+                    // queue/merge; rename is a deliberate action so the
+                    // collision window is small.
+                    if (tab.ws && !tab.isDead) {
+                        tab.ws.sendInput(`/name ${next}\r`);
+                    }
                     this.syncBackendTitle(paneId, next);
+                    setTimeout(() => {
+                        this.app?.sessionsManager?.loadSessions?.();
+                    }, 600);
+                } else {
+                    this.syncBackendTitle(paneId, next);
+                }
             } else {
                 span.textContent = current;
             }

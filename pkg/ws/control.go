@@ -279,7 +279,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		}
 		snapshot := inst.SnapshotCopy()
 		payload = map[string]any{
-			"sid": inst.ID, "title": inst.Title, "cwd": inst.Cwd,
+			"sid": inst.ID, "title": inst.TitleCopy(), "cwd": inst.Cwd,
 			"snapshot": snapshot, "state": inst.StateCopy(),
 		}
 	case rpc.OpListSessions:
@@ -289,7 +289,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		out := []map[string]any{}
 		for _, inst := range s.mgr.List() {
 			out = append(out, map[string]any{
-				"sid": inst.ID, "title": inst.Title, "cwd": inst.Cwd,
+				"sid": inst.ID, "title": inst.TitleCopy(), "cwd": inst.Cwd,
 				"status": inst.StateCopy().Status,
 			})
 		}
@@ -495,6 +495,43 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		if err == nil {
 			payload = map[string]any{"aborted": true}
 		}
+	case rpc.OpSetSessionName:
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		name := strings.TrimSpace(args.Name)
+		if name == "" {
+			err = errors.New("name is required")
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			if _, requestErr := inst.Request(requestCtx, "set_session_name", map[string]any{
+				"name": name,
+			}); requestErr != nil {
+				return nil, requestErr
+			}
+			return nil, nil
+		})
+		if err != nil {
+			break
+		}
+		// Mirror the new name onto the live instance so listSessions and
+		// any title observers pick it up immediately; Pi writes the
+		// session_info entry itself, which the sidebar re-reads.
+		inst.SetTitle(name)
+		st := inst.StateCopy()
+		st.Title = name
+		inst.SetState(st)
+		inst.Emit(rpc.EvtStateChanged, nil, st)
+		payload = map[string]any{"state": inst.StateCopy()}
 	default:
 		if isStubbed(e.Op) {
 			payload = map[string]any{"stubbed": true}

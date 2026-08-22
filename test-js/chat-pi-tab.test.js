@@ -11,32 +11,39 @@ import { openPiRpcChatTab } from '../web/chat-pi/tab.js';
 describe('openPiRpcChatTab', () => {
     beforeEach(() => vi.clearAllMocks());
 
-    it('creates one client tab per cwd and switches on repeat', () => {
+    it('mints a UUID pane key for each fresh chat so duplicates start new pi children', () => {
         const tabs = new Map();
         const createTab = vi.fn((paneId) => {
             tabs.set(paneId, { termContainer: document.createElement('div') });
         });
         const switchTab = vi.fn();
         const manager = { tabs, createTab, switchTab };
+        const uuidPattern =
+            /^pi-rpc:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
         openPiRpcChatTab(manager, '/work/demo');
-        expect(createTab).toHaveBeenCalledWith(
-            'pi-rpc:/work/demo',
+        openPiRpcChatTab(manager, '/work/demo');
+        openPiRpcChatTab(manager, '/work/demo');
+
+        expect(createTab).toHaveBeenCalledTimes(3);
+        const paneIds = createTab.mock.calls.map((call) => call[0]);
+        expect(paneIds).toHaveLength(3);
+        for (const id of paneIds) {
+            expect(id).toMatch(uuidPattern);
+        }
+        expect(new Set(paneIds).size).toBe(3);
+        expect(switchTab).not.toHaveBeenCalled();
+        expect(mountRpcChat).toHaveBeenCalledTimes(3);
+        const mountPaneIds = mountRpcChat.mock.calls.map((call) => call[0]);
+        expect(new Set(mountPaneIds)).toEqual(new Set(paneIds));
+        expect(createTab.mock.calls[0]).toMatchObject([
+            paneIds[0],
             '',
             'Pi RPC · demo',
             'pi-rpc',
             '',
             '/work/demo',
-        );
-        expect(mountRpcChat).toHaveBeenCalledWith(
-            'pi-rpc:/work/demo',
-            expect.any(HTMLElement),
-            '/work/demo',
-        );
-
-        openPiRpcChatTab(manager, '/work/demo');
-        expect(createTab).toHaveBeenCalledTimes(1);
-        expect(switchTab).toHaveBeenCalledWith('pi-rpc:/work/demo');
+        ]);
     });
 
     it('uses Phi terminal font settings for the Pi RPC container', () => {

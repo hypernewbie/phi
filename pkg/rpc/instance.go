@@ -134,6 +134,8 @@ type Instance struct {
 	sessionPath   string
 	sessionPathMu sync.RWMutex
 
+	titleMu sync.RWMutex
+
 	exitOnce sync.Once
 	exitHook func()
 }
@@ -218,6 +220,22 @@ func (i *Instance) setSessionPath(path string) {
 	i.sessionPathMu.Lock()
 	i.sessionPath = path
 	i.sessionPathMu.Unlock()
+}
+
+// TitleCopy returns the current user-facing title.
+func (i *Instance) TitleCopy() string {
+	i.titleMu.RLock()
+	defer i.titleMu.RUnlock()
+	return i.Title
+}
+
+// SetTitle replaces the user-facing title under the title mutex. Callers
+// that also want subscribers to see the change must follow with SetState
+// (State.Title) and Emit(EvtStateChanged).
+func (i *Instance) SetTitle(title string) {
+	i.titleMu.Lock()
+	i.Title = title
+	i.titleMu.Unlock()
 }
 
 // PromptWriteGeneration returns the generation of ordinary prompt writes.

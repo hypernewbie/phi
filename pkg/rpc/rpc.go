@@ -21,6 +21,7 @@ const (
 	OpSetThinking                = "setThinking"
 	OpNewSession                 = "newSession"
 	OpAbort                      = "abort"
+	OpSetSessionName             = "setSessionName"
 
 	EvtStateChanged    = "stateChanged"
 	EvtMessageStart    = "messageStart"

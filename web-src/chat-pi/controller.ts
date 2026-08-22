@@ -103,6 +103,10 @@ export function rpcChatInterrupt(paneId: string): Promise<unknown> {
     return chats.get(paneId)?.interrupt() ?? missingPane(paneId);
 }
 
+export function rpcChatSetName(paneId: string, name: string): Promise<unknown> {
+    return chats.get(paneId)?.setName(name) ?? missingPane(paneId);
+}
+
 export function destroyRpcChat(paneId: string): void {
     const chat = chats.get(paneId);
     if (!chat) {
