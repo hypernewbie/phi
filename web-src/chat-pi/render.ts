@@ -108,6 +108,11 @@ export interface StructuredMessage {
     /** Envelope toolCallId for toolResult messages; lets the view skip
      * results whose output is already rendered inline at the call site. */
     toolCallId?: string;
+    /** Pi's message_end markers (see
+     * research/2026-08-22-0330-pi-rpc-error-rendering.md). The view
+     * renders the matching red row / per-tool error text from these. */
+    stopReason?: string;
+    errorMessage?: string;
 }
 
 /** Convert one raw inbound message into its structured segments. */
@@ -167,11 +172,18 @@ function convertSingle(m: InboundMessage): StructuredMessage {
             : m.role === 'toolResult'
               ? 'toolResult'
               : 'assistant';
-    return {
+    const structured: StructuredMessage = {
         role,
         segments: convertMessage(role, m.content, ''),
         ...(role === 'toolResult' ? { toolCallId: extractToolCallId(m) } : {}),
+        ...(typeof m.stopReason === 'string' && m.stopReason
+            ? { stopReason: m.stopReason }
+            : {}),
+        ...(typeof m.errorMessage === 'string' && m.errorMessage
+            ? { errorMessage: m.errorMessage }
+            : {}),
     };
+    return structured;
 }
 
 interface PiContentItem {
@@ -294,6 +306,44 @@ export function renderTranscriptStructured(
 ): StructuredMessage[] {
     const source = createStructuredTranscript(messages);
     return [...source.slice(0, source.length)];
+}
+
+/**
+ * Map an assistant message's stopReason/errorMessage to the user-visible
+ * text the view appends after the partial content. Returns null when no
+ * error row is required (e.g. tool calls with pending results take
+ * per-tool propagation instead, and a clean stopReason="stop" / "end_turn"
+ * is not a contract row).
+ *
+ * Reference parity: dist/modes/interactive/interactive-mode.js:2608–2660
+ * (pi's TUI). The raw "Request was aborted" string is the upstream
+ * sentinel produced by the abort path; phi renders it as "Operation
+ * aborted" so the message reads as completed-cancellation, not a
+ * provider-side request.
+ */
+export function assistantErrorText(m: {
+    stopReason?: string;
+    errorMessage?: string;
+}): string | null {
+    const stopReason = m.stopReason ?? '';
+    if (stopReason === 'error') {
+        return `Error: ${m.errorMessage || 'Unknown error'}`;
+    }
+    if (stopReason === 'aborted') {
+        if (typeof m.errorMessage === 'string' && m.errorMessage) {
+            // Pi's abort path emits the sentinel "Request was aborted";
+            // render it as "Operation aborted" so the row reads as a
+            // user-initiated cancel, not a provider-side failure.
+            if (m.errorMessage === 'Request was aborted')
+                return 'Operation aborted';
+            return m.errorMessage;
+        }
+        return 'Operation aborted';
+    }
+    if (stopReason === 'length') {
+        return 'Response was truncated before completion.';
+    }
+    return null;
 }
 
 // ─── Legacy flat transcript (kept for non-chat-pi consumers) ──────────

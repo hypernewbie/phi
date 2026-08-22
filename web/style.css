@@ -9117,6 +9117,13 @@ body.md-standalone #md-view-body {
     display: none;
 }
 
+/* Milestone 3: persistent (within-view) red error row appended to
+   the chat transcript. The colour comes from the vendored .error-text
+   rule (color: var(--error)); this rule only sets the spacing. */
+.pi-export-scope .pi-ephemeral-error {
+    margin-top: var(--line-height);
+}
+
 .pi-active-turn {
     align-items: center;
     display: flex;

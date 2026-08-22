@@ -222,9 +222,15 @@ func (m *Manager) readLoop(inst *Instance) {
 }
 
 var piEvtToPhi = map[string]string{
-	"message_start":  EvtMessageStart,
-	"message_update": EvtMessageUpdate,
-	"message_end":    EvtMessageEnd,
+	"message_start":                 EvtMessageStart,
+	"message_update":                EvtMessageUpdate,
+	"message_end":                   EvtMessageEnd,
+	"auto_retry_start":              EvtAutoRetryStart,
+	"auto_retry_end":                EvtAutoRetryEnd,
+	"compaction_end":                EvtCompactionEnd,
+	"extension_error":               EvtExtensionError,
+	"summarization_retry_scheduled": EvtSummarizationRetryScheduled,
+	"summarization_retry_finished":  EvtSummarizationRetryFinished,
 }
 
 func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
@@ -238,21 +244,25 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
 	case "message_end":
 		var probe struct {
-			Role       string          `json:"role"`
-			Content    json.RawMessage `json:"content"`
-			Details    json.RawMessage `json:"details"`
-			ToolCallId string          `json:"toolCallId"`
-			ToolName   string          `json:"toolName"`
-			IsError    *bool           `json:"isError"`
+			Role         string          `json:"role"`
+			Content      json.RawMessage `json:"content"`
+			Details      json.RawMessage `json:"details"`
+			ToolCallId   string          `json:"toolCallId"`
+			ToolName     string          `json:"toolName"`
+			IsError      *bool           `json:"isError"`
+			StopReason   string          `json:"stopReason"`
+			ErrorMessage string          `json:"errorMessage"`
 		}
 		_ = json.Unmarshal(ev.Message, &probe)
 		msg := Message{
-			Role:       probe.Role,
-			Content:    probe.Content,
-			Details:    probe.Details,
-			ToolCallId: probe.ToolCallId,
-			ToolName:   probe.ToolName,
-			IsError:    probe.IsError,
+			Role:         probe.Role,
+			Content:      probe.Content,
+			Details:      probe.Details,
+			ToolCallId:   probe.ToolCallId,
+			ToolName:     probe.ToolName,
+			IsError:      probe.IsError,
+			StopReason:   probe.StopReason,
+			ErrorMessage: probe.ErrorMessage,
 		}
 		// Data carries the authoritative message (rpc.md: message_end.message).
 		inst.Emit(EvtMessageEnd, &msg, map[string]any{"message": ev.Message})
@@ -303,7 +313,28 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		}
 	case "compaction_end":
 		// Compaction is still part of the active turn until Pi settles.
+		// Order matters: the chat-pi client uses the EvtCompactionEnd
+		// payload to surface error/aborted UIs (status bar text,
+		// ephemeral red row); emitting it BEFORE ResetTranscript lets
+		// the client render against the pre-reset state and avoids the
+		// post-reset-hydrate double-application race. EvtCompactionEnd
+		// is raw passthrough — msg=nil, snapshot untouched — and the
+		// snapshot is only cleared by ResetTranscript immediately
+		// after.
+		payload := append([]byte(nil), line...)
+		inst.Emit(EvtCompactionEnd, nil, json.RawMessage(payload))
 		inst.ResetTranscript()
+	case "auto_retry_start", "auto_retry_end", "extension_error",
+		"summarization_retry_scheduled", "summarization_retry_finished":
+		// Raw passthrough: the chat-pi client owns all rendering for
+		// these error/control surfaces (retry indicator, status bar
+		// text, ephemeral row). We only forward the original JSONL
+		// line so the client can read whichever fields pi sends
+		// (attempt/maxAttempts, success/finalError, error, etc.).
+		// Copy the buffer because line aliases LineScanner's reusable
+		// slice and is overwritten by the next Scan.
+		payload := append([]byte(nil), line...)
+		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
 	default:
 		// Unknown pi events are ignored.
 	}

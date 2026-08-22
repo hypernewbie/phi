@@ -1,4 +1,5 @@
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
+import { assistantErrorText } from './chat-pi/render.js';
 import { renderBashExecution } from './chat-pi/bash-render.js';
 import {
     renderToolExecution,
@@ -138,6 +139,11 @@ function createBubble(message, copyText, plainText = false) {
 /** Stable cache key for one rendered message and its paired tool state. */
 function cacheKeyFor(msg, toolResults, toolDiffs) {
     const parts = [msg.role];
+    // Envelope markers (Milestone 2) belong in the key so a settled
+    // envelope and a clean follow-up share no cached block — the
+    // error row must rebuild when stopReason/errorMessage change.
+    parts.push(`s:${msg.stopReason ?? ''}`);
+    parts.push(`e:${msg.errorMessage ?? ''}`);
     for (const seg of msg.segments) {
         switch (seg.kind) {
             case 'text':
@@ -198,6 +204,7 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
     const block = document.createElement('div');
     block.className = 'assistant-message';
     let copyTextAggregate = '';
+    let hasToolCalls = false;
     for (const seg of msg.segments) {
         if (seg.kind === 'text') {
             const textDiv = document.createElement('div');
@@ -224,15 +231,30 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             thinkDiv.appendChild(thinkText);
             block.appendChild(thinkDiv);
         } else if (seg.kind === 'toolCall') {
+            hasToolCalls = true;
             const result = toolResults.get(seg.id);
-            const status = result
+            // Per-tool error propagation for stopReason error/aborted.
+            // When a tool call has no paired result AND the envelope
+            // carries an error/abort marker, render the tool block with
+            // status='error' and the BARE error text as its output (no
+            // "Error: " prefix — pi's interactive-mode.js:2622–2633
+            // overwrites errorMessage before the per-tool loop and
+            // shows it verbatim in the output slot).
+            let status = result
                 ? result.isError
                     ? 'error'
                     : 'success'
                 : 'pending';
-            const output = result
+            let output = result
                 ? extractTextFromToolResult(result.message)
                 : '';
+            if (
+                !result &&
+                (msg.stopReason === 'error' || msg.stopReason === 'aborted')
+            ) {
+                status = 'error';
+                output = mapAbortErrorText(msg.errorMessage);
+            }
             const diff = toolDiffs.get(seg.id);
             if (seg.name === 'bash') {
                 const cmd =
@@ -266,6 +288,18 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             }
         }
     }
+    // Milestone 3: append a red error row after the partial content
+    // when the contract calls for it. Per the behaviour table:
+    //   stopReason="length" — always (even with pending tool calls)
+    //   stopReason="error"|"aborted" — only when no tool calls
+    //     (per-tool propagation owns the surface otherwise)
+    const errorText = assistantErrorText(msg);
+    if (errorText && (msg.stopReason === 'length' || !hasToolCalls)) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'assistant-error error-text';
+        errorDiv.textContent = errorText;
+        block.appendChild(errorDiv);
+    }
     if (copyText && copyTextAggregate.trim()) {
         const btn = document.createElement('button');
         btn.className = 'copy-link-btn';
@@ -279,6 +313,18 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
         block.appendChild(btn);
     }
     return block;
+}
+/**
+ * Map pi's raw "Request was aborted" sentinel to the user-facing
+ * "Operation aborted" before using it as a per-tool output slot.
+ * Mirrors the mapping in assistantErrorText (interactive-mode.js
+ * overwrites errorMessage with the sentinel before the per-tool
+ * loop); parity requires the same rewrite here.
+ */
+function mapAbortErrorText(raw) {
+    if (typeof raw === 'string' && raw === 'Request was aborted')
+        return 'Operation aborted';
+    return typeof raw === 'string' && raw ? raw : '';
 }
 function buildUserMessageBlock(segments, copyText) {
     const block = document.createElement('div');
@@ -452,6 +498,11 @@ export function createReviewTranscriptView(root, options) {
     // and would otherwise drop the live tail for one paint.
     let latestPartial = '';
     let activeTurn = null;
+    // Milestone 3: persistent (within-view) red error row. Phi treats
+    // it as ephemeral: it is not in the snapshot/persist surface and
+    // is re-applied from this view state on every rebuild. Setting
+    // null clears any stale row.
+    let ephemeralErrorText = null;
     let currentStart = 0; // index into structuredMessages of the first rendered
     const cache = new Map();
     function clearActivePromptMarkers(block) {
@@ -515,10 +566,25 @@ export function createReviewTranscriptView(root, options) {
             const live = buildLiveAssistantBlock(opts.appendPartial);
             fragment.appendChild(live);
         }
+        // Milestone 3: persistent (within-view) red error row. Phi
+        // treats the row as ephemeral: not in the snapshot/persist
+        // surface, re-applied from view state on every repaint. Best-
+        // effort placement at the end of the rendered window — a live
+        // partial that streams in afterwards may sit above the row
+        // until the next rebuild, by design.
+        if (ephemeralErrorText) {
+            fragment.appendChild(buildEphemeralErrorBlock(ephemeralErrorText));
+        }
         transcript.replaceChildren(startBadge, fragment);
         startBadge.style.display = currentStart === 0 ? 'block' : 'none';
         syncActivePromptMarkers();
         syncActiveTurn();
+    }
+    function buildEphemeralErrorBlock(text) {
+        const div = document.createElement('div');
+        div.className = 'pi-ephemeral-error error-text';
+        div.textContent = text;
+        return div;
     }
     function syncActivePromptMarkers() {
         for (const block of transcript.querySelectorAll(
@@ -567,9 +633,32 @@ export function createReviewTranscriptView(root, options) {
     function syncActiveTurn() {
         if (!activeHeader || !activeTop || !activeBottom) return;
         const state = activeTurn;
-        activeHeader.classList.toggle('hidden', !state?.active);
+        // Milestone 3: retry indicator alone keeps the working row
+        // visible. Overlay/marker pins remain gated on `active` —
+        // they describe the user's prompt in flight, not provider
+        // bookkeeping.
+        const showHeader = !!state?.active || !!state?.retry;
+        activeHeader.classList.toggle('hidden', !showHeader);
         activeTop.classList.add('hidden');
         activeBottom.classList.add('hidden');
+        // Retry indicator swaps the working label to
+        // "Retrying · attempt N of M"; dots + Esc hint stay unchanged.
+        // The label is updated BEFORE the active-only early return so
+        // a retry-only state (active=false, retry={...}) still mutates
+        // the visible text on the just-shown working row.
+        const retry = state?.retry;
+        if (
+            retry &&
+            Number.isFinite(retry.attempt) &&
+            Number.isFinite(retry.maxAttempts)
+        ) {
+            const working = activeHeader.querySelector('.pi-working-label');
+            if (working)
+                working.textContent = `Retrying · attempt ${retry.attempt} of ${retry.maxAttempts}`;
+        } else {
+            const working = activeHeader.querySelector('.pi-working-label');
+            if (working) working.textContent = 'Pi is working';
+        }
         if (!state?.active) return;
         activeHeader.setAttribute(
             'aria-label',
@@ -821,6 +910,28 @@ export function createReviewTranscriptView(root, options) {
             activeTurn = state;
             syncActivePromptMarkers();
             syncActiveTurn();
+        },
+        setEphemeralError(text) {
+            // Milestone 3: toggle the persistent (within-view) red
+            // error row. Phi treats the row as ephemeral: not in the
+            // snapshot/persist surface. The row survives the next
+            // repaint because rebuildStructuredWindow re-appends it
+            // from view state.
+            ephemeralErrorText = text;
+            // Mutate the DOM directly when a transcript is already
+            // rendered; otherwise the next rebuild will pick the
+            // updated state up. Avoids a full repaint for the
+            // common case where only the row toggles.
+            const existing = transcript.querySelector('.pi-ephemeral-error');
+            if (text === null) {
+                if (existing) existing.remove();
+                return;
+            }
+            if (existing) {
+                existing.textContent = text;
+                return;
+            }
+            transcript.appendChild(buildEphemeralErrorBlock(text));
         },
         prependOlder(count) {
             if (currentStart === 0) return false;

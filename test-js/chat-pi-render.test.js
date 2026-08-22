@@ -252,3 +252,116 @@ describe('createStructuredTranscript (lazy source)', () => {
         expect(segs).toEqual([{ kind: 'text', text: 'hello' }]);
     });
 });
+
+import { assistantErrorText } from '../web/chat-pi/render.js';
+
+describe('assistantErrorText', () => {
+    // Milestone 2: parity with pi's interactive-mode.js:2608–2660.
+    // The view renders these strings directly after the partial
+    // content; errors flow through unchanged. Empty/unknown
+    // stopReason is not a contract row and yields null.
+    it('renders "Error: ${msg}" for stopReason="error" with errorMessage', () => {
+        expect(
+            assistantErrorText({ stopReason: 'error', errorMessage: 'boom' }),
+        ).toBe('Error: boom');
+    });
+
+    it('falls back to "Unknown error" when stopReason="error" omits errorMessage', () => {
+        expect(assistantErrorText({ stopReason: 'error' })).toBe(
+            'Error: Unknown error',
+        );
+        expect(
+            assistantErrorText({ stopReason: 'error', errorMessage: '' }),
+        ).toBe('Error: Unknown error');
+    });
+
+    it('passes through errorMessage for stopReason="aborted" except the upstream sentinel', () => {
+        expect(
+            assistantErrorText({
+                stopReason: 'aborted',
+                errorMessage: 'Custom abort reason',
+            }),
+        ).toBe('Custom abort reason');
+    });
+
+    it('maps the upstream "Request was aborted" sentinel to "Operation aborted"', () => {
+        expect(
+            assistantErrorText({
+                stopReason: 'aborted',
+                errorMessage: 'Request was aborted',
+            }),
+        ).toBe('Operation aborted');
+    });
+
+    it('falls back to "Operation aborted" when stopReason="aborted" omits errorMessage', () => {
+        expect(assistantErrorText({ stopReason: 'aborted' })).toBe(
+            'Operation aborted',
+        );
+        expect(
+            assistantErrorText({ stopReason: 'aborted', errorMessage: '' }),
+        ).toBe('Operation aborted');
+    });
+
+    it('renders the truncation row for stopReason="length"', () => {
+        expect(assistantErrorText({ stopReason: 'length' })).toBe(
+            'Response was truncated before completion.',
+        );
+        // errorMessage is unused for length; the TUI shows the
+        // same text regardless of any underlying error.
+        expect(
+            assistantErrorText({
+                stopReason: 'length',
+                errorMessage: 'whatever',
+            }),
+        ).toBe('Response was truncated before completion.');
+    });
+
+    it('returns null when no stopReason is present', () => {
+        expect(assistantErrorText({})).toBeNull();
+        expect(assistantErrorText({ errorMessage: 'orphan text' })).toBeNull();
+    });
+
+    it('returns null for stopReasons outside the contract (end_turn, stop, tool_use, …)', () => {
+        expect(assistantErrorText({ stopReason: 'end_turn' })).toBeNull();
+        expect(
+            assistantErrorText({ stopReason: 'stop', errorMessage: 'x' }),
+        ).toBeNull();
+        expect(assistantErrorText({ stopReason: 'tool_use' })).toBeNull();
+    });
+});
+
+describe('renderTranscriptStructured carries stopReason/errorMessage into the StructuredMessage envelope', () => {
+    it('copies stopReason and errorMessage from a stopReason="error" message', () => {
+        const out = renderTranscriptStructured([
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'partial answer' }],
+                stopReason: 'error',
+                errorMessage: 'rate limit',
+            },
+        ]);
+        expect(out[0].stopReason).toBe('error');
+        expect(out[0].errorMessage).toBe('rate limit');
+    });
+
+    it('omits stopReason/errorMessage when not present', () => {
+        const out = renderTranscriptStructured([
+            { role: 'assistant', content: 'clean' },
+        ]);
+        expect(out[0].stopReason).toBeUndefined();
+        expect(out[0].errorMessage).toBeUndefined();
+    });
+
+    it('omits stopReason/errorMessage when present-but-empty (avoid spurious rows)', () => {
+        const out = renderTranscriptStructured([
+            {
+                role: 'assistant',
+                content: 'partial',
+                stopReason: '',
+                errorMessage: '',
+            },
+        ]);
+        expect(out[0].stopReason).toBeUndefined();
+        expect(out[0].errorMessage).toBeUndefined();
+    });
+});

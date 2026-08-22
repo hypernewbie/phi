@@ -51,7 +51,16 @@ export class MessageBuffer {
         switch (ev.evt) {
             case 'messageStart': {
                 const hadPartial = this.partial !== '';
-                this.role = d?.message?.role ?? 'assistant';
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const startMsg =
+                    d?.message && typeof d.message === 'object'
+                        ? d.message
+                        : null;
+                this.role =
+                    typeof startMsg?.role === 'string'
+                        ? startMsg.role
+                        : 'assistant';
                 this.partial = '';
                 disposition = hadPartial ? 'partial-clear' : 'none';
                 break;
@@ -59,8 +68,14 @@ export class MessageBuffer {
             case 'messageUpdate': {
                 // pi wire shape: {assistantMessageEvent: {type, contentIndex, delta}}.
                 const a = d?.assistantMessageEvent;
-                if (a?.type === 'text_delta' && typeof a.delta === 'string') {
-                    this.partial += a.delta;
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const aRecord = a && typeof a === 'object' ? a : null;
+                if (
+                    aRecord?.type === 'text_delta' &&
+                    typeof aRecord.delta === 'string'
+                ) {
+                    this.partial += aRecord.delta;
                     disposition = 'partial';
                 }
                 break;
@@ -70,19 +85,34 @@ export class MessageBuffer {
                 // Tool-result envelopes carry toolCallId/toolName/isError at the
                 // top level — keep them so the view can pair call and result.
                 const m = d?.message;
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const mRecord = m && typeof m === 'object' ? m : null;
                 this.partial = '';
                 const settled = {
-                    role: m?.role ?? this.role,
-                    content: m?.content ?? '',
+                    role: mRecord?.role ?? this.role,
+                    content: mRecord?.content ?? '',
                 };
-                if (typeof m?.toolCallId === 'string' && m.toolCallId)
-                    settled.toolCallId = m.toolCallId;
-                if (typeof m?.toolName === 'string' && m.toolName)
-                    settled.toolName = m.toolName;
-                if (m?.isError === true)
-                    settled.isError = true;
-                if (m && typeof m === 'object' && Object.hasOwn(m, 'details'))
-                    settled.details = m.details;
+                if (
+                    typeof mRecord?.toolCallId === 'string' &&
+                    mRecord.toolCallId
+                )
+                    settled.toolCallId = mRecord.toolCallId;
+                if (typeof mRecord?.toolName === 'string' && mRecord.toolName)
+                    settled.toolName = mRecord.toolName;
+                if (mRecord?.isError === true) settled.isError = true;
+                if (mRecord && Object.hasOwn(mRecord, 'details'))
+                    settled.details = mRecord.details;
+                if (
+                    typeof mRecord?.stopReason === 'string' &&
+                    mRecord.stopReason
+                )
+                    settled.stopReason = mRecord.stopReason;
+                if (
+                    typeof mRecord?.errorMessage === 'string' &&
+                    mRecord.errorMessage
+                )
+                    settled.errorMessage = mRecord.errorMessage;
                 this.messages.push(settled);
                 if (settled.role === 'toolResult') {
                     const id = extractToolCallId(settled);
@@ -161,8 +191,7 @@ export class MessageBuffer {
     rebuildToolResultIndex() {
         const next = new Map();
         for (const message of this.messages) {
-            if (message.role !== 'toolResult')
-                continue;
+            if (message.role !== 'toolResult') continue;
             const id = extractToolCallId(message);
             if (typeof id === 'string' && id) {
                 next.set(id, {
@@ -180,28 +209,23 @@ export function extractToolCallId(message) {
     if (typeof message.toolCallId === 'string' && message.toolCallId)
         return message.toolCallId;
     const content = message.content;
-    if (!content)
-        return undefined;
+    if (!content) return undefined;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const id = item.toolCallId;
-                if (typeof id === 'string')
-                    return id;
+                if (typeof id === 'string') return id;
                 const idSnake = item.tool_call_id;
-                if (typeof idSnake === 'string')
-                    return idSnake;
+                if (typeof idSnake === 'string') return idSnake;
             }
         }
         return undefined;
     }
     if (typeof content === 'object') {
         const id = content.toolCallId;
-        if (typeof id === 'string')
-            return id;
+        if (typeof id === 'string') return id;
         const idSnake = content.tool_call_id;
-        if (typeof idSnake === 'string')
-            return idSnake;
+        if (typeof idSnake === 'string') return idSnake;
     }
     return undefined;
 }
@@ -211,23 +235,22 @@ export function extractToolCallId(message) {
  * item, or not at all (current phi RPC bridge). Default to false.
  */
 function extractIsError(message) {
+    // SAFETY: InboundMessage's nominal fields (role, content, details, ...)
+    // are read by name above; this cast widens the structural view only
+    // for the optional `isError` envelope probe.
     const envelope = message;
-    if (envelope.isError === true)
-        return true;
+    if (envelope.isError === true) return true;
     const content = message.content;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const flag = item.isError;
-                if (flag === true)
-                    return true;
+                if (flag === true) return true;
             }
         }
-    }
-    else if (content && typeof content === 'object') {
+    } else if (content && typeof content === 'object') {
         const flag = content.isError;
-        if (flag === true)
-            return true;
+        if (flag === true) return true;
     }
     return false;
 }

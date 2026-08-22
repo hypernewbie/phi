@@ -914,6 +914,52 @@ describe('Review Transcript renderer (structured mode)', () => {
         expect(after).toBe(tool);
         expect(after.classList.contains('folded')).toBe(false);
     });
+
+    // Lock in the markdown-content class on both text-segment kinds.
+    // The vendored Pi export styles (.pi-export-scope) reset margins
+    // and padding on every descendant, so the chat pane needs an
+    // opt-in class to opt into the markdown typography. The chat
+    // uses the same `markdown-content` class that Pi's own exporter
+    // emits; both `assistant-text` and `user-text` must carry it,
+    // and the live streaming partial block must stay plain so it
+    // does not re-parse mid-stream.
+    it('applies markdown-content to assistant and user text segments', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'user',
+                    segments: [{ kind: 'text', text: 'ask' }],
+                },
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'reply' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const assistantText = root.querySelector('.assistant-text');
+        const userText = root.querySelector('.user-text');
+        expect(assistantText).not.toBeNull();
+        expect(userText).not.toBeNull();
+        expect(assistantText.classList.contains('markdown-content')).toBe(true);
+        expect(userText.classList.contains('markdown-content')).toBe(true);
+        // Streaming partial blocks render plain until they settle.
+        view.setStructuredPartial('streaming-partial');
+        const streaming = root.querySelector('.pi-streaming');
+        if (streaming) {
+            const segs = streaming.querySelectorAll('.assistant-text');
+            segs.forEach((seg) => {
+                expect(seg.classList.contains('markdown-content')).toBe(false);
+            });
+        }
+    });
 });
 
 describe('Review Transcript renderer (generic tool calls)', () => {
@@ -2039,5 +2085,372 @@ describe('Review Transcript renderer (live partial path)', () => {
             new Map(),
         );
         expect(root.querySelector('.pi-streaming')).toBeNull();
+    });
+});
+
+describe('Review Transcript renderer (pi error surfaces — Milestone 3)', () => {
+    function mountStructuredView(opts = {}) {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            mode: 'structured',
+            windowSize: 100,
+            ...opts,
+        });
+        return { root, view };
+    }
+
+    it('renders a red assistant-error row after the partial text for stopReason="error" with no tool calls', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'partial answer' }],
+                    stopReason: 'error',
+                    errorMessage: 'rate limit',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const block = root.querySelector('.assistant-message');
+        const errorRow = block.querySelector('.assistant-error.error-text');
+        expect(errorRow).not.toBeNull();
+        expect(errorRow.textContent).toBe('Error: rate limit');
+        // Order: text first, then the error row.
+        const textDiv = block.querySelector('.assistant-text');
+        expect(
+            textDiv.compareDocumentPosition(errorRow) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+    });
+
+    it('uses "Error: Unknown error" when stopReason="error" omits errorMessage', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'partial' }],
+                    stopReason: 'error',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const errorRow = root.querySelector('.assistant-error.error-text');
+        expect(errorRow).not.toBeNull();
+        expect(errorRow.textContent).toBe('Error: Unknown error');
+    });
+
+    it('renders the upstream "Request was aborted" sentinel as "Operation aborted" in the red row', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'mid-turn' }],
+                    stopReason: 'aborted',
+                    errorMessage: 'Request was aborted',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const errorRow = root.querySelector('.assistant-error.error-text');
+        expect(errorRow).not.toBeNull();
+        expect(errorRow.textContent).toBe('Operation aborted');
+    });
+
+    it('passes through non-sentinel errorMessage for stopReason="aborted"', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'mid-turn' }],
+                    stopReason: 'aborted',
+                    errorMessage: 'Provider dropped the connection',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const errorRow = root.querySelector('.assistant-error.error-text');
+        expect(errorRow).not.toBeNull();
+        expect(errorRow.textContent).toBe('Provider dropped the connection');
+    });
+
+    it('always renders the truncation row for stopReason="length" (even with pending tool calls)', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        { kind: 'text', text: 'partial' },
+                        {
+                            kind: 'toolCall',
+                            id: 'call-x',
+                            name: 'bash',
+                            args: { command: 'ls' },
+                        },
+                    ],
+                    stopReason: 'length',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const errorRow = root.querySelector('.assistant-error.error-text');
+        expect(errorRow).not.toBeNull();
+        expect(errorRow.textContent).toBe(
+            'Response was truncated before completion.',
+        );
+        // Pending tool call stays pending (length never propagates as
+        // a per-tool error).
+        const tool = root.querySelector('.tool-execution');
+        expect(tool.classList.contains('pending')).toBe(true);
+    });
+
+    it('does NOT render a message-level error row when stopReason="error" has tool calls (per-tool propagation owns the surface)', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        { kind: 'text', text: 'before' },
+                        {
+                            kind: 'toolCall',
+                            id: 'call-y',
+                            name: 'bash',
+                            args: { command: 'rm -rf' },
+                        },
+                    ],
+                    stopReason: 'error',
+                    errorMessage: 'rate limit',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        expect(root.querySelector('.assistant-error.error-text')).toBeNull();
+    });
+
+    it('propagates stopReason="error" to per-tool status with bare error text as output', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        {
+                            kind: 'toolCall',
+                            id: 'call-z',
+                            name: 'bash',
+                            args: { command: 'true' },
+                        },
+                    ],
+                    stopReason: 'error',
+                    errorMessage: 'rate limit',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const tool = root.querySelector('.tool-execution');
+        expect(tool.classList.contains('error')).toBe(true);
+        expect(tool.classList.contains('pending')).toBe(false);
+        // Output slot carries the BARE error text — no "Error: " prefix.
+        expect(tool.querySelector('.tool-output').textContent).toBe(
+            'rate limit',
+        );
+    });
+
+    it('maps the upstream "Request was aborted" sentinel in per-tool error output', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        {
+                            kind: 'toolCall',
+                            id: 'call-abort',
+                            name: 'bash',
+                            args: { command: 'true' },
+                        },
+                    ],
+                    stopReason: 'aborted',
+                    errorMessage: 'Request was aborted',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const tool = root.querySelector('.tool-execution');
+        expect(tool.classList.contains('error')).toBe(true);
+        expect(tool.querySelector('.tool-output').textContent).toBe(
+            'Operation aborted',
+        );
+    });
+
+    it('renders no error row when stopReason is absent or outside the contract', () => {
+        const { root, view } = mountStructuredView();
+        view.setStructuredMessages(
+            [{ role: 'assistant', segments: [{ kind: 'text', text: 'ok' }] }],
+            '',
+            new Map(),
+        );
+        expect(root.querySelector('.assistant-error.error-text')).toBeNull();
+        expect(root.querySelector('.pi-ephemeral-error')).toBeNull();
+    });
+
+    it('refreshes the cached error row when stopReason/errorMessage change (cache key)', () => {
+        const { root, view } = mountStructuredView();
+        const messages = [
+            {
+                role: 'assistant',
+                segments: [{ kind: 'text', text: 'partial' }],
+                stopReason: 'error',
+                errorMessage: 'first',
+            },
+        ];
+        view.setStructuredMessages(messages, '', new Map());
+        const first = root.querySelector('.assistant-message');
+        const firstError = first.querySelector('.assistant-error.error-text');
+        expect(firstError.textContent).toBe('Error: first');
+
+        // Same shape, new envelope: the cache key includes stopReason
+        // and errorMessage, so the cached block is rebuilt.
+        view.setStructuredMessages(
+            [
+                {
+                    ...messages[0],
+                    errorMessage: 'second',
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const second = root.querySelector('.assistant-message');
+        const secondError = second.querySelector('.assistant-error.error-text');
+        expect(secondError.textContent).toBe('Error: second');
+        // Node identity differs because the cache key changed.
+        expect(secondError).not.toBe(firstError);
+    });
+
+    it('setEphemeralError appends .pi-ephemeral-error.error-text to the transcript', () => {
+        const { root, view } = mountStructuredView();
+        view.setEphemeralError('Compaction failed: provider 500');
+        const row = root.querySelector('.pi-ephemeral-error.error-text');
+        expect(row).not.toBeNull();
+        expect(row.textContent).toBe('Compaction failed: provider 500');
+    });
+
+    it('setEphemeralError(null) removes a previously-set ephemeral row', () => {
+        const { root, view } = mountStructuredView();
+        view.setEphemeralError('first');
+        expect(root.querySelector('.pi-ephemeral-error')).not.toBeNull();
+        view.setEphemeralError(null);
+        expect(root.querySelector('.pi-ephemeral-error')).toBeNull();
+    });
+
+    it('setEphemeralError mutates an existing row in place when text changes', () => {
+        const { root, view } = mountStructuredView();
+        view.setEphemeralError('first');
+        const first = root.querySelector('.pi-ephemeral-error');
+        view.setEphemeralError('second');
+        const second = root.querySelector('.pi-ephemeral-error');
+        expect(second).toBe(first);
+        expect(second.textContent).toBe('second');
+    });
+
+    it('the ephemeral row survives a setStructuredMessages repaint (re-applied from view state)', () => {
+        const { root, view } = mountStructuredView();
+        view.setEphemeralError('sticky error');
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'late message' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const row = root.querySelector('.pi-ephemeral-error.error-text');
+        expect(row).not.toBeNull();
+        expect(row.textContent).toBe('sticky error');
+    });
+
+    it('ActiveTurnState retry alone (without active) keeps the working row visible with "Retrying · attempt N of M"', () => {
+        const { root, view } = mountStructuredView();
+        view.setActiveTurn({
+            active: false,
+            promptText: '',
+            promptOrigin: 'optimistic',
+            stateLabel: 'Sending',
+            retry: { attempt: 2, maxAttempts: 5 },
+        });
+        const header = root.querySelector('.pi-active-turn');
+        expect(header.classList.contains('hidden')).toBe(false);
+        const working = header.querySelector('.pi-working-label');
+        expect(working.textContent).toBe('Retrying · attempt 2 of 5');
+    });
+
+    it('ActiveTurnState retry does NOT trigger overlay/pin markers (gated on active)', () => {
+        const { root, view } = mountStructuredView();
+        view.setActiveTurn({
+            active: false,
+            promptText: '',
+            promptOrigin: 'optimistic',
+            stateLabel: 'Sending',
+            retry: { attempt: 1, maxAttempts: 3 },
+        });
+        expect(
+            root
+                .querySelector('.pi-active-prompt-top')
+                .classList.contains('hidden'),
+        ).toBe(true);
+        expect(
+            root
+                .querySelector('.pi-active-prompt-bottom')
+                .classList.contains('hidden'),
+        ).toBe(true);
+        expect(root.querySelector('[data-pi-active-prompt-index]')).toBeNull();
+        expect(
+            root.querySelector('[data-pi-optimistic-prompt="true"]'),
+        ).toBeNull();
+    });
+
+    it('ActiveTurnState active=true + retry shows the retry label (overrides "Pi is working")', () => {
+        const { root, view } = mountStructuredView();
+        view.setActiveTurn({
+            active: true,
+            promptText: 'go',
+            promptOrigin: 'optimistic',
+            stateLabel: 'Sending',
+            retry: { attempt: 3, maxAttempts: 3 },
+        });
+        const header = root.querySelector('.pi-active-turn');
+        expect(header.classList.contains('hidden')).toBe(false);
+        const working = header.querySelector('.pi-working-label');
+        expect(working.textContent).toBe('Retrying · attempt 3 of 3');
+    });
+
+    it('ActiveTurnState active=true without retry keeps the original "Pi is working" label', () => {
+        const { root, view } = mountStructuredView();
+        view.setActiveTurn({
+            active: true,
+            promptText: 'go',
+            promptOrigin: 'optimistic',
+            stateLabel: 'Sending',
+        });
+        const working = root.querySelector('.pi-working-label');
+        expect(working.textContent).toBe('Pi is working');
     });
 });
