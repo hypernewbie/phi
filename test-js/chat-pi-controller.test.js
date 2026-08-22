@@ -298,7 +298,10 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { aborted: true },
         });
-        await expect(interrupted).resolves.toEqual({ aborted: true });
+        await expect(interrupted).resolves.toEqual({
+            aborted: true,
+            restored: [],
+        });
     });
 
     it('publishes CWD synchronously and hydrates after spawn', async () => {
@@ -776,7 +779,7 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { aborted: true },
         });
-        await expect(first).resolves.toEqual({ aborted: true });
+        await expect(first).resolves.toEqual({ aborted: true, restored: [] });
 
         // After the first abort completes, abortInFlight is cleared and a
         // fresh interrupt can send a new abort frame.
@@ -791,7 +794,7 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { aborted: true },
         });
-        await expect(second).resolves.toEqual({ aborted: true });
+        await expect(second).resolves.toEqual({ aborted: true, restored: [] });
     });
 
     it('interrupt() clears abortInFlight after the abort call fails', async () => {
@@ -833,7 +836,7 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { aborted: true },
         });
-        await expect(second).resolves.toEqual({ aborted: true });
+        await expect(second).resolves.toEqual({ aborted: true, restored: [] });
     });
 
     it('rpcChatInterrupt forwards to mountChatPi.interrupt and rejects missing panes', async () => {
@@ -863,7 +866,7 @@ describe('Pi RPC transcript controller', () => {
             ok: true,
             data: { aborted: true },
         });
-        await expect(promise).resolves.toEqual({ aborted: true });
+        await expect(promise).resolves.toEqual({ aborted: true, restored: [] });
 
         await expect(rpcChatInterrupt('unknown-pane')).rejects.toThrow(
             'unknown or destroyed Pi RPC pane: unknown-pane',

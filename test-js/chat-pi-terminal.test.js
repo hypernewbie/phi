@@ -337,6 +337,7 @@ describe('Pi RPC TabManager boundaries', () => {
         );
         const tm = Object.create(TabManager.prototype);
         tm.presetsContainer = row;
+        tm.tabs = new Map([[tab.paneId, tab]]);
         tm.getActiveTab = vi.fn(() => tab);
         tm._piRpcResetPending = new Set();
         tm.renderPresets('pi-rpc');
@@ -349,6 +350,9 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.textContent).toContain('Reset Chat');
         resolveReset({ cancelled: false, reset: true });
         await Promise.resolve();
+        await Promise.resolve();
+        // The reset chain is then -> catch -> finally: one microtask hop
+        // deeper than before the per-chat history clear was added.
         await Promise.resolve();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
     });
@@ -781,5 +785,339 @@ describe('Pi RPC TabManager real Escape listener (textarea + document)', () => {
         } finally {
             ctx.cleanup();
         }
+    });
+});
+
+describe('Pi RPC per-chat prompt history', () => {
+    function cycleContext(promptHistory) {
+        const tab = { paneId: 'pi-rpc:cycle', coder: 'pi-rpc', promptHistory };
+        const tm = Object.create(TabManager.prototype);
+        tm.inputTextArea = document.createElement('textarea');
+        tm.adjustInputHeight = vi.fn();
+        return { tm, tab };
+    }
+
+    it('records composed payloads newest-first and skips consecutive duplicates', () => {
+        mockFetch();
+        const tab = { paneId: 'pi-rpc:hist', coder: 'pi-rpc' };
+        const tm = stagedContext(tab);
+
+        tm.sendStagedInput();
+        tm.inputTextArea.value = 'second';
+        tm.sendStagedInput();
+        tm.inputTextArea.value = 'second';
+        tm.sendStagedInput();
+
+        expect(tab.promptHistory).toEqual(['second', 'hello from Pi RPC']);
+        expect(tab.chatHistoryCursor).toBe(-1);
+        expect(tab.chatHistoryPreCycleValue).toBeUndefined();
+    });
+
+    it('cycles older/newer, clamps at the oldest, and restores the pre-cycle draft', () => {
+        const { tm, tab } = cycleContext(['newest', 'oldest']);
+        tm.inputTextArea.value = 'draft';
+
+        tm._cycleChatHistory('older', tab);
+        expect(tm.inputTextArea.value).toBe('newest');
+        tm._cycleChatHistory('older', tab);
+        expect(tm.inputTextArea.value).toBe('oldest');
+        tm._cycleChatHistory('older', tab);
+        expect(tm.inputTextArea.value).toBe('oldest'); // clamped
+        tm._cycleChatHistory('newer', tab);
+        expect(tm.inputTextArea.value).toBe('newest');
+        tm._cycleChatHistory('newer', tab);
+        expect(tm.inputTextArea.value).toBe('draft'); // pre-cycle draft back
+        tm._cycleChatHistory('newer', tab);
+        expect(tm.inputTextArea.value).toBe('draft'); // no-op past newest
+    });
+
+    it('does nothing without history', () => {
+        const { tm, tab } = cycleContext([]);
+        tm.inputTextArea.value = 'draft';
+        tm._cycleChatHistory('older', tab);
+        expect(tm.inputTextArea.value).toBe('draft');
+        expect(tab.chatHistoryCursor).toBeUndefined();
+    });
+
+    it('caret guards detect first/last line', () => {
+        const { tm } = cycleContext([]);
+        tm.inputTextArea.value = 'line1\nline2';
+        tm.inputTextArea.setSelectionRange(3, 3); // caret on line1
+        expect(tm._caretOnFirstLine()).toBe(true);
+        expect(tm._caretOnLastLine()).toBe(false);
+        tm.inputTextArea.setSelectionRange(8, 8); // caret on line2
+        expect(tm._caretOnFirstLine()).toBe(false);
+        expect(tm._caretOnLastLine()).toBe(true);
+    });
+
+    it('typed input resets the per-chat cursor', () => {
+        const tab = { paneId: 'pi-rpc:type', coder: 'pi-rpc' };
+        const tm = Object.create(TabManager.prototype);
+        tm.inputTextArea = document.createElement('textarea');
+        tm.getActiveTab = vi.fn(() => tab);
+        tab.chatHistoryCursor = 2;
+
+        TabManager.prototype._initPromptHistoryKeydown.call(tm);
+        tm.inputTextArea.dispatchEvent(new Event('input'));
+
+        expect(tab.chatHistoryCursor).toBe(-1);
+    });
+
+    it('Reset Chat success clears the per-chat history', async () => {
+        const row = document.createElement('div');
+        const tab = {
+            paneId: 'pi-rpc:reset-hist',
+            coder: 'pi-rpc',
+            promptHistory: ['x'],
+            chatHistoryCursor: 1,
+        };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: true,
+            model: 'm',
+            thinking: 'low',
+        });
+        rpcChatReset.mockResolvedValue({ cancelled: false, reset: true });
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.tabs = new Map([[tab.paneId, tab]]);
+        tm.getActiveTab = vi.fn(() => tab);
+        tm._piRpcResetPending = new Set();
+        tm._piRpcError = vi.fn();
+
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-reset-btn').click();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(tab.promptHistory).toEqual([]);
+        expect(tab.chatHistoryCursor).toBe(-1);
+        expect(tab.chatHistoryPreCycleValue).toBeUndefined();
+    });
+});
+
+describe('Pi RPC chat input plain-arrow keydown (real listener)', () => {
+    // Mirrors installRealEscapeListeners: setupEventListeners is the
+    // production wiring for the textarea keydown listener under test.
+    function installRealChatKeydown() {
+        const textarea = document.createElement('textarea');
+        textarea.id = 'input-textarea';
+        const sendBtn = document.createElement('button');
+        sendBtn.id = 'send-input-btn';
+        document.body.append(textarea, sendBtn);
+
+        const tab = { paneId: 'pi-rpc:arrows', coder: 'pi-rpc' };
+        const tm = Object.create(TabManager.prototype);
+        tm.inputTextArea = textarea;
+        tm.sendInputBtn = sendBtn;
+        tm.cancelInputBtn = document.createElement('button');
+        tm.copyInputBtn = document.createElement('button');
+        tm.directModeToggle = document.createElement('button');
+        tm.getActiveTab = vi.fn(() => tab);
+        tm._closePiRpcDropups = vi.fn(() => false);
+        tm._interruptActivePiRpc = vi.fn(() => false);
+        tm.handleGlobalTabShortcuts = vi.fn();
+        tm._initHieroPreview = vi.fn();
+        tm._setupContainerDragHandlers = vi.fn();
+        tm._initAttachmentDropZone = vi.fn();
+        tm._initAttachmentPasteHandler = vi.fn();
+        tm._initPromptHistoryKeydown = vi.fn();
+        tm._initBrandHud = vi.fn();
+        tm.focusActiveTerminal = vi.fn();
+        tm.adjustInputHeight = vi.fn();
+        tm.app = {};
+
+        const realAdd = document.addEventListener.bind(document);
+        const realRemove = document.removeEventListener.bind(document);
+        const capturedKeydown = [];
+        const addSpy = vi
+            .spyOn(document, 'addEventListener')
+            .mockImplementation((type, listener, options) => {
+                if (type === 'keydown') capturedKeydown.push(listener);
+                return realAdd(type, listener, options);
+            });
+        try {
+            TabManager.prototype.setupEventListeners.call(tm);
+        } finally {
+            addSpy.mockRestore();
+        }
+        return {
+            tm,
+            tab,
+            textarea,
+            cleanup: () => {
+                for (const listener of capturedKeydown) {
+                    realRemove('keydown', listener);
+                }
+            },
+        };
+    }
+
+    const arrowEvent = (key, extra = {}) =>
+        new KeyboardEvent('keydown', {
+            key,
+            bubbles: true,
+            cancelable: true,
+            ...extra,
+        });
+
+    it('ArrowUp/ArrowDown cycle the per-chat history on a Pi RPC tab', () => {
+        const ctx = installRealChatKeydown();
+        try {
+            ctx.tab.promptHistory = ['a', 'b'];
+            const up = arrowEvent('ArrowUp');
+            ctx.textarea.dispatchEvent(up);
+            expect(ctx.textarea.value).toBe('a');
+            expect(up.defaultPrevented).toBe(true);
+            ctx.textarea.dispatchEvent(arrowEvent('ArrowDown'));
+            expect(ctx.textarea.value).toBe('');
+        } finally {
+            ctx.cleanup();
+        }
+    });
+
+    it('ArrowUp does not cycle when the caret is below the first line', () => {
+        const ctx = installRealChatKeydown();
+        try {
+            ctx.tab.promptHistory = ['a'];
+            ctx.textarea.value = 'line1\nline2';
+            ctx.textarea.setSelectionRange(8, 8);
+            ctx.textarea.dispatchEvent(arrowEvent('ArrowUp'));
+            expect(ctx.textarea.value).toBe('line1\nline2');
+            expect(ctx.tab.chatHistoryCursor).toBeUndefined();
+        } finally {
+            ctx.cleanup();
+        }
+    });
+
+    it('modified arrows and non-Pi tabs do not cycle', () => {
+        const ctx = installRealChatKeydown();
+        try {
+            ctx.tab.promptHistory = ['a'];
+            ctx.textarea.dispatchEvent(arrowEvent('ArrowUp', { altKey: true }));
+            expect(ctx.textarea.value).toBe('');
+            expect(ctx.tab.chatHistoryCursor).toBeUndefined();
+
+            const bashTab = { paneId: 'bash:1', coder: 'bash' };
+            ctx.tm.getActiveTab.mockReturnValue(bashTab);
+            ctx.tm.sendInput = vi.fn(() => true);
+            ctx.tm._spamScrollToBottom = vi.fn();
+            ctx.textarea.dispatchEvent(arrowEvent('ArrowUp'));
+            expect(ctx.tm.sendInput).toHaveBeenCalledWith(bashTab, '\u001b[A');
+            expect(ctx.textarea.value).toBe('');
+        } finally {
+            ctx.cleanup();
+        }
+    });
+});
+
+describe('Pi RPC interrupt restore', () => {
+    function interruptContext(tab) {
+        const tm = Object.create(TabManager.prototype);
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.inputTextArea = document.createElement('textarea');
+        tm.lastInputValue = '';
+        tm.app = { showToast: vi.fn() };
+        tm.adjustInputHeight = vi.fn();
+        tm._piRpcControlsFor = vi.fn(() => ({
+            ready: true,
+            exited: false,
+            busy: true,
+            queueDepth: 0,
+            hasTranscript: true,
+            model: 'm',
+            thinking: 'low',
+        }));
+        tm._piRpcError = vi.fn();
+        return tm;
+    }
+
+    it('restores the active prompt into the input after a successful abort', async () => {
+        const tab = { paneId: 'pi-rpc:one', coder: 'pi-rpc' };
+        const tm = interruptContext(tab);
+        rpcChatInterrupt.mockResolvedValueOnce({
+            aborted: true,
+            restored: ['fix the login bug'],
+        });
+
+        expect(tm._interruptActivePiRpc()).toBe(true);
+        await Promise.resolve();
+
+        expect(tm.inputTextArea.value).toBe('fix the login bug');
+        expect(tm.lastInputValue).toBe('fix the login bug');
+        expect(tm._historyCursor).toBe(-1);
+        expect(tm._historyPreCycleValue).toBeUndefined();
+        expect(tab.chatHistoryCursor).toBe(-1);
+        expect(tm.app.showToast).not.toHaveBeenCalled();
+    });
+
+    it('joins queued steers above the current draft and hints about the retained queue', async () => {
+        const tab = { paneId: 'pi-rpc:two', coder: 'pi-rpc' };
+        const tm = interruptContext(tab);
+        tm.inputTextArea.value = 'unsent draft';
+        rpcChatInterrupt.mockResolvedValueOnce({
+            aborted: true,
+            restored: ['first', 'second'],
+        });
+
+        tm._interruptActivePiRpc();
+        await Promise.resolve();
+
+        expect(tm.inputTextArea.value).toBe('first\n\nsecond\n\nunsent draft');
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            'Pi kept 1 queued steering message; edit before resending to avoid duplicates',
+            { type: 'info', title: 'Pi interrupt' },
+        );
+    });
+
+    it('parks the restored text on tab.draft when another tab is active at restore time', async () => {
+        const tab = { paneId: 'pi-rpc:away', coder: 'pi-rpc', draft: 'parked' };
+        const other = { paneId: 'bash:1', coder: 'bash' };
+        const tm = interruptContext(tab);
+        rpcChatInterrupt.mockResolvedValueOnce({
+            aborted: true,
+            restored: ['lost prompt'],
+        });
+
+        // Escape fires while the Pi tab is active; the user switches tabs
+        // while the abort is still in flight.
+        tm._interruptActivePiRpc();
+        tm.getActiveTab.mockReturnValue(other);
+        await Promise.resolve();
+
+        expect(tab.draft).toBe('lost prompt\n\nparked');
+        expect(tm.inputTextArea.value).toBe('');
+    });
+
+    it('a rejected abort restores nothing', async () => {
+        const tab = { paneId: 'pi-rpc:fail', coder: 'pi-rpc' };
+        const tm = interruptContext(tab);
+        rpcChatInterrupt.mockRejectedValueOnce(new Error('pi gone'));
+
+        tm._interruptActivePiRpc();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(tm.inputTextArea.value).toBe('');
+        expect(tm._piRpcError).toHaveBeenCalled();
+    });
+
+    it('an empty restored array is a no-op', async () => {
+        const tab = { paneId: 'pi-rpc:idle', coder: 'pi-rpc' };
+        const tm = interruptContext(tab);
+        rpcChatInterrupt.mockResolvedValueOnce({ aborted: true, restored: [] });
+
+        tm._interruptActivePiRpc();
+        await Promise.resolve();
+
+        expect(tm.inputTextArea.value).toBe('');
+        expect(tm.adjustInputHeight).not.toHaveBeenCalled();
     });
 });
