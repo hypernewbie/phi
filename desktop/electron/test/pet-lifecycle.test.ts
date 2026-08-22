@@ -358,53 +358,102 @@ describe('DesktopHost optional pet lifecycle', () => {
     }
   });
 
-  it('keeps only the final deferred factory handle across enable, disable, enable', async () => {
-    const host = new DesktopHost();
-    host.petRoot = '/pet';
-    enable(host, true);
-    const first = deferred<(deps: PetDeps) => PetHandle>();
-    const second = deferred<(deps: PetDeps) => PetHandle>();
-    const load = vi
-      .spyOn(host, 'loadPetFactory')
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
+  it.each(['darwin', 'win32', 'linux'] as const)(
+    'keeps only the final deferred factory handle across enable, disable, enable on %s',
+    async (platform) => {
+      const priorPlatform = process.platform;
+      Object.defineProperty(process, 'platform', {
+        configurable: true,
+        value: platform,
+      });
+      try {
+        const host = new DesktopHost();
+        host.petRoot = '/pet';
+        enable(host, true);
+        const first = deferred<(deps: PetDeps) => PetHandle>();
+        const second = deferred<(deps: PetDeps) => PetHandle>();
+        const load = vi
+          .spyOn(host, 'loadPetFactory')
+          .mockReturnValueOnce(first.promise)
+          .mockReturnValueOnce(second.promise);
 
-    void host.startPet();
-    host.stopPet();
-    void host.startPet();
-    const stale = handle();
-    const final = handle();
-    first.resolve(() => stale);
-    await flush();
-    second.resolve(() => final);
-    await flush();
+        void host.startPet();
+        host.stopPet();
+        void host.startPet();
+        const stale = handle();
+        const final = handle();
+        first.resolve(() => stale);
+        await flush();
+        second.resolve(() => final);
+        await flush();
 
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(stale.start).toHaveBeenCalledTimes(1);
-    expect(final.start).not.toHaveBeenCalled();
-    expect(host.petHandle).toBe(stale);
-  });
+        if (platform === 'linux') {
+          // Pet is intentionally unavailable on linux; the factory is
+          // never loaded and no handle is ever created.
+          expect(load).not.toHaveBeenCalled();
+          expect(stale.start).not.toHaveBeenCalled();
+          expect(final.start).not.toHaveBeenCalled();
+          expect(host.petHandle).toBeNull();
+        } else {
+          expect(load).toHaveBeenCalledTimes(1);
+          expect(stale.start).toHaveBeenCalledTimes(1);
+          expect(final.start).not.toHaveBeenCalled();
+          expect(host.petHandle).toBe(stale);
+        }
+      } finally {
+        Object.defineProperty(process, 'platform', {
+          configurable: true,
+          value: priorPlatform,
+        });
+      }
+    },
+  );
 
-  it('reuses one listener-owning handle across repeated disable and enable', async () => {
-    const host = new DesktopHost();
-    host.petRoot = '/pet';
-    enable(host, true);
-    const retained = handle();
-    const factory = vi.fn(() => retained);
-    const load = vi.spyOn(host, 'loadPetFactory').mockResolvedValue(factory);
+  it.each(['darwin', 'win32', 'linux'] as const)(
+    'reuses one listener-owning handle across repeated disable and enable on %s',
+    async (platform) => {
+      const priorPlatform = process.platform;
+      Object.defineProperty(process, 'platform', {
+        configurable: true,
+        value: platform,
+      });
+      try {
+        const host = new DesktopHost();
+        host.petRoot = '/pet';
+        enable(host, true);
+        const retained = handle();
+        const factory = vi.fn(() => retained);
+        const load = vi
+          .spyOn(host, 'loadPetFactory')
+          .mockResolvedValue(factory);
 
-    await host.startPet();
-    host.stopPet();
-    await host.startPet();
-    host.stopPet();
-    await host.startPet();
+        await host.startPet();
+        host.stopPet();
+        await host.startPet();
+        host.stopPet();
+        await host.startPet();
 
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(retained.stop).toHaveBeenCalledTimes(2);
-    expect(retained.start).toHaveBeenCalledTimes(3);
-    expect(host.petHandle).toBe(retained);
-  });
+        if (platform === 'linux') {
+          // Pet is intentionally unavailable on linux; the factory is
+          // never loaded and no handle is ever created.
+          expect(load).not.toHaveBeenCalled();
+          expect(factory).not.toHaveBeenCalled();
+          expect(host.petHandle).toBeNull();
+        } else {
+          expect(load).toHaveBeenCalledTimes(1);
+          expect(factory).toHaveBeenCalledTimes(1);
+          expect(retained.stop).toHaveBeenCalledTimes(2);
+          expect(retained.start).toHaveBeenCalledTimes(3);
+          expect(host.petHandle).toBe(retained);
+        }
+      } finally {
+        Object.defineProperty(process, 'platform', {
+          configurable: true,
+          value: priorPlatform,
+        });
+      }
+    },
+  );
 
   it.each([
     ['unavailable', null, true, false],
@@ -439,34 +488,62 @@ describe('DesktopHost optional pet lifecycle', () => {
     },
   );
 
-  it('creates no handle when disable or quit invalidates a pending factory', async () => {
-    const host = new DesktopHost();
-    host.petRoot = '/pet';
-    enable(host, true);
-    const disabled = deferred<(deps: PetDeps) => PetHandle>();
-    vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(disabled.promise);
-    void host.startPet();
-    host.stopPet();
-    enable(host, false);
-    const disabledFactory = vi.fn(() => handle());
-    disabled.resolve(disabledFactory);
-    await flush();
-    expect(disabledFactory).toHaveBeenCalledTimes(1);
-    expect(host.petHandle).not.toBeNull();
-    expect((host.petHandle as PetHandle).start).not.toHaveBeenCalled();
+  it.each(['darwin', 'win32', 'linux'] as const)(
+    'creates no handle when disable or quit invalidates a pending factory on %s',
+    async (platform) => {
+      const priorPlatform = process.platform;
+      Object.defineProperty(process, 'platform', {
+        configurable: true,
+        value: platform,
+      });
+      try {
+        const host = new DesktopHost();
+        host.petRoot = '/pet';
+        enable(host, true);
+        const disabled = deferred<(deps: PetDeps) => PetHandle>();
+        vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(disabled.promise);
+        void host.startPet();
+        host.stopPet();
+        enable(host, false);
+        const disabledFactory = vi.fn(() => handle());
+        disabled.resolve(disabledFactory);
+        await flush();
+        if (platform === 'linux') {
+          // Pet is intentionally unavailable on linux; the pending factory
+          // is never loaded.
+          expect(disabledFactory).not.toHaveBeenCalled();
+          expect(host.petHandle).toBeNull();
+        } else {
+          expect(disabledFactory).toHaveBeenCalledTimes(1);
+          expect(host.petHandle).not.toBeNull();
+          expect((host.petHandle as PetHandle).start).not.toHaveBeenCalled();
+        }
 
-    const quitting = deferred<(deps: PetDeps) => PetHandle>();
-    enable(host, true);
-    vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(quitting.promise);
-    void host.startPet();
-    host.quitting = true;
-    host.petGeneration += 1;
-    const quittingFactory = vi.fn(() => handle());
-    quitting.resolve(quittingFactory);
-    await flush();
-    expect(quittingFactory).not.toHaveBeenCalled();
-    expect(host.petHandle).not.toBeNull();
-  });
+        const quitting = deferred<(deps: PetDeps) => PetHandle>();
+        enable(host, true);
+        vi.spyOn(host, 'loadPetFactory').mockReturnValueOnce(quitting.promise);
+        void host.startPet();
+        host.quitting = true;
+        host.petGeneration += 1;
+        const quittingFactory = vi.fn(() => handle());
+        quitting.resolve(quittingFactory);
+        await flush();
+        // Both supported platforms and linux agree: a quit-during-pending
+        // factory never resolves into a handle.
+        expect(quittingFactory).not.toHaveBeenCalled();
+        if (platform === 'linux') {
+          expect(host.petHandle).toBeNull();
+        } else {
+          expect(host.petHandle).not.toBeNull();
+        }
+      } finally {
+        Object.defineProperty(process, 'platform', {
+          configurable: true,
+          value: priorPlatform,
+        });
+      }
+    },
+  );
 
   it('installs and starts through the production controller subscription when initially disabled', async () => {
     const priorPlatform = process.platform;
