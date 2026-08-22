@@ -9074,6 +9074,14 @@ body.md-standalone #md-view-body {
     background: var(--diff-word-removed);
 }
 
+/* Vendored .tool-diff hardcodes font-size: 11px (11/12 of the upstream base),
+   which makes the edit/diff block in the Pi RPC chat stay tiny no matter what
+   terminal font size the user picks. Express it in em so it scales with the
+   scope's inherited terminal font size, preserving Pi's relative sizing. */
+.pi-export-scope .tool-diff {
+    font-size: 0.9167em;
+}
+
 /* Scope the vendored reset (margin/padding/box-sizing) and body font
    so phi's chrome keeps its existing layout. The chat-pi pane mounts
    its root inside .pi-export-scope; the selector below only matches
