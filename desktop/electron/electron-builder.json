@@ -6,7 +6,7 @@
     "output": "out"
   },
   "files": ["dist/**", "src/**", "web/**", "assets/**", "package.json"],
-  "electronVersion": "33.4.11",
+  "electronVersion": "43.4.1",
   "win": {
     "icon": "assets/icon.png"
   },
