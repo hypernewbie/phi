@@ -17,11 +17,11 @@
     "verify": "electron scripts/verify.mjs"
   },
   "devDependencies": {
-    "electron": "33.4.11",
-    "@types/jsdom": "^21.1.7",
-    "@types/node": "^20.19.43",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.13.3",
+    "electron": "43.4.1",
     "jsdom": "^30.0.1",
     "typescript": "7.0.2",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }

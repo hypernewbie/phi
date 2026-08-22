@@ -27,14 +27,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
-    "@noble/hashes": "^2.2.0",
-    "@vitest/coverage-v8": "4.1.10",
-    "dompurify": "^3.4.12",
+    "@noble/hashes": "^2.3.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "dompurify": "^3.4.14",
     "jsdom": "^30.0.1",
     "stylelint": "17.14.1",
     "stylelint-config-standard": "40.0.0",
     "typescript": "7.0.2",
-    "vite": "^8.2.0",
-    "vitest": "4.1.10"
+    "vite": "^8.2.2",
+    "vitest": "4.1.11"
   }
 }
