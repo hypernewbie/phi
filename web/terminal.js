@@ -6242,6 +6242,10 @@ export class TabManager {
                 }
             }
         }
+        // Diff panel xterm lives on app.diffController (not in this.tabs), so
+        // the loop above misses it. Route through the controller's live-apply
+        // hook so the diff screen honors the family picker alongside size.
+        this.app.diffController?.applyFontFamily?.(safe);
     }
 
     // applyTerminalFontSizeToAll sets a new fontSize on every live xterm,
@@ -6259,11 +6263,16 @@ export class TabManager {
                 try {
                     tab.fitAddon.fit();
                     this.sendResizeToBackend(tab);
-                } catch (e) {
+                } catch (_e) {
                     /* tolerate closed term */
                 }
             }
         }
+        // The diff panel xterm lives on app.diffController (not in this.tabs),
+        // so the loop above skips it. Route through the controller's own
+        // live-apply hook so the diff screen respects the slider like every
+        // other xterm instead of staying pinned at its hardcoded 10/12.
+        this.app.diffController?.applyFontSize?.(safe);
     }
 
     pollTerminalIdleAndNotifications() {

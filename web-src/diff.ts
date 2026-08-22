@@ -2,7 +2,7 @@
 
 import type { AppLike } from './types.js';
 import { PTYWebSocket } from './ws.js';
-import { escapeHtml, getLastFolderName, worktreeGlyph } from './util.js';
+import { getLastFolderName, worktreeGlyph } from './util.js';
 
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
@@ -257,7 +257,9 @@ export class DiffController {
         try {
             const webgl = new window.WebglAddon.WebglAddon();
             this.term.loadAddon(webgl);
-        } catch (e) {}
+        } catch (_e) {
+            /* WebGL is a progressive enhancement; ignore load failure */
+        }
 
         // Copy plumbing for the diff/status/log pane. The main terminal
         // wires these (terminal.js:817-878) so users can drag-select +
@@ -500,10 +502,13 @@ export class DiffController {
 
             const currentSelected = this.commitSelect.value || 'unstaged';
 
-            this.commitSelect.innerHTML = `
-                <option value="unstaged">Unstaged Changes</option>
-                <option value="staged">Staged Changes</option>
-            `;
+            const unstagedOpt = document.createElement('option');
+            unstagedOpt.value = 'unstaged';
+            unstagedOpt.textContent = 'Unstaged Changes';
+            const stagedOpt = document.createElement('option');
+            stagedOpt.value = 'staged';
+            stagedOpt.textContent = 'Staged Changes';
+            this.commitSelect.replaceChildren(unstagedOpt, stagedOpt);
 
             if (Array.isArray(commits)) {
                 commits.forEach((commit: any) => {
@@ -619,7 +624,7 @@ export class DiffController {
                         : 'Will use visible terminal tabs',
                     { type: 'info', title: 'Terminal routing' },
                 );
-            } catch (err) {
+            } catch (_err) {
                 this.app.showToast('Failed to save preference', {
                     type: 'error',
                     title: 'Terminal routing',
@@ -645,7 +650,7 @@ export class DiffController {
                         : 'Will always open new terminal tab',
                     { type: 'info', title: 'Terminal routing' },
                 );
-            } catch (err) {
+            } catch (_err) {
                 this.app.showToast('Failed to save preference', {
                     type: 'error',
                     title: 'Terminal routing',
@@ -702,7 +707,7 @@ export class DiffController {
 
                 const dirtyBtn = document.createElement('button');
                 dirtyBtn.className = 'cmd-batch-btn cmd-dirty-btn';
-                dirtyBtn.innerHTML = `⚡ Dirty`;
+                dirtyBtn.textContent = '⚡ Dirty';
                 dirtyBtn.title = `Run on all dirty worktrees: ${cmd.command}`;
                 dirtyBtn.addEventListener('click', () =>
                     this.runCommand(cmd, 'dirty'),
@@ -711,7 +716,7 @@ export class DiffController {
 
                 const allBtn = document.createElement('button');
                 allBtn.className = 'cmd-batch-btn cmd-all-btn';
-                allBtn.innerHTML = `⇉ All`;
+                allBtn.textContent = '⇉ All';
                 allBtn.title = `Run on all worktrees in workspace: ${cmd.command}`;
                 allBtn.addEventListener('click', () =>
                     this.runCommand(cmd, 'all'),
@@ -772,9 +777,9 @@ export class DiffController {
 
             const batchHeader = document.createElement('div');
             batchHeader.className = 'cmd-batch-header';
-            batchHeader.innerHTML = `
-                <span>⚡ "${escapeHtml(this.activeBatchResults.commandName)}" · ${escapeHtml(this.activeBatchResults.scopeLabel)}</span>
-            `;
+            const headerLabel = document.createElement('span');
+            headerLabel.textContent = `⚡ "${this.activeBatchResults.commandName}" · ${this.activeBatchResults.scopeLabel}`;
+            batchHeader.appendChild(headerLabel);
 
             const clearBtn = document.createElement('button');
             clearBtn.className = 'cmd-action-btn';
@@ -802,7 +807,16 @@ export class DiffController {
 
                 const titleEl = document.createElement('div');
                 titleEl.className = 'cmd-batch-item-title';
-                titleEl.innerHTML = `<span class="worktree-glyph" style="color: var(--accent-bright); font-size: 11px;">${escapeHtml(item.glyph)}</span> <span>${escapeHtml(item.name)}</span>`;
+                const glyphSpan = document.createElement('span');
+                glyphSpan.className = 'worktree-glyph';
+                glyphSpan.style.color = 'var(--accent-bright)';
+                glyphSpan.style.fontSize = '11px';
+                glyphSpan.textContent = item.glyph;
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = item.name;
+                titleEl.appendChild(glyphSpan);
+                titleEl.appendChild(document.createTextNode(' '));
+                titleEl.appendChild(nameSpan);
                 rowEl.appendChild(titleEl);
 
                 const badgeEl = document.createElement('span');
@@ -1451,7 +1465,32 @@ export class DiffController {
             colorScheme: 'dark',
         });
 
-        this.diffModalBody!.innerHTML = diffHtml;
+        // diff2html output is third-party HTML built from raw git diff.
+        // Sanitize via DOMPurify (strips scripts/iframes/<style>), then
+        // adopt the parsed nodes — avoids innerHTML entirely. DOMParser
+        // is read-only, so even a missed tag couldn't execute.
+        const safeDiffHtml = window.DOMPurify?.sanitize
+            ? String(
+                  window.DOMPurify.sanitize(diffHtml, {
+                      USE_PROFILES: { html: true },
+                      FORBID_TAGS: [
+                          'script',
+                          'style',
+                          'iframe',
+                          'object',
+                          'embed',
+                          'form',
+                      ],
+                  }),
+              )
+            : diffHtml;
+        const parsed = new DOMParser().parseFromString(
+            safeDiffHtml,
+            'text/html',
+        );
+        this.diffModalBody!.replaceChildren(
+            ...Array.from(parsed.body.childNodes),
+        );
     }
 
     async loadRichDiff(): Promise<void> {
@@ -1477,7 +1516,13 @@ export class DiffController {
             this.lastRawDiffText = rawDiffText;
             this.renderRichDiff(rawDiffText);
         } catch (e) {
-            this.diffModalBody.innerHTML = `<div style="padding: 20px; color: var(--red); font-family: var(--font-mono); font-size: 13px;">Error: ${escapeHtml((e as Error).message)}</div>`;
+            const errDiv = document.createElement('div');
+            errDiv.style.padding = '20px';
+            errDiv.style.color = 'var(--red)';
+            errDiv.style.fontFamily = 'var(--font-mono)';
+            errDiv.style.fontSize = '13px';
+            errDiv.textContent = `Error: ${(e as Error).message}`;
+            this.diffModalBody.replaceChildren(errDiv);
         }
     }
 }
