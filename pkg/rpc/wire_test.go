@@ -300,14 +300,36 @@ func TestBusyLifecycleAndAgentSettledClearing(t *testing.T) {
 		t.Fatalf("compaction_start must not clear Busy: %+v", state)
 	}
 
-	// 5. compaction_end resets the transcript but Busy stays true — the
-	//    turn continues until Pi sends agent_settled.
+	// 5. compaction_end emits EvtCompactionEnd first (raw passthrough
+	//    so the chat-pi client can render its error/aborted UI against
+	//    the pre-reset state), then EvtTranscriptReset to clear the
+	//    stored messages. Both events take consecutive sequence numbers.
 	if _, err := fp.stdoutW.Write([]byte(`{"type":"compaction_end"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	event = nextWireEvent(t, sub)
+	if event.Evt != EvtCompactionEnd {
+		t.Fatalf("compaction_end did not publish compactionEnd: %+v", event)
+	}
+	// compactionEnd must not add or remove messages: it is a raw
+	// passthrough (msg=nil). The snapshot is cleared by the immediately
+	// following transcriptReset, which publishes seq N+1; the synchronous
+	// broadcast pattern in publish() means snapshot.LastSeq is already
+	// at N+1 by the time the subscriber reads compactionEnd, so the
+	// seq-relationship must be checked across both events instead of
+	// against snapshot state at compactionEnd observation time.
+	if event.Seq == 0 {
+		t.Fatalf("compactionEnd seq must be non-zero: %+v", event)
+	}
+	event = nextWireEvent(t, sub)
 	if event.Evt != EvtTranscriptReset {
 		t.Fatalf("compaction_end did not publish transcriptReset: %+v", event)
+	}
+	if event.Seq != inst.SnapshotCopy().LastSeq {
+		t.Fatalf("transcriptReset seq %d does not match snapshot lastSeq %d", event.Seq, inst.SnapshotCopy().LastSeq)
+	}
+	if len(inst.SnapshotCopy().Messages) != 0 {
+		t.Fatalf("transcriptReset did not clear snapshot messages")
 	}
 	if state := inst.StateCopy(); !state.Busy {
 		t.Fatalf("compaction_end must not clear Busy: %+v", state)
@@ -657,5 +679,155 @@ func TestMessageContentAndDetailsAreDeepCopiedAcrossPublishAndSnapshot(t *testin
 	}
 	if string(again.Details) != `{"diff":"old"}` {
 		t.Fatalf("SnapshotCopy details were aliased: %s", again.Details)
+	}
+}
+
+// TestMessageEndCapturesStopReasonAndErrorMessage covers the Milestone 1
+// probe retention: the message_end probe struct now reads stopReason and
+// errorMessage from pi's envelope and copies them into the snapshot
+// Message so the chat-pi frontend can render the red row / per-tool
+// error text without parsing pi's wire format itself.
+func TestMessageEndCapturesStopReasonAndErrorMessage(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	go func() {
+		_, _ = fp.stdoutW.Write([]byte(
+			`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"partial"}],"stopReason":"error","errorMessage":"rate limit"}}` + "\n"))
+	}()
+	event := nextWireEvent(t, sub)
+	if event.Evt != EvtMessageEnd {
+		t.Fatalf("want messageEnd, got %+v", event)
+	}
+	messages := inst.SnapshotCopy().Messages
+	if len(messages) != 1 {
+		t.Fatalf("want 1 message, got %d", len(messages))
+	}
+	if messages[0].StopReason != "error" {
+		t.Fatalf("StopReason lost: %q", messages[0].StopReason)
+	}
+	if messages[0].ErrorMessage != "rate limit" {
+		t.Fatalf("ErrorMessage lost: %q", messages[0].ErrorMessage)
+	}
+	// Raw passthrough on the data side carries the full envelope so the
+	// chat-pi client can also read stopReason / errorMessage from
+	// ev.data.message without parsing the snapshot message itself.
+	encoded, err := json.Marshal(event.Data)
+	if err != nil {
+		t.Fatalf("event data did not marshal: %v", err)
+	}
+	var data struct {
+		Message struct {
+			StopReason   string `json:"stopReason"`
+			ErrorMessage string `json:"errorMessage"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		t.Fatalf("event data did not unmarshal: %v", err)
+	}
+	if data.Message.StopReason != "error" || data.Message.ErrorMessage != "rate limit" {
+		t.Fatalf("event envelope lost stopReason/errorMessage: %+v", data.Message)
+	}
+}
+
+// TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot pins down
+// the Milestone 1 contract for the six new error/control events:
+//   - each maps to its named sequenced Evt (autoRetryStart, autoRetryEnd,
+//     extensionError, summarizationRetryScheduled, summarizationRetryFinished)
+//   - each is a raw passthrough (msg=nil): the snapshot messages list is
+//     unchanged and only lastSeq advances
+//   - compaction_end is its own case (handled above) and is NOT covered here
+func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
+	cases := []struct {
+		piEvent string
+		phiEvt  string
+		line    string
+	}{
+		{
+			piEvent: "auto_retry_start",
+			phiEvt:  EvtAutoRetryStart,
+			line:    `{"type":"auto_retry_start","attempt":1,"maxAttempts":3}`,
+		},
+		{
+			piEvent: "auto_retry_end",
+			phiEvt:  EvtAutoRetryEnd,
+			line:    `{"type":"auto_retry_end","success":false,"finalError":"boom"}`,
+		},
+		{
+			piEvent: "extension_error",
+			phiEvt:  EvtExtensionError,
+			line:    `{"type":"extension_error","error":"x"}`,
+		},
+		{
+			piEvent: "summarization_retry_scheduled",
+			phiEvt:  EvtSummarizationRetryScheduled,
+			line:    `{"type":"summarization_retry_scheduled","attempt":1}`,
+		},
+		{
+			piEvent: "summarization_retry_finished",
+			phiEvt:  EvtSummarizationRetryFinished,
+			line:    `{"type":"summarization_retry_finished"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.piEvent, func(t *testing.T) {
+			fp, inst, sub := wireFixture(t)
+			if _, err := fp.stdoutW.Write([]byte(tc.line + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			event := nextWireEvent(t, sub)
+			if event.Evt != tc.phiEvt {
+				t.Fatalf("%s did not publish %s: got %+v", tc.piEvent, tc.phiEvt, event)
+			}
+			if len(inst.SnapshotCopy().Messages) != 0 {
+				t.Fatalf("%s must not mutate snapshot messages: %+v", tc.piEvent, inst.SnapshotCopy().Messages)
+			}
+			if event.Seq != inst.SnapshotCopy().LastSeq {
+				t.Fatalf("%s seq %d does not match snapshot lastSeq %d", tc.piEvent, event.Seq, inst.SnapshotCopy().LastSeq)
+			}
+			// Raw passthrough: data is the full JSONL line, mutable.
+			raw, ok := event.Data.(json.RawMessage)
+			if !ok {
+				t.Fatalf("%s data type = %T, want json.RawMessage", tc.piEvent, event.Data)
+			}
+			if !strings.Contains(string(raw), `"type":"`+tc.piEvent+`"`) {
+				t.Fatalf("%s raw payload lost type field: %s", tc.piEvent, raw)
+			}
+		})
+	}
+}
+
+// TestCompactionEndOrderingEmitsCompactionEndBeforeTranscriptReset is a
+// tighter Milestone 1 ordering test: the chat-pi client renders
+// compaction-end error/aborted UI off the EvtCompactionEnd payload
+// before the snapshot is cleared, so the ordering invariant matters.
+// Specifically: EvtCompactionEnd.seq + 1 == EvtTranscriptReset.seq, and
+// after the pair snapshot.Messages is empty.
+func TestCompactionEndOrderingEmitsCompactionEndBeforeTranscriptReset(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"compaction_end","reason":"auto","errorMessage":"provider 500"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	first := nextWireEvent(t, sub)
+	if first.Evt != EvtCompactionEnd {
+		t.Fatalf("first event must be compactionEnd, got %+v", first)
+	}
+	second := nextWireEvent(t, sub)
+	if second.Evt != EvtTranscriptReset {
+		t.Fatalf("second event must be transcriptReset, got %+v", second)
+	}
+	if second.Seq != first.Seq+1 {
+		t.Fatalf("transcriptReset seq %d must be compactionEnd seq %d + 1", second.Seq, first.Seq)
+	}
+	if len(inst.SnapshotCopy().Messages) != 0 {
+		t.Fatalf("compaction_end must clear snapshot messages: %+v", inst.SnapshotCopy().Messages)
+	}
+	// compactionEnd carries the original JSONL line so the client can
+	// read reason / errorMessage / aborted without re-parsing pi's
+	// wire format.
+	raw, ok := first.Data.(json.RawMessage)
+	if !ok {
+		t.Fatalf("compactionEnd data type = %T, want json.RawMessage", first.Data)
+	}
+	if !strings.Contains(string(raw), `"errorMessage":"provider 500"`) {
+		t.Fatalf("compactionEnd raw payload lost errorMessage: %s", raw)
 	}
 }

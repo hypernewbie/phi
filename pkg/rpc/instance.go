@@ -48,6 +48,12 @@ type Message struct {
 	ToolName   string          `json:"toolName,omitempty"`
 	IsError    *bool           `json:"isError,omitempty"`
 	Ts         int64           `json:"ts,omitempty"`
+	// Pi's message_end surface may carry an error/abort/length marker
+	// alongside the partial content. The chat-pi frontend renders the
+	// matching red row or per-tool error text from these fields without
+	// parsing pi's wire format itself.
+	StopReason   string `json:"stopReason,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // Snapshot is the atomic hydrate payload.

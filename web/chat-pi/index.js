@@ -162,6 +162,15 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 if (!busy) {
                     outgoing.length = 0;
                     activePrompt = null;
+                    // Milestone 4: guard against a stranded retry state
+                    // when the busy→false transition lands in a hydrate
+                    // window that dropped the auto_retry_end event (the
+                    // event loop's `!result.applied` early return discards
+                    // any event that arrives after a gap). Clearing the
+                    // retry state before syncActiveTurn ensures the
+                    // working row hides and the "Retrying · attempt N of
+                    // M" label cannot persist past the turn boundary.
+                    retryState = null;
                     syncActiveTurn();
                 }
             }
@@ -224,8 +233,14 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
         pageSize: 50,
     });
     const status = view.status;
+    // Milestone 4: provider-level retry indicator (pi's
+    // auto_retry_start / auto_retry_end / summarization_retry_*).
+    // Folded into the ActiveTurnState so the view's working row can
+    // swap its label. Cleared by auto_retry_end (success or failure)
+    // and by the applyState busy→false transition (gap-loss guard).
+    let retryState = null;
     const syncActiveTurn = () => {
-        const active = activePrompt
+        const base = activePrompt
             ? {
                 active: true,
                 promptText: activePrompt.text,
@@ -239,7 +254,25 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
                 })),
             }
             : null;
-        view.setActiveTurn(active);
+        // Retry alone (no activePrompt) keeps the working row visible
+        // with the retry label. promptText is required by the type so
+        // retry-only states pass '' — a UI-only value, never rendered
+        // when active is false.
+        if (!base && retryState) {
+            view.setActiveTurn({
+                active: false,
+                promptText: '',
+                promptOrigin: 'optimistic',
+                stateLabel: 'Sending',
+                retry: retryState,
+            });
+            return;
+        }
+        view.setActiveTurn(
+            base
+                ? { ...base, ...(retryState ? { retry: retryState } : {}) }
+                : null,
+        );
     };
     const cancelPendingSave = () => {
         if (pendingSaveTimer !== null)
@@ -517,6 +550,102 @@ export function mountChatPi(root, cwd, client, sessionPath, onStatusChange = () 
             status.textContent = 'Pi exited';
             flushPendingSave();
             notifyControls();
+        }
+        // Milestone 4: provider-level retry indicator.
+        // auto_retry_start/summarization_retry_scheduled stash
+        // {attempt, maxAttempts} into retryState; the matching end/finished
+        // events clear it. Numbers are coerced (invalid → ignore) so a
+        // malformed event cannot strand the working row.
+        if (
+            env.evt === 'autoRetryStart' ||
+            env.evt === 'summarizationRetryScheduled'
+        ) {
+            const data = env.data;
+            const attempt =
+                data &&
+                typeof data.attempt === 'number' &&
+                Number.isFinite(data.attempt)
+                    ? data.attempt
+                    : null;
+            const maxAttempts =
+                data &&
+                typeof data.maxAttempts === 'number' &&
+                Number.isFinite(data.maxAttempts)
+                    ? data.maxAttempts
+                    : null;
+            if (attempt !== null && maxAttempts !== null) {
+                retryState = { attempt, maxAttempts };
+                syncActiveTurn();
+            }
+            if (env.evt === 'summarizationRetryScheduled') {
+                // rpc.md: summarization_retry_scheduled carries
+                // {attempt, maxAttempts, delayMs, errorMessage}. Pi's TUI
+                // renders showError(event.errorMessage) at
+                // interactive-mode.js:2770. The provider errorMessage
+                // is the actionable text; fall back to the generic
+                // label only when no message is present.
+                const errMsg =
+                    typeof data?.errorMessage === 'string' && data.errorMessage
+                        ? data.errorMessage
+                        : 'summarization retry scheduled';
+                status.textContent = `pi: ${errMsg}`;
+            }
+        }
+        if (
+            env.evt === 'autoRetryEnd' ||
+            env.evt === 'summarizationRetryFinished'
+        ) {
+            const wasRetrying = retryState !== null;
+            retryState = null;
+            syncActiveTurn();
+            if (env.evt === 'autoRetryEnd' && wasRetrying) {
+                const data = env.data;
+                if (data?.success === false) {
+                    status.textContent = `Retry failed after ${String(data.attempt ?? '?')} attempt${
+                        (data.attempt ?? 0) === 1 ? '' : 's'
+                    }: ${String(data.finalError ?? 'Unknown error')}`;
+                }
+            }
+        }
+        if (env.evt === 'extensionError') {
+            const data = env.data;
+            status.textContent = `pi extension error: ${String(data?.error ?? 'unknown')}`;
+        }
+        if (env.evt === 'compactionEnd') {
+            const data = env.data;
+            const aborted = data?.aborted === true;
+            const reason = typeof data?.reason === 'string' ? data.reason : '';
+            const errorMessage =
+                typeof data?.errorMessage === 'string' && data.errorMessage
+                    ? data.errorMessage
+                    : null;
+            // Plan contract (rpc.md reference): compaction_end is
+            // emitted "whether manual or automatic" and on success
+            // carries `result` with NO errorMessage. The ephemeral
+            // red row must be cleared on every compactionEnd that
+            // carries no errorMessage (handler:
+            // setEphemeralError(nonManual && errorMessage ? text : null)
+            // unconditionally). This clears stale rows from any
+            // previous failed auto-compaction, including aborted
+            // compactionEnds that arrive with neither errorMessage
+            // nor non-manual reason.
+            const nonManual = reason !== 'manual';
+            view.setEphemeralError(
+                nonManual && errorMessage ? errorMessage : null,
+            );
+            if (aborted) {
+                status.textContent =
+                    reason === 'manual'
+                        ? 'Compaction cancelled'
+                        : 'Auto-compaction cancelled';
+            } else if (reason === 'manual' && errorMessage) {
+                // Plan row: compaction_end errorMessage + reason manual
+                // → status bar error. Gated on a non-empty errorMessage
+                // so successful manual /compact (no errorMessage per
+                // rpc.md) does not render a spurious "pi: compaction
+                // error" line.
+                status.textContent = `pi: ${errorMessage}`;
+            }
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
             const text = renderedUserText(env.data.message.content);

@@ -10,6 +10,12 @@ export interface InboundMessage {
     toolName?: string;
     isError?: boolean;
     ts?: number;
+    /** Pi's message_end surface markers (see
+     * research/2026-08-22-0330-pi-rpc-error-rendering.md). The frontend
+     * renders the matching red row / per-tool error text from these
+     * fields without re-parsing the wire envelope. */
+    stopReason?: string;
+    errorMessage?: string;
 }
 
 export interface Snapshot {
@@ -99,12 +105,21 @@ export class MessageBuffer {
             };
         }
         this.lastSeq = ev.seq;
-        const d = ev.data as Record<string, any> | null | undefined;
+        const d = ev.data as Record<string, unknown> | null | undefined;
         let disposition: RenderDisposition = 'none';
         switch (ev.evt) {
             case 'messageStart': {
                 const hadPartial = this.partial !== '';
-                this.role = d?.message?.role ?? 'assistant';
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const startMsg =
+                    d?.message && typeof d.message === 'object'
+                        ? (d.message as Record<string, unknown>)
+                        : null;
+                this.role =
+                    typeof startMsg?.role === 'string'
+                        ? startMsg.role
+                        : 'assistant';
                 this.partial = '';
                 disposition = hadPartial ? 'partial-clear' : 'none';
                 break;
@@ -112,8 +127,17 @@ export class MessageBuffer {
             case 'messageUpdate': {
                 // pi wire shape: {assistantMessageEvent: {type, contentIndex, delta}}.
                 const a = d?.assistantMessageEvent;
-                if (a?.type === 'text_delta' && typeof a.delta === 'string') {
-                    this.partial += a.delta;
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const aRecord =
+                    a && typeof a === 'object'
+                        ? (a as Record<string, unknown>)
+                        : null;
+                if (
+                    aRecord?.type === 'text_delta' &&
+                    typeof aRecord.delta === 'string'
+                ) {
+                    this.partial += aRecord.delta;
                     disposition = 'partial';
                 }
                 break;
@@ -123,18 +147,37 @@ export class MessageBuffer {
                 // Tool-result envelopes carry toolCallId/toolName/isError at the
                 // top level — keep them so the view can pair call and result.
                 const m = d?.message;
+                // SAFETY: pi's wire envelope is a free-form JSON object;
+                // narrow to a record view so individual field reads type-check.
+                const mRecord =
+                    m && typeof m === 'object'
+                        ? (m as Record<string, unknown>)
+                        : null;
                 this.partial = '';
                 const settled: InboundMessage = {
-                    role: m?.role ?? this.role,
-                    content: m?.content ?? '',
+                    role: (mRecord?.role as string | undefined) ?? this.role,
+                    content: (mRecord?.content as unknown) ?? '',
                 };
-                if (typeof m?.toolCallId === 'string' && m.toolCallId)
-                    settled.toolCallId = m.toolCallId;
-                if (typeof m?.toolName === 'string' && m.toolName)
-                    settled.toolName = m.toolName;
-                if (m?.isError === true) settled.isError = true;
-                if (m && typeof m === 'object' && Object.hasOwn(m, 'details'))
-                    settled.details = m.details;
+                if (
+                    typeof mRecord?.toolCallId === 'string' &&
+                    mRecord.toolCallId
+                )
+                    settled.toolCallId = mRecord.toolCallId;
+                if (typeof mRecord?.toolName === 'string' && mRecord.toolName)
+                    settled.toolName = mRecord.toolName;
+                if (mRecord?.isError === true) settled.isError = true;
+                if (mRecord && Object.hasOwn(mRecord, 'details'))
+                    settled.details = mRecord.details;
+                if (
+                    typeof mRecord?.stopReason === 'string' &&
+                    mRecord.stopReason
+                )
+                    settled.stopReason = mRecord.stopReason;
+                if (
+                    typeof mRecord?.errorMessage === 'string' &&
+                    mRecord.errorMessage
+                )
+                    settled.errorMessage = mRecord.errorMessage;
                 this.messages.push(settled);
                 if (settled.role === 'toolResult') {
                     const id = extractToolCallId(settled);
@@ -267,6 +310,9 @@ export function extractToolCallId(message: InboundMessage): string | undefined {
  * item, or not at all (current phi RPC bridge). Default to false.
  */
 function extractIsError(message: InboundMessage): boolean {
+    // SAFETY: InboundMessage's nominal fields (role, content, details, ...)
+    // are read by name above; this cast widens the structural view only
+    // for the optional `isError` envelope probe.
     const envelope = message as unknown as Record<string, unknown>;
     if (envelope.isError === true) return true;
     const content = message.content;

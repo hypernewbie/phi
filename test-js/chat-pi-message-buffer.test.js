@@ -385,3 +385,125 @@ describe('MessageBuffer accessors and render disposition', () => {
         expect(b.getStructuredTranscript().length).toBe(2);
     });
 });
+
+describe('MessageBuffer message_end stopReason/errorMessage capture', () => {
+    // Milestone 2: pi's message_end envelope may carry stopReason and
+    // errorMessage. The buffer must copy non-empty strings into the
+    // settled InboundMessage so the chat-pi frontend can render the
+    // matching red row / per-tool error text without re-parsing the
+    // wire envelope itself.
+    it('captures stopReason and errorMessage on the settled assistant message', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'partial' }],
+                    stopReason: 'error',
+                    errorMessage: 'rate limit',
+                },
+            },
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBe('error');
+        expect(settled.errorMessage).toBe('rate limit');
+    });
+
+    it('captures stopReason="aborted" with the "Request was aborted" sentinel', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'mid-turn' }],
+                    stopReason: 'aborted',
+                    errorMessage: 'Request was aborted',
+                },
+            },
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBe('aborted');
+        expect(settled.errorMessage).toBe('Request was aborted');
+    });
+
+    it('captures stopReason="length" so the truncation row can render', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'truncated' }],
+                    stopReason: 'length',
+                },
+            },
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBe('length');
+        expect(settled.errorMessage).toBeUndefined();
+    });
+
+    it('omits the fields when absent (optional, omitempty)', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'clean' }],
+                },
+            },
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBeUndefined();
+        expect(settled.errorMessage).toBeUndefined();
+    });
+
+    it('drops empty-string stopReason/errorMessage (treated as absent)', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'partial' }],
+                    stopReason: '',
+                    errorMessage: '',
+                },
+            },
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBeUndefined();
+        expect(settled.errorMessage).toBeUndefined();
+    });
+
+    it('preserves stopReason/errorMessage across hydrate (snapshot path)', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot({
+            lastSeq: 2,
+            messages: [
+                {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'hydrated partial' }],
+                    stopReason: 'error',
+                    errorMessage: 'transient',
+                },
+            ],
+        });
+        const settled = b.getMessages()[0];
+        expect(settled.stopReason).toBe('error');
+        expect(settled.errorMessage).toBe('transient');
+    });
+});

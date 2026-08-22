@@ -29,6 +29,17 @@ const (
 	EvtTranscriptReset = "transcriptReset"
 	EvtRpcExited       = "rpcExited"
 
+	// Pi error/control surfaces mapped from pi's JSONL events so the
+	// chat-pi frontend can render them with TUI parity. All are
+	// raw-passthrough events: msg is nil, snapshot is untouched, only
+	// the sequenced Evt carries through. Plan: 2026-08-22-0345.
+	EvtAutoRetryStart              = "autoRetryStart"
+	EvtAutoRetryEnd                = "autoRetryEnd"
+	EvtCompactionEnd               = "compactionEnd"
+	EvtExtensionError              = "extensionError"
+	EvtSummarizationRetryScheduled = "summarizationRetryScheduled"
+	EvtSummarizationRetryFinished  = "summarizationRetryFinished"
+
 	DefaultTitlePrefix = "Pi RPC · "
 )
 

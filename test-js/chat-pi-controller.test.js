@@ -1660,3 +1660,518 @@ describe('Pi RPC transcript controller', () => {
         expect(replaceChildren).not.toHaveBeenCalled();
     });
 });
+
+describe('Pi RPC transcript controller (pi error surfaces — Milestone 4)', () => {
+    async function bootReady(wire) {
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+    }
+
+    it('autoRetryStart stashes retry state and updates the working label without an active prompt', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 2, maxAttempts: 5 },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                active: false,
+                retry: { attempt: 2, maxAttempts: 5 },
+            }),
+        );
+        const working = root.querySelector('.pi-working-label');
+        expect(working.textContent).toBe('Retrying · attempt 2 of 5');
+        expect(
+            root.querySelector('.pi-active-turn').classList.contains('hidden'),
+        ).toBe(false);
+    });
+
+    it('autoRetryEnd clears retry state and hides the working row', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 1, maxAttempts: 3 },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'autoRetryEnd',
+            data: { success: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(null);
+        expect(
+            root.querySelector('.pi-active-turn').classList.contains('hidden'),
+        ).toBe(true);
+    });
+
+    it('autoRetryEnd {success:false} sets the "Retry failed after N attempts: ..." status bar', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 1, maxAttempts: 3 },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'autoRetryEnd',
+            data: { success: false, attempt: 3, finalError: 'rate limit' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe(
+            'Retry failed after 3 attempts: rate limit',
+        );
+    });
+
+    it('autoRetryEnd {success:false} uses "attempt" singular when N=1', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 1, maxAttempts: 1 },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'autoRetryEnd',
+            data: { success: false, attempt: 1, finalError: 'boom' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe(
+            'Retry failed after 1 attempt: boom',
+        );
+    });
+
+    it('autoRetryEnd {success:false} with no finalError falls back to "Unknown error"', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 1, maxAttempts: 3 },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'autoRetryEnd',
+            data: { success: false, attempt: 3 },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe(
+            'Retry failed after 3 attempts: Unknown error',
+        );
+    });
+
+    it('autoRetryStart with non-numeric attempt is ignored (no stray retry state)', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'autoRetryStart',
+            data: { attempt: 'one', maxAttempts: 3 },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).not.toHaveBeenCalled();
+    });
+
+    it('summarizationRetryScheduled sets retry state AND status bar; summarizationRetryFinished clears', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'summarizationRetryScheduled',
+            data: { attempt: 1, maxAttempts: 4, errorMessage: 'transient' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                active: false,
+                retry: { attempt: 1, maxAttempts: 4 },
+            }),
+        );
+        expect(view.status.textContent).toBe('pi: transient');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'summarizationRetryFinished',
+            data: {},
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(null);
+    });
+
+    it('extensionError sets "pi extension error: ..." status bar', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'extensionError',
+            data: { error: 'extension exploded' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe(
+            'pi extension error: extension exploded',
+        );
+    });
+
+    it('compactionEnd {aborted:true,reason:"manual"} shows "Compaction cancelled"', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { aborted: true, reason: 'manual' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe('Compaction cancelled');
+        // aborted branches never set an ephemeral row.
+        expect(setEphemeralError).not.toHaveBeenCalledWith(expect.any(String));
+    });
+
+    it('compactionEnd {aborted:true,reason:"auto"} shows "Auto-compaction cancelled"', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { aborted: true, reason: 'auto' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe('Auto-compaction cancelled');
+    });
+
+    it('compactionEnd {reason:"manual",errorMessage:"..."} routes to status bar', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'manual', errorMessage: 'compaction boom' },
+        });
+        await Promise.resolve();
+        expect(view.status.textContent).toBe('pi: compaction boom');
+        expect(setEphemeralError).not.toHaveBeenCalledWith(expect.any(String));
+    });
+
+    it('compactionEnd {reason:"auto",errorMessage:"..."} appends an ephemeral red row', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'auto', errorMessage: 'provider 500' },
+        });
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith('provider 500');
+    });
+
+    it('compactionEnd {reason:"auto",errorMessage:null} clears any stale ephemeral row', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'auto', errorMessage: 'first failure' },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'compactionEnd',
+            data: { reason: 'auto' },
+        });
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith(null);
+    });
+
+    it('applyState busy→false clears any stranded retry state (gap-loss guard)', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire, root);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setActiveTurn = vi.spyOn(view, 'setActiveTurn');
+
+        // Enter busy=true via stateChanged so the next busy=false
+        // actually crosses the busy→false edge (busy starts false;
+        // a stateChanged {busy:false} alone is a no-op).
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { busy: true },
+        });
+        await Promise.resolve();
+
+        // Enter a retry state via autoRetryStart.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'autoRetryStart',
+            data: { attempt: 1, maxAttempts: 3 },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                retry: { attempt: 1, maxAttempts: 3 },
+            }),
+        );
+
+        // A later state event flips busy→false WITHOUT a matching
+        // autoRetryEnd. The guard in applyState must clear the retry
+        // state so the working row hides.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setActiveTurn).toHaveBeenLastCalledWith(null);
+        expect(
+            root.querySelector('.pi-active-turn').classList.contains('hidden'),
+        ).toBe(true);
+    });
+});
+
+describe('Pi RPC transcript controller (compactionEnd regression pinning)', () => {
+    async function bootReady(wire) {
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        wire.emit({
+            t: 'res',
+            id: 'hyd',
+            ok: true,
+            data: { lastSeq: 0, messages: [] },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+    }
+
+    // Regression pin for Finding 1 (review-correctness blocker 1):
+    // rpc.md says compaction_end is emitted whether manual or
+    // automatic, and on success carries `result` with no
+    // errorMessage. The plan's contract row pins the manual
+    // status-bar error on errorMessage being present. A successful
+    // manual /compact therefore must NOT render "pi: compaction
+    // error" in the status bar.
+    it('successful manual compactionEnd (no errorMessage) leaves the status bar unchanged', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const statusBefore = view.status.textContent;
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'manual' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(view.status.textContent).toBe(statusBefore);
+        expect(view.status.textContent).not.toBe('pi: compaction error');
+    });
+
+    // Regression pin for Finding 2 (review-correctness blocker 2):
+    // The handler must call setEphemeralError(nonManual && errorMessage
+    // ? text : null) UNCONDITIONALLY, so aborted compactionEnds
+    // (which carry no errorMessage per rpc.md) clear any stale row
+    // left by a previous failed auto-compaction.
+    it('aborted compactionEnd clears a stale ephemeral row from a prior failed auto-compaction', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+
+        // Failed auto-compaction sets the ephemeral row.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'auto', errorMessage: 'provider 500' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith('provider 500');
+
+        // Aborted compactionEnd (no errorMessage, manual reason)
+        // must clear the stale row.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'compactionEnd',
+            data: { aborted: true, reason: 'manual' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith(null);
+    });
+
+    // Sibling pin for the manual branch (also clears the stale row,
+    // since nonManual is false for reason='manual').
+    it('successful manual compactionEnd (no errorMessage) also clears a stale ephemeral row', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/demo', wire.client);
+        await bootReady(wire);
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const setEphemeralError = vi.spyOn(view, 'setEphemeralError');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'compactionEnd',
+            data: { reason: 'auto', errorMessage: 'first failure' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith('first failure');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'compactionEnd',
+            data: { reason: 'manual' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(setEphemeralError).toHaveBeenLastCalledWith(null);
+    });
+});
