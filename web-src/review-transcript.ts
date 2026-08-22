@@ -310,7 +310,12 @@ function buildAssistantMessageBlock(
     for (const seg of msg.segments) {
         if (seg.kind === 'text') {
             const textDiv = document.createElement('div');
-            textDiv.className = 'assistant-text';
+            // `markdown-content` opts the parsed markdown into the vendored
+            // Pi export styles (pre overflow-x, img max-width, p/h/list
+            // spacing). Without it, long lines and images render past the
+            // message box. Mirrors Pi's own exporter, which emits
+            // `assistant-text markdown-content`.
+            textDiv.className = 'assistant-text markdown-content';
             copyTextAggregate += seg.text;
             const parsed = new DOMParser().parseFromString(
                 renderMarkdownSafe(seg.text),
@@ -398,7 +403,9 @@ function buildUserMessageBlock(
     // interrupted + resumed input) and all must surface in the DOM.
     for (const seg of segments) {
         const div = document.createElement('div');
-        div.className = 'user-text';
+        // Same `markdown-content` opt-in as the assistant path; Pi's
+        // exporter wraps user text in a bare `markdown-content` div.
+        div.className = 'user-text markdown-content';
         const parsed = new DOMParser().parseFromString(
             renderMarkdownSafe(seg.text),
             'text/html',

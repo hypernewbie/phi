@@ -13,11 +13,13 @@ import { expandableOutputElement } from './bash-render.js';
 function shortenPath(p) {
     if (p.startsWith('/Users/')) {
         const parts = p.split('/');
-        if (parts.length > 2) return `~${p.slice(`/Users/${parts[2]}`.length)}`;
+        if (parts.length > 2)
+            return `~${p.slice(`/Users/${parts[2]}`.length)}`;
     }
     if (p.startsWith('/home/')) {
         const parts = p.split('/');
-        if (parts.length > 2) return `~${p.slice(`/home/${parts[2]}`.length)}`;
+        if (parts.length > 2)
+            return `~${p.slice(`/home/${parts[2]}`.length)}`;
     }
     return p;
 }
@@ -30,13 +32,12 @@ function str(value) {
  * metadata from changing the render path.
  */
 export function validatedToolDiff(result) {
-    if (!result || result.isError) return undefined;
+    if (!result || result.isError)
+        return undefined;
     const details = result.message.details;
-    if (
-        details === null ||
+    if (details === null ||
         typeof details !== 'object' ||
-        Array.isArray(details)
-    )
+        Array.isArray(details))
         return undefined;
     const diff = details.diff;
     return typeof diff === 'string' ? diff : undefined;
@@ -44,7 +45,8 @@ export function validatedToolDiff(result) {
 function el(tag, className, text) {
     const node = document.createElement(tag);
     node.className = className;
-    if (text !== undefined) node.textContent = text;
+    if (text !== undefined)
+        node.textContent = text;
     return node;
 }
 function truncate(text, max = 80) {
@@ -53,7 +55,8 @@ function truncate(text, max = 80) {
 /** Vendored from Pi's diff.js:1-13. */
 function parseDiffLine(line) {
     const match = line.match(/^([+-\s])(\s*\d*)\s(.*)$/);
-    if (!match) return null;
+    if (!match)
+        return null;
     return {
         prefix: match[1],
         lineNum: match[2],
@@ -65,19 +68,24 @@ function replaceDiffTabs(text) {
     return text.replace(/\t/g, '   ');
 }
 function diffWordsSafely(oldContent, newContent) {
-    if (typeof window === 'undefined') return null;
+    if (typeof window === 'undefined')
+        return null;
     const diff = window.Diff;
-    if (!diff || typeof diff.diffWords !== 'function') return null;
+    if (!diff || typeof diff.diffWords !== 'function')
+        return null;
     try {
         return diff.diffWords(oldContent, newContent);
-    } catch {
+    }
+    catch {
         return null;
     }
 }
 function appendDiffFragment(row, value, changed) {
-    if (!value) return;
+    if (!value)
+        return;
     const fragment = document.createElement('span');
-    if (changed) fragment.className = 'diff-word-change';
+    if (changed)
+        fragment.className = 'diff-word-change';
     fragment.textContent = value;
     row.appendChild(fragment);
 }
@@ -88,19 +96,13 @@ function appendPlainDiffRow(container, className, text) {
     container.appendChild(row);
 }
 function appendParsedDiffRow(container, parsed, className) {
-    appendPlainDiffRow(
-        container,
-        className,
-        `${parsed.prefix}${parsed.lineNum} ${replaceDiffTabs(parsed.content)}`,
-    );
+    appendPlainDiffRow(container, className, `${parsed.prefix}${parsed.lineNum} ${replaceDiffTabs(parsed.content)}`);
 }
 /** Vendored from Pi's diff.js:21-55, with DOM-native inverse spans. */
 function appendIntraLineDiffRows(container, removed, added) {
-    const wordDiff = diffWordsSafely(
-        replaceDiffTabs(removed.content),
-        replaceDiffTabs(added.content),
-    );
-    if (!wordDiff) return false;
+    const wordDiff = diffWordsSafely(replaceDiffTabs(removed.content), replaceDiffTabs(added.content));
+    if (!wordDiff)
+        return false;
     const removedRow = document.createElement('div');
     removedRow.className = 'diff-removed';
     const addedRow = document.createElement('div');
@@ -123,7 +125,8 @@ function appendIntraLineDiffRows(container, removed, added) {
                 isFirstRemoved = false;
             }
             appendDiffFragment(removedRow, value, true);
-        } else if (part.added) {
+        }
+        else if (part.added) {
             let value = part.value;
             if (isFirstAdded) {
                 const leadingWs = value.match(/^(\s*)/)?.[1] || '';
@@ -132,7 +135,8 @@ function appendIntraLineDiffRows(container, removed, added) {
                 isFirstAdded = false;
             }
             appendDiffFragment(addedRow, value, true);
-        } else {
+        }
+        else {
             appendDiffFragment(removedRow, part.value, false);
             appendDiffFragment(addedRow, part.value, false);
         }
@@ -156,25 +160,21 @@ function appendDiffRows(container, diffText) {
             const removedLines = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '-') break;
+                if (!candidate || candidate.prefix !== '-')
+                    break;
                 removedLines.push(candidate);
                 index++;
             }
             const addedLines = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '+') break;
+                if (!candidate || candidate.prefix !== '+')
+                    break;
                 addedLines.push(candidate);
                 index++;
             }
             if (removedLines.length === 1 && addedLines.length === 1) {
-                if (
-                    appendIntraLineDiffRows(
-                        container,
-                        removedLines[0],
-                        addedLines[0],
-                    )
-                )
+                if (appendIntraLineDiffRows(container, removedLines[0], addedLines[0]))
                     continue;
             }
             for (const removedLine of removedLines)
@@ -185,7 +185,8 @@ function appendDiffRows(container, diffText) {
         }
         if (parsed.prefix === '+') {
             appendParsedDiffRow(container, parsed, 'diff-added');
-        } else {
+        }
+        else {
             appendParsedDiffRow(container, parsed, 'diff-context');
         }
         index++;
@@ -197,7 +198,8 @@ function appendHeader(wrapper, name, args) {
     header.appendChild(el('span', 'tool-name', name));
     const addPath = (raw, extra) => {
         header.appendChild(el('span', 'tool-path', shortenPath(raw)));
-        if (extra) header.appendChild(extra);
+        if (extra)
+            header.appendChild(extra);
     };
     switch (name) {
         case 'read': {
@@ -211,13 +213,8 @@ function appendHeader(wrapper, name, args) {
             const limit = args.limit;
             if (offset !== undefined || limit !== undefined) {
                 const startLine = typeof offset === 'number' ? offset : 1;
-                const endLine =
-                    typeof limit === 'number' ? startLine + limit - 1 : null;
-                extra = el(
-                    'span',
-                    'line-numbers',
-                    `:${startLine}${endLine ? `-${endLine}` : ''}`,
-                );
+                const endLine = typeof limit === 'number' ? startLine + limit - 1 : null;
+                extra = el('span', 'line-numbers', `:${startLine}${endLine ? `-${endLine}` : ''}`);
             }
             addPath(filePath || '', extra);
             break;
@@ -233,9 +230,7 @@ function appendHeader(wrapper, name, args) {
             if (content) {
                 const lines = content.split('\n');
                 if (lines.length > 10)
-                    header.appendChild(
-                        el('span', 'line-count', `(${lines.length} lines)`),
-                    );
+                    header.appendChild(el('span', 'line-count', `(${lines.length} lines)`));
             }
             break;
         }
@@ -256,17 +251,17 @@ function appendHeader(wrapper, name, args) {
             }
             addPath(dirPath || '.');
             if (typeof args.limit === 'number') {
-                header.appendChild(
-                    el('span', 'line-count', `(limit ${args.limit})`),
-                );
+                header.appendChild(el('span', 'line-count', `(limit ${args.limit})`));
             }
             break;
         }
         case 'grep':
         case 'find': {
             const pattern = str(args.pattern ?? args.query);
-            if (pattern) header.appendChild(el('span', 'tool-path', pattern));
-            else if (typeof args.path === 'string') addPath(args.path || '.');
+            if (pattern)
+                header.appendChild(el('span', 'tool-path', pattern));
+            else if (typeof args.path === 'string')
+                addPath(args.path || '.');
             break;
         }
         case 'subagent': {
@@ -278,14 +273,16 @@ function appendHeader(wrapper, name, args) {
                     ? `${action} · ${agent}`
                     : agent
                 : task
-                  ? truncate(task.split('\n')[0])
-                  : action;
-            if (subject) header.appendChild(el('span', 'tool-path', subject));
+                    ? truncate(task.split('\n')[0])
+                    : action;
+            if (subject)
+                header.appendChild(el('span', 'tool-path', subject));
             break;
         }
         default: {
             const id = str(args.id ?? args.sessionId);
-            if (id) header.appendChild(el('span', 'tool-path', truncate(id)));
+            if (id)
+                header.appendChild(el('span', 'tool-path', truncate(id)));
             break;
         }
     }
@@ -316,11 +313,9 @@ export function renderToolExecution(input) {
         case 'read':
         case 'ls': {
             if (resultText) {
-                const inner = expandableOutputElement(
-                    resultText,
-                    name === 'read' ? 10 : 20,
-                );
-                if (inner) wrapper.appendChild(inner);
+                const inner = expandableOutputElement(resultText, name === 'read' ? 10 : 20);
+                if (inner)
+                    wrapper.appendChild(inner);
             }
             break;
         }
@@ -328,9 +323,11 @@ export function renderToolExecution(input) {
             const content = str(args.content);
             if (content) {
                 const inner = expandableOutputElement(content, 10);
-                if (inner) wrapper.appendChild(inner);
+                if (inner)
+                    wrapper.appendChild(inner);
             }
-            if (resultText) appendPlainOutput(resultText);
+            if (resultText)
+                appendPlainOutput(resultText);
             break;
         }
         case 'edit': {
@@ -338,7 +335,8 @@ export function renderToolExecution(input) {
                 const body = el('div', 'tool-diff');
                 appendDiffRows(body, diff);
                 wrapper.appendChild(body);
-            } else if (resultText) {
+            }
+            else if (resultText) {
                 const body = el('div', 'tool-output');
                 body.appendChild(el('pre', '', resultText));
                 wrapper.appendChild(body);
@@ -355,15 +353,14 @@ export function renderToolExecution(input) {
             }
             if (resultText) {
                 const inner = expandableOutputElement(resultText, 10);
-                if (inner) wrapper.appendChild(inner);
+                if (inner)
+                    wrapper.appendChild(inner);
             }
             break;
         }
     }
-    if (
-        status === 'pending' &&
-        wrapper.querySelector('.tool-output') === null
-    ) {
+    if (status === 'pending' &&
+        wrapper.querySelector('.tool-output') === null) {
         const running = el('div', 'tool-output', 'running…');
         wrapper.appendChild(running);
     }
@@ -380,8 +377,8 @@ export function renderToolExecution(input) {
             wrapper
                 .querySelectorAll('.tool-output.expandable')
                 .forEach((el) => {
-                    el.classList.toggle('expanded');
-                });
+                el.classList.toggle('expanded');
+            });
         };
         header.setAttribute('role', 'button');
         header.setAttribute('tabindex', '0');
