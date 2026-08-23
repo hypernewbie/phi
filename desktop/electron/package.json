@@ -20,10 +20,12 @@
     "package": "electron-builder",
     "smoke": "vitest run test/smoke.test.ts"
   },
+  "dependencies": {
+    "commander": "^15.0.0"
+  },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
     "@types/node": "^24.13.3",
-    "commander": "^15.0.0",
     "electron": "43.4.1",
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
