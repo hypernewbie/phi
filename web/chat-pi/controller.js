@@ -1,6 +1,8 @@
 import { connectControl } from './client.js';
 import { mountChatPi } from './index.js';
+import { hideSubagentStrip } from './subagents.js';
 const chats = new Map();
+const lastFleetSnapshots = new Map();
 const statuses = new Map();
 const controls = new Map();
 const statusListeners = new Set();
@@ -45,8 +47,17 @@ export function mountRpcChat(paneId, container, cwd, sessionPath) {
         sessionPath,
         (status) => setPiRpcStatus(paneId, status),
         (state) => setPiRpcControls(paneId, state),
+        (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
     );
     chats.set(paneId, chat);
+}
+/** Repaint the shared subagent strip for the active tab: replay the
+ * pane's last fleet snapshot via its handle, or hide the strip when the
+ * tab has no chat handle (plain terminal/review tabs). */
+export function syncPiSubagentStrip(paneId) {
+    const chat = chats.get(paneId);
+    if (chat) chat.refreshFleet();
+    else hideSubagentStrip();
 }
 export function rpcChatSend(paneId, payload) {
     return chats.get(paneId)?.send(payload) ?? false;
@@ -71,17 +82,22 @@ export function rpcChatReset(paneId) {
 export function rpcChatInterrupt(paneId) {
     return chats.get(paneId)?.interrupt() ?? missingPane(paneId);
 }
+export function closePiSubagentViewer(paneId) {
+    return chats.get(paneId)?.closeSubagentViewer() ?? false;
+}
 export function rpcChatSetName(paneId, name) {
     return chats.get(paneId)?.setName(name) ?? missingPane(paneId);
 }
 export function destroyRpcChat(paneId) {
     const chat = chats.get(paneId);
     if (!chat) {
+        lastFleetSnapshots.delete(paneId);
         setPiRpcStatus(paneId, null);
         setPiRpcControls(paneId, null);
         return;
     }
     chats.delete(paneId);
+    lastFleetSnapshots.delete(paneId);
     statuses.delete(paneId);
     controls.delete(paneId);
     chat.destroy();

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -335,6 +336,41 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		// slice and is overwritten by the next Scan.
 		payload := append([]byte(nil), line...)
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
+	case "extension_ui_request":
+		// pi-subagents drives its TUI fleet strip through setWidget on the
+		// extension UI channel. Only the "subagent-async" widget is ours:
+		// everything else on this channel (dialog select/confirm prompts,
+		// other extension widgets) is intentionally ignored so dialogs keep
+		// working. Fire-and-forget mapping to a sequenced event: msg is nil,
+		// the hydrate snapshot is untouched. pi's rpc-mode serializes
+		// setWidget(key, undefined) with widgetLines dropped by JSON.stringify,
+		// so a missing, empty, or [""] widgetLines all mean "widget cleared"
+		// and emit nil data so the browser hides the strip. The payload is
+		// re-derived from the decoded WidgetLines string, never sliced from
+		// line — the scanner reuses that buffer.
+		var req struct {
+			Method      string   `json:"method"`
+			WidgetKey   string   `json:"widgetKey"`
+			WidgetLines []string `json:"widgetLines"`
+		}
+		if err := json.Unmarshal(line, &req); err != nil {
+			return
+		}
+		if req.Method != "setWidget" || req.WidgetKey != "subagent-async" {
+			return
+		}
+		if len(req.WidgetLines) == 0 || req.WidgetLines[0] == "" {
+			inst.Emit(EvtSubagentFleet, nil, nil)
+			return
+		}
+		const prefix = "PI_SUBAGENT_ASYNC_JSON:"
+		if !strings.HasPrefix(req.WidgetLines[0], prefix) {
+			return
+		}
+		remainder := json.RawMessage(req.WidgetLines[0][len(prefix):])
+		if json.Valid(remainder) {
+			inst.Emit(EvtSubagentFleet, nil, remainder)
+		}
 	default:
 		// Unknown pi events are ignored.
 	}

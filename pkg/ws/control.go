@@ -294,6 +294,16 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			})
 		}
 		payload = out
+	case rpc.OpSubagentTranscript:
+		// Disk-scoped like listSessions: resolves a pi-subagents run from
+		// its status.json on disk, no sid ownership involved.
+		var args struct {
+			RunId string `json:"runId"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		payload, err = s.mgr.SubagentTranscript(args.RunId)
 	case rpc.OpHydrate, rpc.OpGetMessages:
 		if err = decodeEmptyArgs(e.Args); err != nil {
 			break
