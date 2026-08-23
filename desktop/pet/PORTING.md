@@ -19,8 +19,7 @@ config, port the values by hand. Tests prove the port; see below.
 ## Sync procedure (new dsh-pet release)
 
 1. Copy media: `cp dsh-pet/assets/thumb/*.webm <phi>/desktop/pet/assets/thumb/`
-   Also delete phi-side webm whose names no longer exist upstream. The
-   manifest test prints both directions of drift.
+   Also delete phi-side webm whose names no longer exist upstream.
 2. Port config values into `pet-config.ts`:
    - `animations.idle`, `.turn`, `.drag`, `.clicks`, `.moves` (pool arrays)
    - `animations.categories[*]` — `id`, `weight`, `noMirror`, `actions`
