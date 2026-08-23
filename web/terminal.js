@@ -707,12 +707,15 @@ export class TabManager {
                     ? this._caretOnFirstLine()
                     : this._caretOnLastLine())
             ) {
-                e.preventDefault();
-                this._cycleChatHistory(
-                    e.key === 'ArrowUp' ? 'older' : 'newer',
-                    inputTab,
-                );
-                return;
+                if (
+                    this._cycleChatHistory(
+                        e.key === 'ArrowUp' ? 'older' : 'newer',
+                        inputTab,
+                    )
+                ) {
+                    e.preventDefault();
+                    return;
+                }
             }
 
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -3810,7 +3813,10 @@ export class TabManager {
             this._historyCursor = -1;
             // Typed input also breaks the per-chat cycle on Pi RPC tabs.
             const typedTab = this.getActiveTab();
-            if (typedTab?.coder === 'pi-rpc') typedTab.chatHistoryCursor = -1;
+            if (typedTab?.coder === 'pi-rpc') {
+                typedTab.chatHistoryCursor = -1;
+                typedTab.chatHistoryPreCycleValue = undefined;
+            }
         });
     }
 
@@ -6608,13 +6614,13 @@ export class TabManager {
     // tab.chatHistoryPreCycleValue and 'newer' past 0 restores it — minus the
     // async server load.
     _cycleChatHistory(direction, tab) {
-        if (!this.inputTextArea || !tab) return;
+        if (!this.inputTextArea || !tab) return false;
         const history = Array.isArray(tab.promptHistory)
             ? tab.promptHistory
             : [];
-        if (history.length === 0) return;
+        if (history.length === 0) return false;
         if (tab.chatHistoryCursor === undefined) tab.chatHistoryCursor = -1;
-        if (direction === 'newer' && tab.chatHistoryCursor === -1) return;
+        if (direction === 'newer' && tab.chatHistoryCursor === -1) return false;
         if (
             tab.chatHistoryPreCycleValue === undefined &&
             tab.chatHistoryCursor === -1
@@ -6633,16 +6639,16 @@ export class TabManager {
                 tab.chatHistoryPreCycleValue = undefined;
                 this._placeCursorAtEnd();
                 this.adjustInputHeight();
-                return;
+                return true;
             }
             tab.chatHistoryCursor -= 1;
         }
         const entry = history[tab.chatHistoryCursor];
-        if (entry !== undefined) {
-            this.inputTextArea.value = entry;
-            this._placeCursorAtEnd();
-            this.adjustInputHeight();
-        }
+        if (entry === undefined) return false;
+        this.inputTextArea.value = entry;
+        this._placeCursorAtEnd();
+        this.adjustInputHeight();
+        return true;
     }
 
     _placeCursorAtEnd() {

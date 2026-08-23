@@ -197,6 +197,9 @@ export function mountChatPi(
     };
     let outgoingSeq = 0;
     const outgoing: OutgoingPrompt[] = [];
+    // Outgoing records disappear when their user message is rendered; retain
+    // the full current-turn order separately for interrupt restoration.
+    const turnPrompts: OutgoingPrompt[] = [];
     let activePrompt: {
         id: string;
         text: string;
@@ -238,6 +241,7 @@ export function mountChatPi(
                 controlsChanged = true;
                 if (!busy) {
                     outgoing.length = 0;
+                    turnPrompts.length = 0;
                     activePrompt = null;
                     // Milestone 4: guard against a stranded retry state
                     // when the busy→false transition lands in a hydrate
@@ -359,6 +363,11 @@ export function mountChatPi(
         );
     };
 
+    const removeTurnPrompt = (prompt: OutgoingPrompt): void => {
+        const index = turnPrompts.indexOf(prompt);
+        if (index >= 0) turnPrompts.splice(index, 1);
+    };
+
     const cancelPendingSave = (): void => {
         if (pendingSaveTimer !== null) clearTimeout(pendingSaveTimer);
         pendingSaveTimer = null;
@@ -470,6 +479,7 @@ export function mountChatPi(
             state: 'sending' as const,
         };
         outgoing.push(local);
+        turnPrompts.push(local);
         activePrompt = { ...local, origin: 'optimistic' };
         syncActiveTurn();
         void invokeControl(
@@ -489,6 +499,7 @@ export function mountChatPi(
                 const index = outgoing.indexOf(local);
                 if (data?.accepted !== true) {
                     if (index >= 0) outgoing.splice(index, 1);
+                    removeTurnPrompt(local);
                     if (activePrompt?.id === local.id)
                         activePrompt = outgoing.at(-1)
                             ? { ...outgoing.at(-1)!, origin: 'optimistic' }
@@ -510,6 +521,7 @@ export function mountChatPi(
             .catch((error: unknown) => {
                 const index = outgoing.indexOf(local);
                 if (index >= 0) outgoing.splice(index, 1);
+                removeTurnPrompt(local);
                 if (activePrompt?.id === local.id)
                     activePrompt = outgoing.at(-1)
                         ? { ...outgoing.at(-1)!, origin: 'optimistic' }
@@ -582,12 +594,9 @@ export function mountChatPi(
         // Capture the in-flight prompt texts BEFORE the abort request:
         // applyState() clears activePrompt/outgoing on the busy=false state
         // change, which lands before the abort response resolves.
-        const restored: string[] = [];
-        if (activePrompt?.text) restored.push(activePrompt.text);
-        for (const item of outgoing) {
-            if (item.text && !restored.includes(item.text))
-                restored.push(item.text);
-        }
+        const restored = turnPrompts
+            .map((item) => item.text)
+            .filter((text) => text !== '');
         abortInFlight = true;
         const currentSid = sid;
         return invokeControl(
