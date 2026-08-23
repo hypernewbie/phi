@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from './constants.js';
-export const ControlCallTimeout = 6_000;
+export const ControlCallTimeout = 35_000;
 function controlError(message) {
     return new Error(message || 'control call failed');
 }

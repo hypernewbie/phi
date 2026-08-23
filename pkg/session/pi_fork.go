@@ -2,10 +2,19 @@ package session
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
+
+func isSubpath(parent, target string) bool {
+	parent = filepath.Clean(parent)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(parent, target)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..") && rel != "." && !filepath.IsAbs(rel)
+}
 
 // GetPiForkSessionRPCTranscript reads a nested fork session file under
 // the Pi sessions root, enforcing the shared reader's safety checks
@@ -16,7 +25,7 @@ func GetPiForkSessionRPCTranscript(cwd, sessionPath string) ([]PiRPCMessage, err
 		return nil, fmt.Errorf("Pi fork session path must be absolute: %s", sessionPath)
 	}
 	root := expandHome("~/.pi/agent/sessions")
-	if !strings.HasPrefix(sessionPath, root+string(os.PathSeparator)) {
+	if !isSubpath(root, sessionPath) {
 		return nil, fmt.Errorf("Pi fork session path %q escapes the sessions root", sessionPath)
 	}
 	payloads, err := readPiSessionRawMessages(cwd, sessionPath)
