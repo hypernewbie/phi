@@ -7,6 +7,7 @@ import { renderedUserText } from './render.js';
 import type { PiRpcStatus } from './render.js';
 import { createReviewTranscriptView } from '../review-transcript.js';
 import type { ActiveTurnState } from '../review-transcript.js';
+import { createSubagentStrip, createSubagentViewer } from './subagents.js';
 
 export interface PiModel {
     provider: string;
@@ -34,10 +35,13 @@ export interface ChatPiHandle {
     resetChat(): Promise<unknown>;
     interrupt(): Promise<unknown>;
     setName(name: string): Promise<unknown>;
+    refreshFleet(): void;
+    closeSubagentViewer(): boolean;
 }
 
 export type PiRpcStatusChange = (status: PiRpcStatus | null) => void;
 export type PiRpcControlChange = (controls: PiRpcControls | null) => void;
+export type PiFleetChange = (snapshot: unknown) => void;
 
 function cloneStatus(status: PiRpcStatus): PiRpcStatus {
     return {
@@ -178,6 +182,7 @@ export function mountChatPi(
     sessionPath?: string,
     onStatusChange: PiRpcStatusChange = () => {},
     onControlChange: PiRpcControlChange = () => {},
+    onFleetChange: PiFleetChange = () => {},
 ): ChatPiHandle {
     const wire = client as LegacyClient;
     const buffer = new MessageBuffer();
@@ -319,6 +324,16 @@ export function mountChatPi(
         pageSize: 50,
     });
     const status = view.status!;
+    // pi-subagents fleet strip: shared #subagent-strip below the input
+    // bar. Only this pane may write it while it is the active tab, so
+    // background panes' fleet events gate inside update(). The last
+    // snapshot is kept for refreshFleet (tab re-activation repaint).
+    let lastFleet: unknown;
+    const subagentViewer = createSubagentViewer(root, client, cwd);
+    const strip = createSubagentStrip(
+        () => root.classList.contains('active'),
+        (runId, label) => subagentViewer.open(runId, label),
+    );
     // Milestone 4: provider-level retry indicator (pi's
     // auto_retry_start / auto_retry_end / summarization_retry_*).
     // Folded into the ActiveTurnState so the view's working row can
@@ -466,7 +481,7 @@ export function mountChatPi(
     };
 
     const send = (text: string): boolean => {
-        if (!sid || !ready || exited) return false;
+        if (!sid || !ready || exited || subagentViewer.isOpen()) return false;
         const dispatch = dispatchComposer(text);
         if (dispatch.kind === 'rejected') {
             status.textContent = dispatch.reason;
@@ -703,8 +718,17 @@ export function mountChatPi(
             exited = true;
             ready = false;
             status.textContent = 'Pi exited';
+            lastFleet = undefined;
+            onFleetChange(undefined);
+            subagentViewer.destroy();
+            strip.destroy();
             flushPendingSave();
             notifyControls();
+        }
+        if (env.evt === 'subagentFleet') {
+            lastFleet = env.data;
+            strip.update(env.data);
+            onFleetChange(env.data);
         }
         // Milestone 4: provider-level retry indicator.
         // auto_retry_start/summarization_retry_scheduled stash
@@ -908,6 +932,8 @@ export function mountChatPi(
             destroyed = true;
             off();
             client.close();
+            subagentViewer.destroy();
+            strip.destroy();
             root.replaceChildren();
             onStatusChange(null);
             onControlChange(null);
@@ -920,5 +946,16 @@ export function mountChatPi(
         resetChat,
         interrupt,
         setName,
+        refreshFleet: (): void => {
+            // Tab re-activation: repaint this pane's last fleet snapshot
+            // (or hide the shared strip when this pane has none).
+            if (lastFleet === undefined) strip.hide();
+            else strip.update(lastFleet);
+        },
+        closeSubagentViewer: (): boolean => {
+            if (!subagentViewer.isOpen()) return false;
+            subagentViewer.close();
+            return true;
+        },
     };
 }

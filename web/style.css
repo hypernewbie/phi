@@ -2710,6 +2710,188 @@ html[data-phi-desktop-root] .app-header {
     background-color: rgba(239, 68, 68, 0.08);
 }
 
+/* pi-subagents fleet strip: clickable run chips below the input bar,
+   mirroring the attachment-strip idiom. */
+.subagent-strip {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 6px 0 0 0;
+    align-self: stretch;
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+.subagent-strip.hidden {
+    display: none;
+}
+.subagent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--accent-trace);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.2;
+    max-width: 220px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
+}
+.subagent-chip:hover {
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 10px var(--accent-glow);
+    color: var(--text-primary);
+}
+.subagent-chip .subagent-chip-label {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.subagent-chip .dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background-color: var(--text-muted);
+}
+.subagent-chip .dot-running {
+    background-color: var(--accent-bright);
+    box-shadow: 0 0 6px var(--accent-glow);
+}
+.subagent-chip .dot-complete {
+    background-color: var(--green);
+}
+.subagent-chip .dot-failed {
+    background-color: var(--red);
+}
+.subagent-chip .dot-queued {
+    background-color: var(--text-muted);
+}
+
+.subagent-viewer {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-base);
+    color: var(--text-primary);
+}
+.subagent-viewer-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+    min-height: 38px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--bg-border);
+    background: var(--bg-panel);
+}
+.subagent-viewer-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.subagent-viewer-close {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 20px;
+}
+.subagent-viewer-close:hover {
+    border-color: var(--accent-soft);
+    background: var(--accent-glow);
+    color: var(--text-primary);
+}
+.subagent-viewer-error {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--red);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.subagent-viewer-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+.subagent-rail {
+    display: flex;
+    flex: 0 0 140px;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 0;
+    padding: 10px 8px;
+    overflow-y: auto;
+    border-right: 1px solid var(--bg-border);
+    background: var(--bg-panel);
+}
+.subagent-rail button {
+    width: 100%;
+    padding: 6px 8px;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.subagent-rail button:hover,
+.subagent-rail button.active {
+    border-color: var(--accent-trace);
+    background: var(--accent-glow);
+    color: var(--text-primary);
+}
+.subagent-viewer-main {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+}
+.subagent-viewer-main .review-content-body {
+    min-height: 0;
+}
+.subagent-step-header {
+    flex: none;
+    margin: 4px 0 -4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-border);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
 .input-bar-container textarea {
     flex: 1;
     background-color: var(--bg-base);

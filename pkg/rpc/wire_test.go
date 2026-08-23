@@ -831,3 +831,150 @@ func TestCompactionEndOrderingEmitsCompactionEndBeforeTranscriptReset(t *testing
 		t.Fatalf("compactionEnd raw payload lost errorMessage: %s", raw)
 	}
 }
+
+// fleetLine marshals a subagent-async setWidget JSONL line wrapping
+// payload, escaping it exactly as pi's rpc-mode would.
+func fleetLine(t *testing.T, payload string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"type":        "extension_ui_request",
+		"id":          "7f2c1e40-9f0e-4a5f-b1c3-2d8e6a0f5b21",
+		"method":      "setWidget",
+		"widgetKey":   "subagent-async",
+		"widgetLines": []string{"PI_SUBAGENT_ASYNC_JSON:" + payload},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// fleetSnapshot is the widget payload AFTER the PI_SUBAGENT_ASYNC_JSON:
+// prefix (fleetLine adds it).
+const fleetSnapshot = `{"runs":[{"id":"run-1","kind":"agent","label":"worker","state":"running","activity":{"currentTool":"read"}},{"id":"run-2","kind":"agent","label":"reviewer","state":"complete","activity":{}}]}`
+
+func TestSubagentFleetForwardsSnapshot(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	go func() {
+		_, _ = fp.stdoutW.Write([]byte(
+			`{"type":"message_end","message":{"role":"user","content":"a"}}` + "\n" +
+				fleetLine(t, fleetSnapshot) + "\n"))
+	}()
+	first := nextWireEvent(t, sub)
+	if first.Evt != EvtMessageEnd {
+		t.Fatalf("first event must be messageEnd, got %+v", first)
+	}
+	second := nextWireEvent(t, sub)
+	if second.Evt != EvtSubagentFleet {
+		t.Fatalf("second event must be subagentFleet, got %+v", second)
+	}
+	raw, ok := second.Data.(json.RawMessage)
+	if !ok {
+		t.Fatalf("subagentFleet data type = %T, want json.RawMessage", second.Data)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("subagentFleet payload not valid JSON: %v", err)
+	}
+	runs, ok := parsed["runs"].([]any)
+	if !ok || len(runs) != 2 {
+		t.Fatalf("subagentFleet payload lost runs: %s", raw)
+	}
+	if len(inst.SnapshotCopy().Messages) != 1 {
+		t.Fatalf("subagentFleet must not touch snapshot messages: %+v", inst.SnapshotCopy().Messages)
+	}
+}
+
+func TestSubagentFleetIgnoresOtherWidgets(t *testing.T) {
+	lines := []string{
+		`{"type":"extension_ui_request","id":"a1","method":"setWidget","widgetKey":"other-widget","widgetLines":["x"]}`,
+		`{"type":"extension_ui_request","id":"a2","method":"select","title":"pick one","options":["a","b"]}`,
+		fleetLine(t, `{not json`),
+	}
+	fp, inst, sub := wireFixture(t)
+	go func() {
+		_, _ = fp.stdoutW.Write([]byte(
+			strings.Join(lines, "\n") + "\n" +
+				`{"type":"message_end","message":{"role":"user","content":"still parses"}}` + "\n"))
+	}()
+	ev := nextWireEvent(t, sub)
+	if ev.Evt != EvtMessageEnd {
+		t.Fatalf("ignored fleet traffic must not emit; first event was %+v", ev)
+	}
+	if len(inst.SnapshotCopy().Messages) != 1 {
+		t.Fatalf("message_end after noise must still land: %+v", inst.SnapshotCopy().Messages)
+	}
+}
+
+func TestSubagentFleetClearEmitsEmpty(t *testing.T) {
+	// pi's rpc-mode serializes setWidget(key, undefined) with widgetLines
+	// dropped by JSON.stringify, so the clear arrives without the field.
+	cases := map[string]string{
+		"omitted key": `{"type":"extension_ui_request","id":"c1","method":"setWidget","widgetKey":"subagent-async"}`,
+		"empty array": `{"type":"extension_ui_request","id":"c2","method":"setWidget","widgetKey":"subagent-async","widgetLines":[]}`,
+		"empty line":  `{"type":"extension_ui_request","id":"c3","method":"setWidget","widgetKey":"subagent-async","widgetLines":[""]}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			fp, _, sub := wireFixture(t)
+			go func() { _, _ = fp.stdoutW.Write([]byte(line + "\n")) }()
+			ev := nextWireEvent(t, sub)
+			if ev.Evt != EvtSubagentFleet {
+				t.Fatalf("clear must emit subagentFleet, got %+v", ev)
+			}
+			if ev.Data != nil {
+				t.Fatalf("clear must emit nil data, got %#v", ev.Data)
+			}
+		})
+	}
+}
+
+func TestSubagentFleetDoesNotDisturbSeqContinuity(t *testing.T) {
+	fp, _, sub := wireFixture(t)
+	go func() {
+		_, _ = fp.stdoutW.Write([]byte(
+			`{"type":"message_end","message":{"role":"user","content":"a"}}` + "\n" +
+				fleetLine(t, fleetSnapshot) + "\n" +
+				`{"type":"message_end","message":{"role":"assistant","content":"b"}}` + "\n"))
+	}()
+	var prev uint64
+	for i := 0; i < 3; i++ {
+		ev := nextWireEvent(t, sub)
+		if ev.Seq <= prev {
+			t.Fatalf("seq must strictly increase: %d after %d (%s)", ev.Seq, prev, ev.Evt)
+		}
+		prev = ev.Seq
+	}
+}
+
+func TestSubagentFleetNoAliasing(t *testing.T) {
+	// Mirror TestMessageUpdateDataNotAliasedToScannerBuffer: the fleet
+	// payload must survive the scanner reusing its backing buffer. Both
+	// lines share a repeated tail so a sliced alias would be detectable.
+	fp, _, sub := wireFixture(t)
+	snapA := `{"marker":"ORIGINAL_FIRST_DO_NOT_OVERWRITE","tail":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}`
+	snapB := `{"marker":"SECOND_LINE_SHORT","tail":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}`
+	go func() {
+		_, _ = fp.stdoutW.Write([]byte(
+			fleetLine(t, snapA) + "\n" +
+				fleetLine(t, snapB) + "\n" +
+				`{"type":"agent_start"}` + "\n"))
+	}()
+	first := nextWireEvent(t, sub)
+	if first.Evt != EvtSubagentFleet {
+		t.Fatalf("first event must be subagentFleet, got %+v", first)
+	}
+	raw, ok := first.Data.(json.RawMessage)
+	if !ok {
+		t.Fatalf("subagentFleet data type = %T, want json.RawMessage", first.Data)
+	}
+	var parsed struct {
+		Marker string `json:"marker"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("first fleet payload invalid after second line: %v", err)
+	}
+	if parsed.Marker != "ORIGINAL_FIRST_DO_NOT_OVERWRITE" {
+		t.Fatalf("first fleet payload aliased the scanner buffer: %s", raw)
+	}
+}

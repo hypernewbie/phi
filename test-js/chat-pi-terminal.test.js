@@ -16,6 +16,7 @@ vi.mock('../web/chat-pi/controller.js', () => ({
     rpcChatSetThinking: vi.fn(() => Promise.resolve()),
     rpcChatReset: vi.fn(() => Promise.resolve()),
     rpcChatInterrupt: vi.fn(() => Promise.resolve()),
+    closePiSubagentViewer: vi.fn(() => false),
     subscribePiRpcStatus: vi.fn(() => () => {}),
 }));
 
@@ -26,6 +27,7 @@ import {
     rpcChatModels,
     rpcChatReset,
     rpcChatInterrupt,
+    closePiSubagentViewer,
     rpcChatSend,
     rpcChatSetModel,
     rpcChatSetThinking,
@@ -46,6 +48,7 @@ afterEach(() => {
     rpcChatSetThinking.mockImplementation(() => Promise.resolve());
     rpcChatReset.mockImplementation(() => Promise.resolve());
     rpcChatInterrupt.mockImplementation(() => Promise.resolve());
+    closePiSubagentViewer.mockImplementation(() => false);
     subscribePiRpcStatus.mockImplementation(() => () => {});
 });
 
@@ -157,7 +160,7 @@ describe('Pi RPC TabManager boundaries', () => {
         ).toEqual(['Model ▾', 'Thinking ▾', 'Reset Chat']);
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
-        expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(true);
+        expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         expect(tm.copyInputBtn.classList.contains('hidden')).toBe(true);
         expect(tm.directModeToggle.classList.contains('hidden')).toBe(true);
     });
@@ -369,6 +372,7 @@ describe('Pi RPC TabManager boundaries', () => {
             preventDefault: vi.fn(),
             stopPropagation: vi.fn(),
         };
+        tm._closePiSubagentViewerIfOpen = vi.fn(() => false);
         tm._closePiRpcDropups = vi.fn(() => true);
         tm._interruptActivePiRpc = vi.fn(() => true);
         expect(tm._handlePiRpcEscape(dropupEvent)).toBe(true);
@@ -397,12 +401,27 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(tm._interruptActivePiRpc).toHaveBeenCalledOnce();
         expect(activeEvent.preventDefault).toHaveBeenCalledOnce();
 
+        const viewerEvent = {
+            key: 'Escape',
+            isComposing: false,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        tm._closePiSubagentViewerIfOpen.mockReturnValue(true);
+        expect(tm._handlePiRpcEscape(viewerEvent)).toBe(true);
+        expect(tm._closePiSubagentViewerIfOpen).toHaveBeenCalled();
+        expect(tm._closePiRpcDropups).toHaveBeenCalledTimes(2);
+        expect(tm._interruptActivePiRpc).toHaveBeenCalledTimes(1);
+        expect(viewerEvent.preventDefault).toHaveBeenCalledOnce();
+        expect(viewerEvent.stopPropagation).toHaveBeenCalledOnce();
+
         const idleEvent = {
             key: 'Escape',
             isComposing: false,
             preventDefault: vi.fn(),
             stopPropagation: vi.fn(),
         };
+        tm._closePiSubagentViewerIfOpen.mockReturnValue(false);
         tm._interruptActivePiRpc.mockReturnValue(false);
         expect(tm._handlePiRpcEscape(idleEvent)).toBe(false);
         expect(idleEvent.preventDefault).not.toHaveBeenCalled();
@@ -421,7 +440,7 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.copyInputBtn = document.createElement('button');
         tm.directModeToggle = document.createElement('button');
         tm._setPiRpcActionVisibility({ coder: 'pi-rpc' });
-        expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(true);
+        expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         tm._closePiRpcDropups(true);
         expect(modelDropup.classList.contains('hidden')).toBe(true);
         expect(thinkingDropup.classList.contains('hidden')).toBe(true);
@@ -649,6 +668,7 @@ describe('Pi RPC TabManager real Escape listener (textarea + document)', () => {
         }));
         tm._closePiRpcDropups = vi.fn(() => false);
         tm._interruptActivePiRpc = vi.fn(() => false);
+        tm.sendRawInput = vi.fn();
         tm.handleGlobalTabShortcuts = vi.fn();
         tm._initHieroPreview = vi.fn();
         tm._setupContainerDragHandlers = vi.fn();
@@ -679,6 +699,7 @@ describe('Pi RPC TabManager real Escape listener (textarea + document)', () => {
         return {
             tm,
             textarea,
+            cancelInputBtn: tm.cancelInputBtn,
             cleanup: () => {
                 for (const listener of capturedKeydown) {
                     realRemove('keydown', listener);
@@ -686,6 +707,41 @@ describe('Pi RPC TabManager real Escape listener (textarea + document)', () => {
             },
         };
     }
+
+    it('the visible Pi RPC Cancel button calls rpcChatInterrupt instead of raw PTY input', () => {
+        const ctx = installRealEscapeListeners();
+        try {
+            ctx.tm._interruptActivePiRpc =
+                TabManager.prototype._interruptActivePiRpc.bind(ctx.tm);
+            ctx.cancelInputBtn.click();
+            expect(rpcChatInterrupt).toHaveBeenCalledWith('pi-rpc:escape-real');
+            expect(ctx.tm.sendRawInput).not.toHaveBeenCalled();
+        } finally {
+            ctx.cleanup();
+        }
+    });
+
+    it('Esc closes an open viewer without reaching the Pi interrupt path', () => {
+        const ctx = installRealEscapeListeners();
+        try {
+            closePiSubagentViewer.mockReturnValue(true);
+            const event = new KeyboardEvent('keydown', {
+                key: 'Escape',
+                isComposing: false,
+                bubbles: true,
+                cancelable: true,
+            });
+            ctx.textarea.dispatchEvent(event);
+            expect(closePiSubagentViewer).toHaveBeenCalledWith(
+                'pi-rpc:escape-real',
+            );
+            expect(event.defaultPrevented).toBe(true);
+            expect(ctx.tm._interruptActivePiRpc).not.toHaveBeenCalled();
+            expect(rpcChatInterrupt).not.toHaveBeenCalled();
+        } finally {
+            ctx.cleanup();
+        }
+    });
 
     it('composing Escape is a no-op on both textarea and document listeners', () => {
         const ctx = installRealEscapeListeners();

@@ -4,11 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/session"
 )
 
 // Manager owns live Instances keyed by ID.
@@ -382,6 +388,73 @@ func (m *Manager) UpdateSessionPath(inst *Instance, path string) {
 			m.reservations[path] = reservation
 		}
 	}
+}
+
+// subagentStep and subagentTranscript shape the op response: the run's
+// steps with their fork-session transcripts merged in message order.
+type subagentStep struct {
+	Label       string                 `json:"label"`
+	SessionFile string                 `json:"sessionFile"`
+	Messages    []session.PiRPCMessage `json:"messages"`
+}
+
+type subagentTranscript struct {
+	RunId string         `json:"runId"`
+	Steps []subagentStep `json:"steps"`
+}
+
+// SubagentTranscript resolves a subagent run to its transcript
+// messages. runId is validated by charset rejection and enumeration,
+// never joined into a path directly.
+func (m *Manager) SubagentTranscript(runId string) (any, error) {
+	if runId == "" || strings.ContainsAny(runId, "/\\") || strings.Contains(runId, "..") {
+		return nil, fmt.Errorf("invalid subagent run id: %q", runId)
+	}
+	candidates, err := filepath.Glob(filepath.Join(os.TempDir(), "pi-subagents-*", "async-subagent-runs", "*", "status.json"))
+	if err != nil {
+		return nil, fmt.Errorf("scan subagent runs: %w", err)
+	}
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 64*1024 {
+			continue
+		}
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		var st struct {
+			RunId string `json:"runId"`
+			Cwd   string `json:"cwd"`
+			Steps []struct {
+				Label       string `json:"label"`
+				SessionFile string `json:"sessionFile"`
+			} `json:"steps"`
+		}
+		if err := json.Unmarshal(raw, &st); err != nil || st.RunId != runId {
+			continue
+		}
+		steps := make([]subagentStep, 0, len(st.Steps))
+		seen := make(map[string]bool, len(st.Steps))
+		for _, step := range st.Steps {
+			if step.SessionFile == "" || seen[step.SessionFile] {
+				continue
+			}
+			seen[step.SessionFile] = true
+			messages, err := session.GetPiForkSessionRPCTranscript(st.Cwd, step.SessionFile)
+			if err != nil {
+				// A partially failed workflow still shows its completed steps.
+				continue
+			}
+			steps = append(steps, subagentStep{
+				Label:       step.Label,
+				SessionFile: step.SessionFile,
+				Messages:    messages,
+			})
+		}
+		return subagentTranscript{RunId: st.RunId, Steps: steps}, nil
+	}
+	return nil, fmt.Errorf("subagent run not found: %s", runId)
 }
 
 // SubscriptionCount reports active control subscribers for an instance.

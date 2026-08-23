@@ -22,6 +22,7 @@ const (
 	OpNewSession                 = "newSession"
 	OpAbort                      = "abort"
 	OpSetSessionName             = "setSessionName"
+	OpSubagentTranscript         = "subagentTranscript"
 
 	EvtStateChanged    = "stateChanged"
 	EvtMessageStart    = "messageStart"
@@ -29,6 +30,7 @@ const (
 	EvtMessageEnd      = "messageEnd"
 	EvtTranscriptReset = "transcriptReset"
 	EvtRpcExited       = "rpcExited"
+	EvtSubagentFleet   = "subagentFleet"
 
 	// Pi error/control surfaces mapped from pi's JSONL events so the
 	// chat-pi frontend can render them with TUI parity. All are

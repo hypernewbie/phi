@@ -180,18 +180,12 @@ export class DiffController {
         });
     }
     initTerminal() {
-        // Honor configured terminal font size/family; fall back to the
-        // panel's historical 10/12 default only when nothing is set.
-        const cfgSize = this.app?.terminalFontSize;
-        const cfgFamily = this.app?.terminalFontFamily;
         const isMobile = window.innerWidth <= 768;
-        const fontSize = cfgSize >= 8 && cfgSize <= 32 ? cfgSize : isMobile ? 10 : 12;
-        const fontFamily = cfgFamily || 'JetBrains Mono, monospace';
         this.term = new window.Terminal({
             cursorBlink: false,
             cursorStyle: 'underline',
-            fontSize,
-            fontFamily,
+            fontSize: isMobile ? 10 : 12,
+            fontFamily: 'JetBrains Mono, monospace',
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
@@ -361,9 +355,8 @@ export class DiffController {
         if (!this.term || !this.isPanelOpen)
             return;
         try {
-            const cfgSize = this.app?.terminalFontSize;
             const isMobile = window.innerWidth <= 768;
-            const size = cfgSize >= 8 && cfgSize <= 32 ? cfgSize : isMobile ? 10 : 12;
+            const size = isMobile ? 10 : 12;
             if (this.term.options.fontSize !== size) {
                 this.term.options.fontSize = size;
             }
@@ -375,27 +368,6 @@ export class DiffController {
         catch (e) {
             console.error('[diff] Fit error:', e);
         }
-    }
-    // Live-apply new terminal font size (called from applyTerminalFontSizeToAll).
-    applyFontSize(size) {
-        if (!this.term)
-            return;
-        const isMobile = window.innerWidth <= 768;
-        const safe = size >= 8 && size <= 32 ? size : isMobile ? 10 : 12;
-        if (this.term.options.fontSize === safe)
-            return;
-        this.term.options.fontSize = safe;
-        if (this.isPanelOpen)
-            this.fitTerminal();
-    }
-    // Live-apply new terminal font family (called from applyFontToAllActiveTerminals).
-    applyFontFamily(family) {
-        if (!this.term)
-            return;
-        const safe = family || 'JetBrains Mono, monospace';
-        if (this.term.options.fontFamily === safe)
-            return;
-        this.term.options.fontFamily = safe;
     }
     _writeStaticTerminalOutput(text, emptyText) {
         this.fitTerminal();
@@ -1258,7 +1230,14 @@ export class DiffController {
         const safeDiffHtml = window.DOMPurify?.sanitize
             ? String(window.DOMPurify.sanitize(diffHtml, {
                 USE_PROFILES: { html: true },
-                FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
+                FORBID_TAGS: [
+                    'script',
+                    'style',
+                    'iframe',
+                    'object',
+                    'embed',
+                    'form',
+                ],
             }))
             : diffHtml;
         const parsed = new DOMParser().parseFromString(safeDiffHtml, 'text/html');

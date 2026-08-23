@@ -1677,3 +1677,89 @@ func TestControlSetSessionNameEmitsStateChangedEvent(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentTranscriptOp(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	cwd, err := filepath.Abs(filepath.Join(t.TempDir(), "project"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath := setupPiControlFixture(t, cwd, "parent.jsonl", piControlHeader("parent-id", cwd))
+	forkPath := filepath.Join(filepath.Dir(parentPath), "20260822T000000_fork", "run-0", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(forkPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	forkRecords := strings.Join([]string{
+		piControlHeader("fork-id", cwd),
+		`{"type":"message","id":"message-1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"fork hello"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(forkPath, []byte(forkRecords), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const runID = "run-transcript-test"
+	statusPath := filepath.Join(os.TempDir(), "pi-subagents-test", "async-subagent-runs", runID, "status.json")
+	if err := os.MkdirAll(filepath.Dir(statusPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	status, err := json.Marshal(map[string]any{
+		"runId": runID,
+		"cwd":   cwd,
+		"steps": []map[string]string{{
+			"label":       "First step",
+			"sessionFile": forkPath,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statusPath, status, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := &controlServer{mgr: rpc.NewManager()}
+	response := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame,
+		ID:   "subagent-transcript",
+		Op:   rpc.OpSubagentTranscript,
+		Args: json.RawMessage(`{"runId":"run-transcript-test"}`),
+	})
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("subagent transcript failed: %+v", response)
+	}
+	var payload struct {
+		RunID string `json:"runId"`
+		Steps []struct {
+			Messages []json.RawMessage `json:"messages"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.RunID != runID {
+		t.Fatalf("runId = %q, want %q", payload.RunID, runID)
+	}
+	if len(payload.Steps) != 1 || len(payload.Steps[0].Messages) < 1 {
+		t.Fatalf("transcript steps = %+v, want one step with messages", payload.Steps)
+	}
+
+	traversal := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame,
+		ID:   "subagent-traversal",
+		Op:   rpc.OpSubagentTranscript,
+		Args: json.RawMessage(`{"runId":"../x"}`),
+	})
+	if traversal.Ok == nil || *traversal.Ok {
+		t.Fatalf("traversal runId unexpectedly succeeded: %+v", traversal)
+	}
+
+	unknown := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame,
+		ID:   "subagent-unknown",
+		Op:   rpc.OpSubagentTranscript,
+		Args: json.RawMessage(`{"runId":"missing-run"}`),
+	})
+	if unknown.Ok == nil || *unknown.Ok || !strings.Contains(unknown.Error, "subagent run not found") {
+		t.Fatalf("unknown runId response: %+v", unknown)
+	}
+}

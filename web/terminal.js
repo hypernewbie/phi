@@ -36,8 +36,10 @@ import {
     rpcChatSetThinking,
     rpcChatReset,
     rpcChatInterrupt,
+    closePiSubagentViewer,
     rpcChatSetName,
     subscribePiRpcStatus,
+    syncPiSubagentStrip,
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
 
@@ -804,12 +806,16 @@ export class TabManager {
         if (this.cancelInputBtn) {
             this.cancelInputBtn.addEventListener('click', () => {
                 const activeTab = this.getActiveTab();
-                const cancelKey =
-                    activeTab &&
-                    ['pi', 'claude', 'opencode'].includes(activeTab.coder)
-                        ? '\x1b'
-                        : '\x03';
-                this.sendRawInput(cancelKey);
+                if (activeTab?.coder === 'pi-rpc') {
+                    this._interruptActivePiRpc();
+                } else {
+                    const cancelKey =
+                        activeTab &&
+                        ['pi', 'claude', 'opencode'].includes(activeTab.coder)
+                            ? '\x1b'
+                            : '\x03';
+                    this.sendRawInput(cancelKey);
+                }
                 this.inputTextArea.focus({ preventScroll: true });
             });
         }
@@ -2112,14 +2118,16 @@ export class TabManager {
 
     _setPiRpcActionVisibility(tab) {
         const hidden = tab?.coder === 'pi-rpc';
-        for (const element of [
-            this.cancelInputBtn,
-            this.copyInputBtn,
-            this.directModeToggle,
-        ]) {
+        for (const element of [this.copyInputBtn, this.directModeToggle]) {
             element?.classList.toggle('hidden', hidden);
         }
         if (hidden) this.directModeToggle?.classList.remove('active');
+    }
+
+    _closePiSubagentViewerIfOpen() {
+        const tab = this.getActiveTab();
+        if (!tab || tab.coder !== 'pi-rpc') return false;
+        return closePiSubagentViewer(tab.paneId);
     }
 
     _closePiRpcDropups(clear = false) {
@@ -2192,6 +2200,11 @@ export class TabManager {
 
     _handlePiRpcEscape(e) {
         if (e.isComposing) return true;
+        if (this._closePiSubagentViewerIfOpen()) {
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+        }
         if (this._closePiRpcDropups()) {
             e.preventDefault();
             e.stopPropagation();
@@ -2582,6 +2595,9 @@ export class TabManager {
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
         this.renderPiRpcStatusBar();
+        // Fleet strip follows the active tab: replay the pi-rpc pane's
+        // last snapshot, or hide the strip for tabs without a chat pane.
+        syncPiSubagentStrip(newTab.paneId);
 
         // Show/hide staged input & direct mode based on tab settings
         if (newTab.coder === 'review' || newTab.coder === 'kanban') {
