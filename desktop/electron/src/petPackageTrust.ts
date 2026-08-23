@@ -307,7 +307,10 @@ function collectRelativePaths(
   const stack: string[] = [root];
   while (stack.length > 0) {
     const current = stack.pop() as string;
-    const relativeBase = current === root ? '' : current.slice(root.length + 1);
+    const relativeBase =
+      current === root
+        ? ''
+        : current.slice(root.length + 1).replace(/\\/g, '/');
     const entries = readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
       const child = path.join(current, entry.name);
@@ -366,15 +369,15 @@ export function verifyExtractedArchive(
     }
     seen.add(path);
   }
-  for (const path of expected) {
-    if (!seen.has(path)) {
-      throw new Error(`staged pet archive is missing signed file: ${path}`);
+  for (const fileRel of expected) {
+    if (!seen.has(fileRel)) {
+      throw new Error(`staged pet archive is missing signed file: ${fileRel}`);
     }
-    const data = readFileSync(`${root}/${path}`);
+    const data = readFileSync(path.join(root, ...fileRel.split('/')));
     const digest = sha256Hex(data);
-    const file = manifest.files.find((f) => f.path === path);
+    const file = manifest.files.find((f) => f.path === fileRel);
     if (!file || file.sha256 !== digest) {
-      throw new Error(`staged pet archive digest mismatch: ${path}`);
+      throw new Error(`staged pet archive digest mismatch: ${fileRel}`);
     }
   }
 }
