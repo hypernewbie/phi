@@ -25,10 +25,10 @@ func expandHome(path string) string {
 	if len(path) > 0 && path[0] == '~' {
 		home, err := os.UserHomeDir()
 		if err == nil {
-			return home + path[1:]
+			return filepath.Clean(filepath.Join(home, filepath.FromSlash(path[1:])))
 		}
 	}
-	return path
+	return filepath.Clean(path)
 }
 
 func parseRawTime(val interface{}) time.Time {

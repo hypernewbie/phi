@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -200,7 +201,9 @@ func TestListPiSessions_ValidatesCandidates(t *testing.T) {
 	}
 	writePiFixture(t, sessionsDir, "wrong-cwd.jsonl", piSessionHeader("wrong-cwd", otherCwd))
 	writePiFixture(t, sessionsDir, "another-worktree.jsonl", piSessionHeader("another-worktree", otherCwd))
-	writePiFixture(t, sessionsDir, "case.jsonl", piSessionHeader("case", strings.ToUpper(cwd)))
+	if runtime.GOOS != "windows" {
+		writePiFixture(t, sessionsDir, "case.jsonl", piSessionHeader("case", strings.ToUpper(cwd)))
+	}
 	if err := os.Mkdir(filepath.Join(sessionsDir, "directory.jsonl"), 0755); err != nil {
 		t.Fatal(err)
 	}

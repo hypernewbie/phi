@@ -1,6 +1,6 @@
 import { PROTOCOL_VERSION } from './constants.js';
 
-export const ControlCallTimeout = 6_000;
+export const ControlCallTimeout = 35_000;
 
 export interface ControlClient {
     call<T = any>(op: string, sid?: string, args?: unknown): Promise<T>;

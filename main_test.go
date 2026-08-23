@@ -1505,7 +1505,8 @@ func TestHandleGetSessionTranscript_Unsupported(t *testing.T) {
 }
 
 func TestHandleGetSessionTranscript_EmptyPi(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=pi&id=nonexistent&cwd=/tmp/nonexistent", nil)
+	tempCwd := filepath.Join(os.TempDir(), "nonexistent")
+	req := httptest.NewRequest(http.MethodGet, "/api/session-transcript?coder=pi&id=nonexistent&cwd="+tempCwd, nil)
 	w := httptest.NewRecorder()
 	handleGetSessionTranscript(w, req)
 

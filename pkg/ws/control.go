@@ -20,7 +20,7 @@ import (
 
 // ControlOperationTimeout is the one server-side budget for a complete Phi
 // control operation, including gate acquisition and every Pi request it owns.
-const ControlOperationTimeout = 5 * time.Second
+const ControlOperationTimeout = 30 * time.Second
 
 // Envelope is the wire shape of every control frame (both directions).
 type Envelope struct {
