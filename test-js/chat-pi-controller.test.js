@@ -93,7 +93,7 @@ describe('Pi RPC transcript controller', () => {
         expect(wire.sent.at(-1)).toMatchObject({
             op: 'prompt',
             sid: 's1',
-            args: { message: 'hello' },
+            args: { message: 'hello', streamingBehavior: 'steer' },
         });
 
         wire.emit({
@@ -301,6 +301,65 @@ describe('Pi RPC transcript controller', () => {
         await expect(interrupted).resolves.toEqual({
             aborted: true,
             restored: [],
+        });
+    });
+
+    it('restores turn prompts in send order through reconciliation and abort settlement', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = mountChatPi(root, '/work/restore-order', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: true },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('first')).toBe(true);
+        const [first] = wire.sent.filter((frame) => frame.op === 'prompt');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'first' } },
+        });
+        wire.emit({
+            t: 'res',
+            id: first.id,
+            ok: true,
+            data: { accepted: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(chat.send('same')).toBe(true);
+        expect(chat.send('same')).toBe(true);
+        const interrupted = chat.interrupt();
+        const abort = wire.sent.find((frame) => frame.op === 'abort');
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        wire.emit({
+            t: 'res',
+            id: abort.id,
+            ok: true,
+            data: { aborted: true },
+        });
+
+        await expect(interrupted).resolves.toEqual({
+            aborted: true,
+            restored: ['first', 'same', 'same'],
         });
     });
 

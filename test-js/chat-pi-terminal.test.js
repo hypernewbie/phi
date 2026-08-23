@@ -850,17 +850,28 @@ describe('Pi RPC per-chat prompt history', () => {
         expect(tm._caretOnLastLine()).toBe(true);
     });
 
-    it('typed input resets the per-chat cursor', () => {
-        const tab = { paneId: 'pi-rpc:type', coder: 'pi-rpc' };
+    it('typed input starts a fresh per-chat history cycle', () => {
+        const tab = {
+            paneId: 'pi-rpc:type',
+            coder: 'pi-rpc',
+            promptHistory: ['newest'],
+            chatHistoryCursor: 0,
+            chatHistoryPreCycleValue: 'stale draft',
+        };
         const tm = Object.create(TabManager.prototype);
         tm.inputTextArea = document.createElement('textarea');
+        tm.inputTextArea.value = 'edited draft';
         tm.getActiveTab = vi.fn(() => tab);
-        tab.chatHistoryCursor = 2;
+        tm.adjustInputHeight = vi.fn();
 
         TabManager.prototype._initPromptHistoryKeydown.call(tm);
         tm.inputTextArea.dispatchEvent(new Event('input'));
 
         expect(tab.chatHistoryCursor).toBe(-1);
+        expect(tab.chatHistoryPreCycleValue).toBeUndefined();
+        tm._cycleChatHistory('older', tab);
+        tm._cycleChatHistory('newer', tab);
+        expect(tm.inputTextArea.value).toBe('edited draft');
     });
 
     it('Reset Chat success clears the per-chat history', async () => {
@@ -978,6 +989,22 @@ describe('Pi RPC chat input plain-arrow keydown (real listener)', () => {
             expect(up.defaultPrevented).toBe(true);
             ctx.textarea.dispatchEvent(arrowEvent('ArrowDown'));
             expect(ctx.textarea.value).toBe('');
+        } finally {
+            ctx.cleanup();
+        }
+    });
+
+    it('leaves no-op history arrows to native textarea behavior', () => {
+        const ctx = installRealChatKeydown();
+        try {
+            const up = arrowEvent('ArrowUp');
+            ctx.textarea.dispatchEvent(up);
+            expect(up.defaultPrevented).toBe(false);
+
+            ctx.tab.promptHistory = ['a'];
+            const down = arrowEvent('ArrowDown');
+            ctx.textarea.dispatchEvent(down);
+            expect(down.defaultPrevented).toBe(false);
         } finally {
             ctx.cleanup();
         }
