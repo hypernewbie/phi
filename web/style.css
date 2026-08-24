@@ -9282,6 +9282,13 @@ body.md-standalone #md-view-body {
     font-size: inherit;
     --line-height: 1.5em;
 }
+.pi-export-scope .review-chat-wrapper {
+    padding-inline: 0;
+}
+.pi-export-scope .user-message,
+.pi-export-scope .assistant-text {
+    padding-inline: 1ch;
+}
 .pi-export-scope .assistant-message > .tool-execution + .tool-execution,
 .pi-export-scope .assistant-message > .assistant-text + .tool-execution,
 .pi-export-scope .assistant-message > .tool-execution + .assistant-text {

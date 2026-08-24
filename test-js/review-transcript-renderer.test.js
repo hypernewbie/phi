@@ -120,6 +120,19 @@ describe('Review Transcript renderer (structured mode)', () => {
         expect(root.classList.contains('pi-export-scope')).toBe(true);
     });
 
+    it('uses a one-character horizontal text inset only for Pi RPC transcripts', () => {
+        const css = readFileSync('web/style.css', 'utf8');
+        expect(css).toMatch(
+            /\.pi-export-scope\s+\.review-chat-wrapper\s*\{[^}]*padding-inline:\s*0\s*;/s,
+        );
+        expect(css).toMatch(
+            /\.pi-export-scope\s+\.user-message\s*,\s*\.pi-export-scope\s+\.assistant-text\s*\{[^}]*padding-inline:\s*1ch\s*;/s,
+        );
+        expect(css).toMatch(
+            /^\.review-chat-wrapper\s*\{[^}]*padding:\s*24px\s*;/m,
+        );
+    });
+
     it('starts with the Pi active header and pins hidden', () => {
         const root = document.createElement('div');
         createReviewTranscriptView(root, {
