@@ -9391,6 +9391,69 @@ body.md-standalone #md-view-body {
     margin: 0;
     opacity: 0.95;
 }
+/* Pi transcript search stays outside the scrolling message wrapper. */
+.pi-search-bar {
+    align-items: center;
+    box-sizing: border-box;
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--bg-border);
+}
+.pi-search-bar.hidden {
+    display: none;
+}
+.pi-search-bar input[data-pi-search-input] {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    font: inherit;
+}
+.pi-search-bar input[data-pi-search-input]:focus-visible,
+.pi-search-bar button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.pi-search-bar [data-pi-search-count] {
+    min-width: 44px;
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: center;
+}
+.pi-search-bar button {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+}
+.pi-search-bar button:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: var(--accent-glow);
+    border-color: var(--bg-border);
+}
+.pi-search-bar button:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+mark[data-pi-active-match] {
+    padding: 0 1px;
+    color: var(--bg-base);
+    background: var(--accent-bright);
+    border-radius: 2px;
+}
+
 /* Native Pi extension dialogs. The host is a sibling of the transcript so
    dialogs never become scrollback and inactive panes cannot steal focus from
    the active pane. */

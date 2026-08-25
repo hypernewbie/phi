@@ -1,5 +1,6 @@
 import { dispatchComposer } from './composer.js';
 import { createPiDialogController } from './dialogs.js';
+import { createPiSearchController } from './search.js';
 import { MessageBuffer } from './message-buffer.js';
 import { savePersisted } from './persist.js';
 import { renderedUserText } from './render.js';
@@ -399,6 +400,7 @@ export function mountChatPi(
             buffer.getPartial(),
             buffer.getToolResultMap(),
         );
+        refreshSearchSource();
         notifyControls();
     };
     const paint = () => {
@@ -457,6 +459,15 @@ export function mountChatPi(
         announce: (message) => view.announceDialog(message),
     });
     dialogController.setDialogs(dialogs);
+    const searchController = createPiSearchController({
+        root,
+        revealMessage: (index) => view.revealMessage(index),
+        markSearchMatch: (index, query, occurrence) =>
+            view.markSearchMatch(index, query, occurrence),
+        clearSearchMarks: () => view.clearSearchMarks(),
+    });
+    const refreshSearchSource = () =>
+        searchController.setSource(buffer.getStructuredTranscript());
     const reportQueueActionError = (error) => {
         if (!destroyed) {
             status.textContent = `Queue action failed: ${String(error instanceof Error ? error.message : error)}`;
@@ -1236,6 +1247,7 @@ export function mountChatPi(
             if (result.liveToolCleared) {
                 view.setLiveToolOutput(result.liveToolCleared, '');
             }
+            if (result.renderDisposition !== 'none') refreshSearchSource();
             switch (result.renderDisposition) {
                 case 'full':
                     paint();
@@ -1348,6 +1360,7 @@ export function mountChatPi(
             off();
             offConnectionState();
             dialogController.destroy();
+            searchController.destroy();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1370,6 +1383,8 @@ export function mountChatPi(
         closeExtensionDialog: () => dialogController.closeActive(),
         focusExtensionDialog: () => dialogController.focusActive(),
         cancelDialogs: (reason) => dialogController.cancelAll(reason),
+        toggleSearch: () => searchController.toggle(),
+        closeSearch: () => searchController.close(),
         refreshFleet: () => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

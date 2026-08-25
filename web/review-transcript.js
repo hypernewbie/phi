@@ -951,6 +951,99 @@ export function createReviewTranscriptView(root, options) {
             options.copyText,
         );
     }
+    function clearSearchMarks() {
+        for (const mark of transcript.querySelectorAll(
+            'mark[data-pi-active-match]',
+        )) {
+            mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+        }
+        transcript.normalize();
+    }
+    function markSearchMatch(index, query, occurrence = 0) {
+        clearSearchMarks();
+        if (!query) return false;
+        const block = Array.from(
+            transcript.querySelectorAll('[data-buffer-index]'),
+        ).find((candidate) => candidate.dataset.bufferIndex === String(index));
+        if (!block) return false;
+        const needle = query.toLocaleLowerCase();
+        const textNodes = [];
+        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node) {
+            const parent = node.parentElement;
+            if (
+                node.nodeValue &&
+                parent &&
+                !parent.closest('button, mark, .pi-unsupported-content')
+            ) {
+                textNodes.push(node);
+            }
+            node = walker.nextNode();
+        }
+        let seen = 0;
+        for (const textNode of textNodes) {
+            const text = textNode.nodeValue ?? '';
+            const lower = text.toLocaleLowerCase();
+            let cursor = 0;
+            while (cursor <= lower.length - needle.length) {
+                const match = lower.indexOf(needle, cursor);
+                if (match < 0) break;
+                if (seen === occurrence) {
+                    const fragment = document.createDocumentFragment();
+                    if (match > 0)
+                        fragment.appendChild(
+                            document.createTextNode(text.slice(0, match)),
+                        );
+                    const mark = document.createElement('mark');
+                    mark.dataset.piActiveMatch = 'true';
+                    mark.textContent = text.slice(match, match + query.length);
+                    fragment.appendChild(mark);
+                    const after = match + query.length;
+                    if (after < text.length)
+                        fragment.appendChild(
+                            document.createTextNode(text.slice(after)),
+                        );
+                    textNode.replaceWith(fragment);
+                    block.scrollIntoView?.({
+                        block: 'center',
+                        inline: 'nearest',
+                    });
+                    return true;
+                }
+                seen += 1;
+                cursor = match + Math.max(needle.length, 1);
+            }
+        }
+        return false;
+    }
+    function revealMessage(index) {
+        if (
+            !Number.isInteger(index) ||
+            index < 0 ||
+            index >= structuredMessages.length
+        )
+            return false;
+        const newestStart = Math.max(0, structuredMessages.length - windowSize);
+        if (index < currentStart || index >= currentStart + windowSize) {
+            const snap = snapScroll();
+            currentStart = Math.max(
+                0,
+                Math.min(index - Math.floor(windowSize / 2), newestStart),
+            );
+            rebuildStructuredWindow({
+                appendPartial: latestPartial,
+                partialStreaming: latestPartial !== '',
+            });
+            applyScrollAnchor(snap, transcript.scrollHeight - snap.preHeight);
+        }
+        const block = Array.from(
+            transcript.querySelectorAll('[data-buffer-index]'),
+        ).find((candidate) => candidate.dataset.bufferIndex === String(index));
+        block?.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+        syncJumpButton();
+        return block !== undefined;
+    }
     function snapScroll() {
         // Snap-to-bottom detection uses a slightly more generous threshold
         // than the scroll-near-top prepending trigger so the view sticks
@@ -1086,6 +1179,15 @@ export function createReviewTranscriptView(root, options) {
             const announcement = document.createElement('span');
             announcement.textContent = message;
             connectionState.appendChild(announcement);
+        },
+        revealMessage(index) {
+            return revealMessage(index);
+        },
+        clearSearchMarks() {
+            clearSearchMarks();
+        },
+        markSearchMatch(index, query, occurrenceStart) {
+            return markSearchMatch(index, query, occurrenceStart);
         },
         setQueueState(
             items,

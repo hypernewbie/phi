@@ -155,3 +155,9 @@ export function closePiExtensionDialog(paneId) {
 export function focusPiExtensionDialog(paneId) {
     chats.get(paneId)?.focusExtensionDialog();
 }
+export function rpcChatToggleSearch(paneId) {
+    return chats.get(paneId)?.toggleSearch() ?? false;
+}
+export function closePiSearch(paneId) {
+    return chats.get(paneId)?.closeSearch() ?? false;
+}

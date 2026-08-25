@@ -7,6 +7,7 @@ import {
     type DialogRecord,
     type PiDialogController,
 } from './dialogs.js';
+import { createPiSearchController, type PiSearchController } from './search.js';
 import { MessageBuffer } from './message-buffer.js';
 import type { Snapshot } from './message-buffer.js';
 import { savePersisted } from './persist.js';
@@ -108,6 +109,8 @@ export interface ChatPiHandle {
     closeExtensionDialog(): boolean;
     focusExtensionDialog(): void;
     cancelDialogs(reason: 'tabClosed' | 'server'): Promise<unknown>;
+    toggleSearch(): boolean;
+    closeSearch(): boolean;
     refreshFleet(): void;
     closeSubagentViewer(): boolean;
 }
@@ -555,6 +558,7 @@ export function mountChatPi(
             buffer.getPartial(),
             buffer.getToolResultMap(),
         );
+        refreshSearchSource();
         notifyControls();
     };
     const paint = (): void => {
@@ -621,6 +625,15 @@ export function mountChatPi(
         announce: (message) => view.announceDialog(message),
     });
     dialogController.setDialogs(dialogs);
+    const searchController: PiSearchController = createPiSearchController({
+        root,
+        revealMessage: (index) => view.revealMessage(index),
+        markSearchMatch: (index, query, occurrence) =>
+            view.markSearchMatch(index, query, occurrence),
+        clearSearchMarks: () => view.clearSearchMarks(),
+    });
+    const refreshSearchSource = (): void =>
+        searchController.setSource(buffer.getStructuredTranscript());
     const reportQueueActionError = (error: unknown): void => {
         if (!destroyed) {
             status.textContent = `Queue action failed: ${String(
@@ -1450,6 +1463,7 @@ export function mountChatPi(
             if (result.liveToolCleared) {
                 view.setLiveToolOutput(result.liveToolCleared, '');
             }
+            if (result.renderDisposition !== 'none') refreshSearchSource();
             switch (result.renderDisposition) {
                 case 'full':
                     paint();
@@ -1565,6 +1579,7 @@ export function mountChatPi(
             off();
             offConnectionState();
             dialogController.destroy();
+            searchController.destroy();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1588,6 +1603,8 @@ export function mountChatPi(
         focusExtensionDialog: (): void => dialogController.focusActive(),
         cancelDialogs: (reason): Promise<unknown> =>
             dialogController.cancelAll(reason),
+        toggleSearch: (): boolean => searchController.toggle(),
+        closeSearch: (): boolean => searchController.close(),
         refreshFleet: (): void => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

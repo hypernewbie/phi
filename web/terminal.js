@@ -39,6 +39,8 @@ import {
     rpcChatCancelDialogs,
     closePiExtensionDialog,
     focusPiExtensionDialog,
+    rpcChatToggleSearch,
+    closePiSearch,
     closePiSubagentViewer,
     rpcChatSetName,
     subscribePiRpcStatus,
@@ -2238,6 +2240,11 @@ export class TabManager {
             activeTab?.coder === 'pi-rpc' &&
             closePiExtensionDialog(activeTab.paneId)
         ) {
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+        }
+        if (activeTab?.coder === 'pi-rpc' && closePiSearch(activeTab.paneId)) {
             e.preventDefault();
             e.stopPropagation();
             return true;
@@ -5048,6 +5055,17 @@ export class TabManager {
         input.focus({ preventScroll: true });
     }
 
+    _piRpcSearchFocusIsScoped(e, tab) {
+        const target =
+            e.target instanceof HTMLElement ? e.target : document.activeElement;
+        return Boolean(
+            target &&
+                (target === this.inputTextArea ||
+                    this.inputBarContainer?.contains(target) ||
+                    tab.termContainer?.contains(target)),
+        );
+    }
+
     handleGlobalTabShortcuts(e) {
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
         if (
@@ -5067,18 +5085,39 @@ export class TabManager {
         }
 
         if (
-            e.ctrlKey &&
+            (e.ctrlKey || e.metaKey) &&
             e.shiftKey &&
             !e.altKey &&
-            !e.metaKey &&
             e.key.toLowerCase() === 'f'
         ) {
             const activeTab = this.getActiveTab();
-            if (activeTab && activeTab.term) {
+            if (activeTab?.coder === 'pi-rpc') {
+                e.preventDefault();
+                rpcChatToggleSearch(activeTab.paneId);
+                return;
+            }
+            if (e.ctrlKey && !e.metaKey && activeTab?.term) {
                 e.preventDefault();
                 this.toggleFindBar(activeTab);
             }
             return;
+        }
+
+        if (
+            (e.ctrlKey || e.metaKey) &&
+            !e.shiftKey &&
+            !e.altKey &&
+            e.key.toLowerCase() === 'f'
+        ) {
+            const activeTab = this.getActiveTab();
+            if (
+                activeTab?.coder === 'pi-rpc' &&
+                this._piRpcSearchFocusIsScoped(e, activeTab)
+            ) {
+                e.preventDefault();
+                rpcChatToggleSearch(activeTab.paneId);
+                return;
+            }
         }
 
         if (

@@ -98,6 +98,9 @@ describe('Review Transcript renderer (structured mode)', () => {
         const css = readFileSync('web/style.css', 'utf8');
         expect(css).toContain('@media (prefers-reduced-motion: reduce)');
         expect(css).toMatch(/\.pi-working-dot\s*\{[^}]*animation:\s*none/);
+        expect(css).toMatch(/\.review-chat-wrapper\s*\{[^}]*min-height:\s*0/);
+        expect(css).toMatch(/\.review-content-body\s*\{[^}]*min-height:\s*0/);
+        expect(css).toContain('.pi-search-bar');
     });
 
     // Regression: the structured chat-pi view relies on the Pi export CSS
@@ -217,6 +220,164 @@ describe('Review Transcript renderer (structured mode)', () => {
         view.setActiveTurn(null);
         expect(top.classList.contains('hidden')).toBe(true);
         expect(bottom.classList.contains('hidden')).toBe(true);
+    });
+
+    it('reveals off-window buffer indexes and safely replaces active marks', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+            windowSize: 2,
+            pageSize: 1,
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'user',
+                    segments: [{ kind: 'text', text: 'oldest target' }],
+                },
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'middle' }],
+                },
+                { role: 'user', segments: [{ kind: 'text', text: 'newest' }] },
+            ],
+            '',
+            new Map(),
+        );
+        expect(view.revealMessage(0)).toBe(true);
+        const oldest = root.querySelector('[data-buffer-index="0"]');
+        expect(oldest).not.toBeNull();
+        expect(root.querySelectorAll('[data-buffer-index]')).toHaveLength(2);
+        expect(view.markSearchMatch(0, 'oldest', 0)).toBe(true);
+        expect(
+            oldest.querySelector('mark[data-pi-active-match]').textContent,
+        ).toBe('oldest');
+        expect(view.markSearchMatch(0, 'target', 0)).toBe(true);
+        expect(
+            root.querySelectorAll('mark[data-pi-active-match]'),
+        ).toHaveLength(1);
+        expect(
+            root.querySelector('mark[data-pi-active-match]').textContent,
+        ).toBe('target');
+        view.clearSearchMarks();
+        expect(root.querySelector('mark[data-pi-active-match]')).toBeNull();
+        expect(view.revealMessage(99)).toBe(false);
+    });
+
+    it('selects only the requested duplicate occurrence in one message', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'target target' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        expect(view.markSearchMatch(0, 'target', 0)).toBe(true);
+        expect(
+            root.querySelectorAll('mark[data-pi-active-match]'),
+        ).toHaveLength(1);
+        expect(view.markSearchMatch(0, 'target', 1)).toBe(true);
+        const mark = root.querySelector('mark[data-pi-active-match]');
+        expect(
+            root.querySelectorAll('mark[data-pi-active-match]'),
+        ).toHaveLength(1);
+        expect(mark.textContent).toBe('target');
+        expect(mark.previousSibling.textContent).toBe('target ');
+    });
+
+    it('selects a match that starts in a later structured segment', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        { kind: 'text', text: 'first' },
+                        { kind: 'text', text: 'second target' },
+                    ],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        expect(view.markSearchMatch(0, 'target', 0)).toBe(true);
+        expect(
+            root.querySelectorAll('mark[data-pi-active-match]'),
+        ).toHaveLength(1);
+        expect(
+            root.querySelector('mark[data-pi-active-match]').textContent,
+        ).toBe('target');
+    });
+
+    it('continues duplicate search occurrences across an inline tool result', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        {
+                            kind: 'toolCall',
+                            id: 'tool-1',
+                            name: 'needle-tool',
+                            args: {},
+                        },
+                    ],
+                },
+                {
+                    role: 'toolResult',
+                    toolCallId: 'tool-1',
+                    segments: [{ kind: 'text', text: 'needle-result' }],
+                },
+            ],
+            '',
+            new Map([
+                [
+                    'tool-1',
+                    {
+                        message: {
+                            role: 'toolResult',
+                            toolCallId: 'tool-1',
+                            content: [{ type: 'text', text: 'needle-result' }],
+                        },
+                        isError: false,
+                    },
+                ],
+            ]),
+        );
+        expect(view.markSearchMatch(0, 'needle', 0)).toBe(true);
+        const first = root.querySelector('mark[data-pi-active-match]');
+        expect(first).not.toBeNull();
+        expect(first.parentElement.classList.contains('tool-name')).toBe(true);
+        expect(view.markSearchMatch(0, 'needle', 1)).toBe(true);
+        const second = root.querySelector('mark[data-pi-active-match]');
+        expect(second).not.toBeNull();
+        expect(second.closest('.tool-output')).not.toBeNull();
+        expect(
+            root.querySelectorAll('mark[data-pi-active-match]'),
+        ).toHaveLength(1);
     });
 
     it('renders .user-message and .assistant-message blocks', () => {
