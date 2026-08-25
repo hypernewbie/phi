@@ -58,6 +58,9 @@ var (
 	// (the value jumps forward when the user restarts phi) and clear
 	// localStorage references to tabs that no longer exist.
 	StartedAt = time.Now().Unix()
+
+	rpcManagerForShutdown   *rpc.Manager
+	attachmentJanitorCancel context.CancelFunc
 )
 
 func main() {
@@ -131,6 +134,7 @@ func main() {
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
 	rpcMgr := rpc.NewManager()
+	rpcManagerForShutdown = rpcMgr
 	// Do NOT call LoadState() here. tabs.json holds PTYInstance
 	// metadata for tabs the server was managing in its previous life,
 	// but in this codebase the underlying PTY process is always a
@@ -295,6 +299,9 @@ func main() {
 	http.HandleFunc("/api/prompt-history/append", handlePromptHistoryAppend)
 	http.HandleFunc("/api/prompt-history/recent", handlePromptHistoryRecent)
 	http.HandleFunc("/api/attachments", handleAttachments)
+	http.HandleFunc("/api/attachments/release", handleAttachmentRelease)
+	http.HandleFunc("/api/attachments/clear", handleAttachmentClear)
+	http.HandleFunc("/api/config/attachments", handleAttachmentConfig)
 	http.HandleFunc("/api/clipboard", handleGetClipboard)
 	http.HandleFunc("/api/system/cpu", handleSystemCPU)
 	http.HandleFunc("/api/session-transcript", handleGetSessionTranscript)
@@ -352,7 +359,10 @@ func main() {
 	http.HandleFunc("/healthz", handleLivez) // alias
 	http.HandleFunc("/readyz", handleReadyz)
 	http.HandleFunc("/", handleFallback)
-	http.HandleFunc("/ws/control", ws.HandleControl(rpcMgr, func() string { return activeCWD }))
+	http.HandleFunc("/ws/control", ws.HandleControlWithAttachments(rpcMgr, func() string { return activeCWD }, attachmentState, func(r *http.Request) string {
+		owner, _ := attachmentOwnerForRequest(r)
+		return owner
+	}))
 
 	// Graceful shutdown listener. The signal handler drains via
 	// gracefulShutdown (PHI_SHUTDOWN_* env tunables) instead of the old
@@ -455,6 +465,7 @@ func main() {
 	}
 
 	printWelcomeBanner(cfg, boundAddrs, *portFlag)
+	attachmentJanitorCancel = startAttachmentJanitor(context.Background())
 	var serveErr error
 	shutdownServers, serveErr = serveAndCapture(listeners)
 	if serveErr != nil {
@@ -644,6 +655,10 @@ func isInteractiveTTY() bool {
 
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	shuttingDown.Store(true) // /readyz -> 503
+	if attachmentJanitorCancel != nil {
+		attachmentJanitorCancel()
+		attachmentJanitorCancel = nil
+	}
 	if mdWatcher != nil {
 		mdWatcher.Close()
 	}
@@ -662,6 +677,12 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 	time.Sleep(200 * time.Millisecond) // let the WS 0x05 frame flush
 	if ptyManager != nil {
 		ptyManager.Shutdown(ptyGrace)
+	}
+	if rpcManagerForShutdown != nil {
+		for _, inst := range rpcManagerForShutdown.List() {
+			inst.Kill()
+		}
+		rpcManagerForShutdown = nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()

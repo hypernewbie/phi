@@ -84,7 +84,7 @@ function pngFile(name = 'shot.png', size = 8) {
 describe('attachment wiring — drop', () => {
     it('uploads a dropped image and chips it (drop anywhere on page)', async () => {
         serverResponse = {
-            path: '/home/u/.phi/clipboard/clip-1-aaaa.png',
+            ref: '1'.repeat(64),
             name: 'clip-1-aaaa.png',
             sizeBytes: 8,
             mimeType: 'image/png',
@@ -118,10 +118,13 @@ describe('attachment wiring — drop', () => {
 
         const chip = tm.attachmentStrip.querySelector('.attachment-chip');
         expect(chip.getAttribute('data-id')).toMatch(/^att-/);
+        expect(chip.getAttribute('data-ref')).toBe('1'.repeat(64));
+        expect(
+            chip.querySelector('.attachment-remove').getAttribute('aria-label'),
+        ).toContain('clip-1-aaaa.png');
         expect(tm.stagedAttachments).toHaveLength(1);
-        expect(tm.stagedAttachments[0].path).toBe(
-            '/home/u/.phi/clipboard/clip-1-aaaa.png',
-        );
+        expect(tm.stagedAttachments[0].ref).toBe('1'.repeat(64));
+        expect(tm.stagedAttachments[0]).not.toHaveProperty('path');
         expect(tm.stagedAttachments[0].source).toBe('drop');
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(false);
         // Visual feedback was toggled and reset.
@@ -131,7 +134,7 @@ describe('attachment wiring — drop', () => {
     });
 
     it('skips drops that land inside a .tab element (tab reorder wins)', async () => {
-        serverResponse = { path: '/x.png', name: 'x.png' };
+        serverResponse = { ref: '2'.repeat(64), name: 'x.png' };
         const tm = makeTm();
 
         // Add a tab element to the DOM. Drop on the tab should be
@@ -156,7 +159,7 @@ describe('attachment wiring — drop', () => {
     });
 
     it('skips non-image files in the drop', async () => {
-        serverResponse = { path: '/x.png', name: 'x.png' };
+        serverResponse = { ref: '2'.repeat(64), name: 'x.png' };
         const tm = makeTm();
         const textFile = new File([new Uint8Array(8)], 'note.txt', {
             type: 'text/plain',
@@ -177,7 +180,7 @@ describe('attachment wiring — drop', () => {
 describe('attachment wiring — paste', () => {
     it('uploads a pasted image and chips it', async () => {
         serverResponse = {
-            path: '/home/u/.phi/clipboard/clip-2-bbbb.png',
+            ref: '3'.repeat(64),
             name: 'clip-2-bbbb.png',
             sizeBytes: 8,
             mimeType: 'image/png',
@@ -207,7 +210,7 @@ describe('attachment wiring — paste', () => {
         const event = new Event('paste', { bubbles: true, cancelable: true });
         // No `items` with kind=file → handler returns early.
         Object.defineProperty(event, 'clipboardData', { value: { items: [] } });
-        const prevented = !tm.inputTextArea.dispatchEvent(event); // dispatchEvent returns false if preventDefault called
+        !tm.inputTextArea.dispatchEvent(event); // dispatchEvent returns false if preventDefault called
         // preventDefault should NOT have been called for text-only paste.
         expect(event.defaultPrevented).toBe(false);
         expect(tm.stagedAttachments).toHaveLength(0);
@@ -217,12 +220,12 @@ describe('attachment wiring — paste', () => {
 
 describe('attachment wiring — chip management', () => {
     it('renders one chip per attachment', async () => {
-        serverResponse = { path: '/a.png', name: 'a.png', sizeBytes: 8 };
+        serverResponse = { ref: '4'.repeat(64), name: 'a.png', sizeBytes: 8 };
         const tm = makeTm();
         await tm._addAttachmentChip({
             id: 'x',
+            ref: 'a'.repeat(64),
             name: 'a.png',
-            path: '/a.png',
             type: 'image/png',
             sizeBytes: 8,
             source: 'paste',
@@ -230,7 +233,7 @@ describe('attachment wiring — chip management', () => {
         await tm._addAttachmentChip({
             id: 'y',
             name: 'b.png',
-            path: '/b.png',
+            ref: 'b'.repeat(64),
             type: 'image/png',
             sizeBytes: 8,
             source: 'paste',
@@ -245,8 +248,8 @@ describe('attachment wiring — chip management', () => {
         const tm = makeTm();
         await tm._addAttachmentChip({
             id: 'x',
+            ref: 'a'.repeat(64),
             name: 'a.png',
-            path: '/a.png',
             type: 'image/png',
             sizeBytes: 8,
             source: 'paste',
@@ -254,6 +257,7 @@ describe('attachment wiring — chip management', () => {
         expect(
             tm.attachmentStrip.querySelectorAll('.attachment-chip'),
         ).toHaveLength(1);
+        serverResponse = { released: true };
         tm._removeAttachmentChip('x');
         expect(
             tm.attachmentStrip.querySelectorAll('.attachment-chip'),
@@ -263,20 +267,20 @@ describe('attachment wiring — chip management', () => {
         expect(tm.attachmentStrip.classList.contains('hidden')).toBe(true);
     });
 
-    it('de-dupes attachments with the same path', async () => {
+    it('de-dupes attachments with the same opaque ref', async () => {
         const tm = makeTm();
         await tm._addAttachmentChip({
             id: 'x',
+            ref: 'a'.repeat(64),
             name: 'a.png',
-            path: '/a.png',
             type: 'image/png',
             sizeBytes: 8,
             source: 'paste',
         });
         await tm._addAttachmentChip({
             id: 'y',
+            ref: 'a'.repeat(64),
             name: 'a.png',
-            path: '/a.png',
             type: 'image/png',
             sizeBytes: 8,
             source: 'paste',

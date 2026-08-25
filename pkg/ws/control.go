@@ -37,16 +37,31 @@ type Envelope struct {
 	Ok    *bool           `json:"ok,omitempty"`
 }
 
-// HandleControl returns the /ws/control handler. defaultCwd supplies the
-// spawn cwd when a spawn call omits it (main passes activeCWD).
+// AttachmentOwnerFunc captures the immutable access-session owner at the
+// WebSocket upgrade boundary. It must not inspect later control frames.
+type AttachmentOwnerFunc func(*http.Request) string
+
+// HandleControl returns the /ws/control handler without an attachment bridge.
+// Existing callers keep this compatibility form; M5 callers use
+// HandleControlWithAttachments below.
 func HandleControl(mgr *rpc.Manager, defaultCwd func() string) http.HandlerFunc {
+	return HandleControlWithAttachments(mgr, defaultCwd, nil, nil)
+}
+
+// HandleControlWithAttachments binds the attachment resolver and captures the
+// request owner before the control connection starts reading frames.
+func HandleControlWithAttachments(mgr *rpc.Manager, defaultCwd func() string, resolver rpc.QueueAttachmentResolver, owner AttachmentOwnerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := Upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer c.Close()
-		runConn(r, c, mgr, defaultCwd)
+		capturedOwner := ""
+		if owner != nil {
+			capturedOwner = owner(r)
+		}
+		runConn(r, c, mgr, defaultCwd, resolver, capturedOwner)
 	}
 }
 
@@ -370,7 +385,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			break
 		}
 		var item rpc.QueueItem
-		item, err = inst.SubmitQueue(ctx, args.ItemID, args.SessionEpoch, args.Message, args.Delivery, args.AttachmentRefs)
+		item, err = inst.SubmitQueue(ctx, args.ItemID, args.SessionEpoch, args.Message, args.Delivery, args.AttachmentRefs, rpc.QueueSubmitOptions{Owner: s.attachmentOwner, Resolver: s.attachmentResolver})
 		if err == nil {
 			payload = item
 		}
@@ -387,7 +402,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = lookupErr
 			break
 		}
-		payload, err = inst.QueueRestore(args.ItemID, args.SessionEpoch)
+		payload, err = inst.QueueRestore(args.ItemID, args.SessionEpoch, rpc.QueueSubmitOptions{Owner: s.attachmentOwner, Resolver: s.attachmentResolver})
 	case rpc.OpQueueCopy:
 		var args struct {
 			ItemID       string `json:"itemId"`
@@ -401,7 +416,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = lookupErr
 			break
 		}
-		payload, err = inst.QueueCopy(args.ItemID, args.SessionEpoch)
+		payload, err = inst.QueueCopy(args.ItemID, args.SessionEpoch, rpc.QueueSubmitOptions{Owner: s.attachmentOwner, Resolver: s.attachmentResolver})
 	case rpc.OpQueueDiscard:
 		var args struct {
 			ItemID       string `json:"itemId"`
@@ -663,9 +678,11 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 }
 
 type controlServer struct {
-	mgr               *rpc.Manager
-	defaultCwd        func() string
-	subscribeInstance func(*rpc.Instance)
+	mgr                *rpc.Manager
+	defaultCwd         func() string
+	attachmentResolver rpc.QueueAttachmentResolver
+	attachmentOwner    string
+	subscribeInstance  func(*rpc.Instance)
 }
 
 type controlCallResult struct {
@@ -679,7 +696,7 @@ type hydrateFence struct {
 	queued []rpc.Event
 }
 
-func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string) {
+func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string, attachmentResolver rpc.QueueAttachmentResolver, attachmentOwner string) {
 	var hello Envelope
 	if err := c.ReadJSON(&hello); err != nil {
 		return
@@ -716,7 +733,7 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 	merge := make(chan rpc.Event, 256)
 	var subMu sync.Mutex
 	subs := map[string]*rpc.Subscriber{}
-	server := &controlServer{mgr: mgr, defaultCwd: defaultCwd}
+	server := &controlServer{mgr: mgr, defaultCwd: defaultCwd, attachmentResolver: attachmentResolver, attachmentOwner: attachmentOwner}
 	server.subscribeInstance = func(inst *rpc.Instance) {
 		if inst == nil || ctx.Err() != nil {
 			return

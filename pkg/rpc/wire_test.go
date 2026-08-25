@@ -788,11 +788,11 @@ func TestMessageEndCapturesStopReasonAndErrorMessage(t *testing.T) {
 }
 
 // TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot pins down
-// the Milestone 1 contract for the six new error/control events:
-//   - each maps to its named sequenced Evt (autoRetryStart, autoRetryEnd,
-//     extensionError, summarizationRetryScheduled, summarizationRetryFinished)
+// the Milestone 1 contract for raw control events:
+//   - each maps to its named sequenced Evt
 //   - each is a raw passthrough (msg=nil): the snapshot messages list is
 //     unchanged and only lastSeq advances
+//   - tool_execution_start/end remain ignored
 //   - compaction_end is its own case (handled above) and is NOT covered here
 func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 	cases := []struct {
@@ -1095,7 +1095,7 @@ func TestSubagentFleetForwardsSnapshot(t *testing.T) {
 func TestSubagentFleetIgnoresOtherWidgets(t *testing.T) {
 	lines := []string{
 		`{"type":"extension_ui_request","id":"a1","method":"setWidget","widgetKey":"other-widget","widgetLines":["x"]}`,
-		`{"type":"extension_ui_request","id":"a2","method":"select","title":"pick one","options":["a","b"]}`,
+		`{"type":"extension_ui_request","id":"a2","method":"notify","message":"ignored"}`,
 		fleetLine(t, `{not json`),
 	}
 	fp, inst, sub := wireFixture(t)

@@ -23,6 +23,7 @@ import {
     extractImageItems,
     extractImageFiles,
     uploadClipboardImage,
+    releaseAttachment,
     formatChipName,
 } from './attachments.js';
 import {
@@ -37,6 +38,7 @@ import {
     rpcChatReset,
     rpcChatInterrupt,
     rpcChatCancelDialogs,
+    rpcChatRestoreLatestLocal,
     closePiExtensionDialog,
     focusPiExtensionDialog,
     rpcChatToggleSearch,
@@ -110,6 +112,68 @@ export class TabManager {
         this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
+        document.addEventListener('phi:pi-recovery-focus', (event) => {
+            const activeTab = this.getActiveTab();
+            if (
+                !activeTab ||
+                activeTab.coder !== 'pi-rpc' ||
+                !(event.target instanceof Node) ||
+                !activeTab.termContainer?.contains(event.target)
+            )
+                return;
+            this.inputTextArea?.focus({ preventScroll: true });
+        });
+        document.addEventListener('phi:pi-queue-recovery', (event) => {
+            const detail = event?.detail;
+            const paneId = detail?.paneId;
+            const recovery = detail?.recovery;
+            const recoveredItem =
+                recovery?.restored === true &&
+                recovery.item &&
+                typeof recovery.item === 'object'
+                    ? recovery.item
+                    : recovery;
+            if (
+                typeof paneId !== 'string' ||
+                !recovery ||
+                (recovery.copied !== true && recovery.restored !== true) ||
+                !recoveredItem ||
+                typeof recoveredItem.message !== 'string'
+            )
+                return;
+            const tab = this.tabs.get(paneId);
+            if (!tab) return;
+            const attachments = Array.isArray(recoveredItem.attachments)
+                ? recoveredItem.attachments.flatMap((attachment) => {
+                      if (!attachment || typeof attachment.ref !== 'string')
+                          return [];
+                      return [
+                          {
+                              id: `recovered-${attachment.ref}`,
+                              ref: attachment.ref,
+                              name: attachment.name || 'attachment',
+                              type: attachment.mimeType || 'image/png',
+                              sizeBytes:
+                                  Number.isFinite(attachment.sizeBytes) &&
+                                  attachment.sizeBytes >= 0
+                                      ? attachment.sizeBytes
+                                      : 0,
+                              source: 'paste',
+                          },
+                      ];
+                  })
+                : [];
+            tab.draft = recoveredItem.message;
+            tab.draftAttachments = attachments;
+            tab.focusDraftOnActivate = this.getActiveTab()?.paneId !== paneId;
+            if (this.getActiveTab()?.paneId !== paneId) return;
+            this.inputTextArea.value = recoveredItem.message;
+            this.lastInputValue = recoveredItem.message;
+            this.stagedAttachments = attachments;
+            this._renderAttachmentStrip();
+            this.adjustInputHeight();
+            this.inputTextArea.focus({ preventScroll: true });
+        });
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId) => {
             this.renderPiRpcStatusBar();
             const activeTab = this.getActiveTab();
@@ -727,7 +791,9 @@ export class TabManager {
 
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                this.sendStagedInput();
+                this.sendStagedInput({
+                    deliveryOverride: e.altKey ? 'followUp' : undefined,
+                });
             } else if (e.key === 'Escape') {
                 if (this._handlePiRpcEscape(e)) return;
                 // Return focus to terminal in Hybrid mode
@@ -2669,6 +2735,13 @@ export class TabManager {
                 }
             }
         }
+        if (newTab.coder === 'pi-rpc') {
+            focusPiExtensionDialog(newTab.paneId);
+            if (newTab.focusDraftOnActivate && this.inputTextArea) {
+                newTab.focusDraftOnActivate = false;
+                this.inputTextArea.focus({ preventScroll: true });
+            }
+        }
 
         // Scroll tabs bar to active tab
         newTab.tabEl.scrollIntoView({
@@ -3859,7 +3932,12 @@ export class TabManager {
                 !e.metaKey
             ) {
                 e.preventDefault();
-                this._cyclePromptHistory('older');
+                const activeTab = this.getActiveTab();
+                if (activeTab?.coder === 'pi-rpc') {
+                    this._restoreLatestPiQueue(activeTab);
+                } else {
+                    this._cyclePromptHistory('older');
+                }
                 return;
             }
             if (
@@ -3889,21 +3967,57 @@ export class TabManager {
         });
     }
 
+    _restoreLatestPiQueue(tab) {
+        return rpcChatRestoreLatestLocal(tab.paneId)
+            .then((result) => {
+                if (!result?.restored || !result.item) return;
+                const message = result.item.message || '';
+                const attachments = (result.item.attachments || []).map(
+                    (attachment) => ({
+                        id: `restored-${attachment.ref}`,
+                        ref: attachment.ref,
+                        name: attachment.name,
+                        type: attachment.mimeType,
+                        sizeBytes: attachment.sizeBytes,
+                        source: 'paste',
+                    }),
+                );
+                tab.draft = message;
+                tab.draftAttachments = attachments;
+                this.inputTextArea.value = message;
+                this.stagedAttachments = attachments;
+                this._renderAttachmentStrip();
+                this.adjustInputHeight();
+                this.inputTextArea.focus({ preventScroll: true });
+            })
+            .catch((error) =>
+                this._attachmentToast(String(error?.message ?? error)),
+            );
+    }
+
     // _addAttachmentChip stores the attachment and re-renders the strip.
     _addAttachmentChip(attachment) {
-        // De-dupe by path: same file dropped twice shouldn't chip twice.
-        if (this.stagedAttachments.some((a) => a.path === attachment.path))
+        // De-dupe by opaque ref: the server owns the backing file.
+        if (this.stagedAttachments.some((a) => a.ref === attachment.ref))
             return;
         this.stagedAttachments.push(attachment);
         this._renderAttachmentStrip();
     }
 
-    // _removeAttachmentChip removes a single attachment by id.
+    // _removeAttachmentChip removes a single attachment by id and releases
+    // its provisional server lease. A release failure leaves the local chip
+    // removed but remains visible through the actionable attachment toast.
     _removeAttachmentChip(id) {
+        const attachment = this.stagedAttachments.find((a) => a.id === id);
         this.stagedAttachments = this.stagedAttachments.filter(
             (a) => a.id !== id,
         );
         this._renderAttachmentStrip();
+        if (attachment?.ref) {
+            releaseAttachment(attachment.ref).catch((err) =>
+                this._attachmentToast(`Release failed: ${err.message}`),
+            );
+        }
     }
 
     // _renderAttachmentStrip repaints the chip strip from stagedAttachments.
@@ -3920,7 +4034,8 @@ export class TabManager {
             const chip = document.createElement('span');
             chip.className = 'attachment-chip';
             chip.setAttribute('data-id', a.id);
-            chip.title = a.path;
+            chip.setAttribute('data-ref', a.ref);
+            chip.title = a.name;
 
             const icon = document.createElement('span');
             icon.className = 'attachment-icon';
@@ -3939,7 +4054,7 @@ export class TabManager {
 
             const remove = document.createElement('button');
             remove.className = 'attachment-remove';
-            remove.setAttribute('aria-label', 'Remove attachment');
+            remove.setAttribute('aria-label', `Remove attachment ${a.name}`);
             remove.textContent = '✕';
             remove.addEventListener('click', () =>
                 this._removeAttachmentChip(a.id),
@@ -4238,62 +4353,7 @@ export class TabManager {
         `;
     }
 
-    sendStagedInput() {
-        const activeTab = this.getActiveTab();
-        if (!activeTab) return;
-
-        const val = this.inputTextArea.value;
-        const attachments = this.stagedAttachments;
-        // Empty guard now also allows attachments-only sends. Without
-        // this, "drop a screenshot, hit Send with no text" silently
-        // does nothing — a confusing dead end.
-        if (!val && attachments.length === 0) return;
-
-        // Compose payload: text first (if any), then one formatted
-        // attachment path per line. Path formatting is per-active-tab
-        // coder (claude → @path, bash → raw path).
-        const coder = activeTab.coder;
-        const lines = [];
-        if (val && val.trim()) lines.push(val.trim());
-        for (const a of attachments) {
-            lines.push(formatAttachment(coder, a));
-        }
-        let payload = lines.join('\n');
-
-        if (coder === 'pi-rpc') {
-            if (!rpcChatSend(activeTab.paneId, payload)) {
-                this.app.showToast('pi chat: not ready', { type: 'error' });
-                return;
-            }
-            // Per-chat, in-memory, current-session history for plain Up/Down
-            // recall. Newest-first, consecutive duplicates skipped, capped at
-            // 100 like the server-side store. Lives on the tab, dies with it;
-            // Reset Chat clears it (see the reset handler in _renderPiRpcPresets).
-            if (!Array.isArray(activeTab.promptHistory))
-                activeTab.promptHistory = [];
-            if (activeTab.promptHistory[0] !== payload) {
-                activeTab.promptHistory.unshift(payload);
-                if (activeTab.promptHistory.length > 100)
-                    activeTab.promptHistory.length = 100;
-            }
-            activeTab.chatHistoryCursor = -1;
-            activeTab.chatHistoryPreCycleValue = undefined;
-        } else {
-            // Wrap in bracketed paste markers for large prompts or multiline text
-            // to prevent TUI trickle-rendering / autocomplete lagging.
-            if (payload.length > 16 || payload.includes('\n')) {
-                payload = '\x1b[200~' + payload + '\x1b[201~';
-            }
-
-            // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
-            const sent = this.sendInput(activeTab, payload + '\r');
-            if (!sent) return;
-        }
-
-        // Record this prompt into ~/.phi/prompt_history.json BEFORE
-        // clearing the textarea. Fire-and-forget so a slow disk
-        // doesn't hold up the send. The backend handles dedup / cap
-        // (FIFO at 100 entries, per-cwd filter).
+    _finalizeStagedInput(activeTab, val) {
         const sentText = val && val.trim() ? val.trim() : '';
         if (sentText) {
             const cwdForHistory =
@@ -4307,26 +4367,102 @@ export class TabManager {
             }).catch((err) =>
                 console.warn('[prompt_history] append failed', err),
             );
-            // Reset history cursor — user just sent fresh text, cycling
-            // should start back at the most-recent prior entry.
             this._historyCursor = -1;
         }
-
         this.inputTextArea.value = '';
         this.lastInputValue = '';
         this.stagedAttachments = [];
         this._renderAttachmentStrip();
         this.adjustInputHeight();
         this._spamScrollToBottom(activeTab);
-
-        // Auto sync clipboard on /copy command
         if (val && val.includes('/copy')) {
             setTimeout(() => {
                 this.app.syncRemoteClipboard();
             }, 300);
         }
-
         this.inputTextArea.focus({ preventScroll: true });
+    }
+
+    sendStagedInput({ deliveryOverride } = {}) {
+        const activeTab = this.getActiveTab();
+        if (!activeTab) return;
+
+        const val = this.inputTextArea.value;
+        const attachments = this.stagedAttachments;
+        // Empty guard now also allows attachments-only sends. Without
+        // this, "drop a screenshot, hit Send with no text" silently
+        // does nothing — a confusing dead end.
+        if (!val && attachments.length === 0) return;
+
+        const coder = activeTab.coder;
+        const lines = [];
+        if (val && val.trim()) lines.push(val.trim());
+        if (coder !== 'pi-rpc') {
+            try {
+                for (const a of attachments) {
+                    lines.push(formatAttachment(coder, a));
+                }
+            } catch (err) {
+                this._attachmentToast(err.message);
+                return;
+            }
+        }
+        let payload = lines.join('\n');
+
+        if (coder === 'pi-rpc') {
+            const refs = attachments.map((a) => a.ref);
+            const controls = getPiRpcControls(activeTab.paneId);
+            const delivery =
+                deliveryOverride ?? (controls?.busy ? 'steer' : undefined);
+            let result;
+            try {
+                result =
+                    refs.length > 0 || delivery
+                        ? rpcChatSend(activeTab.paneId, payload, refs, delivery)
+                        : rpcChatSend(activeTab.paneId, payload, []);
+            } catch (error) {
+                this._attachmentToast(
+                    String(error?.message ?? error ?? 'Pi RPC is not ready'),
+                );
+                return;
+            }
+            if (!result || typeof result.then !== 'function') {
+                this.app.showToast('pi chat: not ready', { type: 'error' });
+                return;
+            }
+            result
+                .then((queueResult) => {
+                    if (queueResult?.uncertain) {
+                        throw new Error('Delivery uncertain — draft preserved');
+                    }
+                    if (!Array.isArray(activeTab.promptHistory))
+                        activeTab.promptHistory = [];
+                    if (activeTab.promptHistory[0] !== payload) {
+                        activeTab.promptHistory.unshift(payload);
+                        if (activeTab.promptHistory.length > 100)
+                            activeTab.promptHistory.length = 100;
+                    }
+                    activeTab.chatHistoryCursor = -1;
+                    activeTab.chatHistoryPreCycleValue = undefined;
+                    this._finalizeStagedInput(activeTab, val);
+                })
+                .catch((error) => {
+                    this._attachmentToast(String(error?.message ?? error));
+                });
+            return result;
+        } else {
+            // Wrap in bracketed paste markers for large prompts or multiline text
+            // to prevent TUI trickle-rendering / autocomplete lagging.
+            if (payload.length > 16 || payload.includes('\n')) {
+                payload = '\x1b[200~' + payload + '\x1b[201~';
+            }
+
+            // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
+            const sent = this.sendInput(activeTab, payload + '\r');
+            if (!sent) return;
+        }
+
+        this._finalizeStagedInput(activeTab, val);
     }
 
     sendRawInput(bytes) {

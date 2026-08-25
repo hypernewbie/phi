@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { setupDomHarness, mockFetch } from './_dom.js';
 
 vi.mock('../web/chat-pi/controller.js', () => ({
-    rpcChatSend: vi.fn(() => true),
+    rpcChatSend: vi.fn(() => Promise.resolve({ uncertain: false })),
     destroyRpcChat: vi.fn(),
     getPiRpcStatus: vi.fn(() => null),
     getPiRpcControls: vi.fn(() => null),
@@ -19,6 +19,11 @@ vi.mock('../web/chat-pi/controller.js', () => ({
     rpcChatCancelDialogs: vi.fn(() => Promise.resolve({ cancelled: 0 })),
     closePiExtensionDialog: vi.fn(() => false),
     focusPiExtensionDialog: vi.fn(),
+    rpcChatToggleSearch: vi.fn(() => false),
+    closePiSearch: vi.fn(() => false),
+    rpcChatRestoreLatestLocal: vi.fn(() =>
+        Promise.resolve({ restored: false, reason: 'missing' }),
+    ),
     closePiSubagentViewer: vi.fn(() => false),
     subscribePiRpcStatus: vi.fn(() => () => {}),
 }));
@@ -33,6 +38,9 @@ import {
     rpcChatCancelDialogs,
     closePiExtensionDialog,
     focusPiExtensionDialog,
+    rpcChatToggleSearch,
+    closePiSearch,
+    rpcChatRestoreLatestLocal,
     closePiSubagentViewer,
     rpcChatSend,
     rpcChatSetModel,
@@ -59,8 +67,14 @@ afterEach(() => {
     );
     closePiExtensionDialog.mockImplementation(() => false);
     focusPiExtensionDialog.mockImplementation(() => {});
+    rpcChatToggleSearch.mockImplementation(() => false);
+    closePiSearch.mockImplementation(() => false);
+    rpcChatRestoreLatestLocal.mockImplementation(() =>
+        Promise.resolve({ restored: false, reason: 'missing' }),
+    );
     closePiSubagentViewer.mockImplementation(() => false);
     subscribePiRpcStatus.mockImplementation(() => () => {});
+    rpcChatSend.mockImplementation(() => Promise.resolve({ uncertain: false }));
 });
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -477,6 +491,111 @@ describe('Pi RPC TabManager boundaries', () => {
         );
     });
 
+    it('opens Pi search with platform bindings and preserves native browser find elsewhere', () => {
+        const tm = Object.create(TabManager.prototype);
+        const input = document.createElement('textarea');
+        const inputBar = document.createElement('div');
+        inputBar.appendChild(input);
+        const pi = {
+            paneId: 'pi-rpc:search',
+            coder: 'pi-rpc',
+            termContainer: document.createElement('div'),
+        };
+        tm.inputTextArea = input;
+        tm.inputBarContainer = inputBar;
+        tm.getActiveTab = vi.fn(() => pi);
+        const piShortcut = {
+            key: 'F',
+            ctrlKey: true,
+            metaKey: false,
+            shiftKey: true,
+            altKey: false,
+            target: input,
+            preventDefault: vi.fn(),
+        };
+        tm.handleGlobalTabShortcuts(piShortcut);
+        expect(rpcChatToggleSearch).toHaveBeenCalledWith(pi.paneId);
+        expect(piShortcut.preventDefault).toHaveBeenCalledOnce();
+
+        rpcChatToggleSearch.mockClear();
+        const metaShortcut = {
+            ...piShortcut,
+            ctrlKey: false,
+            metaKey: true,
+            preventDefault: vi.fn(),
+        };
+        tm.handleGlobalTabShortcuts(metaShortcut);
+        expect(rpcChatToggleSearch).toHaveBeenCalledWith(pi.paneId);
+        expect(metaShortcut.preventDefault).toHaveBeenCalledOnce();
+
+        rpcChatToggleSearch.mockClear();
+        const scopedFind = {
+            key: 'f',
+            ctrlKey: true,
+            metaKey: false,
+            shiftKey: false,
+            altKey: false,
+            target: input,
+            preventDefault: vi.fn(),
+        };
+        tm.handleGlobalTabShortcuts(scopedFind);
+        expect(rpcChatToggleSearch).toHaveBeenCalledWith(pi.paneId);
+        expect(scopedFind.preventDefault).toHaveBeenCalledOnce();
+
+        rpcChatToggleSearch.mockClear();
+        const outside = document.createElement('button');
+        document.body.appendChild(outside);
+        const nativeFind = {
+            key: 'f',
+            ctrlKey: true,
+            metaKey: false,
+            shiftKey: false,
+            altKey: false,
+            target: outside,
+            preventDefault: vi.fn(),
+        };
+        tm.handleGlobalTabShortcuts(nativeFind);
+        expect(rpcChatToggleSearch).not.toHaveBeenCalled();
+        expect(nativeFind.preventDefault).not.toHaveBeenCalled();
+
+        const pty = { paneId: 'bash:search', coder: 'bash', term: {} };
+        tm.getActiveTab.mockReturnValue(pty);
+        tm.toggleFindBar = vi.fn();
+        const ptySearch = {
+            key: 'F',
+            ctrlKey: true,
+            metaKey: false,
+            shiftKey: true,
+            altKey: false,
+            target: outside,
+            preventDefault: vi.fn(),
+        };
+        tm.handleGlobalTabShortcuts(ptySearch);
+        expect(tm.toggleFindBar).toHaveBeenCalledWith(pty);
+        expect(ptySearch.preventDefault).toHaveBeenCalledOnce();
+        outside.remove();
+    });
+
+    it('closes Pi search before interrupting on Escape', () => {
+        const paneId = 'pi-rpc:search-escape';
+        const tm = Object.create(TabManager.prototype);
+        tm.getActiveTab = vi.fn(() => ({ paneId, coder: 'pi-rpc' }));
+        tm._closePiSubagentViewerIfOpen = vi.fn(() => false);
+        tm._closePiRpcDropups = vi.fn(() => false);
+        tm._interruptActivePiRpc = vi.fn(() => true);
+        closePiSearch.mockReturnValue(true);
+        const event = {
+            key: 'Escape',
+            isComposing: false,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        expect(tm._handlePiRpcEscape(event)).toBe(true);
+        expect(closePiSearch).toHaveBeenCalledWith(paneId);
+        expect(tm._interruptActivePiRpc).not.toHaveBeenCalled();
+        closePiSearch.mockReturnValue(false);
+    });
+
     it('restores inherited actions after leaving Pi RPC and closes Pi dropups', () => {
         const modelDropup = document.createElement('div');
         modelDropup.id = 'pi-rpc-model-dropup';
@@ -582,8 +701,144 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(rpcChatSend).toHaveBeenCalledWith(
             tab.paneId,
             'hello from Pi RPC',
+            [],
         );
         expect(tm.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('passes Pi RPC attachments as ordered opaque refs without path text', () => {
+        mockFetch();
+        const tab = {
+            paneId: 'pi-rpc:/work/images',
+            coder: 'pi-rpc',
+            isDead: false,
+        };
+        const tm = stagedContext(tab);
+        tm.stagedAttachments = [
+            {
+                id: 'a',
+                ref: 'a'.repeat(64),
+                name: 'a.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'paste',
+            },
+            {
+                id: 'b',
+                ref: 'b'.repeat(64),
+                name: 'b.png',
+                type: 'image/png',
+                sizeBytes: 8,
+                source: 'drop',
+            },
+        ];
+        tm.sendStagedInput();
+        expect(rpcChatSend).toHaveBeenCalledWith(
+            tab.paneId,
+            'hello from Pi RPC',
+            ['a'.repeat(64), 'b'.repeat(64)],
+            undefined,
+        );
+        expect(rpcChatSend.mock.calls.at(-1)[1]).not.toContain('/');
+    });
+
+    it('routes Enter and Alt+Enter to steer and follow-up delivery overrides', async () => {
+        mockFetch();
+        const tab = {
+            paneId: 'pi-rpc:/work/delivery',
+            coder: 'pi-rpc',
+            isDead: false,
+        };
+        const tm = stagedContext(tab);
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: true,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'm',
+            thinking: 'medium',
+            connectionState: 'connected',
+        });
+        tm.sendStagedInput();
+        await Promise.resolve();
+        expect(rpcChatSend).toHaveBeenLastCalledWith(
+            tab.paneId,
+            'hello from Pi RPC',
+            [],
+            'steer',
+        );
+        tm.inputTextArea.value = 'follow-up';
+        tm.sendStagedInput({ deliveryOverride: 'followUp' });
+        await Promise.resolve();
+        expect(rpcChatSend).toHaveBeenLastCalledWith(
+            tab.paneId,
+            'follow-up',
+            [],
+            'followUp',
+        );
+    });
+
+    it('keeps the exact draft and chips when queue delivery is uncertain', async () => {
+        const tab = {
+            paneId: 'pi-rpc:/work/uncertain',
+            coder: 'pi-rpc',
+            isDead: false,
+        };
+        const tm = stagedContext(tab);
+        const attachment = {
+            id: 'uncertain-attachment',
+            ref: 'c'.repeat(64),
+            name: 'capture.png',
+            type: 'image/png',
+            sizeBytes: 10,
+            source: 'paste',
+        };
+        tm.stagedAttachments = [attachment];
+        rpcChatSend.mockReturnValueOnce(
+            Promise.reject({ uncertain: true, message: 'transport lost' }),
+        );
+        tm.sendStagedInput();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(tm.inputTextArea.value).toBe('hello from Pi RPC');
+        expect(tm.stagedAttachments).toEqual([attachment]);
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            expect.stringContaining('transport lost'),
+            expect.objectContaining({ type: 'error' }),
+        );
+    });
+
+    it('Alt+Up restores only the newest local queue item and focuses the composer', async () => {
+        const tab = {
+            paneId: 'pi-rpc:/work/restore',
+            coder: 'pi-rpc',
+            isDead: false,
+        };
+        const tm = stagedContext(tab);
+        document.body.appendChild(tm.inputTextArea);
+        rpcChatRestoreLatestLocal.mockResolvedValueOnce({
+            restored: true,
+            item: {
+                message: 'local draft',
+                attachments: [
+                    {
+                        ref: 'd'.repeat(64),
+                        name: 'draft.png',
+                        mimeType: 'image/png',
+                        sizeBytes: 12,
+                    },
+                ],
+            },
+        });
+        tm._restoreLatestPiQueue(tab);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(rpcChatRestoreLatestLocal).toHaveBeenCalledWith(tab.paneId);
+        expect(tm.inputTextArea.value).toBe('local draft');
+        expect(tm.stagedAttachments[0].ref).toBe('d'.repeat(64));
+        expect(document.activeElement).toBe(tm.inputTextArea);
+        tm.inputTextArea.remove();
     });
 
     it('finalizes Pi RPC by destroying its controller without a PTY DELETE', () => {
@@ -904,16 +1159,19 @@ describe('Pi RPC per-chat prompt history', () => {
         return { tm, tab };
     }
 
-    it('records composed payloads newest-first and skips consecutive duplicates', () => {
+    it('records composed payloads newest-first and skips consecutive duplicates', async () => {
         mockFetch();
         const tab = { paneId: 'pi-rpc:hist', coder: 'pi-rpc' };
         const tm = stagedContext(tab);
 
         tm.sendStagedInput();
+        await Promise.resolve();
         tm.inputTextArea.value = 'second';
         tm.sendStagedInput();
+        await Promise.resolve();
         tm.inputTextArea.value = 'second';
         tm.sendStagedInput();
+        await Promise.resolve();
 
         expect(tab.promptHistory).toEqual(['second', 'hello from Pi RPC']);
         expect(tab.chatHistoryCursor).toBe(-1);

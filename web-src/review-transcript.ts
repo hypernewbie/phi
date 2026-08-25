@@ -117,6 +117,11 @@ export interface ReviewTranscriptView {
     setStructuredPartial(partial: string): void;
     setStructuredThinking(text: string): void;
     setLiveToolOutput(id: string, text: string): void;
+    setQueueState(
+        items: readonly ReviewQueueItem[],
+        piQueue?: QueueAuthoritative,
+        actions?: ReviewQueueActions,
+    ): void;
     setConnectionState(state: string | null): void;
     announceDialog(message: string): void;
     revealMessage(index: number): boolean;
@@ -126,11 +131,6 @@ export interface ReviewTranscriptView {
         query: string,
         occurrenceStart: number,
     ): boolean;
-    setQueueState(
-        items: readonly ReviewQueueItem[],
-        piQueue?: QueueAuthoritative,
-        actions?: ReviewQueueActions,
-    ): void;
     setActiveTurn(state: ActiveTurnState | null): void;
     /**
      * Toggle the persistent red error row appended to the chat. Phi
@@ -605,14 +605,17 @@ export function createReviewTranscriptView(
     const transcript = document.createElement('div');
     transcript.className = 'review-chat-wrapper';
     contentBody.appendChild(transcript);
+
     const queuePanel = document.createElement('div');
     queuePanel.className = 'pi-queue-panel hidden';
     contentBody.appendChild(queuePanel);
+
     const connectionState = document.createElement('div');
     connectionState.className = 'pi-rpc-connection-state';
     connectionState.setAttribute('aria-live', 'polite');
     connectionState.classList.add('hidden');
     root.appendChild(connectionState);
+
     const dialogHost = document.createElement('div');
     dialogHost.className = 'pi-extension-dialog-host';
     root.appendChild(dialogHost);
@@ -710,10 +713,13 @@ export function createReviewTranscriptView(
     let latestPartial = '';
     let latestThinking = '';
     const liveToolOutputs = new Map<string, string>();
-    let queueItems: readonly ReviewQueueItem[] = [];
-    let piQueue: QueueAuthoritative = { steering: [], followUp: [] };
-    let queueActions: ReviewQueueActions = {};
     let activeTurn: ActiveTurnState | null = null;
+    let queueItems: readonly ReviewQueueItem[] = [];
+    let piQueue: QueueAuthoritative = {
+        steering: [],
+        followUp: [],
+    };
+    let queueActions: ReviewQueueActions = {};
     // Milestone 3: persistent (within-view) red error row. Phi treats
     // it as ephemeral: it is not in the snapshot/persist surface and
     // is re-applied from this view state on every rebuild. Setting
@@ -952,6 +958,17 @@ export function createReviewTranscriptView(
         target.classList.remove('hidden');
     }
 
+    /** Build the temporary thinking block (not cached or persisted). */
+    function buildLiveThinkingBlock(text: string): HTMLElement {
+        const block = document.createElement('div');
+        block.className = 'thinking-block pi-live-thinking';
+        const content = document.createElement('div');
+        content.className = 'thinking-text';
+        content.textContent = text;
+        block.appendChild(content);
+        return block;
+    }
+
     /** Build the streaming virtual assistant block (not cached). */
     function buildLiveAssistantBlock(partial: string): HTMLElement {
         const block = document.createElement('div');
@@ -975,32 +992,6 @@ export function createReviewTranscriptView(
         ) as HTMLElement | null;
     }
 
-    /**
-     * Update only the streaming live block. Never rebuilds the
-     * transcript or runs markdown / tool-result lookup. An empty
-     * `partial` removes the live block if present; otherwise the block
-     * is lazily created or its `.pi-partial` text content is mutated.
-     *
-     * Bottom-stick: when the user was at the bottom before the update,
-     * the view re-anchors to the bottom; otherwise the scroll position
-     * is preserved so a reader who scrolled up keeps their place.
-     *
-     * Updates `latestPartial` so subsequent window slides
-     * (prependOlder / appendNewer / jump) can re-create the live block
-     * with the latest text.
-     */
-    /** Build the temporary thinking block (not cached or persisted). */
-    function buildLiveThinkingBlock(text: string): HTMLElement {
-        const block = document.createElement('div');
-        block.className = 'thinking-block pi-live-thinking';
-        const content = document.createElement('div');
-        content.className = 'thinking-text';
-        content.textContent = text;
-        block.appendChild(content);
-        return block;
-    }
-
-    /** Build the streaming virtual assistant block (not cached). */
     function findLiveThinkingBlock(): HTMLElement | null {
         return transcript.querySelector(
             ':scope > .pi-live-thinking',
@@ -1132,11 +1123,16 @@ export function createReviewTranscriptView(
         toolDiffs: Map<string, string>,
     ): HTMLElement {
         if (msg.role === 'user') {
-            const texts = msg.segments.filter(
-                (s): s is { kind: 'text'; text: string } => s.kind === 'text',
+            const visible = msg.segments.filter(
+                (
+                    s,
+                ): s is
+                    | { kind: 'text'; text: string }
+                    | { kind: 'unsupported'; label: string } =>
+                    s.kind === 'text' || s.kind === 'unsupported',
             );
-            if (texts.length > 0) {
-                return buildUserMessageBlock(texts, options.copyText);
+            if (visible.length > 0) {
+                return buildUserMessageBlock(visible, options.copyText);
             }
             // No text segment for user (rare): emit empty user block.
             const empty = document.createElement('div');
@@ -1147,16 +1143,25 @@ export function createReviewTranscriptView(
             // Standalone toolResult messages without a paired call: render
             // as a dim assistant block. Pairing lives in the assistant
             // branch above (bash-render takes the result inline).
+            const block = document.createElement('div');
+            block.className = 'assistant-message';
             const text = msg.segments
                 .filter((s) => s.kind === 'text')
                 .map((s) => (s.kind === 'text' ? s.text : ''))
                 .join('\n');
-            const block = document.createElement('div');
-            block.className = 'assistant-message';
-            const textDiv = document.createElement('div');
-            textDiv.className = 'assistant-text';
-            textDiv.textContent = text;
-            block.appendChild(textDiv);
+            if (text) {
+                const textDiv = document.createElement('div');
+                textDiv.className = 'assistant-text';
+                textDiv.textContent = text;
+                block.appendChild(textDiv);
+            }
+            for (const segment of msg.segments) {
+                if (segment.kind === 'unsupported') {
+                    block.appendChild(
+                        buildUnsupportedContentBlock(segment.label),
+                    );
+                }
+            }
             return block;
         }
         return buildAssistantMessageBlock(
@@ -1387,6 +1392,16 @@ export function createReviewTranscriptView(
         setLiveToolOutput(id, text) {
             setLiveToolOutput(id, text);
         },
+        setQueueState(
+            items,
+            authoritative = { steering: [], followUp: [] },
+            actions = {},
+        ) {
+            queueItems = items;
+            piQueue = authoritative;
+            queueActions = actions;
+            renderQueueState();
+        },
         setConnectionState(state) {
             connectionState.replaceChildren();
             if (!state || state === 'connected') {
@@ -1402,6 +1417,25 @@ export function createReviewTranscriptView(
                       ? 'Reconnecting…'
                       : state;
             connectionState.appendChild(message);
+            if (state === 'unavailable') {
+                const recover = document.createElement('button');
+                recover.type = 'button';
+                recover.className = 'pi-rpc-recovery-action';
+                recover.dataset.piRecoveryAction = 'copy-draft';
+                recover.textContent = 'Copy draft to composer';
+                recover.setAttribute(
+                    'aria-label',
+                    'Copy preserved draft to composer',
+                );
+                recover.addEventListener('click', () => {
+                    connectionState.dispatchEvent(
+                        new CustomEvent('phi:pi-recovery-focus', {
+                            bubbles: true,
+                        }),
+                    );
+                });
+                connectionState.appendChild(recover);
+            }
         },
         announceDialog(message) {
             connectionState.replaceChildren();
@@ -1418,16 +1452,6 @@ export function createReviewTranscriptView(
         },
         markSearchMatch(index, query, occurrenceStart) {
             return markSearchMatch(index, query, occurrenceStart);
-        },
-        setQueueState(
-            items,
-            authoritative = { steering: [], followUp: [] },
-            actions = {},
-        ) {
-            queueItems = items;
-            piQueue = authoritative;
-            queueActions = actions;
-            renderQueueState();
         },
         setActiveTurn(state) {
             activeTurn = state;

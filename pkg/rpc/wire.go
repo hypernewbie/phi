@@ -180,12 +180,6 @@ func applyPiMetadata(inst *Instance, resp piResponse) getStateMetadata {
 	return getStateMetadata{}
 }
 
-// mergePiMetadata retains the package-local metadata helper used by focused
-// wire tests. Manager response handling additionally updates session ownership.
-func mergePiMetadata(inst *Instance, resp piResponse) {
-	applyPiMetadata(inst, resp)
-}
-
 func (m *Manager) applyPiResponse(inst *Instance, resp piResponse) {
 	metadata := applyPiMetadata(inst, resp)
 	if resp.Command == "get_state" && metadata.sessionFileSet {

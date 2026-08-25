@@ -596,6 +596,7 @@ describe('Pi RPC transcript controller', () => {
         const chat = mountChatPi(root, '/work/demo', wire.client);
         wire.emit({ t: 'res', id: 'sp', ok: true, data: { sid: 's1' } });
         await Promise.resolve();
+        await Promise.resolve();
 
         expect(chat.send('blocked')).toBe(false);
         expect(root.textContent).toContain(
@@ -1128,9 +1129,8 @@ describe('Pi RPC transcript controller', () => {
         });
         await Promise.resolve();
         await Promise.resolve();
-        // One matching event reconciles ONE prompt (the oldest match by
-        // renderedUserText). The second identical prompt remains
-        // optimistic in the DOM.
+        // Legacy OpPrompt reconciliation still consumes one matching
+        // prompt by text. Queue-backed prompts use a separate identity path.
         expect(
             root.querySelectorAll('[data-pi-optimistic-prompt="true"]'),
         ).toHaveLength(1);

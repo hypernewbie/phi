@@ -144,8 +144,8 @@ type pendingWaiter struct {
 	result chan pendingResult
 }
 
-// QueueSubmitOptions carries queue attachment resolver context captured at the
-// WebSocket boundary. Attachment metadata stays process-local.
+// QueueSubmitOptions carries the access-session owner and attachment bridge
+// captured at the WebSocket upgrade boundary.
 type QueueSubmitOptions struct {
 	Owner    string
 	Resolver QueueAttachmentResolver

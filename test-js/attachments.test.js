@@ -6,6 +6,8 @@ import {
     extractImageItems,
     extractImageFiles,
     formatChipName,
+    releaseAttachment,
+    cloneAttachment,
 } from '../web/attachments.js';
 
 // Pure helper tests — these need no DOM, no fetch, no class wiring.
@@ -16,12 +18,7 @@ setupDomHarness();
 
 describe('formatAttachment', () => {
     const att = {
-        id: 'a1',
-        name: 'shot.png',
         path: '/tmp/shot.png',
-        type: 'image/png',
-        sizeBytes: 1024,
-        source: 'paste',
     };
 
     it('prefixes @ for vision-capable coding agents', () => {
@@ -143,7 +140,7 @@ describe('uploadClipboardImage', () => {
     it('POSTs multipart/form-data and resolves to an Attachment', async () => {
         const blob = new Blob([new Uint8Array(16)], { type: 'image/png' });
         response = {
-            path: '/home/u/.phi/clipboard/clip-1234-abcd.png',
+            ref: 'a'.repeat(64),
             name: 'clip-1234-abcd.png',
             sizeBytes: 16,
             mimeType: 'image/png',
@@ -156,9 +153,8 @@ describe('uploadClipboardImage', () => {
         expect(lastInit.method).toBe('POST');
         expect(lastInit.body).toBeInstanceOf(FormData);
 
-        expect(attachment.path).toBe(
-            '/home/u/.phi/clipboard/clip-1234-abcd.png',
-        );
+        expect(attachment.ref).toBe('a'.repeat(64));
+        expect(attachment).not.toHaveProperty('path');
         expect(attachment.name).toBe('clip-1234-abcd.png');
         expect(attachment.type).toBe('image/png');
         expect(attachment.sizeBytes).toBe(16);
@@ -176,12 +172,43 @@ describe('uploadClipboardImage', () => {
         );
     });
 
+    it('rejects a legacy path response', async () => {
+        const blob = new Blob([new Uint8Array(8)], { type: 'image/png' });
+        response = {
+            path: '/x.png',
+            name: 'x.png',
+            sizeBytes: 8,
+            mimeType: 'image/png',
+        };
+        const { uploadClipboardImage } = await import('../web/attachments.js');
+        await expect(uploadClipboardImage(blob, 'x.png')).rejects.toThrow(
+            /opaque ref/,
+        );
+    });
+
     it('falls back to blob.type and blob.size when server omits them', async () => {
         const blob = new Blob([new Uint8Array(8)], { type: 'image/jpeg' });
-        response = { path: '/x.jpg', name: 'x.jpg' };
+        response = { ref: 'b'.repeat(64), name: 'x.jpg' };
         const { uploadClipboardImage } = await import('../web/attachments.js');
         const a = await uploadClipboardImage(blob, 'x.jpg');
         expect(a.type).toBe('image/jpeg');
         expect(a.sizeBytes).toBe(8);
+    });
+
+    it('releases a provisional ref and clones with a fresh local id', async () => {
+        response = { released: true };
+        expect(await releaseAttachment('c'.repeat(64))).toBe(true);
+        expect(lastUrl).toBe('/api/attachments/release');
+        const original = {
+            id: 'old',
+            ref: 'a'.repeat(64),
+            name: 'x.png',
+            type: 'image/png',
+            sizeBytes: 8,
+            source: 'paste',
+        };
+        const copy = cloneAttachment(original, 'd'.repeat(64));
+        expect(copy.ref).toBe('d'.repeat(64));
+        expect(copy.id).not.toBe(original.id);
     });
 });

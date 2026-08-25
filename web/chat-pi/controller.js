@@ -114,6 +114,21 @@ export function rpcChatReset(paneId) {
 export function rpcChatInterrupt(paneId) {
     return chats.get(paneId)?.interrupt() ?? missingPane(paneId);
 }
+export function rpcChatCancelDialogs(paneId, reason = 'tabClosed') {
+    return chats.get(paneId)?.cancelDialogs(reason) ?? missingPane(paneId);
+}
+export function closePiExtensionDialog(paneId) {
+    return chats.get(paneId)?.closeExtensionDialog() ?? false;
+}
+export function focusPiExtensionDialog(paneId) {
+    chats.get(paneId)?.focusExtensionDialog();
+}
+export function rpcChatToggleSearch(paneId) {
+    return chats.get(paneId)?.toggleSearch() ?? false;
+}
+export function closePiSearch(paneId) {
+    return chats.get(paneId)?.closeSearch() ?? false;
+}
 export function closePiSubagentViewer(paneId) {
     return chats.get(paneId)?.closeSubagentViewer() ?? false;
 }
@@ -145,19 +160,4 @@ export function getPiRpcControls(paneId) {
 export function subscribePiRpcStatus(listener) {
     statusListeners.add(listener);
     return () => statusListeners.delete(listener);
-}
-export function rpcChatCancelDialogs(paneId, reason = 'tabClosed') {
-    return chats.get(paneId)?.cancelDialogs(reason) ?? missingPane(paneId);
-}
-export function closePiExtensionDialog(paneId) {
-    return chats.get(paneId)?.closeExtensionDialog() ?? false;
-}
-export function focusPiExtensionDialog(paneId) {
-    chats.get(paneId)?.focusExtensionDialog();
-}
-export function rpcChatToggleSearch(paneId) {
-    return chats.get(paneId)?.toggleSearch() ?? false;
-}
-export function closePiSearch(paneId) {
-    return chats.get(paneId)?.closeSearch() ?? false;
 }

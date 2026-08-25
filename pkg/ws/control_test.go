@@ -67,6 +67,25 @@ type controlFakeChild struct {
 	commands chan map[string]any
 }
 
+type recordingAttachmentResolver struct {
+	owner string
+	sid   string
+	item  string
+}
+
+func (r *recordingAttachmentResolver) ResolveAttachments(_ context.Context, owner, sid, _ string, item string, refs []string) ([]rpc.QueueAttachment, error) {
+	r.owner, r.sid, r.item = owner, sid, item
+	return []rpc.QueueAttachment{{Ref: refs[0], Name: "shot.png", MimeType: "image/png", SizeBytes: 1, Data: []byte{1}}}, nil
+}
+
+func (r *recordingAttachmentResolver) ReleaseAttachments(context.Context, string, string, string, string, []string) error {
+	return nil
+}
+
+func (r *recordingAttachmentResolver) CopyAttachments(_ context.Context, _ string, _ string, _ string, _ string, source []rpc.QueueAttachment) ([]rpc.QueueAttachment, error) {
+	return source, nil
+}
+
 func newControlFakeChild() *controlFakeChild {
 	stdoutR, stdoutW := io.Pipe()
 	stdinR, stdinW := io.Pipe()
@@ -181,6 +200,39 @@ func piControlHeader(id, cwd string) string {
 		Cwd     string `json:"cwd"`
 	}{Type: "session", Version: 3, ID: id, Cwd: cwd})
 	return string(encoded)
+}
+
+func TestControlQueueAttachmentResolverReceivesUpgradeOwner(t *testing.T) {
+	child := newControlFakeChild()
+	resolver := &recordingAttachmentResolver{}
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: "/w/images"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(inst.Kill)
+	server := &controlServer{mgr: mgr, attachmentResolver: resolver, attachmentOwner: "owner-a"}
+	args, _ := json.Marshal(map[string]any{
+		"itemId": "item-a", "sessionEpoch": inst.QueueSessionEpoch(),
+		"message": "look", "delivery": "prompt", "attachmentRefs": []string{"ref-a"},
+	})
+	response := server.dispatch(context.Background(), Envelope{Type: rpc.CallFrame, ID: "queue", Op: rpc.OpQueueSubmit, Sid: inst.ID, Args: args})
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("queue response=%+v", response)
+	}
+	if resolver.owner != "owner-a" || resolver.sid != inst.ID || resolver.item != "item-a" {
+		t.Fatalf("resolver owner binding owner=%q sid=%q item=%q", resolver.owner, resolver.sid, resolver.item)
+	}
+	select {
+	case command := <-child.commands:
+		if command["images"] == nil {
+			t.Fatalf("queue command omitted images: %#v", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for image queue command")
+	}
 }
 
 func TestControlAbortSuccessErrorAndValidation(t *testing.T) {

@@ -1,7 +1,7 @@
 import { dispatchComposer } from './composer.js';
 import { createPiDialogController } from './dialogs.js';
-import { createPiSearchController } from './search.js';
 import { MessageBuffer } from './message-buffer.js';
+import { createPiSearchController } from './search.js';
 import { savePersisted } from './persist.js';
 import { renderedUserText } from './render.js';
 import { createReviewTranscriptView } from '../review-transcript.js';
@@ -258,10 +258,10 @@ export function mountChatPi(
         steering: [],
         followUp: [],
     };
-    const spawnId = `spawn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    let spawnInFlight = false;
     let connectionState = 'connecting';
     let destroyed = false;
+    const spawnId = `spawn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let spawnInFlight = false;
     let ready = false;
     let busy = false;
     let queueDepth = 0;
@@ -917,13 +917,23 @@ export function mountChatPi(
         });
     };
     const interrupt = () => {
-        if (!sid || !ready || exited || !sessionActive)
+        // Legacy OpPrompt/abort callers may issue abort while the initial
+        // hydrate is still outstanding; browser queue callers are gated by
+        // their ready controls before reaching this method.
+        if (!sid || exited || !sessionActive)
             return rejected('Pi RPC is not active');
         if (abortInFlight) return rejected('Pi interrupt is already pending');
         // Capture the in-flight prompt texts BEFORE the abort request:
         // applyState() clears activePrompt/outgoing on the busy=false state
         // change, which lands before the abort response resolves.
         const restored = turnPrompts
+            .filter((item) => {
+                if (item.legacy) return true;
+                const queueItem = queueItems.find(
+                    (candidate) => candidate.id === item.id,
+                );
+                return queueItem?.state === 'local';
+            })
             .map((item) => item.text)
             .filter((text) => text !== '');
         abortInFlight = true;
@@ -1058,6 +1068,7 @@ export function mountChatPi(
             if (result.gap && sid) requestHydrate(false);
             return;
         }
+        if (result.renderDisposition !== 'none') refreshSearchSource();
         if (env.evt === 'stateChanged') {
             if (env.data?.error)
                 status.textContent = `pi: ${String(env.data.error)}`;
@@ -1221,6 +1232,11 @@ export function mountChatPi(
             }
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
+            // Legacy OpPrompt records predate the queue ledger and retain
+            // their text reconciliation. Queue-backed records are removed
+            // only by an identity-bearing queueChanged transition at
+            // agent_settled; message text, queue_update arrays, and position
+            // cannot prove which accepted item Pi consumed.
             const text = renderedUserText(env.data.message.content);
             const match = outgoing.find(
                 (item) => item.legacy && renderedUserText(item.text) === text,
@@ -1233,6 +1249,7 @@ export function mountChatPi(
                         origin: result.messages.length - 1,
                     };
                 }
+                syncActiveTurn();
             }
         }
         if (env.evt === 'transcriptReset') {
@@ -1247,7 +1264,6 @@ export function mountChatPi(
             if (result.liveToolCleared) {
                 view.setLiveToolOutput(result.liveToolCleared, '');
             }
-            if (result.renderDisposition !== 'none') refreshSearchSource();
             switch (result.renderDisposition) {
                 case 'full':
                     paint();
@@ -1359,8 +1375,8 @@ export function mountChatPi(
             destroyed = true;
             off();
             offConnectionState();
-            dialogController.destroy();
             searchController.destroy();
+            dialogController.destroy();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
