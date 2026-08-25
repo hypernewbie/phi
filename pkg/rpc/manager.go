@@ -183,19 +183,26 @@ func (m *Manager) newInstance(opts SpawnOptions, cmd Cmd, stdin WriteCloser, std
 	if err != nil {
 		return nil, err
 	}
+	sessionEpoch, err := newID()
+	if err != nil {
+		return nil, err
+	}
 	inst := &Instance{
-		ID:        id,
-		Cwd:       opts.Cwd,
-		Title:     TitleFor(opts.Cwd, opts.Title),
-		CreatedAt: time.Now(),
-		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    stdout,
-		sc:        NewLineScanner(stdout),
-		alive:     true,
-		pending:   make(map[string]*pendingWaiter),
-		subs:      newSubscriberSet(),
-		snap:      &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
+		ID:           id,
+		Cwd:          opts.Cwd,
+		Title:        TitleFor(opts.Cwd, opts.Title),
+		CreatedAt:    time.Now(),
+		cmd:          cmd,
+		stdin:        stdin,
+		stdout:       stdout,
+		sc:           NewLineScanner(stdout),
+		alive:        true,
+		pending:      make(map[string]*pendingWaiter),
+		sessionEpoch: sessionEpoch,
+		queueItems:   make(map[string]QueueItem),
+		queueClaims:  make(map[string]queueClaim),
+		subs:         newSubscriberSet(),
+		snap:         &Snapshot{Messages: cloneMessages(opts.InitialMessages)},
 	}
 	inst.setSessionPath(opts.SessionPath)
 	inst.SetState(State{Sid: id, Title: inst.Title, Cwd: opts.Cwd, Status: "live"})

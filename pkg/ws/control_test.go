@@ -483,6 +483,197 @@ func TestControlHydrateUnknownSid(t *testing.T) {
 	}
 }
 
+func newQueueControlFixture(t *testing.T, respond func(map[string]any) (any, bool, string)) (*rpc.Manager, *controlFakeChild, *websocket.Conn, string) {
+	t.Helper()
+	child := newControlFakeChild()
+	respondControlCommands(child, respond)
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/queue-control")
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inst.Kill() })
+	return mgr, child, c, sid
+}
+
+func TestControlQueueOperationsStrictDecode(t *testing.T) {
+	_, _, c, sid := newQueueControlFixture(t, func(command map[string]any) (any, bool, string) {
+		switch command["type"] {
+		case "get_state", "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		default:
+			return map[string]any{}, true, ""
+		}
+	})
+	epoch := "missing-until-hydrate"
+	cases := []struct {
+		name string
+		op   string
+		args string
+	}{
+		{"submit", rpc.OpQueueSubmit, `{"itemId":"x","sessionEpoch":"` + epoch + `","message":"x","delivery":"prompt","attachmentRefs":[],"extra":true}`},
+		{"restore", rpc.OpQueueRestore, `{"itemId":"x","sessionEpoch":"` + epoch + `","extra":true}`},
+		{"copy", rpc.OpQueueCopy, `{"itemId":"x","sessionEpoch":"` + epoch + `","extra":true}`},
+		{"discard", rpc.OpQueueDiscard, `{"itemId":"x","sessionEpoch":"` + epoch + `","extra":true}`},
+	}
+	for index, testCase := range cases {
+		id := fmt.Sprintf("queue-strict-%d", index)
+		if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: id, Op: testCase.op, Sid: sid, Args: json.RawMessage(testCase.args)}); err != nil {
+			t.Fatal(err)
+		}
+		response := readResponse(t, c, id)
+		if response.Ok == nil || *response.Ok {
+			t.Fatalf("%s unexpectedly succeeded: %+v", testCase.name, response)
+		}
+	}
+}
+
+func TestControlQueueAcceptedAndHydrateReattachment(t *testing.T) {
+	var promptSeen atomic.Bool
+	mgr, _, c, sid := newQueueControlFixture(t, func(command map[string]any) (any, bool, string) {
+		switch command["type"] {
+		case "get_state", "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		case "prompt", "steer", "follow_up":
+			if command["type"] == "prompt" {
+				promptSeen.Store(true)
+			}
+			return map[string]any{}, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := inst.QueueSessionEpoch()
+	args := fmt.Sprintf(`{"itemId":"item-control","sessionEpoch":%q,"message":"control item","delivery":"prompt","attachmentRefs":[]}`, epoch)
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "queue-submit", Op: rpc.OpQueueSubmit, Sid: sid, Args: json.RawMessage(args)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "queue-submit")
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("queueSubmit failed: %+v", response)
+	}
+	var item rpc.QueueItem
+	if err := json.Unmarshal(response.Data, &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.ID != "item-control" || item.Sid != sid || item.SessionEpoch != epoch {
+		t.Fatalf("queueSubmit item = %+v", item)
+	}
+	if item.State != rpc.QueueSending && item.State != rpc.QueueAccepted {
+		t.Fatalf("queueSubmit state = %q", item.State)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && mgrStateQueueItem(t, inst, "item-control").State != rpc.QueueAccepted {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := mgrStateQueueItem(t, inst, "item-control").State; got != rpc.QueueAccepted {
+		t.Fatalf("queue item did not settle accepted: %q", got)
+	}
+	if !promptSeen.Load() {
+		t.Fatal("queueSubmit did not send a correlated prompt command")
+	}
+
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "hydrate-one", Op: rpc.OpHydrate, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	firstHydrate := readResponse(t, c, "hydrate-one")
+	var first struct {
+		Queue struct {
+			SessionEpoch string          `json:"sessionEpoch"`
+			Items        []rpc.QueueItem `json:"items"`
+		} `json:"queue"`
+	}
+	if err := json.Unmarshal(firstHydrate.Data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Queue.SessionEpoch != epoch || len(first.Queue.Items) != 1 || first.Queue.Items[0].ID != "item-control" {
+		t.Fatalf("first hydrate queue = %+v", first.Queue)
+	}
+	_ = c.Close()
+
+	second := helloDial(t, mgr)
+	if err := second.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "hydrate-two", Op: rpc.OpHydrate, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	secondHydrate := readResponse(t, second, "hydrate-two")
+	var secondPayload struct {
+		Queue struct {
+			SessionEpoch string          `json:"sessionEpoch"`
+			Items        []rpc.QueueItem `json:"items"`
+		} `json:"queue"`
+	}
+	if err := json.Unmarshal(secondHydrate.Data, &secondPayload); err != nil {
+		t.Fatal(err)
+	}
+	if secondPayload.Queue.SessionEpoch != epoch || len(secondPayload.Queue.Items) != 1 || secondPayload.Queue.Items[0].ID != "item-control" {
+		t.Fatalf("reattached hydrate queue = %+v", secondPayload.Queue)
+	}
+}
+
+func TestControlQueueLateSteerPromotion(t *testing.T) {
+	var stateCalls atomic.Int32
+	var promptCalls atomic.Int32
+	mgr, _, c, sid := newQueueControlFixture(t, func(command map[string]any) (any, bool, string) {
+		switch command["type"] {
+		case "get_state":
+			if stateCalls.Add(1) == 1 {
+				return map[string]any{"isStreaming": true, "isCompacting": false}, true, ""
+			}
+			return map[string]any{"isStreaming": false, "isCompacting": false}, true, ""
+		case "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		case "steer":
+			return nil, false, "run settled"
+		case "prompt":
+			promptCalls.Add(1)
+			return map[string]any{}, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	inst, err := mgr.Lookup(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := inst.QueueSessionEpoch()
+	args := fmt.Sprintf(`{"itemId":"late-steer","sessionEpoch":%q,"message":"promote me","delivery":"steer","attachmentRefs":[]}`, epoch)
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "late-steer", Op: rpc.OpQueueSubmit, Sid: sid, Args: json.RawMessage(args)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "late-steer")
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("late steer queueSubmit failed: %+v", response)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && (mgrStateQueueItem(t, inst, "late-steer").State != rpc.QueueAccepted || promptCalls.Load() != 1) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	item := mgrStateQueueItem(t, inst, "late-steer")
+	if item.State != rpc.QueueAccepted || promptCalls.Load() != 1 {
+		t.Fatalf("late steer promotion = %+v promptCalls=%d", item, promptCalls.Load())
+	}
+}
+
+func mgrStateQueueItem(t *testing.T, inst *rpc.Instance, id string) rpc.QueueItem {
+	t.Helper()
+	for _, item := range inst.QueueSnapshotCopy().Items {
+		if item.ID == id {
+			return item
+		}
+	}
+	t.Fatalf("queue item %q missing from %+v", id, inst.QueueSnapshotCopy().Items)
+	return rpc.QueueItem{}
+}
+
+
 func TestControlNewOperationsStrictDecodeAndUnknownSid(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
 	cases := []struct {

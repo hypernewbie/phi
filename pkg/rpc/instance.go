@@ -99,6 +99,18 @@ type pendingWaiter struct {
 	result chan pendingResult
 }
 
+// QueueSubmitOptions carries queue attachment resolver context captured at the
+// WebSocket boundary. Attachment metadata stays process-local.
+type QueueSubmitOptions struct {
+	Owner    string
+	Resolver QueueAttachmentResolver
+}
+
+type queueClaim struct {
+	options QueueSubmitOptions
+	leased  bool
+}
+
 // Instance is one pi --mode rpc child. All methods are goroutine-safe.
 type Instance struct {
 	ID        string
@@ -130,6 +142,19 @@ type Instance struct {
 
 	state   State
 	stateMu sync.Mutex
+
+	queueMu                   sync.Mutex
+	sessionEpoch              string
+	queueItems                map[string]QueueItem
+	queueClaims               map[string]queueClaim
+	queueSending              bool
+	queueSettlementGeneration uint64
+	// queueDispatchGenerations records only commands that crossed the Pi
+	// JSONL write boundary; promoted items without an entry are still local.
+	queueDispatchGenerations map[string]uint64
+	queueBlocked              bool
+	piSteering                []string
+	piFollowUp                []string
 
 	sessionPath   string
 	sessionPathMu sync.RWMutex
@@ -195,8 +220,14 @@ func (i *Instance) StateCopy() State {
 	return cloneState(i.state)
 }
 
-// SetState replaces the cached state.
+// SetState replaces the cached state. Once the queue ledger exists, its
+// non-terminal depth remains authoritative over Pi's queue_update count.
 func (i *Instance) SetState(s State) {
+	i.queueMu.Lock()
+	if len(i.queueItems) > 0 {
+		s.QueueDepth = i.queueDepthLocked()
+	}
+	i.queueMu.Unlock()
 	i.stateMu.Lock()
 	i.state = cloneState(s)
 	i.stateMu.Unlock()
@@ -488,6 +519,7 @@ func (i *Instance) OnExit(reason string) {
 		i.state = cloneState(st)
 		i.stateMu.Unlock()
 		i.failPending(ErrNotAlive)
+		i.markQueueUncertainOnExit()
 		i.publish(EvtRpcExited, nil, map[string]any{"reason": reason}, false)
 		if i.subs != nil {
 			i.subs.CloseAll()

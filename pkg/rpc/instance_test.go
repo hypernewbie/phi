@@ -305,6 +305,42 @@ func TestControlGateDoesNotDelayPromptWrite(t *testing.T) {
 	close(release)
 }
 
+func TestQueuePromptWriteDoesNotWaitBehindControlGate(t *testing.T) {
+	writer := newByteWiseWriter()
+	inst := testInstanceWithWriter(writer)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = inst.WithControl(context.Background(), func(context.Context) (any, error) {
+			close(entered)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-entered
+	item, err := inst.SubmitQueue(context.Background(), "queued", "epoch", "queued prompt", QueuePrompt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != QueueSending {
+		t.Fatalf("queue item state = %q, want sending", item.State)
+	}
+	select {
+	case line := <-writer.records:
+		var prompt map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(line), &prompt); err != nil {
+			t.Fatal(err)
+		}
+		if prompt["type"] != "prompt" || prompt["message"] != "queued prompt" {
+			t.Fatalf("queue prompt write = %#v", prompt)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("queue prompt waited behind control gate")
+	}
+	close(release)
+	inst.OnExit("test-queue-write")
+}
+
 func TestControlGateTimeoutDoesNotRunSecondOperation(t *testing.T) {
 	inst := testInstanceWithWriter(newByteWiseWriter())
 	entered := make(chan struct{})

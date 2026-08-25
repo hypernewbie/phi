@@ -226,6 +226,8 @@ var piEvtToPhi = map[string]string{
 	"message_start":                 EvtMessageStart,
 	"message_update":                EvtMessageUpdate,
 	"message_end":                   EvtMessageEnd,
+	"tool_execution_update":         EvtToolExecutionUpdate,
+	"queue_update":                  EvtQueueUpdate,
 	"auto_retry_start":              EvtAutoRetryStart,
 	"auto_retry_end":                EvtAutoRetryEnd,
 	"compaction_end":                EvtCompactionEnd,
@@ -236,13 +238,16 @@ var piEvtToPhi = map[string]string{
 
 func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 	switch ev.Type {
-	case "message_start", "message_update":
-		// Raw passthrough: message_update's assistantMessageEvent deltas are not
-		// captured by piEvent; the raw line IS the payload. Copy because line
-		// aliases LineScanner's reusable buffer and is overwritten by the next
-		// Scan; json.Unmarshal would copy elsewhere but we don't unmarshal here.
+	case "message_start", "message_update", "tool_execution_update", "queue_update":
+		// Raw passthrough: message_update's assistantMessageEvent deltas,
+		// tool execution updates, and queue updates are not captured by
+		// piEvent; the raw line IS the payload. Copy because line aliases
+		// LineScanner's reusable buffer and is overwritten by the next Scan.
 		payload := append([]byte(nil), line...)
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
+		if ev.Type == "queue_update" {
+			inst.reconcileQueueUpdate(json.RawMessage(payload))
+		}
 	case "message_end":
 		var probe struct {
 			Role         string          `json:"role"`
@@ -294,12 +299,14 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 	case "agent_end":
 		// Pi's settled event, not agent_end, owns the end of the active turn.
 	case "agent_settled":
+		inst.settleAcceptedQueueItems()
 		st := inst.StateCopy()
-		if st.Busy {
-			st.Busy = false
-			inst.SetState(st)
-			inst.Emit(EvtStateChanged, nil, st)
-		}
+		// agent_settled is the lifecycle boundary even when Busy was already
+		// false; the stateChanged signal retires stale authoritative queue rows
+		// in clients that never observed an agent_start edge.
+		st.Busy = false
+		inst.SetState(st)
+		inst.Emit(EvtStateChanged, nil, st)
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

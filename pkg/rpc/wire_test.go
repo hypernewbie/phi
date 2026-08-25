@@ -752,6 +752,16 @@ func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 			line:    `{"type":"auto_retry_end","success":false,"finalError":"boom"}`,
 		},
 		{
+			piEvent: "tool_execution_update",
+			phiEvt:  EvtToolExecutionUpdate,
+			line:    `{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"type":"text","text":"out"}]}}`,
+		},
+		{
+			piEvent: "queue_update",
+			phiEvt:  EvtQueueUpdate,
+			line:    `{"type":"queue_update","steering":["one"],"followUp":["two"]}`,
+		},
+		{
 			piEvent: "extension_error",
 			phiEvt:  EvtExtensionError,
 			line:    `{"type":"extension_error","error":"x"}`,
@@ -783,15 +793,153 @@ func TestPassthroughEventsAdvanceSequenceWithoutMutatingSnapshot(t *testing.T) {
 			if event.Seq != inst.SnapshotCopy().LastSeq {
 				t.Fatalf("%s seq %d does not match snapshot lastSeq %d", tc.piEvent, event.Seq, inst.SnapshotCopy().LastSeq)
 			}
-			// Raw passthrough: data is the full JSONL line, mutable.
+			// Raw passthrough: data is the copied full JSONL line.
 			raw, ok := event.Data.(json.RawMessage)
 			if !ok {
 				t.Fatalf("%s data type = %T, want json.RawMessage", tc.piEvent, event.Data)
 			}
-			if !strings.Contains(string(raw), `"type":"`+tc.piEvent+`"`) {
-				t.Fatalf("%s raw payload lost type field: %s", tc.piEvent, raw)
+			if string(raw) != tc.line {
+				t.Fatalf("%s raw payload changed: got %s want %s", tc.piEvent, raw, tc.line)
 			}
 		})
+	}
+}
+
+func TestToolAndQueuePassthroughEventsAdvanceConsecutiveSequence(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	lines := []string{
+		`{"type":"tool_execution_update","toolCallId":"call-1","partialResult":{"content":[{"type":"text","text":"first"}]}}`,
+		`{"type":"queue_update","steering":["one"],"followUp":["two"]}`,
+	}
+	if _, err := fp.stdoutW.Write([]byte(strings.Join(lines, "\n") + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	wantEvents := []string{EvtToolExecutionUpdate, EvtQueueUpdate}
+	for index, want := range wantEvents {
+		event := nextWireEvent(t, sub)
+		if event.Evt != want || event.Seq != uint64(index+1) {
+			t.Fatalf("event[%d] = %+v, want evt=%s seq=%d", index, event, want, index+1)
+		}
+		raw, ok := event.Data.(json.RawMessage)
+		if !ok || string(raw) != lines[index] {
+			t.Fatalf("event[%d] payload = %T %s, want %s", index, event.Data, raw, lines[index])
+		}
+	}
+	if snapshot := inst.SnapshotCopy(); len(snapshot.Messages) != 0 || snapshot.LastSeq != 2 {
+		t.Fatalf("tool/queue passthrough changed snapshot: %+v", snapshot)
+	}
+}
+
+func TestExtensionUIRequestIsRetainedAndSequenced(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		method string
+		check  func(*testing.T, ExtensionUIDialog)
+	}{
+		{
+			name:   "select",
+			line:   `{"type":"extension_ui_request","id":"select-1","method":"select","title":"Pick","options":["a","b"],"message":"ignored","prefill":"ignored","timeout":10000}`,
+			method: "select",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if len(dialog.Options) != 2 || dialog.Options[1] != "b" || dialog.Timeout != 10000 || dialog.Message != "" || dialog.Prefill != "" {
+					t.Fatalf("select dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "confirm",
+			line:   `{"type":"extension_ui_request","id":"confirm-1","method":"confirm","title":"Continue?","message":"Please confirm","timeout":5000}`,
+			method: "confirm",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Message != "Please confirm" || dialog.Timeout != 5000 {
+					t.Fatalf("confirm dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "input",
+			line:   `{"type":"extension_ui_request","id":"input-1","method":"input","title":"Value","placeholder":"type here"}`,
+			method: "input",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Placeholder != "type here" {
+					t.Fatalf("input dialog fields = %+v", dialog)
+				}
+			},
+		},
+		{
+			name:   "editor",
+			line:   `{"type":"extension_ui_request","id":"editor-1","method":"editor","title":"Edit","prefill":"line 1\nline 2"}`,
+			method: "editor",
+			check: func(t *testing.T, dialog ExtensionUIDialog) {
+				if dialog.Prefill != "line 1\nline 2" {
+					t.Fatalf("editor dialog fields = %+v", dialog)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp, inst, sub := wireFixture(t)
+			if _, err := fp.stdoutW.Write([]byte(tc.line + "\n")); err != nil {
+				t.Fatal(err)
+			}
+			event := nextWireEvent(t, sub)
+			if event.Evt != EvtExtensionUIRequest || event.Seq != 1 {
+				t.Fatalf("extension request event = %+v", event)
+			}
+			raw, ok := event.Data.(json.RawMessage)
+			if !ok || string(raw) != tc.line {
+				t.Fatalf("extension request payload = %T %s, want %s", event.Data, raw, tc.line)
+			}
+			if len(inst.SnapshotCopy().Messages) != 0 || inst.SnapshotCopy().LastSeq != 1 {
+				t.Fatalf("extension request mutated snapshot: %+v", inst.SnapshotCopy())
+			}
+			dialogs := inst.ExtensionUIDialogsCopy()
+			if len(dialogs) != 1 || dialogs[0].Method != tc.method || dialogs[0].CreatedAt <= 0 {
+				t.Fatalf("retained dialogs = %+v", dialogs)
+			}
+			tc.check(t, dialogs[0])
+		})
+	}
+}
+
+func TestExtensionUIUnknownMethodDoesNotBlock(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	lines := []string{
+		`{"type":"extension_ui_request","id":"unknown-1","method":"unknown_dialog","title":"Unsupported"}`,
+		`{"type":"message_end","message":{"role":"assistant","content":"still parses"}}`,
+	}
+	go func() { _, _ = fp.stdoutW.Write([]byte(strings.Join(lines, "\n") + "\n")) }()
+	var sawClose, sawMessage bool
+	for !sawMessage {
+		event := nextWireEvent(t, sub)
+		switch event.Evt {
+		case EvtExtensionUIClosed:
+			sawClose = true
+			data, _ := json.Marshal(event.Data)
+			if string(data) != `{"id":"unknown-1","reason":"unsupported"}` {
+				t.Fatalf("unknown close data = %s", data)
+			}
+		case EvtMessageEnd:
+			sawMessage = true
+		default:
+			t.Fatalf("unexpected event after unknown dialog: %+v", event)
+		}
+	}
+	if !sawClose {
+		t.Fatal("unknown dialog did not emit extensionUiClosed")
+	}
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "extension_ui_response" || command["id"] != "unknown-1" || command["cancelled"] != true {
+			t.Fatalf("unknown dialog cancellation command = %#v", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unknown dialog did not receive cancellation")
+	}
+	if len(inst.SnapshotCopy().Messages) != 1 {
+		t.Fatalf("following message_end was not retained: %+v", inst.SnapshotCopy().Messages)
 	}
 }
 

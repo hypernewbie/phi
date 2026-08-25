@@ -319,7 +319,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		snapshot := inst.SnapshotCopy()
 		payload = map[string]any{
 			"messages": snapshot.Messages, "lastSeq": snapshot.LastSeq,
-			"state": inst.StateCopy(),
+			"state": inst.StateCopy(), "queue": inst.QueueSnapshotCopy(),
 		}
 	case rpc.OpGetState:
 		if err = decodeEmptyArgs(e.Args); err != nil {
@@ -352,6 +352,69 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			break
 		}
 		payload = map[string]any{"accepted": true}
+	case rpc.OpQueueSubmit:
+		var args struct {
+			ItemID         string            `json:"itemId"`
+			SessionEpoch   string            `json:"sessionEpoch"`
+			Message        string            `json:"message"`
+			Delivery       rpc.QueueDelivery `json:"delivery"`
+			AttachmentRefs []string          `json:"attachmentRefs"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		var item rpc.QueueItem
+		item, err = inst.SubmitQueue(ctx, args.ItemID, args.SessionEpoch, args.Message, args.Delivery, args.AttachmentRefs)
+		if err == nil {
+			payload = item
+		}
+	case rpc.OpQueueRestore:
+		var args struct {
+			ItemID       string `json:"itemId"`
+			SessionEpoch string `json:"sessionEpoch"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		payload, err = inst.QueueRestore(args.ItemID, args.SessionEpoch)
+	case rpc.OpQueueCopy:
+		var args struct {
+			ItemID       string `json:"itemId"`
+			SessionEpoch string `json:"sessionEpoch"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		payload, err = inst.QueueCopy(args.ItemID, args.SessionEpoch)
+	case rpc.OpQueueDiscard:
+		var args struct {
+			ItemID       string `json:"itemId"`
+			SessionEpoch string `json:"sessionEpoch"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		payload, err = inst.QueueDiscard(args.ItemID, args.SessionEpoch)
 	case rpc.OpGetAvailableModels:
 		if err = decodeEmptyArgs(e.Args); err != nil {
 			break
