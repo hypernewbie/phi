@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../web/chat-pi/client.js', () => ({
     connectControl: vi.fn(),
+    CompactCallTimeout: 605_000,
 }));
 vi.mock('../web/chat-pi/persist.js', () => ({
     savePersisted: vi.fn(),
@@ -23,6 +24,7 @@ import {
     getPiRpcStatus,
     mountRpcChat,
     rpcChatInterrupt,
+    rpcChatCompact,
     rpcChatSetName,
     subscribePiRpcStatus,
 } from '../web/chat-pi/controller.js';
@@ -928,6 +930,48 @@ describe('Pi RPC transcript controller', () => {
         await expect(promise).resolves.toEqual({ aborted: true, restored: [] });
 
         await expect(rpcChatInterrupt('unknown-pane')).rejects.toThrow(
+            'unknown or destroyed Pi RPC pane: unknown-pane',
+        );
+    });
+
+    it('rpcChatCompact forwards to mountChatPi.compact and rejects missing panes', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        connectControl.mockReturnValueOnce(wire.client);
+        mountRpcChat('pane-1', root, '/work/compact');
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const promise = rpcChatCompact('pane-1');
+        const [compactFrame] = wire.sent.filter(
+            (frame) => frame.op === 'compact',
+        );
+        expect(compactFrame).toMatchObject({
+            op: 'compact',
+            sid: 's1',
+            args: {},
+        });
+        wire.emit({
+            t: 'res',
+            id: compactFrame.id,
+            ok: true,
+            data: { state: { model: 'm', thinking: 'high' } },
+        });
+        await expect(promise).resolves.toEqual({
+            state: { model: 'm', thinking: 'high' },
+        });
+
+        await expect(rpcChatCompact('unknown-pane')).rejects.toThrow(
             'unknown or destroyed Pi RPC pane: unknown-pane',
         );
     });

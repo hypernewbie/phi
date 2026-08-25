@@ -21,6 +21,7 @@ const (
 	OpSetThinking                = "setThinking"
 	OpNewSession                 = "newSession"
 	OpAbort                      = "abort"
+	OpCompact                    = "compact"
 	OpSetSessionName             = "setSessionName"
 	OpSubagentTranscript         = "subagentTranscript"
 

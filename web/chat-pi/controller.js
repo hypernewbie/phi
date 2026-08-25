@@ -79,6 +79,9 @@ export function rpcChatSetThinking(paneId, level) {
 export function rpcChatReset(paneId) {
     return chats.get(paneId)?.resetChat() ?? missingPane(paneId);
 }
+export function rpcChatCompact(paneId) {
+    return chats.get(paneId)?.compact() ?? missingPane(paneId);
+}
 export function rpcChatInterrupt(paneId) {
     return chats.get(paneId)?.interrupt() ?? missingPane(paneId);
 }
