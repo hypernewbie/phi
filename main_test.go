@@ -243,7 +243,7 @@ func TestHandleConfig_Fields(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, field := range []string{"workspaces", "theme_color", "model_presets", "quick_commands", "markdown_dirs", "auto_reconnect"} {
+	for _, field := range []string{"workspaces", "theme_color", "model_presets", "quick_commands", "markdown_dirs", "auto_reconnect", "attachment_retention_age_seconds", "attachment_unleased_file_cap", "attachment_janitor_interval_seconds"} {
 		if _, ok := body[field]; !ok {
 			t.Errorf("response missing field %q", field)
 		}

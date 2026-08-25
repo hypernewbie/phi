@@ -119,3 +119,30 @@ describe('standalone Config surface routing', () => {
         }
     });
 });
+
+describe('standalone Settings attachment controls (M9)', () => {
+    it('renders the same attachment controls in the in-page config surface', async () => {
+        const app = buildApp();
+        app.config.attachment_retention_age_seconds = 2592000;
+        app.config.attachment_unleased_file_cap = 0;
+        app.config.attachment_janitor_interval_seconds = 86400;
+        openSettingsModal(app, ACCENTS, { standalone: true });
+        expect(
+            [...document.querySelectorAll('.settings-group-title')].some(
+                (title) => title.textContent === 'Attachments',
+            ),
+        ).toBe(true);
+        expect(
+            document.getElementById('settings-attachment-retention-age'),
+        ).not.toBeNull();
+        expect(
+            document.getElementById('settings-attachment-unleased-cap'),
+        ).not.toBeNull();
+        expect(
+            document.getElementById('settings-attachment-janitor-interval'),
+        ).not.toBeNull();
+        expect(
+            document.getElementById('settings-clear-attachment-cache'),
+        ).not.toBeNull();
+    });
+});

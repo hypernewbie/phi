@@ -900,7 +900,6 @@ func mgrStateQueueItem(t *testing.T, inst *rpc.Instance, id string) rpc.QueueIte
 	return rpc.QueueItem{}
 }
 
-
 func TestControlNewOperationsStrictDecodeAndUnknownSid(t *testing.T) {
 	c := helloDial(t, rpc.NewManager())
 	cases := []struct {

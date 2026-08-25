@@ -524,3 +524,169 @@ describe('Settings modal — access password flow', () => {
         expect(removeLink.classList.contains('hidden')).toBe(false);
     });
 });
+
+describe('Settings modal — attachment controls (M9)', () => {
+    function attachmentApp() {
+        const app = buildApp();
+        app.config = {
+            attachment_retention_age_seconds: 123,
+            attachment_unleased_file_cap: 0,
+            attachment_janitor_interval_seconds: 90,
+        };
+        return app;
+    }
+
+    it('renders the Attachments group with normalized values and zero semantics', async () => {
+        makeAppDom();
+        const app = attachmentApp();
+        app.openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(document.body.textContent).toContain('Attachments');
+        expect(
+            document.getElementById('settings-attachment-retention-age').value,
+        ).toBe('123');
+        expect(
+            document.getElementById('settings-attachment-unleased-cap').value,
+        ).toBe('0');
+        expect(
+            document.getElementById('settings-attachment-janitor-interval')
+                .value,
+        ).toBe('90');
+        expect(
+            document.getElementById('settings-clear-attachment-cache'),
+        ).not.toBeNull();
+        expect(
+            document.querySelector(
+                '.settings-attachment-result[role="status"]',
+            ),
+        ).not.toBeNull();
+    });
+
+    it('posts the exact attachment config shape and applies normalized values', async () => {
+        const fetchSpy = mockFetch((url) => {
+            if (url.endsWith('/api/config/attachments')) {
+                return {
+                    attachment_retention_age_seconds: 60,
+                    attachment_unleased_file_cap: 7,
+                    attachment_janitor_interval_seconds: 120,
+                };
+            }
+            return undefined;
+        });
+        makeAppDom();
+        const app = attachmentApp();
+        app.openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const retention = document.getElementById(
+            'settings-attachment-retention-age',
+        );
+        retention.value = '1';
+        retention.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const request = fetchSpy.mock.calls.find(([url]) =>
+            String(url).endsWith('/api/config/attachments'),
+        );
+        expect(request).toBeTruthy();
+        expect(JSON.parse(request[1].body)).toEqual({
+            attachment_retention_age_seconds: 1,
+            attachment_unleased_file_cap: 0,
+            attachment_janitor_interval_seconds: 90,
+        });
+        expect(retention.value).toBe('60');
+        expect(
+            document.getElementById('settings-attachment-unleased-cap').value,
+        ).toBe('7');
+        expect(
+            document.getElementById('settings-attachment-janitor-interval')
+                .value,
+        ).toBe('120');
+        expect(app.config.attachment_unleased_file_cap).toBe(7);
+    });
+
+    it('requires exact confirmation and makes no clear request when cancelled', async () => {
+        const fetchSpy = mockFetch();
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        makeAppDom();
+        attachmentApp().openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        document.getElementById('settings-clear-attachment-cache').click();
+        expect(confirmSpy).toHaveBeenCalledWith(
+            'Clear all unleased attachment cache files?',
+        );
+        expect(fetchSpy).not.toHaveBeenCalled();
+        confirmSpy.mockRestore();
+    });
+
+    it('disables clear in flight, reports counts without paths, and restores focus', async () => {
+        let resolveClear;
+        const fetchSpy = mockFetch((url) => {
+            if (url.endsWith('/api/attachments/clear')) {
+                return new Promise((resolve) => {
+                    resolveClear = resolve;
+                });
+            }
+            return undefined;
+        });
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        makeAppDom();
+        attachmentApp().openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const button = document.getElementById(
+            'settings-clear-attachment-cache',
+        );
+        button.click();
+        expect(button.disabled).toBe(true);
+        expect(fetchSpy).toHaveBeenCalledWith(
+            '/api/attachments/clear',
+            expect.objectContaining({ method: 'POST' }),
+        );
+        resolveClear({
+            removed: { files: 2, bytes: 30 },
+            skippedLeased: { files: 1, bytes: 4 },
+            failed: { files: 0, bytes: 0 },
+            path: '/must-not-render',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(button.disabled).toBe(false);
+        expect(
+            document.querySelector('.settings-attachment-result').textContent,
+        ).toContain('Removed 2 file(s) / 30 bytes');
+        expect(
+            document.querySelector('.settings-attachment-result').textContent,
+        ).not.toContain('/must-not-render');
+        expect(document.activeElement).toBe(button);
+    });
+
+    it('renders a clear error and re-enables the button on failure', async () => {
+        mockFetch((url) => {
+            if (url.endsWith('/api/attachments/clear'))
+                return { ok: false, status: 500 };
+            return undefined;
+        });
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        makeAppDom();
+        attachmentApp().openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const button = document.getElementById(
+            'settings-clear-attachment-cache',
+        );
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(button.disabled).toBe(false);
+        expect(
+            document.querySelector('.settings-attachment-error[role="alert"]')
+                .textContent,
+        ).toContain('HTTP 500');
+    });
+
+    it('restores opener focus when Settings closes', async () => {
+        makeAppDom();
+        const opener = document.createElement('button');
+        document.body.appendChild(opener);
+        opener.focus();
+        attachmentApp().openSettingsModal();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        document.querySelector('.settings-modal .modal-close-btn').click();
+        expect(document.activeElement).toBe(opener);
+    });
+});

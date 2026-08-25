@@ -6,6 +6,11 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     if (document.querySelector('.settings-overlay')) return;
     if (!opts.standalone && tryNative('config', {})) return;
 
+    const opener =
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement !== document.body
+            ? document.activeElement
+            : null;
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay settings-overlay hidden';
 
@@ -224,6 +229,142 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     fastModeRow.classList.add('settings-fast-mode-row');
     behGroup.appendChild(fastModeRow);
 
+    const attachmentConfig = app.config || {};
+    app.config = attachmentConfig;
+    const attachmentGroup = _buildSettingsGroup('Attachments');
+    body.appendChild(attachmentGroup);
+    const retentionRow = _buildNumberRow(
+        'Retention age (seconds; 0 = disabled)',
+        'settings-attachment-retention-age',
+        attachmentConfig.attachment_retention_age_seconds,
+        0,
+    );
+    const unleasedCapRow = _buildNumberRow(
+        'Unleased file cap (files; 0 = unlimited)',
+        'settings-attachment-unleased-cap',
+        attachmentConfig.attachment_unleased_file_cap,
+        0,
+    );
+    const janitorIntervalRow = _buildNumberRow(
+        'Janitor interval (seconds; minimum 60)',
+        'settings-attachment-janitor-interval',
+        attachmentConfig.attachment_janitor_interval_seconds,
+        60,
+    );
+    attachmentGroup.append(retentionRow, unleasedCapRow, janitorIntervalRow);
+
+    const attachmentResult = document.createElement('div');
+    attachmentResult.className = 'settings-attachment-result';
+    attachmentResult.setAttribute('role', 'status');
+    attachmentGroup.appendChild(attachmentResult);
+    const attachmentError = document.createElement('div');
+    attachmentError.className = 'settings-attachment-error';
+    attachmentError.setAttribute('role', 'alert');
+    attachmentGroup.appendChild(attachmentError);
+
+    const clearAttachmentRow = document.createElement('div');
+    clearAttachmentRow.className = 'settings-row settings-attachment-actions';
+    const clearAttachmentButton = document.createElement('button');
+    clearAttachmentButton.type = 'button';
+    clearAttachmentButton.id = 'settings-clear-attachment-cache';
+    clearAttachmentButton.className = 'btn settings-clear-attachment-cache';
+    clearAttachmentButton.textContent = 'Clear attachment cache';
+    clearAttachmentRow.appendChild(clearAttachmentButton);
+    attachmentGroup.appendChild(clearAttachmentRow);
+
+    const attachmentInputs = {
+        retention: retentionRow.querySelector('input'),
+        cap: unleasedCapRow.querySelector('input'),
+        interval: janitorIntervalRow.querySelector('input'),
+    };
+    const attachmentKeys = {
+        retention: 'attachment_retention_age_seconds',
+        cap: 'attachment_unleased_file_cap',
+        interval: 'attachment_janitor_interval_seconds',
+    };
+    const readAttachmentNumber = (input, fallback) => {
+        const value = Number.parseInt(input.value, 10);
+        if (Number.isFinite(value)) return value;
+        const previous = Number.parseInt(String(fallback ?? ''), 10);
+        return Number.isFinite(previous) ? previous : 0;
+    };
+    const setAttachmentError = (message) => {
+        attachmentError.textContent = message || '';
+    };
+    const applyAttachmentValues = (values) => {
+        for (const [name, key] of Object.entries(attachmentKeys)) {
+            const value = Number(values[key]);
+            if (!Number.isFinite(value))
+                throw new Error('Attachment settings response was malformed');
+            attachmentConfig[key] = value;
+            attachmentInputs[name].value = String(value);
+        }
+    };
+    const postAttachmentConfig = async () => {
+        const payload = {};
+        for (const [name, key] of Object.entries(attachmentKeys)) {
+            payload[key] = readAttachmentNumber(
+                attachmentInputs[name],
+                attachmentConfig[key],
+            );
+        }
+        const response = await fetch('/api/config/attachments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok)
+            throw new Error(
+                `Attachment settings failed (HTTP ${response.status})`,
+            );
+        const normalized = await response.json();
+        applyAttachmentValues(normalized);
+        setAttachmentError('');
+    };
+    for (const input of Object.values(attachmentInputs)) {
+        input.addEventListener('change', () => {
+            void postAttachmentConfig().catch((error) => {
+                setAttachmentError(
+                    error instanceof Error ? error.message : String(error),
+                );
+            });
+        });
+    }
+    const formatCleanupCounts = (counts) =>
+        `Removed ${Number(counts?.removed?.files) || 0} file(s) / ${
+            Number(counts?.removed?.bytes) || 0
+        } bytes; skipped leased ${Number(counts?.skippedLeased?.files) || 0} file(s) / ${
+            Number(counts?.skippedLeased?.bytes) || 0
+        } bytes; failed ${Number(counts?.failed?.files) || 0} file(s) / ${
+            Number(counts?.failed?.bytes) || 0
+        } bytes.`;
+    clearAttachmentButton.addEventListener('click', async () => {
+        if (!window.confirm('Clear all unleased attachment cache files?'))
+            return;
+        clearAttachmentButton.disabled = true;
+        attachmentResult.textContent = '';
+        setAttachmentError('');
+        try {
+            const response = await fetch('/api/attachments/clear', {
+                method: 'POST',
+            });
+            if (!response.ok)
+                throw new Error(
+                    `Attachment cache clear failed (HTTP ${response.status})`,
+                );
+            attachmentResult.textContent = formatCleanupCounts(
+                await response.json(),
+            );
+        } catch (error) {
+            setAttachmentError(
+                error instanceof Error ? error.message : String(error),
+            );
+        } finally {
+            clearAttachmentButton.disabled = false;
+            clearAttachmentButton.focus({ preventScroll: true });
+        }
+    });
+
     const PASSWORD_MIN_LENGTH = 8;
     const securityGroup = _buildSettingsGroup('Security');
     body.appendChild(securityGroup);
@@ -353,6 +494,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         document.removeEventListener('keydown', onKeydown);
         overlay.classList.add('hidden');
         overlay.remove();
+        if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
     const onKeydown = (e) => {
         if (e.key === 'Escape') close();
@@ -719,8 +861,8 @@ function _buildNumberRow(labelText, id, current, min, max) {
     const inp = document.createElement('input');
     inp.type = 'number';
     inp.id = id;
-    inp.min = String(min);
-    inp.max = String(max);
+    if (Number.isFinite(min)) inp.min = String(min);
+    if (Number.isFinite(max)) inp.max = String(max);
     inp.value = String(current || min);
     row.appendChild(inp);
     return row;

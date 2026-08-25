@@ -231,3 +231,28 @@ func TestCompressionEnabledExplicitFalse(t *testing.T) {
 		t.Fatal("explicit false must win over the seeded default")
 	}
 }
+
+func TestAttachmentConfigDefaultsAndNormalization(t *testing.T) {
+	cfgPath := withTempConfig(t)
+	cfg := loadConfig()
+	if cfg.AttachmentRetentionAgeSeconds != defaultAttachmentRetentionAgeSeconds ||
+		cfg.AttachmentUnleasedFileCap != defaultAttachmentUnleasedFileCap ||
+		cfg.AttachmentJanitorIntervalSeconds != defaultAttachmentJanitorIntervalSeconds {
+		t.Fatalf("attachment defaults=%+v", cfg)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`{"attachment_retention_age_seconds":-1,"attachment_unleased_file_cap":-1,"attachment_janitor_interval_seconds":0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg = loadConfig()
+	if cfg.AttachmentRetentionAgeSeconds != defaultAttachmentRetentionAgeSeconds || cfg.AttachmentUnleasedFileCap != 0 || cfg.AttachmentJanitorIntervalSeconds != minimumAttachmentJanitorIntervalSeconds {
+		t.Fatalf("normalized attachment settings=%+v", cfg)
+	}
+	cfg.AttachmentRetentionAgeSeconds = 0
+	cfg.AttachmentUnleasedFileCap = 12
+	cfg.AttachmentJanitorIntervalSeconds = 90
+	saveConfig(cfg)
+	reloaded := loadConfig()
+	if reloaded.AttachmentRetentionAgeSeconds != 0 || reloaded.AttachmentUnleasedFileCap != 12 || reloaded.AttachmentJanitorIntervalSeconds != 90 {
+		t.Fatalf("attachment settings did not persist=%+v", reloaded)
+	}
+}

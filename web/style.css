@@ -3844,6 +3844,25 @@ html[data-phi-desktop-root] .app-header {
     box-shadow: 0 0 0 2px rgba(255, 80, 80, 0.2);
 }
 
+.settings-attachment-actions {
+    justify-content: flex-end;
+}
+.settings-clear-attachment-cache {
+    width: auto;
+    min-width: 170px;
+}
+.settings-attachment-result,
+.settings-attachment-error {
+    min-height: 16px;
+    font-size: 11px;
+}
+.settings-attachment-result {
+    color: var(--text-muted);
+}
+.settings-attachment-error {
+    color: var(--red);
+}
+
 .settings-row input[type="checkbox"] {
     width: 18px;
     height: 18px;
@@ -3912,6 +3931,12 @@ html[data-phi-desktop-root] .app-header {
     .settings-row label {
         min-width: 100%;
         margin-bottom: 4px;
+    }
+    .settings-attachment-actions {
+        justify-content: stretch;
+    }
+    .settings-clear-attachment-cache {
+        width: 100%;
     }
 }
 
@@ -9391,6 +9416,7 @@ body.md-standalone #md-view-body {
     margin: 0;
     opacity: 0.95;
 }
+
 /* Pi transcript search stays outside the scrolling message wrapper. */
 .pi-search-bar {
     align-items: center;
@@ -9583,7 +9609,6 @@ mark[data-pi-active-match] {
         text-align: center;
     }
 }
-
 @media (prefers-reduced-motion: reduce) {
     .pi-working-dot {
         animation: none;

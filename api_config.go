@@ -38,6 +38,45 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"ui_font_size":                        cfg.UIFontSize,
 		"terminal_font_family":                cfg.TerminalFontFamily,
 		"terminal_font_size":                  cfg.TerminalFontSize,
+		"attachment_retention_age_seconds":    cfg.AttachmentRetentionAgeSeconds,
+		"attachment_unleased_file_cap":        cfg.AttachmentUnleasedFileCap,
+		"attachment_janitor_interval_seconds": cfg.AttachmentJanitorIntervalSeconds,
+	})
+}
+
+func handleAttachmentConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RetentionAgeSeconds    *int64 `json:"attachment_retention_age_seconds"`
+		UnleasedFileCap        *int   `json:"attachment_unleased_file_cap"`
+		JanitorIntervalSeconds *int64 `json:"attachment_janitor_interval_seconds"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "Invalid attachment settings: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg := loadConfig()
+	if req.RetentionAgeSeconds != nil {
+		cfg.AttachmentRetentionAgeSeconds = *req.RetentionAgeSeconds
+	}
+	if req.UnleasedFileCap != nil {
+		cfg.AttachmentUnleasedFileCap = *req.UnleasedFileCap
+	}
+	if req.JanitorIntervalSeconds != nil {
+		cfg.AttachmentJanitorIntervalSeconds = *req.JanitorIntervalSeconds
+	}
+	normalizeAttachmentConfig(&cfg)
+	saveConfig(cfg)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"attachment_retention_age_seconds":    cfg.AttachmentRetentionAgeSeconds,
+		"attachment_unleased_file_cap":        cfg.AttachmentUnleasedFileCap,
+		"attachment_janitor_interval_seconds": cfg.AttachmentJanitorIntervalSeconds,
 	})
 }
 

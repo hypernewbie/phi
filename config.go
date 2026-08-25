@@ -36,6 +36,13 @@ func (m *ModelPresetsMap) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &mapVal)
 }
 
+const (
+	defaultAttachmentRetentionAgeSeconds    int64 = 30 * 24 * 60 * 60
+	defaultAttachmentUnleasedFileCap              = 0
+	defaultAttachmentJanitorIntervalSeconds int64 = 24 * 60 * 60
+	minimumAttachmentJanitorIntervalSeconds int64 = 60
+)
+
 type Config struct {
 	Workspaces        []string          `json:"workspaces"`
 	ThemeColor        string            `json:"theme_color"`
@@ -111,6 +118,10 @@ type Config struct {
 	SyncCoordinator    string       `json:"sync_coordinator"`
 	AutoReconnect      string       `json:"auto_reconnect"`
 	Peers              []PeerConfig `json:"peers"`
+
+	AttachmentRetentionAgeSeconds    int64 `json:"attachment_retention_age_seconds"`
+	AttachmentUnleasedFileCap        int   `json:"attachment_unleased_file_cap"`
+	AttachmentJanitorIntervalSeconds int64 `json:"attachment_janitor_interval_seconds"`
 }
 
 type PeerConfig struct {
@@ -119,6 +130,20 @@ type PeerConfig struct {
 }
 
 var configMu sync.RWMutex
+
+func normalizeAttachmentConfig(cfg *Config) {
+	if cfg.AttachmentRetentionAgeSeconds < 0 {
+		cfg.AttachmentRetentionAgeSeconds = defaultAttachmentRetentionAgeSeconds
+	}
+	if cfg.AttachmentUnleasedFileCap < 0 {
+		cfg.AttachmentUnleasedFileCap = defaultAttachmentUnleasedFileCap
+	}
+	if cfg.AttachmentJanitorIntervalSeconds < 0 {
+		cfg.AttachmentJanitorIntervalSeconds = defaultAttachmentJanitorIntervalSeconds
+	} else if cfg.AttachmentJanitorIntervalSeconds < minimumAttachmentJanitorIntervalSeconds {
+		cfg.AttachmentJanitorIntervalSeconds = minimumAttachmentJanitorIntervalSeconds
+	}
+}
 
 func expandHome(path string) string {
 	if len(path) > 0 && path[0] == '~' {
@@ -165,10 +190,14 @@ func loadConfig() Config {
 	// and an explicit false wins. (Bools can't be defaulted after the
 	// fact — false is a meaningful user value.)
 	cfg.CompressionEnabled = true
+	cfg.AttachmentRetentionAgeSeconds = defaultAttachmentRetentionAgeSeconds
+	cfg.AttachmentUnleasedFileCap = defaultAttachmentUnleasedFileCap
+	cfg.AttachmentJanitorIntervalSeconds = defaultAttachmentJanitorIntervalSeconds
 	b, err := os.ReadFile(path)
 	if err == nil {
 		_ = json.Unmarshal(b, &cfg)
 	}
+	normalizeAttachmentConfig(&cfg)
 	if cfg.Workspaces == nil {
 		cfg.Workspaces = []string{}
 	}
