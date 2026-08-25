@@ -483,6 +483,181 @@ func TestControlHydrateUnknownSid(t *testing.T) {
 	}
 }
 
+func TestControlHydrateIncludesQueueAndDialogs(t *testing.T) {
+	child := newControlFakeChild()
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: "/w/hydrate-dialog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inst.Kill() })
+	line := `{"type":"extension_ui_request","id":"hydrate-dialog","method":"input","title":"Value","placeholder":"type"}` + "\n"
+	if _, err := child.stdoutW.Write([]byte(line)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(inst.ExtensionUIDialogsCopy()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(inst.ExtensionUIDialogsCopy()) != 1 {
+		t.Fatal("dialog was not retained before hydrate")
+	}
+
+	c := helloDial(t, mgr)
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "hydrate-dialog", Op: rpc.OpHydrate, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "hydrate-dialog")
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("hydrate failed: %+v", response)
+	}
+	var payload struct {
+		Queue struct {
+			SessionEpoch string            `json:"sessionEpoch"`
+			Items        []json.RawMessage `json:"items"`
+		} `json:"queue"`
+		Dialogs []rpc.ExtensionUIDialog `json:"dialogs"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Queue.Items == nil {
+		t.Fatalf("hydrate queue.items is missing/null: %s", response.Data)
+	}
+	if len(payload.Dialogs) != 1 || payload.Dialogs[0].ID != "hydrate-dialog" || payload.Dialogs[0].Method != "input" {
+		t.Fatalf("hydrate dialogs = %+v", payload.Dialogs)
+	}
+}
+
+func TestControlExtensionUIResponseValidationAndLateAnswer(t *testing.T) {
+	child := newControlFakeChild()
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: "/w/dialog-response"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inst.Kill() })
+	server := &controlServer{mgr: mgr}
+	writeRequest := func(line string) {
+		t.Helper()
+		if _, err := child.stdoutW.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			for _, dialog := range inst.ExtensionUIDialogsCopy() {
+				if dialog.ID == "select-response" || dialog.ID == "confirm-response" {
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatal("dialog request was not retained")
+	}
+	writeRequest(`{"type":"extension_ui_request","id":"select-response","method":"select","title":"Pick","options":["a","b"]}`)
+	invalid := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame, ID: "invalid-dialog", Op: rpc.OpExtensionUIResponse, Sid: inst.ID,
+		Args: json.RawMessage(`{"requestId":"select-response"}`),
+	})
+	if invalid.Ok == nil || *invalid.Ok || !strings.Contains(invalid.Error, "requires value") {
+		t.Fatalf("invalid dialog response = %+v", invalid)
+	}
+	valid := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame, ID: "valid-dialog", Op: rpc.OpExtensionUIResponse, Sid: inst.ID,
+		Args: json.RawMessage(`{"requestId":"select-response","value":"a"}`),
+	})
+	if valid.Ok == nil || !*valid.Ok || string(valid.Data) != `{"resolved":true}` {
+		t.Fatalf("valid dialog response = %+v", valid)
+	}
+	selectCommand := <-child.commands
+	if selectCommand["type"] != "extension_ui_response" || selectCommand["value"] != "a" {
+		t.Fatalf("select response command = %#v", selectCommand)
+	}
+	late := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame, ID: "late-dialog", Op: rpc.OpExtensionUIResponse, Sid: inst.ID,
+		Args: json.RawMessage(`{"requestId":"select-response","value":"b"}`),
+	})
+	if late.Ok == nil || !*late.Ok || string(late.Data) != `{"resolved":false}` {
+		t.Fatalf("late dialog response = %+v", late)
+	}
+	writeRequest(`{"type":"extension_ui_request","id":"confirm-response","method":"confirm","title":"Continue?"}`)
+	confirmed := server.dispatch(context.Background(), Envelope{
+		Type: rpc.CallFrame, ID: "confirm-dialog", Op: rpc.OpExtensionUIResponse, Sid: inst.ID,
+		Args: json.RawMessage(`{"requestId":"confirm-response","confirmed":false}`),
+	})
+	if confirmed.Ok == nil || !*confirmed.Ok || string(confirmed.Data) != `{"resolved":true}` {
+		t.Fatalf("confirm dialog response = %+v", confirmed)
+	}
+	confirmCommand := <-child.commands
+	if confirmCommand["type"] != "extension_ui_response" || confirmCommand["confirmed"] != false {
+		t.Fatalf("confirm response command = %#v", confirmCommand)
+	}
+}
+
+func TestControlConnectionCloseKeepsDialogForReconnect(t *testing.T) {
+	child := newControlFakeChild()
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: "/w/dialog-reconnect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inst.Kill() })
+	first := helloDial(t, mgr)
+	if _, err := child.stdoutW.Write([]byte(`{"type":"extension_ui_request","id":"reconnect-dialog","method":"input","title":"Value"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(inst.ExtensionUIDialogsCopy()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(inst.ExtensionUIDialogsCopy()) != 1 {
+		t.Fatal("dialog was not retained before connection close")
+	}
+	_ = first.Close()
+
+	second := helloDial(t, mgr)
+	if err := second.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "rehydrate-dialog", Op: rpc.OpHydrate, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	hydrate := readResponse(t, second, "rehydrate-dialog")
+	var payload struct {
+		Dialogs []rpc.ExtensionUIDialog `json:"dialogs"`
+	}
+	if err := json.Unmarshal(hydrate.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Dialogs) != 1 || payload.Dialogs[0].ID != "reconnect-dialog" {
+		t.Fatalf("rehydrated dialogs = %+v", payload.Dialogs)
+	}
+	if err := second.WriteJSON(Envelope{
+		Type: rpc.CallFrame, ID: "cancel-dialog", Op: rpc.OpExtensionUICancel, Sid: inst.ID,
+		Args: json.RawMessage(`{"reason":"server"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancelResponse := readResponse(t, second, "cancel-dialog")
+	if cancelResponse.Ok == nil || !*cancelResponse.Ok || string(cancelResponse.Data) != `{"cancelled":1}` {
+		t.Fatalf("dialog cancel response = %+v", cancelResponse)
+	}
+	select {
+	case command := <-child.commands:
+		if command["type"] != "extension_ui_response" || command["id"] != "reconnect-dialog" || command["cancelled"] != true {
+			t.Fatalf("dialog cancel command = %#v", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dialog cancellation was not written to Pi")
+	}
+	if len(inst.ExtensionUIDialogsCopy()) != 0 {
+		t.Fatal("explicit dialog cancel left a retained dialog")
+	}
+}
+
 func newQueueControlFixture(t *testing.T, respond func(map[string]any) (any, bool, string)) (*rpc.Manager, *controlFakeChild, *websocket.Conn, string) {
 	t.Helper()
 	child := newControlFakeChild()

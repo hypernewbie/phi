@@ -16,6 +16,9 @@ vi.mock('../web/chat-pi/controller.js', () => ({
     rpcChatSetThinking: vi.fn(() => Promise.resolve()),
     rpcChatReset: vi.fn(() => Promise.resolve()),
     rpcChatInterrupt: vi.fn(() => Promise.resolve()),
+    rpcChatCancelDialogs: vi.fn(() => Promise.resolve({ cancelled: 0 })),
+    closePiExtensionDialog: vi.fn(() => false),
+    focusPiExtensionDialog: vi.fn(),
     closePiSubagentViewer: vi.fn(() => false),
     subscribePiRpcStatus: vi.fn(() => () => {}),
 }));
@@ -27,6 +30,9 @@ import {
     rpcChatModels,
     rpcChatReset,
     rpcChatInterrupt,
+    rpcChatCancelDialogs,
+    closePiExtensionDialog,
+    focusPiExtensionDialog,
     closePiSubagentViewer,
     rpcChatSend,
     rpcChatSetModel,
@@ -48,6 +54,11 @@ afterEach(() => {
     rpcChatSetThinking.mockImplementation(() => Promise.resolve());
     rpcChatReset.mockImplementation(() => Promise.resolve());
     rpcChatInterrupt.mockImplementation(() => Promise.resolve());
+    rpcChatCancelDialogs.mockImplementation(() =>
+        Promise.resolve({ cancelled: 0 }),
+    );
+    closePiExtensionDialog.mockImplementation(() => false);
+    focusPiExtensionDialog.mockImplementation(() => {});
     closePiSubagentViewer.mockImplementation(() => false);
     subscribePiRpcStatus.mockImplementation(() => () => {});
 });
@@ -404,6 +415,23 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(tm._interruptActivePiRpc).toHaveBeenCalledOnce();
         expect(activeEvent.preventDefault).toHaveBeenCalledOnce();
 
+        const dialogEvent = {
+            key: 'Escape',
+            isComposing: false,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        const interruptCallsBeforeDialog =
+            tm._interruptActivePiRpc.mock.calls.length;
+        closePiExtensionDialog.mockReturnValue(true);
+        expect(tm._handlePiRpcEscape(dialogEvent)).toBe(true);
+        expect(closePiExtensionDialog).toHaveBeenCalledWith(tab.paneId);
+        expect(tm._interruptActivePiRpc.mock.calls.length).toBe(
+            interruptCallsBeforeDialog,
+        );
+        expect(dialogEvent.preventDefault).toHaveBeenCalledOnce();
+        closePiExtensionDialog.mockReturnValue(false);
+
         const viewerEvent = {
             key: 'Escape',
             isComposing: false,
@@ -413,7 +441,7 @@ describe('Pi RPC TabManager boundaries', () => {
         tm._closePiSubagentViewerIfOpen.mockReturnValue(true);
         expect(tm._handlePiRpcEscape(viewerEvent)).toBe(true);
         expect(tm._closePiSubagentViewerIfOpen).toHaveBeenCalled();
-        expect(tm._closePiRpcDropups).toHaveBeenCalledTimes(2);
+        expect(tm._closePiRpcDropups).toHaveBeenCalledTimes(3);
         expect(tm._interruptActivePiRpc).toHaveBeenCalledTimes(1);
         expect(viewerEvent.preventDefault).toHaveBeenCalledOnce();
         expect(viewerEvent.stopPropagation).toHaveBeenCalledOnce();
@@ -428,6 +456,25 @@ describe('Pi RPC TabManager boundaries', () => {
         tm._interruptActivePiRpc.mockReturnValue(false);
         expect(tm._handlePiRpcEscape(idleEvent)).toBe(false);
         expect(idleEvent.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('refocuses a retained active-pane Pi dialog when the tab is reselected', () => {
+        const paneId = 'pi-rpc:/work/dialog-focus';
+        const tab = { paneId, coder: 'pi-rpc' };
+        const tm = Object.create(TabManager.prototype);
+        tm.activePaneId = paneId;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm._closePiRpcDropups = vi.fn();
+        tm.activateTabViewport = vi.fn();
+        tm.renderPiRpcStatusBar = vi.fn();
+
+        tm.switchTab(paneId, { userInitiated: true });
+
+        expect(focusPiExtensionDialog).toHaveBeenCalledWith(paneId);
+        expect(tm.activateTabViewport).toHaveBeenCalledWith(
+            tab,
+            expect.objectContaining({ force: true }),
+        );
     });
 
     it('restores inherited actions after leaving Pi RPC and closes Pi dropups', () => {
@@ -577,6 +624,7 @@ describe('Pi RPC TabManager boundaries', () => {
 
         tm.finalizeCloseTab(paneId);
 
+        expect(rpcChatCancelDialogs).toHaveBeenCalledWith(paneId, 'tabClosed');
         expect(destroyRpcChat).toHaveBeenCalledWith(paneId);
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(tm.tabs.has(paneId)).toBe(false);

@@ -444,6 +444,9 @@ export function createReviewTranscriptView(root, options) {
     connectionState.setAttribute('aria-live', 'polite');
     connectionState.classList.add('hidden');
     root.appendChild(connectionState);
+    const dialogHost = document.createElement('div');
+    dialogHost.className = 'pi-extension-dialog-host';
+    root.appendChild(dialogHost);
     let activeHeader = null;
     let activeTop = null;
     let activeBottom = null;
@@ -992,6 +995,7 @@ export function createReviewTranscriptView(root, options) {
         title,
         contentBody,
         transcript,
+        dialogHost,
         status,
         refreshButton,
         setMessages(messages, partial = '') {
@@ -1075,6 +1079,13 @@ export function createReviewTranscriptView(root, options) {
                       ? 'Reconnecting…'
                       : state;
             connectionState.appendChild(message);
+        },
+        announceDialog(message) {
+            connectionState.replaceChildren();
+            connectionState.classList.remove('hidden');
+            const announcement = document.createElement('span');
+            announcement.textContent = message;
+            connectionState.appendChild(announcement);
         },
         setQueueState(
             items,

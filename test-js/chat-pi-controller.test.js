@@ -2817,3 +2817,153 @@ describe('Pi RPC queue-backed controller (M6)', () => {
         }
     });
 });
+
+describe('Pi RPC dialog controller integration (M7)', () => {
+    const dialog = {
+        id: 'dialog-1',
+        method: 'select',
+        title: 'Choose fixture',
+        options: ['Allow', 'Block'],
+        timeout: 5000,
+        createdAt: 1,
+    };
+
+    async function bootDialog(wire, root, dialogs = [dialog]) {
+        const chat = mountChatPi(root, '/work/dialog', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { busy: false },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrate = wire.sent.find((frame) => frame.op === 'hydrate');
+        wire.emit({
+            t: 'res',
+            id: hydrate.id,
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [],
+                state: { busy: false },
+                queue: { sessionEpoch: 'epoch-1', items: [] },
+                dialogs,
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        return chat;
+    }
+
+    it('rehydrates one dialog, sends one exact response, and closes it', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        await bootDialog(wire, root);
+        const overlay = root.querySelector('[data-dialog-id="dialog-1"]');
+        expect(
+            overlay?.querySelector('[data-dialog-value="Allow"]'),
+        ).not.toBeNull();
+        overlay.querySelector('[data-dialog-value="Allow"]').click();
+        const response = wire.sent.find(
+            (frame) => frame.op === 'extensionUiResponse',
+        );
+        expect(response).toMatchObject({
+            sid: 's1',
+            args: { requestId: 'dialog-1', value: 'Allow' },
+        });
+        wire.emit({
+            t: 'res',
+            id: response.id,
+            ok: true,
+            data: { resolved: true },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(root.querySelector('[data-dialog-id="dialog-1"]')).toBeNull();
+        expect(
+            wire.sent.filter((frame) => frame.op === 'extensionUiResponse'),
+        ).toHaveLength(1);
+    });
+
+    it('keeps a retained dialog across a sequence-gap hydrate without duplication', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        await bootDialog(wire, root);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        const hydrate = wire.sent.at(-1);
+        expect(hydrate.op).toBe('hydrate');
+        wire.emit({
+            t: 'res',
+            id: hydrate.id,
+            ok: true,
+            data: {
+                lastSeq: 2,
+                messages: [],
+                state: { busy: false },
+                queue: { sessionEpoch: 'epoch-1', items: [] },
+                dialogs: [dialog],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelectorAll('[data-dialog-id="dialog-1"]'),
+        ).toHaveLength(1);
+    });
+
+    it('closes on child exit and explicit tab cancellation without a second response', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = await bootDialog(wire, root);
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'extensionUiClosed',
+            data: { id: 'dialog-1', reason: 'childExit' },
+        });
+        await Promise.resolve();
+        expect(root.querySelector('[data-dialog-id="dialog-1"]')).toBeNull();
+        expect(root.textContent).toContain('Pi exited and closed the dialog');
+
+        const second = { ...dialog, id: 'dialog-2' };
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'extensionUiRequest',
+            data: second,
+        });
+        const cancel = chat.cancelDialogs('tabClosed');
+        const cancelFrame = wire.sent.find(
+            (frame) => frame.op === 'extensionUiCancel',
+        );
+        expect(cancelFrame).toMatchObject({
+            sid: 's1',
+            args: { reason: 'tabClosed' },
+        });
+        wire.emit({
+            t: 'res',
+            id: cancelFrame.id,
+            ok: true,
+            data: { cancelled: 1 },
+        });
+        await expect(cancel).resolves.toEqual({ cancelled: 1 });
+        expect(root.querySelector('[data-dialog-id="dialog-2"]')).toBeNull();
+        expect(
+            wire.sent.filter((frame) => frame.op === 'extensionUiResponse'),
+        ).toHaveLength(0);
+    });
+});

@@ -320,6 +320,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		payload = map[string]any{
 			"messages": snapshot.Messages, "lastSeq": snapshot.LastSeq,
 			"state": inst.StateCopy(), "queue": inst.QueueSnapshotCopy(),
+			"dialogs": inst.ExtensionUIDialogsCopy(),
 		}
 	case rpc.OpGetState:
 		if err = decodeEmptyArgs(e.Args); err != nil {
@@ -414,7 +415,48 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = lookupErr
 			break
 		}
-		payload, err = inst.QueueDiscard(args.ItemID, args.SessionEpoch)
+		payload, err = inst.QueueDiscard(args.ItemID, args.SessionEpoch, rpc.QueueSubmitOptions{Owner: s.attachmentOwner, Resolver: s.attachmentResolver})
+	case rpc.OpExtensionUIResponse:
+		var args struct {
+			RequestID string  `json:"requestId"`
+			Value     *string `json:"value"`
+			Confirmed *bool   `json:"confirmed"`
+			Cancelled bool    `json:"cancelled"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		if args.RequestID == "" {
+			err = errors.New("requestId is required")
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		var resolved bool
+		resolved, err = inst.ResolveExtensionUIDialog(args.RequestID, args.Value, args.Confirmed, args.Cancelled)
+		if err == nil {
+			payload = map[string]any{"resolved": resolved}
+		}
+	case rpc.OpExtensionUICancel:
+		var args struct {
+			Reason string `json:"reason"`
+		}
+		if err = decodeStrict(e.Args, &args, false); err != nil {
+			break
+		}
+		if args.Reason != "tabClosed" && args.Reason != "server" {
+			err = errors.New("reason must be tabClosed or server")
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		payload = map[string]any{"cancelled": inst.CancelExtensionUIDialogs(args.Reason)}
 	case rpc.OpGetAvailableModels:
 		if err = decodeEmptyArgs(e.Args); err != nil {
 			break

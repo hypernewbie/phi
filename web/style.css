@@ -9391,6 +9391,136 @@ body.md-standalone #md-view-body {
     margin: 0;
     opacity: 0.95;
 }
+/* Native Pi extension dialogs. The host is a sibling of the transcript so
+   dialogs never become scrollback and inactive panes cannot steal focus from
+   the active pane. */
+.pi-extension-dialog-host {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 20;
+}
+.pi-extension-dialog-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(5, 7, 13, 0.78);
+    pointer-events: auto;
+}
+.pi-extension-dialog-overlay.hidden {
+    display: none;
+}
+.pi-extension-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: min(440px, 100%);
+    max-height: min(90%, 560px);
+    overflow: auto;
+    padding: 18px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    box-shadow: 0 18px 56px rgba(0, 0, 0, 0.5);
+}
+.pi-extension-dialog-title {
+    font-size: 15px;
+    font-weight: 600;
+}
+.pi-extension-dialog-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+}
+.pi-extension-dialog-message {
+    white-space: pre-wrap;
+    color: var(--text-secondary);
+}
+.pi-extension-dialog-option,
+.pi-extension-dialog-actions button {
+    min-height: 34px;
+    padding: 7px 11px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+.pi-extension-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.pi-extension-dialog-actions .pi-extension-dialog-confirm,
+.pi-extension-dialog-actions .pi-extension-dialog-submit {
+    color: var(--bg-base);
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.pi-extension-dialog-option:hover,
+.pi-extension-dialog-actions button:hover {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+}
+.pi-extension-dialog-option:focus-visible,
+.pi-extension-dialog-actions button:focus-visible,
+.pi-extension-dialog-input:focus-visible,
+.pi-extension-dialog-editor:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.pi-extension-dialog-actions button:disabled,
+.pi-extension-dialog-option:disabled,
+.pi-extension-dialog-input:disabled,
+.pi-extension-dialog-editor:disabled {
+    cursor: wait;
+    opacity: 0.55;
+}
+.pi-extension-dialog-input,
+.pi-extension-dialog-editor {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 5px;
+    font: inherit;
+}
+.pi-extension-dialog-editor {
+    min-height: 150px;
+    resize: vertical;
+}
+.pi-extension-dialog-error {
+    color: var(--red, #f87171);
+    font-size: 12px;
+}
+@media (max-width: 520px) {
+    .pi-extension-dialog-overlay {
+        align-items: end;
+        padding: 8px;
+    }
+    .pi-extension-dialog {
+        width: 100%;
+        max-height: 85%;
+        padding: 14px;
+    }
+    .pi-extension-dialog-actions {
+        justify-content: stretch;
+    }
+    .pi-extension-dialog-actions button {
+        flex: 1 1 120px;
+        text-align: center;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .pi-working-dot {
         animation: none;

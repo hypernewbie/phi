@@ -206,3 +206,18 @@ export function subscribePiRpcStatus(
     statusListeners.add(listener);
     return () => statusListeners.delete(listener);
 }
+
+export function rpcChatCancelDialogs(
+    paneId: string,
+    reason: 'tabClosed' | 'server' = 'tabClosed',
+): Promise<unknown> {
+    return chats.get(paneId)?.cancelDialogs(reason) ?? missingPane(paneId);
+}
+
+export function closePiExtensionDialog(paneId: string): boolean {
+    return chats.get(paneId)?.closeExtensionDialog() ?? false;
+}
+
+export function focusPiExtensionDialog(paneId: string): void {
+    chats.get(paneId)?.focusExtensionDialog();
+}

@@ -36,6 +36,9 @@ import {
     rpcChatSetThinking,
     rpcChatReset,
     rpcChatInterrupt,
+    rpcChatCancelDialogs,
+    closePiExtensionDialog,
+    focusPiExtensionDialog,
     closePiSubagentViewer,
     rpcChatSetName,
     subscribePiRpcStatus,
@@ -2230,6 +2233,15 @@ export class TabManager {
             e.stopPropagation();
             return true;
         }
+        const activeTab = this.getActiveTab();
+        if (
+            activeTab?.coder === 'pi-rpc' &&
+            closePiExtensionDialog(activeTab.paneId)
+        ) {
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+        }
         if (this._interruptActivePiRpc()) {
             e.preventDefault();
             e.stopPropagation();
@@ -2583,6 +2595,8 @@ export class TabManager {
                     autoReconnect: true,
                     force: userInitiated,
                 });
+                if (activeTab.coder === 'pi-rpc')
+                    focusPiExtensionDialog(activeTab.paneId);
             }
             this.renderPiRpcStatusBar();
             return;
@@ -3195,7 +3209,13 @@ export class TabManager {
                     }
                 });
 
-        if (tab.coder === 'pi-rpc') destroyRpcChat(tab.paneId);
+        if (tab.coder === 'pi-rpc') {
+            // Cancel retained Pi dialogs before destroying the control client.
+            // The call frame is written synchronously; its response may race
+            // the explicit client close and is intentionally ignored here.
+            void rpcChatCancelDialogs(tab.paneId, 'tabClosed').catch(() => {});
+            destroyRpcChat(tab.paneId);
+        }
         try {
             if (tab.ws) tab.ws.close();
         } catch (e) {

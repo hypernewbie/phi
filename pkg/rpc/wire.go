@@ -346,28 +346,61 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		payload := append([]byte(nil), line...)
 		inst.Emit(piEvtToPhi[ev.Type], nil, json.RawMessage(payload))
 	case "extension_ui_request":
-		// pi-subagents drives its TUI fleet strip through setWidget on the
-		// extension UI channel. Only the "subagent-async" widget is ours:
-		// everything else on this channel (dialog select/confirm prompts,
-		// other extension widgets) is intentionally ignored so dialogs keep
-		// working. Fire-and-forget mapping to a sequenced event: msg is nil,
-		// the hydrate snapshot is untouched. pi's rpc-mode serializes
-		// setWidget(key, undefined) with widgetLines dropped by JSON.stringify,
-		// so a missing, empty, or [""] widgetLines all mean "widget cleared"
-		// and emit nil data so the browser hides the strip. The payload is
+		m.handleExtensionUIRequest(inst, line)
+	default:
+		// Unknown pi events are ignored.
+	}
+}
+
+func (m *Manager) handleExtensionUIRequest(inst *Instance, line []byte) {
+	// pi-subagents drives its TUI fleet strip through setWidget on the
+	// extension UI channel. The four blocking dialog methods are retained;
+	// other supported fire-and-forget methods remain intentionally ignored.
+	var req struct {
+		ID          string   `json:"id"`
+		Method      string   `json:"method"`
+		Title       string   `json:"title"`
+		Options     []string `json:"options"`
+		Message     string   `json:"message"`
+		Placeholder string   `json:"placeholder"`
+		Prefill     string   `json:"prefill"`
+		Timeout     int      `json:"timeout"`
+		WidgetKey   string   `json:"widgetKey"`
+		WidgetLines []string `json:"widgetLines"`
+	}
+	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+	if isBlockingExtensionUIMethod(req.Method) {
+		dialog := ExtensionUIDialog{
+			ID:      req.ID,
+			Method:  req.Method,
+			Title:   req.Title,
+			Timeout: req.Timeout,
+		}
+		switch req.Method {
+		case "select":
+			dialog.Options = req.Options
+		case "confirm":
+			dialog.Message = req.Message
+		case "input":
+			dialog.Placeholder = req.Placeholder
+		case "editor":
+			dialog.Prefill = req.Prefill
+		}
+		if !inst.retainExtensionUIDialog(dialog) {
+			return
+		}
+		payload := append([]byte(nil), line...)
+		inst.Emit(EvtExtensionUIRequest, nil, json.RawMessage(payload))
+		return
+	}
+	if req.Method == "setWidget" && req.WidgetKey == "subagent-async" {
+		// pi's rpc-mode serializes setWidget(key, undefined) with widgetLines
+		// dropped by JSON.stringify, so a missing, empty, or [""] widgetLines
+		// all mean "widget cleared" and emit nil data. The payload is
 		// re-derived from the decoded WidgetLines string, never sliced from
 		// line — the scanner reuses that buffer.
-		var req struct {
-			Method      string   `json:"method"`
-			WidgetKey   string   `json:"widgetKey"`
-			WidgetLines []string `json:"widgetLines"`
-		}
-		if err := json.Unmarshal(line, &req); err != nil {
-			return
-		}
-		if req.Method != "setWidget" || req.WidgetKey != "subagent-async" {
-			return
-		}
 		if len(req.WidgetLines) == 0 || req.WidgetLines[0] == "" {
 			inst.Emit(EvtSubagentFleet, nil, nil)
 			return
@@ -380,7 +413,13 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 		if json.Valid(remainder) {
 			inst.Emit(EvtSubagentFleet, nil, remainder)
 		}
-	default:
-		// Unknown pi events are ignored.
+		return
 	}
+	if isKnownFireAndForgetExtensionUIMethod(req.Method) {
+		return
+	}
+	// An unknown extension method may be blocking. Cancel it immediately so
+	// Pi cannot remain stuck, while keeping the normal browser dialog path for
+	// methods whose wire contract Phi understands.
+	inst.cancelUnsupportedExtensionUI(req.ID)
 }

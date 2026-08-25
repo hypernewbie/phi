@@ -129,6 +129,11 @@ describe('Review Transcript renderer (structured mode)', () => {
         });
 
         const header = root.querySelector('.pi-active-turn');
+        const dialogHost = root.querySelector('.pi-extension-dialog-host');
+        expect(dialogHost).not.toBeNull();
+        expect(
+            root.querySelector('.review-chat-wrapper').contains(dialogHost),
+        ).toBe(false);
         expect(header.classList.contains('hidden')).toBe(true);
         expect(
             root
@@ -141,7 +146,20 @@ describe('Review Transcript renderer (structured mode)', () => {
                 .classList.contains('hidden'),
         ).toBe(true);
         expect(
+            header.previousElementSibling.classList.contains('pi-active-turn'),
+        ).toBe(false);
+        expect(
             header.previousElementSibling.classList.contains(
+                'pi-extension-dialog-host',
+            ),
+        ).toBe(true);
+        expect(
+            header.previousElementSibling.previousElementSibling.classList.contains(
+                'pi-rpc-connection-state',
+            ),
+        ).toBe(true);
+        expect(
+            header.previousElementSibling.previousElementSibling.previousElementSibling.classList.contains(
                 'review-content-body',
             ),
         ).toBe(true);

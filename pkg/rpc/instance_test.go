@@ -41,19 +41,186 @@ func TestEmitAppendsMessageAndSeq(t *testing.T) {
 
 func TestOnExitBroadcastsBeforeClose(t *testing.T) {
 	i := &Instance{ID: "x", subs: newSubscriberSet()}
+	if !i.retainExtensionUIDialog(ExtensionUIDialog{ID: "dialog-a", Method: "select", Title: "A", CreatedAt: 1}) ||
+		!i.retainExtensionUIDialog(ExtensionUIDialog{ID: "dialog-b", Method: "confirm", Title: "B", CreatedAt: 2}) {
+		t.Fatal("failed to retain test dialogs")
+	}
 	sub := i.Subscribe()
 	i.OnExit("crash")
-	e := <-sub.Channel() // readable: broadcast precedes CloseAll
-	if e.Evt != EvtRpcExited {
-		t.Fatalf("want rpcExited, got %+v", e)
+	first := <-sub.Channel()
+	second := <-sub.Channel()
+	third := <-sub.Channel() // readable: dialog close broadcasts precede rpcExited
+	if first.Evt != EvtExtensionUIClosed || second.Evt != EvtExtensionUIClosed || third.Evt != EvtRpcExited {
+		t.Fatalf("exit event order = %+v, %+v, %+v", first, second, third)
+	}
+	for _, event := range []Event{first, second} {
+		data, _ := json.Marshal(event.Data)
+		if !strings.Contains(string(data), `"reason":"childExit"`) {
+			t.Fatalf("dialog close reason = %s", data)
+		}
+	}
+	if got := len(i.ExtensionUIDialogsCopy()); got != 0 {
+		t.Fatalf("dialogs remained after exit: %d", got)
 	}
 	i.OnExit("again") // idempotent
-	// CloseAll runs on the first OnExit, so the channel is closed; a receive
-	// on a closed channel returns the zero value immediately. Check the buffer
-	// length instead: a second broadcast would have queued an event before
-	// the close.
+	// CloseAll runs on the first OnExit, so a second call cannot broadcast.
 	if got := len(sub.Channel()); got != 0 {
 		t.Fatalf("unexpected buffered events after idempotent OnExit: %d", got)
+	}
+}
+
+func TestExtensionUIResponseFirstAnswerWins(t *testing.T) {
+	fp, inst, _ := wireFixture(t)
+	if !inst.retainExtensionUIDialog(ExtensionUIDialog{ID: "answer-once", Method: "input", Title: "Value"}) {
+		t.Fatal("failed to retain dialog")
+	}
+	results := make(chan struct {
+		resolved bool
+		err      error
+	}, 2)
+	for _, value := range []string{"first", "second"} {
+		go func(value string) {
+			resolved, err := inst.ResolveExtensionUIDialog("answer-once", &value, nil, false)
+			results <- struct {
+				resolved bool
+				err      error
+			}{resolved, err}
+		}(value)
+	}
+	resolved := 0
+	for index := 0; index < 2; index++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.resolved {
+			resolved++
+		}
+	}
+	if resolved != 1 {
+		t.Fatalf("resolved answers = %d, want exactly one", resolved)
+	}
+	command := nextInstanceCommand(t, fp)
+	if command["type"] != "extension_ui_response" || command["id"] != "answer-once" {
+		t.Fatalf("dialog response command = %#v", command)
+	}
+	select {
+	case duplicate := <-fp.commands:
+		t.Fatalf("second dialog response was written: %#v", duplicate)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func nextInstanceCommand(t *testing.T, fp *fakeProc) map[string]any {
+	t.Helper()
+	select {
+	case command := <-fp.commands:
+		return command
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instance command")
+		return nil
+	}
+}
+
+func TestExtensionUIResponseDoesNotWaitBehindControlGate(t *testing.T) {
+	writer := newByteWiseWriter()
+	inst := testInstanceWithWriter(writer)
+	if !inst.retainExtensionUIDialog(ExtensionUIDialog{ID: "not-gated", Method: "confirm", Title: "Continue"}) {
+		t.Fatal("failed to retain dialog")
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = inst.WithControl(context.Background(), func(context.Context) (any, error) {
+			close(entered)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-entered
+	confirmed := true
+	result := make(chan error, 1)
+	go func() {
+		_, err := inst.ResolveExtensionUIDialog("not-gated", nil, &confirmed, false)
+		result <- err
+	}()
+	select {
+	case line := <-writer.records:
+		var response map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(line), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response["type"] != "extension_ui_response" || response["confirmed"] != true {
+			t.Fatalf("direct dialog response = %#v", response)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("dialog response waited behind control gate")
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+}
+
+func TestExtensionUITimeoutAndLateAnswer(t *testing.T) {
+	_, inst, sub := wireFixture(t)
+	if !inst.retainExtensionUIDialog(ExtensionUIDialog{ID: "timeout", Method: "select", Title: "Pick", Timeout: 20}) {
+		t.Fatal("failed to retain timeout dialog")
+	}
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-sub.Channel():
+			if event.Evt != EvtExtensionUIClosed {
+				continue
+			}
+			data, _ := json.Marshal(event.Data)
+			if string(data) != `{"id":"timeout","reason":"timeout"}` {
+				t.Fatalf("timeout close data = %s", data)
+			}
+			resolved, err := inst.ResolveExtensionUIDialog("timeout", nil, nil, true)
+			if err != nil || resolved {
+				t.Fatalf("late timeout answer = resolved:%v err:%v", resolved, err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("dialog timeout did not emit close event")
+		}
+	}
+}
+
+func TestExtensionUIEditorHasNoSyntheticTimeout(t *testing.T) {
+	_, inst, sub := wireFixture(t)
+	if !inst.retainExtensionUIDialog(ExtensionUIDialog{ID: "editor", Method: "editor", Title: "Edit", Timeout: 10}) {
+		t.Fatal("failed to retain editor dialog")
+	}
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("editor received synthetic timeout event: %+v", event)
+	case <-time.After(40 * time.Millisecond):
+	}
+	value := "done"
+	resolved, err := inst.ResolveExtensionUIDialog("editor", &value, nil, false)
+	if err != nil || !resolved {
+		t.Fatalf("editor answer = resolved:%v err:%v", resolved, err)
+	}
+}
+
+func TestExtensionUICancelOnChildExit(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	if !inst.retainExtensionUIDialog(ExtensionUIDialog{ID: "exit-dialog", Method: "confirm", Title: "Exit"}) {
+		t.Fatal("failed to retain exit dialog")
+	}
+	inst.OnExit("child-exit")
+	first := <-sub.Channel()
+	second := <-sub.Channel()
+	if first.Evt != EvtExtensionUIClosed || second.Evt != EvtRpcExited {
+		t.Fatalf("child exit events = %+v, %+v", first, second)
+	}
+	select {
+	case command := <-fp.commands:
+		t.Fatalf("child exit wrote dialog response: %#v", command)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

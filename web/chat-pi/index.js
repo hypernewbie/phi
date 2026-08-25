@@ -1,4 +1,5 @@
 import { dispatchComposer } from './composer.js';
+import { createPiDialogController } from './dialogs.js';
 import { MessageBuffer } from './message-buffer.js';
 import { savePersisted } from './persist.js';
 import { renderedUserText } from './render.js';
@@ -70,6 +71,54 @@ function validQueueSnapshot(value) {
     if (!value || typeof value !== 'object') return false;
     const queue = value;
     return typeof queue.sessionEpoch === 'string' && Array.isArray(queue.items);
+}
+function cloneDialogRecords(value) {
+    if (!Array.isArray(value)) return [];
+    const methods = new Set(['select', 'confirm', 'input', 'editor']);
+    return value.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return [];
+        const record = entry;
+        if (
+            typeof record.id !== 'string' ||
+            !methods.has(String(record.method)) ||
+            typeof record.title !== 'string'
+        )
+            return [];
+        const method = record.method;
+        return [
+            {
+                id: record.id,
+                method,
+                title: record.title,
+                ...(Array.isArray(record.options)
+                    ? {
+                          options: record.options.filter(
+                              (option) => typeof option === 'string',
+                          ),
+                      }
+                    : {}),
+                ...(typeof record.message === 'string'
+                    ? { message: record.message }
+                    : {}),
+                ...(typeof record.placeholder === 'string'
+                    ? { placeholder: record.placeholder }
+                    : {}),
+                ...(typeof record.prefill === 'string'
+                    ? { prefill: record.prefill }
+                    : {}),
+                timeout:
+                    typeof record.timeout === 'number' &&
+                    Number.isFinite(record.timeout)
+                        ? record.timeout
+                        : 0,
+                createdAt:
+                    typeof record.createdAt === 'number' &&
+                    Number.isFinite(record.createdAt)
+                        ? record.createdAt
+                        : 0,
+            },
+        ];
+    });
 }
 function cloneQueueItems(items) {
     if (!Array.isArray(items)) return [];
@@ -203,6 +252,7 @@ export function mountChatPi(
     let sid = '';
     let queueSessionEpoch = '';
     let queueItems = [];
+    let dialogs = [];
     let piAuthoritativeQueue = {
         steering: [],
         followUp: [],
@@ -229,6 +279,7 @@ export function mountChatPi(
     let hydrateGeneration = 0;
     let activeHydrate = null;
     let legacyHydrateId = 0;
+    let dialogCallSeq = 0;
     const legacyResponses = new Map();
     const notifyStatus = () => onStatusChange(cloneStatus(localStatus));
     const notifyControls = () =>
@@ -375,6 +426,37 @@ export function mountChatPi(
         pageSize: 50,
     });
     const status = view.status;
+    const respondDialog = (record, answer) => {
+        if (!sid) return rejected('Pi RPC is not ready');
+        return invokeControl(
+            wire,
+            'extensionUiResponse',
+            sid,
+            { requestId: record.id, ...answer },
+            `dialog-response-${++dialogCallSeq}`,
+            legacyResponses,
+        );
+    };
+    const cancelDialogRecords = (reason) => {
+        if (!sid) return Promise.resolve({ cancelled: 0 });
+        return invokeControl(
+            wire,
+            'extensionUiCancel',
+            sid,
+            { reason },
+            `dialog-cancel-${++dialogCallSeq}`,
+            legacyResponses,
+        );
+    };
+    const dialogController = createPiDialogController({
+        host: view.dialogHost,
+        isActive: () => root.classList.contains('active'),
+        fallbackFocus: () => document.getElementById('input-textarea'),
+        respond: respondDialog,
+        cancelAll: cancelDialogRecords,
+        announce: (message) => view.announceDialog(message),
+    });
+    dialogController.setDialogs(dialogs);
     const reportQueueActionError = (error) => {
         if (!destroyed) {
             status.textContent = `Queue action failed: ${String(error instanceof Error ? error.message : error)}`;
@@ -578,6 +660,8 @@ export function mountChatPi(
                 buffer.applySnapshot(data);
                 applyState(data.state);
                 applyQueueSnapshot(data.queue);
+                dialogs = cloneDialogRecords(data.dialogs);
+                dialogController.setDialogs(dialogs);
                 hydrateInFlight = false;
                 ready =
                     connectionState === 'connected' ||
@@ -987,6 +1071,28 @@ export function mountChatPi(
         if (env.evt === 'queueChanged') {
             applyQueueSnapshot(env.data);
         }
+        if (env.evt === 'extensionUiRequest') {
+            const next = cloneDialogRecords([env.data])[0];
+            if (next && !dialogs.some((dialog) => dialog.id === next.id)) {
+                dialogs = [...dialogs, next];
+                dialogController.upsertDialog(next);
+            }
+        }
+        if (env.evt === 'extensionUiClosed') {
+            const data = env.data;
+            const id = typeof data?.id === 'string' ? data.id : '';
+            if (id) {
+                dialogs = dialogs.filter((dialog) => dialog.id !== id);
+                const reason =
+                    data?.reason === 'timeout' ||
+                    data?.reason === 'childExit' ||
+                    data?.reason === 'tabClosed' ||
+                    data?.reason === 'unsupported'
+                        ? data.reason
+                        : 'server';
+                dialogController.closeDialog(id, reason);
+            }
+        }
         if (
             env.evt === 'queueUpdate' &&
             env.data &&
@@ -1241,6 +1347,7 @@ export function mountChatPi(
             destroyed = true;
             off();
             offConnectionState();
+            dialogController.destroy();
             client.close();
             subagentViewer.destroy();
             strip.destroy();
@@ -1260,6 +1367,9 @@ export function mountChatPi(
         queueDiscard,
         queueRestore,
         restoreLatestLocal,
+        closeExtensionDialog: () => dialogController.closeActive(),
+        focusExtensionDialog: () => dialogController.focusActive(),
+        cancelDialogs: (reason) => dialogController.cancelAll(reason),
         refreshFleet: () => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

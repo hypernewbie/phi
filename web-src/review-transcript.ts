@@ -95,6 +95,7 @@ export interface ReviewTranscriptView {
     title: HTMLElement;
     contentBody: HTMLElement;
     transcript: HTMLElement;
+    dialogHost: HTMLElement;
     status: HTMLElement | null;
     refreshButton: HTMLButtonElement | null;
     // Legacy mode (sessions.ts):
@@ -117,6 +118,7 @@ export interface ReviewTranscriptView {
     setStructuredThinking(text: string): void;
     setLiveToolOutput(id: string, text: string): void;
     setConnectionState(state: string | null): void;
+    announceDialog(message: string): void;
     setQueueState(
         items: readonly ReviewQueueItem[],
         piQueue?: QueueAuthoritative,
@@ -604,6 +606,9 @@ export function createReviewTranscriptView(
     connectionState.setAttribute('aria-live', 'polite');
     connectionState.classList.add('hidden');
     root.appendChild(connectionState);
+    const dialogHost = document.createElement('div');
+    dialogHost.className = 'pi-extension-dialog-host';
+    root.appendChild(dialogHost);
 
     let activeHeader: HTMLElement | null = null;
     let activeTop: HTMLElement | null = null;
@@ -1206,6 +1211,7 @@ export function createReviewTranscriptView(
         title,
         contentBody,
         transcript,
+        dialogHost,
         status,
         refreshButton,
         setMessages(messages, partial = '') {
@@ -1289,6 +1295,13 @@ export function createReviewTranscriptView(
                       ? 'Reconnecting…'
                       : state;
             connectionState.appendChild(message);
+        },
+        announceDialog(message) {
+            connectionState.replaceChildren();
+            connectionState.classList.remove('hidden');
+            const announcement = document.createElement('span');
+            announcement.textContent = message;
+            connectionState.appendChild(announcement);
         },
         setQueueState(
             items,

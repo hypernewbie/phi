@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,45 @@ func cloneState(state State) State {
 	return state
 }
 
+// ExtensionUIDialog is the server-owned record for one blocking Pi dialog.
+// Optional fields are populated only for the matching dialog method.
+type ExtensionUIDialog struct {
+	ID          string   `json:"id"`
+	Method      string   `json:"method"`
+	Title       string   `json:"title"`
+	Options     []string `json:"options,omitempty"`
+	Message     string   `json:"message,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+	Prefill     string   `json:"prefill,omitempty"`
+	Timeout     int      `json:"timeout"`
+	CreatedAt   int64    `json:"createdAt"`
+}
+
+func cloneExtensionUIDialog(dialog ExtensionUIDialog) ExtensionUIDialog {
+	if dialog.Options != nil {
+		dialog.Options = append([]string{}, dialog.Options...)
+	}
+	return dialog
+}
+
+func isBlockingExtensionUIMethod(method string) bool {
+	switch method {
+	case "select", "confirm", "input", "editor":
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownFireAndForgetExtensionUIMethod(method string) bool {
+	switch method {
+	case "notify", "setStatus", "setWidget", "setTitle", "set_editor_text":
+		return true
+	default:
+		return false
+	}
+}
+
 type pendingResult struct {
 	response piResponse
 	err      error
@@ -157,9 +197,13 @@ type Instance struct {
 	// queueDispatchGenerations records only commands that crossed the Pi
 	// JSONL write boundary; promoted items without an entry are still local.
 	queueDispatchGenerations map[string]uint64
-	queueBlocked              bool
-	piSteering                []string
-	piFollowUp                []string
+	queueBlocked             bool
+	piSteering               []string
+	piFollowUp               []string
+
+	dialogMu     sync.Mutex
+	dialogs      map[string]ExtensionUIDialog
+	dialogTimers map[string]*time.Timer
 
 	sessionPath   string
 	sessionPathMu sync.RWMutex
@@ -223,6 +267,209 @@ func (i *Instance) StateCopy() State {
 	i.stateMu.Lock()
 	defer i.stateMu.Unlock()
 	return cloneState(i.state)
+}
+
+// retainExtensionUIDialog records one known blocking request. Duplicate IDs
+// are ignored so reconnect/event duplication cannot create duplicate records.
+func (i *Instance) retainExtensionUIDialog(dialog ExtensionUIDialog) bool {
+	if dialog.ID == "" || !isBlockingExtensionUIMethod(dialog.Method) {
+		return false
+	}
+	if dialog.CreatedAt == 0 {
+		dialog.CreatedAt = time.Now().UnixMilli()
+	}
+	dialog = cloneExtensionUIDialog(dialog)
+	i.dialogMu.Lock()
+	defer i.dialogMu.Unlock()
+	if i.dialogs == nil {
+		i.dialogs = make(map[string]ExtensionUIDialog)
+	}
+	if _, exists := i.dialogs[dialog.ID]; exists {
+		return false
+	}
+	i.dialogs[dialog.ID] = dialog
+	if dialog.Timeout > 0 && dialog.Method != "editor" {
+		if i.dialogTimers == nil {
+			i.dialogTimers = make(map[string]*time.Timer)
+		}
+		i.dialogTimers[dialog.ID] = time.AfterFunc(time.Duration(dialog.Timeout)*time.Millisecond, func() {
+			i.expireExtensionUIDialog(dialog.ID)
+		})
+	}
+	return true
+}
+
+// ExtensionUIDialogsCopy returns retained dialogs in stable creation order.
+func (i *Instance) ExtensionUIDialogsCopy() []ExtensionUIDialog {
+	i.dialogMu.Lock()
+	out := make([]ExtensionUIDialog, 0, len(i.dialogs))
+	for _, dialog := range i.dialogs {
+		out = append(out, cloneExtensionUIDialog(dialog))
+	}
+	i.dialogMu.Unlock()
+	sort.SliceStable(out, func(left, right int) bool {
+		if out[left].CreatedAt == out[right].CreatedAt {
+			return out[left].ID < out[right].ID
+		}
+		return out[left].CreatedAt < out[right].CreatedAt
+	})
+	return out
+}
+
+func (i *Instance) takeExtensionUIDialog(id string) (ExtensionUIDialog, bool) {
+	i.dialogMu.Lock()
+	defer i.dialogMu.Unlock()
+	dialog, ok := i.dialogs[id]
+	if !ok {
+		return ExtensionUIDialog{}, false
+	}
+	delete(i.dialogs, id)
+	if timer := i.dialogTimers[id]; timer != nil {
+		timer.Stop()
+		delete(i.dialogTimers, id)
+	}
+	return cloneExtensionUIDialog(dialog), true
+}
+
+func (i *Instance) expireExtensionUIDialog(id string) {
+	dialog, ok := i.takeExtensionUIDialog(id)
+	if !ok {
+		return
+	}
+	i.Emit(EvtExtensionUIClosed, nil, map[string]any{
+		"id": dialog.ID, "reason": "timeout",
+	})
+}
+
+func (i *Instance) closeExtensionUIDialogs(reason string) {
+	i.dialogMu.Lock()
+	closed := make([]ExtensionUIDialog, 0, len(i.dialogs))
+	for _, dialog := range i.dialogs {
+		closed = append(closed, cloneExtensionUIDialog(dialog))
+	}
+	for _, timer := range i.dialogTimers {
+		timer.Stop()
+	}
+	i.dialogs = make(map[string]ExtensionUIDialog)
+	i.dialogTimers = make(map[string]*time.Timer)
+	i.dialogMu.Unlock()
+	sort.SliceStable(closed, func(left, right int) bool {
+		if closed[left].CreatedAt == closed[right].CreatedAt {
+			return closed[left].ID < closed[right].ID
+		}
+		return closed[left].CreatedAt < closed[right].CreatedAt
+	})
+	for _, dialog := range closed {
+		i.Emit(EvtExtensionUIClosed, nil, map[string]any{
+			"id": dialog.ID, "reason": reason,
+		})
+	}
+}
+
+var ErrExtensionUIResponseInvalid = errors.New("invalid extension UI response")
+
+func validateExtensionUIDialogResponse(dialog ExtensionUIDialog, value *string, confirmed *bool, cancelled bool) error {
+	if cancelled {
+		return nil
+	}
+	switch dialog.Method {
+	case "select", "input", "editor":
+		if value == nil {
+			return fmt.Errorf("%w: %s requires value or cancelled", ErrExtensionUIResponseInvalid, dialog.Method)
+		}
+	case "confirm":
+		if confirmed == nil {
+			return fmt.Errorf("%w: confirm requires confirmed or cancelled", ErrExtensionUIResponseInvalid)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported dialog method %q", ErrExtensionUIResponseInvalid, dialog.Method)
+	}
+	return nil
+}
+
+// ResolveExtensionUIDialog removes the matching request before writing the
+// answer, so concurrent and late answers are first-answer-wins. It never
+// acquires the ordinary control gate.
+func (i *Instance) ResolveExtensionUIDialog(id string, value *string, confirmed *bool, cancelled bool) (bool, error) {
+	i.dialogMu.Lock()
+	dialog, ok := i.dialogs[id]
+	if !ok {
+		i.dialogMu.Unlock()
+		return false, nil
+	}
+	if err := validateExtensionUIDialogResponse(dialog, value, confirmed, cancelled); err != nil {
+		i.dialogMu.Unlock()
+		return false, err
+	}
+	delete(i.dialogs, id)
+	if timer := i.dialogTimers[id]; timer != nil {
+		timer.Stop()
+		delete(i.dialogTimers, id)
+	}
+	i.dialogMu.Unlock()
+
+	response := map[string]any{"type": "extension_ui_response", "id": id}
+	if cancelled {
+		response["cancelled"] = true
+	} else if dialog.Method == "confirm" {
+		response["confirmed"] = *confirmed
+	} else {
+		response["value"] = *value
+	}
+	if err := i.Send(response); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// CancelExtensionUIDialogs resolves all open requests as cancelled while the
+// child is alive and emits one close event per removed record.
+func (i *Instance) CancelExtensionUIDialogs(reason string) int {
+	i.dialogMu.Lock()
+	closed := make([]ExtensionUIDialog, 0, len(i.dialogs))
+	for _, dialog := range i.dialogs {
+		closed = append(closed, cloneExtensionUIDialog(dialog))
+	}
+	for _, timer := range i.dialogTimers {
+		timer.Stop()
+	}
+	i.dialogs = make(map[string]ExtensionUIDialog)
+	i.dialogTimers = make(map[string]*time.Timer)
+	i.dialogMu.Unlock()
+	sort.SliceStable(closed, func(left, right int) bool {
+		if closed[left].CreatedAt == closed[right].CreatedAt {
+			return closed[left].ID < closed[right].ID
+		}
+		return closed[left].CreatedAt < closed[right].CreatedAt
+	})
+	for _, dialog := range closed {
+		if i.IsAlive() {
+			_ = i.Send(map[string]any{
+				"type": "extension_ui_response", "id": dialog.ID, "cancelled": true,
+			})
+		}
+		i.Emit(EvtExtensionUIClosed, nil, map[string]any{
+			"id": dialog.ID, "reason": reason,
+		})
+	}
+	return len(closed)
+}
+
+// cancelUnsupportedExtensionUI prevents an unknown blocking request from
+// leaving Pi waiting forever. It emits the same close event used by later
+// dialog cancellation paths; Send is guarded by the instance's alive state.
+func (i *Instance) cancelUnsupportedExtensionUI(id string) {
+	if id == "" {
+		return
+	}
+	_ = i.Send(map[string]any{
+		"type":      "extension_ui_response",
+		"id":        id,
+		"cancelled": true,
+	})
+	i.Emit(EvtExtensionUIClosed, nil, map[string]any{
+		"id": id, "reason": "unsupported",
+	})
 }
 
 // SetState replaces the cached state. Once the queue ledger exists, its
@@ -525,6 +772,10 @@ func (i *Instance) OnExit(reason string) {
 		i.stateMu.Unlock()
 		i.failPending(ErrNotAlive)
 		i.markQueueUncertainOnExit()
+		// Dialog close events must be sequenced before rpcExited so clients
+		// can dismiss every retained overlay while the instance identity is
+		// still available. No response is attempted after alive is false.
+		i.closeExtensionUIDialogs("childExit")
 		i.publish(EvtRpcExited, nil, map[string]any{"reason": reason}, false)
 		if i.subs != nil {
 			i.subs.CloseAll()
