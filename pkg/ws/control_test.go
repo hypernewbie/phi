@@ -928,6 +928,49 @@ func TestControlSpawnReusedLeaseDoesNotBootstrapAgain(t *testing.T) {
 	}
 }
 
+func TestControlSpawnIDReusesInstance(t *testing.T) {
+	child := newControlFakeChild()
+	var spawnCalls atomic.Int32
+	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
+		spawnCalls.Add(1)
+		switch command["type"] {
+		case "get_state", "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	c := helloDial(t, mgr)
+	args := json.RawMessage(`{"cwd":"/w/spawn-id-control","spawnId":"browser-spawn-1"}`)
+	var firstSid string
+	for index, id := range []string{"spawn-one", "spawn-two"} {
+		if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: id, Op: rpc.OpSpawn, Args: args}); err != nil {
+			t.Fatal(err)
+		}
+		response := readResponse(t, c, id)
+		if response.Ok == nil || !*response.Ok {
+			t.Fatalf("spawn %d failed: %+v", index, response)
+		}
+		var payload struct {
+			Sid string `json:"sid"`
+		}
+		if err := json.Unmarshal(response.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			firstSid = payload.Sid
+		} else if payload.Sid != firstSid {
+			t.Fatalf("spawn ID returned a different sid: first=%q second=%q", firstSid, payload.Sid)
+		}
+	}
+	if spawnCalls.Load() != 3 {
+		t.Fatalf("spawn ID repeated bootstrap %d Pi commands, want 3", spawnCalls.Load())
+	}
+}
+
 func TestControlPiAvailabilityAndSetterOutcomes(t *testing.T) {
 	child := newControlFakeChild()
 	var stateCalls atomic.Int32

@@ -238,6 +238,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 		var args struct {
 			Cwd         string `json:"cwd"`
 			SessionPath string `json:"sessionPath"`
+			SpawnID     string `json:"spawnId"`
 		}
 		if err = decodeStrict(e.Args, &args, true); err != nil {
 			break
@@ -251,6 +252,7 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = optsErr
 			break
 		}
+		opts.SpawnID = args.SpawnID
 		lease, beginErr := s.mgr.BeginSpawn(ctx, opts)
 		if beginErr != nil {
 			err = beginErr
