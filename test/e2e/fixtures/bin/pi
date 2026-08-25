@@ -1,0 +1,453 @@
+#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+
+const logPath = process.env.PI_FAKE_LOG;
+const args = process.argv.slice(2);
+if (args.length !== 2 || args[0] !== '--mode' || args[1] !== 'rpc') {
+    process.stderr.write(`fake Pi requires --mode rpc; got ${args.join(' ')}\n`);
+    process.exit(2);
+}
+
+function log(record) {
+    if (!logPath) return;
+    appendFileSync(logPath, `${JSON.stringify(record)}\n`);
+}
+
+function write(record) {
+    process.stdout.write(`${JSON.stringify(record)}\n`);
+}
+
+function emit(event) {
+    write(event);
+    log({ kind: 'event', ...event });
+}
+
+function containsPath(value, key = '') {
+    if (key === 'path') return true;
+    if (typeof value === 'string') {
+        if (key === 'mimeType') return false;
+        return (
+            value.startsWith('/') ||
+            value.startsWith('\\') ||
+            value.startsWith('@/') ||
+            value.includes('/clipboard/')
+        );
+    }
+    if (Array.isArray(value)) return value.some((item) => containsPath(item));
+    if (value && typeof value === 'object') {
+        return Object.entries(value).some(([childKey, childValue]) =>
+            containsPath(childValue, childKey),
+        );
+    }
+    return false;
+}
+
+function logCommand(request) {
+    const record = {
+        kind: 'command',
+        id: request.id,
+        type: request.type,
+    };
+    if (typeof request.message === 'string') record.message = request.message;
+    if (Array.isArray(request.images)) {
+        record.imageSummary = request.images.map((image) => ({
+            type: image?.type,
+            mimeType: image?.mimeType,
+            dataBytes:
+                typeof image?.data === 'string'
+                    ? image.data.length
+                    : 0,
+        }));
+    }
+    record.containsPath = containsPath(request);
+    log(record);
+}
+
+function response(request, success, data, error) {
+    const record = {
+        type: 'response',
+        id: request.id,
+        command: request.type,
+        success,
+    };
+    if (error !== undefined) record.error = error;
+    record.data = data === undefined ? null : data;
+    write(record);
+}
+
+function messageEnd(role, text, extra = {}) {
+    emit({
+        type: 'message_end',
+        message: {
+            role,
+            content: [{ type: 'text', text }],
+            ...extra,
+        },
+    });
+}
+
+function assistantEnd(text) {
+    messageEnd('assistant', text);
+}
+
+function settle() {
+    emit({ type: 'agent_settled' });
+}
+
+const startupState = {
+    model: { id: 'fake-model', name: 'Fake Model' },
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    isCompacting: false,
+    pendingMessageCount: 0,
+    sessionId: 'fake-session',
+};
+const stats = {
+    sessionFile: '/tmp/fake-pi-session.jsonl',
+    sessionId: 'fake-session',
+    userMessages: 0,
+    assistantMessages: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 0,
+    tokens: {
+        input: 12,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 20,
+    },
+    cost: 0.42,
+    contextUsage: { tokens: 20, contextWindow: 200000, percent: 0.01 },
+};
+
+let queueRun = false;
+const queueSeen = new Set();
+let lateRun = false;
+let lateSteerPendingState = false;
+let latePromptSeen = false;
+let dialogResolver = null;
+
+async function runPrompt(request) {
+    const message = request.message || '';
+    if (message === 'reconnect-proof') {
+        messageEnd('user', message);
+        emit({ type: 'agent_start' });
+        emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        emit({
+            type: 'message_update',
+            assistantMessageEvent: {
+                type: 'text_delta',
+                contentIndex: 0,
+                delta: 'reconnected',
+            },
+        });
+        assistantEnd('reconnected');
+        settle();
+        return;
+    }
+    if (message === 'dialog') {
+        emit({
+            type: 'extension_ui_request',
+            id: 'dialog-1',
+            method: 'select',
+            title: 'Choose fixture',
+            options: ['Allow', 'Block'],
+            timeout: 5000,
+        });
+        await new Promise((resolve) => {
+            dialogResolver = resolve;
+        });
+        dialogResolver = null;
+        emit({ type: 'agent_start' });
+        messageEnd('user', message);
+        assistantEnd('fake dialog accepted');
+        settle();
+        return;
+    }
+    if (message === 'stream') {
+        messageEnd('user', message);
+        emit({ type: 'agent_start' });
+        emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        emit({
+            type: 'message_update',
+            assistantMessageEvent: {
+                type: 'thinking_delta',
+                contentIndex: 0,
+                delta: 'checking the fixture',
+            },
+        });
+        emit({
+            type: 'message_update',
+            assistantMessageEvent: {
+                type: 'text_delta',
+                contentIndex: 1,
+                delta: 'I will run it',
+            },
+        });
+        // Keep the live thinking/text phase observable before the
+        // authoritative assistant message_end clears partial buffers.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        emit({
+            type: 'message_end',
+            message: {
+                role: 'assistant',
+                content: [
+                    { type: 'thinking', thinking: 'checking the fixture' },
+                    { type: 'text', text: 'I will run it' },
+                    {
+                        type: 'toolCall',
+                        id: 'stream-call',
+                        name: 'bash',
+                        arguments: { command: 'printf live-tool-output' },
+                    },
+                ],
+            },
+        });
+        emit({
+            type: 'tool_execution_start',
+            toolCallId: 'stream-call',
+            toolName: 'bash',
+            args: { command: 'printf live-tool-output' },
+        });
+        emit({
+            type: 'tool_execution_update',
+            toolCallId: 'stream-call',
+            toolName: 'bash',
+            args: { command: 'printf live-tool-output' },
+            partialResult: {
+                content: [{ type: 'text', text: 'live-' }],
+                details: {},
+            },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        emit({
+            type: 'tool_execution_update',
+            toolCallId: 'stream-call',
+            toolName: 'bash',
+            args: { command: 'printf live-tool-output' },
+            partialResult: {
+                content: [{ type: 'text', text: 'live-tool-output-done' }],
+                details: {},
+            },
+        });
+        emit({
+            type: 'tool_execution_end',
+            toolCallId: 'stream-call',
+            toolName: 'bash',
+            result: {
+                content: [{ type: 'text', text: 'live-tool-output-done' }],
+                details: {},
+            },
+            isError: false,
+        });
+        emit({
+            type: 'message_end',
+            message: {
+                role: 'toolResult',
+                toolCallId: 'stream-call',
+                toolName: 'bash',
+                content: [{ type: 'text', text: 'live-tool-output-done' }],
+                isError: false,
+            },
+        });
+        assistantEnd('finished');
+        settle();
+        return;
+    }
+    if (message === 'queue-run') {
+        queueRun = true;
+        queueSeen.clear();
+        messageEnd('user', message);
+        emit({ type: 'agent_start' });
+        emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        emit({
+            type: 'queue_update',
+            steering: ['steer-target'],
+            followUp: ['follow-target'],
+        });
+        return;
+    }
+    if (message === 'late-steer-run') {
+        lateRun = true;
+        lateSteerPendingState = false;
+        latePromptSeen = false;
+        messageEnd('user', message);
+        emit({ type: 'agent_start' });
+        emit({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        return;
+    }
+    if (message === 'image-check') {
+        const valid =
+            Array.isArray(request.images) &&
+            request.images.length === 1 &&
+            request.images[0]?.type === 'image' &&
+            request.images[0]?.mimeType === 'image/png' &&
+            typeof request.images[0]?.data === 'string' &&
+            request.images[0].data.length > 0;
+        messageEnd('user', message);
+        assistantEnd(valid ? 'fake image received' : 'fake image missing');
+        settle();
+        return;
+    }
+    if (message === 'history') {
+        for (let index = 0; index < 120; index += 1) {
+            const text = index === 0 ? 'oldest-search-target' : `history-${index}`;
+            messageEnd('user', text);
+            assistantEnd(`history-answer-${index}`);
+        }
+        settle();
+    }
+}
+
+function handleQueueCommand(request) {
+    const message = request.message || '';
+    const key = request.type;
+    if (queueRun) {
+        if (
+            (key === 'steer' && message === 'steer-target') ||
+            (key === 'follow_up' && message === 'follow-target')
+        ) {
+            if (queueSeen.has(key)) {
+                response(request, false, null, 'duplicate queue fixture command');
+                return;
+            }
+            queueSeen.add(key);
+            response(request, true, {});
+            if (queueSeen.has('steer') && queueSeen.has('follow_up')) {
+                queueRun = false;
+                messageEnd('user', 'steer-target');
+                messageEnd('user', 'follow-target');
+                assistantEnd('queue complete');
+                settle();
+            }
+            return;
+        }
+    }
+    if (lateRun && key === 'steer' && message === 'late-steer-target') {
+        response(request, false, null, 'agent is not streaming');
+        lateSteerPendingState = true;
+        return;
+    }
+    response(request, true, {});
+}
+
+function handleCommand(request) {
+    logCommand(request);
+    if (request.type === 'extension_ui_response') {
+        if (
+            request.id === 'dialog-1' &&
+            request.value === 'Allow' &&
+            dialogResolver
+        ) {
+            dialogResolver();
+        }
+        return;
+    }
+    if (request.type === 'get_state') {
+        if (lateSteerPendingState) {
+            lateSteerPendingState = false;
+            response(request, true, {
+                ...startupState,
+                isStreaming: false,
+                isCompacting: false,
+                pendingMessageCount: 0,
+            });
+        } else {
+            response(request, true, startupState);
+        }
+        return;
+    }
+    if (request.type === 'get_session_stats') {
+        response(request, true, stats);
+        return;
+    }
+    if (request.type === 'get_commands') {
+        response(request, true, { commands: [] });
+        return;
+    }
+    if (request.type === 'get_available_models') {
+        response(request, true, {
+            models: [{ provider: 'fake', id: 'fake-model', name: 'Fake Model' }],
+        });
+        return;
+    }
+    if (request.type === 'get_available_thinking_levels') {
+        response(request, true, { levels: ['off', 'medium'] });
+        return;
+    }
+    if (
+        request.type === 'set_model' ||
+        request.type === 'set_thinking_level' ||
+        request.type === 'new_session' ||
+        request.type === 'set_session_name' ||
+        request.type === 'abort'
+    ) {
+        response(
+            request,
+            true,
+            request.type === 'new_session' ? { cancelled: false } : {},
+        );
+        return;
+    }
+    if (
+        request.type === 'steer' ||
+        request.type === 'follow_up'
+    ) {
+        handleQueueCommand(request);
+        return;
+    }
+    if (request.type === 'prompt') {
+        if (lateRun && request.message === 'late-steer-target') {
+            if (latePromptSeen) {
+                response(request, false, null, 'duplicate promoted prompt');
+                return;
+            }
+            latePromptSeen = true;
+            response(request, true, {});
+            lateRun = false;
+            // Keep the promoted ledger state observable before the
+            // authoritative settlement consumes it.
+            setTimeout(() => {
+                messageEnd('user', 'late-steer-target');
+                assistantEnd('late steer promoted');
+                settle();
+            }, 300);
+            return;
+        }
+        response(request, true, {});
+        void runPrompt(request);
+        return;
+    }
+    response(request, false, null, 'unsupported fixture command');
+}
+
+log({ kind: 'startup', args });
+let pending = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+    pending += chunk;
+    const lines = pending.split('\n');
+    pending = lines.pop() ?? '';
+    for (const raw of lines) {
+        const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+        if (!line) continue;
+        try {
+            handleCommand(JSON.parse(line));
+        } catch (error) {
+            process.stderr.write(`fake Pi protocol error: ${error}\n`);
+            process.exitCode = 1;
+        }
+    }
+});
+process.stdin.on('end', () => {
+    const line = pending.endsWith('\r') ? pending.slice(0, -1) : pending;
+    if (line) {
+        try {
+            handleCommand(JSON.parse(line));
+        } catch (error) {
+            process.stderr.write(`fake Pi protocol error: ${error}\n`);
+            process.exitCode = 1;
+        }
+    }
+});

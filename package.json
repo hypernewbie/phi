@@ -12,6 +12,7 @@
     "build:web": "tsc -p tsconfig.build.json && pnpm format",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:e2e": "playwright test test/e2e/pi-rpc-chat.spec.js --project=chromium",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "dev": "vite",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
     "@noble/hashes": "^2.3.0",
+    "@playwright/test": "1.62.1",
     "@vitest/coverage-v8": "4.1.11",
     "dompurify": "^3.4.14",
     "jsdom": "^30.0.1",

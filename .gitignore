@@ -24,3 +24,9 @@ node_modules/
 # Local-only agent memory file. Holds working rules + repeated
 # reminders for AI agents working on phi. Never enters the repo.
 AGENTS.md
+
+# Playwright/E2E worktree artifacts
+.playwright-browsers/
+.playwright/
+test/e2e/.runtime-home/
+test-results/
