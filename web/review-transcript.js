@@ -5,6 +5,7 @@ import {
     renderToolExecution,
     validatedToolDiff,
 } from './chat-pi/tool-render.js';
+import { renderQueuePanel } from './chat-pi/queue.js';
 /** Wrap a structured array as a source-compatible view without conversion. */
 function arrayAsSource(messages) {
     return {
@@ -410,6 +411,9 @@ export function createReviewTranscriptView(root, options) {
     const transcript = document.createElement('div');
     transcript.className = 'review-chat-wrapper';
     contentBody.appendChild(transcript);
+    const queuePanel = document.createElement('div');
+    queuePanel.className = 'pi-queue-panel hidden';
+    contentBody.appendChild(queuePanel);
     let activeHeader = null;
     let activeTop = null;
     let activeBottom = null;
@@ -497,6 +501,9 @@ export function createReviewTranscriptView(root, options) {
     // paint. Window slides (appendNewer, jump button) rebuild outside it
     // and would otherwise drop the live tail for one paint.
     let latestPartial = '';
+    let queueItems = [];
+    let piQueue = { steering: [], followUp: [] };
+    let queueActions = {};
     let activeTurn = null;
     // Milestone 3: persistent (within-view) red error row. Phi treats
     // it as ephemeral: it is not in the snapshot/persist surface and
@@ -743,6 +750,10 @@ export function createReviewTranscriptView(root, options) {
      * (prependOlder / appendNewer / jump) can re-create the live block
      * with the latest text.
      */
+    function renderQueueState() {
+        if (options.mode !== 'structured') return;
+        renderQueuePanel(queuePanel, queueItems, piQueue, queueActions);
+    }
     function setStructuredPartial(partial) {
         latestPartial = partial;
         const existing = findLiveAssistantBlock();
@@ -905,6 +916,16 @@ export function createReviewTranscriptView(root, options) {
         },
         setStructuredPartial(partial) {
             setStructuredPartial(partial);
+        },
+        setQueueState(
+            items,
+            authoritative = { steering: [], followUp: [] },
+            actions = {},
+        ) {
+            queueItems = items;
+            piQueue = authoritative;
+            queueActions = actions;
+            renderQueueState();
         },
         setActiveTurn(state) {
             activeTurn = state;

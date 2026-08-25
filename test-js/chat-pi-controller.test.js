@@ -2300,3 +2300,436 @@ describe('Pi RPC transcript controller (compactionEnd regression pinning)', () =
         expect(setEphemeralError).toHaveBeenLastCalledWith(null);
     });
 });
+
+describe('Pi RPC queue-backed controller (M6)', () => {
+    function queueItem(frame, state = 'local') {
+        return {
+            id: frame.args.itemId,
+            sid: frame.sid,
+            sessionEpoch: frame.args.sessionEpoch,
+            message: frame.args.message,
+            delivery: frame.args.delivery,
+            state,
+            attachments: [],
+            createdAt: Date.now(),
+        };
+    }
+
+    async function bootQueue(
+        wire,
+        root,
+        state = { busy: false },
+        onQueueRecovery = () => {},
+    ) {
+        const chat = mountChatPi(
+            root,
+            '/work/queue',
+            wire.client,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            onQueueRecovery,
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state,
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const hydrate = wire.sent.find((frame) => frame.op === 'hydrate');
+        wire.emit({
+            t: 'res',
+            id: hydrate.id,
+            ok: true,
+            data: {
+                lastSeq: 0,
+                messages: [],
+                state,
+                queue: { sessionEpoch: 'epoch-1', items: [] },
+                dialogs: [],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        return chat;
+    }
+
+    it('sends prompt, steer, and follow-up through queueSubmit with stable IDs', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = await bootQueue(wire, root, { busy: true });
+
+        const prompt = chat?.send({ message: 'prompt', attachments: [] });
+        const promptFrame = wire.sent.find(
+            (frame) =>
+                frame.op === 'queueSubmit' && frame.args.message === 'prompt',
+        );
+        expect(promptFrame).toMatchObject({
+            sid: 's1',
+            args: {
+                sessionEpoch: 'epoch-1',
+                delivery: 'steer',
+                attachmentRefs: [],
+            },
+        });
+        wire.emit({
+            t: 'res',
+            id: promptFrame.id,
+            ok: true,
+            data: queueItem(promptFrame),
+        });
+        await expect(prompt).resolves.toMatchObject({
+            item: { id: promptFrame.args.itemId, delivery: 'steer' },
+            uncertain: false,
+        });
+
+        const follow = chat.send({
+            message: 'follow-up',
+            attachments: [],
+            deliveryOverride: 'followUp',
+        });
+        const followFrame = wire.sent.find(
+            (frame) =>
+                frame.op === 'queueSubmit' &&
+                frame.args.message === 'follow-up',
+        );
+        expect(followFrame.args.delivery).toBe('followUp');
+        expect(followFrame.args.itemId).not.toBe(promptFrame.args.itemId);
+        wire.emit({
+            t: 'res',
+            id: followFrame.id,
+            ok: true,
+            data: queueItem(followFrame),
+        });
+        await expect(follow).resolves.toMatchObject({ uncertain: false });
+
+        const rows = root.querySelectorAll('.pi-queue-item');
+        expect(rows).toHaveLength(2);
+        expect(
+            root.querySelector('[data-queue-delivery="followUp"]'),
+        ).not.toBeNull();
+    });
+
+    it('clears Pi-authoritative rows on idle settlement without a busy edge', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        // The backend still emits stateChanged for agent_settled when Busy
+        // was already false; this must clear display-only Pi queue rows.
+        await bootQueue(wire, root, { busy: false });
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'queueUpdate',
+            data: {
+                steering: ['steer-target'],
+                followUp: ['follow-target'],
+            },
+        });
+        await Promise.resolve();
+        expect(root.querySelectorAll('.pi-queue-authoritative')).toHaveLength(
+            2,
+        );
+        expect(
+            root.querySelector('.pi-queue-panel')?.classList.contains('hidden'),
+        ).toBe(false);
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        expect(root.querySelectorAll('.pi-queue-authoritative')).toHaveLength(
+            0,
+        );
+        expect(
+            root.querySelector('.pi-queue-panel')?.classList.contains('hidden'),
+        ).toBe(true);
+    });
+
+    it('restores a queue-panel item through the recovery callback', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const onQueueRecovery = vi.fn();
+        await bootQueue(wire, root, { busy: false }, onQueueRecovery);
+        const local = {
+            id: 'local-restore',
+            sid: 's1',
+            sessionEpoch: 'epoch-1',
+            message: 'restore this draft',
+            delivery: 'prompt',
+            state: 'local',
+            attachments: [
+                {
+                    ref: 'a'.repeat(64),
+                    name: 'capture.png',
+                    mimeType: 'image/png',
+                    sizeBytes: 12,
+                },
+            ],
+            createdAt: 1,
+        };
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'queueChanged',
+            data: { sessionEpoch: 'epoch-1', items: [local] },
+        });
+        await Promise.resolve();
+        const restore = root.querySelector('.pi-queue-restore');
+        expect(restore).not.toBeNull();
+        restore.click();
+        const restoreFrame = wire.sent.find(
+            (frame) => frame.op === 'queueRestore',
+        );
+        expect(restoreFrame).toMatchObject({
+            sid: 's1',
+            args: { itemId: 'local-restore', sessionEpoch: 'epoch-1' },
+        });
+        const result = {
+            restored: true,
+            item: { ...local, state: 'cancelled' },
+        };
+        wire.emit({
+            t: 'res',
+            id: restoreFrame.id,
+            ok: true,
+            data: result,
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(onQueueRecovery).toHaveBeenCalledWith(result);
+    });
+
+    it('keeps queue restore no-op and errors out of recovery', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const onQueueRecovery = vi.fn();
+        await bootQueue(wire, root, { busy: false }, onQueueRecovery);
+        const local = {
+            id: 'local-noop',
+            sid: 's1',
+            sessionEpoch: 'epoch-1',
+            message: 'leave this draft',
+            delivery: 'prompt',
+            state: 'local',
+            attachments: [],
+            createdAt: 1,
+        };
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'queueChanged',
+            data: { sessionEpoch: 'epoch-1', items: [local] },
+        });
+        await Promise.resolve();
+        root.querySelector('.pi-queue-restore').click();
+        let restoreFrame = wire.sent.find(
+            (frame) => frame.op === 'queueRestore',
+        );
+        wire.emit({
+            t: 'res',
+            id: restoreFrame.id,
+            ok: true,
+            data: { restored: false, reason: 'not-local' },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(onQueueRecovery).not.toHaveBeenCalled();
+        expect(root.querySelector('.pi-queue-restore')).not.toBeNull();
+
+        root.querySelector('.pi-queue-restore').click();
+        restoreFrame = wire.sent.filter(
+            (frame) => frame.op === 'queueRestore',
+        )[1];
+        wire.emit({
+            t: 'res',
+            id: restoreFrame.id,
+            ok: false,
+            error: 'restore failed',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(onQueueRecovery).not.toHaveBeenCalled();
+        expect(root.textContent).toContain(
+            'Queue action failed: restore failed',
+        );
+    });
+
+    it('clears an optimistic turn on idle settlement without a busy=true edge', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = await bootQueue(wire, root);
+        const pending = chat.send({ message: 'history', attachments: [] });
+        const frame = wire.sent.find(
+            (candidate) => candidate.op === 'queueSubmit',
+        );
+        wire.emit({
+            t: 'res',
+            id: frame.id,
+            ok: true,
+            data: queueItem(frame, 'sending'),
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // Queue consumption is published only after agent_settled as an
+        // identity-bearing queueChanged transition; a bare idle state cannot
+        // consume the item.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'queueChanged',
+            data: {
+                sessionEpoch: 'epoch-1',
+                items: [queueItem(frame, 'consumed')],
+            },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { busy: false },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        await expect(pending).resolves.toMatchObject({ uncertain: false });
+        expect(
+            root.querySelector('.pi-active-turn')?.classList.contains('hidden'),
+        ).toBe(true);
+        expect(
+            root.querySelector('[data-pi-optimistic-prompt="true"]'),
+        ).toBeNull();
+    });
+
+    it('keeps duplicate text on separate queue IDs and does not use text as identity', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const chat = await bootQueue(wire, root);
+        const first = chat.send({ message: 'same', attachments: [] });
+        const firstFrame = wire.sent.find(
+            (frame) => frame.op === 'queueSubmit',
+        );
+        wire.emit({
+            t: 'res',
+            id: firstFrame.id,
+            ok: true,
+            data: queueItem(firstFrame, 'accepted'),
+        });
+        await first;
+        const second = chat.send({ message: 'same', attachments: [] });
+        const secondFrame = wire.sent.filter(
+            (frame) => frame.op === 'queueSubmit',
+        )[1];
+        wire.emit({
+            t: 'res',
+            id: secondFrame.id,
+            ok: true,
+            data: queueItem(secondFrame, 'accepted'),
+        });
+        await second;
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'same' } },
+        });
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'messageEnd',
+            data: { message: { role: 'user', content: 'same' } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        // User message text does not consume queue-backed optimistic records;
+        // duplicate text has no stable identity at this lifecycle point.
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-message="true"]'),
+        ).toHaveLength(2);
+        const ids = [...root.querySelectorAll('.pi-queue-item')].map(
+            (row) => row.dataset.queueId,
+        );
+        expect(ids).toEqual([firstFrame.args.itemId, secondFrame.args.itemId]);
+        expect(new Set(ids).size).toBe(2);
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 3,
+            evt: 'queueChanged',
+            data: {
+                sessionEpoch: 'epoch-1',
+                items: [
+                    queueItem(firstFrame, 'consumed'),
+                    queueItem(secondFrame, 'consumed'),
+                ],
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+            root.querySelectorAll('[data-pi-optimistic-message="true"]'),
+        ).toHaveLength(0);
+    });
+
+    it('keeps search state on the live chat handle and reveals a settled match', async () => {
+        vi.useFakeTimers();
+        try {
+            const root = document.createElement('div');
+            const wire = fakeClient();
+            const chat = await bootQueue(wire, root);
+            wire.emit({
+                t: 'evt',
+                sid: 's1',
+                seq: 1,
+                evt: 'messageEnd',
+                data: {
+                    message: {
+                        role: 'user',
+                        content: [{ type: 'text', text: 'search target' }],
+                    },
+                },
+            });
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(chat.toggleSearch()).toBe(true);
+            const input = root.querySelector('[data-pi-search-input]');
+            input.value = 'target';
+            input.dispatchEvent(new Event('input'));
+            vi.advanceTimersByTime(120);
+            expect(
+                root.querySelector('[data-pi-search-count]').textContent,
+            ).toBe('1 / 1');
+            expect(
+                root.querySelector('mark[data-pi-active-match]'),
+            ).not.toBeNull();
+            expect(chat.closeSearch()).toBe(true);
+            expect(chat.toggleSearch()).toBe(true);
+            expect(input.value).toBe('target');
+            chat.destroy();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});

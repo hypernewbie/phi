@@ -65,6 +65,79 @@ function isSnapshot(value) {
 function rejected(message) {
     return Promise.reject(new Error(message));
 }
+function validQueueSnapshot(value) {
+    if (!value || typeof value !== 'object') return false;
+    const queue = value;
+    return typeof queue.sessionEpoch === 'string' && Array.isArray(queue.items);
+}
+function cloneQueueItems(items) {
+    if (!Array.isArray(items)) return [];
+    return items.flatMap((value) => {
+        if (!value || typeof value !== 'object') return [];
+        const item = value;
+        const deliveries = new Set(['prompt', 'steer', 'followUp']);
+        const states = new Set([
+            'local',
+            'sending',
+            'accepted',
+            'uncertain',
+            'consumed',
+            'cancelled',
+            'promoted',
+        ]);
+        if (
+            typeof item.id !== 'string' ||
+            typeof item.sid !== 'string' ||
+            typeof item.sessionEpoch !== 'string' ||
+            typeof item.message !== 'string' ||
+            typeof item.delivery !== 'string' ||
+            !deliveries.has(item.delivery) ||
+            typeof item.state !== 'string' ||
+            !states.has(item.state)
+        )
+            return [];
+        return [
+            {
+                id: item.id,
+                sid: item.sid,
+                sessionEpoch: item.sessionEpoch,
+                message: item.message,
+                delivery: item.delivery,
+                state: item.state,
+                error: typeof item.error === 'string' ? item.error : undefined,
+                createdAt:
+                    typeof item.createdAt === 'number'
+                        ? item.createdAt
+                        : undefined,
+                attachments: Array.isArray(item.attachments)
+                    ? item.attachments.flatMap((attachment) => {
+                          if (!attachment || typeof attachment !== 'object')
+                              return [];
+                          const record = attachment;
+                          if (typeof record.ref !== 'string') return [];
+                          return [
+                              {
+                                  ref: record.ref,
+                                  name:
+                                      typeof record.name === 'string'
+                                          ? record.name
+                                          : 'attachment',
+                                  mimeType:
+                                      typeof record.mimeType === 'string'
+                                          ? record.mimeType
+                                          : 'application/octet-stream',
+                                  sizeBytes:
+                                      typeof record.sizeBytes === 'number'
+                                          ? record.sizeBytes
+                                          : 0,
+                              },
+                          ];
+                      })
+                    : [],
+            },
+        ];
+    });
+}
 function validModels(value) {
     const models = value?.models;
     if (!Array.isArray(models)) throw new Error('Pi model list is malformed');
@@ -121,11 +194,19 @@ export function mountChatPi(
     onStatusChange = () => {},
     onControlChange = () => {},
     onFleetChange = () => {},
+    onQueueRecovery = undefined,
 ) {
     const wire = client;
     const buffer = new MessageBuffer();
     const localStatus = { cwd };
     let sid = '';
+    let queueSessionEpoch = '';
+    let queueItems = [];
+    let piAuthoritativeQueue = {
+        steering: [],
+        followUp: [],
+    };
+    const spawnId = `spawn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     let destroyed = false;
     let ready = false;
     let busy = false;
@@ -133,7 +214,6 @@ export function mountChatPi(
     let exited = false;
     let resetInFlight = false;
     let sessionActive = false;
-    let outgoingSeq = 0;
     const outgoing = [];
     // Outgoing records disappear when their user message is rendered; retain
     // the full current-turn order separately for interrupt restoration.
@@ -163,14 +243,59 @@ export function mountChatPi(
         const statusChanged = mergeState(localStatus, state);
         let controlsChanged = statusChanged;
         if (source && typeof source === 'object') {
-            if (typeof source.busy === 'boolean' && source.busy !== busy) {
+            if (typeof source.busy === 'boolean') {
+                const busyChanged = source.busy !== busy;
                 busy = source.busy;
                 sessionActive = busy;
-                controlsChanged = true;
-                if (!busy) {
-                    outgoing.length = 0;
-                    turnPrompts.length = 0;
-                    activePrompt = null;
+                controlsChanged = controlsChanged || busyChanged;
+                // The Pi-authoritative arrays are display-only. Retire them at
+                // the idle/settlement boundary without changing ledger
+                // ownership; queueChanged remains the identity-bearing path
+                // for local item transitions.
+                if (
+                    !busy &&
+                    (piAuthoritativeQueue.steering.length > 0 ||
+                        piAuthoritativeQueue.followUp.length > 0)
+                ) {
+                    piAuthoritativeQueue = { steering: [], followUp: [] };
+                    syncQueueView();
+                }
+                // agent_settled is authoritative even when Pi never exposed a
+                // busy=true edge (a settled child may report busy=false from
+                // the start). Clear any optimistic turn on every idle state,
+                // not only on a false transition.
+                if (
+                    !busy &&
+                    (busyChanged ||
+                        outgoing.length > 0 ||
+                        activePrompt !== null ||
+                        retryState !== null)
+                ) {
+                    // Queue-backed records have identity-bearing terminal
+                    // transitions from queueChanged. A busy=false state
+                    // (including a get_state response) cannot prove that Pi
+                    // consumed an accepted item, so only clear legacy
+                    // OpPrompt records at this compatibility boundary.
+                    const queueOutgoing = outgoing.filter(
+                        (item) => !item.legacy,
+                    );
+                    const queueIds = new Set(
+                        queueOutgoing.map((item) => item.id),
+                    );
+                    outgoing.splice(0, outgoing.length, ...queueOutgoing);
+                    for (
+                        let index = turnPrompts.length - 1;
+                        index >= 0;
+                        index--
+                    ) {
+                        if (turnPrompts[index].legacy)
+                            turnPrompts.splice(index, 1);
+                    }
+                    if (activePrompt && !queueIds.has(activePrompt.id)) {
+                        activePrompt = queueOutgoing.at(-1)
+                            ? { ...queueOutgoing.at(-1), origin: 'optimistic' }
+                            : null;
+                    }
                     // Milestone 4: guard against a stranded retry state
                     // when the busy→false transition lands in a hydrate
                     // window that dropped the auto_retry_end event (the
@@ -245,6 +370,77 @@ export function mountChatPi(
         pageSize: 50,
     });
     const status = view.status;
+    const reportQueueActionError = (error) => {
+        if (!destroyed) {
+            status.textContent = `Queue action failed: ${String(error instanceof Error ? error.message : error)}`;
+        }
+    };
+    const syncQueueView = () => {
+        view.setQueueState(queueItems, piAuthoritativeQueue, {
+            copy: (item) => {
+                void queueCopy(item.id)
+                    .then((result) => {
+                        if (result && typeof result === 'object') {
+                            onQueueRecovery?.(result);
+                        }
+                        return result;
+                    })
+                    .catch(reportQueueActionError);
+            },
+            discard: (item) => {
+                void queueDiscard(item.id).catch(reportQueueActionError);
+            },
+            restore: (item) => {
+                void queueRestore(item.id)
+                    .then((result) => {
+                        if (
+                            result &&
+                            typeof result === 'object' &&
+                            result.restored === true
+                        ) {
+                            onQueueRecovery?.(result);
+                        }
+                        return result;
+                    })
+                    .catch(reportQueueActionError);
+            },
+        });
+    };
+    const applyQueueSnapshot = (value) => {
+        if (!validQueueSnapshot(value)) return;
+        queueSessionEpoch = value.sessionEpoch;
+        queueItems = cloneQueueItems(value.items);
+        for (const outgoingItem of [...outgoing]) {
+            if (outgoingItem.legacy) continue;
+            const queueItem = queueItems.find(
+                (candidate) => candidate.id === outgoingItem.id,
+            );
+            if (!queueItem) continue;
+            if (
+                queueItem.state === 'accepted' ||
+                queueItem.state === 'promoted'
+            ) {
+                outgoingItem.state = 'sent';
+                if (activePrompt?.id === outgoingItem.id)
+                    activePrompt.state = 'sent';
+            } else if (
+                queueItem.state === 'cancelled' ||
+                queueItem.state === 'consumed' ||
+                queueItem.state === 'uncertain'
+            ) {
+                const outgoingIndex = outgoing.indexOf(outgoingItem);
+                if (outgoingIndex >= 0) outgoing.splice(outgoingIndex, 1);
+                removeTurnPrompt(outgoingItem);
+                if (activePrompt?.id === outgoingItem.id) {
+                    activePrompt = outgoing.at(-1)
+                        ? { ...outgoing.at(-1), origin: 'optimistic' }
+                        : null;
+                }
+            }
+        }
+        syncQueueView();
+        syncActiveTurn();
+    };
     // pi-subagents fleet strip: shared #subagent-strip below the input
     // bar. Only this pane may write it while it is the active tab, so
     // background panes' fleet events gate inside update(). The last
@@ -376,6 +572,7 @@ export function mountChatPi(
                 }
                 buffer.applySnapshot(data);
                 applyState(data.state);
+                applyQueueSnapshot(data.queue);
                 hydrateInFlight = false;
                 paint();
                 // A hydrate replaces the authoritative settled transcript.
@@ -397,18 +594,22 @@ export function mountChatPi(
                 }
             });
     };
-    const send = (text) => {
-        if (!sid || !ready || exited || subagentViewer.isOpen()) return false;
-        const dispatch = dispatchComposer(text);
+    const sendLegacy = (text) => {
+        // OpPrompt predates the hydrate barrier and remains a compatibility
+        // path for existing non-browser callers. Queue-backed sends below
+        // still require `ready` and a hydrated session epoch.
+        if (!sid || exited || subagentViewer.isOpen()) return false;
+        const dispatch = dispatchComposer(text, { busy });
         if (dispatch.kind === 'rejected') {
             status.textContent = dispatch.reason;
             return false;
         }
         const currentSid = sid;
         const local = {
-            id: `out-${++outgoingSeq}`,
+            id: `out-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             text: dispatch.message,
             state: 'sending',
+            legacy: true,
         };
         outgoing.push(local);
         turnPrompts.push(local);
@@ -418,12 +619,7 @@ export function mountChatPi(
             wire,
             'prompt',
             currentSid,
-            {
-                message: dispatch.message,
-                ...(dispatch.streamingBehavior
-                    ? { streamingBehavior: dispatch.streamingBehavior }
-                    : {}),
-            },
+            { message: dispatch.message, streamingBehavior: 'steer' },
             `p${Date.now()}-${Math.random().toString(16).slice(2)}`,
             legacyResponses,
         )
@@ -438,15 +634,10 @@ export function mountChatPi(
                             : null;
                     if (!destroyed && currentSid === sid)
                         status.textContent = 'Error: prompt was not accepted';
-                } else if (index >= 0) {
+                } else {
                     local.state = 'sent';
                     if (activePrompt?.id === local.id)
                         activePrompt.state = 'sent';
-                } else if (activePrompt?.id === local.id) {
-                    // Pi may reconcile the outgoing record before the
-                    // prompt response arrives. Keep the retained marker's
-                    // state in sync with the accepted response.
-                    activePrompt.state = 'sent';
                 }
                 syncActiveTurn();
             })
@@ -463,6 +654,95 @@ export function mountChatPi(
                 syncActiveTurn();
             });
         return true;
+    };
+    const send = (input) => {
+        // OpPrompt remains a compatibility path for non-browser callers. The
+        // shared composer always passes the structured object form below.
+        if (typeof input === 'string') return sendLegacy(input);
+        if (!sid || !ready || exited || subagentViewer.isOpen()) {
+            return rejected('Pi RPC is not ready');
+        }
+        const dispatch = dispatchComposer(input.message, {
+            busy,
+            followUp: input.deliveryOverride === 'followUp',
+        });
+        if (dispatch.kind === 'rejected') {
+            status.textContent = dispatch.reason;
+            return rejected(dispatch.reason);
+        }
+        if (!queueSessionEpoch) {
+            return rejected('Pi queue is not hydrated yet');
+        }
+        const delivery = input.deliveryOverride ?? dispatch.delivery;
+        const attachments = Array.isArray(input.attachments)
+            ? input.attachments
+            : [];
+        const currentSid = sid;
+        const itemId =
+            typeof crypto !== 'undefined' &&
+            typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `queue-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const local = {
+            id: itemId,
+            text: dispatch.message,
+            state: 'sending',
+        };
+        outgoing.push(local);
+        turnPrompts.push(local);
+        activePrompt = { ...local, origin: 'optimistic' };
+        syncActiveTurn();
+        return invokeControl(
+            wire,
+            'queueSubmit',
+            currentSid,
+            {
+                itemId,
+                sessionEpoch: queueSessionEpoch,
+                message: dispatch.message,
+                delivery,
+                attachmentRefs: [...attachments],
+            },
+            `q${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            legacyResponses,
+        )
+            .then((data) => {
+                const item = cloneQueueItems([data])[0];
+                if (!item) throw new Error('queue response was malformed');
+                queueItems = [
+                    ...queueItems.filter(
+                        (candidate) => candidate.id !== item.id,
+                    ),
+                    item,
+                ];
+                if (item.state === 'accepted' || item.state === 'promoted') {
+                    local.state = 'sent';
+                }
+                syncQueueView();
+                if (activePrompt?.id === local.id && local.state === 'sending')
+                    activePrompt.state = 'sending';
+                else if (activePrompt?.id === local.id)
+                    activePrompt.state = 'sent';
+                syncActiveTurn();
+                return { item, uncertain: false };
+            })
+            .catch((error) => {
+                const uncertain = error?.uncertain === true;
+                const index = outgoing.indexOf(local);
+                if (index >= 0) outgoing.splice(index, 1);
+                removeTurnPrompt(local);
+                if (activePrompt?.id === local.id)
+                    activePrompt = outgoing.at(-1)
+                        ? { ...outgoing.at(-1), origin: 'optimistic' }
+                        : null;
+                if (!destroyed && currentSid === sid) {
+                    status.textContent = uncertain
+                        ? 'Delivery uncertain — draft preserved'
+                        : `Error: ${String(error)}`;
+                }
+                syncActiveTurn();
+                throw error;
+            });
     };
     const getModels = () => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
@@ -597,6 +877,45 @@ export function mountChatPi(
             legacyResponses,
         );
     };
+    const queueOperation = (op, itemId) => {
+        if (!sid || !queueSessionEpoch)
+            return rejected('Pi queue is not hydrated yet');
+        return invokeControl(
+            wire,
+            op,
+            sid,
+            { itemId, sessionEpoch: queueSessionEpoch },
+            `${op}-${Date.now()}`,
+            legacyResponses,
+        ).then((data) => {
+            if (data?.item) {
+                const item = cloneQueueItems([data.item])[0];
+                if (item) {
+                    queueItems = [
+                        ...queueItems.filter(
+                            (candidate) => candidate.id !== item.id,
+                        ),
+                        item,
+                    ];
+                    syncQueueView();
+                }
+            }
+            return data;
+        });
+    };
+    const queueCopy = (itemId) => queueOperation('queueCopy', itemId);
+    const queueDiscard = (itemId) => queueOperation('queueDiscard', itemId);
+    const queueRestore = (itemId) => queueOperation('queueRestore', itemId);
+    const restoreLatestLocal = () => {
+        const latest = [...queueItems]
+            .filter((item) => item.state === 'local')
+            .sort(
+                (left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0),
+            )[0];
+        return latest
+            ? queueRestore(latest.id)
+            : Promise.resolve({ restored: false, reason: 'missing' });
+    };
     const off = client.onMessage((env) => {
         if (env?.t === 'res' && typeof env.id === 'string') {
             const response = legacyResponses.get(env.id);
@@ -641,6 +960,29 @@ export function mountChatPi(
             lastFleet = env.data;
             strip.update(env.data);
             onFleetChange(env.data);
+        }
+        if (env.evt === 'queueChanged') {
+            applyQueueSnapshot(env.data);
+        }
+        if (
+            env.evt === 'queueUpdate' &&
+            env.data &&
+            typeof env.data === 'object'
+        ) {
+            const queue = env.data;
+            piAuthoritativeQueue = {
+                steering: Array.isArray(queue.steering)
+                    ? queue.steering.filter(
+                          (value) => typeof value === 'string',
+                      )
+                    : [],
+                followUp: Array.isArray(queue.followUp)
+                    ? queue.followUp.filter(
+                          (value) => typeof value === 'string',
+                      )
+                    : [],
+            };
+            syncQueueView();
         }
         // Milestone 4: provider-level retry indicator.
         // auto_retry_start/summarization_retry_scheduled stash
@@ -741,7 +1083,7 @@ export function mountChatPi(
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {
             const text = renderedUserText(env.data.message.content);
             const match = outgoing.find(
-                (item) => renderedUserText(item.text) === text,
+                (item) => item.legacy && renderedUserText(item.text) === text,
             );
             if (match) {
                 outgoing.splice(outgoing.indexOf(match), 1);
@@ -780,7 +1122,10 @@ export function mountChatPi(
             }
         }
     });
-    const spawnArgs = { cwd };
+    const spawnArgs = {
+        cwd,
+        spawnId,
+    };
     if (sessionPath) spawnArgs.sessionPath = sessionPath;
     void invokeControl(
         wire,
@@ -802,6 +1147,7 @@ export function mountChatPi(
                 typeof data.title === 'string' ? data.title : 'Pi RPC';
             buffer.applySnapshot(data.snapshot);
             applyState(data.state);
+            applyQueueSnapshot(data.queue);
             ready = true;
             exited = false;
             status.textContent = 'Ready';
@@ -825,7 +1171,7 @@ export function mountChatPi(
             onStatusChange(null);
             onControlChange(null);
         },
-        send,
+        send: send,
         getModels,
         getThinkingLevels,
         setModel,
@@ -833,6 +1179,10 @@ export function mountChatPi(
         resetChat,
         interrupt,
         setName,
+        queueCopy,
+        queueDiscard,
+        queueRestore,
+        restoreLatestLocal,
         refreshFleet: () => {
             // Tab re-activation: repaint this pane's last fleet snapshot
             // (or hide the shared strip when this pane has none).

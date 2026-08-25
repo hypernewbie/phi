@@ -48,6 +48,15 @@ export function mountRpcChat(paneId, container, cwd, sessionPath) {
         (status) => setPiRpcStatus(paneId, status),
         (state) => setPiRpcControls(paneId, state),
         (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
+        (recovery) => {
+            if (typeof document !== 'undefined') {
+                document.dispatchEvent(
+                    new CustomEvent('phi:pi-queue-recovery', {
+                        detail: { paneId, recovery },
+                    }),
+                );
+            }
+        },
     );
     chats.set(paneId, chat);
 }
@@ -59,8 +68,31 @@ export function syncPiSubagentStrip(paneId) {
     if (chat) chat.refreshFleet();
     else hideSubagentStrip();
 }
-export function rpcChatSend(paneId, payload) {
-    return chats.get(paneId)?.send(payload) ?? false;
+export function rpcChatSend(
+    paneId,
+    payload,
+    attachmentRefs = [],
+    deliveryOverride,
+) {
+    return (
+        chats.get(paneId)?.send({
+            message: payload,
+            attachments: [...attachmentRefs],
+            ...(deliveryOverride ? { deliveryOverride } : {}),
+        }) ?? missingPane(paneId)
+    );
+}
+export function rpcChatQueueCopy(paneId, itemId) {
+    return chats.get(paneId)?.queueCopy(itemId) ?? missingPane(paneId);
+}
+export function rpcChatQueueDiscard(paneId, itemId) {
+    return chats.get(paneId)?.queueDiscard(itemId) ?? missingPane(paneId);
+}
+export function rpcChatQueueRestore(paneId, itemId) {
+    return chats.get(paneId)?.queueRestore(itemId) ?? missingPane(paneId);
+}
+export function rpcChatRestoreLatestLocal(paneId) {
+    return chats.get(paneId)?.restoreLatestLocal() ?? missingPane(paneId);
 }
 export function rpcChatModels(paneId) {
     return chats.get(paneId)?.getModels() ?? missingPane(paneId);

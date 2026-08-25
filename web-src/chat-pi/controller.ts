@@ -1,7 +1,14 @@
 import { connectControl } from './client.js';
 import { mountChatPi } from './index.js';
 import { hideSubagentStrip } from './subagents.js';
-import type { ChatPiHandle, PiModel, PiRpcControls } from './index.js';
+import type {
+    ChatPiHandle,
+    ChatPiSendInput,
+    PiModel,
+    PiQueueRecovery,
+    PiQueueSendResult,
+    PiRpcControls,
+} from './index.js';
 import type { PiRpcStatus } from './render.js';
 
 const chats = new Map<string, ChatPiHandle>();
@@ -65,6 +72,15 @@ export function mountRpcChat(
         (status) => setPiRpcStatus(paneId, status),
         (state) => setPiRpcControls(paneId, state),
         (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
+        (recovery: PiQueueRecovery) => {
+            if (typeof document !== 'undefined') {
+                document.dispatchEvent(
+                    new CustomEvent('phi:pi-queue-recovery', {
+                        detail: { paneId, recovery },
+                    }),
+                );
+            }
+        },
     );
     chats.set(paneId, chat);
 }
@@ -78,8 +94,44 @@ export function syncPiSubagentStrip(paneId: string): void {
     else hideSubagentStrip();
 }
 
-export function rpcChatSend(paneId: string, payload: string): boolean {
-    return chats.get(paneId)?.send(payload) ?? false;
+export function rpcChatSend(
+    paneId: string,
+    payload: string,
+    attachmentRefs: string[] = [],
+    deliveryOverride?: ChatPiSendInput['deliveryOverride'],
+): Promise<PiQueueSendResult> {
+    return (
+        chats.get(paneId)?.send({
+            message: payload,
+            attachments: [...attachmentRefs],
+            ...(deliveryOverride ? { deliveryOverride } : {}),
+        }) ?? missingPane(paneId)
+    );
+}
+
+export function rpcChatQueueCopy(
+    paneId: string,
+    itemId: string,
+): Promise<unknown> {
+    return chats.get(paneId)?.queueCopy(itemId) ?? missingPane(paneId);
+}
+
+export function rpcChatQueueDiscard(
+    paneId: string,
+    itemId: string,
+): Promise<unknown> {
+    return chats.get(paneId)?.queueDiscard(itemId) ?? missingPane(paneId);
+}
+
+export function rpcChatQueueRestore(
+    paneId: string,
+    itemId: string,
+): Promise<unknown> {
+    return chats.get(paneId)?.queueRestore(itemId) ?? missingPane(paneId);
+}
+
+export function rpcChatRestoreLatestLocal(paneId: string): Promise<unknown> {
+    return chats.get(paneId)?.restoreLatestLocal() ?? missingPane(paneId);
 }
 
 export function rpcChatModels(paneId: string): Promise<PiModel[]> {

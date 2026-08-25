@@ -14,6 +14,13 @@ import {
     validatedToolDiff,
 } from './chat-pi/tool-render.js';
 import type { ToolStatus } from './chat-pi/tool-render.js';
+import { renderQueuePanel } from './chat-pi/queue.js';
+import type {
+    QueueActions as ReviewQueueActions,
+    QueueAuthoritative,
+    QueueItem as ReviewQueueItem,
+} from './chat-pi/queue.js';
+export type { ReviewQueueActions, ReviewQueueItem };
 
 /** Wrap a structured array as a source-compatible view without conversion. */
 function arrayAsSource(
@@ -107,6 +114,11 @@ export interface ReviewTranscriptView {
      * `partial` removes the live block if present.
      */
     setStructuredPartial(partial: string): void;
+    setQueueState(
+        items: readonly ReviewQueueItem[],
+        piQueue?: QueueAuthoritative,
+        actions?: ReviewQueueActions,
+    ): void;
     setActiveTurn(state: ActiveTurnState | null): void;
     /**
      * Toggle the persistent red error row appended to the chat. Phi
@@ -552,6 +564,9 @@ export function createReviewTranscriptView(
     const transcript = document.createElement('div');
     transcript.className = 'review-chat-wrapper';
     contentBody.appendChild(transcript);
+    const queuePanel = document.createElement('div');
+    queuePanel.className = 'pi-queue-panel hidden';
+    contentBody.appendChild(queuePanel);
 
     let activeHeader: HTMLElement | null = null;
     let activeTop: HTMLElement | null = null;
@@ -644,6 +659,9 @@ export function createReviewTranscriptView(
     // paint. Window slides (appendNewer, jump button) rebuild outside it
     // and would otherwise drop the live tail for one paint.
     let latestPartial = '';
+    let queueItems: readonly ReviewQueueItem[] = [];
+    let piQueue: QueueAuthoritative = { steering: [], followUp: [] };
+    let queueActions: ReviewQueueActions = {};
     let activeTurn: ActiveTurnState | null = null;
     // Milestone 3: persistent (within-view) red error row. Phi treats
     // it as ephemeral: it is not in the snapshot/persist surface and
@@ -909,6 +927,11 @@ export function createReviewTranscriptView(
      * (prependOlder / appendNewer / jump) can re-create the live block
      * with the latest text.
      */
+    function renderQueueState(): void {
+        if (options.mode !== 'structured') return;
+        renderQueuePanel(queuePanel, queueItems, piQueue, queueActions);
+    }
+
     function setStructuredPartial(partial: string): void {
         latestPartial = partial;
         const existing = findLiveAssistantBlock();
@@ -1085,6 +1108,16 @@ export function createReviewTranscriptView(
         },
         setStructuredPartial(partial) {
             setStructuredPartial(partial);
+        },
+        setQueueState(
+            items,
+            authoritative = { steering: [], followUp: [] },
+            actions = {},
+        ) {
+            queueItems = items;
+            piQueue = authoritative;
+            queueActions = actions;
+            renderQueueState();
         },
         setActiveTurn(state) {
             activeTurn = state;
