@@ -1,5 +1,6 @@
 import { dispatchComposer } from './composer.js';
 import type { ControlClient } from './client.js';
+import { CompactCallTimeout } from './client.js';
 import { MessageBuffer } from './message-buffer.js';
 import type { Snapshot } from './message-buffer.js';
 import { savePersisted } from './persist.js';
@@ -32,6 +33,7 @@ export interface ChatPiHandle {
     getThinkingLevels(): Promise<string[]>;
     setModel(provider: string, modelId: string): Promise<unknown>;
     setThinking(level: string): Promise<unknown>;
+    compact(): Promise<unknown>;
     resetChat(): Promise<unknown>;
     interrupt(): Promise<unknown>;
     setName(name: string): Promise<unknown>;
@@ -154,8 +156,15 @@ function invokeControl(
     args: unknown,
     legacyId: string,
     legacyResponses?: LegacyResponseMap,
+    timeoutMs?: number,
 ): Promise<any> {
-    if (typeof client.call === 'function') return client.call(op, sid, args);
+    if (typeof client.call === 'function')
+        return client.call(
+            op,
+            sid,
+            args,
+            timeoutMs ? { timeoutMs } : undefined,
+        );
     const frame: Record<string, unknown> = { t: 'call', id: legacyId, op };
     if (sid !== undefined) frame.sid = sid;
     if (args !== undefined) frame.args = args;
@@ -194,6 +203,7 @@ export function mountChatPi(
     let queueDepth = 0;
     let exited = false;
     let resetInFlight = false;
+    let compactInFlight = false;
     let sessionActive = false;
     type OutgoingPrompt = {
         id: string;
@@ -633,6 +643,47 @@ export function mountChatPi(
             });
     };
 
+    const compact = (): Promise<unknown> => {
+        if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
+        if (busy || queueDepth > 0) return rejected('Pi RPC is busy');
+        if (compactInFlight)
+            return rejected('Pi compaction is already pending');
+        compactInFlight = true;
+        notifyControls();
+        const currentSid = sid;
+        return invokeControl(
+            wire,
+            'compact',
+            currentSid,
+            {},
+            'compact',
+            legacyResponses,
+            CompactCallTimeout,
+        )
+            .then((data) => {
+                if (currentSid === sid) {
+                    applyState(data?.state);
+                    if (
+                        typeof data?.stateWarning === 'string' &&
+                        data.stateWarning
+                    )
+                        status.textContent = `Warning: ${data.stateWarning}`;
+                }
+                return data;
+            })
+            .catch((error: unknown) => {
+                if (!destroyed && currentSid === sid)
+                    status.textContent = `Error: ${String(error)}`;
+                throw error;
+            })
+            .finally(() => {
+                compactInFlight = false;
+                // A pane destroyed mid-compaction must not repopulate the
+                // controller's control cache after teardown published null.
+                if (!destroyed) notifyControls();
+            });
+    };
+
     const resetChat = (): Promise<unknown> => {
         if (!sid || !ready || exited) return rejected('Pi RPC is not ready');
         if (busy || queueDepth > 0) return rejected('Pi RPC is busy');
@@ -944,6 +995,7 @@ export function mountChatPi(
         setModel,
         setThinking,
         resetChat,
+        compact,
         interrupt,
         setName,
         refreshFleet: (): void => {

@@ -928,6 +928,179 @@ func TestControlSpawnReusedLeaseDoesNotBootstrapAgain(t *testing.T) {
 	}
 }
 
+func TestControlCompactRunsPiCompactAndReturnsRefreshedState(t *testing.T) {
+	child := newControlFakeChild()
+	var compactCalls atomic.Int32
+	var stateCalls atomic.Int32
+	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
+		switch command["type"] {
+		case "compact":
+			compactCalls.Add(1)
+			return map[string]any{}, true, ""
+		case "get_state":
+			// Bootstrap returns "bootstrap"; the post-compact refresh must
+			// return distinct values so a deleted refresh cannot pass.
+			if stateCalls.Add(1) >= 2 {
+				return map[string]any{
+					"model":               map[string]any{"name": "m-compacted"},
+					"thinkingLevel":       "high",
+					"isStreaming":         false,
+					"isCompacting":        false,
+					"pendingMessageCount": 0,
+				}, true, ""
+			}
+			return map[string]any{
+				"model":               map[string]any{"name": "bootstrap"},
+				"thinkingLevel":       "low",
+				"isStreaming":         false,
+				"isCompacting":        false,
+				"pendingMessageCount": 0,
+			}, true, ""
+		case "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/compact")
+	t.Cleanup(func() {
+		if inst, err := mgr.Lookup(sid); err == nil {
+			inst.Kill()
+		}
+	})
+
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-ok", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "compact-ok")
+	if response.Ok == nil || !*response.Ok || compactCalls.Load() != 1 {
+		t.Fatalf("compact call failed: response=%+v calls=%d", response, compactCalls.Load())
+	}
+	var payload struct {
+		State rpc.State `json:"state"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.State.Model != "m-compacted" || payload.State.Thinking != "high" {
+		t.Fatalf("compact did not return refreshed canonical state: %+v", payload.State)
+	}
+
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-reject", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{"x":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	invalid := readResponse(t, c, "compact-reject")
+	if invalid.Ok == nil || *invalid.Ok || compactCalls.Load() != 1 {
+		t.Fatalf("compact validation unexpectedly succeeded: %+v", invalid)
+	}
+}
+
+func TestControlCompactRefreshFailureSurfacesWarningNotFailure(t *testing.T) {
+	child := newControlFakeChild()
+	var compactCalls atomic.Int32
+	var stateCalls atomic.Int32
+	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
+		switch command["type"] {
+		case "compact":
+			compactCalls.Add(1)
+			return map[string]any{}, true, ""
+		case "get_state":
+			if stateCalls.Add(1) >= 2 {
+				// Post-compact refresh fails after compaction completed.
+				return nil, false, "state refresh rejected"
+			}
+			return map[string]any{
+				"model":               map[string]any{"name": "bootstrap"},
+				"thinkingLevel":       "low",
+				"isStreaming":         false,
+				"isCompacting":        false,
+				"pendingMessageCount": 0,
+			}, true, ""
+		case "get_session_stats", "get_commands":
+			return map[string]any{}, true, ""
+		default:
+			return nil, false, "unexpected command"
+		}
+	})
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	c := helloDial(t, mgr)
+	sid := spawnControlSession(t, c, "/w/compact-warn")
+	t.Cleanup(func() {
+		if inst, err := mgr.Lookup(sid); err == nil {
+			inst.Kill()
+		}
+	})
+
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "compact-warn", Op: rpc.OpCompact, Sid: sid, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	response := readResponse(t, c, "compact-warn")
+	if response.Ok == nil || !*response.Ok || compactCalls.Load() != 1 {
+		t.Fatalf("completed compaction reported as failure: %+v", response)
+	}
+	var payload struct {
+		State        rpc.State `json:"state"`
+		StateWarning string    `json:"stateWarning"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.StateWarning == "" {
+		t.Fatalf("refresh failure did not surface a warning: %s", response.Data)
+	}
+}
+
+func TestControlAbortBypassesControlGateHeldByCompact(t *testing.T) {
+	child := newControlFakeChild()
+	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
+		if command["type"] != "abort" {
+			return nil, false, "unexpected command"
+		}
+		return nil, true, ""
+	})
+	mgr := rpc.NewManagerWithSpawner(func(rpc.SpawnOptions) (rpc.Cmd, rpc.WriteCloser, rpc.ReadCloser, error) {
+		return child, child.stdinW, child.stdoutR, nil
+	})
+	inst, err := mgr.Spawn(rpc.SpawnOptions{Cwd: "/w/abort-gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inst.Kill() })
+	c := helloDial(t, mgr)
+
+	// Hold the control gate exactly like a long-running compact would.
+	// WithControl runs fn only after acquiring the gate, so closing `held`
+	// proves the gate is ours.
+	held := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = inst.WithControl(context.Background(), func(context.Context) (any, error) {
+			close(held)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-held
+	t.Cleanup(func() { close(release) })
+
+	if err := c.WriteJSON(Envelope{Type: rpc.CallFrame, ID: "abort-gate", Op: rpc.OpAbort, Sid: inst.ID, Args: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	// If abort queued behind the gate it would hit the operation deadline;
+	// a short read deadline keeps the failure mode fast.
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	response := readResponse(t, c, "abort-gate")
+	if response.Ok == nil || !*response.Ok {
+		t.Fatalf("abort was starved by the control gate: %+v", response)
+	}
+}
+
 func TestControlPiAvailabilityAndSetterOutcomes(t *testing.T) {
 	child := newControlFakeChild()
 	var stateCalls atomic.Int32

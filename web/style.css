@@ -3012,13 +3012,15 @@ html[data-phi-desktop-root] .app-header {
 
 .pi-rpc-status-label {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: inherit;
+    font-weight: 700;
     text-transform: uppercase;
 }
 
 .pi-rpc-status-value {
     color: var(--text-primary);
-    font-size: 11px;
+    font-size: inherit;
+    font-weight: 700;
 }
 
 /* PRESETS PANEL */
@@ -3054,6 +3056,60 @@ html[data-phi-desktop-root] .app-header {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 160px;
+}
+
+.presets-container > .pi-rpc-model-trigger,
+.presets-container > .pi-rpc-thinking-trigger,
+.presets-container > .pi-rpc-compact-btn,
+.presets-container > .pi-rpc-reset-btn {
+    font-size: inherit;
+    font-weight: 700;
+}
+
+.pi-rpc-context-meter {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    min-width: 140px;
+    min-height: 24px;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 10px;
+    overflow: hidden;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    background-color: var(--bg-elevated);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.pi-rpc-context-meter-fill {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    height: 100%;
+    width: 0;
+    background: transparent;
+}
+
+.pi-rpc-context-meter-fill--green {
+    background: color-mix(in srgb, #10b981 45%, transparent);
+}
+
+.pi-rpc-context-meter-fill--yellow {
+    background: color-mix(in srgb, #fbbf24 45%, transparent);
+}
+
+.pi-rpc-context-meter-fill--red {
+    background: color-mix(in srgb, #f87171 45%, transparent);
+}
+
+.pi-rpc-context-meter-text {
+    position: relative;
+    color: var(--text-primary);
+    font-size: inherit;
+    font-weight: 700;
 }
 
 .preset-btn:hover {
@@ -3170,6 +3226,17 @@ html[data-phi-desktop-root] .app-header {
     padding: 8px 12px;
     color: var(--text-muted);
     font-size: 12px;
+}
+
+#pi-rpc-model-dropup .dropup-header,
+#pi-rpc-thinking-dropup .dropup-header,
+#pi-rpc-model-dropup .dropup-model-btn,
+#pi-rpc-thinking-dropup .dropup-model-btn,
+#pi-rpc-model-dropup .pi-rpc-dropup-meta,
+#pi-rpc-model-dropup .pi-rpc-dropup-message,
+#pi-rpc-thinking-dropup .pi-rpc-dropup-message {
+    font-size: inherit;
+    font-weight: 700;
 }
 
 .dropup-row-actions {
@@ -6565,6 +6632,23 @@ html[data-phi-config-page] .settings-modal {
         height: 24px !important;
         line-height: 22px !important;
         border-radius: 4px !important;
+    }
+
+    .presets-container > .pi-rpc-model-trigger,
+    .presets-container > .pi-rpc-thinking-trigger,
+    .presets-container > .pi-rpc-compact-btn,
+    .presets-container > .pi-rpc-reset-btn {
+        font-size: inherit !important;
+        min-height: 24px;
+        height: auto !important;
+        line-height: normal !important;
+    }
+
+    .presets-container > .pi-rpc-context-meter {
+        font-size: inherit !important;
+        min-height: 24px;
+        height: auto !important;
+        line-height: normal !important;
     }
 
     .preset-btn.mobile-nav-btn {

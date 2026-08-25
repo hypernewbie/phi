@@ -35,6 +35,7 @@ import {
     rpcChatSetModel,
     rpcChatSetThinking,
     rpcChatReset,
+    rpcChatCompact,
     rpcChatInterrupt,
     closePiSubagentViewer,
     rpcChatSetName,
@@ -2089,15 +2090,12 @@ export class TabManager {
             return;
         }
         const display = formatPiRpcStatus(getPiRpcStatus(activeTab.paneId));
+        const cacheRW = `${display.cacheRead} / ${display.cacheWrite}`;
         const fields = [
             ['CWD', display.cwd],
-            ['Model', display.model],
-            ['Thinking', display.thinking],
             ['Input', display.input],
             ['Output', display.output],
-            ['Context', display.context],
-            ['Cache read', display.cacheRead],
-            ['Cache write', display.cacheWrite],
+            ['Cache R/W', cacheRW],
         ];
         bar.classList.remove('hidden');
         bar.replaceChildren(
@@ -2470,7 +2468,7 @@ export class TabManager {
         modelButton.type = 'button';
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = 'Model ▾';
+        modelButton.textContent = `Model · ${state.model || '—'} ▾`;
         modelButton.disabled =
             menuDisabled || this._piRpcModelPending?.paneId === paneId;
         modelButton.addEventListener('click', (event) => {
@@ -2484,7 +2482,7 @@ export class TabManager {
         thinkingButton.type = 'button';
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = 'Thinking ▾';
+        thinkingButton.textContent = `Thinking · ${state.thinking || '—'} ▾`;
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
@@ -2538,7 +2536,90 @@ export class TabManager {
                         this.renderPresets('pi-rpc');
                 });
         });
-        this.presetsContainer.append(modelButton, thinkingButton, resetButton);
+        // Context meter — ratio from raw status; text from formatPiRpcStatus.
+        const rawStatus = getPiRpcStatus(activeTab.paneId);
+        const displayStatus = formatPiRpcStatus(rawStatus);
+        const usedTokens = rawStatus?.contextUsedTokens;
+        const windowTokens = rawStatus?.contextWindowTokens;
+        const ratioKnown =
+            typeof usedTokens === 'number' &&
+            Number.isFinite(usedTokens) &&
+            typeof windowTokens === 'number' &&
+            Number.isFinite(windowTokens) &&
+            windowTokens > 0;
+        // Band selection uses the exact ratio so a 39.999% fill stays green;
+        // only the displayed width/aria value rounds to one decimal.
+        const ratioExact = ratioKnown
+            ? Math.min(100, Math.max(0, (usedTokens / windowTokens) * 100))
+            : null;
+        const ratioPercent = ratioKnown
+            ? Math.round(ratioExact * 10) / 10
+            : null;
+        let fillModifier = '';
+        if (ratioExact !== null) {
+            if (ratioExact < 40)
+                fillModifier = ' pi-rpc-context-meter-fill--green';
+            else if (ratioExact <= 70)
+                fillModifier = ' pi-rpc-context-meter-fill--yellow';
+            else fillModifier = ' pi-rpc-context-meter-fill--red';
+        }
+        const meter = document.createElement('span');
+        meter.className = 'pi-rpc-context-meter';
+        meter.setAttribute('role', 'progressbar');
+        meter.setAttribute('aria-valuemin', '0');
+        meter.setAttribute('aria-valuemax', '100');
+        if (ratioPercent !== null)
+            meter.setAttribute('aria-valuenow', String(ratioPercent));
+        meter.setAttribute('aria-label', `Context: ${displayStatus.context}`);
+        const fill = document.createElement('span');
+        fill.className = `pi-rpc-context-meter-fill${fillModifier}`.trim();
+        fill.style.width = ratioPercent === null ? '0%' : `${ratioPercent}%`;
+        const meterText = document.createElement('span');
+        meterText.className = 'pi-rpc-context-meter-text';
+        meterText.textContent = displayStatus.context;
+        meter.append(fill, meterText);
+        const compactButton = document.createElement('button');
+        compactButton.type = 'button';
+        compactButton.className = 'preset-btn pi-rpc-compact-btn';
+        compactButton.textContent = 'Compact';
+        const compactPending = this._piRpcCompactPending?.has(paneId) === true;
+        compactButton.disabled =
+            menuDisabled ||
+            state.busy ||
+            state.queueDepth > 0 ||
+            compactPending;
+        compactButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (compactButton.disabled) return;
+            if (!this._piRpcCompactPending)
+                this._piRpcCompactPending = new Set();
+            this._piRpcCompactPending.add(paneId);
+            this.renderPresets('pi-rpc');
+            let compactResult;
+            try {
+                compactResult = rpcChatCompact(paneId);
+            } catch (error) {
+                compactResult = Promise.reject(error);
+            }
+            Promise.resolve(compactResult)
+                .catch((error) => {
+                    // A closed pane must not surface a post-teardown toast.
+                    if (this.tabs.has(paneId))
+                        this._piRpcError(error, 'Compact');
+                })
+                .finally(() => {
+                    this._piRpcCompactPending.delete(paneId);
+                    if (this.getActiveTab()?.paneId === paneId)
+                        this.renderPresets('pi-rpc');
+                });
+        });
+        this.presetsContainer.append(
+            modelButton,
+            thinkingButton,
+            meter,
+            compactButton,
+            resetButton,
+        );
     }
 
     switchTab(paneId, { userInitiated = false } = {}) {

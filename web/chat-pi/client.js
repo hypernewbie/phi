@@ -1,5 +1,9 @@
 import { PROTOCOL_VERSION } from './constants.js';
 export const ControlCallTimeout = 35_000;
+// Compaction runs a summary LLM call; Pi answers only when it finishes. The
+// client stays awake slightly past the server's CompactOperationTimeout so
+// the server's own deadline surfaces as the error.
+export const CompactCallTimeout = 605_000;
 function controlError(message) {
     return new Error(message || 'control call failed');
 }
@@ -68,7 +72,7 @@ export function connectControl() {
         if (env?.t !== 'evt') return;
         for (const cb of [...listeners]) cb(env);
     };
-    const call = (op, sid, args) => {
+    const call = (op, sid, args, opts) => {
         if (closed)
             return Promise.reject(controlError('control socket closed'));
         const id = `c${nextId++}`;
@@ -80,7 +84,7 @@ export function connectControl() {
                 if (!pending.delete(id)) return;
                 removeOutboxCall(id);
                 reject(controlError('control call timeout'));
-            }, ControlCallTimeout);
+            }, opts?.timeoutMs ?? ControlCallTimeout);
             pending.set(id, { timer, resolve, reject });
             transmit(JSON.stringify(frame), id);
         });

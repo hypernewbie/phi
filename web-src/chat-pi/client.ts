@@ -2,8 +2,22 @@ import { PROTOCOL_VERSION } from './constants.js';
 
 export const ControlCallTimeout = 35_000;
 
+// Compaction runs a summary LLM call; Pi answers only when it finishes. The
+// client stays awake slightly past the server's CompactOperationTimeout so
+// the server's own deadline surfaces as the error.
+export const CompactCallTimeout = 605_000;
+
+export interface CallOptions {
+    timeoutMs?: number;
+}
+
 export interface ControlClient {
-    call<T = any>(op: string, sid?: string, args?: unknown): Promise<T>;
+    call<T = any>(
+        op: string,
+        sid?: string,
+        args?: unknown,
+        opts?: CallOptions,
+    ): Promise<T>;
     /** Legacy fire-and-forget transport for callers outside the chat controller. */
     send(frame: unknown): void;
     /** Receives sequenced events only; responses belong to call(). */
@@ -100,6 +114,7 @@ export function connectControl(): ControlClient {
         op: string,
         sid?: string,
         args?: unknown,
+        opts?: CallOptions,
     ): Promise<T> => {
         if (closed)
             return Promise.reject(controlError('control socket closed'));
@@ -112,7 +127,7 @@ export function connectControl(): ControlClient {
                 if (!pending.delete(id)) return;
                 removeOutboxCall(id);
                 reject(controlError('control call timeout'));
-            }, ControlCallTimeout);
+            }, opts?.timeoutMs ?? ControlCallTimeout);
             pending.set(id, { timer, resolve, reject });
             transmit(JSON.stringify(frame), id);
         });

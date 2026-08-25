@@ -22,6 +22,11 @@ import (
 // control operation, including gate acquisition and every Pi request it owns.
 const ControlOperationTimeout = 30 * time.Second
 
+// CompactOperationTimeout is the compact budget. Compaction runs a summary
+// LLM call; Pi only answers the correlated response when compaction finishes,
+// so compact needs its own budget instead of the shared control one.
+const CompactOperationTimeout = 10 * time.Minute
+
 // Envelope is the wire shape of every control frame (both directions).
 type Envelope struct {
 	Type  string          `json:"t"`
@@ -498,12 +503,38 @@ func (s *controlServer) dispatch(ctx context.Context, e Envelope) Envelope {
 			err = lookupErr
 			break
 		}
-		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
-			_, requestErr := inst.Request(requestCtx, "abort", nil)
-			return nil, requestErr
-		})
+		// Abort bypasses the control gate: it must stay available while a
+		// long-running operation (e.g. compact) holds the gate for minutes.
+		_, err = inst.Request(ctx, "abort", nil)
 		if err == nil {
 			payload = map[string]any{"aborted": true}
+		}
+	case rpc.OpCompact:
+		if err = decodeEmptyArgs(e.Args); err != nil {
+			break
+		}
+		inst, lookupErr := lookupSid(s.mgr, e.Sid)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		var compactWarning string
+		_, err = inst.WithControl(ctx, func(requestCtx context.Context) (any, error) {
+			if _, requestErr := inst.Request(requestCtx, "compact", nil); requestErr != nil {
+				return nil, requestErr
+			}
+			// Compaction already completed; a refresh failure must not report
+			// the whole operation as failed, or the UI invites a second compact.
+			if _, refreshErr := refreshState(requestCtx, inst); refreshErr != nil {
+				compactWarning = refreshErr.Error()
+			}
+			return nil, nil
+		})
+		if err == nil {
+			payload = map[string]any{"state": inst.StateCopy()}
+			if compactWarning != "" {
+				payload.(map[string]any)["stateWarning"] = compactWarning
+			}
 		}
 	case rpc.OpSetSessionName:
 		var args struct {
@@ -702,7 +733,12 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 				fence.latest++
 				epoch = fence.latest
 			}
-			opCtx, opCancel := context.WithTimeout(ctx, ControlOperationTimeout)
+			opCtx, opCancel := context.WithTimeout(ctx, func() time.Duration {
+				if e.Op == rpc.OpCompact {
+					return CompactOperationTimeout
+				}
+				return ControlOperationTimeout
+			}())
 			go func(call Envelope, hydrateEpoch uint64, callCtx context.Context, done context.CancelFunc) {
 				defer done()
 				response := server.dispatch(callCtx, call)

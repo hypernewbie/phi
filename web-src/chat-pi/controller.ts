@@ -111,6 +111,10 @@ export function rpcChatReset(paneId: string): Promise<unknown> {
     return chats.get(paneId)?.resetChat() ?? missingPane(paneId);
 }
 
+export function rpcChatCompact(paneId: string): Promise<unknown> {
+    return chats.get(paneId)?.compact() ?? missingPane(paneId);
+}
+
 export function rpcChatInterrupt(paneId: string): Promise<unknown> {
     return chats.get(paneId)?.interrupt() ?? missingPane(paneId);
 }

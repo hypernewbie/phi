@@ -15,6 +15,7 @@ vi.mock('../web/chat-pi/controller.js', () => ({
     rpcChatSetModel: vi.fn(() => Promise.resolve()),
     rpcChatSetThinking: vi.fn(() => Promise.resolve()),
     rpcChatReset: vi.fn(() => Promise.resolve()),
+    rpcChatCompact: vi.fn(() => Promise.resolve()),
     rpcChatInterrupt: vi.fn(() => Promise.resolve()),
     closePiSubagentViewer: vi.fn(() => false),
     subscribePiRpcStatus: vi.fn(() => () => {}),
@@ -26,6 +27,7 @@ import {
     getPiRpcStatus,
     rpcChatModels,
     rpcChatReset,
+    rpcChatCompact,
     rpcChatInterrupt,
     closePiSubagentViewer,
     rpcChatSend,
@@ -47,12 +49,126 @@ afterEach(() => {
     rpcChatSetModel.mockImplementation(() => Promise.resolve());
     rpcChatSetThinking.mockImplementation(() => Promise.resolve());
     rpcChatReset.mockImplementation(() => Promise.resolve());
+    rpcChatCompact.mockImplementation(() => Promise.resolve());
     rpcChatInterrupt.mockImplementation(() => Promise.resolve());
     closePiSubagentViewer.mockImplementation(() => false);
     subscribePiRpcStatus.mockImplementation(() => () => {});
 });
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const CSS = readFileSync(join(ROOT, 'web/style.css'), 'utf8');
+
+function maskCssComments(css) {
+    return css.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
+        comment.replace(/[^\n]/g, ' '),
+    );
+}
+
+function extractMobileBlocks(css) {
+    const masked = maskCssComments(css);
+    const blocks = [];
+    const re = /@media\s*\(max-width:\s*768px\)\s*\{/g;
+    let match = re.exec(masked);
+    while (match !== null) {
+        const contentStart = match.index + match[0].length;
+        let depth = 1;
+        let i = contentStart;
+        while (i < masked.length && depth > 0) {
+            const ch = masked[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') depth--;
+            i++;
+        }
+        if (depth !== 0) throw new Error('Unclosed mobile CSS block');
+        blocks.push({
+            content: css.slice(contentStart, i - 1),
+            start: match.index,
+            contentStart,
+            end: i,
+        });
+        match = re.exec(masked);
+    }
+    return blocks;
+}
+
+function removeMobileBlocks(css, blocks) {
+    let result = '';
+    let cursor = 0;
+    for (const block of blocks) {
+        result += css.slice(cursor, block.start);
+        cursor = block.end;
+    }
+    return result + css.slice(cursor);
+}
+
+function extractRuleRecords(css, sourceOffset = 0) {
+    const masked = maskCssComments(css);
+    const records = [];
+    let statementStart = 0;
+    let i = 0;
+    while (i < masked.length) {
+        if (masked[i] !== '{') {
+            i++;
+            continue;
+        }
+        const selectors = masked.slice(statementStart, i).trim();
+        let depth = 1;
+        let end = i + 1;
+        while (end < masked.length && depth > 0) {
+            const ch = masked[end];
+            if (ch === '{') depth++;
+            else if (ch === '}') depth--;
+            end++;
+        }
+        if (depth !== 0) throw new Error('Unclosed CSS rule');
+        if (selectors && !selectors.startsWith('@')) {
+            records.push({
+                selectors,
+                body: css.slice(i + 1, end - 1),
+                start: sourceOffset + statementStart,
+                end: sourceOffset + end,
+            });
+        }
+        statementStart = end;
+        i = end;
+    }
+    return records;
+}
+
+function findExactRule(rules, selector) {
+    return (
+        rules.find((rule) =>
+            rule.selectors
+                .split(',')
+                .some((candidate) => candidate.trim() === selector),
+        ) || null
+    );
+}
+
+function hasDeclaration(body, property, value) {
+    const declaration = `${property}: ${value}`.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&',
+    );
+    return new RegExp(`(?:^|[;\\n])\\s*${declaration}\\s*;`).test(
+        maskCssComments(body),
+    );
+}
+
+function expectRuleDeclarations(rules, selector, declarations) {
+    const rule = findExactRule(rules, selector);
+    expect(rule, `CSS rule not found for ${selector}`).toBeTruthy();
+    for (const [property, value] of Object.entries(declarations)) {
+        expect(
+            hasDeclaration(rule.body, property, value),
+            `${selector} must declare ${property}: ${value}`,
+        ).toBe(true);
+    }
+    return rule;
+}
+
+const MOBILE_BLOCKS = extractMobileBlocks(CSS);
+const BASE_CSS = removeMobileBlocks(CSS, MOBILE_BLOCKS);
 
 function stagedContext(tab) {
     const tm = Object.create(TabManager.prototype);
@@ -86,7 +202,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(html).toContain('id="pi-rpc-thinking-dropup"');
     });
 
-    it('renders the eight Pi RPC fields without a Skills item', () => {
+    it('renders the four Pi RPC status items with a combined Cache R/W field', () => {
         const bar = document.createElement('div');
         const tab = { paneId: 'pi-rpc:one', coder: 'pi-rpc' };
         getPiRpcStatus.mockReturnValue({
@@ -113,19 +229,16 @@ describe('Pi RPC TabManager boundaries', () => {
             [...bar.querySelectorAll('.pi-rpc-status-label')].map(
                 (label) => label.textContent,
             ),
-        ).toEqual([
-            'CWD',
-            'Model',
-            'Thinking',
-            'Input',
-            'Output',
-            'Context',
-            'Cache read',
-            'Cache write',
-        ]);
-        expect(bar.textContent).toContain('Context42K / 200K');
-        expect(bar.textContent).toContain('Cache read0');
-        expect(bar.textContent).toContain('Cache write0');
+        ).toEqual(['CWD', 'Input', 'Output', 'Cache R/W']);
+        expect(
+            [...bar.querySelectorAll('.pi-rpc-status-value')].map(
+                (value) => value.textContent,
+            ),
+        ).toEqual(['/work/one', '0', '1.2K', '0 / 0']);
+        expect(bar.querySelector('.pi-rpc-status-item-context')).toBeNull();
+        expect(bar.textContent).not.toContain('Model');
+        expect(bar.textContent).not.toContain('Thinking');
+        expect(bar.textContent).not.toContain('Context');
         expect(bar.textContent).not.toContain('Skills');
         expect(bar.querySelector('[tabindex="0"]')).toBeNull();
         expect(bar.querySelector('.pi-rpc-status-item-skills')).toBeNull();
@@ -157,12 +270,344 @@ describe('Pi RPC TabManager boundaries', () => {
             [...row.querySelectorAll('button')].map(
                 (button) => button.textContent,
             ),
-        ).toEqual(['Model ▾', 'Thinking ▾', 'Reset Chat']);
+        ).toEqual([
+            'Model · pi-4 ▾',
+            'Thinking · high ▾',
+            'Compact',
+            'Reset Chat',
+        ]);
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
         expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         expect(tm.copyInputBtn.classList.contains('hidden')).toBe(true);
         expect(tm.directModeToggle.classList.contains('hidden')).toBe(true);
+    });
+
+    it('falls back to an em dash for empty Pi model and thinking values', () => {
+        const row = document.createElement('div');
+        const tab = { paneId: 'pi-rpc:empty-controls', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: '',
+            thinking: '',
+        });
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.cancelInputBtn = document.createElement('button');
+        tm.copyInputBtn = document.createElement('button');
+        tm.directModeToggle = document.createElement('button');
+        tm._piRpcResetPending = new Set();
+
+        tm.renderPresets('pi-rpc');
+
+        expect(
+            [...row.querySelectorAll('button')].map(
+                (button) => button.textContent,
+            ),
+        ).toEqual(['Model · — ▾', 'Thinking · — ▾', 'Compact', 'Reset Chat']);
+    });
+
+    it('renders the Context meter with progressbar semantics and color states', () => {
+        function mountMeter(rawStatus) {
+            const row = document.createElement('div');
+            const tab = { paneId: 'pi-rpc:meter', coder: 'pi-rpc' };
+            getPiRpcStatus.mockReturnValue(rawStatus);
+            getPiRpcControls.mockReturnValue({
+                ready: true,
+                exited: false,
+                busy: false,
+                queueDepth: 0,
+                hasTranscript: false,
+                model: 'm',
+                thinking: 'low',
+            });
+            const tm = Object.create(TabManager.prototype);
+            tm.presetsContainer = row;
+            tm.getActiveTab = vi.fn(() => tab);
+            tm.cancelInputBtn = document.createElement('button');
+            tm.copyInputBtn = document.createElement('button');
+            tm.directModeToggle = document.createElement('button');
+            tm._piRpcResetPending = new Set();
+            tm.renderPresets('pi-rpc');
+            const meter = row.querySelector('.pi-rpc-context-meter');
+            const fill = meter?.querySelector('.pi-rpc-context-meter-fill');
+            const text = meter?.querySelector('.pi-rpc-context-meter-text');
+            return { row, meter, fill, text };
+        }
+
+        // Unknown state — no raw context values.
+        const unknown = mountMeter({ cwd: '/work/meter' });
+        expect(unknown.meter).toBeTruthy();
+        expect(unknown.meter.getAttribute('role')).toBe('progressbar');
+        expect(unknown.meter.getAttribute('aria-valuemin')).toBe('0');
+        expect(unknown.meter.getAttribute('aria-valuemax')).toBe('100');
+        expect(unknown.meter.hasAttribute('aria-valuenow')).toBe(false);
+        expect(unknown.fill.style.width).toBe('0%');
+        for (const cls of ['--green', '--yellow', '--red']) {
+            expect(
+                unknown.fill.classList.contains(
+                    `pi-rpc-context-meter-fill${cls}`,
+                ),
+            ).toBe(false);
+        }
+        expect(unknown.meter.getAttribute('aria-label')).toBe('Context: —');
+        expect(unknown.text.textContent).toBe('—');
+
+        // Known states — exact boundaries. Compact formatting: 3990 -> 4K.
+        const knownCases = [
+            {
+                raw: { contextUsedTokens: 3990, contextWindowTokens: 10000 },
+                color: 'green',
+                valuenow: '39.9',
+                width: '39.9%',
+                label: 'Context: 4K / 10K',
+                text: '4K / 10K',
+            },
+            {
+                // 39.999% exact: green by exact ratio, rounded display 40.
+                raw: { contextUsedTokens: 39999, contextWindowTokens: 100000 },
+                color: 'green',
+                valuenow: '40',
+                width: '40%',
+                label: 'Context: 40K / 100K',
+                text: '40K / 100K',
+            },
+            {
+                raw: { contextUsedTokens: 4000, contextWindowTokens: 10000 },
+                color: 'yellow',
+                valuenow: '40',
+                width: '40%',
+                label: 'Context: 4K / 10K',
+                text: '4K / 10K',
+            },
+            {
+                raw: { contextUsedTokens: 7000, contextWindowTokens: 10000 },
+                color: 'yellow',
+                valuenow: '70',
+                width: '70%',
+                label: 'Context: 7K / 10K',
+                text: '7K / 10K',
+            },
+            {
+                raw: { contextUsedTokens: 7010, contextWindowTokens: 10000 },
+                color: 'red',
+                valuenow: '70.1',
+                width: '70.1%',
+                label: 'Context: 7K / 10K',
+                text: '7K / 10K',
+            },
+            {
+                raw: { contextUsedTokens: 15000, contextWindowTokens: 10000 },
+                color: 'red',
+                valuenow: '100',
+                width: '100%',
+                label: 'Context: 15K / 10K',
+                text: '15K / 10K',
+            },
+        ];
+        for (const { raw, color, valuenow, width, label, text } of knownCases) {
+            const m = mountMeter(raw);
+            expect(
+                m.fill.classList.contains(
+                    `pi-rpc-context-meter-fill--${color}`,
+                ),
+                `color for ${valuenow}`,
+            ).toBe(true);
+            expect(m.meter.getAttribute('aria-valuenow')).toBe(valuenow);
+            expect(m.fill.style.width).toBe(width);
+            expect(m.meter.getAttribute('aria-label')).toBe(label);
+            expect(m.text.textContent).toBe(text);
+        }
+
+        // Unknown state — missing, null, zero, or negative window.
+        const unknownWindow = [
+            { contextUsedTokens: 1000 },
+            { contextUsedTokens: 1000, contextWindowTokens: null },
+            { contextUsedTokens: 1000, contextWindowTokens: 0 },
+            { contextUsedTokens: 1000, contextWindowTokens: -1 },
+        ];
+        for (const raw of unknownWindow) {
+            const m = mountMeter(raw);
+            expect(
+                m.meter.hasAttribute('aria-valuenow'),
+                'valuenow absent for unknown window',
+            ).toBe(false);
+            for (const cls of ['--green', '--yellow', '--red']) {
+                expect(
+                    m.fill.classList.contains(
+                        `pi-rpc-context-meter-fill${cls}`,
+                    ),
+                ).toBe(false);
+            }
+            expect(m.fill.style.width).toBe('0%');
+        }
+    });
+
+    it('keeps Pi typography scoped and restores its narrow-screen sizing', () => {
+        const baseRules = extractRuleRecords(BASE_CSS);
+        const baseContracts = {
+            '.pi-rpc-context-meter': {
+                position: 'relative',
+                'min-width': '140px',
+                'min-height': '24px',
+                overflow: 'hidden',
+                'border-radius': '4px',
+            },
+            '.pi-rpc-context-meter-fill': {
+                position: 'absolute',
+                height: '100%',
+                width: '0',
+            },
+            '.pi-rpc-context-meter-fill--green': {
+                background: 'color-mix(in srgb, #10b981 45%, transparent)',
+            },
+            '.pi-rpc-context-meter-fill--yellow': {
+                background: 'color-mix(in srgb, #fbbf24 45%, transparent)',
+            },
+            '.pi-rpc-context-meter-fill--red': {
+                background: 'color-mix(in srgb, #f87171 45%, transparent)',
+            },
+            '.pi-rpc-context-meter-text': {
+                position: 'relative',
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.pi-rpc-status-label': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.pi-rpc-status-value': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.presets-container > .pi-rpc-model-trigger': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.presets-container > .pi-rpc-thinking-trigger': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.presets-container > .pi-rpc-reset-btn': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '.presets-container > .pi-rpc-compact-btn': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-model-dropup .dropup-header': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-thinking-dropup .dropup-header': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-model-dropup .dropup-model-btn': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-thinking-dropup .dropup-model-btn': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-model-dropup .pi-rpc-dropup-meta': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-model-dropup .pi-rpc-dropup-message': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+            '#pi-rpc-thinking-dropup .pi-rpc-dropup-message': {
+                'font-size': 'inherit',
+                'font-weight': '700',
+            },
+        };
+        for (const [selector, declarations] of Object.entries(baseContracts)) {
+            expectRuleDeclarations(baseRules, selector, declarations);
+        }
+
+        const mobileRuleSets = MOBILE_BLOCKS.map((block) => ({
+            block,
+            rules: extractRuleRecords(block.content, block.contentStart),
+        }));
+        const finalMobile = [...mobileRuleSets].reverse().find(({ rules }) => {
+            const genericPreset = findExactRule(rules, '.preset-btn');
+            return (
+                genericPreset &&
+                hasDeclaration(
+                    genericPreset.body,
+                    'font-size',
+                    '10px !important',
+                )
+            );
+        });
+        expect(finalMobile).toBeTruthy();
+        const genericPreset = expectRuleDeclarations(
+            finalMobile.rules,
+            '.preset-btn',
+            { 'font-size': '10px !important' },
+        );
+        const piControlSelectors = [
+            '.presets-container > .pi-rpc-model-trigger',
+            '.presets-container > .pi-rpc-thinking-trigger',
+            '.presets-container > .pi-rpc-compact-btn',
+            '.presets-container > .pi-rpc-reset-btn',
+        ];
+        const piControlRules = piControlSelectors.map((selector) =>
+            expectRuleDeclarations(finalMobile.rules, selector, {
+                'font-size': 'inherit !important',
+                'min-height': '24px',
+                height: 'auto !important',
+                'line-height': 'normal !important',
+            }),
+        );
+        expect(new Set(piControlRules).size).toBe(1);
+        expect(piControlRules[0].start).toBeGreaterThan(genericPreset.start);
+        const piMeterNarrow = expectRuleDeclarations(
+            finalMobile.rules,
+            '.presets-container > .pi-rpc-context-meter',
+            {
+                'font-size': 'inherit !important',
+                'min-height': '24px',
+                height: 'auto !important',
+                'line-height': 'normal !important',
+            },
+        );
+        expect(piMeterNarrow.start).toBeGreaterThan(piControlRules[0].start);
+        const genericHeader = expectRuleDeclarations(
+            baseRules,
+            '.dropup-header',
+            { 'font-size': '10px' },
+        );
+        expect(maskCssComments(genericHeader.body)).not.toMatch(
+            /font-size:\s*inherit/,
+        );
+        const genericModelButton = expectRuleDeclarations(
+            baseRules,
+            '.dropup-model-btn',
+            { 'font-size': '11px' },
+        );
+        expect(maskCssComments(genericModelButton.body)).not.toMatch(
+            /font-size:\s*inherit/,
+        );
+        const genericPresetBase = expectRuleDeclarations(
+            baseRules,
+            '.preset-btn',
+            {
+                'font-size': '11px',
+            },
+        );
+        expect(maskCssComments(genericPresetBase.body)).not.toMatch(
+            /font-size:\s*inherit/,
+        );
     });
 
     it('loads Pi model choices and calls the active pane setter', async () => {
@@ -360,6 +805,52 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
     });
 
+    it('runs Compact without confirmation, disables it while pending, and surfaces errors', async () => {
+        const row = document.createElement('div');
+        const tab = { paneId: 'pi-rpc:compact', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: true,
+            model: 'm',
+            thinking: 'low',
+        });
+        let rejectCompact;
+        rpcChatCompact.mockImplementation(
+            () =>
+                new Promise((_resolve, reject) => {
+                    rejectCompact = reject;
+                }),
+        );
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.tabs = new Map([[tab.paneId, tab]]);
+        tm.getActiveTab = vi.fn(() => tab);
+        tm._piRpcResetPending = new Set();
+        tm._piRpcError = vi.fn();
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-compact-btn').click();
+        // Compaction is non-destructive: no confirmation dialog.
+        expect(confirm).not.toHaveBeenCalled();
+        expect(rpcChatCompact).toHaveBeenCalledWith(tab.paneId);
+        expect(row.querySelector('.pi-rpc-compact-btn').disabled).toBe(true);
+        rejectCompact(new Error('compact rejected'));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(tm._piRpcError).toHaveBeenCalledWith(
+            expect.any(Error),
+            'Compact',
+        );
+        expect(row.querySelector('.pi-rpc-compact-btn').disabled).toBe(false);
+    });
+
     it('handles Escape dropup-first, composing, active, and idle states', () => {
         const tab = { paneId: 'pi-rpc:escape', coder: 'pi-rpc' };
         const tm = Object.create(TabManager.prototype);
@@ -481,19 +972,55 @@ describe('Pi RPC TabManager boundaries', () => {
 
     it('refreshes only the active Pi pane from controller notifications', () => {
         const bar = document.createElement('div');
+        const presets = document.createElement('div');
         const active = { paneId: 'pi-rpc:active', coder: 'pi-rpc' };
         const inactive = { paneId: 'pi-rpc:inactive', coder: 'pi-rpc' };
         let current = new Map([
-            [active.paneId, { cwd: '/work/active' }],
+            [
+                active.paneId,
+                {
+                    cwd: '/work/active',
+                    contextUsedTokens: 1000,
+                    contextWindowTokens: 10000,
+                },
+            ],
             [inactive.paneId, { cwd: '/work/inactive' }],
         ]);
+        let controls = {
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'old-model',
+            thinking: 'low',
+        };
         getPiRpcStatus.mockImplementation(
             (paneId) => current.get(paneId) ?? null,
         );
+        getPiRpcControls.mockImplementation(() => controls);
         const tm = Object.create(TabManager.prototype);
         tm.piRpcStatusBar = bar;
+        tm.presetsContainer = presets;
         tm.getActiveTab = vi.fn(() => active);
+        tm.cancelInputBtn = document.createElement('button');
+        tm.copyInputBtn = document.createElement('button');
+        tm.directModeToggle = document.createElement('button');
+        tm._piRpcResetPending = new Set();
         tm.renderPiRpcStatusBar();
+        tm.renderPresets('pi-rpc');
+        const meter = () => presets.querySelector('.pi-rpc-context-meter');
+        const fill = () => meter()?.querySelector('.pi-rpc-context-meter-fill');
+        expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
+            'Model · old-model ▾',
+        );
+        expect(
+            presets.querySelector('.pi-rpc-thinking-trigger').textContent,
+        ).toBe('Thinking · low ▾');
+        expect(meter().getAttribute('aria-valuenow')).toBe('10');
+        expect(
+            fill().classList.contains('pi-rpc-context-meter-fill--green'),
+        ).toBe(true);
 
         // The constructor owns subscription; invoke its captured listener on a
         // lightweight instance after installing the same callback contract.
@@ -503,18 +1030,61 @@ describe('Pi RPC TabManager boundaries', () => {
         vi.spyOn(globalThis, 'setInterval').mockImplementation(() => 0);
         const constructed = new TabManager({});
         constructed.piRpcStatusBar = bar;
+        constructed.presetsContainer = presets;
         constructed.getActiveTab = vi.fn(() => active);
+        constructed.cancelInputBtn = document.createElement('button');
+        constructed.copyInputBtn = document.createElement('button');
+        constructed.directModeToggle = document.createElement('button');
+        constructed._piRpcResetPending = new Set();
         const notify = subscribePiRpcStatus.mock.calls[0]?.[0];
         expect(notify).toEqual(expect.any(Function));
         current = new Map([
-            [active.paneId, { cwd: '/work/active-new' }],
+            [
+                active.paneId,
+                {
+                    cwd: '/work/active-new',
+                    contextUsedTokens: 1000,
+                    contextWindowTokens: 10000,
+                },
+            ],
             [inactive.paneId, { cwd: '/work/inactive-new' }],
         ]);
+        controls = {
+            ...controls,
+            model: 'new-model',
+            thinking: 'high',
+        };
         notify(inactive.paneId, current.get(inactive.paneId));
         expect(bar.textContent).toContain('/work/active-new');
         expect(bar.textContent).not.toContain('/work/inactive-new');
+        expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
+            'Model · old-model ▾',
+        );
+        expect(
+            presets.querySelector('.pi-rpc-thinking-trigger').textContent,
+        ).toBe('Thinking · low ▾');
+        expect(meter().getAttribute('aria-valuenow')).toBe('10');
+        expect(
+            fill().classList.contains('pi-rpc-context-meter-fill--green'),
+        ).toBe(true);
+        current.set(active.paneId, {
+            cwd: '/work/active-new',
+            contextUsedTokens: 5000,
+            contextWindowTokens: 10000,
+        });
         notify(active.paneId, current.get(active.paneId));
         expect(bar.textContent).toContain('/work/active-new');
+        expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
+            'Model · new-model ▾',
+        );
+        expect(
+            presets.querySelector('.pi-rpc-thinking-trigger').textContent,
+        ).toBe('Thinking · high ▾');
+        expect(meter().getAttribute('aria-valuenow')).toBe('50');
+        expect(
+            fill().classList.contains('pi-rpc-context-meter-fill--yellow'),
+        ).toBe(true);
+        expect(fill().style.width).toBe('50%');
         setup.mockRestore();
     });
 
