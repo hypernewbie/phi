@@ -31,6 +31,7 @@ type State struct {
 	ContextWindowTokens *int64   `json:"contextWindowTokens"`
 	CacheReadTokens     *int64   `json:"cacheReadTokens"`
 	CacheWriteTokens    *int64   `json:"cacheWriteTokens"`
+	Cost                *float64 `json:"cost"`
 	Skills              []string `json:"skills"`
 	Busy                bool     `json:"busy"`
 	Status              string   `json:"status"` // "live" | "exited"
@@ -86,6 +87,10 @@ func cloneMessages(messages []Message) []Message {
 func cloneState(state State) State {
 	if state.Skills != nil {
 		state.Skills = append([]string{}, state.Skills...)
+	}
+	if state.Cost != nil {
+		cost := *state.Cost
+		state.Cost = &cost
 	}
 	return state
 }

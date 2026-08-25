@@ -2096,6 +2096,7 @@ export class TabManager {
             ['Input', display.input],
             ['Output', display.output],
             ['Context', display.context],
+            ['Cost', display.cost],
             ['Cache read', display.cacheRead],
             ['Cache write', display.cacheWrite],
         ];
@@ -2116,12 +2117,31 @@ export class TabManager {
         );
     }
 
+    _setPiRpcInputAvailability(tab) {
+        if (!this.inputTextArea) return;
+        if (tab?.coder !== 'pi-rpc') {
+            this.inputTextArea.disabled = false;
+            if (this.sendInputBtn) this.sendInputBtn.disabled = false;
+            return;
+        }
+        const state = this._piRpcControlsFor(tab);
+        const unavailable =
+            !state.ready ||
+            state.exited ||
+            state.connectionState === 'reconnecting' ||
+            state.connectionState === 'unavailable' ||
+            state.connectionState === 'closed';
+        this.inputTextArea.disabled = unavailable;
+        if (this.sendInputBtn) this.sendInputBtn.disabled = unavailable;
+    }
+
     _setPiRpcActionVisibility(tab) {
         const hidden = tab?.coder === 'pi-rpc';
         for (const element of [this.copyInputBtn, this.directModeToggle]) {
             element?.classList.toggle('hidden', hidden);
         }
         if (hidden) this.directModeToggle?.classList.remove('active');
+        this._setPiRpcInputAvailability(tab);
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -2231,6 +2251,12 @@ export class TabManager {
             hasTranscript: state?.hasTranscript === true,
             model: typeof state?.model === 'string' ? state.model : '',
             thinking: typeof state?.thinking === 'string' ? state.thinking : '',
+            connectionState:
+                typeof state?.connectionState === 'string'
+                    ? state.connectionState
+                    : state?.ready === true
+                      ? 'connected'
+                      : 'connecting',
         };
     }
 

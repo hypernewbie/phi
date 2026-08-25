@@ -230,6 +230,202 @@ describe('Review Transcript renderer (structured mode)', () => {
         );
     });
 
+    it('renders live thinking before the live partial and clears it narrowly', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        view.setStructuredMessages([], '', new Map());
+        view.setStructuredThinking('reasoning');
+        expect(root.querySelector('.pi-live-thinking')).not.toBeNull();
+        expect(root.querySelector('.pi-live-thinking').textContent).toBe(
+            'reasoning',
+        );
+        view.setStructuredPartial('answer');
+        expect(
+            root
+                .querySelector('.pi-live-thinking')
+                .compareDocumentPosition(root.querySelector('.pi-partial')) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        view.setStructuredThinking('');
+        expect(root.querySelector('.pi-live-thinking')).toBeNull();
+    });
+
+    it('mutates live tool output in place and ignores tools outside the window', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        const messages = [
+            {
+                role: 'assistant',
+                segments: [
+                    {
+                        kind: 'toolCall',
+                        id: 'live-tool',
+                        name: 'bash',
+                        args: { command: 'echo hi' },
+                    },
+                ],
+            },
+        ];
+        view.setStructuredMessages(messages, '', new Map());
+        view.setLiveToolOutput('live-tool', 'first output');
+        const node = root.querySelector('#tool-call-live-tool');
+        expect(node.classList.contains('pi-live-tool')).toBe(true);
+        const liveOutput = node.querySelector('.pi-live-tool-output');
+        expect(liveOutput.textContent).toBe('first output');
+        view.setLiveToolOutput('live-tool', 'replacement');
+        expect(root.querySelector('#tool-call-live-tool')).toBe(node);
+        expect(node.querySelector('.pi-live-tool-output').textContent).toBe(
+            'replacement',
+        );
+
+        const pagedRoot = document.createElement('div');
+        const paged = createReviewTranscriptView(pagedRoot, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+            windowSize: 1,
+        });
+        paged.setStructuredMessages(
+            [
+                ...messages,
+                {
+                    role: 'assistant',
+                    segments: [{ kind: 'text', text: 'tail' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        paged.setLiveToolOutput('live-tool', 'off-window');
+        expect(pagedRoot.querySelector('#tool-call-live-tool')).toBeNull();
+    });
+
+    it('appends live output for write tools without replacing their call content', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'assistant',
+                    segments: [
+                        {
+                            kind: 'toolCall',
+                            id: 'write-tool',
+                            name: 'write',
+                            args: {
+                                file_path: '/work/demo.txt',
+                                content: 'file content',
+                            },
+                        },
+                    ],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const node = root.querySelector('#tool-call-write-tool');
+        expect(node.textContent).toContain('file content');
+        view.setLiveToolOutput('write-tool', 'write result');
+        expect(root.querySelector('#tool-call-write-tool')).toBe(node);
+        expect(node.classList.contains('pi-live-tool')).toBe(true);
+        expect(node.querySelector('.pi-live-tool-output')?.textContent).toBe(
+            'write result',
+        );
+    });
+
+    it('renders an unsupported tool-result item as a visible diagnostic', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'toolResult',
+                    segments: [{ kind: 'unsupported', label: 'future-result' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        expect(root.querySelector('.pi-unsupported-content')?.textContent).toBe(
+            'Unsupported content: future-result',
+        );
+    });
+
+    it('rebuilds a live tool node from the settled result and removes the live marker', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        const call = {
+            role: 'assistant',
+            segments: [
+                {
+                    kind: 'toolCall',
+                    id: 'settle-tool',
+                    name: 'bash',
+                    args: { command: 'pwd' },
+                },
+            ],
+        };
+        view.setStructuredMessages([call], '', new Map());
+        view.setLiveToolOutput('settle-tool', 'live');
+        expect(
+            root
+                .querySelector('#tool-call-settle-tool')
+                .classList.contains('pi-live-tool'),
+        ).toBe(true);
+        view.setStructuredMessages(
+            [
+                call,
+                {
+                    role: 'toolResult',
+                    toolCallId: 'settle-tool',
+                    segments: [{ kind: 'text', text: 'final' }],
+                },
+            ],
+            '',
+            new Map([
+                [
+                    'settle-tool',
+                    {
+                        message: { role: 'toolResult', content: 'final' },
+                        isError: false,
+                    },
+                ],
+            ]),
+        );
+        expect(
+            root
+                .querySelector('#tool-call-settle-tool')
+                .classList.contains('pi-live-tool'),
+        ).toBe(false);
+        expect(root.textContent).toContain('final');
+    });
+
     it('renders thinking text safely and visibly', () => {
         const root = document.createElement('div');
         const view = createReviewTranscriptView(root, {
@@ -267,6 +463,34 @@ describe('Review Transcript renderer (structured mode)', () => {
     // Regression: the user-block path used `.find` and rendered only the
     // first text segment. A structured user message with two text segments
     // must surface both, in order, each exactly once.
+    it('renders unsupported content diagnostics for user and tool-result items', () => {
+        const root = document.createElement('div');
+        const view = createReviewTranscriptView(root, {
+            title: 'Pi RPC',
+            coder: 'pi-rpc',
+            status: 'Ready',
+            mode: 'structured',
+        });
+        view.setStructuredMessages(
+            [
+                {
+                    role: 'user',
+                    segments: [{ kind: 'unsupported', label: 'future_block' }],
+                },
+                {
+                    role: 'toolResult',
+                    segments: [{ kind: 'unsupported', label: 'future_tool' }],
+                },
+            ],
+            '',
+            new Map(),
+        );
+        const diagnostics = root.querySelectorAll('.pi-unsupported-content');
+        expect(diagnostics).toHaveLength(2);
+        expect(root.textContent).toContain('Unsupported content: future_block');
+        expect(root.textContent).toContain('Unsupported content: future_tool');
+    });
+
     it('renders every text segment inside a multi-segment user message', () => {
         const root = document.createElement('div');
         const view = createReviewTranscriptView(root, {

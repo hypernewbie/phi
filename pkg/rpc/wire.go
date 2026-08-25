@@ -110,6 +110,7 @@ func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
 			Tokens        *int64 `json:"tokens"`
 			ContextWindow *int64 `json:"contextWindow"`
 		} `json:"contextUsage"`
+		Cost *float64 `json:"cost"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		return false
@@ -119,6 +120,7 @@ func mergeStatsMetadata(inst *Instance, resp piResponse) bool {
 	st.OutputTokens = data.Tokens.Output
 	st.CacheReadTokens = data.Tokens.CacheRead
 	st.CacheWriteTokens = data.Tokens.CacheWrite
+	st.Cost = data.Cost
 	st.ContextUsedTokens = nil
 	st.ContextWindowTokens = nil
 	if data.ContextUsage != nil {

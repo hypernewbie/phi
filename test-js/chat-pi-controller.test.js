@@ -1356,6 +1356,90 @@ describe('Pi RPC transcript controller', () => {
         void chat;
     });
 
+    it('streams thinking and live tool updates through narrow setters before settlement', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        mountChatPi(root, '/work/live-thinking-tools', wire.client);
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: { sid: 's1', snapshot: { lastSeq: 0, messages: [] } },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const view = createReviewTranscriptView.mock.results.at(-1).value;
+        const full = vi.spyOn(view, 'setStructuredMessages');
+        const thinking = vi.spyOn(view, 'setStructuredThinking');
+        const liveTool = vi.spyOn(view, 'setLiveToolOutput');
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        for (let i = 0; i < 100; i++) {
+            wire.emit({
+                t: 'evt',
+                sid: 's1',
+                seq: i + 2,
+                evt: 'messageUpdate',
+                data: {
+                    assistantMessageEvent: {
+                        type: 'thinking_delta',
+                        delta: `t${i}`,
+                    },
+                },
+            });
+        }
+        await Promise.resolve();
+        expect(full).not.toHaveBeenCalled();
+        expect(thinking).toHaveBeenCalledTimes(100);
+        expect(thinking).toHaveBeenLastCalledWith(
+            't0t1t2t3t4t5t6t7t8t9' +
+                Array.from({ length: 90 }, (_, i) => `t${i + 10}`).join(''),
+        );
+
+        for (let i = 0; i < 100; i++) {
+            wire.emit({
+                t: 'evt',
+                sid: 's1',
+                seq: 102 + i,
+                evt: 'toolExecutionUpdate',
+                data: {
+                    toolCallId: 'live-1',
+                    partialResult: {
+                        content: [{ type: 'text', text: `tool-${i}` }],
+                    },
+                },
+            });
+        }
+        expect(liveTool).toHaveBeenCalledTimes(100);
+        expect(liveTool).toHaveBeenLastCalledWith('live-1', 'tool-99');
+        expect(full).not.toHaveBeenCalled();
+
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 202,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'toolResult',
+                    toolCallId: 'live-1',
+                    content: [{ type: 'text', text: 'final output' }],
+                },
+            },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(full).toHaveBeenCalledTimes(1);
+        expect(liveTool).toHaveBeenCalledTimes(101);
+        expect(liveTool).toHaveBeenLastCalledWith('live-1', '');
+    });
+
     it('renders at most 100 settled messages and pages older history without duplicates', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();

@@ -369,6 +369,52 @@ func TestBusyLifecycleAndAgentSettledClearing(t *testing.T) {
 	}
 }
 
+func TestIdleAgentSettledPublishesStateChanged(t *testing.T) {
+	fp, inst, sub := wireFixture(t)
+	t.Cleanup(inst.Kill)
+
+	if state := inst.StateCopy(); state.Busy {
+		t.Fatalf("fixture unexpectedly busy: %+v", state)
+	}
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	event := nextWireEvent(t, sub)
+	if event.Evt != EvtStateChanged {
+		t.Fatalf("idle agent_settled did not publish stateChanged: %+v", event)
+	}
+	state, ok := event.Data.(State)
+	if !ok || state.Busy {
+		t.Fatalf("idle settled stateChanged data = %#v", event.Data)
+	}
+	if state := inst.StateCopy(); state.Busy {
+		t.Fatalf("idle agent_settled changed Busy unexpectedly: %+v", state)
+	}
+
+	// The lifecycle event also refreshes session stats; answer that request so
+	// the fixture has no pending waiter when the test exits.
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "get_session_stats" {
+			t.Fatalf("unexpected idle settled refresh: %#v", command)
+		}
+		id, ok := command["id"].(string)
+		if !ok || id == "" {
+			t.Fatalf("idle settled refresh missing id: %#v", command)
+		}
+		line := fmt.Sprintf(`{"type":"response","id":%q,"command":"get_session_stats","success":true,"data":{}}`+"\n", id)
+		if _, err := fp.stdoutW.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("idle agent_settled did not refresh stats")
+	}
+	event = nextWireEvent(t, sub)
+	if event.Evt != EvtStateChanged {
+		t.Fatalf("idle settled stats response event = %+v", event)
+	}
+}
+
 func TestPiRejectionUnblocksRequestAndRemovesWaiter(t *testing.T) {
 	fp, inst, _ := wireFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -416,7 +462,7 @@ func TestMetadataResponsesMergeState(t *testing.T) {
 	if state = inst.StateCopy(); state.Model != "fallback-id" {
 		t.Fatalf("model id fallback not merged: %+v", state)
 	}
-	wireResponse(t, fp, inst, "get_session_stats", `{"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextUsage":{"tokens":42000,"contextWindow":200000}}`)
+	wireResponse(t, fp, inst, "get_session_stats", `{"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"cost":0.45,"contextUsage":{"tokens":42000,"contextWindow":200000}}`)
 	nextWireEvent(t, sub)
 	state = inst.StateCopy()
 	if state.InputTokens == nil || *state.InputTokens != 0 ||
@@ -424,8 +470,21 @@ func TestMetadataResponsesMergeState(t *testing.T) {
 		state.CacheReadTokens == nil || *state.CacheReadTokens != 0 ||
 		state.CacheWriteTokens == nil || *state.CacheWriteTokens != 0 ||
 		state.ContextUsedTokens == nil || *state.ContextUsedTokens != 42000 ||
-		state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 {
+		state.ContextWindowTokens == nil || *state.ContextWindowTokens != 200000 ||
+		state.Cost == nil || *state.Cost != 0.45 {
 		t.Fatalf("stats metadata not merged: %+v", state)
+	}
+	wireResponse(t, fp, inst, "get_session_stats", `{"cost":0}`)
+	nextWireEvent(t, sub)
+	state = inst.StateCopy()
+	if state.Cost == nil || *state.Cost != 0 {
+		t.Fatalf("zero cost was not preserved: %+v", state)
+	}
+	wireResponse(t, fp, inst, "get_session_stats", `{}`)
+	nextWireEvent(t, sub)
+	state = inst.StateCopy()
+	if state.Cost != nil {
+		t.Fatalf("omitted cost should clear cached cost: %+v", state)
 	}
 	wireResponse(t, fp, inst, "get_commands", `{"commands":[{"source":"skill","name":"one","path":"/secret"},{"source":"extension","name":"nope"},{"source":"skill","name":"one"},{"source":"skill","name":"two"}]}`)
 	nextWireEvent(t, sub)

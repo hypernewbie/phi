@@ -11,6 +11,11 @@ function numberOrDash(value) {
         ? compactNumber.format(value)
         : '—';
 }
+function costOrDash(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    const formatted = value.toFixed(2).replace(/\.?(0+)$/u, '');
+    return `$${formatted}`;
+}
 export function formatPiRpcStatus(status) {
     return {
         cwd: valueOrDash(status?.cwd),
@@ -25,6 +30,7 @@ export function formatPiRpcStatus(status) {
                 : `${numberOrDash(status?.contextUsedTokens)} / ${numberOrDash(status?.contextWindowTokens)}`,
         cacheRead: numberOrDash(status?.cacheReadTokens),
         cacheWrite: numberOrDash(status?.cacheWriteTokens),
+        cost: costOrDash(status?.cost),
         skills:
             status?.skills == null
                 ? '—'
@@ -117,18 +123,25 @@ function coerceArgs(raw) {
     }
     return {};
 }
+function unsupportedContentLabel(item) {
+    if (typeof item.type === 'string' && item.type) return item.type;
+    return 'unknown content';
+}
+function asPiContentItem(value) {
+    return value && typeof value === 'object' ? value : {};
+}
 function walkContentItems(content) {
-    if (Array.isArray(content)) return content;
+    if (Array.isArray(content)) return content.map(asPiContentItem);
     if (content && typeof content === 'object') {
-        return [content];
+        return [asPiContentItem(content)];
     }
     if (typeof content === 'string') {
         // Try to parse JSON-encoded structured content first.
         try {
             const parsed = JSON.parse(content);
-            if (Array.isArray(parsed)) return parsed;
+            if (Array.isArray(parsed)) return parsed.map(asPiContentItem);
             if (parsed && typeof parsed === 'object') {
-                return [parsed];
+                return [asPiContentItem(parsed)];
             }
         } catch {
             /* not JSON */
@@ -173,11 +186,19 @@ function segmentsFromContent(role, content, fallback) {
                         name: item.name,
                         args: coerceArgs(item.arguments),
                     });
+                } else {
+                    segments.push({
+                        kind: 'unsupported',
+                        label: unsupportedContentLabel(item),
+                    });
                 }
                 break;
             }
             default:
-                // Unknown / non-renderable item: drop silently.
+                segments.push({
+                    kind: 'unsupported',
+                    label: unsupportedContentLabel(item),
+                });
                 break;
         }
     }

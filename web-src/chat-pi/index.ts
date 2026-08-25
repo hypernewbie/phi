@@ -1,6 +1,6 @@
 import { dispatchComposer } from './composer.js';
 import type { QueueDelivery } from './composer.js';
-import type { ControlClient } from './client.js';
+import type { ControlClient, ControlConnectionState } from './client.js';
 import { MessageBuffer } from './message-buffer.js';
 import type { Snapshot } from './message-buffer.js';
 import { savePersisted } from './persist.js';
@@ -28,6 +28,7 @@ export interface PiRpcControls {
     hasTranscript: boolean;
     model: string;
     thinking: string;
+    connectionState: ControlConnectionState;
 }
 
 export interface PiQueueItem extends ReviewQueueItem {
@@ -129,6 +130,7 @@ function mergeState(status: PiRpcStatus, state: unknown): boolean {
         'contextWindowTokens',
         'cacheReadTokens',
         'cacheWriteTokens',
+        'cost',
     ] as const;
     for (const field of numbers) {
         if (!Object.hasOwn(source, field)) continue;
@@ -334,6 +336,8 @@ export function mountChatPi(
         followUp: [] as string[],
     };
     const spawnId = `spawn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let spawnInFlight = false;
+    let connectionState: ControlConnectionState = 'connecting';
     let destroyed = false;
     let ready = false;
     let busy = false;
@@ -380,6 +384,7 @@ export function mountChatPi(
             hasTranscript: buffer.getMessageCount() > 0,
             model: localStatus.model ?? '',
             thinking: localStatus.thinking ?? '',
+            connectionState,
         });
     const applyState = (state: unknown): void => {
         const source = state as Record<string, unknown> | null;
@@ -504,6 +509,7 @@ export function mountChatPi(
         hasTranscript: false,
         model: '',
         thinking: '',
+        connectionState,
     });
 
     const view = createReviewTranscriptView(root, {
@@ -726,6 +732,12 @@ export function mountChatPi(
                     (data as Snapshot & { queue?: unknown }).queue,
                 );
                 hydrateInFlight = false;
+                ready =
+                    connectionState === 'connected' ||
+                    connectionState === 'connecting';
+                status.textContent = 'Ready';
+                view.setConnectionState(connectionState);
+                notifyControls();
                 paint();
                 // A hydrate replaces the authoritative settled transcript.
                 // Reset completion flushes in the next microtask; initial and
@@ -739,9 +751,21 @@ export function mountChatPi(
                 const wasReset = activeHydrate.reset;
                 activeHydrate = null;
                 hydrateInFlight = false;
-                status.textContent = `Error: ${String(error)}`;
+                const message = String(error);
+                const normalized = message.toLowerCase();
+                const unavailable =
+                    normalized.includes('not found') ||
+                    normalized.includes('unknown or destroyed') ||
+                    normalized.includes('session unavailable');
+                status.textContent =
+                    connectionState === 'reconnecting'
+                        ? 'Reconnecting…'
+                        : unavailable
+                          ? 'Session unavailable — draft preserved'
+                          : `Error: ${message}`;
                 if (!wasReset) {
                     ready = false;
+                    if (unavailable) view.setConnectionState('unavailable');
                     notifyControls();
                 }
             });
@@ -1297,16 +1321,32 @@ export function mountChatPi(
             // every partial. The microtask-coalesced paint() stays for
             // authoritative `full` events; the live partial path uses a
             // narrow DOM mutation.
+            if (result.liveToolCleared) {
+                view.setLiveToolOutput(result.liveToolCleared, '');
+            }
             switch (result.renderDisposition) {
                 case 'full':
                     paint();
                     if (!hydrateInFlight) schedulePersist(250);
                     break;
                 case 'partial':
-                    view.setStructuredPartial(buffer.getPartial());
+                    if (result.partialKind === 'thinking') {
+                        view.setStructuredThinking(buffer.getPartialThinking());
+                    } else {
+                        view.setStructuredPartial(buffer.getPartial());
+                    }
                     break;
                 case 'partial-clear':
                     view.setStructuredPartial('');
+                    view.setStructuredThinking('');
+                    break;
+                case 'live-tool':
+                    if (result.toolCallId && result.output !== undefined) {
+                        view.setLiveToolOutput(
+                            result.toolCallId,
+                            result.output,
+                        );
+                    }
                     break;
                 case 'none':
                     // stateChanged, queue events, stale events, irrelevant
@@ -1321,37 +1361,75 @@ export function mountChatPi(
         spawnId,
     };
     if (sessionPath) spawnArgs.sessionPath = sessionPath;
-    void invokeControl(
-        wire,
-        'spawn',
-        undefined,
-        spawnArgs,
-        'sp',
-        legacyResponses,
-    )
-        .then((data: any) => {
-            if (destroyed) return;
-            const nextSid = typeof data?.sid === 'string' ? data.sid : '';
-            if (!nextSid || !isSnapshot(data?.snapshot)) {
-                failBootstrap('Pi RPC bootstrap snapshot missing or malformed');
-                return;
-            }
-            sid = nextSid;
-            view.title.textContent =
-                typeof data.title === 'string' ? data.title : 'Pi RPC';
-            buffer.applySnapshot(data.snapshot);
-            applyState(data.state);
-            applyQueueSnapshot(data.queue);
-            ready = true;
-            exited = false;
-            status.textContent = 'Ready';
-            notifyControls();
-            paint();
-            requestHydrate(false);
-        })
-        .catch((error: unknown) => {
-            if (!destroyed) failBootstrap(error);
-        });
+    const startSpawn = (): void => {
+        if (destroyed || sid || spawnInFlight) return;
+        spawnInFlight = true;
+        void invokeControl(
+            wire,
+            'spawn',
+            undefined,
+            spawnArgs,
+            'sp',
+            legacyResponses,
+        )
+            .then((data: any) => {
+                spawnInFlight = false;
+                if (destroyed) return;
+                const nextSid = typeof data?.sid === 'string' ? data.sid : '';
+                if (!nextSid || !isSnapshot(data?.snapshot)) {
+                    throw new Error(
+                        'Pi RPC bootstrap snapshot missing or malformed',
+                    );
+                }
+                sid = nextSid;
+                view.title.textContent =
+                    typeof data.title === 'string' ? data.title : 'Pi RPC';
+                buffer.applySnapshot(data.snapshot);
+                applyState(data.state);
+                applyQueueSnapshot(data.queue);
+                ready = false;
+                exited = false;
+                hydrateInFlight = false;
+                status.textContent = 'Hydrating…';
+                notifyControls();
+                paint();
+                requestHydrate(false);
+            })
+            .catch((error: unknown) => {
+                spawnInFlight = false;
+                if (destroyed) return;
+                ready = false;
+                if (connectionState === 'reconnecting') {
+                    status.textContent = 'Reconnecting…';
+                } else {
+                    failBootstrap(error);
+                }
+                notifyControls();
+            });
+    };
+    const offConnectionState =
+        typeof (client as ControlClient & { onConnectionState?: unknown })
+            .onConnectionState === 'function'
+            ? (client as ControlClient).onConnectionState((next) => {
+                  connectionState = next;
+                  view.setConnectionState(next);
+                  if (next === 'reconnecting') {
+                      ready = false;
+                      status.textContent = 'Reconnecting…';
+                  } else if (next === 'unavailable') {
+                      ready = false;
+                      status.textContent =
+                          'Session unavailable — draft preserved';
+                  } else if (next === 'connected') {
+                      if (sid) {
+                          status.textContent = 'Hydrating…';
+                          requestHydrate(false);
+                      } else startSpawn();
+                  }
+                  notifyControls();
+              })
+            : () => {};
+    startSpawn();
 
     return {
         destroy: (): void => {
@@ -1359,6 +1437,7 @@ export function mountChatPi(
             flushPendingSave();
             destroyed = true;
             off();
+            offConnectionState();
             client.close();
             subagentViewer.destroy();
             strip.destroy();

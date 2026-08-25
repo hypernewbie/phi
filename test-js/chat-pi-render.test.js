@@ -48,6 +48,7 @@ describe('render', () => {
             context: '42K / 200K',
             cacheRead: '0',
             cacheWrite: '0',
+            cost: '—',
             skills: 'none',
         });
         expect(
@@ -64,6 +65,13 @@ describe('render', () => {
         expect(
             formatPiRpcStatus({ cwd: '/work/demo', skills: longSkills }).skills,
         ).toBe(longSkills.join(', '));
+        expect(formatPiRpcStatus({ cwd: '/work/demo', cost: 0.45 }).cost).toBe(
+            '$0.45',
+        );
+        expect(formatPiRpcStatus({ cwd: '/work/demo', cost: 0 }).cost).toBe(
+            '$0',
+        );
+        expect(formatPiRpcStatus({ cwd: '/work/demo' }).cost).toBe('—');
     });
 
     it('renders transcript parts', () => {
@@ -241,6 +249,25 @@ describe('createStructuredTranscript (lazy source)', () => {
         expect(source.length).toBe(0);
         expect(source.slice(0)).toEqual([]);
         expect(source.slice(-5)).toEqual([]);
+    });
+
+    it('renders unknown content items as visible unsupported segments', () => {
+        expect(
+            convertMessage(
+                'assistant',
+                [
+                    { type: 'text', text: 'before' },
+                    { type: 'future_block', payload: 1 },
+                ],
+                '',
+            ),
+        ).toEqual([
+            { kind: 'text', text: 'before' },
+            { kind: 'unsupported', label: 'future_block' },
+        ]);
+        expect(
+            convertMessage('toolResult', [{ type: 'future_tool_item' }], ''),
+        ).toEqual([{ kind: 'unsupported', label: 'future_tool_item' }]);
     });
 
     it('convertMessage is a thin wrapper for segmentsFromContent', () => {

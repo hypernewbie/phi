@@ -6,6 +6,8 @@ export class MessageBuffer {
     gapped = false;
     role = 'assistant';
     partial = '';
+    partialThinking = '';
+    liveTools = new Map();
     /**
      * Incremental tool-result index. The map is rebuilt on every
      * applySnapshot and updated on the messageEnd branch when the
@@ -19,6 +21,8 @@ export class MessageBuffer {
         this.gapped = false;
         this.role = 'assistant';
         this.partial = '';
+        this.partialThinking = '';
+        this.liveTools = new Map();
         this.rebuildToolResultIndex();
     }
     applyEvent(ev) {
@@ -48,9 +52,14 @@ export class MessageBuffer {
         this.lastSeq = ev.seq;
         const d = ev.data;
         let disposition = 'none';
+        let partialKind;
+        let toolCallId;
+        let output;
+        let liveToolCleared;
         switch (ev.evt) {
             case 'messageStart': {
-                const hadPartial = this.partial !== '';
+                const hadPartial =
+                    this.partial !== '' || this.partialThinking !== '';
                 // SAFETY: pi's wire envelope is a free-form JSON object;
                 // narrow to a record view so individual field reads type-check.
                 const startMsg =
@@ -62,6 +71,7 @@ export class MessageBuffer {
                         ? startMsg.role
                         : 'assistant';
                 this.partial = '';
+                this.partialThinking = '';
                 disposition = hadPartial ? 'partial-clear' : 'none';
                 break;
             }
@@ -72,12 +82,29 @@ export class MessageBuffer {
                 // narrow to a record view so individual field reads type-check.
                 const aRecord = a && typeof a === 'object' ? a : null;
                 if (
+                    aRecord?.type === 'thinking_delta' &&
+                    typeof aRecord.delta === 'string'
+                ) {
+                    this.partialThinking += aRecord.delta;
+                    disposition = 'partial';
+                    partialKind = 'thinking';
+                } else if (
                     aRecord?.type === 'text_delta' &&
                     typeof aRecord.delta === 'string'
                 ) {
                     this.partial += aRecord.delta;
                     disposition = 'partial';
+                    partialKind = 'text';
                 }
+                break;
+            }
+            case 'toolExecutionUpdate': {
+                toolCallId =
+                    typeof d?.toolCallId === 'string' ? d.toolCallId : '';
+                if (!toolCallId) break;
+                output = extractLiveToolOutput(d?.partialResult);
+                this.liveTools.set(toolCallId, output);
+                disposition = 'live-tool';
                 break;
             }
             case 'messageEnd': {
@@ -89,6 +116,7 @@ export class MessageBuffer {
                 // narrow to a record view so individual field reads type-check.
                 const mRecord = m && typeof m === 'object' ? m : null;
                 this.partial = '';
+                this.partialThinking = '';
                 const settled = {
                     role: mRecord?.role ?? this.role,
                     content: mRecord?.content ?? '',
@@ -121,6 +149,7 @@ export class MessageBuffer {
                             message: settled,
                             isError: extractIsError(settled),
                         });
+                        if (this.liveTools.delete(id)) liveToolCleared = id;
                     }
                 }
                 disposition = 'full';
@@ -128,6 +157,9 @@ export class MessageBuffer {
             }
             case 'transcriptReset': {
                 this.gapped = true; // force rehydrate; snapshot replaces transcript
+                this.partial = '';
+                this.partialThinking = '';
+                this.liveTools = new Map();
                 this.toolResults = new Map();
                 return {
                     messages: this.messages,
@@ -144,6 +176,9 @@ export class MessageBuffer {
             gap: false,
             applied: true,
             renderDisposition: disposition,
+            ...(partialKind ? { partialKind } : {}),
+            ...(toolCallId ? { toolCallId, output } : {}),
+            ...(liveToolCleared ? { liveToolCleared } : {}),
         };
     }
     /** Defensive shallow copy for persistence and external callers. */
@@ -176,6 +211,14 @@ export class MessageBuffer {
     getPartial() {
         return this.partial;
     }
+    /** Live thinking partial (assembled from thinking_delta); temporary only. */
+    getPartialThinking() {
+        return this.partialThinking;
+    }
+    /** Current accumulated output for one live tool call, if any. */
+    getLiveToolOutput(id) {
+        return this.liveTools.get(id);
+    }
     /**
      * Index of `role: "toolResult"` messages by their `toolCallId`. The
      * returned view is rebuilt incrementally on snapshot and on each
@@ -202,6 +245,23 @@ export class MessageBuffer {
         }
         this.toolResults = next;
     }
+}
+function extractLiveToolOutput(partialResult) {
+    if (!partialResult || typeof partialResult !== 'object') return '';
+    const content = partialResult.content;
+    if (!Array.isArray(content)) return '';
+    return content
+        .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+                const record = item;
+                if (record.type !== 'text') return '';
+                const text = record.text;
+                if (typeof text === 'string') return text;
+            }
+            return '';
+        })
+        .join('');
 }
 /** Pull `toolCallId` out of a toolResult message (envelope first, then
  * legacy content-item shapes). */

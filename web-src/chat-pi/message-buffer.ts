@@ -41,7 +41,12 @@ export interface ToolResultEntry {
  * and a new turn starts). State events, queue events, stale events, and
  * gap/reset do not repaint on their own.
  */
-export type RenderDisposition = 'full' | 'partial' | 'partial-clear' | 'none';
+export type RenderDisposition =
+    | 'full'
+    | 'partial'
+    | 'partial-clear'
+    | 'live-tool'
+    | 'none';
 
 export interface BufferResult {
     messages: readonly InboundMessage[];
@@ -49,6 +54,10 @@ export interface BufferResult {
     /** True only when this event advanced the authoritative sequence. */
     applied: boolean;
     renderDisposition: RenderDisposition;
+    partialKind?: 'text' | 'thinking';
+    toolCallId?: string;
+    output?: string;
+    liveToolCleared?: string;
 }
 
 /** Applies a snapshot, then strictly ordered events. A seq gap forces rehydrate. */
@@ -58,6 +67,8 @@ export class MessageBuffer {
     private gapped = false;
     private role = 'assistant';
     private partial = '';
+    private partialThinking = '';
+    private liveTools: Map<string, string> = new Map();
 
     /**
      * Incremental tool-result index. The map is rebuilt on every
@@ -73,6 +84,8 @@ export class MessageBuffer {
         this.gapped = false;
         this.role = 'assistant';
         this.partial = '';
+        this.partialThinking = '';
+        this.liveTools = new Map();
         this.rebuildToolResultIndex();
     }
 
@@ -107,9 +120,14 @@ export class MessageBuffer {
         this.lastSeq = ev.seq;
         const d = ev.data as Record<string, unknown> | null | undefined;
         let disposition: RenderDisposition = 'none';
+        let partialKind: BufferResult['partialKind'];
+        let toolCallId: string | undefined;
+        let output: string | undefined;
+        let liveToolCleared: string | undefined;
         switch (ev.evt) {
             case 'messageStart': {
-                const hadPartial = this.partial !== '';
+                const hadPartial =
+                    this.partial !== '' || this.partialThinking !== '';
                 // SAFETY: pi's wire envelope is a free-form JSON object;
                 // narrow to a record view so individual field reads type-check.
                 const startMsg =
@@ -121,6 +139,7 @@ export class MessageBuffer {
                         ? startMsg.role
                         : 'assistant';
                 this.partial = '';
+                this.partialThinking = '';
                 disposition = hadPartial ? 'partial-clear' : 'none';
                 break;
             }
@@ -134,12 +153,29 @@ export class MessageBuffer {
                         ? (a as Record<string, unknown>)
                         : null;
                 if (
+                    aRecord?.type === 'thinking_delta' &&
+                    typeof aRecord.delta === 'string'
+                ) {
+                    this.partialThinking += aRecord.delta;
+                    disposition = 'partial';
+                    partialKind = 'thinking';
+                } else if (
                     aRecord?.type === 'text_delta' &&
                     typeof aRecord.delta === 'string'
                 ) {
                     this.partial += aRecord.delta;
                     disposition = 'partial';
+                    partialKind = 'text';
                 }
+                break;
+            }
+            case 'toolExecutionUpdate': {
+                toolCallId =
+                    typeof d?.toolCallId === 'string' ? d.toolCallId : '';
+                if (!toolCallId) break;
+                output = extractLiveToolOutput(d?.partialResult);
+                this.liveTools.set(toolCallId, output);
+                disposition = 'live-tool';
                 break;
             }
             case 'messageEnd': {
@@ -154,6 +190,7 @@ export class MessageBuffer {
                         ? (m as Record<string, unknown>)
                         : null;
                 this.partial = '';
+                this.partialThinking = '';
                 const settled: InboundMessage = {
                     role: (mRecord?.role as string | undefined) ?? this.role,
                     content: (mRecord?.content as unknown) ?? '',
@@ -186,6 +223,7 @@ export class MessageBuffer {
                             message: settled,
                             isError: extractIsError(settled),
                         });
+                        if (this.liveTools.delete(id)) liveToolCleared = id;
                     }
                 }
                 disposition = 'full';
@@ -193,6 +231,9 @@ export class MessageBuffer {
             }
             case 'transcriptReset': {
                 this.gapped = true; // force rehydrate; snapshot replaces transcript
+                this.partial = '';
+                this.partialThinking = '';
+                this.liveTools = new Map();
                 this.toolResults = new Map();
                 return {
                     messages: this.messages,
@@ -209,6 +250,9 @@ export class MessageBuffer {
             gap: false,
             applied: true,
             renderDisposition: disposition,
+            ...(partialKind ? { partialKind } : {}),
+            ...(toolCallId ? { toolCallId, output } : {}),
+            ...(liveToolCleared ? { liveToolCleared } : {}),
         };
     }
 
@@ -248,6 +292,16 @@ export class MessageBuffer {
         return this.partial;
     }
 
+    /** Live thinking partial (assembled from thinking_delta); temporary only. */
+    getPartialThinking(): string {
+        return this.partialThinking;
+    }
+
+    /** Current accumulated output for one live tool call, if any. */
+    getLiveToolOutput(id: string): string | undefined {
+        return this.liveTools.get(id);
+    }
+
     /**
      * Index of `role: "toolResult"` messages by their `toolCallId`. The
      * returned view is rebuilt incrementally on snapshot and on each
@@ -275,6 +329,24 @@ export class MessageBuffer {
         }
         this.toolResults = next;
     }
+}
+
+function extractLiveToolOutput(partialResult: unknown): string {
+    if (!partialResult || typeof partialResult !== 'object') return '';
+    const content = (partialResult as Record<string, unknown>).content;
+    if (!Array.isArray(content)) return '';
+    return content
+        .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+                const record = item as Record<string, unknown>;
+                if (record.type !== 'text') return '';
+                const text = record.text;
+                if (typeof text === 'string') return text;
+            }
+            return '';
+        })
+        .join('');
 }
 
 /** Pull `toolCallId` out of a toolResult message (envelope first, then

@@ -386,6 +386,135 @@ describe('MessageBuffer accessors and render disposition', () => {
     });
 });
 
+describe('MessageBuffer live thinking and tool output', () => {
+    it('assembles thinking deltas separately and clears them at settlement/reset', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        b.applyEvent({
+            seq: 1,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        const first = b.applyEvent({
+            seq: 2,
+            evt: 'messageUpdate',
+            data: {
+                assistantMessageEvent: {
+                    type: 'thinking_delta',
+                    delta: 'reason',
+                },
+            },
+        });
+        expect(first.renderDisposition).toBe('partial');
+        expect(first.partialKind).toBe('thinking');
+        b.applyEvent({
+            seq: 3,
+            evt: 'messageUpdate',
+            data: {
+                assistantMessageEvent: {
+                    type: 'thinking_delta',
+                    delta: 'ing',
+                },
+            },
+        });
+        expect(b.getPartialThinking()).toBe('reasoning');
+        expect(b.getPartial()).toBe('');
+        const cleared = b.applyEvent({
+            seq: 4,
+            evt: 'messageStart',
+            data: { message: { role: 'assistant' } },
+        });
+        expect(cleared.renderDisposition).toBe('partial-clear');
+        expect(b.getPartialThinking()).toBe('');
+        b.applyEvent({
+            seq: 5,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: 'done' }],
+                },
+            },
+        });
+        expect(b.getPartialThinking()).toBe('');
+        expect(b.getMessages()[0]).not.toHaveProperty('partialThinking');
+
+        b.applySnapshot(snap(8, []));
+        expect(b.getPartialThinking()).toBe('');
+        expect(b.getLiveToolOutput('tool-1')).toBeUndefined();
+        b.applyEvent({
+            seq: 9,
+            evt: 'messageUpdate',
+            data: {
+                assistantMessageEvent: {
+                    type: 'thinking_delta',
+                    delta: 'stale',
+                },
+            },
+        });
+        b.applyEvent({ seq: 10, evt: 'transcriptReset' });
+        expect(b.getPartialThinking()).toBe('');
+    });
+
+    it('replaces accumulated live tool output and clears the matching result', () => {
+        const b = new MessageBuffer();
+        b.applySnapshot(snap(0));
+        const first = b.applyEvent({
+            seq: 1,
+            evt: 'toolExecutionUpdate',
+            data: {
+                toolCallId: 'tool-1',
+                partialResult: {
+                    content: [
+                        { type: 'text', text: 'first ' },
+                        { type: 'json', text: 'ignored non-text item' },
+                        { type: 'text', text: 'chunk' },
+                    ],
+                },
+            },
+        });
+        expect(first.renderDisposition).toBe('live-tool');
+        expect(first).toEqual(
+            expect.objectContaining({
+                toolCallId: 'tool-1',
+                output: 'first chunk',
+                renderDisposition: 'live-tool',
+            }),
+        );
+        expect(b.getLiveToolOutput('tool-1')).toBe('first chunk');
+        const replacement = b.applyEvent({
+            seq: 2,
+            evt: 'toolExecutionUpdate',
+            data: {
+                toolCallId: 'tool-1',
+                partialResult: { content: [{ type: 'text', text: 'total' }] },
+            },
+        });
+        expect(replacement).toEqual(
+            expect.objectContaining({
+                toolCallId: 'tool-1',
+                output: 'total',
+                renderDisposition: 'live-tool',
+            }),
+        );
+        expect(b.getMessages()).toEqual([]);
+        const settled = b.applyEvent({
+            seq: 3,
+            evt: 'messageEnd',
+            data: {
+                message: {
+                    role: 'toolResult',
+                    toolCallId: 'tool-1',
+                    content: [{ type: 'text', text: 'final' }],
+                },
+            },
+        });
+        expect(settled.renderDisposition).toBe('full');
+        expect(settled.liveToolCleared).toBe('tool-1');
+        expect(b.getLiveToolOutput('tool-1')).toBeUndefined();
+    });
+});
+
 describe('MessageBuffer message_end stopReason/errorMessage capture', () => {
     // Milestone 2: pi's message_end envelope may carry stopReason and
     // errorMessage. The buffer must copy non-empty strings into the

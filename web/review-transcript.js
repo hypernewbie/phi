@@ -164,29 +164,41 @@ function cacheKeyFor(msg, toolResults, toolDiffs) {
             case 'toolResult':
                 parts.push(`r:${seg.toolCallId}:${seg.content}`);
                 break;
+            case 'unsupported':
+                parts.push(`u:${seg.label}`);
+                break;
         }
     }
     return parts.join('|');
 }
+function unsupportedToolResultLabel(item) {
+    if (item && typeof item === 'object') {
+        const type = item.type;
+        if (typeof type === 'string' && type) return type;
+    }
+    return 'unknown content';
+}
 function extractTextFromToolResult(message) {
     const content = message.content;
     if (typeof content === 'string') return content;
+    const textForItem = (item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+            const record = item;
+            const type = record.type;
+            if (
+                (type === undefined || type === 'text') &&
+                typeof record.text === 'string'
+            ) {
+                return record.text;
+            }
+        }
+        return `Unsupported content: ${unsupportedToolResultLabel(item)}`;
+    };
     if (Array.isArray(content)) {
-        return content
-            .map((item) => {
-                if (item && typeof item === 'object') {
-                    const t = item.text;
-                    if (typeof t === 'string') return t;
-                }
-                return '';
-            })
-            .filter(Boolean)
-            .join('\n');
+        return content.map(textForItem).filter(Boolean).join('\n');
     }
-    if (content && typeof content === 'object' && !Array.isArray(content)) {
-        const t = content.text;
-        if (typeof t === 'string') return t;
-    }
+    if (content && typeof content === 'object') return textForItem(content);
     return '';
 }
 function collectValidatedToolDiffs(messages, toolResults) {
@@ -200,6 +212,12 @@ function collectValidatedToolDiffs(messages, toolResults) {
         }
     }
     return diffs;
+}
+function buildUnsupportedContentBlock(label) {
+    const div = document.createElement('div');
+    div.className = 'pi-unsupported-content';
+    div.textContent = `Unsupported content: ${label}`;
+    return div;
 }
 function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
     const block = document.createElement('div');
@@ -231,6 +249,8 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             appendThinkingText(thinkText, seg.text);
             thinkDiv.appendChild(thinkText);
             block.appendChild(thinkDiv);
+        } else if (seg.kind === 'unsupported') {
+            block.appendChild(buildUnsupportedContentBlock(seg.label));
         } else if (seg.kind === 'toolCall') {
             hasToolCalls = true;
             const result = toolResults.get(seg.id);
@@ -335,6 +355,10 @@ function buildUserMessageBlock(segments, copyText) {
     // structured user messages can carry multiple text segments (e.g.
     // interrupted + resumed input) and all must surface in the DOM.
     for (const seg of segments) {
+        if (seg.kind === 'unsupported') {
+            block.appendChild(buildUnsupportedContentBlock(seg.label));
+            continue;
+        }
         const div = document.createElement('div');
         // Same `markdown-content` opt-in as the assistant path; Pi's
         // exporter wraps user text in a bare `markdown-content` div.
@@ -351,6 +375,7 @@ function buildUserMessageBlock(segments, copyText) {
     // separator, then trimmed. Mirrors the assistant aggregator's no-sep
     // behaviour so a downstream notepad sees the same joined source.
     const copyAggregate = segments
+        .filter((s) => s.kind === 'text')
         .map((s) => s.text)
         .join('')
         .trim();
@@ -414,6 +439,11 @@ export function createReviewTranscriptView(root, options) {
     const queuePanel = document.createElement('div');
     queuePanel.className = 'pi-queue-panel hidden';
     contentBody.appendChild(queuePanel);
+    const connectionState = document.createElement('div');
+    connectionState.className = 'pi-rpc-connection-state';
+    connectionState.setAttribute('aria-live', 'polite');
+    connectionState.classList.add('hidden');
+    root.appendChild(connectionState);
     let activeHeader = null;
     let activeTop = null;
     let activeBottom = null;
@@ -501,6 +531,8 @@ export function createReviewTranscriptView(root, options) {
     // paint. Window slides (appendNewer, jump button) rebuild outside it
     // and would otherwise drop the live tail for one paint.
     let latestPartial = '';
+    let latestThinking = '';
+    const liveToolOutputs = new Map();
     let queueItems = [];
     let piQueue = { steering: [], followUp: [] };
     let queueActions = {};
@@ -558,11 +590,20 @@ export function createReviewTranscriptView(root, options) {
             const block = cached ?? buildAssistantOrUserBlock(msg, toolDiffs);
             clearActivePromptMarkers(block);
             block.dataset.piMessageIndex = String(currentStart + index);
+            block.dataset.bufferIndex = String(currentStart + index);
             if (!cached) cache.set(key, block);
             fragment.appendChild(block);
         }
         for (const key of cache.keys()) {
             if (!retainedKeys.has(key)) cache.delete(key);
+        }
+        for (const [toolCallId, output] of liveToolOutputs) {
+            applyLiveToolOutputToHost(fragment, toolCallId, output);
+        }
+        // Thinking is temporary and stays outside the settled message/cache
+        // source. It renders before the live assistant partial.
+        if (latestThinking) {
+            fragment.appendChild(buildLiveThinkingBlock(latestThinking));
         }
         // Virtual "live" assistant message appended when streaming. It
         // lives outside the slice so `currentStart` and the persisted
@@ -750,6 +791,98 @@ export function createReviewTranscriptView(root, options) {
      * (prependOlder / appendNewer / jump) can re-create the live block
      * with the latest text.
      */
+    /** Build the temporary thinking block (not cached or persisted). */
+    function buildLiveThinkingBlock(text) {
+        const block = document.createElement('div');
+        block.className = 'thinking-block pi-live-thinking';
+        const content = document.createElement('div');
+        content.className = 'thinking-text';
+        content.textContent = text;
+        block.appendChild(content);
+        return block;
+    }
+    /** Build the streaming virtual assistant block (not cached). */
+    function findLiveThinkingBlock() {
+        return transcript.querySelector(':scope > .pi-live-thinking');
+    }
+    function applyLiveToolOutputToHost(host, id, output) {
+        const wrapper = Array.from(
+            host.querySelectorAll('.tool-execution'),
+        ).find((candidate) => candidate.id === `tool-call-${id}`);
+        if (!wrapper) return null;
+        wrapper.classList.add('pi-live-tool');
+        let live = wrapper.querySelector('.pi-live-tool-output');
+        if (!output) {
+            if (live) live.remove();
+            wrapper.classList.remove('pi-live-tool');
+            return null;
+        }
+        if (!live) {
+            live =
+                Array.from(wrapper.querySelectorAll('.tool-output')).find(
+                    (candidate) => candidate.textContent === 'running…',
+                ) ?? null;
+            if (live) live.classList.add('pi-live-tool-output');
+        }
+        if (!live) {
+            live = document.createElement('div');
+            live.className = 'tool-output pi-live-tool-output';
+            wrapper.appendChild(live);
+        }
+        live.textContent = output;
+        return live;
+    }
+    /**
+     * Update only the streaming live block. Never rebuilds the
+     * transcript or runs markdown / tool-result lookup. An empty
+     * `partial` removes the live block if present; otherwise the block
+     * is lazily created or its `.pi-partial` text content is mutated.
+     *
+     * Bottom-stick: when the user was at the bottom before the update,
+     * the view re-anchors to the bottom; otherwise the scroll position
+     * is preserved so a reader who scrolled up keeps their place.
+     *
+     * Updates `latestPartial` so subsequent window slides
+     * (prependOlder / appendNewer / jump) can re-create the live block
+     * with the latest text.
+     */
+    function setStructuredThinking(text) {
+        latestThinking = text;
+        const existing = findLiveThinkingBlock();
+        if (text === '') {
+            if (existing) existing.remove();
+            syncJumpButton();
+            return;
+        }
+        const wasAtBottom =
+            transcript.scrollHeight -
+                transcript.scrollTop -
+                transcript.clientHeight <=
+            SNAP_ZONE_PX;
+        if (existing) {
+            const content = existing.querySelector('.thinking-text');
+            if (content) content.textContent = text;
+        } else {
+            const live = buildLiveThinkingBlock(text);
+            const partial = findLiveAssistantBlock();
+            if (partial) transcript.insertBefore(live, partial);
+            else transcript.appendChild(live);
+        }
+        if (wasAtBottom) transcript.scrollTop = transcript.scrollHeight;
+        syncJumpButton();
+    }
+    function setLiveToolOutput(id, text) {
+        if (text === '') liveToolOutputs.delete(id);
+        else liveToolOutputs.set(id, text);
+        const wasAtBottom =
+            transcript.scrollHeight -
+                transcript.scrollTop -
+                transcript.clientHeight <=
+            SNAP_ZONE_PX;
+        applyLiveToolOutputToHost(transcript, id, text);
+        if (wasAtBottom) transcript.scrollTop = transcript.scrollHeight;
+        syncJumpButton();
+    }
     function renderQueueState() {
         if (options.mode !== 'structured') return;
         renderQueuePanel(queuePanel, queueItems, piQueue, queueActions);
@@ -899,6 +1032,10 @@ export function createReviewTranscriptView(root, options) {
             structuredMessages = source;
             toolResults = results;
             latestPartial = partial;
+            latestThinking = '';
+            for (const id of liveToolOutputs.keys()) {
+                if (results.has(id)) liveToolOutputs.delete(id);
+            }
             const newestStart = Math.max(0, source.length - windowSize);
             if (wasAtNewest || source.length < previousTotal) {
                 currentStart = newestStart;
@@ -916,6 +1053,28 @@ export function createReviewTranscriptView(root, options) {
         },
         setStructuredPartial(partial) {
             setStructuredPartial(partial);
+        },
+        setStructuredThinking(text) {
+            setStructuredThinking(text);
+        },
+        setLiveToolOutput(id, text) {
+            setLiveToolOutput(id, text);
+        },
+        setConnectionState(state) {
+            connectionState.replaceChildren();
+            if (!state || state === 'connected') {
+                connectionState.classList.add('hidden');
+                return;
+            }
+            connectionState.classList.remove('hidden');
+            const message = document.createElement('span');
+            message.textContent =
+                state === 'unavailable'
+                    ? 'Session unavailable — draft preserved'
+                    : state === 'reconnecting'
+                      ? 'Reconnecting…'
+                      : state;
+            connectionState.appendChild(message);
         },
         setQueueState(
             items,

@@ -14,6 +14,7 @@ export interface PiRpcStatus {
     contextWindowTokens?: number | null;
     cacheReadTokens?: number | null;
     cacheWriteTokens?: number | null;
+    cost?: number | null;
     skills?: string[] | null;
 }
 
@@ -26,6 +27,7 @@ export interface PiRpcStatusDisplay {
     context: string;
     cacheRead: string;
     cacheWrite: string;
+    cost: string;
     skills: string;
 }
 
@@ -44,6 +46,12 @@ function numberOrDash(value: number | null | undefined): string {
         : '—';
 }
 
+function costOrDash(value: number | null | undefined): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+    const formatted = value.toFixed(2).replace(/\.?(0+)$/u, '');
+    return `$${formatted}`;
+}
+
 export function formatPiRpcStatus(
     status: PiRpcStatus | null | undefined,
 ): PiRpcStatusDisplay {
@@ -60,6 +68,7 @@ export function formatPiRpcStatus(
                 : `${numberOrDash(status?.contextUsedTokens)} / ${numberOrDash(status?.contextWindowTokens)}`,
         cacheRead: numberOrDash(status?.cacheReadTokens),
         cacheWrite: numberOrDash(status?.cacheWriteTokens),
+        cost: costOrDash(status?.cost),
         skills:
             status?.skills == null
                 ? '—'
@@ -100,7 +109,8 @@ export type Segment =
           name: string;
           args: Record<string, unknown>;
       }
-    | { kind: 'toolResult'; toolCallId: string; content: string };
+    | { kind: 'toolResult'; toolCallId: string; content: string }
+    | { kind: 'unsupported'; label: string };
 
 export interface StructuredMessage {
     role: 'user' | 'assistant' | 'toolResult';
@@ -187,7 +197,7 @@ function convertSingle(m: InboundMessage): StructuredMessage {
 }
 
 interface PiContentItem {
-    type?: string;
+    type?: unknown;
     text?: string;
     thinking?: string;
     id?: string;
@@ -213,18 +223,27 @@ function coerceArgs(raw: unknown): Record<string, unknown> {
     return {};
 }
 
+function unsupportedContentLabel(item: PiContentItem): string {
+    if (typeof item.type === 'string' && item.type) return item.type;
+    return 'unknown content';
+}
+
+function asPiContentItem(value: unknown): PiContentItem {
+    return value && typeof value === 'object' ? (value as PiContentItem) : {};
+}
+
 function walkContentItems(content: unknown): PiContentItem[] {
-    if (Array.isArray(content)) return content as PiContentItem[];
+    if (Array.isArray(content)) return content.map(asPiContentItem);
     if (content && typeof content === 'object') {
-        return [content as PiContentItem];
+        return [asPiContentItem(content)];
     }
     if (typeof content === 'string') {
         // Try to parse JSON-encoded structured content first.
         try {
             const parsed = JSON.parse(content);
-            if (Array.isArray(parsed)) return parsed as PiContentItem[];
+            if (Array.isArray(parsed)) return parsed.map(asPiContentItem);
             if (parsed && typeof parsed === 'object') {
-                return [parsed as PiContentItem];
+                return [asPiContentItem(parsed)];
             }
         } catch {
             /* not JSON */
@@ -278,11 +297,19 @@ function segmentsFromContent(
                         name: item.name,
                         args: coerceArgs(item.arguments),
                     });
+                } else {
+                    segments.push({
+                        kind: 'unsupported',
+                        label: unsupportedContentLabel(item),
+                    });
                 }
                 break;
             }
             default:
-                // Unknown / non-renderable item: drop silently.
+                segments.push({
+                    kind: 'unsupported',
+                    label: unsupportedContentLabel(item),
+                });
                 break;
         }
     }

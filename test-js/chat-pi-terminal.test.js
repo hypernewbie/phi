@@ -86,7 +86,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(html).toContain('id="pi-rpc-thinking-dropup"');
     });
 
-    it('renders the eight Pi RPC fields without a Skills item', () => {
+    it('renders the nine Pi RPC fields without a Skills item', () => {
         const bar = document.createElement('div');
         const tab = { paneId: 'pi-rpc:one', coder: 'pi-rpc' };
         getPiRpcStatus.mockReturnValue({
@@ -99,6 +99,7 @@ describe('Pi RPC TabManager boundaries', () => {
             contextWindowTokens: 200000,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
+            cost: 0.45,
             skills: ['review', 'test'],
         });
         const tm = Object.create(TabManager.prototype);
@@ -120,10 +121,12 @@ describe('Pi RPC TabManager boundaries', () => {
             'Input',
             'Output',
             'Context',
+            'Cost',
             'Cache read',
             'Cache write',
         ]);
         expect(bar.textContent).toContain('Context42K / 200K');
+        expect(bar.textContent).toContain('Cost$0.45');
         expect(bar.textContent).toContain('Cache read0');
         expect(bar.textContent).toContain('Cache write0');
         expect(bar.textContent).not.toContain('Skills');
