@@ -551,7 +551,8 @@ export class SessionsManager {
             if (!sessions || sessions.length === 0) {
                 container.innerHTML =
                     '<div class="no-sessions-found">No sessions found</div>';
-                if (this.activeCoder === 'pi-rpc') {
+                if (this.activeCoder === 'pi' ||
+                    this.activeCoder === 'pi-rpc') {
                     this._renderRpcChatSection(wtPath, container);
                 }
                 return;
@@ -698,7 +699,8 @@ export class SessionsManager {
                 }
                 container.appendChild(item);
             });
-            if (this.activeCoder === 'pi-rpc') {
+            if (this.activeCoder === 'pi' ||
+                this.activeCoder === 'pi-rpc') {
                 this._renderRpcChatSection(wtPath, container);
             }
             const activeTab = this.app.tabManager.getActiveTab();
