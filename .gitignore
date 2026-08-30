@@ -24,3 +24,8 @@ node_modules/
 # Local-only agent memory file. Holds working rules + repeated
 # reminders for AI agents working on phi. Never enters the repo.
 AGENTS.md
+
+# Purged via filter-repo 2026-08-29: never re-track these
+PLAN.md
+phi_bin
+.antigravitycli/
