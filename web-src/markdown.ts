@@ -440,9 +440,9 @@ export class MarkdownManager {
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'md-manage-btn';
         pasteBtn.id = 'md-paste-btn';
-        pasteBtn.innerText = '📋  Paste';
+        pasteBtn.innerText = '📋 Paste Markdown With Filename';
         pasteBtn.title =
-            'Paste clipboard markdown (expects "# path/to/file.md" header)';
+            'Paste Markdown With Filename (expects "# path/to/file.md" header)';
         pasteBtn.addEventListener('click', () =>
             this._pasteFromSystemClipboard(),
         );
@@ -961,10 +961,47 @@ export class MarkdownManager {
 
         const actions = [
             {
+                icon: '@',
+                label: 'Insert @path',
+                className: 'insert-path',
+                handler: () =>
+                    this._insertRelativePath(file, { mention: true }),
+            },
+            {
+                icon: '↗',
+                label: 'Open in new window',
+                className: 'open-window',
+                handler: () => this._openInNewWindow(file),
+            },
+            {
                 icon: '⧉',
-                label: 'Copy to clipboard',
+                label: 'Copy',
                 className: 'copy',
                 handler: () => this._copyMarkdownFile(file),
+            },
+            {
+                icon: '⧉',
+                label: 'Copy Markdown With Filename',
+                className: 'copy-blob',
+                handler: () => this._copyMarkdownBlob(file),
+            },
+            {
+                icon: '⇉',
+                label: 'Copy to all worktrees',
+                className: 'copy-all',
+                handler: () => this._copyMarkdownFileToAllWorktrees(file),
+            },
+            {
+                icon: '⇩',
+                label: 'Paste…',
+                className: 'paste',
+                handler: () => this._pasteMarkdownFile(file),
+            },
+            {
+                icon: '🗑',
+                label: 'Delete…',
+                className: 'delete',
+                handler: () => this._deleteMarkdownFile(file),
             },
         ];
 
@@ -1023,6 +1060,31 @@ export class MarkdownManager {
     }
 
     async _copyMarkdownFile(file: any): Promise<void> {
+        try {
+            const cwd = this.app.sessionsManager.activeCWD || '';
+            const res = await fetch(
+                `/api/markdown/file?path=${encodeURIComponent(file.path)}&cwd=${encodeURIComponent(cwd)}`,
+            );
+            if (!res.ok) throw new Error(await res.text());
+            const content = await res.text();
+            this.markdownClipboard = {
+                name: file.name,
+                dir: file.dir,
+                content,
+            };
+            this.app.showToast(`Copied "${file.name}"`, {
+                type: 'info',
+                title: 'Markdown Clipboard',
+            });
+        } catch (e) {
+            this.app.showToast(`Failed to copy file: ${(e as Error).message}`, {
+                type: 'error',
+                title: 'Markdown Clipboard',
+            });
+        }
+    }
+
+    async _copyMarkdownBlob(file: any): Promise<void> {
         try {
             const cwd = this.app.sessionsManager.activeCWD || '';
             const res = await fetch(
