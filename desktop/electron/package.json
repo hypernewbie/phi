@@ -1,7 +1,7 @@
 {
   "name": "phi-desktop-electron",
   "productName": "phi-client",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "private": true,
   "description": "Terminal multiplexer and browser-based control center for AI coding assistants.",
   "author": "hypernewbie",
