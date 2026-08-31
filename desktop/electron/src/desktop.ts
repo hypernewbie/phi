@@ -1025,7 +1025,7 @@ export class DesktopHost {
   pushRailState(): void {
     const ctrl = this.controller;
     const rail = this.railView;
-    if (!ctrl || !rail || rail.webContents.isDestroyed()) return;
+    if (!ctrl || !rail || !rail.webContents || rail.webContents.isDestroyed()) return;
     const st = ctrl.state();
     const state: RailState = {
       profiles: st.profiles.map((p) => {
@@ -1059,6 +1059,8 @@ export class DesktopHost {
     if (
       !ctrl ||
       generation !== this.sessionGeneration ||
+      !view ||
+      !view.webContents ||
       view.webContents.isDestroyed()
     )
       return null;
@@ -1115,7 +1117,7 @@ export class DesktopHost {
     const st = ctrl.state();
     for (const profile of st.profiles) {
       const view = this.viewByOrigin.get(profile.origin);
-      if (!view || view.webContents.isDestroyed()) {
+      if (!view || !view.webContents || view.webContents.isDestroyed()) {
         // A profile without a live retained view keeps no rail reading.
         if (this.observedCpu.delete(profile.id)) this.pushRailState();
         if (profile.id === st.activeId && !win.isDestroyed()) {
@@ -1134,7 +1136,7 @@ export class DesktopHost {
           .executeJavaScript(READ_WORKSPACE_SCRIPT)
           .catch(() => null),
       ]).then(([rawCpu, rawActivity, rawWorkspace]) => {
-        if (!this.isCurrentWindowSession(win, generation)) return;
+        if (!this.isCurrentWindowSession(win, generation) || !view.webContents || view.webContents.isDestroyed()) return;
         const cpu =
           typeof rawCpu === 'number' && Number.isFinite(rawCpu)
             ? Math.min(100, Math.max(0, rawCpu))
@@ -1185,7 +1187,7 @@ export class DesktopHost {
     workspace?: string | null,
   ): void {
     const win = this.mainWindow;
-    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) return;
     const state: HeaderState = {
       cpuPercent,
       terminalActivity,
@@ -1553,7 +1555,7 @@ export class DesktopHost {
     action: FileAction,
     reason: string,
   ): void {
-    if (view.webContents.isDestroyed()) return;
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     void view.webContents
       .executeJavaScript(toastErrorScript(`"${action.rel}" — ${reason}`))
       .catch(() => {});
@@ -1599,10 +1601,10 @@ export class DesktopHost {
     const profile = st.profiles.find((p) => p.id === st.activeId) ?? null;
     if (!profile) return;
     const view = this.viewByOrigin.get(profile.origin);
-    if (!view || view.webContents.isDestroyed()) return;
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     void view.webContents.executeJavaScript(READ_FILE_ACTION_SCRIPT).then(
       (raw) => {
-        if (!this.isCurrentWindowSession(win, generation)) return;
+        if (!this.isCurrentWindowSession(win, generation) || !view.webContents || view.webContents.isDestroyed()) return;
         const action = parseFileAction(raw);
         if (action) void this.runFileAction(action, view);
       },
@@ -1621,9 +1623,9 @@ export class DesktopHost {
     this.pendingDividers = null;
     if (pending.left === null && pending.right === null) return;
     const view = this.profileViews?.getView(targetId) ?? null;
-    if (!view || view.webContents.isDestroyed()) return;
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const apply = (): void => {
-      if (view.webContents.isDestroyed()) return;
+      if (!view.webContents || view.webContents.isDestroyed()) return;
       void view.webContents
         .executeJavaScript(applyDividersScript(pending.left, pending.right))
         .catch(() => {});
@@ -1637,9 +1639,9 @@ export class DesktopHost {
    * loadedViews gate). */
   openServerSessions(id: string): void {
     const view = this.profileViews?.getView(id) ?? null;
-    if (!view || view.webContents.isDestroyed()) return;
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const open = (): void => {
-      if (view.webContents.isDestroyed()) return;
+      if (!view.webContents || view.webContents.isDestroyed()) return;
       void view.webContents
         .executeJavaScript(OPEN_SESSIONS_SCRIPT)
         .catch(() => {});
@@ -1659,7 +1661,7 @@ export class DesktopHost {
       outgoingId === null
         ? null
         : (this.profileViews?.getView(outgoingId) ?? null);
-    if (!outgoing || outgoing.webContents.isDestroyed()) return;
+    if (!outgoing || !outgoing.webContents || outgoing.webContents.isDestroyed()) return;
     void outgoing.webContents.executeJavaScript(READ_DIVIDERS_SCRIPT).then(
       (raw) => {
         if (generation !== this.sessionGeneration) return;
@@ -2098,7 +2100,7 @@ export class DesktopHost {
         const activeId = this.profileViews?.getActive() ?? null;
         if (activeId !== null) {
           const view = this.profileViews?.getView(activeId) ?? null;
-          if (view && !view.webContents.isDestroyed()) return view.webContents;
+          if (view && view.webContents && !view.webContents.isDestroyed()) return view.webContents;
         }
         return win.webContents;
       },
@@ -2108,7 +2110,7 @@ export class DesktopHost {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
-        if (view && !view.webContents.isDestroyed()) return view.webContents;
+        if (view && view.webContents && !view.webContents.isDestroyed()) return view.webContents;
       }
       return win.webContents;
     });
@@ -2120,7 +2122,7 @@ export class DesktopHost {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
-        if (view && !view.webContents.isDestroyed()) {
+        if (view && view.webContents && !view.webContents.isDestroyed()) {
           view.webContents.focus();
         }
       }
@@ -2647,6 +2649,7 @@ export class DesktopHost {
         if (
           isCurrent() &&
           this.railView &&
+          this.railView.webContents &&
           !this.railView.webContents.isDestroyed()
         ) {
           const b = win.getContentBounds();
@@ -2717,7 +2720,7 @@ export class DesktopHost {
         console.log(`phi-desktop: rail loadFile failed: ${String(err)}`);
       }
       if (!isCurrent()) return;
-      if (!rail.webContents.isDestroyed()) this.pushRailState();
+      if (rail && rail.webContents && !rail.webContents.isDestroyed()) this.pushRailState();
       // The main view page IS the window's own webContents (the vendored
       // header + caption controls + empty body area); the rail and the
       // retained profile views are the only child views. Push the current
@@ -2965,6 +2968,8 @@ export class DesktopHost {
       if (
         info.generation !== this.sessionGeneration ||
         !current ||
+        current.isDestroyed() ||
+        !current.webContents ||
         current.webContents.isDestroyed()
       )
         return;
@@ -2978,6 +2983,8 @@ export class DesktopHost {
       if (
         generation !== this.sessionGeneration ||
         !current ||
+        current.isDestroyed() ||
+        !current.webContents ||
         current.webContents.isDestroyed()
       )
         return;
@@ -3040,7 +3047,7 @@ export class DesktopHost {
       const profile =
         ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
       const view = profile ? this.viewByOrigin.get(profile.origin) : null;
-      if (!view || view.webContents.isDestroyed()) {
+      if (!view || !view.webContents || view.webContents.isDestroyed()) {
         return {
           ok: false,
           code: 'unavailable',
@@ -3452,7 +3459,7 @@ export class DesktopHost {
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return null;
       const view = this.viewByOrigin.get(active.origin);
-      if (!view || view.webContents.isDestroyed()) return null;
+      if (!view || !view.webContents || view.webContents.isDestroyed()) return null;
       try {
         const raw = await view.webContents.executeJavaScript(
           READ_WORKSPACE_SCRIPT,
@@ -3559,7 +3566,7 @@ export class DesktopHost {
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return;
       const view = this.viewByOrigin.get(active.origin);
-      if (!view || view.webContents.isDestroyed()) return;
+      if (!view || !view.webContents || view.webContents.isDestroyed()) return;
       const action = payload as HeaderAction | null;
       if (action === null || typeof action !== 'object') return;
       if (
