@@ -6787,14 +6787,14 @@ html[data-phi-config-page] .settings-modal {
     .presets-container > .pi-rpc-thinking-trigger,
     .presets-container > .pi-rpc-compact-btn,
     .presets-container > .pi-rpc-reset-btn {
-        font-size: 10px !important;
+        font-size: inherit !important;
         min-height: 24px;
         height: auto !important;
         line-height: normal !important;
     }
 
     .presets-container > .pi-rpc-context-meter {
-        font-size: 10px !important;
+        font-size: inherit !important;
         min-height: 24px;
         height: auto !important;
         line-height: normal !important;
@@ -9790,7 +9790,7 @@ body.md-standalone #md-view-body {
 }
 .pi-export-scope .review-chat-wrapper {
     border: 1ch solid var(--bg-base);
-    padding: 1ch;
+    padding-inline: 0;
     box-sizing: border-box;
 }
 .pi-export-scope .user-message,

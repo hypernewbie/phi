@@ -139,14 +139,15 @@ export class TabManager {
             (paneId, status) => {
                 // Model change Invalidates thinking-level cache (different model → different set)
                 const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
-                const prev = this._piLastModel.get(paneId);
+                const prev = this._piLastModel?.get(paneId);
                 if (m && prev !== undefined && m !== prev) {
-                    this._piAvailableThinking.delete(paneId);
+                    this._piAvailableThinking?.delete(paneId);
                 }
+                if (!this._piLastModel) this._piLastModel = new Map();
                 if (m) this._piLastModel.set(paneId, m);
                 else if (status === null) {
                     this._piLastModel.delete(paneId);
-                    this._piAvailableThinking.delete(paneId);
+                    this._piAvailableThinking?.delete(paneId);
                 }
                 this.renderPiRpcStatusBar();
                 const activeTab = this.getActiveTab();
@@ -717,7 +718,6 @@ export class TabManager {
             // paneIds (closed tabs, or IDs that changed during a session
             // restart) are dropped; new tabs not in the saved order are
             // appended at the end in their natural order.
-            this.applySavedTabOrder();
             // BUG-2 fix: the kanban tab is client-only (no server-side terminal
             // entry), so restore it here if it was open when the page was
             // last reloaded. createTab short-circuits if it's already there.
@@ -2339,9 +2339,9 @@ export class TabManager {
             const fmt = raw ? formatPiRpcStatus(raw) : null;
             const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
             if (rawLevel && rawLevel !== '—') level = String(rawLevel);
-            else level = this._piThinkingLevels.get(tab.paneId) || 'off';
+            else level = this._piThinkingLevels?.get(tab.paneId) || 'off';
         } else {
-            level = this._piThinkingLevels.get(tab.paneId) || 'off';
+            level = this._piThinkingLevels?.get(tab.paneId) || 'off';
         }
         const cls = thinkingLevelClass(level);
         const isPending = this._piRpcThinkingPending?.paneId === tab.paneId;
@@ -2359,6 +2359,7 @@ export class TabManager {
     _cyclePiThinking() {
         const tab = this.getActiveTab();
         if (!tab || (tab.coder !== 'pi' && tab.coder !== 'pi-rpc')) return;
+        if (!this._piThinkingLevels) this._piThinkingLevels = new Map();
         if (tab.coder === 'pi') {
             let cur = this._piThinkingLevels.get(tab.paneId) || 'off';
             const norm = normalizeThinkingLevel(cur);
@@ -2379,6 +2380,7 @@ export class TabManager {
         }
         // pi-rpc: cycle only among Pi-advertised levels
         if (this._piRpcThinkingPending) return;
+        if (!this._piAvailableThinking) this._piAvailableThinking = new Map();
         const cached = this._piAvailableThinking.get(tab.paneId);
         if (!cached || !Array.isArray(cached) || cached.length === 0) {
             let p;
@@ -2391,6 +2393,8 @@ export class TabManager {
                 .then((levels) => {
                     if (!Array.isArray(levels) || levels.length === 0)
                         throw new Error('No Pi thinking levels available');
+                    if (!this._piAvailableThinking)
+                        this._piAvailableThinking = new Map();
                     this._piAvailableThinking.set(tab.paneId, [...levels]);
                     this._cyclePiThinkingWithLevels(tab, [...levels]);
                 })
@@ -2423,7 +2427,7 @@ export class TabManager {
         const fmt = raw ? formatPiRpcStatus(raw) : null;
         const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
         if (rawLevel && rawLevel !== '—') cur = String(rawLevel);
-        else cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+        else cur = this._piThinkingLevels?.get(tab.paneId) || 'off';
         const curNorm = normalizeThinkingLevel(cur);
         let idx = cycleNorm.indexOf(curNorm);
         // If current not in cycle (e.g. stale), start before first
@@ -2447,6 +2451,7 @@ export class TabManager {
             .then(() => {
                 if (this._piRpcThinkingPending === op)
                     this._piRpcThinkingPending = null;
+                if (!this._piThinkingLevels) this._piThinkingLevels = new Map();
                 this._piThinkingLevels.set(tab.paneId, next);
                 if (this.getActiveTab()?.paneId === tab.paneId) {
                     this.renderPresets('pi-rpc');
@@ -2718,7 +2723,7 @@ export class TabManager {
                         }
                         Promise.resolve(setterResult)
                             .then(() => {
-                                this._piAvailableThinking.delete(paneId);
+                                this._piAvailableThinking?.delete(paneId);
                                 if (this._piRpcModelPending === operation)
                                     this._piRpcModelPending = null;
                                 if (this.getActiveTab()?.paneId === paneId) {
@@ -2802,6 +2807,8 @@ export class TabManager {
                     this.getActiveTab()?.paneId !== paneId
                 )
                     return;
+                if (!this._piAvailableThinking)
+                    this._piAvailableThinking = new Map();
                 if (Array.isArray(levels) && levels.length > 0)
                     this._piAvailableThinking.set(paneId, [...levels]);
                 dropup.replaceChildren(header);
@@ -2962,6 +2969,7 @@ export class TabManager {
         const thinkingVisibilityBtn = document.createElement('button');
         thinkingVisibilityBtn.type = 'button';
         thinkingVisibilityBtn.className = 'preset-btn';
+        if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
         const allVisible = this._thinkingAllVisible.get(paneId) === true;
         thinkingVisibilityBtn.textContent = allVisible
             ? 'Hide thinking'
@@ -2970,6 +2978,7 @@ export class TabManager {
         thinkingVisibilityBtn.disabled = menuDisabled;
         thinkingVisibilityBtn.addEventListener('click', (event) => {
             event.stopPropagation();
+            if (!this._thinkingAllVisible) this._thinkingAllVisible = new Map();
             const next = !(this._thinkingAllVisible.get(paneId) === true);
             this._thinkingAllVisible.set(paneId, next);
             const container = this.tabs.get(paneId)?.termContainer;

@@ -893,7 +893,10 @@ export function createReviewTranscriptView(root, options) {
         for (let i = start; i < end && i < total; i++) {
             if (i < snapLen) out.push(compactSnapshot.messages[i]);
             else if (i === snapLen)
-                out.push({ __compaction: true, info: compactSnapshot });
+                out.push({
+                    __compaction: true,
+                    info: compactSnapshot,
+                });
             else out.push(liveMessages[i - snapLen - divider]);
         }
         return out;
