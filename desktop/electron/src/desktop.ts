@@ -1393,6 +1393,63 @@ export class DesktopHost {
     }
   }
 
+  /**
+   * Recovers a saved access credential from the body view's localStorage.
+   * If the user previously logged into this origin in the browser or body view,
+   * localStorage holds the PBKDF2 verifier and trust params, which can be
+   * reused by the desktop host to authenticate without prompting.
+   */
+  async recoverFromViewLocalStorage(
+    view: WebContentsView | null | undefined,
+    origin: string,
+  ): Promise<{
+    verifier: Buffer;
+    salt: Buffer;
+    iterations: number;
+    version: 'v1';
+    algorithm: 'pbkdf2-sha256';
+  } | null> {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return null;
+    try {
+      const raw = (await view.webContents.executeJavaScript(
+        "localStorage.getItem('phi_access_credential_v1')",
+      )) as string | null;
+      if (typeof raw !== 'string' || raw === '') return null;
+      const parsed = JSON.parse(raw) as {
+        version?: unknown;
+        algorithm?: unknown;
+        iterations?: unknown;
+        salt?: unknown;
+        verifier?: unknown;
+      };
+      if (
+        parsed.version !== 'v1' ||
+        parsed.algorithm !== 'pbkdf2-sha256' ||
+        typeof parsed.iterations !== 'number' ||
+        typeof parsed.salt !== 'string' ||
+        typeof parsed.verifier !== 'string'
+      ) {
+        return null;
+      }
+      const salt = Buffer.from(parsed.salt, 'base64url');
+      const verifier = Buffer.from(parsed.verifier, 'base64url');
+      if (salt.length === 0 || verifier.length !== 32) return null;
+      const cred = {
+        version: 'v1' as const,
+        algorithm: 'pbkdf2-sha256' as const,
+        iterations: parsed.iterations,
+        salt,
+        verifier,
+      };
+      const canonicalOrigin = new URL(origin).origin;
+      this.storedCredentials.set(canonicalOrigin, cred);
+      this.saveStoredCredentials();
+      return cred;
+    } catch {
+      return null;
+    }
+  }
+
   /** Resolves a stored credential from memory, loading from disk or local config fallback. */
   private getOrRecoverCredential(origin: string): {
     verifier: Buffer;
@@ -2605,6 +2662,23 @@ export class DesktopHost {
           void view.webContents
             .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
             .catch(() => {});
+          void this.recoverFromViewLocalStorage(view, origin).then((cred) => {
+            if (cred && isCurrent()) {
+              if (pendingUnlock && pendingUnlock.origin === origin) {
+                pendingUnlock.abort.abort();
+                pendingUnlock = null;
+                sendBodyObscuring(false);
+              }
+              const verifierCopy = Buffer.from(cred.verifier);
+              void accessAuth
+                .tryUnlockWithVerifier(origin, verifierCopy)
+                .then((res) => {
+                  if (res.kind === 'ok' && isCurrent()) {
+                    this.pushActiveServer();
+                  }
+                });
+            }
+          });
           // A first activation can request header config before this body has
           // populated its workspace selector. Re-push the active server after
           // load so the main header reads this server's actual selected project.
@@ -3275,6 +3349,28 @@ export class DesktopHost {
           this.viewByOrigin.get(origin);
         if (bodyView && bodyView.webContents && !bodyView.webContents.isDestroyed()) {
           try {
+            const recovered = await this.recoverFromViewLocalStorage(bodyView, origin);
+            if (recovered) {
+              const verifierCopy = Buffer.from(recovered.verifier);
+              const unlock = await auth.tryUnlockWithVerifier(origin, verifierCopy);
+              if (
+                capture.generation === this.sessionGeneration &&
+                ctrl.state().activeId === capture.profileId &&
+                unlock.kind === 'ok' &&
+                unlock.config
+              ) {
+                if (pendingUnlock && pendingUnlock.origin === origin) {
+                  pendingUnlock.abort.abort();
+                  pendingUnlock = null;
+                  sendBodyObscuring(false);
+                }
+                return unlock.config;
+              }
+            }
+          } catch {
+            /* localStorage recovery failed; try DOM read */
+          }
+          try {
             const remoteConfig = (await bodyView.webContents.executeJavaScript(
               READ_REMOTE_CONFIG_SCRIPT,
             )) as {
@@ -3290,6 +3386,11 @@ export class DesktopHost {
               Array.isArray(remoteConfig.workspaces) &&
               remoteConfig.workspaces.length > 0
             ) {
+              if (pendingUnlock && pendingUnlock.origin === origin) {
+                pendingUnlock.abort.abort();
+                pendingUnlock = null;
+                sendBodyObscuring(false);
+              }
               return remoteConfig;
             }
           } catch {
