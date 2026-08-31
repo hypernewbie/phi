@@ -30,11 +30,13 @@ function asSource(messages) {
 }
 const DEFAULT_WINDOW_SIZE = 1000;
 const DEFAULT_PAGE_SIZE = 50;
-const SCROLL_NEAR_TOP_PX = 16;
-const SCROLL_NEAR_BOTTOM_PX = 16;
+const SCROLL_NEAR_TOP_PX = 24;
+const SCROLL_NEAR_BOTTOM_PX = 40;
 // Shared by snapScroll's at-bottom detection and the jump button's
 // visibility sync so "is at bottom" means the same thing everywhere.
-const SNAP_ZONE_PX = 24;
+// Bumped from 24→80 to tolerate 1ch border/padding on wrapper and
+// keep new pi messages pinned when user is near bottom.
+const SNAP_ZONE_PX = 80;
 function roleLabel(role) {
     if (role === 'user') return 'User';
     if (role === 'assistant') return 'Assistant';
@@ -793,6 +795,9 @@ export function createReviewTranscriptView(root, options) {
         }
         if (wasAtBottom) {
             transcript.scrollTop = transcript.scrollHeight;
+            requestAnimationFrame(() => {
+                transcript.scrollTop = transcript.scrollHeight;
+            });
         }
         syncJumpButton();
     }
@@ -927,6 +932,21 @@ export function createReviewTranscriptView(root, options) {
             });
             const delta = transcript.scrollHeight - snap.preHeight;
             applyScrollAnchor(snap, delta);
+            // If we were at the newest window and new messages arrived, stay pinned
+            // to bottom even if wasAtBottom was false by a few px (border/padding).
+            if (wasAtNewest && source.length > previousTotal) {
+                const nearBottom =
+                    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= SNAP_ZONE_PX * 1.5;
+                if (nearBottom || snap.wasAtBottom) {
+                    transcript.scrollTop = transcript.scrollHeight;
+                } else {
+                    // Still ensure the newest window is visible — schedule a frame
+                    // in case scrollHeight hasn't settled yet.
+                    requestAnimationFrame(() => {
+                        transcript.scrollTop = transcript.scrollHeight;
+                    });
+                }
+            }
             syncJumpButton();
         },
         setStructuredPartial(partial) {
