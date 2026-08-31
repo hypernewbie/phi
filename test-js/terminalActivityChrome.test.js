@@ -72,7 +72,9 @@ describe('terminal activity chrome rendering', () => {
     it('enters the live state on the first output byte, not every byte', () => {
         const updateDocumentTitle = vi.fn();
         const syncBackendPin = vi.fn();
-        const term = { write: vi.fn() };
+        const term = {
+            write: vi.fn((_data, callback) => callback()),
+        };
         const tabInfo = tab({
             writeBuffer: '',
             writePending: false,
@@ -80,11 +82,10 @@ describe('terminal activity chrome rendering', () => {
             loaderEl: null,
             term,
         });
-        const writeManager = { updateDocumentTitle, syncBackendPin };
-        vi.stubGlobal('requestAnimationFrame', (callback) => {
-            callback();
-            return 1;
-        });
+        const writeManager = Object.assign(
+            Object.create(TabManager.prototype),
+            { updateDocumentTitle, syncBackendPin },
+        );
 
         TabManager.prototype.writeToTerminal.call(writeManager, tabInfo, 'one');
         TabManager.prototype.writeToTerminal.call(writeManager, tabInfo, 'two');

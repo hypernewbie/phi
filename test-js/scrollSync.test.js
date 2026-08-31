@@ -5,7 +5,8 @@ import { TabManager } from '../web/terminal.js';
 
 // Scroll-area desync fixes (2026-07-24):
 // (1) writeToTerminal must force xterm's DOM scroll area back in sync after
-//     each write batch (the vendored xterm leaves it stale during streaming,
+//     each completed write batch (the vendored xterm leaves it stale during
+//     streaming,
 //     which made wheel-up jump to a stale coordinate and wheel-down clamp
 //     before the real bottom).
 // (2) User wheel/scrollbar scrolls never fire xterm's public onScroll
@@ -34,10 +35,9 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
         userFollowBottom: follow,
         term: {
             // baseY advances on write, like a real terminal growing its
-            // buffer. This is what makes preAtBottom's capture point (before
-            // the rAF/write, per terminal.js:932-933) observable: capturing
-            // it late (after write) would see the new, taller baseY and
-            // wrongly conclude the user isn't at bottom.
+            // buffer. This makes the pre-write at-bottom capture observable:
+            // capturing it late (after write) would see the new, taller baseY
+            // and wrongly conclude the user isn't at bottom.
             write: vi.fn(function (_data, cb) {
                 this.buffer.active.baseY += 1;
                 if (cb) cb();
@@ -53,10 +53,6 @@ function makeTab({ viewportY = 100, baseY = 100, follow = true } = {}) {
 
 describe('write batches sync the DOM scroll area', () => {
     it('calls _core.viewport.syncScrollArea(true) via the write callback', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => {
-            fn();
-            return 1;
-        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         tm.writeToTerminal(tab, 'hello');
@@ -65,10 +61,6 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('still snaps to bottom when following at bottom (existing behavior preserved)', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => {
-            fn();
-            return 1;
-        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab({ viewportY: 100, baseY: 100, follow: true });
         tm.writeToTerminal(tab, 'hello');
@@ -76,10 +68,6 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('does not write or sync on a dead tab', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => {
-            fn();
-            return 1;
-        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         tab.isDead = true;
@@ -89,10 +77,6 @@ describe('write batches sync the DOM scroll area', () => {
     });
 
     it('tolerates a term without _core.viewport (optional chain)', () => {
-        vi.stubGlobal('requestAnimationFrame', (fn) => {
-            fn();
-            return 1;
-        });
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
         delete tab.term._core;
