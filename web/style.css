@@ -3136,16 +3136,19 @@ html[data-phi-desktop-root] .app-header {
     background: transparent;
 }
 
-.pi-rpc-context-meter-fill--green {
-    background: color-mix(in srgb, #10b981 45%, transparent);
+.pi-rpc-context-meter-fill--green,
+.pi-rpc-context-meter-fill--low {
+    background: color-mix(in srgb, var(--text-muted) 32%, transparent);
 }
 
-.pi-rpc-context-meter-fill--yellow {
-    background: color-mix(in srgb, #fbbf24 45%, transparent);
+.pi-rpc-context-meter-fill--yellow,
+.pi-rpc-context-meter-fill--mid {
+    background: color-mix(in srgb, var(--text-muted) 58%, transparent);
 }
 
-.pi-rpc-context-meter-fill--red {
-    background: color-mix(in srgb, #f87171 45%, transparent);
+.pi-rpc-context-meter-fill--red,
+.pi-rpc-context-meter-fill--high {
+    background: color-mix(in srgb, var(--accent) 48%, transparent);
 }
 
 .pi-rpc-context-meter-text {
@@ -3153,6 +3156,23 @@ html[data-phi-desktop-root] .app-header {
     color: var(--text-primary);
     font-size: 11px;
     font-weight: 500;
+}
+
+.pi-rpc-status-meter {
+    min-width: 72px;
+    width: 72px;
+    min-height: 12px;
+    height: 12px;
+    padding: 0;
+    border-radius: 2px;
+    font-size: 9px;
+    line-height: 1;
+}
+
+.pi-rpc-status-meter .pi-rpc-context-meter-text {
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
 }
 
 .preset-btn:hover {
