@@ -1046,24 +1046,30 @@ export class MarkdownManager {
         try {
             if (typeof navigator !== 'undefined' &&
                 navigator.clipboard &&
+                window
+                    .isSecureContext !== false &&
                 navigator.clipboard.readText) {
                 text = await navigator.clipboard.readText();
             }
             else {
-                this.app.showToast('Clipboard API not available', {
+                const fallback = await this._readClipboardViaUserPaste();
+                if (fallback === null)
+                    return;
+                text = fallback;
+            }
+        }
+        catch (err) {
+            console.warn('[md] clipboard read blocked', err);
+            // Fallback to user-gesture paste capture (works on insecure http:// LAN)
+            const fallback = await this._readClipboardViaUserPaste();
+            if (fallback === null) {
+                this.app.showToast('Failed to read clipboard', {
                     type: 'error',
                     title: 'Markdown',
                 });
                 return;
             }
-        }
-        catch (err) {
-            console.warn('[md] clipboard read blocked', err);
-            this.app.showToast('Failed to read clipboard', {
-                type: 'error',
-                title: 'Markdown',
-            });
-            return;
+            text = fallback;
         }
         if (!text || !text.trim()) {
             this.app.showToast('Clipboard is empty', {
@@ -1151,6 +1157,87 @@ export class MarkdownManager {
                 title: 'Markdown',
             });
         }
+    }
+    // Fallback for insecure contexts (http:// on LAN where clipboard.readText is blocked).
+    // Shows a textarea overlay that captures the next Ctrl+V via the paste event
+    // (clipboardData.getData('text')) or via textarea value — works without
+    // navigator.clipboard. Resolves with the pasted string or null on cancel.
+    _readClipboardViaUserPaste() {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.style.zIndex = '10001';
+            overlay.innerHTML = `
+                <div class="modal" style="max-width:560px">
+                    <h3 style="margin:0 0 8px">Paste markdown clipboard</h3>
+                    <p style="margin:0 0 8px;opacity:0.8;font-size:13px">Clipboard API is blocked on this connection (plain http). Press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste — first line must be <code># path/to/file.md</code></p>
+                    <textarea id="md-system-paste-input" style="width:100%;height:180px;font-family:monospace;font-size:13px" placeholder="# temp/A.md
+# heading
+body..."></textarea>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+                        <button type="button" id="md-system-paste-cancel" class="btn">Cancel</button>
+                        <button type="button" id="md-system-paste-confirm" class="btn btn-accent">Paste</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+            const ta = overlay.querySelector('#md-system-paste-input');
+            const cancelBtn = overlay.querySelector('#md-system-paste-cancel');
+            const confirmBtn = overlay.querySelector('#md-system-paste-confirm');
+            let done = false;
+            const cleanup = () => {
+                window.removeEventListener('paste', onWindowPaste);
+                overlay.remove();
+            };
+            const finish = (val) => {
+                if (done)
+                    return;
+                done = true;
+                cleanup();
+                resolve(val);
+            };
+            const onWindowPaste = (e) => {
+                const data = e.clipboardData?.getData('text') ?? '';
+                if (data) {
+                    // Prevent double insert into textarea
+                    e.preventDefault();
+                    ta.value = data;
+                    // let paste render then resolve
+                    requestAnimationFrame(() => finish(data));
+                }
+            };
+            window.addEventListener('paste', onWindowPaste);
+            ta.focus({ preventScroll: true });
+            // Clicking outside modal cancels
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay)
+                    finish(null);
+            });
+            cancelBtn.addEventListener('click', () => finish(null));
+            confirmBtn.addEventListener('click', () => {
+                const v = ta.value;
+                finish(v ? v : null);
+            });
+            ta.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    finish(null);
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    finish(ta.value || null);
+                }
+            });
+            // If user pastes via context menu into textarea, Confirm will pick it up;
+            // also auto-resolve shortly after any paste into textarea
+            ta.addEventListener('paste', () => {
+                setTimeout(() => {
+                    if (!done && ta.value.trim()) {
+                        // Don't auto-close: let user review + press Paste
+                        // but if they pasted header+body we can hint
+                    }
+                }, 50);
+            });
+        });
     }
     // _openPasteModal fills the static #md-paste-modal from a clean state
     // every call. The dir field is rendered as a read-only text label
