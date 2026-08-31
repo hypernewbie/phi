@@ -2,6 +2,13 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.1 — 2026-08-31
+
+### Fixed
+- **Desktop access-auth silent recovery & TBAR synchronization** (`fb9f2797`, `c6bd058e`, `7b961f98`). Resolved an unlock modal race condition on password-protected remote origins where the desktop host Node process hit `401 Unauthorized` while the body view was already authenticated via `localStorage`. `DesktopHost` now automatically recovers stored PBKDF2 verifiers (`phi_access_credential_v1`) from the body view, silently authenticates its own session, clears pending unlock states, and keeps the TBAR (`hostname`, `workspaces`, active project, and theme accent) synchronized across launches and profile switches without redundant password prompts.
+- **`webContents.isDestroyed()` lifecycle null-guards** (`b8b3897f`). Protected all `isDestroyed()` accesses across `pollCpu`, `ProfileViewManager`, `observeProfileIdentity`, `pushRailState`, and IPC handlers against transient `undefined` views during view lifecycle transitions.
+- **Cross-window configuration broadcast channel** (`af241913`). Real-time synchronization of theme, font, and appearance settings across popouts and standalone configuration windows.
+
 ## v0.20.0 — 2026-08-31
 
 ### Added
