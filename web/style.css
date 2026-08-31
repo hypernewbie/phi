@@ -9868,8 +9868,36 @@ body.md-standalone #md-view-body {
     animation-delay: 0.4s;
 }
 @keyframes thinking-dot-blink {
-    0%, 80%, 100% { opacity: 0.2; }
-    40% { opacity: 1; }
+    0%,
+    80%,
+    100% {
+        opacity: 0.2;
+    }
+    40% {
+        opacity: 1;
+    }
+}
+.pi-export-scope .compaction-block {
+    margin: var(--line-height) 0;
+    border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 4px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--panelAlt) 60%, transparent);
+}
+.pi-export-scope .compaction-divider {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+    text-align: center;
+    margin-bottom: 6px;
+}
+.pi-export-scope .compaction-summary {
+    font-size: 12px;
+    opacity: 0.9;
+}
+.pi-export-scope .compacted-old {
+    opacity: 0.58;
 }
 .pi-export-scope .assistant-message > .tool-execution + .tool-execution,
 .pi-export-scope .assistant-message > .assistant-text + .tool-execution,

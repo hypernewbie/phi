@@ -121,15 +121,33 @@ export interface ReviewTranscriptView {
     /** Slide the DOM window `count` messages newer; returns false when
     already at the end of the loaded buffer. */
     appendNewer(count: number): boolean;
+    getStructuredMessages(): readonly StructuredMessage[];
+    hasCompactSnapshot(): boolean;
+    setCompactSnapshot(snapshot: {
+        messages: readonly StructuredMessage[];
+        ids?: Set<string>;
+        summary?: string | null;
+        from?: number | null;
+        kept?: number | null;
+        at?: number;
+    }): void;
+    clearCompactSnapshot(): void;
+    loadCompactSnapshotFromFile(opts: {
+        sessionPath?: string | null;
+        cwd?: string;
+        fetchImpl?: typeof fetch;
+    }): Promise<boolean>;
 }
 
 const DEFAULT_WINDOW_SIZE = 1000;
 const DEFAULT_PAGE_SIZE = 50;
-const SCROLL_NEAR_TOP_PX = 16;
-const SCROLL_NEAR_BOTTOM_PX = 16;
+const SCROLL_NEAR_TOP_PX = 24;
+const SCROLL_NEAR_BOTTOM_PX = 40;
 // Shared by snapScroll's at-bottom detection and the jump button's
 // visibility sync so "is at bottom" means the same thing everywhere.
-const SNAP_ZONE_PX = 24;
+// Bumped from 24→80 to tolerate 1ch border/padding on wrapper and
+// keep new pi messages pinned when user is near bottom.
+const SNAP_ZONE_PX = 80;
 
 function roleLabel(role: string): string {
     if (role === 'user') return 'User';
@@ -349,11 +367,37 @@ function buildAssistantMessageBlock(
             block.appendChild(textDiv);
         } else if (seg.kind === 'thinking') {
             const thinkDiv = document.createElement('div');
-            thinkDiv.className = 'thinking-block';
+            thinkDiv.className = 'thinking-block collapsed';
+            const header = document.createElement('div');
+            header.className = 'thinking-header';
+            const label = document.createElement('span');
+            label.className = 'thinking-label';
+            label.textContent = 'Thinking';
+            const dots = document.createElement('span');
+            dots.className = 'thinking-dots';
+            dots.setAttribute('aria-hidden', 'true');
+            for (let i = 0; i < 3; i++) {
+                const d = document.createElement('span');
+                d.className = 'thinking-dot';
+                d.textContent = '.';
+                dots.appendChild(d);
+            }
+            const left = document.createElement('span');
+            left.className = 'thinking-left';
+            left.append(label, dots);
+            const toggle = document.createElement('span');
+            toggle.className = 'thinking-toggle';
+            toggle.textContent = '▶';
+            toggle.setAttribute('aria-hidden', 'true');
+            header.append(left, toggle);
             const thinkText = document.createElement('div');
             thinkText.className = 'thinking-text';
             appendThinkingText(thinkText, seg.text);
-            thinkDiv.appendChild(thinkText);
+            header.addEventListener('click', () => {
+                const collapsed = thinkDiv.classList.toggle('collapsed');
+                toggle.textContent = collapsed ? '▶' : '▼';
+            });
+            thinkDiv.append(header, thinkText);
             block.appendChild(thinkDiv);
         } else if (seg.kind === 'toolCall') {
             hasToolCalls = true;
@@ -640,6 +684,15 @@ export function createReviewTranscriptView(
         slice: () => [] as readonly StructuredMessage[],
     };
     let toolResults: ReadonlyMap<string, ToolResultEntry> = new Map();
+    let compactSnapshot: {
+        messages: readonly StructuredMessage[];
+        ids: Set<string>;
+        summary: string | null;
+        from: number | null;
+        kept: number | null;
+        at: number;
+    } | null = null;
+    let liveMessages: readonly StructuredMessage[] | null = null;
     // Latest streaming partial, stashed on every setStructuredMessages
     // paint. Window slides (appendNewer, jump button) rebuild outside it
     // and would otherwise drop the live tail for one paint.
@@ -667,15 +720,23 @@ export function createReviewTranscriptView(
         appendPartial?: string;
         partialStreaming?: boolean;
     }): void {
-        const end = Math.min(
-            structuredMessages.length,
-            currentStart + windowSize,
+        const totalLen = compactSnapshot
+            ? combinedLength()
+            : structuredMessages.length;
+        const end = Math.min(totalLen, currentStart + windowSize);
+        const slice = compactSnapshot
+            ? (combinedSlice(currentStart, end) as readonly StructuredMessage[])
+            : (structuredMessages.slice(
+                  currentStart,
+                  end,
+              ) as readonly StructuredMessage[]);
+        const toolDiffs = collectValidatedToolDiffs(
+            slice.filter(
+                (m) =>
+                    !(m as unknown as { __compaction?: boolean }).__compaction,
+            ) as readonly StructuredMessage[],
+            toolResults,
         );
-        const slice = structuredMessages.slice(
-            currentStart,
-            end,
-        ) as readonly StructuredMessage[];
-        const toolDiffs = collectValidatedToolDiffs(slice, toolResults);
         const fragment = document.createDocumentFragment();
 
         // Tool calls render their result inline (bash-render /
@@ -685,6 +746,8 @@ export function createReviewTranscriptView(
         // the window) still fall through to the dim block.
         const renderedCallIds = new Set<string>();
         for (const msg of slice) {
+            if ((msg as unknown as { __compaction?: boolean }).__compaction)
+                continue;
             for (const seg of msg.segments) {
                 if (seg.kind === 'toolCall') renderedCallIds.add(seg.id);
             }
@@ -692,6 +755,24 @@ export function createReviewTranscriptView(
 
         const retainedKeys = new Set<string>();
         for (const [index, msg] of slice.entries()) {
+            if ((msg as unknown as { __compaction?: boolean }).__compaction) {
+                const info = (
+                    msg as unknown as {
+                        info: {
+                            summary: string | null;
+                            from: number | null;
+                            kept: number | null;
+                        };
+                    }
+                ).info;
+                const key = `${currentStart + index}:compaction:${info?.summary ?? ''}`;
+                retainedKeys.add(key);
+                const cached = cache.get(key);
+                const block = cached ?? buildCompactionBlock(info);
+                if (!cached) cache.set(key, block);
+                fragment.appendChild(block);
+                continue;
+            }
             if (
                 msg.role === 'toolResult' &&
                 msg.toolCallId &&
@@ -709,6 +790,14 @@ export function createReviewTranscriptView(
             clearActivePromptMarkers(block);
             block.dataset.piMessageIndex = String(currentStart + index);
             if (!cached) cache.set(key, block);
+            if (
+                compactSnapshot &&
+                currentStart + index < compactSnapshot.messages.length
+            ) {
+                block.classList.add('compacted-old');
+            } else {
+                block.classList.remove('compacted-old');
+            }
             fragment.appendChild(block);
         }
         for (const key of cache.keys()) {
@@ -933,6 +1022,9 @@ export function createReviewTranscriptView(
         }
         if (wasAtBottom) {
             transcript.scrollTop = transcript.scrollHeight;
+            requestAnimationFrame(() => {
+                transcript.scrollTop = transcript.scrollHeight;
+            });
         }
         syncJumpButton();
     }
@@ -975,6 +1067,67 @@ export function createReviewTranscriptView(
             toolDiffs,
             options.copyText,
         );
+    }
+
+    function buildCompactionBlock(info: {
+        summary: string | null;
+        from: number | null;
+        kept: number | null;
+    }): HTMLElement {
+        const wrap = document.createElement('div');
+        wrap.className = 'compaction-block';
+        const line = document.createElement('div');
+        line.className = 'compaction-divider';
+        const kept = info?.kept ?? '?';
+        const from = info?.from ?? '?';
+        line.textContent = `— Compacted ${from} → ${kept} —`;
+        wrap.appendChild(line);
+        if (info?.summary) {
+            const sum = document.createElement('div');
+            sum.className = 'compaction-summary markdown-content';
+            const parsed = new DOMParser().parseFromString(
+                renderMarkdownSafe(String(info.summary)),
+                'text/html',
+            );
+            sum.replaceChildren(...parsed.body.childNodes);
+            highlightCodeIn(sum);
+            wrap.appendChild(sum);
+        }
+        return wrap;
+    }
+
+    function combinedSlice(
+        start: number,
+        end: number,
+    ): readonly StructuredMessage[] {
+        if (!compactSnapshot || !liveMessages)
+            return structuredMessages.slice(
+                start,
+                end,
+            ) as readonly StructuredMessage[];
+        const snapLen = compactSnapshot.messages.length;
+        const divider = 1;
+        const total = snapLen + divider + liveMessages.length;
+        const out: StructuredMessage[] = [];
+        for (let i = start; i < end && i < total; i++) {
+            if (i < snapLen)
+                out.push(compactSnapshot.messages[i] as StructuredMessage);
+            else if (i === snapLen)
+                out.push({
+                    __compaction: true,
+                    info: compactSnapshot,
+                } as unknown as StructuredMessage);
+            else
+                out.push(
+                    liveMessages[i - snapLen - divider] as StructuredMessage,
+                );
+        }
+        return out;
+    }
+
+    function combinedLength(): number {
+        if (!compactSnapshot || !liveMessages) return structuredMessages.length;
+        return compactSnapshot.messages.length + 1 + liveMessages.length;
     }
 
     function snapScroll(): { wasAtBottom: boolean; preHeight: number } {
@@ -1061,15 +1214,55 @@ export function createReviewTranscriptView(
             transcript.appendChild(empty);
         },
         setStructuredMessages(messages, partial, results) {
-            const source = asSource(messages);
-            const previousTotal = structuredMessages.length;
+            const sourceRaw = asSource(messages);
+            let source: StructuredMessageSource = sourceRaw;
+            let sourceArr: readonly StructuredMessage[] | null = null;
+            if (compactSnapshot) {
+                sourceArr = sourceRaw.slice(
+                    0,
+                    sourceRaw.length,
+                ) as readonly StructuredMessage[];
+                const snapIds = compactSnapshot.ids;
+                const filtered = (
+                    sourceArr as readonly StructuredMessage[]
+                ).filter(
+                    (m) =>
+                        !(m as unknown as { id?: string })?.id ||
+                        !snapIds.has((m as unknown as { id: string }).id),
+                );
+                if (
+                    filtered.length !==
+                    (sourceArr as readonly StructuredMessage[]).length
+                ) {
+                    source = asSource(filtered);
+                    sourceArr = filtered;
+                }
+            }
+            const previousTotal = compactSnapshot
+                ? combinedLength()
+                : structuredMessages.length;
             const previousNewestStart = Math.max(0, previousTotal - windowSize);
             const wasAtNewest = currentStart === previousNewestStart;
-            structuredMessages = source;
+            if (compactSnapshot) {
+                liveMessages = (sourceArr ??
+                    (source.slice(
+                        0,
+                        source.length,
+                    ) as readonly StructuredMessage[])) as readonly StructuredMessage[];
+                structuredMessages = source;
+            } else {
+                structuredMessages = source;
+            }
             toolResults = results;
             latestPartial = partial;
-            const newestStart = Math.max(0, source.length - windowSize);
-            if (wasAtNewest || source.length < previousTotal) {
+            const newestTotal = compactSnapshot
+                ? combinedLength()
+                : (source as StructuredMessageSource).length;
+            const newestStart = Math.max(0, newestTotal - windowSize);
+            const curLen = sourceArr
+                ? sourceArr.length
+                : (source as StructuredMessageSource).length;
+            if (wasAtNewest || curLen < previousTotal) {
                 currentStart = newestStart;
             } else {
                 currentStart = Math.min(currentStart, newestStart);
@@ -1081,6 +1274,23 @@ export function createReviewTranscriptView(
             });
             const delta = transcript.scrollHeight - snap.preHeight;
             applyScrollAnchor(snap, delta);
+            const effectiveLen = compactSnapshot
+                ? combinedLength()
+                : (source as StructuredMessageSource).length;
+            if (wasAtNewest && effectiveLen > previousTotal) {
+                const nearBottom =
+                    transcript.scrollHeight -
+                        transcript.scrollTop -
+                        transcript.clientHeight <=
+                    SNAP_ZONE_PX * 1.5;
+                if (nearBottom || snap.wasAtBottom) {
+                    transcript.scrollTop = transcript.scrollHeight;
+                } else {
+                    requestAnimationFrame(() => {
+                        transcript.scrollTop = transcript.scrollHeight;
+                    });
+                }
+            }
             syncJumpButton();
         },
         setStructuredPartial(partial) {
@@ -1113,7 +1323,206 @@ export function createReviewTranscriptView(
             }
             transcript.appendChild(buildEphemeralErrorBlock(text));
         },
+        getStructuredMessages() {
+            if (compactSnapshot)
+                return combinedSlice(
+                    0,
+                    combinedLength(),
+                ) as readonly StructuredMessage[];
+            return structuredMessages.slice(
+                0,
+                structuredMessages.length,
+            ) as readonly StructuredMessage[];
+        },
+        hasCompactSnapshot() {
+            return !!compactSnapshot;
+        },
+        setCompactSnapshot(snapshot) {
+            if (!snapshot || !Array.isArray(snapshot.messages)) {
+                compactSnapshot = null;
+                liveMessages = null;
+                cache.clear();
+                return;
+            }
+            const msgs = snapshot.messages as readonly StructuredMessage[];
+            const ids =
+                snapshot.ids instanceof Set
+                    ? snapshot.ids
+                    : new Set(
+                          msgs
+                              .map((m) => (m as unknown as { id?: string }).id)
+                              .filter(Boolean) as string[],
+                      );
+            compactSnapshot = {
+                messages: msgs,
+                ids,
+                summary: snapshot.summary ?? null,
+                from: snapshot.from ?? msgs.length,
+                kept: snapshot.kept ?? null,
+                at: snapshot.at ?? Date.now(),
+            };
+            liveMessages = [];
+            currentStart = Math.max(
+                0,
+                compactSnapshot.messages.length + 1 - windowSize,
+            );
+            cache.clear();
+        },
+        clearCompactSnapshot() {
+            compactSnapshot = null;
+            liveMessages = null;
+            cache.clear();
+            rebuildStructuredWindow({
+                appendPartial: latestPartial,
+                partialStreaming: latestPartial !== '',
+            });
+        },
+        async loadCompactSnapshotFromFile(opts) {
+            const fetchImpl = opts?.fetchImpl ?? fetch;
+            let sessionPath = opts?.sessionPath ?? null;
+            if (!sessionPath && opts?.cwd) {
+                try {
+                    const res = await fetchImpl(
+                        `/api/sessions?coder=pi&cwd=${encodeURIComponent(opts.cwd)}`,
+                    );
+                    if (res.ok) {
+                        const data = await res.json();
+                        const sessions = Array.isArray(
+                            (data as unknown as { sessions?: unknown[] })
+                                ?.sessions,
+                        )
+                            ? (
+                                  data as unknown as {
+                                      sessions: Array<{
+                                          path?: string;
+                                          file?: string;
+                                      }>;
+                                  }
+                              ).sessions
+                            : Array.isArray(data)
+                              ? (data as Array<{
+                                    path?: string;
+                                    file?: string;
+                                }>)
+                              : [];
+                        const match =
+                            sessions.find((s) => s.path === sessionPath) ||
+                            sessions[0];
+                        if (match?.path) sessionPath = match.path;
+                        else if (match?.file) sessionPath = match.file;
+                    }
+                } catch {}
+            }
+            if (!sessionPath) return false;
+            try {
+                const res = await fetchImpl(
+                    `/api/fs/read?path=${encodeURIComponent(sessionPath)}`,
+                );
+                if (!res.ok) return false;
+                const text = await res.text();
+                const lines = text.split('\n').filter(Boolean);
+                const old: StructuredMessage[] = [];
+                const liveIds = new Set(
+                    (
+                        liveMessages ??
+                        (structuredMessages.slice(
+                            0,
+                            structuredMessages.length,
+                        ) as readonly StructuredMessage[])
+                    )
+                        .map((m) => (m as unknown as { id?: string }).id)
+                        .filter(Boolean) as string[],
+                );
+                const snapIds = compactSnapshot?.ids ?? new Set<string>();
+                let compactionSeen = false;
+                let compactionSummary: string | null = null;
+                for (const line of lines) {
+                    try {
+                        const entry = JSON.parse(line);
+                        if (entry.type === 'compaction') {
+                            compactionSeen = true;
+                            compactionSummary =
+                                entry.summary ?? entry.data?.summary ?? null;
+                            continue;
+                        }
+                        if (entry.type !== 'message' && entry.type !== 'custom')
+                            continue;
+                        if (
+                            entry.type === 'custom' &&
+                            entry.customType !== 'pi-compaction'
+                        )
+                            continue;
+                        const msg = (entry.message ??
+                            entry.data?.message ??
+                            entry.data) as StructuredMessage & { id?: string };
+                        if (!msg || !msg.id) continue;
+                        if (liveIds.has(msg.id) || snapIds.has(msg.id))
+                            continue;
+                        if (compactionSeen) continue;
+                        old.push(msg as StructuredMessage);
+                    } catch {}
+                }
+                if (old.length === 0) return false;
+                if (!compactSnapshot) {
+                    compactSnapshot = {
+                        messages: old,
+                        ids: new Set(
+                            old
+                                .map(
+                                    (m) => (m as unknown as { id?: string }).id,
+                                )
+                                .filter(Boolean) as string[],
+                        ),
+                        summary: compactionSummary,
+                        from: old.length + (liveMessages?.length ?? 0),
+                        kept: liveMessages?.length ?? structuredMessages.length,
+                        at: Date.now(),
+                    };
+                    liveMessages = (liveMessages ??
+                        (structuredMessages.slice(
+                            0,
+                            structuredMessages.length,
+                        ) as readonly StructuredMessage[])) as readonly StructuredMessage[];
+                } else {
+                    const existingIds = compactSnapshot.ids;
+                    const add = old.filter(
+                        (m) =>
+                            !existingIds.has(
+                                (m as unknown as { id?: string }).id as string,
+                            ),
+                    );
+                    if (add.length) {
+                        compactSnapshot.messages = [
+                            ...add,
+                            ...compactSnapshot.messages,
+                        ] as readonly StructuredMessage[];
+                        for (const m of add)
+                            existingIds.add(
+                                (m as unknown as { id?: string }).id as string,
+                            );
+                    } else return false;
+                }
+                const preHeight = transcript.scrollHeight;
+                currentStart = 0;
+                rebuildStructuredWindow({
+                    appendPartial: latestPartial,
+                    partialStreaming: latestPartial !== '',
+                });
+                const delta = transcript.scrollHeight - preHeight;
+                transcript.scrollTop = Math.max(
+                    0,
+                    transcript.scrollTop + delta,
+                );
+                syncJumpButton();
+                return true;
+            } catch {
+                return false;
+            }
+        },
         prependOlder(count) {
+            const totalLen = compactSnapshot
+                ? combinedLength()
+                : structuredMessages.length;
             if (currentStart === 0) return false;
             const newStart = Math.max(0, currentStart - count);
             if (newStart === currentStart) return false;
