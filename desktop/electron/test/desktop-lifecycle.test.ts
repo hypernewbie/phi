@@ -529,4 +529,65 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     first.finishClose();
   });
+
+  it('resolves server config directly from authenticated body view on 401 fallback without prompting', async () => {
+    vi.stubGlobal('fetch', async (url: string | URL) => {
+      const u = url.toString();
+      if (u.includes('/api/config')) {
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ enabled: true, version: 'v1' }),
+      } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    host.handleLaunch([
+      { kind: 'server', value: 'https://minerva.example.test/' },
+    ]);
+    await flush();
+
+    // Body view is authenticated and returns its rendered config
+    const bodyViews = fake.FakeWebContentsView.instances;
+    expect(bodyViews.length).toBeGreaterThan(0);
+    const bodyView = bodyViews[bodyViews.length - 1];
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      if (script.includes('workspace-select')) {
+        return {
+          hostname: 'minerva',
+          workspaces: ['/Users/minerva/code/project'],
+          active_cwd: '/Users/minerva/code/project',
+          theme_color: 'amber',
+        };
+      }
+      return null;
+    };
+
+    const fetchConfigHandler = fake.ipcHandlers.get('phi:server-config');
+    expect(fetchConfigHandler).toBeDefined();
+    const config = await fetchConfigHandler!({ sender: win.webContents });
+
+    expect(config).toEqual({
+      hostname: 'minerva',
+      workspaces: ['/Users/minerva/code/project'],
+      active_cwd: '/Users/minerva/code/project',
+      theme_color: 'amber',
+    });
+
+    // phi:auth-required must NOT have been sent because the body view resolved the config
+    expect(
+      win.webContents.sent.some(([channel]) => channel === 'phi:auth-required'),
+    ).toBe(false);
+
+    win.finishClose();
+  });
 });
