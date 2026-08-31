@@ -9784,13 +9784,14 @@ body.md-standalone #md-view-body {
     --line-height: 1.5em;
 }
 .pi-export-scope .review-content-body {
-    border: 1ch solid var(--bg-base);
-    padding: 1ch;
+    border: none;
+    padding: 0;
     box-sizing: border-box;
 }
 .pi-export-scope .review-chat-wrapper {
-    padding: 0;
-    border: none;
+    border: 1ch solid var(--bg-base);
+    padding: 1ch;
+    box-sizing: border-box;
 }
 .pi-export-scope .user-message,
 .pi-export-scope .assistant-text {
