@@ -2989,11 +2989,10 @@ html[data-phi-desktop-root] .app-header {
 /* PI RPC STATUS BAR */
 .pi-rpc-status-bar {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     flex-shrink: 0;
-    gap: 4px 12px;
-    align-items: center;
-    padding: 3px 8px;
+    gap: 2px;
+    padding: 4px 8px;
     border-top: 1px solid var(--bg-border);
     background-color: var(--bg-panel);
     color: var(--text-secondary);
@@ -3024,6 +3023,43 @@ html[data-phi-desktop-root] .app-header {
     color: var(--text-primary);
     font-size: 11px;
     font-weight: 400;
+}
+
+.pi-rpc-status-cwd {
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pi-rpc-status-main {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+}
+
+.pi-rpc-status-tokens {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.pi-rpc-status-model {
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-align: right;
 }
 
 /* PRESETS PANEL */
