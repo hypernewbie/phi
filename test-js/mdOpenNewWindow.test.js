@@ -79,9 +79,11 @@ describe('_openInNewWindow', () => {
     });
 });
 
-describe('_showContextMenu single Copy action', () => {
-    it('shows only Copy to clipboard (no Open in new window)', () => {
+describe('_showContextMenu "Open in new window" action', () => {
+    it('is the second button (Insert @path stays first) and wires to window.open', () => {
         const { mm } = makeMm();
+        const openSpy = vi.fn(() => ({ opener: {} }));
+        vi.stubGlobal('open', openSpy);
         const anchor = document.createElement('button');
         document.body.appendChild(anchor);
 
@@ -91,10 +93,16 @@ describe('_showContextMenu single Copy action', () => {
         );
 
         const buttons = mm.contextMenuEl.querySelectorAll('.md-context-action');
-        expect(buttons.length).toBe(1);
-        expect(buttons[0].classList.contains('copy')).toBe(true);
-        expect(buttons[0].querySelector('.md-context-label').textContent).toBe(
-            'Copy to clipboard',
+        expect(buttons[0].classList.contains('insert-path')).toBe(true);
+        const second = buttons[1];
+        expect(second.classList.contains('open-window')).toBe(true);
+        expect(second.querySelector('.md-context-label').textContent).toBe(
+            'Open in new window',
         );
+
+        second.click();
+
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(mm.contextMenuEl.classList.contains('hidden')).toBe(true);
     });
 });

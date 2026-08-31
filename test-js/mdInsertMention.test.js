@@ -102,9 +102,9 @@ describe('_insertRelativePath mention formatting', () => {
     });
 });
 
-describe('_showContextMenu single Copy action', () => {
-    it('shows only "Copy to clipboard" and not Insert @path', () => {
-        const { mm } = makeMm('claude');
+describe('_showContextMenu "Insert @path" action', () => {
+    it('shows "Insert @path" as the first action and wires it to a mention insert', () => {
+        const { mm, textarea } = makeMm('claude');
         const anchor = document.createElement('button');
         document.body.appendChild(anchor);
 
@@ -114,11 +114,16 @@ describe('_showContextMenu single Copy action', () => {
         );
 
         const buttons = mm.contextMenuEl.querySelectorAll('.md-context-action');
-        expect(buttons.length).toBe(1);
+        expect(buttons.length).toBeGreaterThan(0);
         const first = buttons[0];
-        expect(first.classList.contains('copy')).toBe(true);
+        expect(first.classList.contains('insert-path')).toBe(true);
         expect(first.querySelector('.md-context-label').textContent).toBe(
-            'Copy to clipboard',
+            'Insert @path',
         );
+
+        first.click();
+
+        expect(textarea.value).toBe('@docs/notes.md');
+        expect(mm.contextMenuEl.classList.contains('hidden')).toBe(true);
     });
 });
