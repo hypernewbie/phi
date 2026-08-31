@@ -358,40 +358,16 @@ export class MarkdownManager {
                 this.fileListEl.appendChild(group);
             }
         }
-        // Dir management row at the bottom
+        // Bottom row: single Paste + Add Dir. Export/Import PHIMD bundle
+        // removed — single-file copy/paste uses "# rel/path.md" header.
         const manageRow = document.createElement('div');
         manageRow.className = 'md-manage-row';
-        // Clipboard export: pulls every .md file in the configured dirs,
-        // gzips + base64-encodes them server-side, copies to clipboard.
-        // Reuses the same server-blob format as config import/export.
-        const exportBtn = document.createElement('button');
-        exportBtn.className = 'md-manage-btn';
-        exportBtn.innerText = '⤓  Export';
-        exportBtn.title =
-            'Copy all markdown files to clipboard (gzip + clipboard)';
-        exportBtn.addEventListener('click', () => this._exportMarkdownBundle());
-        manageRow.appendChild(exportBtn);
-        // Clipboard import: reads a PHIMD blob (from clipboard or paste),
-        // decompresses, validates signature + path-safety, writes into
-        // the first configured markdownDir. Skip-existing behavior by
-        // default; overwrite flag re-enables the replace.
-        const importBtn = document.createElement('button');
-        importBtn.className = 'md-manage-btn';
-        importBtn.innerText = '⤒  Import';
-        importBtn.title = 'Import markdown files from a clipboard blob';
-        importBtn.addEventListener('click', () => this._importMarkdownBundle());
-        manageRow.appendChild(importBtn);
-        // Paste from system clipboard: reads plain text via
-        // navigator.clipboard.readText() and opens a small modal that
-        // lets the user name the new file (with a timestamped default)
-        // and pick a target markdown directory. Falls back to an
-        // editable textarea in the modal when the browser blocks the
-        // clipboard read, so the user can paste by hand.
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'md-manage-btn';
         pasteBtn.id = 'md-paste-btn';
         pasteBtn.innerText = '📋  Paste';
-        pasteBtn.title = 'Paste clipboard text into a new markdown file';
+        pasteBtn.title =
+            'Paste clipboard markdown (expects "# path/to/file.md" header)';
         pasteBtn.addEventListener('click', () => this._pasteFromSystemClipboard());
         manageRow.appendChild(pasteBtn);
         const addDirBtn = document.createElement('button');
@@ -859,40 +835,10 @@ export class MarkdownManager {
         this.contextMenuEl.innerHTML = '';
         const actions = [
             {
-                icon: '@',
-                label: 'Insert @path',
-                className: 'insert-path',
-                handler: () => this._insertRelativePath(file, { mention: true }),
-            },
-            {
-                icon: '↗',
-                label: 'Open in new window',
-                className: 'open-window',
-                handler: () => this._openInNewWindow(file),
-            },
-            {
                 icon: '⧉',
-                label: 'Copy',
+                label: 'Copy to clipboard',
                 className: 'copy',
                 handler: () => this._copyMarkdownFile(file),
-            },
-            {
-                icon: '⇉',
-                label: 'Copy to all worktrees',
-                className: 'copy-all',
-                handler: () => this._copyMarkdownFileToAllWorktrees(file),
-            },
-            {
-                icon: '⇩',
-                label: 'Paste…',
-                className: 'paste',
-                handler: () => this._pasteMarkdownFile(file),
-            },
-            {
-                icon: '🗑',
-                label: 'Delete…',
-                className: 'delete',
-                handler: () => this._deleteMarkdownFile(file),
             },
         ];
         actions.forEach((action) => {
@@ -946,15 +892,9 @@ export class MarkdownManager {
             if (!res.ok)
                 throw new Error(await res.text());
             const content = await res.text();
-            this.markdownClipboard = {
-                name: file.name,
-                dir: file.dir,
-                content,
-            };
-            this.app.showToast(`Copied "${file.name}"`, {
-                type: 'info',
-                title: 'Markdown Clipboard',
-            });
+            const relPath = relativeToCwd(file.path, cwd) || file.name;
+            const payload = `# ${relPath}\n${content}`;
+            await this._copyToClipboard(payload, `Copied "${relPath}" to clipboard`);
         }
         catch (e) {
             this.app.showToast(`Failed to copy file: ${e.message}`, {
@@ -1027,14 +967,12 @@ export class MarkdownManager {
             this.app.showToast(`Failed to paste file: ${e.message}`, { type: 'error', title: 'Markdown Clipboard' });
         }
     }
-    // _pasteFromSystemClipboard is the public entry point for the manage
-    // row's Paste button. It reads plain text from the OS clipboard via
-    // navigator.clipboard.readText() and opens the paste modal pre-filled
-    // with that content. If the browser blocks the read (insecure context,
-    // missing API, permission denied) the modal opens with an empty
-    // editable textarea and a contextual hint, so the user can paste by
-    // hand. The actual write happens in _submitPaste; this method only
-    // owns the read + open sequence.
+    // _pasteFromSystemClipboard implements the single Paste button.
+    // It reads the OS clipboard, expects the first line to be
+    // "# temp/A.md" (relative path, no leading ./), and writes the
+    // remaining content to that path under activeCWD. If the target
+    // directory does not exist, the backend returns a simple error.
+    // On 409 (file exists) it confirms overwrite before retrying.
     async _pasteFromSystemClipboard() {
         const dirs = this.app.markdownDirs || [];
         if (dirs.length === 0) {
@@ -1044,36 +982,115 @@ export class MarkdownManager {
             });
             return;
         }
-        let content = '';
-        let clipboardAvailable = false;
+        let text = '';
         try {
             if (typeof navigator !== 'undefined' &&
                 navigator.clipboard &&
                 navigator.clipboard.readText) {
-                content = await navigator.clipboard.readText();
-                clipboardAvailable = true;
+                text = await navigator.clipboard.readText();
+            }
+            else {
+                this.app.showToast('Clipboard API not available', {
+                    type: 'error',
+                    title: 'Markdown',
+                });
+                return;
             }
         }
         catch (err) {
             console.warn('[md] clipboard read blocked', err);
+            this.app.showToast('Failed to read clipboard', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
         }
-        let hint;
-        if (clipboardAvailable) {
-            if (!content || !content.trim()) {
-                hint = 'Clipboard is empty — paste markdown below.';
-            }
-            else {
-                hint = 'Pasting clipboard text as a new markdown file.';
-            }
+        if (!text || !text.trim()) {
+            this.app.showToast('Clipboard is empty', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
+        }
+        const firstNewline = text.indexOf('\n');
+        const firstLine = (firstNewline === -1 ? text : text.slice(0, firstNewline)).trim();
+        if (!firstLine.startsWith('#')) {
+            this.app.showToast('Clipboard does not start with "# path/to/file.md"', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
+        }
+        let relPath = firstLine.slice(1).trim();
+        // Normalize: strip leading ./ and leading /
+        relPath = relPath.replace(/^\.\//, '').replace(/^\/+/, '');
+        if (!relPath) {
+            this.app.showToast('Invalid path in clipboard header', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
+        }
+        // Ensure .md extension for safety (paste target is markdown)
+        if (!relPath.toLowerCase().endsWith('.md')) {
+            relPath += '.md';
+        }
+        const lastSlash = relPath.lastIndexOf('/');
+        let dir;
+        let name;
+        if (lastSlash === -1) {
+            dir = '.';
+            name = relPath;
         }
         else {
-            hint = 'Clipboard access was blocked — paste markdown below.';
+            dir = relPath.slice(0, lastSlash) || '.';
+            name = relPath.slice(lastSlash + 1);
         }
-        this._openPasteModal({
-            content: content || '',
-            hint,
-            focusContent: !clipboardAvailable || !content,
-        });
+        if (!name || name === '.md') {
+            this.app.showToast('Invalid filename in clipboard header', {
+                type: 'error',
+                title: 'Markdown',
+            });
+            return;
+        }
+        let content = firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+        // Strip one leading newline if the copy used "# rel\ncontent"
+        if (content.startsWith('\r\n'))
+            content = content.slice(2);
+        else if (content.startsWith('\n'))
+            content = content.slice(1);
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        const doPaste = async (overwrite) => {
+            return fetch('/api/markdown/paste', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, dir, name, content, overwrite }),
+            });
+        };
+        try {
+            let res = await doPaste(false);
+            if (res.status === 409) {
+                const ok = confirm(`"${relPath}" already exists. Overwrite it?`);
+                if (!ok)
+                    return;
+                res = await doPaste(true);
+            }
+            if (!res.ok) {
+                const msg = (await res.text()) || `HTTP ${res.status}`;
+                throw new Error(msg);
+            }
+            this.app.showToast(`Pasted to "${relPath}"`, {
+                type: 'info',
+                title: 'Markdown',
+            });
+            await this.refreshFiles();
+        }
+        catch (e) {
+            this.app.showToast(`Paste failed: ${e.message}`, {
+                type: 'error',
+                title: 'Markdown',
+            });
+        }
     }
     // _openPasteModal fills the static #md-paste-modal from a clean state
     // every call. The dir field is rendered as a read-only text label
