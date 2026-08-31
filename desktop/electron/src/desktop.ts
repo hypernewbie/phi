@@ -277,7 +277,16 @@ const REMOTE_IDENTITY_SCRIPT = `(() => {
   };
 })()`;
 
-const READ_REMOTE_CONFIG_SCRIPT = `(() => {
+const READ_REMOTE_CONFIG_SCRIPT = `(async () => {
+  try {
+    const res = await fetch('/api/config', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data === 'object' && Array.isArray(data.workspaces)) {
+        return data;
+      }
+    }
+  } catch {}
   const wsSelect = document.getElementById('workspace-select');
   const hostnameEl = document.getElementById('hostname-display');
   const theme = document.documentElement.dataset.themeColor || '';
@@ -3259,9 +3268,12 @@ export class DesktopHost {
         if (result.kind === 'unavailable') return null;
         // result.kind === 'unauthorized': the server requires access.
         // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
-        // read the rendered config directly from its DOM so the desktop TBAR syncs without a redundant prompt.
-        const bodyView = this.viewByOrigin.get(active.origin);
-        if (bodyView && !bodyView.webContents.isDestroyed()) {
+        // read the rendered config directly from its DOM/fetch so the desktop TBAR syncs without a redundant prompt.
+        const bodyView =
+          this.profileViews?.getView(active.id) ??
+          this.viewByOrigin.get(active.origin) ??
+          this.viewByOrigin.get(origin);
+        if (bodyView && bodyView.webContents && !bodyView.webContents.isDestroyed()) {
           try {
             const remoteConfig = (await bodyView.webContents.executeJavaScript(
               READ_REMOTE_CONFIG_SCRIPT,
@@ -3458,7 +3470,10 @@ export class DesktopHost {
       const st = ctrl.state();
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return null;
-      const view = this.viewByOrigin.get(active.origin);
+      const view =
+        this.profileViews?.getView(active.id) ??
+        this.viewByOrigin.get(active.origin) ??
+        this.viewByOrigin.get(new URL(active.origin).origin);
       if (!view || !view.webContents || view.webContents.isDestroyed()) return null;
       try {
         const raw = await view.webContents.executeJavaScript(
@@ -3565,7 +3580,10 @@ export class DesktopHost {
       const st = ctrl.state();
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return;
-      const view = this.viewByOrigin.get(active.origin);
+      const view =
+        this.profileViews?.getView(active.id) ??
+        this.viewByOrigin.get(active.origin) ??
+        this.viewByOrigin.get(new URL(active.origin).origin);
       if (!view || !view.webContents || view.webContents.isDestroyed()) return;
       const action = payload as HeaderAction | null;
       if (action === null || typeof action !== 'object') return;
