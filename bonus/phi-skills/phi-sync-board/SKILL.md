@@ -77,6 +77,29 @@ Each entry is a JSON object:
 it into the string yourself (e.g. `-d '{"key":"foo","value":"{\"status\":\"done\"}"}'`)
 and decode with `jq -r '.value' | jq .` on read.
 
+## Desktop alerts: PHI_NOTIF (notify) and PHI_ALARM (error)
+
+Any sync message whose **key or value** contains `PHI_NOTIF` or `PHI_ALARM` triggers a desktop-shell alert (the Phi Electron / `?desktop=1` build only — plain browser tabs ignore it).
+
+- `PHI_NOTIF` — **notify** (informational). Use for "done", hand-off, ready-for-review.
+- `PHI_ALARM` — **error/alarm** (higher priority, breaks through). Use for failures, blocked, needs-attention. Takes precedence over `PHI_NOTIF` if both are present.
+
+The web client (`web-src/sync.ts:signalDesktopAlert`) scans the refreshed message list; when a marker is found it writes `PHI_NOTIF <key>` or `PHI_ALARM <key>` (truncated to 120 chars) into `document.title` as a transient signal the desktop shell observes via `page-title-updated`. The terminal-activity title updater overwrites it on the next tick, so the marker is transient by design and display-only — never a remote action.
+
+Include the marker in either field; key is conventional so the title shows the context:
+
+```bash
+# notify — informational hand-off
+curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: application/json" \
+  -d '{"key":"my_task PHI_NOTIF","value":"{\"status\":\"done\"}"}'
+
+# error/alarm — failure
+curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: application/json" \
+  -d '{"key":"build PHI_ALARM","value":"tests failed on linux"}'
+```
+
+Shorthand: think `synboard notify` → add `PHI_NOTIF`, `syncboard error` → add `PHI_ALARM`.
+
 ## Notes
 
 - The coordinator address is whatever your phi server binds to. On a default
