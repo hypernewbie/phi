@@ -196,8 +196,8 @@ describe('Pi RPC TabManager boundaries', () => {
         const status = html.indexOf('id="pi-rpc-status-bar"');
         const presets = html.indexOf('id="presets-container"');
         expect(input).toBeGreaterThanOrEqual(0);
-        expect(input).toBeLessThan(status);
-        expect(status).toBeLessThan(presets);
+        expect(status).toBeLessThan(input);
+        expect(input).toBeLessThan(presets);
         expect(html).toContain('id="pi-rpc-model-dropup"');
         expect(html).toContain('id="pi-rpc-thinking-dropup"');
     });
@@ -220,28 +220,22 @@ describe('Pi RPC TabManager boundaries', () => {
         const tm = Object.create(TabManager.prototype);
         tm.piRpcStatusBar = bar;
         tm.getActiveTab = vi.fn(() => tab);
+        tm.piThinkingBtn = document.createElement('button');
+        tm._piThinkingLevels = new Map();
 
         tm.renderPiRpcStatusBar();
 
         expect(bar.classList.contains('hidden')).toBe(false);
-        expect(bar.textContent).toContain('CWD/work/one');
-        expect(
-            [...bar.querySelectorAll('.pi-rpc-status-label')].map(
-                (label) => label.textContent,
-            ),
-        ).toEqual(['CWD', 'Input', 'Output', 'Cache R/W']);
-        expect(
-            [...bar.querySelectorAll('.pi-rpc-status-value')].map(
-                (value) => value.textContent,
-            ),
-        ).toEqual(['/work/one', '0', '1.2K', '0 / 0']);
-        expect(bar.querySelector('.pi-rpc-status-item-context')).toBeNull();
-        expect(bar.textContent).not.toContain('Model');
-        expect(bar.textContent).not.toContain('Thinking');
-        expect(bar.textContent).not.toContain('Context');
-        expect(bar.textContent).not.toContain('Skills');
+        expect(bar.textContent).toContain('/work/one');
+        expect(bar.textContent).toContain('↑0');
+        expect(bar.textContent).toContain('↓1.2K');
+        expect(bar.textContent).toContain('pi-4');
+        expect(bar.textContent).toContain('high');
+        expect(bar.querySelector('.pi-rpc-status-cwd')).not.toBeNull();
+        expect(bar.querySelector('.pi-rpc-status-tokens')).not.toBeNull();
+        expect(bar.querySelector('.pi-rpc-status-model')).not.toBeNull();
+        expect(bar.querySelector('.pi-rpc-status-meter')).not.toBeNull();
         expect(bar.querySelector('[tabindex="0"]')).toBeNull();
-        expect(bar.querySelector('.pi-rpc-status-item-skills')).toBeNull();
     });
 
     it('renders only Model, Thinking, and Reset Chat for Pi RPC', () => {
@@ -271,13 +265,16 @@ describe('Pi RPC TabManager boundaries', () => {
                 (button) => button.textContent,
             ),
         ).toEqual([
-            'Model · pi-4 ▾',
-            'Thinking · high ▾',
             'Compact',
-            'Reset Chat',
+            'Clear',
+            '⚡ Cmds ▾',
+            '🤖 Models ▾',
+            'Thinking ▾',
         ]);
+        expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
+        expect(row.querySelector('.pi-rpc-reset-btn').textContent).toBe('Clear');
         expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         expect(tm.copyInputBtn.classList.contains('hidden')).toBe(true);
         expect(tm.directModeToggle.classList.contains('hidden')).toBe(true);
@@ -309,12 +306,15 @@ describe('Pi RPC TabManager boundaries', () => {
             [...row.querySelectorAll('button')].map(
                 (button) => button.textContent,
             ),
-        ).toEqual(['Model · — ▾', 'Thinking · — ▾', 'Compact', 'Reset Chat']);
+        ).toEqual(['Compact', 'Clear', '⚡ Cmds ▾', '🤖 Models ▾', 'Thinking ▾']);
+        expect(row.querySelector('.pi-rpc-model-trigger').title).toBe('—');
+        expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe('—');
     });
 
     it('renders the Context meter with progressbar semantics and color states', () => {
         function mountMeter(rawStatus) {
             const row = document.createElement('div');
+            const bar = document.createElement('div');
             const tab = { paneId: 'pi-rpc:meter', coder: 'pi-rpc' };
             getPiRpcStatus.mockReturnValue(rawStatus);
             getPiRpcControls.mockReturnValue({
@@ -328,13 +328,17 @@ describe('Pi RPC TabManager boundaries', () => {
             });
             const tm = Object.create(TabManager.prototype);
             tm.presetsContainer = row;
+            tm.piRpcStatusBar = bar;
+            tm.piThinkingBtn = document.createElement('button');
+            tm._piThinkingLevels = new Map();
             tm.getActiveTab = vi.fn(() => tab);
             tm.cancelInputBtn = document.createElement('button');
             tm.copyInputBtn = document.createElement('button');
             tm.directModeToggle = document.createElement('button');
             tm._piRpcResetPending = new Set();
             tm.renderPresets('pi-rpc');
-            const meter = row.querySelector('.pi-rpc-context-meter');
+            tm.renderPiRpcStatusBar();
+            const meter = bar.querySelector('.pi-rpc-context-meter');
             const fill = meter?.querySelector('.pi-rpc-context-meter-fill');
             const text = meter?.querySelector('.pi-rpc-context-meter-text');
             return { row, meter, fill, text };
@@ -454,7 +458,7 @@ describe('Pi RPC TabManager boundaries', () => {
             '.pi-rpc-context-meter': {
                 position: 'relative',
                 'min-width': '140px',
-                'min-height': '24px',
+                'min-height': '22px',
                 overflow: 'hidden',
                 'border-radius': '4px',
             },
@@ -463,71 +467,62 @@ describe('Pi RPC TabManager boundaries', () => {
                 height: '100%',
                 width: '0',
             },
-            '.pi-rpc-context-meter-fill--green': {
-                background: 'color-mix(in srgb, #10b981 45%, transparent)',
-            },
-            '.pi-rpc-context-meter-fill--yellow': {
-                background: 'color-mix(in srgb, #fbbf24 45%, transparent)',
-            },
-            '.pi-rpc-context-meter-fill--red': {
-                background: 'color-mix(in srgb, #f87171 45%, transparent)',
-            },
             '.pi-rpc-context-meter-text': {
                 position: 'relative',
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '500',
             },
             '.pi-rpc-status-label': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '10px',
+                'font-weight': '600',
             },
             '.pi-rpc-status-value': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '400',
             },
             '.presets-container > .pi-rpc-model-trigger': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '500',
             },
             '.presets-container > .pi-rpc-thinking-trigger': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '500',
             },
             '.presets-container > .pi-rpc-reset-btn': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '500',
             },
             '.presets-container > .pi-rpc-compact-btn': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '500',
             },
             '#pi-rpc-model-dropup .dropup-header': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '10px',
+                'font-weight': '600',
             },
             '#pi-rpc-thinking-dropup .dropup-header': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '10px',
+                'font-weight': '600',
             },
             '#pi-rpc-model-dropup .dropup-model-btn': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '400',
             },
             '#pi-rpc-thinking-dropup .dropup-model-btn': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '400',
             },
             '#pi-rpc-model-dropup .pi-rpc-dropup-meta': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '10px',
+                'font-weight': '400',
             },
             '#pi-rpc-model-dropup .pi-rpc-dropup-message': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '400',
             },
             '#pi-rpc-thinking-dropup .pi-rpc-dropup-message': {
-                'font-size': 'inherit',
-                'font-weight': '700',
+                'font-size': '11px',
+                'font-weight': '400',
             },
         };
         for (const [selector, declarations] of Object.entries(baseContracts)) {
@@ -795,7 +790,7 @@ describe('Pi RPC TabManager boundaries', () => {
         );
         expect(rpcChatReset).toHaveBeenCalledWith(tab.paneId);
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(true);
-        expect(row.textContent).toContain('Reset Chat');
+        expect(row.textContent).toContain('Clear');
         resolveReset({ cancelled: false, reset: true });
         await Promise.resolve();
         await Promise.resolve();
@@ -1009,17 +1004,24 @@ describe('Pi RPC TabManager boundaries', () => {
         tm._piRpcResetPending = new Set();
         tm.renderPiRpcStatusBar();
         tm.renderPresets('pi-rpc');
-        const meter = () => presets.querySelector('.pi-rpc-context-meter');
+        const meter = () => bar.querySelector('.pi-rpc-context-meter');
         const fill = () => meter()?.querySelector('.pi-rpc-context-meter-fill');
         expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
-            'Model · old-model ▾',
+            '🤖 Models ▾',
+        );
+        expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
+            'old-model',
         );
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
-        ).toBe('Thinking · low ▾');
+        ).toBe('Thinking ▾');
+        expect(
+            presets.querySelector('.pi-rpc-thinking-trigger').title,
+        ).toBe('low');
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
-            fill().classList.contains('pi-rpc-context-meter-fill--green'),
+            fill().classList.contains('pi-rpc-context-meter-fill--green') ||
+                fill().classList.contains('pi-rpc-context-meter-fill--low'),
         ).toBe(true);
 
         // The constructor owns subscription; invoke its captured listener on a
@@ -1035,6 +1037,8 @@ describe('Pi RPC TabManager boundaries', () => {
         constructed.cancelInputBtn = document.createElement('button');
         constructed.copyInputBtn = document.createElement('button');
         constructed.directModeToggle = document.createElement('button');
+        constructed.piThinkingBtn = document.createElement('button');
+        constructed._piThinkingLevels = new Map();
         constructed._piRpcResetPending = new Set();
         const notify = subscribePiRpcStatus.mock.calls[0]?.[0];
         expect(notify).toEqual(expect.any(Function));
@@ -1058,14 +1062,15 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(bar.textContent).toContain('/work/active-new');
         expect(bar.textContent).not.toContain('/work/inactive-new');
         expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
-            'Model · old-model ▾',
+            '🤖 Models ▾',
         );
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
-        ).toBe('Thinking · low ▾');
+        ).toBe('Thinking ▾');
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
-            fill().classList.contains('pi-rpc-context-meter-fill--green'),
+            fill().classList.contains('pi-rpc-context-meter-fill--green') ||
+                fill().classList.contains('pi-rpc-context-meter-fill--low'),
         ).toBe(true);
         current.set(active.paneId, {
             cwd: '/work/active-new',
@@ -1074,15 +1079,16 @@ describe('Pi RPC TabManager boundaries', () => {
         });
         notify(active.paneId, current.get(active.paneId));
         expect(bar.textContent).toContain('/work/active-new');
-        expect(presets.querySelector('.pi-rpc-model-trigger').textContent).toBe(
-            'Model · new-model ▾',
+        expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
+            'new-model',
         );
         expect(
-            presets.querySelector('.pi-rpc-thinking-trigger').textContent,
-        ).toBe('Thinking · high ▾');
+            presets.querySelector('.pi-rpc-thinking-trigger').title,
+        ).toBe('high');
         expect(meter().getAttribute('aria-valuenow')).toBe('50');
         expect(
-            fill().classList.contains('pi-rpc-context-meter-fill--yellow'),
+            fill().classList.contains('pi-rpc-context-meter-fill--yellow') ||
+                fill().classList.contains('pi-rpc-context-meter-fill--mid'),
         ).toBe(true);
         expect(fill().style.width).toBe('50%');
         setup.mockRestore();

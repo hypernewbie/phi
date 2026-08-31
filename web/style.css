@@ -2964,6 +2964,42 @@ html[data-phi-desktop-root] .app-header {
         0 0 16px var(--accent-glow);
 }
 
+.pi-thinking-btn {
+    width: 38px;
+    height: 38px;
+    color: var(--text-muted);
+}
+.pi-thinking-btn--off {
+    color: #252525;
+    border-color: #252525;
+}
+.pi-thinking-btn--minimal {
+    color: #474747;
+    border-color: #252525;
+}
+.pi-thinking-btn--low {
+    color: #6d28d9;
+    border-color: #6d28d9;
+    background-color: color-mix(in srgb, #6d28d9 12%, var(--bg-elevated));
+}
+.pi-thinking-btn--medium {
+    color: #ddd6fe;
+    border-color: #ddd6fe;
+    background-color: color-mix(in srgb, #ddd6fe 10%, var(--bg-elevated));
+}
+.pi-thinking-btn--high {
+    color: #a78bfa;
+    border-color: #a78bfa;
+    background-color: color-mix(in srgb, #a78bfa 14%, var(--bg-elevated));
+    box-shadow: 0 0 10px color-mix(in srgb, #a78bfa 30%, transparent);
+}
+.pi-thinking-btn--xhigh {
+    color: #e3e3e4;
+    border-color: #e3e3e4;
+    background-color: color-mix(in srgb, #e3e3e4 14%, var(--bg-elevated));
+    box-shadow: 0 0 12px color-mix(in srgb, #e3e3e4 24%, transparent);
+}
+
 .cancel-btn-icon {
     font-size: 14px;
     font-weight: 600;

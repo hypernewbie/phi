@@ -44,6 +44,27 @@ import {
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
 
+// Pi thinking levels — bonus/pi_themes/phi_violet.json colors:
+//  off darkGray #252525 → minimal gray #474747 → low #6d28d9 → medium #ddd6fe → high #a78bfa → xhigh white #e3e3e4
+const PI_THINKING_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const PI_THINKING_ALIASES = {
+    max: 'xhigh',
+    none: 'off',
+    'x-high': 'xhigh',
+    x_high: 'xhigh',
+};
+
+function normalizeThinkingLevel(level) {
+    const raw = String(level || '')
+        .trim()
+        .toLowerCase();
+    return PI_THINKING_ALIASES[raw] || raw;
+}
+function thinkingLevelClass(level) {
+    const n = normalizeThinkingLevel(level);
+    return PI_THINKING_ORDER.includes(n) ? n : 'off';
+}
+
 // Shared "session done" chime. Constructing a new Audio per chime
 // re-fetches bell.wav; one object per page is enough.
 let doneChimeAudio = null;
@@ -105,6 +126,8 @@ export class TabManager {
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
+        this.piThinkingBtn = document.getElementById('pi-thinking-btn');
+        this._piThinkingLevels = new Map(); // paneId -> thinking level (pi PTY local)
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId) => {
@@ -736,6 +759,11 @@ export class TabManager {
 
         this.sendInputBtn.addEventListener('click', () => {
             this.sendStagedInput();
+        });
+
+        this.piThinkingBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._cyclePiThinking();
         });
 
         // Drag-and-drop and clipboard-paste attachments. Drop handler is on
@@ -2085,6 +2113,7 @@ export class TabManager {
         if (!activeTab || activeTab.coder !== 'pi-rpc') {
             bar.classList.add('hidden');
             bar.replaceChildren();
+            this._updatePiThinkingButton();
             return;
         }
         const raw = getPiRpcStatus(activeTab.paneId);
@@ -2136,33 +2165,32 @@ export class TabManager {
                 fillTheme = ' pi-rpc-context-meter-fill--mid';
             else fillTheme = ' pi-rpc-context-meter-fill--high';
         }
-        let meterEl = null;
-        if (display.context !== '—' || ratioKnown) {
-            meterEl = document.createElement('span');
-            meterEl.className = 'pi-rpc-context-meter pi-rpc-status-meter';
-            meterEl.setAttribute('role', 'progressbar');
-            meterEl.setAttribute('aria-valuemin', '0');
-            meterEl.setAttribute('aria-valuemax', '100');
-            if (ratioPercent !== null)
-                meterEl.setAttribute('aria-valuenow', String(ratioPercent));
-            meterEl.setAttribute('aria-label', `Context: ${display.context}`);
-            const fill = document.createElement('span');
-            // Keep legacy green/yellow/red for backward compat but primary is low/mid/high theme
-            let legacy = '';
-            if (ratioExact !== null) {
-                if (ratioExact < 40) legacy = ' pi-rpc-context-meter-fill--green';
-                else if (ratioExact <= 70)
-                    legacy = ' pi-rpc-context-meter-fill--yellow';
-                else legacy = ' pi-rpc-context-meter-fill--red';
-            }
-            fill.className = `pi-rpc-context-meter-fill${fillTheme}${legacy}`.trim();
-            fill.style.width =
-                ratioPercent === null ? '0%' : `${ratioPercent}%`;
-            const meterText = document.createElement('span');
-            meterText.className = 'pi-rpc-context-meter-text';
-            meterText.textContent = display.context;
-            meterEl.append(fill, meterText);
+        let meterEl = document.createElement('span');
+        meterEl.className = 'pi-rpc-context-meter pi-rpc-status-meter';
+        meterEl.setAttribute('role', 'progressbar');
+        meterEl.setAttribute('aria-valuemin', '0');
+        meterEl.setAttribute('aria-valuemax', '100');
+        if (ratioPercent !== null)
+            meterEl.setAttribute('aria-valuenow', String(ratioPercent));
+        meterEl.setAttribute('aria-label', `Context: ${display.context}`);
+        const fill = document.createElement('span');
+        // Keep legacy green/yellow/red for backward compat but primary is low/mid/high theme
+        let legacy = '';
+        if (ratioExact !== null) {
+            if (ratioExact < 40)
+                legacy = ' pi-rpc-context-meter-fill--green';
+            else if (ratioExact <= 70)
+                legacy = ' pi-rpc-context-meter-fill--yellow';
+            else legacy = ' pi-rpc-context-meter-fill--red';
         }
+        fill.className =
+            `pi-rpc-context-meter-fill${fillTheme}${legacy}`.trim();
+        fill.style.width =
+            ratioPercent === null ? '0%' : `${ratioPercent}%`;
+        const meterText = document.createElement('span');
+        meterText.className = 'pi-rpc-context-meter-text';
+        meterText.textContent = display.context;
+        meterEl.append(fill, meterText);
 
         bar.classList.remove('hidden');
         const cwdEl = document.createElement('div');
@@ -2185,6 +2213,7 @@ export class TabManager {
         if (meterEl) mainRow.append(leftEl, meterEl, rightEl);
         else mainRow.append(leftEl, rightEl);
         bar.replaceChildren(cwdEl, mainRow);
+        this._updatePiThinkingButton();
     }
 
     _setPiRpcActionVisibility(tab) {
@@ -2193,6 +2222,99 @@ export class TabManager {
             element?.classList.toggle('hidden', hidden);
         }
         if (hidden) this.directModeToggle?.classList.remove('active');
+        this._updatePiThinkingButton();
+    }
+
+    _updatePiThinkingButton() {
+        if (!this.piThinkingBtn) return;
+        const tab = this.getActiveTab();
+        const isPi = tab?.coder === 'pi' || tab?.coder === 'pi-rpc';
+        if (!isPi) {
+            this.piThinkingBtn.classList.add('hidden');
+            return;
+        }
+        this.piThinkingBtn.classList.remove('hidden');
+        let level = 'off';
+        if (tab.coder === 'pi-rpc') {
+            const raw = getPiRpcStatus(tab.paneId);
+            const fmt = raw ? formatPiRpcStatus(raw) : null;
+            const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
+            if (rawLevel && rawLevel !== '—') level = String(rawLevel);
+            else level = this._piThinkingLevels.get(tab.paneId) || 'off';
+        } else {
+            level = this._piThinkingLevels.get(tab.paneId) || 'off';
+        }
+        const cls = thinkingLevelClass(level);
+        const isPending = this._piRpcThinkingPending?.paneId === tab.paneId;
+        this.piThinkingBtn.className = `direct-mode-btn pi-thinking-btn pi-thinking-btn--${cls}${isPending ? ' disabled' : ''}`;
+        this.piThinkingBtn.disabled = !!isPending;
+        const label = cls === 'xhigh' ? `${level} (max)` : level;
+        this.piThinkingBtn.title = `Thinking: ${label}`;
+        this.piThinkingBtn.setAttribute('aria-label', `Thinking ${level}`);
+        if (isPending) this.piThinkingBtn.classList.add('hidden'); // hide briefly? keep disabled
+        // ensure visible unless pending hidden
+        if (!isPending) this.piThinkingBtn.classList.remove('hidden');
+        else this.piThinkingBtn.classList.remove('hidden');
+    }
+
+    _cyclePiThinking() {
+        const tab = this.getActiveTab();
+        if (!tab || (tab.coder !== 'pi' && tab.coder !== 'pi-rpc')) return;
+        let cur = 'off';
+        if (tab.coder === 'pi-rpc') {
+            const raw = getPiRpcStatus(tab.paneId);
+            const fmt = raw ? formatPiRpcStatus(raw) : null;
+            const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
+            if (rawLevel && rawLevel !== '—') cur = String(rawLevel);
+            else cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+        } else {
+            cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+        }
+        const norm = normalizeThinkingLevel(cur);
+        let idx = PI_THINKING_ORDER.indexOf(norm);
+        if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
+        const next = PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
+        if (tab.coder === 'pi-rpc') {
+            if (this._piRpcThinkingPending) return;
+            const op = { paneId: tab.paneId, level: next };
+            this._piRpcThinkingPending = op;
+            this._updatePiThinkingButton();
+            this.renderPresets('pi-rpc');
+            let res;
+            try {
+                res = rpcChatSetThinking(tab.paneId, next);
+            } catch (err) {
+                res = Promise.reject(err);
+            }
+            Promise.resolve(res)
+                .then(() => {
+                    if (this._piRpcThinkingPending === op)
+                        this._piRpcThinkingPending = null;
+                    this._piThinkingLevels.set(tab.paneId, next);
+                    if (this.getActiveTab()?.paneId === tab.paneId) {
+                        this.renderPresets('pi-rpc');
+                        this._updatePiThinkingButton();
+                        this.renderPiRpcStatusBar();
+                    }
+                })
+                .catch((err) => {
+                    if (this._piRpcThinkingPending === op)
+                        this._piRpcThinkingPending = null;
+                    this._piRpcError(err, 'Pi thinking');
+                    if (this.getActiveTab()?.paneId === tab.paneId)
+                        this._updatePiThinkingButton();
+                });
+        } else {
+            this._piThinkingLevels.set(tab.paneId, next);
+            this._updatePiThinkingButton();
+            try {
+                this.sendRawInput(`/thinking ${next}\r`);
+            } catch {}
+            this.app?.showToast?.(
+                `Thinking: ${next}${next === 'xhigh' ? ' (max)' : ''}`,
+                { type: 'info' },
+            );
+        }
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -2608,40 +2730,46 @@ export class TabManager {
         const paneId = activeTab.paneId;
         const menuDisabled = !state.ready || state.exited;
 
-        const modelButton = document.createElement('button');
-        modelButton.type = 'button';
-        modelButton.className =
-            'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = `Model ▾`;
-        modelButton.title = state.model || '—';
-        modelButton.disabled =
-            menuDisabled || this._piRpcModelPending?.paneId === paneId;
-        modelButton.addEventListener('click', (event) => {
+        const compactButton = document.createElement('button');
+        compactButton.type = 'button';
+        compactButton.className = 'preset-btn pi-rpc-compact-btn';
+        compactButton.textContent = 'Compact';
+        const compactPending = this._piRpcCompactPending?.has(paneId) === true;
+        compactButton.disabled =
+            menuDisabled ||
+            state.busy ||
+            state.queueDepth > 0 ||
+            compactPending;
+        compactButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._toggleDropup('pi-rpc-model-dropup', modelButton, () =>
-                this._renderPiRpcModelsDropup(),
-            );
-        });
-
-        const thinkingButton = document.createElement('button');
-        thinkingButton.type = 'button';
-        thinkingButton.className =
-            'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = `Thinking ▾`;
-        thinkingButton.title = state.thinking || '—';
-        thinkingButton.disabled =
-            menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
-        thinkingButton.addEventListener('click', (event) => {
-            event.stopPropagation();
-            this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () =>
-                this._renderPiRpcThinkingDropup(),
-            );
+            if (compactButton.disabled) return;
+            if (!this._piRpcCompactPending)
+                this._piRpcCompactPending = new Set();
+            this._piRpcCompactPending.add(paneId);
+            this.renderPresets('pi-rpc');
+            let compactResult;
+            try {
+                compactResult = rpcChatCompact(paneId);
+            } catch (error) {
+                compactResult = Promise.reject(error);
+            }
+            Promise.resolve(compactResult)
+                .catch((error) => {
+                    if (this.tabs.has(paneId))
+                        this._piRpcError(error, 'Compact');
+                })
+                .finally(() => {
+                    this._piRpcCompactPending.delete(paneId);
+                    if (this.getActiveTab()?.paneId === paneId)
+                        this.renderPresets('pi-rpc');
+                });
         });
 
         const resetButton = document.createElement('button');
         resetButton.type = 'button';
         resetButton.className = 'preset-btn pi-rpc-reset-btn';
-        resetButton.textContent = 'Reset Chat';
+        resetButton.textContent = 'Clear';
+        resetButton.title = 'Reset Chat — fresh conversation';
         const resetPending = this._piRpcResetPending?.has(paneId) === true;
         resetButton.disabled =
             menuDisabled || state.busy || state.queueDepth > 0 || resetPending;
@@ -2682,47 +2810,67 @@ export class TabManager {
                         this.renderPresets('pi-rpc');
                 });
         });
-        const compactButton = document.createElement('button');
-        compactButton.type = 'button';
-        compactButton.className = 'preset-btn pi-rpc-compact-btn';
-        compactButton.textContent = 'Compact';
-        const compactPending = this._piRpcCompactPending?.has(paneId) === true;
-        compactButton.disabled =
-            menuDisabled ||
-            state.busy ||
-            state.queueDepth > 0 ||
-            compactPending;
-        compactButton.addEventListener('click', (event) => {
+        const divider = document.createElement('div');
+        divider.className = 'presets-divider';
+
+        const quickCmdsButton = document.createElement('button');
+        quickCmdsButton.type = 'button';
+        quickCmdsButton.className = 'preset-btn model-trigger-btn';
+        quickCmdsButton.textContent = '⚡ Cmds ▾';
+        quickCmdsButton.disabled = menuDisabled;
+        quickCmdsButton.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (compactButton.disabled) return;
-            if (!this._piRpcCompactPending)
-                this._piRpcCompactPending = new Set();
-            this._piRpcCompactPending.add(paneId);
-            this.renderPresets('pi-rpc');
-            let compactResult;
-            try {
-                compactResult = rpcChatCompact(paneId);
-            } catch (error) {
-                compactResult = Promise.reject(error);
-            }
-            Promise.resolve(compactResult)
-                .catch((error) => {
-                    // A closed pane must not surface a post-teardown toast.
-                    if (this.tabs.has(paneId))
-                        this._piRpcError(error, 'Compact');
-                })
-                .finally(() => {
-                    this._piRpcCompactPending.delete(paneId);
-                    if (this.getActiveTab()?.paneId === paneId)
-                        this.renderPresets('pi-rpc');
-                });
+            this._toggleDropup('quick-commands-dropup', quickCmdsButton, () =>
+                this.renderQuickCmdsDropup(),
+            );
         });
+
+        const modelButton = document.createElement('button');
+        modelButton.type = 'button';
+        modelButton.className = 'preset-btn model-trigger-btn pi-rpc-model-trigger';
+        modelButton.textContent = '🤖 Models ▾';
+        modelButton.title = state.model || '—';
+        modelButton.disabled =
+            menuDisabled || this._piRpcModelPending?.paneId === paneId;
+        modelButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._toggleDropup('pi-rpc-model-dropup', modelButton, () =>
+                this._renderPiRpcModelsDropup(),
+            );
+        });
+
+        const thinkingButton = document.createElement('button');
+        thinkingButton.type = 'button';
+        thinkingButton.className =
+            'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
+        thinkingButton.textContent = 'Thinking ▾';
+        thinkingButton.title = state.thinking || '—';
+        thinkingButton.disabled =
+            menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
+        thinkingButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._toggleDropup('pi-rpc-thinking-dropup', thinkingButton, () =>
+                this._renderPiRpcThinkingDropup(),
+            );
+        });
+
         this.presetsContainer.append(
-            modelButton,
-            thinkingButton,
             compactButton,
             resetButton,
+            divider,
+            quickCmdsButton,
+            modelButton,
+            thinkingButton,
         );
+        const qcDropup = document.getElementById('quick-commands-dropup');
+        if (qcDropup && !qcDropup.classList.contains('hidden'))
+            this.renderQuickCmdsDropup();
+        const mDropup = document.getElementById('pi-rpc-model-dropup');
+        if (mDropup && !mDropup.classList.contains('hidden'))
+            this._renderPiRpcModelsDropup();
+        const tDropup = document.getElementById('pi-rpc-thinking-dropup');
+        if (tDropup && !tDropup.classList.contains('hidden'))
+            this._renderPiRpcThinkingDropup();
     }
 
     switchTab(paneId, { userInitiated = false } = {}) {
@@ -5672,7 +5820,11 @@ export class TabManager {
             const dropupWidth =
                 window.innerWidth <= 768
                     ? Math.min(280, window.innerWidth - 24)
-                    : 320;
+                    : dropupId === 'pi-rpc-model-dropup'
+                      ? 420
+                      : dropupId === 'pi-rpc-thinking-dropup'
+                        ? 280
+                        : 320;
             left = Math.max(
                 12,
                 Math.min(left, containerRect.width - dropupWidth - 12),
@@ -5875,6 +6027,7 @@ export class TabManager {
                 this.presetsContainer.appendChild(btn);
             });
         }
+        this._updatePiThinkingButton();
     }
 
     renderSlashDropup(slashPresets) {
