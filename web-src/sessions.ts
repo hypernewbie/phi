@@ -374,7 +374,14 @@ export class SessionsManager {
     }
 
     switchCoder(coderId: string, skipReload: boolean = false): void {
-        if (coderId === 'review' || coderId === 'kanban') return;
+        // pi-rpc is a chat tab (eye icon) — never hijack the left Pi tab's
+        // terminal view. The Pi coder stays as 'pi'.
+        if (
+            coderId === 'review' ||
+            coderId === 'kanban' ||
+            coderId === 'pi-rpc'
+        )
+            return;
         if (this.activeCoder === coderId) return;
         this.activeCoder = coderId;
 

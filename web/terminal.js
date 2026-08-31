@@ -2710,8 +2710,12 @@ export class TabManager {
         this.saveTabsState();
 
         // Update sidebar select state and active coder tab, but skip auto-reload since we coordinate it
+        // pi-rpc is a chat tab opened via the eye icon — it must NOT hijack the left Pi tab's
+        // activeCoder or trigger a worktree reload. The Pi tab stays as terminal (pi).
         const prevCoder = this.app.sessionsManager.activeCoder;
-        this.app.sessionsManager.switchCoder(newTab.coder, true);
+        if (newTab.coder !== 'pi-rpc') {
+            this.app.sessionsManager.switchCoder(newTab.coder, true);
+        }
 
         // BUG-1 fix: kanban and review are independent views — they were opened
         // with a snapshot of whatever workspace/cwd was active at the time, but
@@ -2720,7 +2724,11 @@ export class TabManager {
         // then returns to kanban, blindly applying kanban's stale workspace/cwd
         // would clobber the sidebar and reload worktrees for the wrong project.
         // So skip the workspace/cwd sync for non-terminal coders entirely.
-        if (newTab.coder === 'kanban' || newTab.coder === 'review') {
+        if (
+            newTab.coder === 'kanban' ||
+            newTab.coder === 'review' ||
+            newTab.coder === 'pi-rpc'
+        ) {
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             this.activateTabViewport(newTab, {
                 scrollToBottom: true,
