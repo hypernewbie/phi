@@ -590,4 +590,198 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     win.finishClose();
   });
+
+  it('silently authenticates and syncs TBAR by recovering credentials from body view localStorage on 401', async () => {
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    const verifier = Buffer.alloc(32, 0x42);
+    const saltB64 = salt.toString('base64url');
+    const verifierB64 = verifier.toString('base64url');
+
+    let hasSessionCookie = false;
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: saltB64,
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/login')) {
+        hasSessionCookie = true;
+        return {
+          status: 200,
+          ok: true,
+          headers: new Headers({
+            'set-cookie':
+              'phi_access_session=mock-session-cookie; Path=/; HttpOnly',
+          }),
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }
+      if (u.includes('/api/config')) {
+        const headers = (init?.headers as Record<string, string>) ?? {};
+        const cookie = headers['Cookie'] || headers['cookie'] || '';
+        if (hasSessionCookie || cookie.includes('phi_access_session')) {
+          return {
+            status: 200,
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                hostname: 'minerva',
+                workspaces: ['/Users/minerva/project'],
+                active_cwd: '/Users/minerva/project',
+                theme_color: 'cyan',
+              }),
+            json: async () => ({
+              hostname: 'minerva',
+              workspaces: ['/Users/minerva/project'],
+              active_cwd: '/Users/minerva/project',
+              theme_color: 'cyan',
+            }),
+          } as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ enabled: true, version: 'v1' }),
+      } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    host.handleLaunch([
+      { kind: 'server', value: 'https://minerva.example.test/' },
+    ]);
+    await flush();
+
+    const bodyViews = fake.FakeWebContentsView.instances;
+    expect(bodyViews.length).toBeGreaterThan(0);
+    const bodyView = bodyViews[bodyViews.length - 1];
+
+    // Mock localStorage credential in the body view
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      if (script.includes('phi_access_credential_v1')) {
+        return JSON.stringify({
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          salt: saltB64,
+          verifier: verifierB64,
+        });
+      }
+      return null;
+    };
+
+    const fetchConfigHandler = fake.ipcHandlers.get('phi:server-config');
+    expect(fetchConfigHandler).toBeDefined();
+    const config = await fetchConfigHandler!({ sender: win.webContents });
+
+    expect(config).toEqual({
+      hostname: 'minerva',
+      workspaces: ['/Users/minerva/project'],
+      active_cwd: '/Users/minerva/project',
+      theme_color: 'cyan',
+    });
+
+    // phi:auth-required must NOT have been sent because localStorage verifier auto-unlocked
+    expect(
+      win.webContents.sent.some(([channel]) => channel === 'phi:auth-required'),
+    ).toBe(false);
+
+    win.finishClose();
+  });
+
+  it('auto-recovers credential on body view did-finish-load to resolve pending unlock and push active server', async () => {
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    const verifier = Buffer.alloc(32, 0x42);
+    const saltB64 = salt.toString('base64url');
+    const verifierB64 = verifier.toString('base64url');
+
+    vi.stubGlobal('fetch', async (url: string | URL) => {
+      const u = url.toString();
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: saltB64,
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/login')) {
+        return {
+          status: 200,
+          ok: true,
+          headers: new Headers({
+            'set-cookie':
+              'phi_access_session=mock-session-cookie; Path=/; HttpOnly',
+          }),
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ enabled: true }),
+      } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    host.handleLaunch([
+      { kind: 'server', value: 'https://minerva.example.test/' },
+    ]);
+    await flush();
+
+    const bodyViews = fake.FakeWebContentsView.instances;
+    const bodyView = bodyViews[bodyViews.length - 1];
+
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      if (script.includes('phi_access_credential_v1')) {
+        return JSON.stringify({
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          salt: saltB64,
+          verifier: verifierB64,
+        });
+      }
+      return null;
+    };
+
+    // Emit did-finish-load on the body view
+    bodyView.webContents.emit('did-finish-load');
+    await flush();
+
+    // Verify phi:active-server was sent with the profile info
+    const activeServerSent = win.webContents.sent.filter(
+      ([channel]) => channel === 'phi:active-server',
+    );
+    expect(activeServerSent.length).toBeGreaterThan(0);
+
+    win.finishClose();
+  });
 });
