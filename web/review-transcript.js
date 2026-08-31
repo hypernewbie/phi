@@ -230,11 +230,23 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             const label = document.createElement('span');
             label.className = 'thinking-label';
             label.textContent = 'Thinking';
+            const dots = document.createElement('span');
+            dots.className = 'thinking-dots';
+            dots.setAttribute('aria-hidden', 'true');
+            for (let i = 0; i < 3; i++) {
+                const d = document.createElement('span');
+                d.className = 'thinking-dot';
+                d.textContent = '.';
+                dots.appendChild(d);
+            }
+            const left = document.createElement('span');
+            left.className = 'thinking-left';
+            left.append(label, dots);
             const toggle = document.createElement('span');
             toggle.className = 'thinking-toggle';
             toggle.textContent = '▶';
             toggle.setAttribute('aria-hidden', 'true');
-            header.append(label, toggle);
+            header.append(left, toggle);
             const thinkText = document.createElement('div');
             thinkText.className = 'thinking-text';
             appendThinkingText(thinkText, seg.text);
