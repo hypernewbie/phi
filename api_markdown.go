@@ -371,8 +371,12 @@ func handleMarkdownPaste(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Target directory not in allowed markdown dirs", http.StatusForbidden)
 		return
 	}
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		http.Error(w, "Failed to create target directory: "+err.Error(), http.StatusInternalServerError)
+	if _, err := os.Stat(targetDir); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Directory does not exist: "+req.Dir, http.StatusBadRequest)
+		} else {
+			http.Error(w, "Failed to access target directory: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	targetPath := filepath.Join(targetDir, name)
