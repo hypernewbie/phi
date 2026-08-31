@@ -699,8 +699,7 @@ export class SessionsManager {
                 }
                 container.appendChild(item);
             });
-            if (this.activeCoder === 'pi' ||
-                this.activeCoder === 'pi-rpc') {
+            if (this.activeCoder === 'pi' || this.activeCoder === 'pi-rpc') {
                 this._renderRpcChatSection(wtPath, container);
             }
             const activeTab = this.app.tabManager.getActiveTab();

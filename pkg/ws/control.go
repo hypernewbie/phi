@@ -599,8 +599,10 @@ type controlCallResult struct {
 }
 
 type hydrateFence struct {
-	latest uint64
-	queued []rpc.Event
+	latest       uint64
+	nextResponse uint64
+	responses    map[uint64]Envelope
+	queued       []rpc.Event
 }
 
 func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd func() string) {
@@ -693,9 +695,23 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 		}
 		return write(Envelope{Type: "evt", Evt: ev.Evt, Sid: ev.Sid, Seq: ev.Seq, Data: data})
 	}
-	flushFence := func(sid string, epoch uint64) bool {
+	flushFence := func(sid string) bool {
 		fence := fences[sid]
-		if fence == nil || fence.latest != epoch {
+		if fence == nil {
+			return false
+		}
+		for {
+			response, ok := fence.responses[fence.nextResponse]
+			if !ok {
+				break
+			}
+			delete(fence.responses, fence.nextResponse)
+			if !write(response) {
+				return false
+			}
+			fence.nextResponse++
+		}
+		if fence.nextResponse <= fence.latest {
 			return true
 		}
 		for _, ev := range fence.queued {
@@ -727,7 +743,10 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 			if e.Op == rpc.OpHydrate {
 				fence := fences[e.Sid]
 				if fence == nil {
-					fence = &hydrateFence{}
+					fence = &hydrateFence{
+						nextResponse: 1,
+						responses:    make(map[uint64]Envelope),
+					}
 					fences[e.Sid] = fence
 				}
 				fence.latest++
@@ -749,13 +768,21 @@ func runConn(r *http.Request, c *websocket.Conn, mgr *rpc.Manager, defaultCwd fu
 				}
 			}(e, epoch, opCtx, opCancel)
 		case result := <-results:
-			if !write(result.response) {
-				return
-			}
 			if result.response.ID == "" || result.hydrateEpoch == 0 {
+				if !write(result.response) {
+					return
+				}
 				continue
 			}
-			if !flushFence(result.hydrateSid, result.hydrateEpoch) {
+			fence := fences[result.hydrateSid]
+			if fence == nil {
+				if !write(result.response) {
+					return
+				}
+				continue
+			}
+			fence.responses[result.hydrateEpoch] = result.response
+			if !flushFence(result.hydrateSid) {
 				return
 			}
 		case ev := <-merge:
