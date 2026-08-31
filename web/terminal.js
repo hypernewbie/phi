@@ -130,6 +130,7 @@ export class TabManager {
         this._piThinkingLevels = new Map(); // paneId -> thinking level (pi PTY local)
         this._piAvailableThinking = new Map(); // paneId -> string[] from Pi
         this._piLastModel = new Map(); // paneId -> model string (for cache invalidation)
+        this._thinkingAllVisible = new Map(); // paneId -> bool (global thinking visibility)
         this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
@@ -2873,6 +2874,28 @@ export class TabManager {
                         this.renderPresets('pi-rpc');
                 });
         });
+        const thinkingVisibilityBtn = document.createElement('button');
+        thinkingVisibilityBtn.type = 'button';
+        thinkingVisibilityBtn.className = 'preset-btn';
+        const allVisible = this._thinkingAllVisible.get(paneId) === true;
+        thinkingVisibilityBtn.textContent = allVisible ? 'Hide thinking' : 'Show thinking';
+        thinkingVisibilityBtn.title = 'Toggle all thinking blocks';
+        thinkingVisibilityBtn.disabled = menuDisabled;
+        thinkingVisibilityBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const next = !(this._thinkingAllVisible.get(paneId) === true);
+            this._thinkingAllVisible.set(paneId, next);
+            const container = this.tabs.get(paneId)?.termContainer;
+            if (container) {
+                container.querySelectorAll('.thinking-block').forEach((el) => {
+                    el.classList.toggle('collapsed', !next);
+                    const t = el.querySelector('.thinking-toggle');
+                    if (t) t.textContent = next ? '▼' : '▶';
+                });
+            }
+            this.renderPresets('pi-rpc');
+        });
+
         const divider = document.createElement('div');
         divider.className = 'presets-divider';
 
@@ -2920,6 +2943,7 @@ export class TabManager {
         this.presetsContainer.append(
             compactButton,
             resetButton,
+            thinkingVisibilityBtn,
             divider,
             quickCmdsButton,
             modelButton,

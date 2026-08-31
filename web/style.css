@@ -9820,6 +9820,29 @@ body.md-standalone #md-view-body {
     font-size: inherit;
     line-height: inherit;
 }
+.pi-export-scope .thinking-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding: 4px 8px;
+    color: var(--thinkingText);
+    font-style: italic;
+    user-select: none;
+    border-radius: 4px;
+}
+.pi-export-scope .thinking-header:hover {
+    background: color-mix(in srgb, var(--thinkingText) 8%, transparent);
+}
+.pi-export-scope .thinking-toggle {
+    font-size: 10px;
+    line-height: 1;
+    margin-left: 12px;
+    flex-shrink: 0;
+}
+.pi-export-scope .thinking-block.collapsed .thinking-text {
+    display: none;
+}
 .pi-export-scope .assistant-message > .tool-execution + .tool-execution,
 .pi-export-scope .assistant-message > .assistant-text + .tool-execution,
 .pi-export-scope .assistant-message > .tool-execution + .assistant-text {

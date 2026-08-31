@@ -224,11 +224,25 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             block.appendChild(textDiv);
         } else if (seg.kind === 'thinking') {
             const thinkDiv = document.createElement('div');
-            thinkDiv.className = 'thinking-block';
+            thinkDiv.className = 'thinking-block collapsed';
+            const header = document.createElement('div');
+            header.className = 'thinking-header';
+            const label = document.createElement('span');
+            label.className = 'thinking-label';
+            label.textContent = 'Thinking';
+            const toggle = document.createElement('span');
+            toggle.className = 'thinking-toggle';
+            toggle.textContent = '▶';
+            toggle.setAttribute('aria-hidden', 'true');
+            header.append(label, toggle);
             const thinkText = document.createElement('div');
             thinkText.className = 'thinking-text';
             appendThinkingText(thinkText, seg.text);
-            thinkDiv.appendChild(thinkText);
+            header.addEventListener('click', () => {
+                const collapsed = thinkDiv.classList.toggle('collapsed');
+                toggle.textContent = collapsed ? '▶' : '▼';
+            });
+            thinkDiv.append(header, thinkText);
             block.appendChild(thinkDiv);
         } else if (seg.kind === 'toolCall') {
             hasToolCalls = true;
