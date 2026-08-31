@@ -173,7 +173,7 @@ export class ProfileViewManager {
       existing.view.setVisible(true);
       // Keyboard/shortcuts route to the newly shown view (the outgoing
       // view kept focus until now).
-      if (!existing.view.webContents.isDestroyed())
+      if (existing.view.webContents && !existing.view.webContents.isDestroyed())
         existing.view.webContents.focus();
     } else {
       // First activation: created hidden; shown after did-finish-load.
@@ -233,7 +233,7 @@ export class ProfileViewManager {
    */
   reloadAll(ignoringCache = false): void {
     for (const [id, entry] of this.views.entries()) {
-      if (!entry.view.webContents.isDestroyed()) {
+      if (entry.view.webContents && !entry.view.webContents.isDestroyed()) {
         if (ignoringCache) {
           entry.view.webContents.reloadIgnoringCache();
         } else {
@@ -253,7 +253,7 @@ export class ProfileViewManager {
     const id = targetId ?? this.activeId;
     if (!id) return;
     const entry = this.views.get(id);
-    if (entry && !entry.view.webContents.isDestroyed()) {
+    if (entry && entry.view.webContents && !entry.view.webContents.isDestroyed()) {
       if (ignoringCache) {
         entry.view.webContents.reloadIgnoringCache();
       } else {
@@ -294,7 +294,8 @@ export class ProfileViewManager {
    *  (WebContentsView does not expose `.destroy()`; the documented
    *  teardown is webContents.close() + window.contentView.removeChildView.) */
   private teardownView(entry: ViewEntry): void {
-    if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
+    if (entry.view.webContents && !entry.view.webContents.isDestroyed())
+      entry.view.webContents.close();
     this.win.contentView.removeChildView(entry.view);
   }
 
