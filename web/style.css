@@ -9784,9 +9784,8 @@ body.md-standalone #md-view-body {
     --line-height: 1.5em;
 }
 .pi-export-scope .review-content-body {
+    border: 1ch solid var(--bg-base);
     padding: 1ch;
-    border: none;
-    box-shadow: inset 0 0 0 1ch var(--bg-base);
     box-sizing: border-box;
 }
 .pi-export-scope .review-chat-wrapper {
@@ -9807,6 +9806,16 @@ body.md-standalone #md-view-body {
 .pi-export-scope .tool-header,
 .pi-export-scope .compaction,
 .pi-export-scope .skill-invocation {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+.pi-export-scope pre,
+.pi-export-scope code,
+.pi-export-scope .markdown-content pre,
+.pi-export-scope .markdown-content code,
+.pi-export-scope .markdown-content pre code,
+.pi-export-scope .hljs {
     font-family: inherit;
     font-size: inherit;
     line-height: inherit;

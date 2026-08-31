@@ -3,12 +3,9 @@ import { getLastFolderName } from '../util.js';
 function applyTerminalFont(container, app) {
     const configuredSize = app?.terminalFontSize;
     let fontSize = window.innerWidth <= 768 ? 10 : 14;
-    if (
-        typeof configuredSize === 'number' &&
-        configuredSize >= 8 &&
-        configuredSize <= 32
-    ) {
-        fontSize = configuredSize;
+    const numericSize = Number(configuredSize);
+    if (Number.isFinite(numericSize) && numericSize >= 8 && numericSize <= 32) {
+        fontSize = numericSize;
     }
     container.style.fontFamily =
         app?.terminalFontFamily || 'JetBrains Mono, monospace';
