@@ -551,10 +551,6 @@ export class SessionsManager {
             if (!sessions || sessions.length === 0) {
                 container.innerHTML =
                     '<div class="no-sessions-found">No sessions found</div>';
-                if (this.activeCoder === 'pi' ||
-                    this.activeCoder === 'pi-rpc') {
-                    this._renderRpcChatSection(wtPath, container);
-                }
                 return;
             }
             sessions.forEach((sess) => {
@@ -699,9 +695,6 @@ export class SessionsManager {
                 }
                 container.appendChild(item);
             });
-            if (this.activeCoder === 'pi' || this.activeCoder === 'pi-rpc') {
-                this._renderRpcChatSection(wtPath, container);
-            }
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab && activeTab.coder === this.activeCoder) {
                 this.highlightActiveSession(activeTab.sessionId);
@@ -741,17 +734,6 @@ export class SessionsManager {
                 item.classList.remove('active');
             }
         });
-    }
-    _renderRpcChatSection(wtPath, container) {
-        const item = document.createElement('div');
-        item.className = 'session-item';
-        item.setAttribute('data-worktree-path', wtPath);
-        const button = document.createElement('button');
-        button.className = 'session-action-btn';
-        button.textContent = 'New pi chat';
-        button.addEventListener('click', () => openPiRpcChatTab(this.app.tabManager, wtPath));
-        item.appendChild(button);
-        container.appendChild(item);
     }
     async spawnNewSession() {
         if (this.activeCoder === 'pi-rpc') {

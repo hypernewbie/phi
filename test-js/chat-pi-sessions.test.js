@@ -18,7 +18,6 @@ function context(activeCoder) {
         app: { tabManager },
         launchSession: vi.fn(),
         _showSessionContextMenu: vi.fn(),
-        _renderRpcChatSection: SessionsManager.prototype._renderRpcChatSection,
         tabManager,
     };
 }
@@ -54,8 +53,8 @@ describe('Pi RPC sessions surface', () => {
             '/api/sessions?coder=pi&cwd=%2Fwork%2Fdemo',
         );
         expect(container.textContent).toContain('No sessions found');
-        expect(container.querySelectorAll('button')).toHaveLength(1);
-        expect(container.textContent.match(/New pi chat/g)).toHaveLength(1);
+        expect(container.querySelectorAll('button')).toHaveLength(0);
+        expect(container.textContent).not.toContain('New pi chat');
     });
 
     it('opens a discovered Pi RPC row by exact path/title without terminal handlers', async () => {
@@ -92,7 +91,7 @@ describe('Pi RPC sessions surface', () => {
         expect(ctx.launchSession).not.toHaveBeenCalled();
         expect(ctx._showSessionContextMenu).not.toHaveBeenCalled();
         expect(row.textContent).not.toContain('Pi chat');
-        expect(container.textContent.match(/New pi chat/g)).toHaveLength(1);
+        expect(container.textContent).not.toContain('New pi chat');
     });
 
     it('labels the Pi review action Open Pi RPC and forwards its path/title', async () => {
@@ -160,7 +159,7 @@ describe('Pi RPC sessions surface', () => {
         );
     });
 
-    it('keeps exactly one new-chat action for empty and populated Pi RPC lists', async () => {
+    it('does not render New pi chat action — native is top New Session', async () => {
         const empty = document.createElement('div');
         vi.spyOn(globalThis, 'fetch').mockResolvedValue(response([]));
         await SessionsManager.prototype.loadWorktreeSessions.call(
@@ -168,7 +167,7 @@ describe('Pi RPC sessions surface', () => {
             '/work/demo',
             empty,
         );
-        expect(empty.textContent.match(/New pi chat/g)).toHaveLength(1);
+        expect(empty.textContent).not.toContain('New pi chat');
 
         vi.restoreAllMocks();
         const populated = document.createElement('div');
@@ -189,7 +188,7 @@ describe('Pi RPC sessions surface', () => {
             '/work/demo',
             populated,
         );
-        expect(populated.textContent.match(/New pi chat/g)).toHaveLength(1);
+        expect(populated.textContent).not.toContain('New pi chat');
     });
 
     it('does not retain an overlay mount global', () => {
