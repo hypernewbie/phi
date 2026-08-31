@@ -9792,6 +9792,10 @@ body.md-standalone #md-view-body {
     padding: 0;
     border: none;
 }
+.terminal-content {
+    border: 1ch solid var(--bg-base);
+    box-sizing: border-box;
+}
 .pi-export-scope .user-message,
 .pi-export-scope .assistant-text {
     padding-inline: 1ch;
@@ -9808,7 +9812,7 @@ body.md-standalone #md-view-body {
 .pi-export-scope .skill-invocation {
     font-family: inherit;
     font-size: inherit;
-    line-height: inherit;
+    line-height: 1;
 }
 .pi-export-scope .assistant-message > .tool-execution + .tool-execution,
 .pi-export-scope .assistant-message > .assistant-text + .tool-execution,
