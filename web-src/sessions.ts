@@ -676,10 +676,8 @@ export class SessionsManager {
         container.innerHTML =
             '<div class="scanning-sessions">Scanning sessions...</div>';
         try {
-            const requestCoder =
-                this.activeCoder === 'pi-rpc' ? 'pi' : this.activeCoder;
             const res = await fetch(
-                `/api/sessions?coder=${requestCoder}&cwd=${encodeURIComponent(wtPath)}`,
+                `/api/sessions?coder=${this.activeCoder}&cwd=${encodeURIComponent(wtPath)}`,
             );
             if (!res.ok) {
                 const errMsg = await res.text();
@@ -783,60 +781,40 @@ export class SessionsManager {
                     </div>
                 `;
 
-                if (this.activeCoder === 'pi-rpc') {
-                    item.addEventListener('click', (e) => {
-                        if (
-                            (e.target as Element).closest('.session-action-btn')
-                        )
-                            return;
+                if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
+                    const link = document.createElement('a');
+                    link.href = '#';
+                    link.className = 'session-action-btn';
+                    link.textContent = 'Pi chat';
+                    link.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
                         openPiRpcChatTab(
                             this.app.tabManager,
-                            sess.cwd ?? wtPath,
+                            sess.cwd ?? '',
                             sess.session_path,
                             sess.title,
                         );
                     });
-                } else {
-                    if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
-                        const link = document.createElement('a');
-                        link.href = '#';
-                        link.className = 'session-action-btn';
-                        link.textContent = 'Pi chat';
-                        link.addEventListener('click', (ev) => {
-                            ev.preventDefault();
-                            ev.stopPropagation();
-                            openPiRpcChatTab(
-                                this.app.tabManager,
-                                sess.cwd ?? '',
-                                sess.session_path,
-                                sess.title,
-                            );
-                        });
-                        item.querySelector('.session-actions')?.appendChild(
-                            link,
-                        );
-                    }
-
-                    item.addEventListener('click', (e) => {
-                        if (
-                            (e.target as Element).closest('.session-action-btn')
-                        )
-                            return;
-                        this.launchSession(sess.id, sess.title);
-
-                        const sidebar =
-                            document.getElementById('sidebar-panel');
-                        if (sidebar) {
-                            sidebar.classList.remove('drawer-open');
-                        }
-                    });
-
-                    item.addEventListener('contextmenu', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        this._showSessionContextMenu(e, item, sess);
-                    });
+                    item.querySelector('.session-actions')?.appendChild(link);
                 }
+
+                item.addEventListener('click', (e) => {
+                    if ((e.target as Element).closest('.session-action-btn'))
+                        return;
+                    this.launchSession(sess.id, sess.title);
+
+                    const sidebar = document.getElementById('sidebar-panel');
+                    if (sidebar) {
+                        sidebar.classList.remove('drawer-open');
+                    }
+                });
+
+                item.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this._showSessionContextMenu(e, item, sess);
+                });
 
                 if (
                     this.activeCoder === 'opencode' ||
@@ -923,10 +901,6 @@ export class SessionsManager {
     }
 
     async spawnNewSession(): Promise<void> {
-        if (this.activeCoder === 'pi-rpc') {
-            openPiRpcChatTab(this.app.tabManager, this.activeCWD);
-            return;
-        }
         try {
             let coderName = 'Shell';
             if (this.activeCoder === 'opencode') coderName = 'OpenCode';
