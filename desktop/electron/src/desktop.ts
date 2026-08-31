@@ -277,6 +277,22 @@ const REMOTE_IDENTITY_SCRIPT = `(() => {
   };
 })()`;
 
+const READ_REMOTE_CONFIG_SCRIPT = `(() => {
+  const wsSelect = document.getElementById('workspace-select');
+  const hostnameEl = document.getElementById('hostname-display');
+  const theme = document.documentElement.dataset.themeColor || '';
+  if (!wsSelect || !wsSelect.options || wsSelect.options.length === 0) return null;
+  const workspaces = Array.from(wsSelect.options).map((o) => o.value).filter(Boolean);
+  if (workspaces.length === 0) return null;
+  const hostname = hostnameEl ? (hostnameEl.textContent || '').trim() : '';
+  return {
+    hostname,
+    workspaces,
+    active_cwd: wsSelect.value || workspaces[0] || '',
+    theme_color: theme,
+  };
+})()`;
+
 /** Fixed page-observation expression for the remote page's CPU percent (never interpolated). */
 const REMOTE_CPU_SCRIPT = `(() => {
   const raw = document.querySelector('.brand .logo')?.dataset.cpuPct;
@@ -3235,6 +3251,32 @@ export class DesktopHost {
         if (result.kind === 'ok') return result.config;
         if (result.kind === 'unavailable') return null;
         // result.kind === 'unauthorized': the server requires access.
+        // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
+        // read the rendered config directly from its DOM so the desktop TBAR syncs without a redundant prompt.
+        const bodyView = this.viewByOrigin.get(active.origin);
+        if (bodyView && !bodyView.webContents.isDestroyed()) {
+          try {
+            const remoteConfig = (await bodyView.webContents.executeJavaScript(
+              READ_REMOTE_CONFIG_SCRIPT,
+            )) as {
+              hostname?: string;
+              workspaces?: string[];
+              active_cwd?: string;
+              theme_color?: string;
+            } | null;
+            if (
+              capture.generation === this.sessionGeneration &&
+              ctrl.state().activeId === capture.profileId &&
+              remoteConfig &&
+              Array.isArray(remoteConfig.workspaces) &&
+              remoteConfig.workspaces.length > 0
+            ) {
+              return remoteConfig;
+            }
+          } catch {
+            /* body view not ready; proceed to auth flow */
+          }
+        }
         // Validate the status before prompting. Re-check active profile at
         // every await point to avoid A-response-after-switch races.
         if (
