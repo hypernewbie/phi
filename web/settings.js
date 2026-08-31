@@ -2,6 +2,16 @@ import { displayHostname } from './util.js';
 import { setAccessPassword, clearAccessPassword } from './auth.js';
 import { tryNative } from './desktop.js';
 
+export function broadcastConfigSync(type, payload = {}) {
+    try {
+        if (typeof BroadcastChannel !== 'undefined') {
+            const ch = new BroadcastChannel('phi_config_sync');
+            ch.postMessage({ type, ...payload });
+            ch.close();
+        }
+    } catch {}
+}
+
 export function openSettingsModal(app, accentColors, opts = {}) {
     if (document.querySelector('.settings-overlay')) return;
     if (!opts.standalone && tryNative('config', {})) return;
@@ -367,7 +377,10 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     let persistTimer = null;
     const debouncedPersist = () => {
         clearTimeout(persistTimer);
-        persistTimer = setTimeout(() => app.persistAppearance(), 300);
+        persistTimer = setTimeout(() => {
+            app.persistAppearance();
+            broadcastConfigSync('appearance');
+        }, 300);
     };
     uiFontRow.querySelector('select')?.addEventListener('change', (e) => {
         app.uiFontFamily = e.target.value;
@@ -412,6 +425,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             app._injectCustomFontFace(file);
             app.customFontName = file.name;
             app._saveAppearanceLocal();
+            broadcastConfigSync('appearance');
             app.showToast(
                 `Loaded ${file.name}. Pick "Custom: ${file.name}" in the font dropdowns.`,
                 { type: 'success' },
@@ -439,6 +453,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         );
         app.tabManager?.applyTerminalFontSizeToAll(0);
         app.persistAppearance();
+        broadcastConfigSync('appearance');
         document.getElementById('settings-ui-font').value = '';
         document.getElementById('settings-ui-font-size').value = '14';
         document.getElementById('settings-term-font').value = '';
@@ -460,6 +475,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: app.useHiddenTerminal }),
             });
+            broadcastConfigSync('behavior');
         } catch (err) {
             console.warn(
                 '[settings] failed to persist hidden-terminal toggle',
@@ -475,6 +491,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: app.useExistingTerminalTab }),
             });
+            broadcastConfigSync('behavior');
         } catch (err) {
             console.warn('[settings] failed to persist reuse-tab toggle', err);
         }
@@ -491,6 +508,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
                 });
+                broadcastConfigSync('behavior');
             } catch (err) {
                 console.warn(
                     '[settings] failed to persist auto-reconnect toggle',
@@ -510,6 +528,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled }),
                 });
+                broadcastConfigSync('behavior');
             } catch (err) {
                 console.warn(
                     '[settings] failed to persist fast-mode toggle',
@@ -676,6 +695,7 @@ function _buildSwatchRow(app, activeColor, accentColors) {
         sw.addEventListener('click', () => {
             app.applyAccentTheme(key);
             app.saveTheme(key);
+            broadcastConfigSync('theme', { color: key });
             grid.querySelectorAll('.settings-swatch').forEach((s) => {
                 s.setAttribute(
                     'aria-checked',

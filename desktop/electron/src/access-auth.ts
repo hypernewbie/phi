@@ -123,6 +123,23 @@ export class AccessAuth {
     this._doFetch = doFetch;
   }
 
+  private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
+    try {
+      return await this._doFetch(url, init);
+    } catch (err) {
+      if (url.hostname === 'localhost') {
+        const fallback = new URL(url.toString());
+        fallback.hostname = '127.0.0.1';
+        try {
+          return await this._doFetch(fallback, init);
+        } catch {
+          throw err;
+        }
+      }
+      throw err;
+    }
+  }
+
   /** Drops the captured cookie AND the cached verifier for `origin`.
    *  Used on rail switch away-from, profile removal, and quit — but
    *  cookies are intentionally NOT dropped on rail switch so a return
@@ -240,7 +257,7 @@ export class AccessAuth {
     if (cookie)
       headers['Cookie'] = `${cookie.cookieName}=${cookie.cookieValue}`;
     try {
-      const res = await this._doFetch(new URL(CONFIG_PATH, origin), {
+      const res = await this.safeFetch(new URL(CONFIG_PATH, origin), {
         headers,
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: 'error',
@@ -397,7 +414,7 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
   > {
     try {
-      const res = await this._doFetch(new URL(AUTH_PATH_STATUS, origin), {
+      const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, origin), {
         signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
@@ -438,7 +455,7 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
   > {
     try {
-      const res = await this._doFetch(new URL(AUTH_PATH_LOGIN, origin), {
+      const res = await this.safeFetch(new URL(AUTH_PATH_LOGIN, origin), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge, proof }),

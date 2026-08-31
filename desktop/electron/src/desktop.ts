@@ -2386,6 +2386,21 @@ export class DesktopHost {
         // guard paths (window-open and will-navigate) compare the same
         // canonical origin string.
         const allowedOrigin = new URL(origin).origin;
+        const isSameServerOrigin = (
+          target: URL,
+          allowedOrigin: string,
+        ): boolean => {
+          if (target.origin === allowedOrigin) return true;
+          const allowed = new URL(allowedOrigin);
+          const isLoopback = (host: string): boolean =>
+            host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+          return (
+            target.protocol === allowed.protocol &&
+            target.port === allowed.port &&
+            isLoopback(target.hostname) &&
+            isLoopback(allowed.hostname)
+          );
+        };
         const popupSize = (
           features: string,
         ): { width: number; height: number } => {
@@ -2404,7 +2419,10 @@ export class DesktopHost {
           if (!isCurrent()) return { action: 'deny' };
           try {
             const target = new URL(url);
-            if (target.origin === allowedOrigin) {
+            if (
+              target.origin === allowedOrigin ||
+              isSameServerOrigin(target, allowedOrigin)
+            ) {
               const size = popupSize(features);
               return {
                 action: 'allow',
@@ -2431,9 +2449,10 @@ export class DesktopHost {
                   installReloadShortcut(child.webContents);
                   installZoomShortcuts(child.webContents);
                   this.sessionChildren.add(child);
-                  child.once('closed', () =>
-                    this.sessionChildren.delete(child),
-                  );
+                  child.once('closed', () => {
+                    this.sessionChildren.delete(child);
+                    this.pushActiveServer();
+                  });
                   return child.webContents;
                 },
               };
@@ -2456,7 +2475,11 @@ export class DesktopHost {
           contents.on('will-navigate', (event, url) => {
             try {
               const target = new URL(url);
-              if (target.origin === allowedOrigin) return; // same-origin: allow
+              if (
+                target.origin === allowedOrigin ||
+                isSameServerOrigin(target, allowedOrigin)
+              )
+                return; // same-origin: allow
               if (target.protocol === 'http:' || target.protocol === 'https:') {
                 void shell.openExternal(url);
               }
