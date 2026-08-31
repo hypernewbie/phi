@@ -1129,46 +1129,41 @@ export class TabManager {
         }
 
         if (!tabInfo.writePending) {
-            tabInfo.writePending = true;
-            // Capture the user's pre-write scroll position so we can decide
-            // whether to auto-follow bottom on the rAF tick. Standard
-            // xterm "is-at-bottom" predicate, matching the scroll-to-bottom
-            // button's check (viewportY >= baseY, no slack).
-            const buf =
-                tabInfo.term &&
-                tabInfo.term.buffer &&
-                tabInfo.term.buffer.active;
-            const preAtBottom = buf && buf.viewportY >= buf.baseY;
-            requestAnimationFrame(() => {
-                if (tabInfo.writeBuffer.length > 0 && !tabInfo.isDead) {
-                    // write(data, cb): cb fires once the chunk is parsed into
-                    // the buffer. Sync the DOM scroll area then — xterm leaves
-                    // it stale during streaming (no reflow), which made the
-                    // first wheel-up compute from a minutes-old scrollTop (the
-                    // "jump") and wheel-down clamp before the real bottom (the
-                    // "stuck below bottom" state). xterm is vendored/pinned
-                    // (web/vendor/xterm.js), so reaching the core viewport is
-                    // version-stable; syncScrollArea(true) is a no-op when
-                    // already in sync.
-                    tabInfo.term.write(tabInfo.writeBuffer, () => {
-                        tabInfo.term._core?.viewport?.syncScrollArea(true);
-                    });
-                    tabInfo.writeBuffer = '';
-
-                    // Force the scrollbar to reflect the new bottom.
-                    // xterm's native syncScrollArea leaves the scrollbar
-                    // stale when output grows without a layout reflow;
-                    // the only reliable cross-version fix is an explicit
-                    // scroll-to-bottom call. Respects userFollowBottom:
-                    // if the user has scrolled up (flag = false), we
-                    // honor that and leave the scroll position alone.
-                    if (preAtBottom && tabInfo.userFollowBottom !== false) {
-                        tabInfo.term.scrollToBottom();
-                    }
-                }
-                tabInfo.writePending = false;
-            });
+            this._flushTerminalWrite(tabInfo);
         }
+    }
+
+    _flushTerminalWrite(tabInfo) {
+        if (tabInfo.writePending || tabInfo.isDead) return;
+        if (tabInfo.writeBuffer.length === 0) return;
+
+        // Capture follow state before xterm grows the buffer. This is the same
+        // strict predicate used by the scroll-to-bottom button.
+        const buffer = tabInfo.term?.buffer?.active;
+        const followBottom =
+            buffer &&
+            buffer.viewportY >= buffer.baseY &&
+            tabInfo.userFollowBottom !== false;
+        const data = tabInfo.writeBuffer;
+        tabInfo.writeBuffer = '';
+        tabInfo.writePending = true;
+
+        tabInfo.term.write(data, () => {
+            tabInfo.writePending = false;
+            if (tabInfo.isDead) {
+                tabInfo.writeBuffer = '';
+                return;
+            }
+
+            // xterm has parsed this complete batch, so its buffer state is
+            // current. Keep the existing scrollbar sync and follow behavior.
+            tabInfo.term._core?.viewport?.syncScrollArea(true);
+            if (followBottom && tabInfo.userFollowBottom !== false) {
+                tabInfo.term.scrollToBottom();
+            }
+
+            this._flushTerminalWrite(tabInfo);
+        });
     }
 
     updateDirectModeUI(tab) {
@@ -1744,6 +1739,7 @@ export class TabManager {
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
+            // Keep one xterm parse in flight; later output accumulates here.
             writeBuffer: '',
             writePending: false,
             loaderEl: loaderEl,
