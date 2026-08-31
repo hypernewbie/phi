@@ -267,6 +267,7 @@ describe('Pi RPC TabManager boundaries', () => {
         ).toEqual([
             'Compact',
             'Clear',
+            'Show thinking',
             '⚡ Cmds ▾',
             '🤖 Models ▾',
             'Thinking ▾',
@@ -274,7 +275,9 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.querySelector('.presets-divider')).not.toBeNull();
         expect(row.querySelector('.mobile-nav-btn')).toBeNull();
         expect(row.querySelector('.pi-rpc-reset-btn').disabled).toBe(false);
-        expect(row.querySelector('.pi-rpc-reset-btn').textContent).toBe('Clear');
+        expect(row.querySelector('.pi-rpc-reset-btn').textContent).toBe(
+            'Clear',
+        );
         expect(tm.cancelInputBtn.classList.contains('hidden')).toBe(false);
         expect(tm.copyInputBtn.classList.contains('hidden')).toBe(true);
         expect(tm.directModeToggle.classList.contains('hidden')).toBe(true);
@@ -306,7 +309,14 @@ describe('Pi RPC TabManager boundaries', () => {
             [...row.querySelectorAll('button')].map(
                 (button) => button.textContent,
             ),
-        ).toEqual(['Compact', 'Clear', '⚡ Cmds ▾', '🤖 Models ▾', 'Thinking ▾']);
+        ).toEqual([
+            'Compact',
+            'Clear',
+            'Show thinking',
+            '⚡ Cmds ▾',
+            '🤖 Models ▾',
+            'Thinking ▾',
+        ]);
         expect(row.querySelector('.pi-rpc-model-trigger').title).toBe('—');
         expect(row.querySelector('.pi-rpc-thinking-trigger').title).toBe('—');
     });
@@ -473,11 +483,11 @@ describe('Pi RPC TabManager boundaries', () => {
                 'font-weight': '500',
             },
             '.pi-rpc-status-label': {
-                'font-size': '10px',
+                'font-size': '11px',
                 'font-weight': '600',
             },
             '.pi-rpc-status-value': {
-                'font-size': '11px',
+                'font-size': '12px',
                 'font-weight': '400',
             },
             '.presets-container > .pi-rpc-model-trigger': {
@@ -1015,9 +1025,9 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(
             presets.querySelector('.pi-rpc-thinking-trigger').textContent,
         ).toBe('Thinking ▾');
-        expect(
-            presets.querySelector('.pi-rpc-thinking-trigger').title,
-        ).toBe('low');
+        expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
+            'low',
+        );
         expect(meter().getAttribute('aria-valuenow')).toBe('10');
         expect(
             fill().classList.contains('pi-rpc-context-meter-fill--green') ||
@@ -1082,9 +1092,9 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(presets.querySelector('.pi-rpc-model-trigger').title).toBe(
             'new-model',
         );
-        expect(
-            presets.querySelector('.pi-rpc-thinking-trigger').title,
-        ).toBe('high');
+        expect(presets.querySelector('.pi-rpc-thinking-trigger').title).toBe(
+            'high',
+        );
         expect(meter().getAttribute('aria-valuenow')).toBe('50');
         expect(
             fill().classList.contains('pi-rpc-context-meter-fill--yellow') ||
