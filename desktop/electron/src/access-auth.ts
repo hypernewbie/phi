@@ -47,11 +47,15 @@ const pbkdf2Async = promisify(pbkdf2) as (
 /** Lazy fetch override (test seam). Production = native `fetch`. */
 export type FetchLike = typeof fetch;
 
-interface CookieJarEntry {
+export interface ParsedSessionCookie {
   readonly cookieName: string;
   readonly cookieValue: string;
+  readonly httpOnly: boolean;
   readonly path: string;
-  readonly httpOnly: true;
+}
+
+export interface CookieJarEntry extends ParsedSessionCookie {
+  readonly origin: string;
 }
 
 /** Discriminated outcome of `fetchConfig` — never throws on network failure. */
@@ -82,6 +86,15 @@ export interface StoredCredential {
   readonly salt: Buffer;
   readonly verifier: Buffer;
 }
+
+export type CookieProvider = (
+  origin: string,
+) => Promise<CookieJarEntry | null> | CookieJarEntry | null;
+
+export type CookieCapturedListener = (
+  origin: string,
+  cookie: CookieJarEntry,
+) => void | Promise<void>;
 
 /** Strict bounds — server-controlled values that must be validated before
  *  handing them to the PBKDF2 primitive (mitigates remote-driven cost
@@ -118,9 +131,19 @@ export class AccessAuth {
     { verifier: Buffer; salt: Buffer; iterations: number }
   >();
   private readonly _doFetch: FetchLike;
+  private _cookieProvider: CookieProvider | null = null;
+  private _onCookieCaptured: CookieCapturedListener | null = null;
 
   constructor(doFetch: FetchLike = fetch) {
     this._doFetch = doFetch;
+  }
+
+  setCookieProvider(provider: CookieProvider | null): void {
+    this._cookieProvider = provider;
+  }
+
+  setOnCookieCaptured(listener: CookieCapturedListener | null): void {
+    this._onCookieCaptured = listener;
   }
 
   private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
@@ -252,7 +275,18 @@ export class AccessAuth {
    * CORS, malformed JSON) is `unavailable` — NOT promptable.
    */
   async fetchConfig(origin: string): Promise<FetchConfigResult> {
-    const cookie = this.cookies.get(origin);
+    let cookie = this.cookies.get(origin);
+    if (!cookie && this._cookieProvider) {
+      try {
+        const fromProvider = await this._cookieProvider(origin);
+        if (fromProvider) {
+          this.cookies.set(origin, fromProvider);
+          cookie = fromProvider;
+        }
+      } catch {
+        /* ignore provider lookup error */
+      }
+    }
     const headers: Record<string, string> = {};
     if (cookie)
       headers['Cookie'] = `${cookie.cookieName}=${cookie.cookieValue}`;
@@ -368,6 +402,13 @@ export class AccessAuth {
       return login;
     }
     this.cookies.set(origin, login.cookie);
+    if (this._onCookieCaptured) {
+      try {
+        void this._onCookieCaptured(origin, login.cookie);
+      } catch {
+        /* ignore */
+      }
+    }
     // Cache the verifier and trust settings so the host can persist it across restarts.
     // The host reads via `getLastCredential` after a successful unlock
     // and stores to disk encrypted via `safeStorage`.
@@ -483,7 +524,7 @@ export class AccessAuth {
           kind: 'unavailable',
           message: 'missing or insecure session cookie',
         };
-      return { kind: 'ok', cookie };
+      return { kind: 'ok', cookie: { origin, ...cookie } };
     } catch (err) {
       return {
         kind: 'unavailable',
@@ -566,7 +607,7 @@ export function validateStatus(raw: unknown): ValidateStatusOutcome | null {
  * the jar); we don't re-check origin here because the response itself
  * is from a same-origin POST.
  */
-export function parseSessionCookie(res: Response): CookieJarEntry | null {
+export function parseSessionCookie(res: Response): ParsedSessionCookie | null {
   const setCookieHeaders = readSetCookieHeaders(res);
   for (const raw of setCookieHeaders) {
     const parts = raw.split(';').map((s) => s.trim());
