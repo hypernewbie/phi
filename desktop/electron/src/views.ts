@@ -253,7 +253,11 @@ export class ProfileViewManager {
     const id = targetId ?? this.activeId;
     if (!id) return;
     const entry = this.views.get(id);
-    if (entry && entry.view.webContents && !entry.view.webContents.isDestroyed()) {
+    if (
+      entry &&
+      entry.view.webContents &&
+      !entry.view.webContents.isDestroyed()
+    ) {
       if (ignoringCache) {
         entry.view.webContents.reloadIgnoringCache();
       } else {
