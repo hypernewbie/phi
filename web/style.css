@@ -9182,6 +9182,274 @@ html[data-phi-config-page] .settings-modal {
     }
 }
 
+/* ── Kanban Notes (notepad view over same task list) ─────────────────── */
+.kanban-notes-view {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 12px;
+    height: calc(100% - 0px);
+}
+
+.kanban-notes-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.kanban-notes-list-pane {
+    width: 300px;
+    flex-shrink: 0;
+}
+
+.kanban-notes-editor-pane {
+    flex: 1;
+}
+
+.kanban-notes-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kanban-note-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text-primary);
+}
+
+.kanban-note-row:hover {
+    background: var(--bg-elevated);
+    border-color: var(--bg-border);
+}
+
+.kanban-note-row.active {
+    background: var(--accent-soft);
+    border-color: var(--accent-dim);
+}
+
+.kanban-note-row.is-done {
+    opacity: 0.6;
+}
+
+.kanban-note-row.is-done .kanban-note-row-title {
+    text-decoration: line-through;
+}
+
+.kanban-note-row-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.kanban-note-row-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.kanban-note-row-date {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.kanban-note-row-snippet {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.kanban-note-row-meta {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.kanban-note-labels {
+    display: inline-flex;
+    gap: 3px;
+}
+
+.kanban-note-label {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    border: 1px solid var(--bg-border);
+}
+
+.kanban-note-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.kanban-note-done-badge {
+    background: var(--green);
+    color: white;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.kanban-notes-editor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    padding: 14px;
+    gap: 10px;
+}
+
+.kanban-notes-editor--empty {
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.kanban-notes-editor-header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.kanban-note-title-input {
+    flex: 1;
+    min-width: 180px;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+}
+
+.kanban-note-title-input:focus {
+    outline: none;
+    border-color: var(--accent-dim);
+    background: var(--bg-elevated);
+}
+
+.kanban-notes-editor-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.kanban-note-save-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 48px;
+}
+
+.kanban-note-bucket-select {
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--bg-border);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+.kanban-note-done-toggle {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.kanban-note-desc {
+    flex: 1;
+    min-height: 260px;
+    resize: none;
+    padding: 10px;
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.kanban-note-desc:focus {
+    outline: none;
+    border-color: var(--accent-dim);
+}
+
+.kanban-note-preview {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    background: var(--bg-base);
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.kanban-note-preview.hidden,
+.kanban-note-desc.hidden {
+    display: none;
+}
+
+.kanban-notes-editor-footer {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.kanban-notes-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+}
+
+@media (max-width: 768px) {
+    .kanban-notes-view {
+        flex-direction: column;
+    }
+    .kanban-notes-list-pane {
+        width: 100%;
+        max-height: 38%;
+    }
+}
+
 /* ── Fast mode (config.fast_mode; forced on mobile): perf crutch ───────
    Disables the idle-capable infinite animations and the always-visible
    backdrop blurs. Any single running animation keeps the 60fps repaint

@@ -16,6 +16,9 @@ export class KanbanManager {
     buckets;
     boardContainer;
     filterQuery;
+    selectedNoteId;
+    _notesSaveTimer;
+    _notesEditorState;
     _boardClickHandler;
     _boardKeyHandler;
     _boardDelegateHost;
@@ -38,6 +41,9 @@ export class KanbanManager {
         this._boardDelegateHost = null;
         this._taskWrites = new Map();
         this._reauthPromise = null;
+        this.selectedNoteId = null;
+        this._notesSaveTimer = null;
+        this._notesEditorState = null;
     }
     async openBoard() {
         const paneId = 'kanban-board';
@@ -84,6 +90,12 @@ export class KanbanManager {
         this._dragActive = false;
         this.destroyStatsCharts();
         this.unbindBoardDelegates();
+        if (this._notesSaveTimer) {
+            clearTimeout(this._notesSaveTimer);
+            this._notesSaveTimer = null;
+        }
+        this.selectedNoteId = null;
+        this._notesEditorState = null;
         this.boardContainer = null;
         localStorage.removeItem('phi_kanban_open');
     }
@@ -422,7 +434,10 @@ export class KanbanManager {
     renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks) {
         this.destroyStatsCharts();
         let boardContentHtml = '';
-        if (!kanbanView) {
+        if (this.boardMode === 'notes') {
+            boardContentHtml = this.renderNotesView();
+        }
+        else if (!kanbanView) {
             boardContentHtml = `
                 <div class="kanban-no-view-wrapper">
                     <h3>No Kanban View Available</h3>
@@ -464,11 +479,12 @@ export class KanbanManager {
                             <button class="kanban-view-btn ${this.boardMode === 'board' ? 'active' : ''}" data-kanban-mode="board">Board</button>
                             <button class="kanban-view-btn ${this.boardMode === 'features' ? 'active' : ''}" data-kanban-mode="features">Features</button>
                             <button class="kanban-view-btn ${this.boardMode === 'stats' ? 'active' : ''}" data-kanban-mode="stats">Stats</button>
+                            <button class="kanban-view-btn ${this.boardMode === 'notes' ? 'active' : ''}" data-kanban-mode="notes">Notes</button>
                         </div>
                         ${this.boardMode !== 'stats'
             ? `
                             <div class="kanban-search-wrapper" style="margin-left: 8px;">
-                                <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}..." />
+                                <input type="text" id="kanban-search-input" class="kanban-search-input" placeholder="Filter ${this.boardMode === 'features' ? 'features' : 'tasks'}${this.boardMode === 'notes' ? ' notes' : ''}..." />
                             </div>
                         `
             : ''}
@@ -487,6 +503,17 @@ export class KanbanManager {
                                     <line x1="10" y1="12" x2="14" y2="12"></line>
                                 </svg>
                                 <span>Column</span>
+                            </button>
+                        `
+            : ''}
+                        ${this.boardMode === 'notes'
+            ? `
+                            <button id="kanban-new-note-btn" class="toolbar-btn" title="New note">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M12 20h9"></path>
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+                                </svg>
+                                <span>New Note</span>
                             </button>
                         `
             : ''}
@@ -512,8 +539,18 @@ export class KanbanManager {
             .forEach((button) => {
             button.addEventListener('click', () => {
                 const mode = button.dataset.kanbanMode;
+                if (this.boardMode === 'notes') {
+                    // Don't lose a pending keystroke when leaving notes
+                    this.flushNotesSave(container);
+                    if (this._notesSaveTimer) {
+                        clearTimeout(this._notesSaveTimer);
+                        this._notesSaveTimer = null;
+                    }
+                }
                 this.boardMode =
-                    mode === 'features' || mode === 'stats'
+                    mode === 'features' ||
+                        mode === 'stats' ||
+                        mode === 'notes'
                         ? mode
                         : 'board';
                 this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
@@ -521,6 +558,14 @@ export class KanbanManager {
         });
         const projectSelect = container.querySelector('#kanban-project-select');
         projectSelect.addEventListener('change', () => {
+            if (this.boardMode === 'notes') {
+                this.flushNotesSave(container);
+                if (this._notesSaveTimer) {
+                    clearTimeout(this._notesSaveTimer);
+                    this._notesSaveTimer = null;
+                }
+                this.selectedNoteId = null;
+            }
             localStorage.setItem('vikunja_selected_project', projectSelect.value);
             this.loadAndRenderBoard(container);
         });
@@ -742,6 +787,9 @@ export class KanbanManager {
             bucketsWithTasks.length > 0) {
             this.initSortable(container, bucketsWithTasks);
         }
+        if (this.boardMode === 'notes') {
+            this.bindNotesView(container, projects, currentProject, kanbanView, bucketsWithTasks);
+        }
     }
     renderFeaturesView() {
         const allFeatures = buildFeatures(Object.values(this.taskCache));
@@ -881,6 +929,444 @@ export class KanbanManager {
                 </div>
             </div>
         `;
+    }
+    // ---- notes view (notepad over same task list) ---------------------
+    notesSorted() {
+        const tasks = Object.values(this.taskCache);
+        return tasks
+            .filter((t) => t && t.id != null)
+            .sort((a, b) => {
+            const da = new Date(a.updated || a.created || 0).getTime();
+            const db = new Date(b.updated || b.created || 0).getTime();
+            return db - da;
+        });
+    }
+    stripHtml(html) {
+        if (!html)
+            return '';
+        return html.replace(/<[^>]*>/g, '');
+    }
+    formatNoteDate(iso) {
+        if (!iso)
+            return '';
+        try {
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime()))
+                return '';
+            const now = Date.now();
+            const diff = now - d.getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1)
+                return 'just now';
+            if (mins < 60)
+                return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24)
+                return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            if (days < 7)
+                return `${days}d ago`;
+            return d.toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+            });
+        }
+        catch {
+            return '';
+        }
+    }
+    renderNoteRow(task, isActive) {
+        const title = this.escapeHtml(task.title || 'Untitled');
+        const snippet = this.escapeHtml(this.stripHtml(task.description || '').slice(0, 120));
+        const date = this.formatNoteDate(task.updated || task.created || '');
+        const labelPills = (task.labels || [])
+            .slice(0, 3)
+            .map((l) => `<span class="kanban-note-label" style="background:${this.escapeHtml(safeHexColor(l.hex_color || '#666'))}"></span>`)
+            .join('');
+        const doneClass = task.done ? ' is-done' : '';
+        const activeClass = isActive ? ' active' : '';
+        return `
+            <button class="kanban-note-row${doneClass}${activeClass}" data-task-id="${this.escapeHtml(String(task.id))}" data-note-row>
+                <div class="kanban-note-row-top">
+                    <span class="kanban-note-row-title">${title}</span>
+                    <span class="kanban-note-row-date">${this.escapeHtml(date)}</span>
+                </div>
+                ${snippet ? `<div class="kanban-note-row-snippet">${snippet}</div>` : ''}
+                <div class="kanban-note-row-meta">
+                    ${labelPills ? `<span class="kanban-note-labels">${labelPills}</span>` : ''}
+                    ${task.identifier ? `<span class="kanban-note-id">${this.escapeHtml(task.identifier)}</span>` : ''}
+                    ${task.done ? `<span class="kanban-note-done-badge">done</span>` : ''}
+                </div>
+            </button>
+        `;
+    }
+    renderNotesView() {
+        const notes = this.notesSorted();
+        if (notes.length === 0) {
+            return `
+                <div class="kanban-notes-view kanban-notes-empty">
+                    <div class="kanban-no-view-wrapper">
+                        <h3>No notes yet</h3>
+                        <p>Tasks in this project appear as notes. Create one with “New Note”.</p>
+                        <button id="kanban-notes-empty-new" class="btn btn-accent">+ New Note</button>
+                    </div>
+                </div>
+            `;
+        }
+        // Keep selection valid across refreshes; default to most recent.
+        if (!this.selectedNoteId || !this.taskCache[this.selectedNoteId]) {
+            this.selectedNoteId = String(notes[0].id);
+        }
+        const selected = this.selectedNoteId
+            ? this.taskCache[this.selectedNoteId]
+            : null;
+        const buckets = this.buckets || [];
+        const bucketOptions = buckets
+            .map((b) => `<option value="${this.escapeHtml(String(b.id))}">${this.escapeHtml(b.title || 'Untitled')}</option>`)
+            .join('');
+        const editorHtml = selected
+            ? `
+                <div class="kanban-notes-editor" data-task-id="${this.escapeHtml(String(selected.id))}">
+                    <div class="kanban-notes-editor-header">
+                        <input id="kanban-note-title" class="kanban-note-title-input" type="text" value="${this.escapeHtml(selected.title || '')}" placeholder="Untitled" autocomplete="off" />
+                        <div class="kanban-notes-editor-actions">
+                            <span id="kanban-note-save-status" class="kanban-note-save-status">Saved</span>
+                            <label class="kanban-note-done-toggle" title="Mark done">
+                                <input id="kanban-note-done" type="checkbox" ${selected.done ? 'checked' : ''} />
+                                <span>Done</span>
+                            </label>
+                            ${bucketOptions ? `<select id="kanban-note-bucket" class="kanban-note-bucket-select" title="Move to column">${bucketOptions}</select>` : ''}
+                            <button id="kanban-note-delete" class="toolbar-btn text-danger" title="Delete note">Delete</button>
+                            <button id="kanban-note-preview-toggle" class="toolbar-btn" title="Preview markdown">Preview</button>
+                        </div>
+                    </div>
+                    <textarea id="kanban-note-desc" class="kanban-note-desc" placeholder="Jot down…">${this.escapeHtml(this.stripHtml(selected.description || ''))}</textarea>
+                    <div id="kanban-note-preview" class="kanban-note-preview hidden"></div>
+                    <div class="kanban-notes-editor-footer">
+                        <span class="kanban-note-meta">${selected.identifier ? this.escapeHtml(selected.identifier) + ' · ' : ''}${this.escapeHtml(this.formatNoteDate(selected.updated || selected.created || ''))}</span>
+                    </div>
+                </div>
+            `
+            : `
+                <div class="kanban-notes-editor kanban-notes-editor--empty">
+                    <p>Select a note on the left.</p>
+                </div>
+            `;
+        return `
+            <div class="kanban-notes-view">
+                <div class="kanban-notes-pane kanban-notes-list-pane">
+                    <div class="kanban-notes-list" id="kanban-notes-list">
+                        ${notes.map((t) => this.renderNoteRow(t, String(t.id) === this.selectedNoteId)).join('')}
+                    </div>
+                </div>
+                <div class="kanban-notes-pane kanban-notes-editor-pane">
+                    ${editorHtml}
+                </div>
+            </div>
+        `;
+    }
+    bindNotesView(container, projects, currentProject, kanbanView, bucketsWithTasks) {
+        // Keep editor state in sync with the selected task
+        const selected = this.selectedNoteId
+            ? this.taskCache[this.selectedNoteId]
+            : null;
+        if (selected) {
+            this._notesEditorState = {
+                id: String(selected.id),
+                title: selected.title || '',
+                description: this.stripHtml(selected.description || ''),
+            };
+            const bucketSel = container.querySelector('#kanban-note-bucket');
+            if (bucketSel && selected.bucket_id != null) {
+                bucketSel.value = String(selected.bucket_id);
+            }
+        }
+        else {
+            this._notesEditorState = null;
+        }
+        // New note buttons
+        const newBtn = container.querySelector('#kanban-new-note-btn');
+        if (newBtn) {
+            newBtn.addEventListener('click', async () => {
+                await this.createNote(container, projects, currentProject, kanbanView, bucketsWithTasks);
+            });
+        }
+        const emptyNewBtn = container.querySelector('#kanban-notes-empty-new');
+        if (emptyNewBtn) {
+            emptyNewBtn.addEventListener('click', async () => {
+                await this.createNote(container, projects, currentProject, kanbanView, bucketsWithTasks);
+            });
+        }
+        // Left list selection
+        container.querySelectorAll('[data-note-row]').forEach((el) => {
+            el.addEventListener('click', () => {
+                const id = el.dataset.taskId;
+                if (id === this.selectedNoteId)
+                    return;
+                // Flush pending save before switching
+                this.flushNotesSave();
+                this.selectedNoteId = id;
+                // Re-render only the notes view, not the whole toolbar
+                const notesHtml = this.renderNotesView();
+                const notesView = container.querySelector('.kanban-notes-view');
+                if (notesView) {
+                    notesView.outerHTML = notesHtml;
+                    this.bindNotesView(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                }
+                else {
+                    this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                }
+                // Re-apply filter after re-render
+                this.applyFilter(container);
+            });
+        });
+        // Editor wiring
+        const titleInput = container.querySelector('#kanban-note-title');
+        const descInput = container.querySelector('#kanban-note-desc');
+        const bucketSel = container.querySelector('#kanban-note-bucket');
+        const doneChk = container.querySelector('#kanban-note-done');
+        const deleteBtn = container.querySelector('#kanban-note-delete');
+        const previewBtn = container.querySelector('#kanban-note-preview-toggle');
+        const previewEl = container.querySelector('#kanban-note-preview');
+        const saveStatus = container.querySelector('#kanban-note-save-status');
+        const schedule = () => {
+            if (!this.selectedNoteId)
+                return;
+            if (saveStatus)
+                saveStatus.textContent = 'Saving…';
+            if (this._notesSaveTimer)
+                clearTimeout(this._notesSaveTimer);
+            this._notesSaveTimer = setTimeout(async () => {
+                await this.flushNotesSave(container);
+            }, 420);
+        };
+        if (titleInput) {
+            titleInput.addEventListener('input', schedule);
+            titleInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    descInput?.focus({ preventScroll: true });
+                }
+            });
+        }
+        if (descInput) {
+            descInput.addEventListener('input', schedule);
+            // Cmd/Ctrl+S flush
+            descInput.addEventListener('keydown', (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    this.flushNotesSave(container);
+                }
+            });
+        }
+        if (bucketSel) {
+            bucketSel.addEventListener('change', async () => {
+                if (!this.selectedNoteId)
+                    return;
+                const newBid = bucketSel.value;
+                try {
+                    await this.moveTask(this.selectedNoteId, newBid);
+                    this.app.showToast('Moved note', {
+                        type: 'info',
+                        title: 'Kanban',
+                    });
+                    // Keep selection, refresh list labels
+                    this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                }
+                catch (err) {
+                    this.app.showToast(`Move failed: ${err.message}`, { type: 'error', title: 'Kanban' });
+                }
+            });
+        }
+        if (doneChk) {
+            doneChk.addEventListener('change', async () => {
+                if (!this.selectedNoteId)
+                    return;
+                const task = this.taskCache[this.selectedNoteId];
+                if (!task)
+                    return;
+                try {
+                    await this.setTaskDone(task, doneChk.checked);
+                    // Optimistic already toggled class via applyTaskMutation; re-render list
+                    this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                }
+                catch (err) {
+                    this.app.showToast(`Failed: ${err.message}`, {
+                        type: 'error',
+                        title: 'Kanban',
+                    });
+                    doneChk.checked = !doneChk.checked;
+                }
+            });
+        }
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async () => {
+                if (!this.selectedNoteId)
+                    return;
+                const id = this.selectedNoteId;
+                this.flushNotesSave();
+                await this.confirmDeleteCard(id, container);
+                // confirmDeleteCard does optimistic remove; pick new selection
+                const remaining = this.notesSorted();
+                this.selectedNoteId = remaining[0]
+                    ? String(remaining[0].id)
+                    : null;
+                if (remaining.length === 0) {
+                    this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                }
+                else {
+                    // Re-render notes view with new selection
+                    const html = this.renderNotesView();
+                    const view = container.querySelector('.kanban-notes-view');
+                    if (view) {
+                        view.outerHTML = html;
+                        this.bindNotesView(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                    }
+                    else {
+                        this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks);
+                    }
+                }
+            });
+        }
+        if (previewBtn && previewEl && descInput) {
+            let previewing = false;
+            previewBtn.addEventListener('click', () => {
+                previewing = !previewing;
+                if (previewing) {
+                    const raw = descInput.value;
+                    const escaped = this.escapeHtml(raw);
+                    const html = escaped.replace(/\n/g, '<br>');
+                    previewEl.innerHTML =
+                        html || '<em class="text-muted">Empty</em>';
+                    previewEl.classList.remove('hidden');
+                    descInput.classList.add('hidden');
+                    previewBtn.textContent = 'Edit';
+                }
+                else {
+                    previewEl.classList.add('hidden');
+                    descInput.classList.remove('hidden');
+                    previewBtn.textContent = 'Preview';
+                    descInput.focus({ preventScroll: true });
+                }
+            });
+        }
+        // Apply current filter to new rows
+        this.applyFilter(container);
+    }
+    async createNote(container, projects, currentProject, kanbanView, bucketsWithTasks) {
+        const buckets = this.buckets || bucketsWithTasks || [];
+        const firstBucket = buckets[0];
+        if (!firstBucket) {
+            this.app.showToast('No column to create note in — add a column first', {
+                type: 'error',
+                title: 'Kanban',
+            });
+            return;
+        }
+        try {
+            const created = await this.createTask(firstBucket.id, 'Untitled');
+            if (created?.id != null) {
+                this.addTaskState(created, firstBucket.id);
+                this.selectedNoteId = String(created.id);
+                this._notesEditorState = {
+                    id: String(created.id),
+                    title: created.title || 'Untitled',
+                    description: this.stripHtml(created.description || ''),
+                };
+                this.renderBoardLayout(container, projects, currentProject, kanbanView, bucketsWithTasks || this.buckets);
+                // Focus title after render
+                setTimeout(() => {
+                    const ti = container.querySelector('#kanban-note-title');
+                    ti?.focus({ preventScroll: true });
+                    ti?.select();
+                }, 0);
+            }
+            else {
+                await this.refreshBoard(container);
+            }
+        }
+        catch (err) {
+            this.app.showToast(`Failed to create note: ${err.message}`, {
+                type: 'error',
+                title: 'Kanban',
+            });
+        }
+    }
+    async flushNotesSave(container) {
+        if (!this.selectedNoteId)
+            return;
+        const c = container || this.boardContainer;
+        if (!c)
+            return;
+        const titleInput = c.querySelector('#kanban-note-title');
+        const descInput = c.querySelector('#kanban-note-desc');
+        const saveStatus = c.querySelector('#kanban-note-save-status');
+        if (!titleInput || !descInput)
+            return;
+        const newTitle = titleInput.value;
+        const newDesc = descInput.value;
+        const prev = this._notesEditorState;
+        if (prev &&
+            prev.id === this.selectedNoteId &&
+            prev.title === newTitle &&
+            prev.description === newDesc) {
+            if (saveStatus)
+                saveStatus.textContent = 'Saved';
+            return;
+        }
+        const taskId = this.selectedNoteId;
+        const task = this.taskCache[taskId];
+        if (!task)
+            return;
+        // Avoid sending empty title
+        const titleToSave = newTitle.trim() || 'Untitled';
+        if (this._notesSaveTimer) {
+            clearTimeout(this._notesSaveTimer);
+            this._notesSaveTimer = null;
+        }
+        this._notesEditorState = {
+            id: taskId,
+            title: newTitle,
+            description: newDesc,
+        };
+        try {
+            await this.applyTaskMutation(taskId, { title: titleToSave, description: newDesc }, () => {
+                return this.apiPost(`/tasks/${taskId}`, {
+                    title: titleToSave,
+                    description: newDesc,
+                    done: task.done,
+                    priority: task.priority,
+                    due_date: task.due_date,
+                });
+            });
+            if (saveStatus)
+                saveStatus.textContent = 'Saved';
+            // Patch left list row in place without full re-render
+            const row = c.querySelector(`[data-note-row][data-task-id="${taskId}"]`);
+            if (row) {
+                const newRowHtml = this.renderNoteRow(this.taskCache[taskId], true);
+                const tmp = document.createElement('div');
+                tmp.innerHTML = newRowHtml.trim();
+                const newRow = tmp.firstElementChild;
+                if (newRow)
+                    row.replaceWith(newRow);
+                // Re-apply filter and re-bind click
+                newRow?.addEventListener('click', () => {
+                    // already selected, no-op
+                });
+                this.applyFilter(c);
+            }
+        }
+        catch (err) {
+            if (saveStatus)
+                saveStatus.textContent = 'Failed';
+            this.app.showToast(`Save failed: ${err.message}`, {
+                type: 'error',
+                title: 'Kanban',
+            });
+            // Rollback editor state so next keystroke retries
+            this._notesEditorState = null;
+        }
     }
     destroyStatsCharts() {
         (this.statsCharts || []).forEach((chart) => {
@@ -2156,7 +2642,7 @@ export class KanbanManager {
     }
     applyFilter(container) {
         container
-            .querySelectorAll('.kanban-card, .kanban-feature-row')
+            .querySelectorAll('.kanban-card, .kanban-feature-row, .kanban-note-row')
             .forEach((card) => {
             this.applyFilterToCard(card);
         });

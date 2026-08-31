@@ -251,6 +251,34 @@ const MUTATIONS = [
         run: (c) => c.moveTask('1', '20'),
         reply: { ok: true, status: 200, json: {} },
     },
+    {
+        name: 'flushNotesSave',
+        run: async (c) => {
+            const container = document.createElement('div');
+            container.innerHTML = `
+                <input id="kanban-note-title" value="New Title" />
+                <textarea id="kanban-note-desc">New body</textarea>
+                <span id="kanban-note-save-status"></span>
+            `;
+            document.body.appendChild(container);
+            c.boardContainer = container;
+            c.selectedNoteId = '1';
+            c._notesEditorState = {
+                id: '1',
+                title: 'A',
+                description: '',
+            };
+            c.taskCache[1] = {
+                ...c.taskCache[1],
+                done: false,
+                priority: 0,
+                due_date: null,
+            };
+            await c.flushNotesSave(container);
+            container.remove();
+        },
+        reply: { ok: true, json: { id: 1 } },
+    },
 ];
 
 describe('every phi -> Vikunja mutation matches the vendored swagger', () => {
