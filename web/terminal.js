@@ -2920,10 +2920,10 @@ export class TabManager {
         this.presetsContainer.append(
             compactButton,
             resetButton,
+            thinkingButton,
             divider,
             quickCmdsButton,
             modelButton,
-            thinkingButton,
         );
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden'))
