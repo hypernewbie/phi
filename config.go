@@ -105,6 +105,8 @@ type Config struct {
 	SimplepushKey     string `json:"simplepush_key"`
 	SimplepushEnabled bool   `json:"simplepush_enabled"`
 	KanbanPasswordEnc string `json:"kanban_password_enc"`
+	KanbanUsername    string `json:"kanban_username,omitempty"`
+	KanbanURL         string `json:"kanban_url,omitempty"`
 	// AccessPasswordHash is an optional browser-derived password verifier.
 	// An empty string deliberately disables Phi's access-password gate.
 	AccessPasswordHash string       `json:"access_password_hash"`

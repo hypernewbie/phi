@@ -146,12 +146,21 @@ export class KanbanManager {
 
         this.renderLoading(container, 'Checking saved Kanban credentials...');
 
-        const savedPw = await this.getSavedVaultPassword();
-
+        const vault = await this.getSavedVaultCredentials();
+        // Vault is the durable cross-browser store; sync it to localStorage
+        // so a fresh browser/device gets the same username+url without
+        // re-typing. localStorage wins only when vault has nothing to say.
+        if (vault.username)
+            localStorage.setItem('vikunja_username', vault.username);
+        if (vault.url) localStorage.setItem('vikunja_url', vault.url);
+        const savedPw = vault.password;
         const urlVal = (
-            localStorage.getItem('vikunja_url') || 'http://charon:3456'
+            vault.url ||
+            localStorage.getItem('vikunja_url') ||
+            'http://charon:3456'
         ).replace(/\/$/, '');
-        const userVal = localStorage.getItem('vikunja_username');
+        const userVal =
+            vault.username || localStorage.getItem('vikunja_username');
         let autologinError: Error | null = null;
 
         if (savedPw && userVal && urlVal) {
@@ -203,16 +212,29 @@ export class KanbanManager {
         `;
     }
 
-    async getSavedVaultPassword(): Promise<string | null> {
+    async getSavedVaultCredentials(): Promise<{
+        password: string | null;
+        username: string | null;
+        url: string | null;
+    }> {
         try {
             const res = await fetch('/api/config/kanban-vault');
-            if (!res.ok) return null;
+            if (!res.ok) return { password: null, username: null, url: null };
             const data = await res.json();
-            return data.password || null;
+            return {
+                password: data.password || null,
+                username: data.username || null,
+                url: data.url || null,
+            };
         } catch (e) {
             console.error('Failed to check kanban vault:', e);
-            return null;
+            return { password: null, username: null, url: null };
         }
+    }
+
+    async getSavedVaultPassword(): Promise<string | null> {
+        const c = await this.getSavedVaultCredentials();
+        return c.password;
     }
 
     async attemptLogin(
@@ -320,12 +342,19 @@ export class KanbanManager {
                 localStorage.setItem('vikunja_url', urlInput);
                 localStorage.setItem('vikunja_username', usernameInput);
 
-                // Save or clear vault password
+                // Save or clear vault credentials (password + username + url).
+                // Vault is the durable store; localStorage is kept in sync
+                // for offline/autologin reads. Username/url now persist
+                // cross-browser via the backend so you don't retype USER.
                 if (rememberInput) {
                     fetch('/api/config/kanban-vault', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ password: passwordInput }),
+                        body: JSON.stringify({
+                            password: passwordInput,
+                            username: usernameInput,
+                            url: urlInput,
+                        }),
                     }).catch((e) => console.error('Vault save error:', e));
                 } else {
                     fetch('/api/config/kanban-vault', {
@@ -3062,12 +3091,19 @@ export class KanbanManager {
 
         this._reauthPromise = (async () => {
             try {
-                const password = await this.getSavedVaultPassword();
-                const url = (localStorage.getItem('vikunja_url') || '').replace(
-                    /\/$/,
-                    '',
-                );
-                const username = localStorage.getItem('vikunja_username');
+                const creds = await this.getSavedVaultCredentials();
+                // Keep localStorage in sync when vault adds a missing field
+                if (creds.username)
+                    localStorage.setItem('vikunja_username', creds.username);
+                if (creds.url) localStorage.setItem('vikunja_url', creds.url);
+                const password = creds.password;
+                const url = (
+                    creds.url ||
+                    localStorage.getItem('vikunja_url') ||
+                    ''
+                ).replace(/\/$/, '');
+                const username =
+                    creds.username || localStorage.getItem('vikunja_username');
                 if (!password || !username || !url) return false;
 
                 const token = await this.attemptLogin(url, username, password);
