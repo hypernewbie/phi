@@ -2107,30 +2107,62 @@ export class TabManager {
             display.cacheWrite !== '0.0'
         )
             tokens.push(`W${display.cacheWrite}`);
-        // Context: 19.4% 203K/1M (auto) — compact like phi's real statusline
-        let ctxPart = '';
-        if (
-            raw &&
-            typeof raw.contextUsedTokens === 'number' &&
-            typeof raw.contextWindowTokens === 'number' &&
-            raw.contextWindowTokens > 0
-        ) {
-            const pct =
-                Math.round(
-                    (raw.contextUsedTokens / raw.contextWindowTokens) * 1000,
-                ) / 10;
-            ctxPart = `${pct}% ${display.context}`;
-        } else if (display.context !== '—') {
-            ctxPart = display.context;
-        }
-        if (ctxPart) tokens.push(ctxPart);
-        const leftText = tokens.length ? tokens.join('  ') : '—';
+        const leftText = tokens.join('  ');
         const modelRight =
             display.model !== '—'
                 ? `${display.model}${display.thinking !== '—' ? ` • ${display.thinking}` : ''}`
                 : display.thinking !== '—'
                   ? display.thinking
                   : '';
+
+        // Thin context meter — replaces the 203.5K / 1M text, lives in statusbar
+        const usedTokens = raw?.contextUsedTokens;
+        const windowTokens = raw?.contextWindowTokens;
+        const ratioKnown =
+            typeof usedTokens === 'number' &&
+            Number.isFinite(usedTokens) &&
+            typeof windowTokens === 'number' &&
+            Number.isFinite(windowTokens) &&
+            windowTokens > 0;
+        const ratioExact = ratioKnown
+            ? Math.min(100, Math.max(0, (usedTokens / windowTokens) * 100))
+            : null;
+        const ratioPercent =
+            ratioExact !== null ? Math.round(ratioExact * 10) / 10 : null;
+        let fillTheme = '';
+        if (ratioExact !== null) {
+            if (ratioExact < 40) fillTheme = ' pi-rpc-context-meter-fill--low';
+            else if (ratioExact <= 70)
+                fillTheme = ' pi-rpc-context-meter-fill--mid';
+            else fillTheme = ' pi-rpc-context-meter-fill--high';
+        }
+        let meterEl = null;
+        if (display.context !== '—' || ratioKnown) {
+            meterEl = document.createElement('span');
+            meterEl.className = 'pi-rpc-context-meter pi-rpc-status-meter';
+            meterEl.setAttribute('role', 'progressbar');
+            meterEl.setAttribute('aria-valuemin', '0');
+            meterEl.setAttribute('aria-valuemax', '100');
+            if (ratioPercent !== null)
+                meterEl.setAttribute('aria-valuenow', String(ratioPercent));
+            meterEl.setAttribute('aria-label', `Context: ${display.context}`);
+            const fill = document.createElement('span');
+            // Keep legacy green/yellow/red for backward compat but primary is low/mid/high theme
+            let legacy = '';
+            if (ratioExact !== null) {
+                if (ratioExact < 40) legacy = ' pi-rpc-context-meter-fill--green';
+                else if (ratioExact <= 70)
+                    legacy = ' pi-rpc-context-meter-fill--yellow';
+                else legacy = ' pi-rpc-context-meter-fill--red';
+            }
+            fill.className = `pi-rpc-context-meter-fill${fillTheme}${legacy}`.trim();
+            fill.style.width =
+                ratioPercent === null ? '0%' : `${ratioPercent}%`;
+            const meterText = document.createElement('span');
+            meterText.className = 'pi-rpc-context-meter-text';
+            meterText.textContent = display.context;
+            meterEl.append(fill, meterText);
+        }
 
         bar.classList.remove('hidden');
         const cwdEl = document.createElement('div');
@@ -2150,7 +2182,8 @@ export class TabManager {
         rightEl.textContent = modelRight;
         if (modelRight) rightEl.title = modelRight;
 
-        mainRow.append(leftEl, rightEl);
+        if (meterEl) mainRow.append(leftEl, meterEl, rightEl);
+        else mainRow.append(leftEl, rightEl);
         bar.replaceChildren(cwdEl, mainRow);
     }
 
@@ -2578,48 +2611,6 @@ export class TabManager {
                         this.renderPresets('pi-rpc');
                 });
         });
-        // Context meter — ratio from raw status; text from formatPiRpcStatus.
-        const rawStatus = getPiRpcStatus(activeTab.paneId);
-        const displayStatus = formatPiRpcStatus(rawStatus);
-        const usedTokens = rawStatus?.contextUsedTokens;
-        const windowTokens = rawStatus?.contextWindowTokens;
-        const ratioKnown =
-            typeof usedTokens === 'number' &&
-            Number.isFinite(usedTokens) &&
-            typeof windowTokens === 'number' &&
-            Number.isFinite(windowTokens) &&
-            windowTokens > 0;
-        // Band selection uses the exact ratio so a 39.999% fill stays green;
-        // only the displayed width/aria value rounds to one decimal.
-        const ratioExact = ratioKnown
-            ? Math.min(100, Math.max(0, (usedTokens / windowTokens) * 100))
-            : null;
-        const ratioPercent = ratioKnown
-            ? Math.round(ratioExact * 10) / 10
-            : null;
-        let fillModifier = '';
-        if (ratioExact !== null) {
-            if (ratioExact < 40)
-                fillModifier = ' pi-rpc-context-meter-fill--green';
-            else if (ratioExact <= 70)
-                fillModifier = ' pi-rpc-context-meter-fill--yellow';
-            else fillModifier = ' pi-rpc-context-meter-fill--red';
-        }
-        const meter = document.createElement('span');
-        meter.className = 'pi-rpc-context-meter';
-        meter.setAttribute('role', 'progressbar');
-        meter.setAttribute('aria-valuemin', '0');
-        meter.setAttribute('aria-valuemax', '100');
-        if (ratioPercent !== null)
-            meter.setAttribute('aria-valuenow', String(ratioPercent));
-        meter.setAttribute('aria-label', `Context: ${displayStatus.context}`);
-        const fill = document.createElement('span');
-        fill.className = `pi-rpc-context-meter-fill${fillModifier}`.trim();
-        fill.style.width = ratioPercent === null ? '0%' : `${ratioPercent}%`;
-        const meterText = document.createElement('span');
-        meterText.className = 'pi-rpc-context-meter-text';
-        meterText.textContent = displayStatus.context;
-        meter.append(fill, meterText);
         const compactButton = document.createElement('button');
         compactButton.type = 'button';
         compactButton.className = 'preset-btn pi-rpc-compact-btn';
@@ -2658,7 +2649,6 @@ export class TabManager {
         this.presetsContainer.append(
             modelButton,
             thinkingButton,
-            meter,
             compactButton,
             resetButton,
         );
