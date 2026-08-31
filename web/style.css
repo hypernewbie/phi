@@ -9783,12 +9783,32 @@ body.md-standalone #md-view-body {
     font-size: inherit;
     --line-height: 1.5em;
 }
+.pi-export-scope .review-content-body {
+    border: 1ch solid var(--bg-base);
+    padding: 0;
+    box-sizing: border-box;
+}
 .pi-export-scope .review-chat-wrapper {
-    padding-inline: 0;
+    padding: 0;
+    border: none;
 }
 .pi-export-scope .user-message,
 .pi-export-scope .assistant-text {
     padding-inline: 1ch;
+}
+.pi-export-scope .assistant-text,
+.pi-export-scope .user-message,
+.pi-export-scope .thinking-text,
+.pi-export-scope .tool-output,
+.pi-export-scope .markdown-content,
+.pi-export-scope .tool-diff,
+.pi-export-scope .tool-command,
+.pi-export-scope .tool-header,
+.pi-export-scope .compaction,
+.pi-export-scope .skill-invocation {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
 }
 .pi-export-scope .assistant-message > .tool-execution + .tool-execution,
 .pi-export-scope .assistant-message > .assistant-text + .tool-execution,
