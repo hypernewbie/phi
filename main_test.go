@@ -2089,8 +2089,12 @@ func TestSimplepushAPI(t *testing.T) {
 func TestKanbanVaultAPI(t *testing.T) {
 	withTempConfig(t)
 
-	// POST save password
-	postBody, _ := json.Marshal(map[string]string{"password": "my_test_password"})
+	// POST save password + username + url
+	postBody, _ := json.Marshal(map[string]string{
+		"password": "my_test_password",
+		"username": "alice",
+		"url":      "http://charon:3456",
+	})
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/config/kanban-vault", strings.NewReader(string(postBody)))
 	wPost := httptest.NewRecorder()
 	handleKanbanVault(wPost, reqPost)
@@ -2103,6 +2107,12 @@ func TestKanbanVaultAPI(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.KanbanPasswordEnc == "" || cfg.KanbanPasswordEnc == "my_test_password" {
 		t.Errorf("Expected encrypted password in config, got %q", cfg.KanbanPasswordEnc)
+	}
+	if cfg.KanbanUsername != "alice" {
+		t.Errorf("Expected KanbanUsername 'alice', got %q", cfg.KanbanUsername)
+	}
+	if cfg.KanbanURL != "http://charon:3456" {
+		t.Errorf("Expected KanbanURL 'http://charon:3456', got %q", cfg.KanbanURL)
 	}
 
 	// GET password
@@ -2118,6 +2128,25 @@ func TestKanbanVaultAPI(t *testing.T) {
 	if getRes["password"] != "my_test_password" {
 		t.Errorf("Expected decrypted password 'my_test_password', got %q", getRes["password"])
 	}
+	if getRes["username"] != "alice" {
+		t.Errorf("Expected username 'alice', got %q", getRes["username"])
+	}
+	if getRes["url"] != "http://charon:3456" {
+		t.Errorf("Expected url 'http://charon:3456', got %q", getRes["url"])
+	}
+
+	// POST partial update — only password should not clear username/url
+	postBody2, _ := json.Marshal(map[string]string{"password": "new_pw"})
+	reqPost2 := httptest.NewRequest(http.MethodPost, "/api/config/kanban-vault", strings.NewReader(string(postBody2)))
+	wPost2 := httptest.NewRecorder()
+	handleKanbanVault(wPost2, reqPost2)
+	if wPost2.Code != http.StatusOK {
+		t.Fatalf("second POST failed: %d", wPost2.Code)
+	}
+	cfg2 := loadConfig()
+	if cfg2.KanbanUsername != "alice" {
+		t.Errorf("Partial POST should preserve username, got %q", cfg2.KanbanUsername)
+	}
 
 	// DELETE password
 	reqDel := httptest.NewRequest(http.MethodDelete, "/api/config/kanban-vault", nil)
@@ -2131,6 +2160,12 @@ func TestKanbanVaultAPI(t *testing.T) {
 	cfgAfterDel := loadConfig()
 	if cfgAfterDel.KanbanPasswordEnc != "" {
 		t.Errorf("Expected empty KanbanPasswordEnc after DELETE")
+	}
+	if cfgAfterDel.KanbanUsername != "" {
+		t.Errorf("Expected empty KanbanUsername after DELETE, got %q", cfgAfterDel.KanbanUsername)
+	}
+	if cfgAfterDel.KanbanURL != "" {
+		t.Errorf("Expected empty KanbanURL after DELETE, got %q", cfgAfterDel.KanbanURL)
 	}
 }
 

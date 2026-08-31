@@ -25,6 +25,11 @@ function manager() {
     c.currentProjectId = 9;
     c.currentViewId = 5;
     c._reauthPromise = null;
+    c.getSavedVaultCredentials = vi.fn(async () => ({
+        password: 'hunter2',
+        username: 'me',
+        url: 'http://vik.local',
+    }));
     c.getSavedVaultPassword = vi.fn(async () => 'hunter2');
     c.attemptLogin = vi.fn(async () => 'fresh-token');
     return c;
@@ -108,6 +113,11 @@ describe('an expired Vikunja session recovers itself', () => {
 
     it('surfaces the original error when no vault credentials are saved', async () => {
         const c = manager();
+        c.getSavedVaultCredentials = vi.fn(async () => ({
+            password: null,
+            username: null,
+            url: null,
+        }));
         c.getSavedVaultPassword = vi.fn(async () => null);
         expiringToken();
 
