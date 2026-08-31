@@ -88,6 +88,30 @@ describe('single-flight terminal write pump', () => {
         expect(tab.term.scrollToBottom).toHaveBeenCalledOnce();
     });
 
+    it('syncs the native scroll area after following a newly grown tail', () => {
+        const { callbacks, manager, tab } = makeHarness({
+            viewportY: 800,
+            baseY: 800,
+        });
+        const syncedViewportY = [];
+        tab.term.write = vi.fn((_data, callback) => {
+            tab.term.buffer.active.baseY = 1800;
+            callbacks.push(callback);
+        });
+        tab.term.scrollToBottom = vi.fn(() => {
+            tab.term.buffer.active.viewportY = tab.term.buffer.active.baseY;
+        });
+        tab.term._core.viewport.syncScrollArea = vi.fn(() => {
+            syncedViewportY.push(tab.term.buffer.active.viewportY);
+        });
+
+        manager.writeToTerminal(tab, '1000 new lines');
+        callbacks.shift()();
+
+        expect(tab.term.scrollToBottom).toHaveBeenCalledOnce();
+        expect(syncedViewportY).toEqual([1800]);
+    });
+
     it('does not yank the viewport down if the user scrolls before completion', () => {
         const { callbacks, manager, tab } = makeHarness();
 
