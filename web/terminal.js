@@ -26,6 +26,7 @@ import {
     formatChipName,
 } from './attachments.js';
 import {
+    mountRpcChat,
     rpcChatSend,
     destroyRpcChat,
     getPiRpcStatus,
@@ -279,6 +280,51 @@ export class TabManager {
             // to persist order shouldn't break tab switching - just log.
             console.warn('phi: failed to save tab order', e);
         }
+    }
+
+    savePiRpcTabs() {
+        try {
+            const piTabs = Array.from(this.tabs.values())
+                .filter((t) => t.coder === 'pi-rpc')
+                .map((t) => ({
+                    paneId: t.paneId,
+                    cwd: t.cwd || '',
+                    title: t.title || '',
+                    workspace: t.workspace || '',
+                    sessionPath: t.paneId.startsWith('pi-rpc:session:')
+                        ? decodeURIComponent(t.paneId.slice('pi-rpc:session:'.length))
+                        : undefined,
+                }));
+            localStorage.setItem('phi_pi_rpc_tabs', JSON.stringify(piTabs));
+        } catch {}
+    }
+
+    restorePiRpcTabs() {
+        let raw;
+        try {
+            raw = localStorage.getItem('phi_pi_rpc_tabs');
+            if (!raw) return;
+            const tabs = JSON.parse(raw);
+            if (!Array.isArray(tabs) || tabs.length === 0) return;
+            for (const t of tabs) {
+                if (!t.paneId || this.tabs.has(t.paneId)) continue;
+                const title = t.title || `Pi RPC · ${t.cwd ? t.cwd.split('/').pop() : t.paneId}`;
+                this.createTab(t.paneId, '', title, 'pi-rpc', t.workspace || '', t.cwd || '');
+                const tab = this.tabs.get(t.paneId);
+                if (!tab) continue;
+                // Mirror openPiRpcChatTab font wiring so F5 text matches live
+                const sz = Number(this.app?.terminalFontSize);
+                const fontSize = Number.isFinite(sz) && sz >= 8 && sz <= 32 ? sz : window.innerWidth <= 768 ? 10 : 14;
+                tab.termContainer.style.fontFamily = this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
+                tab.termContainer.style.fontSize = `${fontSize}px`;
+                try {
+                    if (t.sessionPath) mountRpcChat(t.paneId, tab.termContainer, t.cwd || '', t.sessionPath);
+                    else mountRpcChat(t.paneId, tab.termContainer, t.cwd || '');
+                } catch (e) {
+                    console.warn('phi: failed to restore pi-rpc tab', t.paneId, e);
+                }
+            }
+        } catch {}
     }
 
     // ---- Drag-to-reorder (localStorage-only, v0.8.x polish) ----
@@ -645,12 +691,19 @@ export class TabManager {
             // last reloaded. createTab short-circuits if it's already there.
             if (localStorage.getItem('phi_kanban_open') === '1') {
                 await this.app.kanbanManager.openBoard();
-                return;
             }
+            // pi-rpc tabs are also client-only (chat, not a PTY) – persist
+            // across F5 via phi_pi_rpc_tabs so F5 doesn't nuke the tab.
+            this.restorePiRpcTabs();
+            this.applySavedTabOrder();
             if (savedActive && this.tabs.has(savedActive)) {
                 this.switchTab(savedActive);
             } else if (instances.length > 0) {
                 this.switchTab(instances[0].id);
+            } else if (this.tabs.size > 0) {
+                // All server instances gone but client-only tabs (kanban/pi)
+                // survived – show the first survivor.
+                this.switchTab(Array.from(this.tabs.keys())[0]);
             }
         } catch (e) {
             console.error('Failed to restore tabs from server-side state:', e);
@@ -1390,6 +1443,7 @@ export class TabManager {
             };
             this.tabs.set(paneId, tabInfo);
             this.switchTab(paneId);
+            if (coder === 'pi-rpc') this.savePiRpcTabs();
             return;
         }
 
@@ -3627,10 +3681,12 @@ export class TabManager {
             this._piRpcResetPending?.delete(paneId);
             this._closePiRpcDropups(true);
         }
+        const wasPiRpc = tab.coder === 'pi-rpc';
         this.tabs.delete(paneId);
         this.updateDocumentTitle();
         this.updateDisconnectBanner();
         this.saveTabsState();
+        if (wasPiRpc) this.savePiRpcTabs();
 
         // Refresh overflow chip to reflect the removal.
         this.updateTabOverflow();
