@@ -2989,16 +2989,19 @@ html[data-phi-desktop-root] .app-header {
 /* PI RPC STATUS BAR */
 .pi-rpc-status-bar {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     flex-shrink: 0;
-    gap: 2px;
-    padding: 4px 8px;
-    border-top: 1px solid var(--bg-border);
-    background-color: var(--bg-panel);
+    align-items: center;
+    gap: 10px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--bg-border);
+    background-color: var(--bg-base);
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 11px;
+    font-weight: 400;
     line-height: 1.4;
+    white-space: nowrap;
     overflow: hidden;
 }
 
@@ -3026,40 +3029,41 @@ html[data-phi-desktop-root] .app-header {
 }
 
 .pi-rpc-status-cwd {
-    color: var(--text-primary);
+    color: var(--text-muted);
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 400;
+    font-family: var(--font-mono);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 0 1 auto;
+    min-width: 0;
 }
 
 .pi-rpc-status-main {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    min-width: 0;
+    display: contents;
 }
 
 .pi-rpc-status-tokens {
     color: var(--text-muted);
     font-size: 11px;
     font-weight: 400;
+    font-family: var(--font-mono);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex: 1;
-    min-width: 0;
+    flex: 0 0 auto;
 }
 
 .pi-rpc-status-model {
     color: var(--text-primary);
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 400;
+    font-family: var(--font-mono);
     white-space: nowrap;
     flex-shrink: 0;
     text-align: right;
+    margin-left: auto;
 }
 
 /* PRESETS PANEL */
