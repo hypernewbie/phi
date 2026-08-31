@@ -135,24 +135,29 @@ export class TabManager {
         this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
-        this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId, status) => {
-            // Model change Invalidates thinking-level cache (different model → different set)
-            const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
-            const prev = this._piLastModel.get(paneId);
-            if (m && prev !== undefined && m !== prev) {
-                this._piAvailableThinking.delete(paneId);
-            }
-            if (m) this._piLastModel.set(paneId, m);
-            else if (status === null) {
-                this._piLastModel.delete(paneId);
-                this._piAvailableThinking.delete(paneId);
-            }
-            this.renderPiRpcStatusBar();
-            const activeTab = this.getActiveTab();
-            if (activeTab?.paneId === paneId && activeTab.coder === 'pi-rpc') {
-                this.renderPresets('pi-rpc');
-            }
-        });
+        this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
+            (paneId, status) => {
+                // Model change Invalidates thinking-level cache (different model → different set)
+                const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
+                const prev = this._piLastModel.get(paneId);
+                if (m && prev !== undefined && m !== prev) {
+                    this._piAvailableThinking.delete(paneId);
+                }
+                if (m) this._piLastModel.set(paneId, m);
+                else if (status === null) {
+                    this._piLastModel.delete(paneId);
+                    this._piAvailableThinking.delete(paneId);
+                }
+                this.renderPiRpcStatusBar();
+                const activeTab = this.getActiveTab();
+                if (
+                    activeTab?.paneId === paneId &&
+                    activeTab.coder === 'pi-rpc'
+                ) {
+                    this.renderPresets('pi-rpc');
+                }
+            },
+        );
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
 
@@ -292,7 +297,9 @@ export class TabManager {
                     title: t.title || '',
                     workspace: t.workspace || '',
                     sessionPath: t.paneId.startsWith('pi-rpc:session:')
-                        ? decodeURIComponent(t.paneId.slice('pi-rpc:session:'.length))
+                        ? decodeURIComponent(
+                              t.paneId.slice('pi-rpc:session:'.length),
+                          )
                         : undefined,
                 }));
             localStorage.setItem('phi_pi_rpc_tabs', JSON.stringify(piTabs));
@@ -308,20 +315,45 @@ export class TabManager {
             if (!Array.isArray(tabs) || tabs.length === 0) return;
             for (const t of tabs) {
                 if (!t.paneId || this.tabs.has(t.paneId)) continue;
-                const title = t.title || `Pi RPC · ${t.cwd ? t.cwd.split('/').pop() : t.paneId}`;
-                this.createTab(t.paneId, '', title, 'pi-rpc', t.workspace || '', t.cwd || '');
+                const title =
+                    t.title ||
+                    `Pi RPC · ${t.cwd ? t.cwd.split('/').pop() : t.paneId}`;
+                this.createTab(
+                    t.paneId,
+                    '',
+                    title,
+                    'pi-rpc',
+                    t.workspace || '',
+                    t.cwd || '',
+                );
                 const tab = this.tabs.get(t.paneId);
                 if (!tab) continue;
                 // Mirror openPiRpcChatTab font wiring so F5 text matches live
                 const sz = Number(this.app?.terminalFontSize);
-                const fontSize = Number.isFinite(sz) && sz >= 8 && sz <= 32 ? sz : window.innerWidth <= 768 ? 10 : 14;
-                tab.termContainer.style.fontFamily = this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
+                const fontSize =
+                    Number.isFinite(sz) && sz >= 8 && sz <= 32
+                        ? sz
+                        : window.innerWidth <= 768
+                          ? 10
+                          : 14;
+                tab.termContainer.style.fontFamily =
+                    this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
                 tab.termContainer.style.fontSize = `${fontSize}px`;
                 try {
-                    if (t.sessionPath) mountRpcChat(t.paneId, tab.termContainer, t.cwd || '', t.sessionPath);
+                    if (t.sessionPath)
+                        mountRpcChat(
+                            t.paneId,
+                            tab.termContainer,
+                            t.cwd || '',
+                            t.sessionPath,
+                        );
                     else mountRpcChat(t.paneId, tab.termContainer, t.cwd || '');
                 } catch (e) {
-                    console.warn('phi: failed to restore pi-rpc tab', t.paneId, e);
+                    console.warn(
+                        'phi: failed to restore pi-rpc tab',
+                        t.paneId,
+                        e,
+                    );
                 }
             }
         } catch {}
@@ -2246,16 +2278,14 @@ export class TabManager {
         // Keep legacy green/yellow/red for backward compat but primary is low/mid/high theme
         let legacy = '';
         if (ratioExact !== null) {
-            if (ratioExact < 40)
-                legacy = ' pi-rpc-context-meter-fill--green';
+            if (ratioExact < 40) legacy = ' pi-rpc-context-meter-fill--green';
             else if (ratioExact <= 70)
                 legacy = ' pi-rpc-context-meter-fill--yellow';
             else legacy = ' pi-rpc-context-meter-fill--red';
         }
         fill.className =
             `pi-rpc-context-meter-fill${fillTheme}${legacy}`.trim();
-        fill.style.width =
-            ratioPercent === null ? '0%' : `${ratioPercent}%`;
+        fill.style.width = ratioPercent === null ? '0%' : `${ratioPercent}%`;
         const meterText = document.createElement('span');
         meterText.className = 'pi-rpc-context-meter-text';
         meterText.textContent = display.context;
@@ -2334,7 +2364,8 @@ export class TabManager {
             const norm = normalizeThinkingLevel(cur);
             let idx = PI_THINKING_ORDER.indexOf(norm);
             if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
-            const next = PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
+            const next =
+                PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
             this._piThinkingLevels.set(tab.paneId, next);
             this._updatePiThinkingButton();
             try {
@@ -2932,7 +2963,9 @@ export class TabManager {
         thinkingVisibilityBtn.type = 'button';
         thinkingVisibilityBtn.className = 'preset-btn';
         const allVisible = this._thinkingAllVisible.get(paneId) === true;
-        thinkingVisibilityBtn.textContent = allVisible ? 'Hide thinking' : 'Show thinking';
+        thinkingVisibilityBtn.textContent = allVisible
+            ? 'Hide thinking'
+            : 'Show thinking';
         thinkingVisibilityBtn.title = 'Toggle all thinking blocks';
         thinkingVisibilityBtn.disabled = menuDisabled;
         thinkingVisibilityBtn.addEventListener('click', (event) => {
@@ -2967,7 +3000,8 @@ export class TabManager {
 
         const modelButton = document.createElement('button');
         modelButton.type = 'button';
-        modelButton.className = 'preset-btn model-trigger-btn pi-rpc-model-trigger';
+        modelButton.className =
+            'preset-btn model-trigger-btn pi-rpc-model-trigger';
         modelButton.textContent = '🤖 Models ▾';
         modelButton.title = state.model || '—';
         modelButton.disabled =

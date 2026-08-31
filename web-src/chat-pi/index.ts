@@ -204,6 +204,19 @@ export function mountChatPi(
     let exited = false;
     let resetInFlight = false;
     let compactInFlight = false;
+    let compactSnapshot: {
+        messages: unknown[];
+        ids: Set<string>;
+        at: number;
+        summary?: string | null;
+        kept?: number | null;
+    } | null = null;
+    let lastCompaction: {
+        summary: string | null;
+        id: string | null;
+        timestamp: number;
+        kept: number | null;
+    } | null = null;
     let sessionActive = false;
     type OutgoingPrompt = {
         id: string;
@@ -334,6 +347,44 @@ export function mountChatPi(
         pageSize: 50,
     });
     const status = view.status!;
+    const _origPrepend = view.prependOlder.bind(view);
+    let _compactFileTried = false;
+    (view as unknown as Record<string, unknown>).prependOlder = (
+        count: number,
+    ) => {
+        const ok = (_origPrepend as (c: number) => boolean)(count);
+        if (ok) return true;
+        if (_compactFileTried) return false;
+        const hasSnapshot =
+            (
+                view as unknown as { hasCompactSnapshot?: () => boolean }
+            ).hasCompactSnapshot?.() ?? false;
+        const total =
+            (
+                view as unknown as { getStructuredMessages?: () => unknown[] }
+            ).getStructuredMessages?.().length ?? 0;
+        if (!hasSnapshot && total < 30) {
+            _compactFileTried = true;
+            const sp = sessionPath ?? null;
+            (
+                view as unknown as {
+                    loadCompactSnapshotFromFile?: (
+                        o: unknown,
+                    ) => Promise<boolean>;
+                }
+            )
+                .loadCompactSnapshotFromFile?.({ sessionPath: sp, cwd })
+                .then((loaded) => {
+                    if (loaded)
+                        (
+                            view as unknown as {
+                                prependOlder: (c: number) => boolean;
+                            }
+                        ).prependOlder(count);
+                });
+        }
+        return false;
+    };
     // pi-subagents fleet strip: shared #subagent-strip below the input
     // bar. Only this pane may write it while it is the active tab, so
     // background panes' fleet events gate inside update(). The last
@@ -648,6 +699,52 @@ export function mountChatPi(
         if (busy || queueDepth > 0) return rejected('Pi RPC is busy');
         if (compactInFlight)
             return rejected('Pi compaction is already pending');
+        try {
+            const snapMessages =
+                (
+                    view as unknown as {
+                        getStructuredMessages?: () => unknown[];
+                    }
+                ).getStructuredMessages?.() ??
+                (
+                    buffer as unknown as { getMessages?: () => unknown[] }
+                ).getMessages?.() ??
+                [];
+            const snapForView = (() => {
+                if (!compactSnapshot) return snapMessages as unknown[];
+                const existingIds = compactSnapshot.ids;
+                return (snapMessages as Array<{ id?: string }>).filter(
+                    (m) => !m?.id || !existingIds.has(m.id),
+                );
+            })();
+            compactSnapshot = {
+                messages: JSON.parse(JSON.stringify(snapMessages)),
+                at: Date.now(),
+                ids: new Set(
+                    (snapMessages as Array<{ id?: string }>)
+                        .map((m) => m.id)
+                        .filter(Boolean) as string[],
+                ),
+            };
+            const v2 = view as unknown as {
+                setCompactSnapshot?: (s: unknown) => void;
+            };
+            if (v2.setCompactSnapshot) {
+                const from = (snapForView as unknown[]).length;
+                v2.setCompactSnapshot({
+                    messages: JSON.parse(JSON.stringify(snapForView)),
+                    ids: new Set(
+                        (snapForView as Array<{ id?: string }>)
+                            .map((m) => m.id)
+                            .filter(Boolean) as string[],
+                    ),
+                    from,
+                    kept: null,
+                    summary: null,
+                    at: Date.now(),
+                });
+            }
+        } catch {}
         compactInFlight = true;
         notifyControls();
         const currentSid = sid;
@@ -898,6 +995,64 @@ export function mountChatPi(
                 // rpc.md) does not render a spurious "pi: compaction
                 // error" line.
                 status.textContent = `pi: ${errorMessage}`;
+            } else if (!aborted && !errorMessage) {
+                const summary =
+                    (typeof (
+                        data as unknown as { result?: { summary?: unknown } }
+                    )?.result?.summary === 'string' &&
+                        (data as unknown as { result: { summary: string } })
+                            .result.summary) ||
+                    (typeof (data as unknown as { summary?: unknown })
+                        ?.summary === 'string' &&
+                        (data as unknown as { summary: string }).summary) ||
+                    (typeof (
+                        data as unknown as {
+                            result?: { compactionSummary?: unknown };
+                        }
+                    )?.result?.compactionSummary === 'string' &&
+                        (
+                            data as unknown as {
+                                result: { compactionSummary: string };
+                            }
+                        ).result.compactionSummary) ||
+                    null;
+                const kept = Array.isArray(
+                    (data as unknown as { result?: { messages?: unknown } })
+                        ?.result?.messages,
+                )
+                    ? ((data as unknown as { result: { messages: unknown[] } })
+                          .result.messages.length as number)
+                    : null;
+                lastCompaction = {
+                    summary,
+                    id:
+                        typeof (
+                            data as unknown as { result?: { id?: unknown } }
+                        )?.result?.id === 'string'
+                            ? (data as unknown as { result: { id: string } })
+                                  .result.id
+                            : null,
+                    timestamp: Date.now(),
+                    kept,
+                };
+                const v3 = view as unknown as {
+                    setCompactSnapshot?: (s: unknown) => void;
+                };
+                if (v3.setCompactSnapshot && compactSnapshot) {
+                    try {
+                        const existing = compactSnapshot.messages;
+                        v3.setCompactSnapshot({
+                            messages: existing,
+                            ids: compactSnapshot.ids,
+                            summary,
+                            from: (existing as unknown[]).length + (kept ?? 0),
+                            kept,
+                            at: Date.now(),
+                        });
+                        compactSnapshot.summary = summary;
+                        compactSnapshot.kept = kept;
+                    } catch {}
+                }
             }
         }
         if (env.evt === 'messageEnd' && env.data?.message?.role === 'user') {

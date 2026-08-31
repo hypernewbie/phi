@@ -521,6 +521,8 @@ export function createReviewTranscriptView(root, options) {
         slice: () => [],
     };
     let toolResults = new Map();
+    let compactSnapshot = null;
+    let liveMessages = null;
     // Latest streaming partial, stashed on every setStructuredMessages
     // paint. Window slides (appendNewer, jump button) rebuild outside it
     // and would otherwise drop the live tail for one paint.
@@ -543,12 +545,17 @@ export function createReviewTranscriptView(root, options) {
     startBadge.style.display = 'none';
     transcript.appendChild(startBadge);
     function rebuildStructuredWindow(opts) {
-        const end = Math.min(
-            structuredMessages.length,
-            currentStart + windowSize,
+        const totalLen = compactSnapshot
+            ? combinedLength()
+            : structuredMessages.length;
+        const end = Math.min(totalLen, currentStart + windowSize);
+        const slice = compactSnapshot
+            ? combinedSlice(currentStart, end)
+            : structuredMessages.slice(currentStart, end);
+        const toolDiffs = collectValidatedToolDiffs(
+            slice.filter((m) => !m.__compaction),
+            toolResults,
         );
-        const slice = structuredMessages.slice(currentStart, end);
-        const toolDiffs = collectValidatedToolDiffs(slice, toolResults);
         const fragment = document.createDocumentFragment();
         // Tool calls render their result inline (bash-render /
         // tool-render), so a paired toolResult message would duplicate the
@@ -557,12 +564,23 @@ export function createReviewTranscriptView(root, options) {
         // the window) still fall through to the dim block.
         const renderedCallIds = new Set();
         for (const msg of slice) {
+            if (msg.__compaction) continue;
             for (const seg of msg.segments) {
                 if (seg.kind === 'toolCall') renderedCallIds.add(seg.id);
             }
         }
         const retainedKeys = new Set();
         for (const [index, msg] of slice.entries()) {
+            if (msg.__compaction) {
+                const info = msg.info;
+                const key = `${currentStart + index}:compaction:${info?.summary ?? ''}`;
+                retainedKeys.add(key);
+                const cached = cache.get(key);
+                const block = cached ?? buildCompactionBlock(info);
+                if (!cached) cache.set(key, block);
+                fragment.appendChild(block);
+                continue;
+            }
             if (
                 msg.role === 'toolResult' &&
                 msg.toolCallId &&
@@ -580,6 +598,14 @@ export function createReviewTranscriptView(root, options) {
             clearActivePromptMarkers(block);
             block.dataset.piMessageIndex = String(currentStart + index);
             if (!cached) cache.set(key, block);
+            if (
+                compactSnapshot &&
+                currentStart + index < compactSnapshot.messages.length
+            ) {
+                block.classList.add('compacted-old');
+            } else {
+                block.classList.remove('compacted-old');
+            }
             fragment.appendChild(block);
         }
         for (const key of cache.keys()) {
@@ -835,6 +861,47 @@ export function createReviewTranscriptView(root, options) {
             options.copyText,
         );
     }
+    function buildCompactionBlock(info) {
+        const wrap = document.createElement('div');
+        wrap.className = 'compaction-block';
+        const line = document.createElement('div');
+        line.className = 'compaction-divider';
+        const kept = info?.kept ?? '?';
+        const from = info?.from ?? '?';
+        line.textContent = `— Compacted ${from} → ${kept} —`;
+        wrap.appendChild(line);
+        if (info?.summary) {
+            const sum = document.createElement('div');
+            sum.className = 'compaction-summary markdown-content';
+            const parsed = new DOMParser().parseFromString(
+                renderMarkdownSafe(String(info.summary)),
+                'text/html',
+            );
+            sum.replaceChildren(...parsed.body.childNodes);
+            highlightCodeIn(sum);
+            wrap.appendChild(sum);
+        }
+        return wrap;
+    }
+    function combinedSlice(start, end) {
+        if (!compactSnapshot || !liveMessages)
+            return structuredMessages.slice(start, end);
+        const snapLen = compactSnapshot.messages.length;
+        const divider = 1;
+        const total = snapLen + divider + liveMessages.length;
+        const out = [];
+        for (let i = start; i < end && i < total; i++) {
+            if (i < snapLen) out.push(compactSnapshot.messages[i]);
+            else if (i === snapLen)
+                out.push({ __compaction: true, info: compactSnapshot });
+            else out.push(liveMessages[i - snapLen - divider]);
+        }
+        return out;
+    }
+    function combinedLength() {
+        if (!compactSnapshot || !liveMessages) return structuredMessages.length;
+        return compactSnapshot.messages.length + 1 + liveMessages.length;
+    }
     function snapScroll() {
         // Snap-to-bottom detection uses a slightly more generous threshold
         // than the scroll-near-top prepending trigger so the view sticks
@@ -912,15 +979,39 @@ export function createReviewTranscriptView(root, options) {
             transcript.appendChild(empty);
         },
         setStructuredMessages(messages, partial, results) {
-            const source = asSource(messages);
-            const previousTotal = structuredMessages.length;
+            const sourceRaw = asSource(messages);
+            let source = sourceRaw;
+            let sourceArr = null;
+            if (compactSnapshot) {
+                sourceArr = sourceRaw.slice(0, sourceRaw.length);
+                const snapIds = compactSnapshot.ids;
+                const filtered = sourceArr.filter(
+                    (m) => !m?.id || !snapIds.has(m.id),
+                );
+                if (filtered.length !== sourceArr.length) {
+                    source = asSource(filtered);
+                    sourceArr = filtered;
+                }
+            }
+            const previousTotal = compactSnapshot
+                ? combinedLength()
+                : structuredMessages.length;
             const previousNewestStart = Math.max(0, previousTotal - windowSize);
             const wasAtNewest = currentStart === previousNewestStart;
-            structuredMessages = source;
+            if (compactSnapshot) {
+                liveMessages = sourceArr ?? source.slice(0, source.length);
+                structuredMessages = source;
+            } else {
+                structuredMessages = source;
+            }
             toolResults = results;
             latestPartial = partial;
-            const newestStart = Math.max(0, source.length - windowSize);
-            if (wasAtNewest || source.length < previousTotal) {
+            const newestTotal = compactSnapshot
+                ? combinedLength()
+                : source.length;
+            const newestStart = Math.max(0, newestTotal - windowSize);
+            const curLen = sourceArr ? sourceArr.length : source.length;
+            if (wasAtNewest || curLen < previousTotal) {
                 currentStart = newestStart;
             } else {
                 currentStart = Math.min(currentStart, newestStart);
@@ -932,16 +1023,18 @@ export function createReviewTranscriptView(root, options) {
             });
             const delta = transcript.scrollHeight - snap.preHeight;
             applyScrollAnchor(snap, delta);
-            // If we were at the newest window and new messages arrived, stay pinned
-            // to bottom even if wasAtBottom was false by a few px (border/padding).
-            if (wasAtNewest && source.length > previousTotal) {
+            const effectiveLen = compactSnapshot
+                ? combinedLength()
+                : source.length;
+            if (wasAtNewest && effectiveLen > previousTotal) {
                 const nearBottom =
-                    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= SNAP_ZONE_PX * 1.5;
+                    transcript.scrollHeight -
+                        transcript.scrollTop -
+                        transcript.clientHeight <=
+                    SNAP_ZONE_PX * 1.5;
                 if (nearBottom || snap.wasAtBottom) {
                     transcript.scrollTop = transcript.scrollHeight;
                 } else {
-                    // Still ensure the newest window is visible — schedule a frame
-                    // in case scrollHeight hasn't settled yet.
                     requestAnimationFrame(() => {
                         transcript.scrollTop = transcript.scrollHeight;
                     });
@@ -979,7 +1072,162 @@ export function createReviewTranscriptView(root, options) {
             }
             transcript.appendChild(buildEphemeralErrorBlock(text));
         },
+        getStructuredMessages() {
+            if (compactSnapshot) return combinedSlice(0, combinedLength());
+            return structuredMessages.slice(0, structuredMessages.length);
+        },
+        hasCompactSnapshot() {
+            return !!compactSnapshot;
+        },
+        setCompactSnapshot(snapshot) {
+            if (!snapshot || !Array.isArray(snapshot.messages)) {
+                compactSnapshot = null;
+                liveMessages = null;
+                cache.clear();
+                return;
+            }
+            const msgs = snapshot.messages;
+            const ids =
+                snapshot.ids instanceof Set
+                    ? snapshot.ids
+                    : new Set(msgs.map((m) => m.id).filter(Boolean));
+            compactSnapshot = {
+                messages: msgs,
+                ids,
+                summary: snapshot.summary ?? null,
+                from: snapshot.from ?? msgs.length,
+                kept: snapshot.kept ?? null,
+                at: snapshot.at ?? Date.now(),
+            };
+            liveMessages = [];
+            currentStart = Math.max(
+                0,
+                compactSnapshot.messages.length + 1 - windowSize,
+            );
+            cache.clear();
+        },
+        clearCompactSnapshot() {
+            compactSnapshot = null;
+            liveMessages = null;
+            cache.clear();
+            rebuildStructuredWindow({
+                appendPartial: latestPartial,
+                partialStreaming: latestPartial !== '',
+            });
+        },
+        async loadCompactSnapshotFromFile(opts) {
+            const fetchImpl = opts?.fetchImpl ?? fetch;
+            let sessionPath = opts?.sessionPath ?? null;
+            if (!sessionPath && opts?.cwd) {
+                try {
+                    const res = await fetchImpl(
+                        `/api/sessions?coder=pi&cwd=${encodeURIComponent(opts.cwd)}`,
+                    );
+                    if (res.ok) {
+                        const data = await res.json();
+                        const sessions = Array.isArray(data?.sessions)
+                            ? data.sessions
+                            : Array.isArray(data)
+                              ? data
+                              : [];
+                        const match =
+                            sessions.find((s) => s.path === sessionPath) ||
+                            sessions[0];
+                        if (match?.path) sessionPath = match.path;
+                        else if (match?.file) sessionPath = match.file;
+                    }
+                } catch {}
+            }
+            if (!sessionPath) return false;
+            try {
+                const res = await fetchImpl(
+                    `/api/fs/read?path=${encodeURIComponent(sessionPath)}`,
+                );
+                if (!res.ok) return false;
+                const text = await res.text();
+                const lines = text.split('\n').filter(Boolean);
+                const old = [];
+                const liveIds = new Set(
+                    (
+                        liveMessages ??
+                        structuredMessages.slice(0, structuredMessages.length)
+                    )
+                        .map((m) => m.id)
+                        .filter(Boolean),
+                );
+                const snapIds = compactSnapshot?.ids ?? new Set();
+                let compactionSeen = false;
+                let compactionSummary = null;
+                for (const line of lines) {
+                    try {
+                        const entry = JSON.parse(line);
+                        if (entry.type === 'compaction') {
+                            compactionSeen = true;
+                            compactionSummary =
+                                entry.summary ?? entry.data?.summary ?? null;
+                            continue;
+                        }
+                        if (entry.type !== 'message' && entry.type !== 'custom')
+                            continue;
+                        if (
+                            entry.type === 'custom' &&
+                            entry.customType !== 'pi-compaction'
+                        )
+                            continue;
+                        const msg =
+                            entry.message ?? entry.data?.message ?? entry.data;
+                        if (!msg || !msg.id) continue;
+                        if (liveIds.has(msg.id) || snapIds.has(msg.id))
+                            continue;
+                        if (compactionSeen) continue;
+                        old.push(msg);
+                    } catch {}
+                }
+                if (old.length === 0) return false;
+                if (!compactSnapshot) {
+                    compactSnapshot = {
+                        messages: old,
+                        ids: new Set(old.map((m) => m.id).filter(Boolean)),
+                        summary: compactionSummary,
+                        from: old.length + (liveMessages?.length ?? 0),
+                        kept: liveMessages?.length ?? structuredMessages.length,
+                        at: Date.now(),
+                    };
+                    liveMessages =
+                        liveMessages ??
+                        structuredMessages.slice(0, structuredMessages.length);
+                } else {
+                    const existingIds = compactSnapshot.ids;
+                    const add = old.filter((m) => !existingIds.has(m.id));
+                    if (add.length) {
+                        compactSnapshot.messages = [
+                            ...add,
+                            ...compactSnapshot.messages,
+                        ];
+                        for (const m of add) existingIds.add(m.id);
+                    } else return false;
+                }
+                const preHeight = transcript.scrollHeight;
+                currentStart = 0;
+                rebuildStructuredWindow({
+                    appendPartial: latestPartial,
+                    partialStreaming: latestPartial !== '',
+                });
+                const delta = transcript.scrollHeight - preHeight;
+                transcript.scrollTop = Math.max(
+                    0,
+                    transcript.scrollTop + delta,
+                );
+                syncJumpButton();
+                return true;
+            } catch {
+                return false;
+            }
+        },
         prependOlder(count) {
+            const totalLen = compactSnapshot
+                ? combinedLength()
+                : structuredMessages.length;
             if (currentStart === 0) return false;
             const newStart = Math.max(0, currentStart - count);
             if (newStart === currentStart) return false;
