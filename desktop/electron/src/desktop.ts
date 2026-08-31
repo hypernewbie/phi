@@ -1329,11 +1329,14 @@ export class DesktopHost {
       if (!existsSync(phiConfigPath)) return null;
 
       const content = readFileSync(phiConfigPath, 'utf8');
-      const cfg = JSON.parse(content) as { password_hash?: string };
-      if (!cfg.password_hash || typeof cfg.password_hash !== 'string')
-        return null;
+      const cfg = JSON.parse(content) as {
+        password_hash?: string;
+        access_password_hash?: string;
+      };
+      const hash = cfg.access_password_hash || cfg.password_hash;
+      if (!hash || typeof hash !== 'string') return null;
 
-      const parts = cfg.password_hash.split('.');
+      const parts = hash.split('.');
       if (
         parts.length !== 5 ||
         parts[0] !== 'v1' ||
@@ -1511,8 +1514,13 @@ export class DesktopHost {
     this.loadStoredCredentials();
     const profiles = this.controller?.state().profiles ?? [];
     for (const p of profiles) {
-      if (!this.storedCredentials.has(p.origin)) {
-        this.tryRecoverLocalCredential(p.origin);
+      try {
+        const canonicalOrigin = new URL(p.origin).origin;
+        if (!this.storedCredentials.has(canonicalOrigin)) {
+          this.tryRecoverLocalCredential(canonicalOrigin);
+        }
+      } catch {
+        /* malformed profile origin */
       }
     }
     if (this.storedCredentials.size === 0) return;
@@ -3261,7 +3269,22 @@ export class DesktopHost {
         // that lets us do that without a prompt. Only when no valid
         // credential exists (or the server rotated the salt) do we fall
         // through to the modal below.
-        if (pendingUnlock !== null) return null; // one prompt at a time
+        if (pendingUnlock !== null) {
+          if (
+            pendingUnlock.origin === origin &&
+            pendingUnlock.profileId === active.id
+          ) {
+            sendBodyObscuring(true, pendingUnlock.generation);
+            sendAuthRequired({
+              requestId: pendingUnlock.requestId,
+              profileId: pendingUnlock.profileId,
+              origin: pendingUnlock.origin,
+              label: active.name !== '' ? active.name : pendingUnlock.origin,
+              generation: pendingUnlock.generation,
+            });
+          }
+          return null; // one prompt at a time
+        }
         if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
         if (unlockInFlight) return null;
         const cred = this.getOrRecoverCredential(origin);

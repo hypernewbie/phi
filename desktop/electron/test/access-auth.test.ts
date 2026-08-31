@@ -849,4 +849,80 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     expect(out.kind).toBe('ok');
     expect(auth.hasCookie(origin)).toBe(true);
   });
+
+  it('fetchConfig checks and imports cookie from cookieProvider when in-memory jar is empty', async () => {
+    let capturedHeader = '';
+    const doFetch = (async (_url: URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string> | undefined;
+      capturedHeader = headers?.['Cookie'] || '';
+      return new Response('{"workspaces":["/test"]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const auth = new AccessAuth(doFetch);
+    expect(auth.hasCookie(origin)).toBe(false);
+
+    auth.setCookieProvider(async (queryOrigin) => {
+      if (queryOrigin === origin) {
+        return {
+          origin,
+          cookieName: 'phi_access_session',
+          cookieValue: 'provider-session-token',
+          path: '/',
+          httpOnly: true,
+        };
+      }
+      return null;
+    });
+
+    const res = await auth.fetchConfig(origin);
+    expect(res.kind).toBe('ok');
+    expect(capturedHeader).toBe('phi_access_session=provider-session-token');
+    expect(auth.hasCookie(origin)).toBe(true);
+  });
+
+  it('notifies onCookieCaptured when a new session cookie is acquired', async () => {
+    const goodStatus = {
+      enabled: true,
+      version: 'v1' as const,
+      algorithm: 'pbkdf2-sha256' as const,
+      iterations: 600_000,
+      salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+      challenge: 'test-challenge',
+    };
+    const doFetch = (async (url: URL) => {
+      const path = url.toString();
+      if (path.endsWith('/api/auth/status')) {
+        return new Response(JSON.stringify(goodStatus), { status: 200 });
+      }
+      if (path.endsWith('/api/auth/login')) {
+        return new Response('{"ok":true}', {
+          status: 200,
+          headers: {
+            'set-cookie':
+              'phi_access_session=captured-session; Path=/; HttpOnly',
+          },
+        });
+      }
+      if (path.endsWith('/api/config')) {
+        return new Response('{"workspaces":[]}', { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as unknown as typeof fetch;
+
+    const auth = new AccessAuth(doFetch);
+    let notifiedOrigin = '';
+    let notifiedCookie = '';
+    auth.setOnCookieCaptured((orig, cookie) => {
+      notifiedOrigin = orig;
+      notifiedCookie = cookie.cookieValue;
+    });
+
+    const result = await auth.tryUnlock(origin, 'valid-password-123');
+    expect(result.kind).toBe('ok');
+    expect(notifiedOrigin).toBe(origin);
+    expect(notifiedCookie).toBe('captured-session');
+  });
 });
