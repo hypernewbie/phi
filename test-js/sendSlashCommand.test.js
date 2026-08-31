@@ -120,7 +120,7 @@ function makeTm() {
 // `dead` and `wsReady` model the failure modes we want to exercise.
 function makeTab(paneId, coder = 'pi', { dead = false, wsReady = true } = {}) {
     const wsSendInput = vi.fn();
-    if (!wsReady) wsSendInput.mockReturnValue(false);
+    wsSendInput.mockReturnValue(wsReady);
     return {
         paneId,
         coder,
@@ -348,8 +348,7 @@ describe('opencode picker chain + pi model dropdown — tabInfo captured at clic
 });
 
 describe('opencode/pi preset chip (desktop + mobile renderSlashDropup)', () => {
-    it('opencode/pi coder, paste-eligible preset: atomic sendSlashCommand', () => {
-        // After commit 2, the preset chip path is also atomic.
+    it('pi coder, paste-eligible preset: atomic sendSlashCommand', () => {
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         const tabB = makeTab('pi-B', 'pi');
@@ -472,7 +471,7 @@ describe('pi /model picker sequence', () => {
         expect(tabA.sendInputCalls).toHaveLength(3);
     });
 
-    it('opencode/pi coder preset button: single sendSlashCommand', () => {
+    it('pi coder preset button: single sendSlashCommand', () => {
         const tm = makeTm();
         const tabA = makeTab('pi-A', 'pi');
         tm.tabs.set(tabA.paneId, tabA);
@@ -534,5 +533,30 @@ describe('pi /model picker sequence', () => {
 
         expect(tabA.sendInputCalls.length).toBe(1);
         expect(tabA.sendInputCalls[0][0]).toBe('\x1b[200~/model\x1b[201~\r');
+    });
+
+    it('opencode waits for the paste to settle before sending Enter', () => {
+        const tm = makeTm();
+        const tabA = makeTab('opencode-A', 'opencode');
+        const tabB = makeTab('opencode-B', 'opencode');
+        tm.tabs.set(tabA.paneId, tabA);
+        tm.tabs.set(tabB.paneId, tabB);
+        tm.activePaneId = tabA.paneId;
+
+        expect(tm.sendSlashCommand(tabA, '/compact')).toBe(true);
+        expect(tabA.sendInputCalls).toEqual([['\x1b[200~/compact\x1b[201~']]);
+
+        // Switching tabs cannot redirect the delayed Enter.
+        tm.activePaneId = tabB.paneId;
+        vi.advanceTimersByTime(199);
+        expect(tabA.sendInputCalls).toHaveLength(1);
+        expect(tabB.sendInputCalls).toHaveLength(0);
+
+        vi.advanceTimersByTime(1);
+        expect(tabA.sendInputCalls).toEqual([
+            ['\x1b[200~/compact\x1b[201~'],
+            ['\r'],
+        ]);
+        expect(tabB.sendInputCalls).toHaveLength(0);
     });
 });

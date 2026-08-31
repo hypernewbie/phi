@@ -4446,20 +4446,24 @@ export class TabManager {
     }
 
     /**
-     * Sends a slash command as one atomic bracketed-paste write. pkg/pty's
-     * Write() (pty.go:235) splits the trailing \r into its own ConPTY write
-     * with a crGapDur pause, so Enter registers as a distinct keypress on
-     * Windows with no frontend delay needed. Same atomic form the
-     * initial-cmd path (terminal.js:1421) has always used. Replaces the
-     * prior split (sendRawInput + setTimeout(sendRawInput('\r'), 200))
-     * which re-resolved the active tab in the delayed callback.
-     * Called synchronously at click time (tab is still active), so it
-     * preserves sendRawInput's focus behavior.
+     * OpenCode must process a bracketed-paste event before it receives Enter,
+     * or it can discard Enter while updating the command input. Keep its 200ms
+     * gap, but pin the delayed keypress to the tab clicked by the user. Pi
+     * accepts the atomic form and keeps it to avoid an unnecessary delay.
      */
     sendSlashCommand(tabInfo, cmd) {
         if (tabInfo?.coder === 'pi-rpc') return false;
-        const sent = this.sendToTab(tabInfo, `\x1b[200~${cmd}\x1b[201~\r`);
+        const paste = `\x1b[200~${cmd}\x1b[201~`;
+        const sent = this.sendToTab(
+            tabInfo,
+            tabInfo.coder === 'opencode' ? paste : `${paste}\r`,
+        );
         if (!sent) return false;
+        if (tabInfo.coder === 'opencode') {
+            setTimeout(() => {
+                this.sendToTab(tabInfo, '\r');
+            }, 200);
+        }
         const isMobile = window.innerWidth <= 768;
         if (isMobile && !tabInfo.directMode && this.inputTextArea) {
             this.inputTextArea.focus({ preventScroll: true });
@@ -5642,12 +5646,8 @@ export class TabManager {
                             p.value.endsWith('\r')
                         ) {
                             const cmd = p.value.slice(0, -1);
-                            // Atomic paste+Enter. pkg/pty's crGapDur handles
-                            // the ConPTY Enter quirk at the PTY layer; pi-tui
-                            // re-feeds bytes after \x1b[201~ through
-                            // handleInput so the Enter registers with no
-                            // frontend delay. Same form the initial-cmd
-                            // path has always used.
+                            // OpenCode delays Enter after the paste; Pi accepts
+                            // the atomic paste+Enter form.
                             this.sendSlashCommand(activeTab, cmd);
                         } else {
                             this.sendRawInput(p.value);
@@ -5800,7 +5800,7 @@ export class TabManager {
                     p.value.endsWith('\r')
                 ) {
                     const cmd = p.value.slice(0, -1);
-                    // Atomic paste+Enter (see sibling site above).
+                    // OpenCode delays Enter after the paste; Pi stays atomic.
                     this.sendSlashCommand(activeTab, cmd);
                 } else {
                     this.sendRawInput(p.value);
