@@ -2087,29 +2087,71 @@ export class TabManager {
             bar.replaceChildren();
             return;
         }
-        const display = formatPiRpcStatus(getPiRpcStatus(activeTab.paneId));
-        const cacheRW = `${display.cacheRead} / ${display.cacheWrite}`;
-        const fields = [
-            ['CWD', display.cwd],
-            ['Input', display.input],
-            ['Output', display.output],
-            ['Cache R/W', cacheRW],
-        ];
+        const raw = getPiRpcStatus(activeTab.paneId);
+        const display = formatPiRpcStatus(raw);
+        // CWD: ~/code/ae style — replace home with ~, truncate gracefully
+        let cwdDisplay = display.cwd;
+        if (cwdDisplay && cwdDisplay !== '—') {
+            cwdDisplay = cwdDisplay
+                .replace(/^\/Users\/[^\/]+/, '~')
+                .replace(/^\/home\/[^\/]+/, '~');
+        }
+        const tokens = [];
+        if (display.input !== '—') tokens.push(`↑${display.input}`);
+        if (display.output !== '—') tokens.push(`↓${display.output}`);
+        if (display.cacheRead !== '—' && display.cacheRead !== '0')
+            tokens.push(`R${display.cacheRead}`);
+        if (
+            display.cacheWrite !== '—' &&
+            display.cacheWrite !== '0' &&
+            display.cacheWrite !== '0.0'
+        )
+            tokens.push(`W${display.cacheWrite}`);
+        // Context: 19.4% 203K/1M (auto) — compact like phi's real statusline
+        let ctxPart = '';
+        if (
+            raw &&
+            typeof raw.contextUsedTokens === 'number' &&
+            typeof raw.contextWindowTokens === 'number' &&
+            raw.contextWindowTokens > 0
+        ) {
+            const pct =
+                Math.round(
+                    (raw.contextUsedTokens / raw.contextWindowTokens) * 1000,
+                ) / 10;
+            ctxPart = `${pct}% ${display.context}`;
+        } else if (display.context !== '—') {
+            ctxPart = display.context;
+        }
+        if (ctxPart) tokens.push(ctxPart);
+        const leftText = tokens.length ? tokens.join('  ') : '—';
+        const modelRight =
+            display.model !== '—'
+                ? `${display.model}${display.thinking !== '—' ? ` • ${display.thinking}` : ''}`
+                : display.thinking !== '—'
+                  ? display.thinking
+                  : '';
+
         bar.classList.remove('hidden');
-        bar.replaceChildren(
-            ...fields.map(([label, value]) => {
-                const item = document.createElement('span');
-                item.className = 'pi-rpc-status-item';
-                const labelEl = document.createElement('span');
-                labelEl.className = 'pi-rpc-status-label';
-                labelEl.textContent = label;
-                const valueEl = document.createElement('span');
-                valueEl.className = 'pi-rpc-status-value';
-                valueEl.textContent = value;
-                item.append(labelEl, valueEl);
-                return item;
-            }),
-        );
+        const cwdEl = document.createElement('div');
+        cwdEl.className = 'pi-rpc-status-cwd';
+        cwdEl.textContent = cwdDisplay;
+        cwdEl.title = raw?.cwd || display.cwd;
+
+        const mainRow = document.createElement('div');
+        mainRow.className = 'pi-rpc-status-main';
+
+        const leftEl = document.createElement('span');
+        leftEl.className = 'pi-rpc-status-tokens';
+        leftEl.textContent = leftText;
+
+        const rightEl = document.createElement('span');
+        rightEl.className = 'pi-rpc-status-model';
+        rightEl.textContent = modelRight;
+        if (modelRight) rightEl.title = modelRight;
+
+        mainRow.append(leftEl, rightEl);
+        bar.replaceChildren(cwdEl, mainRow);
     }
 
     _setPiRpcActionVisibility(tab) {
@@ -2466,7 +2508,8 @@ export class TabManager {
         modelButton.type = 'button';
         modelButton.className =
             'preset-btn model-trigger-btn pi-rpc-model-trigger';
-        modelButton.textContent = `Model · ${state.model || '—'} ▾`;
+        modelButton.textContent = `Model ▾`;
+        modelButton.title = state.model || '—';
         modelButton.disabled =
             menuDisabled || this._piRpcModelPending?.paneId === paneId;
         modelButton.addEventListener('click', (event) => {
@@ -2480,7 +2523,8 @@ export class TabManager {
         thinkingButton.type = 'button';
         thinkingButton.className =
             'preset-btn model-trigger-btn pi-rpc-thinking-trigger';
-        thinkingButton.textContent = `Thinking · ${state.thinking || '—'} ▾`;
+        thinkingButton.textContent = `Thinking ▾`;
+        thinkingButton.title = state.thinking || '—';
         thinkingButton.disabled =
             menuDisabled || this._piRpcThinkingPending?.paneId === paneId;
         thinkingButton.addEventListener('click', (event) => {
