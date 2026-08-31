@@ -87,6 +87,9 @@ export class App {
             });
         }
 
+        // 6.2 Listen for cross-window settings/theme sync (e.g. from standalone /config.html)
+        this.initCrossWindowConfigSync();
+
         // 6.5 Start fleet poller (plan §3.4). Polls every 15s while the
         // sidebar is visible. Renders peer rows; hides panel when no
         // peers configured. Cheap, no-ops when no fleet config.
@@ -977,6 +980,54 @@ export class App {
         } catch (e) {
             console.warn('[appearance] failed to persist:', e);
         }
+    }
+
+    initCrossWindowConfigSync() {
+        if (typeof BroadcastChannel === 'undefined') return;
+        try {
+            this._configBroadcastChannel = new BroadcastChannel(
+                'phi_config_sync',
+            );
+            this._configBroadcastChannel.onmessage = async (e) => {
+                const msg = e.data;
+                if (!msg || typeof msg !== 'object') return;
+                if (msg.type === 'theme' && typeof msg.color === 'string') {
+                    this.applyAccentTheme(msg.color);
+                    this.tabManager?.applyThemeToAllActiveTerminals?.();
+                } else if (msg.type === 'appearance') {
+                    let ls = null;
+                    try {
+                        ls = JSON.parse(
+                            localStorage.getItem('phi_appearance') || 'null',
+                        );
+                    } catch {}
+                    this.uiFontFamily = ls?.ui_font_family || '';
+                    this.uiFontSize = Number(ls?.ui_font_size) || 0;
+                    this.terminalFontFamily = ls?.terminal_font_family || '';
+                    this.terminalFontSize = Number(ls?.terminal_font_size) || 0;
+                    this.customFontName = ls?.custom_font_name || '';
+                    this.applyUIFont?.();
+                    this.tabManager?.applyFontToAllActiveTerminals?.(
+                        this.terminalFontFamily || 'JetBrains Mono, monospace',
+                    );
+                    this.tabManager?.applyTerminalFontSizeToAll?.(
+                        this.terminalFontSize,
+                    );
+                } else if (msg.type === 'behavior') {
+                    try {
+                        const res = await fetch('/api/config');
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.config = data;
+                            this.useExistingTerminalTab =
+                                !!data.use_existing_terminal_tab;
+                            this.useHiddenTerminal = !!data.use_hidden_terminal;
+                            this.applyFastMode?.();
+                        }
+                    } catch {}
+                }
+            };
+        } catch {}
     }
 
     /**

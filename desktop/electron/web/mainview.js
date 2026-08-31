@@ -326,12 +326,16 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     applyTerminalActivityIndicator(Boolean(state.terminalActivity), true);
     if (typeof state.workspace === 'string' && state.workspace !== '' && workspaceSelect) {
       if (workspaceSelect.value !== state.workspace) {
-        workspaceSelect.value = state.workspace;
-        if (workspaceSelect.value !== state.workspace) {
-          void refreshConfig();
-        } else {
-          updateWorkspaceSelectWidth();
+        const hasOption = [...workspaceSelect.options].some((o) => o.value === state.workspace);
+        if (!hasOption) {
+          const opt = document.createElement('option');
+          opt.value = state.workspace;
+          opt.textContent = workspaceLabel(state.workspace, [state.workspace]);
+          opt.title = state.workspace;
+          workspaceSelect.appendChild(opt);
         }
+        workspaceSelect.value = state.workspace;
+        updateWorkspaceSelectWidth();
       }
     }
   });
