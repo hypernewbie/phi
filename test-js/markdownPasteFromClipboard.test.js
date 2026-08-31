@@ -169,11 +169,12 @@ describe('markdown paste-from-system-clipboard', () => {
     });
 
     describe('clipboard blocked / empty', () => {
-        it('toasts when readText throws', async () => {
+        it('toasts when readText throws and fallback cancelled', async () => {
             const { mm, app } = makeMm();
             stubClipboard(async () => {
                 throw new Error('permission denied');
             });
+            mm._readClipboardViaUserPaste = vi.fn(async () => null);
             await mm._pasteFromSystemClipboard();
             expect(fetchMock).not.toHaveBeenCalled();
             expect(app.showToast).toHaveBeenCalledWith(
@@ -193,18 +194,59 @@ describe('markdown paste-from-system-clipboard', () => {
             );
         });
 
-        it('toasts when clipboard is undefined (insecure context)', async () => {
+        it('falls back to paste capture when clipboard is undefined (insecure context)', async () => {
+            const { mm } = makeMm();
+            Object.defineProperty(global.navigator, 'clipboard', {
+                configurable: true,
+                value: undefined,
+            });
+            mm._readClipboardViaUserPaste = vi.fn(
+                async () => '# temp/A.md\nhello fallback',
+            );
+            fetchMock.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: async () => ({}),
+                text: async () => '',
+            });
+            await mm._pasteFromSystemClipboard();
+            expect(mm._readClipboardViaUserPaste).toHaveBeenCalledTimes(1);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+            expect(body.dir).toBe('temp');
+            expect(body.name).toBe('A.md');
+        });
+
+        it('falls back to paste capture when readText throws and succeeds', async () => {
+            const { mm } = makeMm();
+            stubClipboard(async () => {
+                throw new Error('permission denied');
+            });
+            mm._readClipboardViaUserPaste = vi.fn(
+                async () => '# temp/A.md\nfrom fallback',
+            );
+            fetchMock.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: async () => ({}),
+                text: async () => '',
+            });
+            await mm._pasteFromSystemClipboard();
+            expect(mm._readClipboardViaUserPaste).toHaveBeenCalledTimes(1);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+        });
+
+        it('shows no paste when fallback is cancelled', async () => {
             const { mm, app } = makeMm();
             Object.defineProperty(global.navigator, 'clipboard', {
                 configurable: true,
                 value: undefined,
             });
+            mm._readClipboardViaUserPaste = vi.fn(async () => null);
             await mm._pasteFromSystemClipboard();
             expect(fetchMock).not.toHaveBeenCalled();
-            expect(app.showToast).toHaveBeenCalledWith(
-                expect.stringMatching(/Clipboard API not available/i),
-                expect.objectContaining({ type: 'error' }),
-            );
+            // No error toast for cancel
+            expect(app.showToast).not.toHaveBeenCalled();
         });
     });
 
