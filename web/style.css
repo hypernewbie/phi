@@ -6258,6 +6258,9 @@ html[data-phi-config-page] .settings-modal {
     border-bottom: 1px solid var(--bg-border);
     background-color: rgba(255, 255, 255, 0.01);
 }
+.pi-export-scope .review-header-bar {
+    display: none !important;
+}
 .review-header-left {
     display: flex;
     align-items: center;
