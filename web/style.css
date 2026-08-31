@@ -1687,6 +1687,16 @@ html[data-phi-desktop-root] .app-header {
     opacity: 1;
 }
 
+.tab-favicon[src*="kanban"] {
+    filter: grayscale(100%);
+}
+
+.tab:hover .tab-favicon[src*="kanban"],
+.tab.active .tab-favicon[src*="kanban"] {
+    filter: grayscale(100%);
+    opacity: 0.85;
+}
+
 .tab-title {
     overflow: hidden;
     text-overflow: ellipsis;
