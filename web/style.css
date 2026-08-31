@@ -9827,12 +9827,14 @@ body.md-standalone #md-view-body {
     align-items: center;
     cursor: pointer;
     padding: 4px 8px;
+    /* stylelint-disable-next-line custom-property-pattern -- vendored Pi variable */
     color: var(--thinkingText);
     font-style: italic;
     user-select: none;
     border-radius: 4px;
 }
 .pi-export-scope .thinking-header:hover {
+    /* stylelint-disable-next-line custom-property-pattern -- vendored Pi variable */
     background: color-mix(in srgb, var(--thinkingText) 8%, transparent);
 }
 .pi-export-scope .thinking-toggle {
@@ -9882,6 +9884,7 @@ body.md-standalone #md-view-body {
     border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
     border-radius: 4px;
     padding: 6px 10px;
+    /* stylelint-disable-next-line custom-property-pattern -- vendored Pi variable */
     background: color-mix(in srgb, var(--panelAlt) 60%, transparent);
 }
 .pi-export-scope .compaction-divider {
@@ -9996,6 +9999,7 @@ body.md-standalone #md-view-body {
     }
 }
 /* Pi theme sweep — toolcall boxes exactly map pi theme folder values per data-theme-color */
+/* stylelint-disable custom-property-pattern */
 html[data-theme-color="amber"] .pi-export-scope {
     --accent: #fbbf24;
     --accentDark: #b45309;
@@ -11514,3 +11518,4 @@ html[data-theme-color="white"] .pi-export-scope {
     --warning: #e3cea3;
     --white: #e3e3e4;
 }
+/* stylelint-enable custom-property-pattern */
