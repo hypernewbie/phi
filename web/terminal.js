@@ -129,10 +129,22 @@ export class TabManager {
         this.piThinkingBtn = document.getElementById('pi-thinking-btn');
         this._piThinkingLevels = new Map(); // paneId -> thinking level (pi PTY local)
         this._piAvailableThinking = new Map(); // paneId -> string[] from Pi
+        this._piLastModel = new Map(); // paneId -> model string (for cache invalidation)
         this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
-        this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId) => {
+        this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId, status) => {
+            // Model change Invalidates thinking-level cache (different model → different set)
+            const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
+            const prev = this._piLastModel.get(paneId);
+            if (m && prev !== undefined && m !== prev) {
+                this._piAvailableThinking.delete(paneId);
+            }
+            if (m) this._piLastModel.set(paneId, m);
+            else if (status === null) {
+                this._piLastModel.delete(paneId);
+                this._piAvailableThinking.delete(paneId);
+            }
             this.renderPiRpcStatusBar();
             const activeTab = this.getActiveTab();
             if (activeTab?.paneId === paneId && activeTab.coder === 'pi-rpc') {
@@ -2620,6 +2632,7 @@ export class TabManager {
                         }
                         Promise.resolve(setterResult)
                             .then(() => {
+                                this._piAvailableThinking.delete(paneId);
                                 if (this._piRpcModelPending === operation)
                                     this._piRpcModelPending = null;
                                 if (this.getActiveTab()?.paneId === paneId) {
