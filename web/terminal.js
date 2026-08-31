@@ -2322,7 +2322,7 @@ export class TabManager {
             button.disabled = disabled;
     }
 
-    _renderPiRpcModelsDropup() {
+    _renderPiRpcModelsDropup(showAll = false) {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
         if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
@@ -2362,13 +2362,65 @@ export class TabManager {
                     return;
                 }
                 const pending = this._piRpcModelPending?.paneId === paneId;
-                for (const model of models) {
+                // Configured pi models — exactly model_presets.pi (see config.go)
+                const configured = this.app?.modelPresets?.pi;
+                const configuredSet =
+                    Array.isArray(configured) && configured.length > 0
+                        ? new Set(
+                              configured
+                                  .map((s) => String(s).trim())
+                                  .filter(Boolean),
+                          )
+                        : null;
+                const configuredLower = configuredSet
+                    ? new Set([...configuredSet].map((s) => s.toLowerCase()))
+                    : null;
+
+                let visible = models;
+                let isFiltered = false;
+                if (!showAll && configuredSet && configuredLower) {
+                    const filtered = models.filter((m) => {
+                        if (
+                            !m ||
+                            typeof m.provider !== 'string' ||
+                            typeof m.id !== 'string'
+                        )
+                            return false;
+                        const key = `${m.provider}/${m.id}`;
+                        return (
+                            configuredSet.has(key) ||
+                            configuredLower.has(key.toLowerCase()) ||
+                            configuredSet.has(m.id) ||
+                            (typeof m.name === 'string' &&
+                                configuredLower.has(m.name.toLowerCase()))
+                        );
+                    });
+                    if (filtered.length > 0) {
+                        visible = filtered;
+                        isFiltered = true;
+                    } else if (configuredSet.size > 0) {
+                        // No rpc match (e.g. uaa presets) — synthesize rows from config strings
+                        visible = [...configuredSet].map((str) => {
+                            const slash = str.indexOf('/');
+                            if (slash === -1)
+                                return { provider: 'pi', id: str, name: str };
+                            return {
+                                provider: str.slice(0, slash),
+                                id: str.slice(slash + 1),
+                                name: str,
+                            };
+                        });
+                        isFiltered = true;
+                    }
+                }
+
+                const renderModelRow = (model) => {
                     if (
                         !model ||
                         typeof model.provider !== 'string' ||
                         typeof model.id !== 'string'
                     )
-                        continue;
+                        return;
                     const row = document.createElement('div');
                     row.className = 'dropup-row';
                     const button = document.createElement('button');
@@ -2410,7 +2462,7 @@ export class TabManager {
                                     this._piRpcModelPending = null;
                                 this._piRpcError(error, 'Pi model');
                                 if (this.getActiveTab()?.paneId === paneId)
-                                    this._renderPiRpcModelsDropup();
+                                    this._renderPiRpcModelsDropup(showAll);
                             });
                     });
                     const meta = document.createElement('span');
@@ -2418,6 +2470,25 @@ export class TabManager {
                     meta.textContent = `${model.provider}/${model.id}`;
                     row.append(button, meta);
                     dropup.appendChild(row);
+                };
+
+                for (const model of visible) renderModelRow(model);
+
+                if (isFiltered) {
+                    const allRow = document.createElement('div');
+                    allRow.className = 'dropup-row dropup-row--all';
+                    const allBtn = document.createElement('button');
+                    allBtn.type = 'button';
+                    allBtn.className = 'dropup-model-btn dropup-model-btn--all';
+                    allBtn.textContent = `All → ${models.length} models`;
+                    allBtn.title = 'Show full Pi model list';
+                    allBtn.disabled = pending;
+                    allBtn.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        this._renderPiRpcModelsDropup(true);
+                    });
+                    allRow.appendChild(allBtn);
+                    dropup.appendChild(allRow);
                 }
             })
             .catch((error) => {
