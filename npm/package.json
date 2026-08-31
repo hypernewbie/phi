@@ -1,6 +1,6 @@
 {
   "name": "@hypernewbie/phi-code",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "description": "Terminal multiplexer & control center for AI coding assistants",
   "bin": {
     "phi": "./bin/phi"

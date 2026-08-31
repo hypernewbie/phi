@@ -2,6 +2,23 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.0 — 2026-08-31
+
+### Added
+- **Pi RPC UX polish — statusline, presets, thinking, themes, compact** (`7e8b5891`..`e067c743`). Statusline moved above input (one-line terminal-bg, preset-sized `11px`→`12px`), presets `Compact · Clear · [Show/Hide thinking] · Cmds · Models · Thinking`, collapsible `Thinking...` with dots + `var(--line-height)` margin + global toggle, `1ch` border moved to `.review-chat-wrapper` wrapper only, F5 persistence via `phi_pi_rpc_tabs` localStorage, exact per-theme pi colors (22 `data-theme-color` palettes `amber`→`white` via `--accent*` sweep, `web/style.css:9998-11517`), robust compact keep (dimmed old + `— Compacted N→K —` divider + summary, dedup by `id` not text, lazy file on-demand from session `jsonl` for new incognito, window math `combinedLength`/`getNewestStart`).
+- **VS Code themes for all 22 phi accents** (`91866179`, `0ad53939`, `40196804`). Bonus themes under `bonus/vscode_themes/`, rail diamond preserves per-server accent.
+- **Signed optional desktop pet overlay** (`7366e2a2`, `8d84c833`, `d565f348`). Vendored `dsh-pet` assets + ed25519-signed `phi-pet-*.tar.gz` attached to release.
+
+### Fixed
+- **Kanban tab icon now white, matches any accent** (`f4b33f1c`, `9d5ccaa3`). Was fixed purple `kanban.png`; now `brightness(0) invert(1)` so it stays neutral against green/amber/etc.
+- **Markdown single-file paste works on insecure http (Linux)** (`2cd71210`). `navigator.clipboard.readText()` is blocked on plain `http://` LAN; now falls back to a user-gesture paste capture modal (`_readClipboardViaUserPaste`) that reads `clipboardData.getData('text')` from `paste` event, preserving the `# rel/path.md` header contract. Updated `test-js/markdownPasteFromClipboard.test.js` (15 tests).
+- **Markdown watcher, reconnect, pty, and config pill fixes** (`n0mad-awx/#11`, `80028d0`, `e643bc8`, `6553d14`, `b95700a`, `d0a18ad`). fsnotify debounced per-dir, silent refresh on same cwd, attention toast “Go to tab”, reconnect exponential backoff, WebGL fallback, `/model` picker routing, etc. (see v0.15.x range).
+- **Lint: vendored Pi vars exempted from kebab-case** (`d3aa4579`). `stylelint-disable custom-property-pattern` around theme sweep and `--thinkingText`/`--panelAlt`.
+
+### Changed
+- **Tab bulk actions → icon-only, shortcuts documented** (`ef7624e1`, `947dede1`).
+- **Terminal pi-rpc border + font** (`0ff770aa`..`83f0e6d2`). Exact terminal metrics (`applyTerminalFont`), `1ch` inset shadow, `pre/code` inherit.
+
 ## v0.19.2 — 2026-08-13
 
 ### Added
