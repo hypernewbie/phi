@@ -56,6 +56,7 @@ const CODER_FAVICONS = {
     'pi-rpc': 'vendor/logos/pi.png',
     bash: 'vendor/logos/bash.jpg',
     review: 'vendor/logos/review.png',
+    kanban: 'vendor/logos/kanban.png',
 };
 
 // Automatic-reconnect retry policy: full-jitter exponential backoff.
