@@ -1156,11 +1156,12 @@ export class TabManager {
             }
 
             // xterm has parsed this complete batch, so its buffer state is
-            // current. Keep the existing scrollbar sync and follow behavior.
-            tabInfo.term._core?.viewport?.syncScrollArea(true);
+            // current. scrollToBottom changes ydisp, which is the coordinate
+            // the viewport uses to set native scrollTop; synchronize after it.
             if (followBottom && tabInfo.userFollowBottom !== false) {
                 tabInfo.term.scrollToBottom();
             }
+            tabInfo.term._core?.viewport?.syncScrollArea(true);
 
             this._flushTerminalWrite(tabInfo);
         });
