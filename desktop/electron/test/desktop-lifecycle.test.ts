@@ -60,7 +60,10 @@ const fake = vi.hoisted(() => {
     loadURL(): Promise<void> {
       return Promise.resolve();
     }
-    executeJavaScript(): Promise<unknown> {
+    executeJavaScript(
+      _code?: string,
+      _userGesture?: boolean,
+    ): Promise<unknown> {
       return Promise.resolve(null);
     }
     focus(): void {}
