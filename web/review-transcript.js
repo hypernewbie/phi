@@ -487,10 +487,7 @@ export function createReviewTranscriptView(root, options) {
         jumpBtn.textContent = '↓';
         contentBody.appendChild(jumpBtn);
         jumpBtn.addEventListener('click', () => {
-            const newestStart = Math.max(
-                0,
-                structuredMessages.length - windowSize,
-            );
+            const newestStart = getNewestStart();
             if (currentStart < newestStart) {
                 currentStart = newestStart;
                 rebuildStructuredWindow({
@@ -504,7 +501,7 @@ export function createReviewTranscriptView(root, options) {
     }
     function syncJumpButton() {
         if (!jumpBtn) return;
-        const newestStart = Math.max(0, structuredMessages.length - windowSize);
+        const newestStart = getNewestStart();
         const atBottom =
             transcript.scrollHeight -
                 transcript.scrollTop -
@@ -905,6 +902,12 @@ export function createReviewTranscriptView(root, options) {
         if (!compactSnapshot || !liveMessages) return structuredMessages.length;
         return compactSnapshot.messages.length + 1 + liveMessages.length;
     }
+    function getNewestStart() {
+        const total = compactSnapshot
+            ? combinedLength()
+            : structuredMessages.length;
+        return Math.max(0, total - windowSize);
+    }
     function snapScroll() {
         // Snap-to-bottom detection uses a slightly more generous threshold
         // than the scroll-near-top prepending trigger so the view sticks
@@ -1076,7 +1079,10 @@ export function createReviewTranscriptView(root, options) {
             transcript.appendChild(buildEphemeralErrorBlock(text));
         },
         getStructuredMessages() {
-            if (compactSnapshot) return combinedSlice(0, combinedLength());
+            if (compactSnapshot) {
+                const all = combinedSlice(0, combinedLength());
+                return all.filter((m) => !m.__compaction);
+            }
             return structuredMessages.slice(0, structuredMessages.length);
         },
         hasCompactSnapshot() {
@@ -1133,9 +1139,7 @@ export function createReviewTranscriptView(root, options) {
                             : Array.isArray(data)
                               ? data
                               : [];
-                        const match =
-                            sessions.find((s) => s.path === sessionPath) ||
-                            sessions[0];
+                        const match = sessions[0];
                         if (match?.path) sessionPath = match.path;
                         else if (match?.file) sessionPath = match.file;
                     }
@@ -1159,13 +1163,11 @@ export function createReviewTranscriptView(root, options) {
                         .filter(Boolean),
                 );
                 const snapIds = compactSnapshot?.ids ?? new Set();
-                let compactionSeen = false;
                 let compactionSummary = null;
                 for (const line of lines) {
                     try {
                         const entry = JSON.parse(line);
                         if (entry.type === 'compaction') {
-                            compactionSeen = true;
                             compactionSummary =
                                 entry.summary ?? entry.data?.summary ?? null;
                             continue;
@@ -1182,7 +1184,6 @@ export function createReviewTranscriptView(root, options) {
                         if (!msg || !msg.id) continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
-                        if (compactionSeen) continue;
                         old.push(msg);
                     } catch {}
                 }

@@ -648,10 +648,7 @@ export function createReviewTranscriptView(
         jumpBtn.textContent = '↓';
         contentBody.appendChild(jumpBtn);
         jumpBtn.addEventListener('click', () => {
-            const newestStart = Math.max(
-                0,
-                structuredMessages.length - windowSize,
-            );
+            const newestStart = getNewestStart();
             if (currentStart < newestStart) {
                 currentStart = newestStart;
                 rebuildStructuredWindow({
@@ -666,7 +663,7 @@ export function createReviewTranscriptView(
 
     function syncJumpButton(): void {
         if (!jumpBtn) return;
-        const newestStart = Math.max(0, structuredMessages.length - windowSize);
+        const newestStart = getNewestStart();
         const atBottom =
             transcript.scrollHeight -
                 transcript.scrollTop -
@@ -1130,6 +1127,13 @@ export function createReviewTranscriptView(
         return compactSnapshot.messages.length + 1 + liveMessages.length;
     }
 
+    function getNewestStart(): number {
+        const total = compactSnapshot
+            ? combinedLength()
+            : structuredMessages.length;
+        return Math.max(0, total - windowSize);
+    }
+
     function snapScroll(): { wasAtBottom: boolean; preHeight: number } {
         // Snap-to-bottom detection uses a slightly more generous threshold
         // than the scroll-near-top prepending trigger so the view sticks
@@ -1324,11 +1328,17 @@ export function createReviewTranscriptView(
             transcript.appendChild(buildEphemeralErrorBlock(text));
         },
         getStructuredMessages() {
-            if (compactSnapshot)
-                return combinedSlice(
+            if (compactSnapshot) {
+                const all = combinedSlice(
                     0,
                     combinedLength(),
                 ) as readonly StructuredMessage[];
+                return all.filter(
+                    (m) =>
+                        !(m as unknown as { __compaction?: boolean })
+                            .__compaction,
+                ) as readonly StructuredMessage[];
+            }
             return structuredMessages.slice(
                 0,
                 structuredMessages.length,
@@ -1405,9 +1415,7 @@ export function createReviewTranscriptView(
                                     file?: string;
                                 }>)
                               : [];
-                        const match =
-                            sessions.find((s) => s.path === sessionPath) ||
-                            sessions[0];
+                        const match = sessions[0];
                         if (match?.path) sessionPath = match.path;
                         else if (match?.file) sessionPath = match.file;
                     }
@@ -1434,13 +1442,11 @@ export function createReviewTranscriptView(
                         .filter(Boolean) as string[],
                 );
                 const snapIds = compactSnapshot?.ids ?? new Set<string>();
-                let compactionSeen = false;
                 let compactionSummary: string | null = null;
                 for (const line of lines) {
                     try {
                         const entry = JSON.parse(line);
                         if (entry.type === 'compaction') {
-                            compactionSeen = true;
                             compactionSummary =
                                 entry.summary ?? entry.data?.summary ?? null;
                             continue;
@@ -1458,7 +1464,6 @@ export function createReviewTranscriptView(
                         if (!msg || !msg.id) continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
-                        if (compactionSeen) continue;
                         old.push(msg as StructuredMessage);
                     } catch {}
                 }

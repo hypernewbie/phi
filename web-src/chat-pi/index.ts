@@ -381,6 +381,10 @@ export function mountChatPi(
                                 prependOlder: (c: number) => boolean;
                             }
                         ).prependOlder(count);
+                    else _compactFileTried = false;
+                })
+                .catch(() => {
+                    _compactFileTried = false;
                 });
         }
         return false;
@@ -988,6 +992,10 @@ export function mountChatPi(
                     reason === 'manual'
                         ? 'Compaction cancelled'
                         : 'Auto-compaction cancelled';
+                (
+                    view as unknown as { clearCompactSnapshot?: () => void }
+                ).clearCompactSnapshot?.();
+                compactSnapshot = null;
             } else if (reason === 'manual' && errorMessage) {
                 // Plan row: compaction_end errorMessage + reason manual
                 // → status bar error. Gated on a non-empty errorMessage
@@ -995,6 +1003,10 @@ export function mountChatPi(
                 // rpc.md) does not render a spurious "pi: compaction
                 // error" line.
                 status.textContent = `pi: ${errorMessage}`;
+                (
+                    view as unknown as { clearCompactSnapshot?: () => void }
+                ).clearCompactSnapshot?.();
+                compactSnapshot = null;
             } else if (!aborted && !errorMessage) {
                 const summary =
                     (typeof (
@@ -1071,6 +1083,10 @@ export function mountChatPi(
             }
         }
         if (env.evt === 'transcriptReset') {
+            (
+                view as unknown as { clearCompactSnapshot?: () => void }
+            ).clearCompactSnapshot?.();
+            compactSnapshot = null;
             requestHydrate(true);
         } else {
             // Hot-path branching on the render disposition avoids full
