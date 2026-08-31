@@ -128,6 +128,8 @@ export class TabManager {
         this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
         this.piThinkingBtn = document.getElementById('pi-thinking-btn');
         this._piThinkingLevels = new Map(); // paneId -> thinking level (pi PTY local)
+        this._piAvailableThinking = new Map(); // paneId -> string[] from Pi
+        this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus((paneId) => {
@@ -2260,51 +2262,12 @@ export class TabManager {
     _cyclePiThinking() {
         const tab = this.getActiveTab();
         if (!tab || (tab.coder !== 'pi' && tab.coder !== 'pi-rpc')) return;
-        let cur = 'off';
-        if (tab.coder === 'pi-rpc') {
-            const raw = getPiRpcStatus(tab.paneId);
-            const fmt = raw ? formatPiRpcStatus(raw) : null;
-            const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
-            if (rawLevel && rawLevel !== '—') cur = String(rawLevel);
-            else cur = this._piThinkingLevels.get(tab.paneId) || 'off';
-        } else {
-            cur = this._piThinkingLevels.get(tab.paneId) || 'off';
-        }
-        const norm = normalizeThinkingLevel(cur);
-        let idx = PI_THINKING_ORDER.indexOf(norm);
-        if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
-        const next = PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
-        if (tab.coder === 'pi-rpc') {
-            if (this._piRpcThinkingPending) return;
-            const op = { paneId: tab.paneId, level: next };
-            this._piRpcThinkingPending = op;
-            this._updatePiThinkingButton();
-            this.renderPresets('pi-rpc');
-            let res;
-            try {
-                res = rpcChatSetThinking(tab.paneId, next);
-            } catch (err) {
-                res = Promise.reject(err);
-            }
-            Promise.resolve(res)
-                .then(() => {
-                    if (this._piRpcThinkingPending === op)
-                        this._piRpcThinkingPending = null;
-                    this._piThinkingLevels.set(tab.paneId, next);
-                    if (this.getActiveTab()?.paneId === tab.paneId) {
-                        this.renderPresets('pi-rpc');
-                        this._updatePiThinkingButton();
-                        this.renderPiRpcStatusBar();
-                    }
-                })
-                .catch((err) => {
-                    if (this._piRpcThinkingPending === op)
-                        this._piRpcThinkingPending = null;
-                    this._piRpcError(err, 'Pi thinking');
-                    if (this.getActiveTab()?.paneId === tab.paneId)
-                        this._updatePiThinkingButton();
-                });
-        } else {
+        if (tab.coder === 'pi') {
+            let cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+            const norm = normalizeThinkingLevel(cur);
+            let idx = PI_THINKING_ORDER.indexOf(norm);
+            if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
+            const next = PI_THINKING_ORDER[(idx + 1) % PI_THINKING_ORDER.length];
             this._piThinkingLevels.set(tab.paneId, next);
             this._updatePiThinkingButton();
             try {
@@ -2314,7 +2277,92 @@ export class TabManager {
                 `Thinking: ${next}${next === 'xhigh' ? ' (max)' : ''}`,
                 { type: 'info' },
             );
+            return;
         }
+        // pi-rpc: cycle only among Pi-advertised levels
+        if (this._piRpcThinkingPending) return;
+        const cached = this._piAvailableThinking.get(tab.paneId);
+        if (!cached || !Array.isArray(cached) || cached.length === 0) {
+            let p;
+            try {
+                p = rpcChatThinkingLevels(tab.paneId);
+            } catch (err) {
+                p = Promise.reject(err);
+            }
+            Promise.resolve(p)
+                .then((levels) => {
+                    if (!Array.isArray(levels) || levels.length === 0)
+                        throw new Error('No Pi thinking levels available');
+                    this._piAvailableThinking.set(tab.paneId, [...levels]);
+                    this._cyclePiThinkingWithLevels(tab, [...levels]);
+                })
+                .catch((err) => this._piRpcError(err, 'Pi thinking'));
+            return;
+        }
+        this._cyclePiThinkingWithLevels(tab, cached);
+    }
+
+    _cyclePiThinkingWithLevels(tab, levels) {
+        // Build normalized -> original mapping so we send exactly what Pi advertised
+        const normToOriginal = new Map();
+        for (const lv of levels) {
+            if (typeof lv !== 'string') continue;
+            const n = normalizeThinkingLevel(lv);
+            if (!normToOriginal.has(n)) normToOriginal.set(n, lv);
+        }
+        // Preserve PI_THINKING_ORDER but filter to available
+        const filteredNorm = PI_THINKING_ORDER.filter((n) =>
+            normToOriginal.has(n),
+        );
+        // Fallback to raw levels if none matched order (e.g. custom names)
+        const cycleNorm =
+            filteredNorm.length > 0
+                ? filteredNorm
+                : levels.map((l) => normalizeThinkingLevel(l));
+        const cycleOriginal = cycleNorm.map((n) => normToOriginal.get(n) ?? n);
+        let cur = 'off';
+        const raw = getPiRpcStatus(tab.paneId);
+        const fmt = raw ? formatPiRpcStatus(raw) : null;
+        const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
+        if (rawLevel && rawLevel !== '—') cur = String(rawLevel);
+        else cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+        const curNorm = normalizeThinkingLevel(cur);
+        let idx = cycleNorm.indexOf(curNorm);
+        // If current not in cycle (e.g. stale), start before first
+        if (idx === -1) idx = cycleNorm.indexOf('off');
+        if (idx === -1) idx = -1;
+        const nextIdx = (idx + 1) % cycleNorm.length;
+        const nextNorm = cycleNorm[nextIdx];
+        const next = cycleOriginal[nextIdx] ?? nextNorm;
+        if (this._piRpcThinkingPending) return;
+        const op = { paneId: tab.paneId, level: next };
+        this._piRpcThinkingPending = op;
+        this._updatePiThinkingButton();
+        this.renderPresets('pi-rpc');
+        let res;
+        try {
+            res = rpcChatSetThinking(tab.paneId, next);
+        } catch (err) {
+            res = Promise.reject(err);
+        }
+        Promise.resolve(res)
+            .then(() => {
+                if (this._piRpcThinkingPending === op)
+                    this._piRpcThinkingPending = null;
+                this._piThinkingLevels.set(tab.paneId, next);
+                if (this.getActiveTab()?.paneId === tab.paneId) {
+                    this.renderPresets('pi-rpc');
+                    this._updatePiThinkingButton();
+                    this.renderPiRpcStatusBar();
+                }
+            })
+            .catch((err) => {
+                if (this._piRpcThinkingPending === op)
+                    this._piRpcThinkingPending = null;
+                this._piRpcError(err, 'Pi thinking');
+                if (this.getActiveTab()?.paneId === tab.paneId)
+                    this._updatePiThinkingButton();
+            });
     }
 
     _closePiSubagentViewerIfOpen() {
@@ -2655,6 +2703,8 @@ export class TabManager {
                     this.getActiveTab()?.paneId !== paneId
                 )
                     return;
+                if (Array.isArray(levels) && levels.length > 0)
+                    this._piAvailableThinking.set(paneId, [...levels]);
                 dropup.replaceChildren(header);
                 if (!Array.isArray(levels) || levels.length === 0) {
                     const empty = document.createElement('div');
