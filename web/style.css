@@ -6621,6 +6621,40 @@ html[data-phi-config-page] .settings-modal {
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.18);
 }
 
+/* Batch actions are available from a command row's context menu. Keeping
+   them out of the row leaves the existing current-run and edit/copy/delete
+   controls easy to scan. */
+.cmd-context-menu {
+    position: fixed;
+    z-index: 1100;
+    min-width: 140px;
+    padding: 4px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.cmd-context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font: 11px var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+}
+
+.cmd-context-menu-item:hover,
+.cmd-context-menu-item:focus-visible {
+    outline: none;
+    background: var(--accent-trace);
+    color: var(--accent-bright);
+}
+
 /* Batch execution progress & results in cmd panel */
 .cmd-batch-results {
     margin-top: 4px;
