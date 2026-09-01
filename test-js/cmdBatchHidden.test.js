@@ -88,20 +88,52 @@ describe('cmd panel hidden terminal and batch worktree actions', () => {
         );
     });
 
-    it('renders current, dirty, and all buttons for each command', async () => {
+    it('keeps current-run visible and moves dirty/all to the row context menu', async () => {
         const mod = await import('../web/diff.js');
+        fakeController._openCommandContextMenu =
+            mod.DiffController.prototype._openCommandContextMenu;
+        fakeController._closeCommandContextMenu =
+            mod.DiffController.prototype._closeCommandContextMenu;
+        fakeController.runCommand = vi.fn();
         mod.DiffController.prototype.renderCmdPanel.call(fakeController);
 
         const runBtns = cmdPanelEl.querySelectorAll('.cmd-run-btn');
         const dirtyBtns = cmdPanelEl.querySelectorAll('.cmd-dirty-btn');
         const allBtns = cmdPanelEl.querySelectorAll('.cmd-all-btn');
+        const actionBtns = cmdPanelEl.querySelectorAll(
+            '.cmd-item-actions .cmd-action-btn',
+        );
 
         expect(runBtns.length).toBe(2);
-        expect(dirtyBtns.length).toBe(2);
-        expect(allBtns.length).toBe(2);
+        expect(dirtyBtns.length).toBe(0);
+        expect(allBtns.length).toBe(0);
+        expect(actionBtns.length).toBe(6);
         expect(runBtns[0].textContent).toContain('commit');
-        expect(dirtyBtns[0].textContent).toContain('Dirty');
-        expect(allBtns[0].textContent).toContain('All');
+
+        const firstItem = cmdPanelEl.querySelector('.cmd-item');
+        const contextEvent = new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 100,
+            clientY: 120,
+        });
+        expect(firstItem.dispatchEvent(contextEvent)).toBe(false);
+
+        const menu = document.getElementById('cmd-context-menu');
+        expect(menu).toBeTruthy();
+        expect(
+            menu.querySelector('[data-scope="dirty"]').textContent,
+        ).toContain('Dirty');
+        expect(menu.querySelector('[data-scope="all"]').textContent).toContain(
+            'All',
+        );
+
+        menu.querySelector('[data-scope="dirty"]').click();
+        expect(fakeController.runCommand).toHaveBeenCalledWith(
+            fakeApp.terminalCommands[0],
+            'dirty',
+        );
+        expect(document.getElementById('cmd-context-menu')).toBeNull();
     });
 
     it('clicking dirty button queries dirty worktrees and executes batch run', async () => {

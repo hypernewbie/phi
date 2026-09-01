@@ -82,6 +82,7 @@ export class DiffController {
     currentLayout: string;
     lastRawDiffText: string;
     activeBatchResults: any = null;
+    commandContextMenuAbort: AbortController | null;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -118,6 +119,7 @@ export class DiffController {
         this.currentContextLines = 3;
         this.currentLayout = 'line-by-line'; // Default unified
         this.lastRawDiffText = '';
+        this.commandContextMenuAbort = null;
 
         this.setupEventListeners();
     }
@@ -441,6 +443,7 @@ export class DiffController {
     }
 
     _setPanel(mode: string): void {
+        this._closeCommandContextMenu?.();
         const termEl = document.getElementById('diff-term-container')!;
         const mdEl = document.getElementById('markdown-file-list')!;
         const cmdEl = document.getElementById('cmd-panel');
@@ -533,7 +536,76 @@ export class DiffController {
         }
     }
 
+    _closeCommandContextMenu(): void {
+        this.commandContextMenuAbort?.abort();
+        this.commandContextMenuAbort = null;
+        const menu = document.getElementById('cmd-context-menu');
+        if (menu) menu.remove();
+    }
+
+    _openCommandContextMenu(cmd: any, event: MouseEvent): void {
+        event.preventDefault();
+        event.stopPropagation();
+        this._closeCommandContextMenu();
+
+        const listenerController = new AbortController();
+        this.commandContextMenuAbort = listenerController;
+
+        const menu = document.createElement('div');
+        menu.id = 'cmd-context-menu';
+        menu.className = 'cmd-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', `Batch actions for ${cmd.name}`);
+
+        const addItem = (label: string, scope: 'dirty' | 'all'): void => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'cmd-context-menu-item';
+            item.dataset.scope = scope;
+            item.setAttribute('role', 'menuitem');
+            item.textContent = label;
+            item.addEventListener('click', () => {
+                this._closeCommandContextMenu();
+                void this.runCommand(cmd, scope);
+            });
+            menu.appendChild(item);
+        };
+
+        addItem('⚡ Dirty', 'dirty');
+        addItem('⇉ All', 'all');
+        document.body.appendChild(menu);
+
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight =
+            window.innerHeight || document.documentElement.clientHeight;
+        const rect = menu.getBoundingClientRect();
+        const x = Number.isFinite(event.clientX) ? event.clientX : 8;
+        const y = Number.isFinite(event.clientY) ? event.clientY : 8;
+        const maxLeft = Math.max(8, viewportWidth - rect.width - 8);
+        const maxTop = Math.max(8, viewportHeight - rect.height - 8);
+        menu.style.left = `${Math.min(Math.max(8, x), maxLeft)}px`;
+        menu.style.top = `${Math.min(Math.max(8, y), maxTop)}px`;
+
+        const onDocumentClick = (e: MouseEvent): void => {
+            if (!menu.contains(e.target as Node)) this._closeCommandContextMenu();
+        };
+        const onKeydown = (e: KeyboardEvent): void => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this._closeCommandContextMenu();
+            }
+        };
+        document.addEventListener('click', onDocumentClick, {
+            signal: listenerController.signal,
+        });
+        document.addEventListener('keydown', onKeydown, {
+            signal: listenerController.signal,
+        });
+        menu.querySelector('button')?.focus({ preventScroll: true });
+    }
+
     renderCmdPanel(): void {
+        this._closeCommandContextMenu?.();
         const cmdEl = document.getElementById('cmd-panel');
         if (!cmdEl) return;
         cmdEl.innerHTML = '';
@@ -705,23 +777,6 @@ export class DiffController {
                 );
                 buttonsGroup.appendChild(runBtn);
 
-                const dirtyBtn = document.createElement('button');
-                dirtyBtn.className = 'cmd-batch-btn cmd-dirty-btn';
-                dirtyBtn.textContent = '⚡ Dirty';
-                dirtyBtn.title = `Run on all dirty worktrees: ${cmd.command}`;
-                dirtyBtn.addEventListener('click', () =>
-                    this.runCommand(cmd, 'dirty'),
-                );
-                buttonsGroup.appendChild(dirtyBtn);
-
-                const allBtn = document.createElement('button');
-                allBtn.className = 'cmd-batch-btn cmd-all-btn';
-                allBtn.textContent = '⇉ All';
-                allBtn.title = `Run on all worktrees in workspace: ${cmd.command}`;
-                allBtn.addEventListener('click', () =>
-                    this.runCommand(cmd, 'all'),
-                );
-                buttonsGroup.appendChild(allBtn);
 
                 left.appendChild(buttonsGroup);
 
@@ -732,6 +787,11 @@ export class DiffController {
                 left.appendChild(val);
 
                 item.appendChild(left);
+                item.addEventListener('contextmenu', (e) => {
+                    const target = e.target as Element | null;
+                    if (target?.closest('.cmd-item-actions')) return;
+                    this._openCommandContextMenu(cmd, e);
+                });
 
                 // Actions
                 const actions = document.createElement('div');
