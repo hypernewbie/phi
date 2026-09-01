@@ -59,6 +59,20 @@ describe('openConfigEditor', () => {
         expect(result).toBeNull();
     });
 
+    it('does not close and discard the draft when the backdrop is clicked', async () => {
+        const promise = openEditor();
+        document.getElementById('config-editor-name').value = 'tests';
+        document.getElementById('config-editor-command').value = 'npm test';
+
+        document.querySelector('.config-editor-overlay').click();
+        expect(await settleOr(promise, 80)).toBe('__timeout__');
+
+        document
+            .querySelector('.config-editor-footer .btn:not(.btn-accent)')
+            .click();
+        expect(await settleOr(promise)).toBeNull();
+    });
+
     it('does not submit while a required field is empty', async () => {
         const promise = openEditor();
         // leave name empty, fill command

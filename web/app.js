@@ -1244,9 +1244,9 @@ export class App {
 
             closeBtn.addEventListener('click', () => cleanup(null));
             cancelBtn.addEventListener('click', () => cleanup(null));
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) cleanup(null);
-            });
+            // This editor contains unsaved user input. Do not close it when
+            // the user clicks the backdrop; only the explicit controls or
+            // Escape should discard the draft.
             body.addEventListener('submit', (e) => {
                 e.preventDefault();
                 const values = {};
