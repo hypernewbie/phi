@@ -36,6 +36,7 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
+  type Session,
   type WebContents,
 } from 'electron';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -1308,6 +1309,65 @@ export class DesktopHost {
     };
   }
 
+  /**
+   * Lets Phi pages use the browser Clipboard API in Electron. Electron's
+   * default permission policy rejects clipboard reads from renderer pages,
+   * so the browser implementation falls through to `prompt()` (which
+   * Electron does not implement). Keep the permission narrow: only the
+   * current local shell and retained Phi profile main frames may use it;
+   * remote pages still get no preload or IPC bridge.
+   */
+  private installClipboardPermissions(sharedSession: Session): void {
+    if (
+      typeof sharedSession.setPermissionCheckHandler !== 'function' ||
+      typeof sharedSession.setPermissionRequestHandler !== 'function'
+    )
+      return;
+
+    const isClipboardPermission = (permission: string): boolean =>
+      permission === 'clipboard-read' ||
+      permission === 'clipboard-sanitized-write';
+
+    const isTrustedFrame = (
+      contents: WebContents | null,
+      requestingUrl: string,
+      isMainFrame: boolean,
+    ): boolean => {
+      if (!contents || !isMainFrame) return false;
+      const main = this.liveMainWindow();
+      if (main?.webContents === contents) {
+        return requestingUrl.startsWith('file://');
+      }
+      for (const [origin, view] of this.viewByOrigin) {
+        if (view.webContents !== contents) continue;
+        try {
+          return new URL(requestingUrl).origin === new URL(origin).origin;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    };
+
+    sharedSession.setPermissionCheckHandler(
+      (contents, permission, requestingOrigin, details) =>
+        isClipboardPermission(permission) &&
+        isTrustedFrame(contents, requestingOrigin, details.isMainFrame),
+    );
+    sharedSession.setPermissionRequestHandler(
+      (contents, permission, callback, details) => {
+        callback(
+          isClipboardPermission(permission) &&
+            isTrustedFrame(
+              contents,
+              details.requestingUrl,
+              details.isMainFrame,
+            ),
+        );
+      },
+    );
+  }
+
   /** Writes the encrypted credential file. Captures a single atomic
    *  snapshot of `this.storedCredentials` so a torn write (kill -9 in
    *  the middle) leaves either the old or the new file, not a half
@@ -2486,6 +2546,7 @@ export class DesktopHost {
       armAuthCancellation();
       void this.bootstrapStoredCredentials(accessAuth, generation);
       const sharedSession = session.defaultSession;
+      this.installClipboardPermissions(sharedSession);
       const makeView = (origin: string): WebContentsView => {
         const view = new WebContentsView({
           webPreferences: {

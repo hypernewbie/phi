@@ -242,7 +242,8 @@ isolation.
   server view (the pane) are `contentView` children. The Phi page is
   loaded as a top-level page with the non-negotiable security defaults
   (`sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`,
-  `webSecurity: true`) — permissions default-deny; popups from the
+  `webSecurity: true`) — permissions default-deny except for the narrowly
+  scoped Clipboard API permission used by Phi profile pages; popups from the
   active page are step 7.
 - **Deep links / single instance / tray / hotkeys / protocol** — steps
   2-5 behavior is unchanged; deep links and forwarded argv now reach

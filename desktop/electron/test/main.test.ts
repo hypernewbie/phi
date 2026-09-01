@@ -66,6 +66,25 @@ describe('src/main.ts + src/desktop.ts (phase-1 Electron entry)', () => {
     // no loadURL call anywhere in the host loop.
     expect(desktopSource).not.toMatch(/\.loadURL\(/);
   });
+
+  it('grants the browser Clipboard API only to Phi main frames', () => {
+    expect(desktopSource).toContain('installClipboardPermissions');
+    expect(desktopSource).toContain('setPermissionCheckHandler');
+    expect(desktopSource).toContain('setPermissionRequestHandler');
+    expect(desktopSource).toContain("permission === 'clipboard-read'");
+    expect(desktopSource).toContain(
+      "permission === 'clipboard-sanitized-write'",
+    );
+    const makeViewIdx = desktopSource.indexOf(
+      'const makeView = (origin: string): WebContentsView => {',
+    );
+    const makeViewEndIdx = desktopSource.indexOf('return view;', makeViewIdx);
+    expect(makeViewIdx).toBeGreaterThan(-1);
+    expect(makeViewEndIdx).toBeGreaterThan(makeViewIdx);
+    expect(desktopSource.slice(makeViewIdx, makeViewEndIdx)).not.toContain(
+      'preload:',
+    );
+  });
 });
 
 describe('src/main.ts (phase-2 single-instance + argv routing)', () => {
