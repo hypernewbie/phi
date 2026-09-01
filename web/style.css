@@ -3199,6 +3199,27 @@ html[data-phi-desktop-root] .app-header {
     color: var(--accent-bright);
 }
 
+#pi-rpc-model-dropup .pi-rpc-model-star {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    padding: 0 8px 0 10px;
+    line-height: 1;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-star:hover {
+    color: var(--accent-bright);
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-star.is-favorite {
+    color: var(--accent-bright);
+}
+
 .dropup-row-actions {
     display: flex;
     align-items: center;

@@ -712,10 +712,8 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.renderPresets('pi-rpc');
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
-        dropup
-            .querySelector('.pi-rpc-model-group-toggle')
-            ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
+        // With no favorites and no modelPresets, the picker renders a single
+        // "All Models" group that is auto-expanded — nothing to toggle.
         expect(rpcChatModels).toHaveBeenCalledWith(tab.paneId);
         expect(dropup.textContent).toContain('Model · current-model');
         expect(dropup.textContent).toContain('Friendly model');
@@ -739,7 +737,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(row.querySelector('.pi-rpc-model-trigger').disabled).toBe(false);
     });
 
-    it('filters Pi models by query across provider groups', async () => {
+    it('filters Pi models by query and dims empty sections', async () => {
         const row = document.createElement('div');
         const dropup = document.createElement('div');
         dropup.id = 'pi-rpc-model-dropup';
@@ -770,29 +768,31 @@ describe('Pi RPC TabManager boundaries', () => {
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
 
-        const groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
-        expect(groups).toHaveLength(2);
+        // With no favorites, only "All Models" exists and is expanded.
+        const allGroup = dropup.querySelector('.pi-rpc-model-group');
+        expect(allGroup).not.toBeNull();
         expect(
-            groups[0].querySelector('.pi-rpc-model-group-toggle').textContent,
-        ).toContain('remote (2)');
-        expect(
-            groups[1]
+            allGroup
                 .querySelector('.pi-rpc-model-group-toggle')
                 .getAttribute('aria-expanded'),
-        ).toBe('false');
+        ).toBe('true');
+        expect(allGroup.querySelectorAll('.pi-rpc-model-row')).toHaveLength(3);
 
-        dropup
-            .querySelector('.pi-rpc-model-group-toggle')
-            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
         const search = dropup.querySelector('.pi-rpc-model-search');
+        search.value = 'xyzzy';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        expect(dropup.querySelector('.pi-rpc-model-no-match')).not.toBeNull();
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-group')
+                .classList.contains('is-empty'),
+        ).toBe(true);
+
         search.value = 'friendly';
         search.dispatchEvent(new Event('input', { bubbles: true }));
-
         const visible = [...dropup.querySelectorAll('.pi-rpc-model-row')];
         expect(visible).toHaveLength(1);
         expect(visible[0].textContent).toContain('Friendly model');
-        const groupsAfter = [...dropup.querySelectorAll('.pi-rpc-model-group')];
-        expect(groupsAfter[1].classList.contains('is-empty')).toBe(true);
     });
 
     it('marks the active Pi model row with is-active', async () => {
@@ -869,13 +869,144 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(dropup.textContent).toContain('No matches');
     });
 
-    it('keeps the configured-subset view and All button working', async () => {
+    it('auto-expands the first section while searching and restores manual state on clear', async () => {
         const row = document.createElement('div');
         const dropup = document.createElement('div');
         dropup.id = 'pi-rpc-model-dropup';
         dropup.className = 'model-presets-dropup hidden';
         document.body.append(dropup);
-        const tab = { paneId: 'pi-rpc:configured', coder: 'pi-rpc' };
+        const tab = { paneId: 'pi-rpc:autoexpand', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'current-model',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+            { provider: 'remote', id: 'fallback-id' },
+            { provider: 'local', id: 'lm' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = { showToast: vi.fn() };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        // With no favorites and only an All Models section, it starts open.
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('true');
+
+        // Manually collapse All Models.
+        dropup
+            .querySelector('.pi-rpc-model-group-toggle')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('false');
+
+        // Typing a query auto-expands the (only) section.
+        const search = dropup.querySelector('.pi-rpc-model-search');
+        search.value = 'friendly';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('true');
+
+        // Esc clears the query; manual expansion state returns (collapsed).
+        search.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'Escape',
+                bubbles: true,
+            }),
+        );
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('false');
+    });
+
+    it('seeds favorites from model_presets.pi on first open and renders Favorites + All Models', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:favorites', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'current-model',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+            { provider: 'remote', id: 'fallback-id' },
+            { provider: 'local', id: 'lm' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = {
+            showToast: vi.fn(),
+            modelPresets: { pi: ['remote/model-id'] },
+        };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        const groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
+        expect(groups).toHaveLength(2);
+        expect(
+            groups[0].querySelector('.pi-rpc-model-group-label').textContent,
+        ).toContain('Favorites (1)');
+        expect(
+            groups[0]
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('true');
+        expect(groups[0].querySelector('.pi-rpc-model-row')).not.toBeNull();
+        expect(
+            groups[1].querySelector('.pi-rpc-model-group-label').textContent,
+        ).toContain('All Models (2)');
+        expect(
+            groups[1]
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('false');
+        // Seeded favorites were also persisted to localStorage.
+        expect(localStorage.getItem('phi.piRpc.favorites')).toBe(
+            JSON.stringify(['remote/model-id']),
+        );
+    });
+
+    it('toggles a model into and out of Favorites via the star button and persists', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:toggle-fav', coder: 'pi-rpc' };
         getPiRpcControls.mockReturnValue({
             ready: true,
             exited: false,
@@ -892,27 +1023,49 @@ describe('Pi RPC TabManager boundaries', () => {
         const tm = Object.create(TabManager.prototype);
         tm.presetsContainer = row;
         tm.getActiveTab = vi.fn(() => tab);
-        tm.app = {
-            showToast: vi.fn(),
-            modelPresets: { pi: ['remote/model-id'] },
-        };
+        tm.app = { showToast: vi.fn() };
         tm._piRpcResetPending = new Set();
         tm._piRpcMenuRequest = 0;
         tm.renderPresets('pi-rpc');
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
 
-        const rows = [...dropup.querySelectorAll('.pi-rpc-model-row')];
-        expect(rows).toHaveLength(1);
-        expect(rows[0].textContent).toContain('Friendly model');
-        const allBtn = dropup.querySelector('.dropup-model-btn--all');
-        expect(allBtn).not.toBeNull();
-        expect(allBtn.textContent).toContain('All → 2 models');
+        // No favorites yet — only All Models with both rows, both stars empty.
+        let allRows = [...dropup.querySelectorAll('.pi-rpc-model-row')];
+        expect(allRows).toHaveLength(2);
+        expect([
+            ...dropup.querySelectorAll('.pi-rpc-model-star.is-favorite'),
+        ]).toHaveLength(0);
 
-        allBtn.click();
-        const rowsAfter = [...dropup.querySelectorAll('.pi-rpc-model-row')];
-        expect(rowsAfter).toHaveLength(2);
-        expect(dropup.querySelector('.dropup-model-btn--all')).toBeNull();
+        // Click the star on Friendly model.
+        const friendlyStar = allRows[0].querySelector('.pi-rpc-model-star');
+        expect(friendlyStar.getAttribute('aria-pressed')).toBe('false');
+        friendlyStar.click();
+
+        // Now: Favorites (1) + All Models (1). The star shows pressed.
+        let groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
+        expect(groups).toHaveLength(2);
+        expect(groups[0].querySelector('.pi-rpc-model-row')).not.toBeNull();
+        expect(groups[1].querySelector('.pi-rpc-model-row')).not.toBeNull();
+        expect(
+            dropup
+                .querySelector('.pi-rpc-model-star.is-favorite')
+                .getAttribute('aria-pressed'),
+        ).toBe('true');
+        expect(JSON.parse(localStorage.getItem('phi.piRpc.favorites'))).toEqual(
+            ['remote/model-id'],
+        );
+
+        // Click again to remove from Favorites.
+        dropup.querySelector('.pi-rpc-model-star.is-favorite').click();
+        groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
+        expect(groups).toHaveLength(1);
+        expect(
+            groups[0].querySelector('.pi-rpc-model-group-label').textContent,
+        ).toContain('All Models (2)');
+        expect(JSON.parse(localStorage.getItem('phi.piRpc.favorites'))).toEqual(
+            [],
+        );
     });
 
     it('uses Pi thinking levels, preserves generic model isolation, and reports setter errors', async () => {
