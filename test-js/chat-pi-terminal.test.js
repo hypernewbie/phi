@@ -651,6 +651,9 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.renderPresets('pi-rpc');
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
+        dropup
+            .querySelector('.pi-rpc-model-group-toggle')
+            ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
         expect(rpcChatModels).toHaveBeenCalledWith(tab.paneId);
         expect(dropup.textContent).toContain('Model · current-model');
@@ -673,6 +676,182 @@ describe('Pi RPC TabManager boundaries', () => {
         await Promise.resolve();
         expect(dropup.classList.contains('hidden')).toBe(true);
         expect(row.querySelector('.pi-rpc-model-trigger').disabled).toBe(false);
+    });
+
+    it('filters Pi models by query across provider groups', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:filter', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'current-model',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+            { provider: 'remote', id: 'fallback-id' },
+            { provider: 'local', id: 'lm' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = { showToast: vi.fn() };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        const groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
+        expect(groups).toHaveLength(2);
+        expect(
+            groups[0].querySelector('.pi-rpc-model-group-toggle').textContent,
+        ).toContain('remote (2)');
+        expect(
+            groups[1]
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('false');
+
+        dropup
+            .querySelector('.pi-rpc-model-group-toggle')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const search = dropup.querySelector('.pi-rpc-model-search');
+        search.value = 'friendly';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+
+        const visible = [...dropup.querySelectorAll('.pi-rpc-model-row')];
+        expect(visible).toHaveLength(1);
+        expect(visible[0].textContent).toContain('Friendly model');
+        const groupsAfter = [...dropup.querySelectorAll('.pi-rpc-model-group')];
+        expect(groupsAfter[1].classList.contains('is-empty')).toBe(true);
+    });
+
+    it('marks the active Pi model row with is-active', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:active', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'model-id',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+            { provider: 'remote', id: 'fallback-id' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = { showToast: vi.fn() };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        const activeRows = dropup.querySelectorAll(
+            '.pi-rpc-model-row.is-active',
+        );
+        expect(activeRows).toHaveLength(1);
+        expect(activeRows[0].textContent).toContain('Friendly model');
+    });
+
+    it('shows No matches when the Pi model query hits nothing', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:nomatch', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'current-model',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = { showToast: vi.fn() };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        const search = dropup.querySelector('.pi-rpc-model-search');
+        search.value = 'xyzzy';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+
+        expect(dropup.querySelector('.pi-rpc-model-no-match')).not.toBeNull();
+        expect(dropup.textContent).toContain('No matches');
+    });
+
+    it('keeps the configured-subset view and All button working', async () => {
+        const row = document.createElement('div');
+        const dropup = document.createElement('div');
+        dropup.id = 'pi-rpc-model-dropup';
+        dropup.className = 'model-presets-dropup hidden';
+        document.body.append(dropup);
+        const tab = { paneId: 'pi-rpc:configured', coder: 'pi-rpc' };
+        getPiRpcControls.mockReturnValue({
+            ready: true,
+            exited: false,
+            busy: false,
+            queueDepth: 0,
+            hasTranscript: false,
+            model: 'current-model',
+            thinking: 'medium',
+        });
+        rpcChatModels.mockResolvedValue([
+            { provider: 'remote', id: 'model-id', name: 'Friendly model' },
+            { provider: 'remote', id: 'fallback-id' },
+        ]);
+        const tm = Object.create(TabManager.prototype);
+        tm.presetsContainer = row;
+        tm.getActiveTab = vi.fn(() => tab);
+        tm.app = {
+            showToast: vi.fn(),
+            modelPresets: { pi: ['remote/model-id'] },
+        };
+        tm._piRpcResetPending = new Set();
+        tm._piRpcMenuRequest = 0;
+        tm.renderPresets('pi-rpc');
+        row.querySelector('.pi-rpc-model-trigger').click();
+        await Promise.resolve();
+
+        const rows = [...dropup.querySelectorAll('.pi-rpc-model-row')];
+        expect(rows).toHaveLength(1);
+        expect(rows[0].textContent).toContain('Friendly model');
+        const allBtn = dropup.querySelector('.dropup-model-btn--all');
+        expect(allBtn).not.toBeNull();
+        expect(allBtn.textContent).toContain('All → 2 models');
+
+        allBtn.click();
+        const rowsAfter = [...dropup.querySelectorAll('.pi-rpc-model-row')];
+        expect(rowsAfter).toHaveLength(2);
+        expect(dropup.querySelector('.dropup-model-btn--all')).toBeNull();
     });
 
     it('uses Pi thinking levels, preserves generic model isolation, and reports setter errors', async () => {

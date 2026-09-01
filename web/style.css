@@ -3396,6 +3396,90 @@ html[data-phi-desktop-root] .app-header {
     color: var(--accent-bright);
 }
 
+/* Pi RPC model picker: grouped + searchable (see research
+   2025-01-20-pi-rpc-model-picker-grouped.md). Id-scoped so these
+   overrides beat the shared .dropup-* class rules. */
+#pi-rpc-model-dropup .pi-rpc-model-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color: var(--bg-elevated);
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-search {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    width: calc(100% - 16px);
+    margin: 8px;
+    background-color: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    border-radius: 6px;
+    padding: 10px 14px;
+    outline: none;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-search:focus {
+    border-color: var(--accent);
+    box-shadow:
+        0 0 0 1px var(--accent-edge),
+        0 0 18px var(--accent-glow);
+}
+
+.pi-rpc-model-group-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.pi-rpc-model-group-toggle:hover {
+    color: var(--accent-bright);
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-list.is-collapsed {
+    display: none;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-group.is-empty {
+    opacity: 0.4;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-row.is-active::before {
+    content: "✓ ";
+    color: var(--accent-bright);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding-left: 12px;
+    align-self: center;
+}
+
+#pi-rpc-model-dropup .pi-rpc-model-row.is-active .dropup-model-btn {
+    color: var(--accent-bright);
+}
+
 .dropup-row-actions {
     display: flex;
     align-items: center;
@@ -4774,11 +4858,24 @@ html[data-phi-config-page] .settings-modal {
     #model-presets-dropup .dropup-header,
     #quick-commands-dropup .dropup-header,
     #slash-presets-dropup .dropup-header,
-    #pi-rpc-model-dropup .dropup-header,
     #pi-rpc-thinking-dropup .dropup-header {
         position: sticky;
         top: 0;
         z-index: 1;
+    }
+
+    /* Variable-aware cap survives on-screen keyboard collapse
+       (--vv-height is set from visualViewport; see web/app.js:477-518). */
+    #pi-rpc-model-dropup {
+        max-height: min(42vh, calc(var(--vv-height, 100dvh) * 0.42));
+    }
+
+    #pi-rpc-model-dropup .pi-rpc-model-list-container {
+        touch-action: pan-y;
+    }
+
+    #pi-rpc-model-dropup .dropup-model-btn {
+        min-height: 44px;
     }
 
     .dropup-action-btn,

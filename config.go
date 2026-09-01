@@ -230,15 +230,12 @@ func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {
 	if m == nil {
 		m = make(ModelPresetsMap)
 	}
+	// Pi's model list comes from the live RPC, so no preset default is set
+	// here — shipping a stale hardcoded list (as we did previously) made the
+	// Pi-RPC picker open to a group of synthesized ghost rows. Opencode,
+	// Claude, and Agy have fixed coders and keep their (also-stale) defaults
+	// for now; clean those up separately if they bite.
 	defaults := map[string][]string{
-		"pi": {
-			"gemini-1.5-pro",
-			"gemini-1.5-flash",
-			"deepseek-coder",
-			"gpt-4o",
-			"gpt-4-turbo",
-			"claude-3-5-sonnet",
-		},
 		"opencode": {
 			"opencode/big-pickle",
 		},
