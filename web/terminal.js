@@ -135,6 +135,10 @@ export class TabManager {
         this._piRpcThinkingPending = null;
         this._piRpcResetPending = new Set();
         this._piRpcMenuRequest = 0;
+        this._piRpcModels = null;
+        this._piRpcModelQuery = '';
+        this._piRpcModelExpandedProvider = null;
+        this._piRpcModelShowAll = false;
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
             (paneId, status) => {
                 // Model change Invalidates thinking-level cache (different model → different set)
@@ -1075,6 +1079,7 @@ export class TabManager {
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') this._handlePiRpcEscape(e);
+            else this._handlePiRpcKeydown(e);
         });
 
         // Close dropups and dropdowns on clicking outside
@@ -2562,6 +2567,21 @@ export class TabManager {
         return false;
     }
 
+    _handlePiRpcKeydown(e) {
+        if (e.isComposing) return;
+        if (e.key !== '/') return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        const dropup = document.getElementById('pi-rpc-model-dropup');
+        if (!dropup || dropup.classList.contains('hidden')) return;
+        if (
+            e.target instanceof Element &&
+            e.target.closest('input, textarea, select, [contenteditable]')
+        )
+            return;
+        e.preventDefault();
+        dropup.querySelector('.pi-rpc-model-search')?.focus();
+    }
+
     _piRpcControlsFor(tab) {
         const state = tab ? getPiRpcControls(tab.paneId) : null;
         return {
@@ -2595,21 +2615,69 @@ export class TabManager {
             button.disabled = disabled;
     }
 
-    _renderPiRpcModelsDropup(showAll = false) {
+    _renderPiRpcModelsDropup(preserve = false) {
         const dropup = document.getElementById('pi-rpc-model-dropup');
         const activeTab = this.getActiveTab();
         if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
         const paneId = activeTab.paneId;
         const request = ++this._piRpcMenuRequest;
         const state = this._piRpcControlsFor(activeTab);
-        const header = document.createElement('div');
-        header.className = 'dropup-header';
-        header.textContent = `Model · ${state.model || '—'}`;
-        dropup.replaceChildren(header);
+        if (!preserve) {
+            this._piRpcModelQuery = '';
+            this._piRpcModels = null;
+            this._piRpcModelExpandedProvider = null;
+            this._piRpcModelShowAll = false;
+            const sticky = document.createElement('div');
+            sticky.className = 'pi-rpc-model-sticky';
+            const header = document.createElement('div');
+            header.className = 'dropup-header';
+            header.textContent = `Model · ${state.model || '—'}`;
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'pi-rpc-model-search';
+            search.setAttribute('aria-label', 'Filter Pi models');
+            search.placeholder = 'Filter models…';
+            search.addEventListener('input', (event) => {
+                if (event.isComposing) return;
+                if (
+                    typeof event.inputType === 'string' &&
+                    event.inputType.startsWith('insertComposition')
+                )
+                    return;
+                this._piRpcModelQuery = search.value.toLowerCase();
+                this._buildPiRpcModelList();
+            });
+            search.addEventListener('compositionend', () => {
+                this._piRpcModelQuery = search.value.toLowerCase();
+                this._buildPiRpcModelList();
+            });
+            search.addEventListener('keydown', (event) => {
+                if (event.isComposing) return;
+                if (event.key === 'Escape' && search.value !== '') {
+                    search.value = '';
+                    this._piRpcModelQuery = '';
+                    this._buildPiRpcModelList();
+                    event.stopPropagation();
+                }
+            });
+            sticky.append(header, search);
+            const listContainer = document.createElement('div');
+            listContainer.className = 'pi-rpc-model-list-container';
+            dropup.replaceChildren(sticky, listContainer);
+        } else {
+            const header = dropup.querySelector(
+                '.pi-rpc-model-sticky .dropup-header',
+            );
+            if (header) header.textContent = `Model · ${state.model || '—'}`;
+        }
+        const listContainer = dropup.querySelector(
+            '.pi-rpc-model-list-container',
+        );
+        if (!listContainer) return;
         const loading = document.createElement('div');
         loading.className = 'dropup-row pi-rpc-dropup-message';
         loading.textContent = 'Loading Pi models…';
-        dropup.appendChild(loading);
+        listContainer.replaceChildren(loading);
 
         let requestResult;
         try {
@@ -2626,144 +2694,8 @@ export class TabManager {
                     this.getActiveTab()?.paneId !== paneId
                 )
                     return;
-                dropup.replaceChildren(header);
-                if (!Array.isArray(models) || models.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.className = 'dropup-row pi-rpc-dropup-message';
-                    empty.textContent = 'No Pi models available';
-                    dropup.appendChild(empty);
-                    return;
-                }
-                const pending = this._piRpcModelPending?.paneId === paneId;
-                // Configured pi models — exactly model_presets.pi (see config.go)
-                const configured = this.app?.modelPresets?.pi;
-                const configuredSet =
-                    Array.isArray(configured) && configured.length > 0
-                        ? new Set(
-                              configured
-                                  .map((s) => String(s).trim())
-                                  .filter(Boolean),
-                          )
-                        : null;
-                const configuredLower = configuredSet
-                    ? new Set([...configuredSet].map((s) => s.toLowerCase()))
-                    : null;
-
-                let visible = models;
-                let isFiltered = false;
-                if (!showAll && configuredSet && configuredLower) {
-                    const filtered = models.filter((m) => {
-                        if (
-                            !m ||
-                            typeof m.provider !== 'string' ||
-                            typeof m.id !== 'string'
-                        )
-                            return false;
-                        const key = `${m.provider}/${m.id}`;
-                        return (
-                            configuredSet.has(key) ||
-                            configuredLower.has(key.toLowerCase()) ||
-                            configuredSet.has(m.id) ||
-                            (typeof m.name === 'string' &&
-                                configuredLower.has(m.name.toLowerCase()))
-                        );
-                    });
-                    if (filtered.length > 0) {
-                        visible = filtered;
-                        isFiltered = true;
-                    } else if (configuredSet.size > 0) {
-                        // No rpc match (e.g. uaa presets) — synthesize rows from config strings
-                        visible = [...configuredSet].map((str) => {
-                            const slash = str.indexOf('/');
-                            if (slash === -1)
-                                return { provider: 'pi', id: str, name: str };
-                            return {
-                                provider: str.slice(0, slash),
-                                id: str.slice(slash + 1),
-                                name: str,
-                            };
-                        });
-                        isFiltered = true;
-                    }
-                }
-
-                const renderModelRow = (model) => {
-                    if (
-                        !model ||
-                        typeof model.provider !== 'string' ||
-                        typeof model.id !== 'string'
-                    )
-                        return;
-                    const row = document.createElement('div');
-                    row.className = 'dropup-row';
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.className = 'dropup-model-btn';
-                    button.textContent = model.name || model.id;
-                    button.title = `${model.provider}/${model.id}`;
-                    button.disabled = pending;
-                    button.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        const operation = {
-                            paneId,
-                            provider: model.provider,
-                            modelId: model.id,
-                        };
-                        this._piRpcModelPending = operation;
-                        this._setPiRpcDropupButtonsDisabled(dropup, true);
-                        let setterResult;
-                        try {
-                            setterResult = rpcChatSetModel(
-                                paneId,
-                                model.provider,
-                                model.id,
-                            );
-                        } catch (error) {
-                            setterResult = Promise.reject(error);
-                        }
-                        Promise.resolve(setterResult)
-                            .then(() => {
-                                this._piAvailableThinking?.delete(paneId);
-                                if (this._piRpcModelPending === operation)
-                                    this._piRpcModelPending = null;
-                                if (this.getActiveTab()?.paneId === paneId) {
-                                    this.renderPresets('pi-rpc');
-                                    this._closePiRpcDropups(true);
-                                }
-                            })
-                            .catch((error) => {
-                                if (this._piRpcModelPending === operation)
-                                    this._piRpcModelPending = null;
-                                this._piRpcError(error, 'Pi model');
-                                if (this.getActiveTab()?.paneId === paneId)
-                                    this._renderPiRpcModelsDropup(showAll);
-                            });
-                    });
-                    const meta = document.createElement('span');
-                    meta.className = 'pi-rpc-dropup-meta';
-                    meta.textContent = `${model.provider}/${model.id}`;
-                    row.append(button, meta);
-                    dropup.appendChild(row);
-                };
-
-                for (const model of visible) renderModelRow(model);
-
-                if (isFiltered) {
-                    const allRow = document.createElement('div');
-                    allRow.className = 'dropup-row dropup-row--all';
-                    const allBtn = document.createElement('button');
-                    allBtn.type = 'button';
-                    allBtn.className = 'dropup-model-btn dropup-model-btn--all';
-                    allBtn.textContent = `All → ${models.length} models`;
-                    allBtn.title = 'Show full Pi model list';
-                    allBtn.disabled = pending;
-                    allBtn.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        this._renderPiRpcModelsDropup(true);
-                    });
-                    allRow.appendChild(allBtn);
-                    dropup.appendChild(allRow);
-                }
+                this._piRpcModels = Array.isArray(models) ? models : [];
+                this._buildPiRpcModelList();
             })
             .catch((error) => {
                 if (
@@ -2774,6 +2706,233 @@ export class TabManager {
                 loading.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
                 this._piRpcError(error, 'Pi models');
             });
+    }
+
+    _buildPiRpcModelList() {
+        const dropup = document.getElementById('pi-rpc-model-dropup');
+        const activeTab = this.getActiveTab();
+        if (!dropup || !activeTab || activeTab.coder !== 'pi-rpc') return;
+        const listContainer = dropup.querySelector(
+            '.pi-rpc-model-list-container',
+        );
+        if (!listContainer || !Array.isArray(this._piRpcModels)) return;
+        const state = this._piRpcControlsFor(activeTab);
+        const paneId = activeTab.paneId;
+        const query = this._piRpcModelQuery;
+        const pending = this._piRpcModelPending?.paneId === paneId;
+        const models = this._piRpcModels.filter(
+            (model) =>
+                model &&
+                typeof model.provider === 'string' &&
+                typeof model.id === 'string',
+        );
+        if (models.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'dropup-row pi-rpc-dropup-message';
+            empty.textContent = 'No Pi models available';
+            listContainer.replaceChildren(empty);
+            return;
+        }
+        // Configured pi models — exactly model_presets.pi (see config.go).
+        // Preserved from the previous flat-list implementation.
+        const configured = this.app?.modelPresets?.pi;
+        const configuredSet =
+            Array.isArray(configured) && configured.length > 0
+                ? new Set(
+                      configured.map((s) => String(s).trim()).filter(Boolean),
+                  )
+                : null;
+        const configuredLower = configuredSet
+            ? new Set([...configuredSet].map((s) => s.toLowerCase()))
+            : null;
+        let visible = models;
+        let isFiltered = false;
+        if (
+            query === '' &&
+            !this._piRpcModelShowAll &&
+            configuredSet &&
+            configuredLower
+        ) {
+            const filtered = models.filter((m) => {
+                const key = `${m.provider}/${m.id}`;
+                return (
+                    configuredSet.has(key) ||
+                    configuredLower.has(key.toLowerCase()) ||
+                    configuredSet.has(m.id) ||
+                    (typeof m.name === 'string' &&
+                        configuredLower.has(m.name.toLowerCase()))
+                );
+            });
+            if (filtered.length > 0) {
+                visible = filtered;
+                isFiltered = true;
+            } else if (configuredSet.size > 0) {
+                // No rpc match (e.g. uaa presets) — synthesize rows from config strings
+                visible = [...configuredSet].map((str) => {
+                    const slash = str.indexOf('/');
+                    if (slash === -1)
+                        return { provider: 'pi', id: str, name: str };
+                    return {
+                        provider: str.slice(0, slash),
+                        id: str.slice(slash + 1),
+                        name: str,
+                    };
+                });
+                isFiltered = true;
+            }
+        }
+        const matches = (model) => {
+            const haystack = (
+                model.provider +
+                ' ' +
+                model.id +
+                ' ' +
+                (model.name || '')
+            ).toLowerCase();
+            return query === '' || haystack.includes(query);
+        };
+        let activeModel = null;
+        for (const model of visible) {
+            if (model.id === state.model) {
+                activeModel = model;
+                break;
+            }
+        }
+        if (!activeModel) {
+            for (const model of visible) {
+                if (model.name === state.model) {
+                    activeModel = model;
+                    break;
+                }
+            }
+        }
+        const groups = [];
+        const groupByProvider = new Map();
+        for (const model of visible) {
+            let group = groupByProvider.get(model.provider);
+            if (!group) {
+                group = { provider: model.provider, models: [] };
+                groupByProvider.set(model.provider, group);
+                groups.push(group);
+            }
+            group.models.push(model);
+        }
+        let totalMatches = 0;
+        const nodes = [];
+        groups.forEach((group, groupIndex) => {
+            const groupMatches = group.models.filter(matches);
+            totalMatches += groupMatches.length;
+            const groupEl = document.createElement('div');
+            groupEl.className = 'pi-rpc-model-group';
+            if (groupMatches.length === 0) {
+                groupEl.classList.add('is-empty');
+            }
+            const listId = `pi-rpc-model-list-${groupIndex}`;
+            const expanded =
+                this._piRpcModelExpandedProvider === group.provider;
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'pi-rpc-model-group-toggle';
+            toggle.setAttribute('aria-controls', listId);
+            toggle.setAttribute('aria-expanded', String(expanded));
+            toggle.disabled = pending;
+            toggle.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this._piRpcModelExpandedProvider =
+                    this._piRpcModelExpandedProvider === group.provider
+                        ? null
+                        : group.provider;
+                this._buildPiRpcModelList();
+            });
+            const label = document.createElement('span');
+            label.className = 'pi-rpc-model-group-label';
+            label.textContent = `${group.provider} (${group.models.length})`;
+            toggle.appendChild(label);
+            const list = document.createElement('ul');
+            list.id = listId;
+            list.className = 'pi-rpc-model-list';
+            if (!expanded) list.classList.add('is-collapsed');
+            for (const model of groupMatches) {
+                const row = document.createElement('li');
+                row.className = 'dropup-row pi-rpc-model-row';
+                if (model === activeModel) row.classList.add('is-active');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'dropup-model-btn';
+                button.textContent = model.name || model.id;
+                button.title = `${model.provider}/${model.id}`;
+                button.disabled = pending;
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const operation = {
+                        paneId,
+                        provider: model.provider,
+                        modelId: model.id,
+                    };
+                    this._piRpcModelPending = operation;
+                    this._setPiRpcDropupButtonsDisabled(dropup, true);
+                    let setterResult;
+                    try {
+                        setterResult = rpcChatSetModel(
+                            paneId,
+                            model.provider,
+                            model.id,
+                        );
+                    } catch (error) {
+                        setterResult = Promise.reject(error);
+                    }
+                    Promise.resolve(setterResult)
+                        .then(() => {
+                            this._piAvailableThinking?.delete(paneId);
+                            if (this._piRpcModelPending === operation)
+                                this._piRpcModelPending = null;
+                            if (this.getActiveTab()?.paneId === paneId) {
+                                this.renderPresets('pi-rpc');
+                                this._closePiRpcDropups(true);
+                            }
+                        })
+                        .catch((error) => {
+                            if (this._piRpcModelPending === operation)
+                                this._piRpcModelPending = null;
+                            this._piRpcError(error, 'Pi model');
+                            if (this.getActiveTab()?.paneId === paneId)
+                                this._renderPiRpcModelsDropup(true);
+                        });
+                });
+                const meta = document.createElement('span');
+                meta.className = 'pi-rpc-dropup-meta';
+                meta.textContent = `${model.provider}/${model.id}`;
+                row.append(button, meta);
+                list.appendChild(row);
+            }
+            groupEl.append(toggle, list);
+            nodes.push(groupEl);
+        });
+        if (isFiltered && query === '' && !this._piRpcModelShowAll) {
+            const allRow = document.createElement('div');
+            allRow.className = 'dropup-row dropup-row--all';
+            const allBtn = document.createElement('button');
+            allBtn.type = 'button';
+            allBtn.className = 'dropup-model-btn dropup-model-btn--all';
+            allBtn.textContent = `All → ${models.length} models`;
+            allBtn.title = 'Show full Pi model list';
+            allBtn.disabled = pending;
+            allBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this._piRpcModelShowAll = true;
+                this._buildPiRpcModelList();
+            });
+            allRow.appendChild(allBtn);
+            nodes.push(allRow);
+        }
+        if (query !== '' && totalMatches === 0) {
+            const noMatch = document.createElement('div');
+            noMatch.className = 'dropup-row pi-rpc-model-no-match';
+            noMatch.textContent = 'No matches';
+            listContainer.replaceChildren(...nodes, noMatch);
+            return;
+        }
+        listContainer.replaceChildren(...nodes);
     }
 
     _renderPiRpcThinkingDropup() {
@@ -3051,7 +3210,7 @@ export class TabManager {
             this.renderQuickCmdsDropup();
         const mDropup = document.getElementById('pi-rpc-model-dropup');
         if (mDropup && !mDropup.classList.contains('hidden'))
-            this._renderPiRpcModelsDropup();
+            this._renderPiRpcModelsDropup(true);
         const tDropup = document.getElementById('pi-rpc-thinking-dropup');
         if (tDropup && !tDropup.classList.contains('hidden'))
             this._renderPiRpcThinkingDropup();
