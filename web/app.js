@@ -1497,23 +1497,36 @@ export class App {
         try {
             if (btnElement) btnElement.classList.add('loading');
 
+            const openPasteDialog = async () => {
+                const values = await this.openConfigEditor({
+                    title: 'Paste config',
+                    subtitle: `Paste a config string starting with ${prefix}:`,
+                    fields: [
+                        {
+                            id: 'config',
+                            label: 'Config',
+                            multiline: true,
+                            placeholder: `${prefix}:...`,
+                        },
+                    ],
+                    submitLabel: 'Import',
+                });
+                return values?.config || '';
+            };
+
             let configText = '';
             if (navigator.clipboard && navigator.clipboard.readText) {
                 try {
                     configText = await navigator.clipboard.readText();
                 } catch (e) {
                     console.warn(
-                        '[config] Browser blocked clipboard read, falling back to prompt',
+                        '[config] Browser blocked clipboard read, falling back to paste dialog',
                         e,
                     );
-                    configText = prompt(
-                        `Paste your config string here (starts with ${prefix}:):`,
-                    );
+                    configText = await openPasteDialog();
                 }
             } else {
-                configText = prompt(
-                    `Paste your config string here (starts with ${prefix}:):`,
-                );
+                configText = await openPasteDialog();
             }
 
             if (!configText) {
