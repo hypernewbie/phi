@@ -723,7 +723,9 @@ export class DesktopHost {
               // Apply immediately: hibernate or restore views
               this.applyLowMemoryMode(ctrl.getLowMemoryMode());
             } catch (err) {
-              console.log(`phi-desktop: tray toggle-low-memory: ${String(err)}`);
+              console.log(
+                `phi-desktop: tray toggle-low-memory: ${String(err)}`,
+              );
             }
             break;
           }
@@ -1010,13 +1012,38 @@ export class DesktopHost {
   applyLowMemoryMode(enabled: boolean): void {
     // Massively aggro: keep only active WebContentsView alive, destroy all others immediately.
     // PTY/WS + tabs.json stay alive server-side; next click recreates view via shared session.
-    const mgr = this.profileViews as unknown as { hibernateInactive?: (keepId: string) => void; restoreAll?: () => void } | undefined;
-    if (!mgr) return;
+    const mgr = this.profileViews as unknown as
+      | ProfileViewManager
+      | {
+          hibernateInactive?: (keepId: string) => void;
+          restoreAll?: () => void;
+          getActive?: () => string | null;
+          viewsCreated?: () => number;
+        }
+      | undefined;
+    if (!mgr || typeof (mgr as { hibernateInactive?: unknown }).hibernateInactive !== 'function') {
+      console.log(`phi-desktop: applyLowMemoryMode(${enabled}) — no view manager yet`);
+      return;
+    }
     if (enabled) {
-      const keepId = this.controller?.state().activeId ?? '';
-      mgr.hibernateInactive?.(keepId);
+      let keepId = this.controller?.state().activeId ?? '';
+      if (!keepId) keepId = (mgr as ProfileViewManager).getActive?.() ?? '';
+      if (!keepId) keepId = this.controller?.mostRecent()?.id ?? '';
+      // Fallback: keep first retained view if still empty (e.g. controller activeId blank at boot)
+      if (!keepId) {
+        try {
+          const any = (mgr as unknown as { views?: Map<string, unknown> })?.views?.keys?.().next?.().value as string | undefined;
+          if (any) keepId = any;
+        } catch {}
+      }
+      const before = (mgr as ProfileViewManager).viewsCreated?.() ?? -1;
+      console.log(`phi-desktop: low-memory ON — keep ${keepId || '(none)'} before=${before}`);
+      (mgr as { hibernateInactive: (id: string) => void }).hibernateInactive(keepId);
+      const after = (mgr as ProfileViewManager).viewsCreated?.() ?? -1;
+      console.log(`phi-desktop: low-memory ON — after=${after}`);
     } else {
-      mgr.restoreAll?.();
+      (mgr as { restoreAll: () => void }).restoreAll();
+      console.log('phi-desktop: low-memory OFF — hibernation disabled');
     }
     this.trayHandle?.rebuildMenu();
   }
@@ -2568,11 +2595,26 @@ export class DesktopHost {
       const { totalmem } = await import('node:os');
       const tenGB = 10 * 1024 * 1024 * 1024;
       // Only auto-enable if key was absent (fresh store) and RAM <10GB — preserve explicit user choice.
-      const raw = (() => { try { return require('node:fs').readFileSync(app.getPath('userData') + '/profiles.json','utf8'); } catch { return ''; } })();
+      const raw = (() => {
+        try {
+          return require('node:fs').readFileSync(
+            app.getPath('userData') + '/profiles.json',
+            'utf8',
+          );
+        } catch {
+          return '';
+        }
+      })();
       const hasKey = raw.includes('lowMemoryMode');
-      if (!hasKey && totalmem() < tenGB && !this.controller.getLowMemoryMode()) {
+      if (
+        !hasKey &&
+        totalmem() < tenGB &&
+        !this.controller.getLowMemoryMode()
+      ) {
         this.controller.setLowMemoryMode(true);
-        console.log(`phi-desktop: auto-enabled low memory mode (RAM ${(totalmem()/1024/1024/1024).toFixed(1)}GB <10GB)`);
+        console.log(
+          `phi-desktop: auto-enabled low memory mode (RAM ${(totalmem() / 1024 / 1024 / 1024).toFixed(1)}GB <10GB)`,
+        );
       }
     } catch {}
     // The first tray was constructed before the controller for boot ordering;
@@ -2729,8 +2771,18 @@ export class DesktopHost {
           },
         });
         // Obsidian blank so reloads don't flashbang white for 1 frame
-        try { (view as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
-        try { (view.webContents as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
+        try {
+          (
+            view as unknown as { setBackgroundColor?: (c: string) => void }
+          ).setBackgroundColor?.('#08080a');
+        } catch {}
+        try {
+          (
+            view.webContents as unknown as {
+              setBackgroundColor?: (c: string) => void;
+            }
+          ).setBackgroundColor?.('#08080a');
+        } catch {}
         // The CPU poll resolves the selected server's view from this lookup
         // (the retained views are owned by ProfileViewManager).
         this.viewByOrigin.set(origin, view);
@@ -3044,8 +3096,18 @@ export class DesktopHost {
           session: sharedSession,
         },
       });
-      try { (rail as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
-      try { (rail.webContents as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
+      try {
+        (
+          rail as unknown as { setBackgroundColor?: (c: string) => void }
+        ).setBackgroundColor?.('#08080a');
+      } catch {}
+      try {
+        (
+          rail.webContents as unknown as {
+            setBackgroundColor?: (c: string) => void;
+          }
+        ).setBackgroundColor?.('#08080a');
+      } catch {}
       this.railView = rail;
       this.trustedSessionSenders.add(rail.webContents);
       win.contentView.addChildView(rail);
