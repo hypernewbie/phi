@@ -79,11 +79,11 @@ export class KanbanManager {
             document.removeEventListener('keydown', this.escListener);
             this.escListener = null;
         }
-        if (this.activeDetailPanel && this.activeDetailPanel.parentNode) {
+        if (this.activeDetailPanel?.parentNode) {
             this.activeDetailPanel.parentNode.removeChild(this.activeDetailPanel);
         }
         this.activeDetailPanel = null;
-        if (this.activeOverlay && this.activeOverlay.parentNode) {
+        if (this.activeOverlay?.parentNode) {
             this.activeOverlay.parentNode.removeChild(this.activeOverlay);
         }
         this.activeOverlay = null;
@@ -189,7 +189,7 @@ export class KanbanManager {
         return c.password;
     }
     async attemptLogin(url, username, password) {
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1/login')}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1/login`)}`;
         const res = await fetch(proxyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -323,7 +323,7 @@ export class KanbanManager {
                 `;
                 container
                     .querySelector('#kanban-retry-btn')
-                    .addEventListener('click', () => this.initTabContainer(container));
+                    ?.addEventListener('click', () => this.initTabContainer(container));
                 return;
             }
             let selectedProjectId = localStorage.getItem('vikunja_selected_project');
@@ -419,10 +419,10 @@ export class KanbanManager {
             `;
             container
                 .querySelector('#kanban-retry-btn')
-                .addEventListener('click', () => this.loadAndRenderBoard(container, isAutoRetry));
+                ?.addEventListener('click', () => this.loadAndRenderBoard(container, isAutoRetry));
             container
                 .querySelector('#kanban-reconnect-btn')
-                .addEventListener('click', () => {
+                ?.addEventListener('click', () => {
                 sessionStorage.removeItem('vikunja_token');
                 this.initTabContainer(container);
             });
@@ -571,7 +571,7 @@ export class KanbanManager {
         });
         container
             .querySelector('#kanban-refresh-btn')
-            .addEventListener('click', () => {
+            ?.addEventListener('click', () => {
             // Refresh in place. Blanking the board the user is looking at is
             // worse feedback than the toolbar indicator.
             this.refreshBoard(container);
@@ -686,7 +686,7 @@ export class KanbanManager {
         this.bindBoardDelegates(container);
         container
             .querySelector('#kanban-disconnect-btn')
-            .addEventListener('click', () => {
+            ?.addEventListener('click', () => {
             sessionStorage.removeItem('vikunja_token');
             fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch((e) => console.error('Vault delete error:', e));
             this.initTabContainer(container);
@@ -1043,7 +1043,7 @@ export class KanbanManager {
                     <textarea id="kanban-note-desc" class="kanban-note-desc" placeholder="Jot down…">${this.escapeHtml(this.stripHtml(selected.description || ''))}</textarea>
                     <div id="kanban-note-preview" class="kanban-note-preview hidden"></div>
                     <div class="kanban-notes-editor-footer">
-                        <span class="kanban-note-meta">${selected.identifier ? this.escapeHtml(selected.identifier) + ' · ' : ''}${this.escapeHtml(this.formatNoteDate(selected.updated || selected.created || ''))}</span>
+                        <span class="kanban-note-meta">${selected.identifier ? `${this.escapeHtml(selected.identifier)} · ` : ''}${this.escapeHtml(this.formatNoteDate(selected.updated || selected.created || ''))}</span>
                     </div>
                 </div>
             `
@@ -1910,7 +1910,7 @@ export class KanbanManager {
     escapeHtml(str) {
         return escapeHtmlUtil(str);
     }
-    initSortable(container, buckets) {
+    initSortable(container, _buckets) {
         const lists = container.querySelectorAll('.kanban-cards-list');
         lists.forEach((list) => {
             if (typeof window.Sortable === 'undefined') {
@@ -2004,7 +2004,7 @@ export class KanbanManager {
         `;
         panel
             .querySelector('.kdp-close-btn')
-            .addEventListener('click', () => this.closeDetailPanel());
+            ?.addEventListener('click', () => this.closeDetailPanel());
         document.body.appendChild(panel);
         this.activeDetailPanel = panel;
         // Escape key to close
@@ -2046,7 +2046,7 @@ export class KanbanManager {
             `;
             panel
                 .querySelector('.kdp-close-btn')
-                .addEventListener('click', () => this.closeDetailPanel());
+                ?.addEventListener('click', () => this.closeDetailPanel());
         }
     }
     sanitizeTaskDescription(description) {
@@ -2218,10 +2218,10 @@ export class KanbanManager {
         this.wireFeatureDetailSection(panel, task, cardEl, container);
         panel
             .querySelector('.kdp-close-btn')
-            .addEventListener('click', () => this.closeDetailPanel());
+            ?.addEventListener('click', () => this.closeDetailPanel());
         panel
             .querySelector('.kdp-cancel-btn')
-            .addEventListener('click', () => this.closeDetailPanel());
+            ?.addEventListener('click', () => this.closeDetailPanel());
         // Detail-panel Delete button. Confirms, then deletes the task and closes
         // the panel. The container ref is captured so the board reloads.
         const deleteBtn = panel.querySelector('.kdp-delete-btn');
@@ -2242,7 +2242,7 @@ export class KanbanManager {
         }
         panel
             .querySelector('.kdp-save-btn')
-            .addEventListener('click', async () => {
+            ?.addEventListener('click', async () => {
             const saveBtn = panel.querySelector('.kdp-save-btn');
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving...';
@@ -2367,7 +2367,7 @@ export class KanbanManager {
         }
         return child;
     }
-    async saveTaskDetail(task, formData, cardEl, container) {
+    async saveTaskDetail(task, formData, _cardEl, _container) {
         const payload = this.taskUpdatePayload(task, formData);
         // Vikunja's UPDATE endpoint is POST /tasks/{id} (not PUT — only CREATE is PUT).
         // The card repaints immediately and rolls back if the save fails, so
@@ -2630,11 +2630,11 @@ export class KanbanManager {
             return true;
         if (!task)
             return false;
-        if (task.title && task.title.toLowerCase().includes(query))
+        if (task.title?.toLowerCase().includes(query))
             return true;
-        if (task.identifier && task.identifier.toLowerCase().includes(query))
+        if (task.identifier?.toLowerCase().includes(query))
             return true;
-        return (task.labels || []).some((l) => l.title && l.title.toLowerCase().includes(query));
+        return (task.labels || []).some((l) => l.title?.toLowerCase().includes(query));
     }
     applyFilterToCard(card) {
         const task = this.taskCache[card.dataset.taskId];
@@ -3048,12 +3048,12 @@ export class KanbanManager {
         this.assertAddressable(path, body);
         const token = sessionStorage.getItem('vikunja_token');
         const url = localStorage.getItem('vikunja_url');
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1${path}`)}`;
         const headers = {
             'Content-Type': 'application/json',
         };
         if (token && token !== 'null' && token !== 'undefined') {
-            headers['Authorization'] = `Bearer ${token}`;
+            headers.Authorization = `Bearer ${token}`;
         }
         const res = await fetch(proxyUrl, {
             method,

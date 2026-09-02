@@ -98,7 +98,7 @@ export class SyncManager {
         }
         catch (e) {
             console.error('Failed to save sync coordinator:', e);
-            this.app.showToast('Failed to save coordinator: ' + e.message, { type: 'error' });
+            this.app.showToast(`Failed to save coordinator: ${e.message}`, { type: 'error' });
         }
     }
     startPolling() {
@@ -107,16 +107,14 @@ export class SyncManager {
         this.refreshMessages();
         this.pollInterval = setInterval(() => {
             const diffCtrl = this.app.diffController;
-            if (diffCtrl &&
-                diffCtrl.isPanelOpen &&
-                diffCtrl.activeTab === 'sync') {
+            if (diffCtrl?.isPanelOpen && diffCtrl.activeTab === 'sync') {
                 this.refreshMessages();
             }
         }, 15000);
     }
     async getCoordinatorUrl() {
         const config = this.app.sessionsManager.config;
-        return (config && config.sync_coordinator) || 'http://localhost:7070';
+        return config?.sync_coordinator || 'http://localhost:7070';
     }
     async fetchWithProxy(endpoint, options = {}) {
         const coordinator = await this.getCoordinatorUrl();
@@ -175,7 +173,7 @@ export class SyncManager {
             valEl.addEventListener('click', () => {
                 valEl.classList.toggle('collapsed');
             });
-            card.querySelector('.sync-edit-btn').addEventListener('click', (e) => {
+            card.querySelector('.sync-edit-btn')?.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.formContainer.classList.remove('hidden');
                 this.formKey.value = msg.key;
@@ -183,7 +181,7 @@ export class SyncManager {
                 this.formValue.value = msg.value;
                 this.formValue.focus({ preventScroll: true });
             });
-            card.querySelector('.sync-del-btn').addEventListener('click', async (e) => {
+            card.querySelector('.sync-del-btn')?.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 if (confirm(`Delete sync key "${msg.key}"?`)) {
                     try {
@@ -193,7 +191,7 @@ export class SyncManager {
                         this.refreshMessages();
                     }
                     catch (err) {
-                        this.app.showToast('Failed to delete: ' + err.message, { type: 'error' });
+                        this.app.showToast(`Failed to delete: ${err.message}`, { type: 'error' });
                     }
                 }
             });
@@ -217,7 +215,7 @@ export class SyncManager {
             this.refreshMessages();
         }
         catch (e) {
-            this.app.showToast('Failed to save message: ' + e.message, { type: 'error' });
+            this.app.showToast(`Failed to save message: ${e.message}`, { type: 'error' });
         }
     }
     escapeHtml(str) {
@@ -272,7 +270,7 @@ export class SyncManager {
                 keys = list.map((m) => m.key).filter(Boolean);
         }
         catch (e) {
-            this.app.showToast('Failed to read messages: ' + e.message, { type: 'error' });
+            this.app.showToast(`Failed to read messages: ${e.message}`, { type: 'error' });
             return;
         }
         if (keys.length === 0) {

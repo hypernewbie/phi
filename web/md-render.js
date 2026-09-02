@@ -38,7 +38,7 @@ export function resolveRelative(baseDir, rel) {
         }
         stack.push(seg);
     }
-    return '/' + stack.join('/');
+    return `/${stack.join('/')}`;
 }
 // Rewrites relative <img> srcs to the asset endpoint, resolved against
 // the markdown file's directory. Absolute URLs (scheme, //, /, #, data:)

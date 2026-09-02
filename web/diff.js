@@ -154,7 +154,7 @@ export class DiffController {
             btn.addEventListener('click', () => {
                 document
                     .querySelector('.diff-tab-btn.active')
-                    .classList.remove('active');
+                    ?.classList.remove('active');
                 btn.classList.add('active');
                 this.activeTab = btn.getAttribute('data-tab');
                 this.refreshDiff(false); // Reload commit list when changing tabs
@@ -376,7 +376,7 @@ export class DiffController {
         this.term.reset();
         this.term.clear();
         const normalized = (text || '').replace(/\r?\n/g, '\r\n');
-        this.term.write(normalized && normalized.trim() ? normalized : emptyText);
+        this.term.write(normalized?.trim() ? normalized : emptyText);
     }
     _setPanel(mode) {
         this._closeCommandContextMenu?.();
@@ -388,48 +388,48 @@ export class DiffController {
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
-            cmdEl.classList.add('hidden');
-            syncEl.classList.add('hidden');
-            ftEl.classList.add('hidden');
-            this.actionBar.classList.add('hidden');
+            cmdEl?.classList.add('hidden');
+            syncEl?.classList.add('hidden');
+            ftEl?.classList.add('hidden');
+            this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'sync') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            cmdEl.classList.add('hidden');
-            syncEl.classList.remove('hidden');
-            ftEl.classList.add('hidden');
-            this.actionBar.classList.add('hidden');
+            cmdEl?.classList.add('hidden');
+            syncEl?.classList.remove('hidden');
+            ftEl?.classList.add('hidden');
+            this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'cmd') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            cmdEl.classList.remove('hidden');
-            syncEl.classList.add('hidden');
-            ftEl.classList.add('hidden');
-            this.actionBar.classList.add('hidden');
+            cmdEl?.classList.remove('hidden');
+            syncEl?.classList.add('hidden');
+            ftEl?.classList.add('hidden');
+            this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'files') {
             termEl.classList.add('hidden');
             mdEl.classList.add('hidden');
-            cmdEl.classList.add('hidden');
-            syncEl.classList.add('hidden');
-            ftEl.classList.remove('hidden');
-            this.actionBar.classList.add('hidden');
+            cmdEl?.classList.add('hidden');
+            syncEl?.classList.add('hidden');
+            ftEl?.classList.remove('hidden');
+            this.actionBar?.classList.add('hidden');
         }
         else {
             termEl.classList.remove('hidden');
             mdEl.classList.add('hidden');
-            cmdEl.classList.add('hidden');
-            syncEl.classList.add('hidden');
-            ftEl.classList.add('hidden');
+            cmdEl?.classList.add('hidden');
+            syncEl?.classList.add('hidden');
+            ftEl?.classList.add('hidden');
             if (this.activeTab === 'diff') {
-                this.actionBar.classList.remove('hidden');
-                this.commitSelect.classList.remove('hidden');
-                this.richDiffBtn.classList.remove('hidden');
+                this.actionBar?.classList.remove('hidden');
+                this.commitSelect?.classList.remove('hidden');
+                this.richDiffBtn?.classList.remove('hidden');
             }
             else {
-                this.actionBar.classList.add('hidden');
+                this.actionBar?.classList.add('hidden');
             }
         }
     }
@@ -455,7 +455,7 @@ export class DiffController {
                     const opt = document.createElement('option');
                     opt.value = commit.hash;
                     opt.innerText = `${commit.hash} - ${commit.subject}`;
-                    this.commitSelect.appendChild(opt);
+                    this.commitSelect?.appendChild(opt);
                 });
             }
             if (Array.from(this.commitSelect.options).some((o) => o.value === currentSelected)) {
@@ -902,7 +902,7 @@ export class DiffController {
         }
         catch (e) {
             console.error('Delete command failed:', e);
-            alert('Delete command failed: ' + e.message);
+            alert(`Delete command failed: ${e.message}`);
         }
     }
     copyAllCommands(btnElement) {
@@ -922,7 +922,7 @@ export class DiffController {
                 const allWts = await wtRes.json();
                 const dirtyRes = await fetch(`/api/git/worktree-dirty?cwd=${encodeURIComponent(ws)}`);
                 const dirtyMap = await dirtyRes.json();
-                const targetWts = (Array.isArray(allWts) ? allWts : []).filter((wt) => dirtyMap && dirtyMap[wt.path]);
+                const targetWts = (Array.isArray(allWts) ? allWts : []).filter((wt) => dirtyMap?.[wt.path]);
                 if (targetWts.length === 0) {
                     this.app.showToast('No dirty worktrees found', {
                         type: 'info',
@@ -1001,13 +1001,13 @@ export class DiffController {
         if (isUsableShell(targetTab)) {
             let payload = combined;
             if (combined.length > 16 || combined.includes('\n')) {
-                payload = '\x1b[200~' + combined + '\x1b[201~';
+                payload = `\x1b[200~${combined}\x1b[201~`;
             }
             // Bug fix: previously this used activeTab.ws which meant the
             // command went to whichever tab was focused BEFORE the reuse
             // switch. Must use targetTab so the command lands in the tab
             // we just routed to.
-            this.app.tabManager.sendInput(targetTab, payload + '\r');
+            this.app.tabManager.sendInput(targetTab, `${payload}\r`);
             this.app.tabManager.inputTextArea.focus({ preventScroll: true });
             this.app.tabManager._spamScrollToBottom(targetTab);
         }
@@ -1214,7 +1214,7 @@ export class DiffController {
             // Streaming endpoint signals non-repo via JSON flag rather
             // than by spawning a PTY that immediately exits with the
             // fatal stderr.
-            if (data && data.notGitRepo)
+            if (data?.notGitRepo)
                 return notAGitRepo('this view');
             // Connect and stream diff/log output
             this.currentWs = new PTYWebSocket(data.pane_id, (text) => {
@@ -1269,7 +1269,7 @@ export class DiffController {
         this.renderRichDiff(this.lastRawDiffText);
     }
     renderRichDiff(rawDiffText) {
-        if (!rawDiffText || !rawDiffText.trim()) {
+        if (!rawDiffText?.trim()) {
             this.diffModalBody.innerHTML =
                 '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
             return;
@@ -1300,7 +1300,7 @@ export class DiffController {
             }))
             : diffHtml;
         const parsed = new DOMParser().parseFromString(safeDiffHtml, 'text/html');
-        this.diffModalBody.replaceChildren(...Array.from(parsed.body.childNodes));
+        this.diffModalBody?.replaceChildren(...Array.from(parsed.body.childNodes));
     }
     async loadRichDiff() {
         if (!this.diffModalBody)
