@@ -2728,6 +2728,9 @@ export class DesktopHost {
             session: sharedSession,
           },
         });
+        // Obsidian blank so reloads don't flashbang white for 1 frame
+        try { (view as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
+        try { (view.webContents as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
         // The CPU poll resolves the selected server's view from this lookup
         // (the retained views are owned by ProfileViewManager).
         this.viewByOrigin.set(origin, view);
@@ -3041,6 +3044,8 @@ export class DesktopHost {
           session: sharedSession,
         },
       });
+      try { (rail as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
+      try { (rail.webContents as unknown as { setBackgroundColor?: (c: string) => void }).setBackgroundColor?.('#08080a'); } catch {}
       this.railView = rail;
       this.trustedSessionSenders.add(rail.webContents);
       win.contentView.addChildView(rail);
