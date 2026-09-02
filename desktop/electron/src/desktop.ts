@@ -1072,9 +1072,9 @@ export class DesktopHost {
     screenY: number,
   ): void {
     const parent = this.liveMainWindow();
-    const profile = this.controller?.state().profiles.find(
-      (candidate) => candidate.id === profileId,
-    );
+    const profile = this.controller
+      ?.state()
+      .profiles.find((candidate) => candidate.id === profileId);
     if (!parent || !profile) return;
     this.closeRailMenu();
 

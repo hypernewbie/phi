@@ -575,7 +575,8 @@ export class DiffController {
         addItem('⇉ All', 'all');
         document.body.appendChild(menu);
 
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportWidth =
+            window.innerWidth || document.documentElement.clientWidth;
         const viewportHeight =
             window.innerHeight || document.documentElement.clientHeight;
         const rect = menu.getBoundingClientRect();
@@ -587,7 +588,8 @@ export class DiffController {
         menu.style.top = `${Math.min(Math.max(8, y), maxTop)}px`;
 
         const onDocumentClick = (e: MouseEvent): void => {
-            if (!menu.contains(e.target as Node)) this._closeCommandContextMenu();
+            if (!menu.contains(e.target as Node))
+                this._closeCommandContextMenu();
         };
         const onKeydown = (e: KeyboardEvent): void => {
             if (e.key === 'Escape') {
@@ -776,7 +778,6 @@ export class DiffController {
                     this.runCommand(cmd, 'current'),
                 );
                 buttonsGroup.appendChild(runBtn);
-
 
                 left.appendChild(buttonsGroup);
 
