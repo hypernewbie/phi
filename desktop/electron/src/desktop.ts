@@ -30,6 +30,7 @@ import {
   Menu,
   Notification,
   safeStorage,
+  screen,
   session,
   shell,
   WebContentsView,
@@ -50,6 +51,7 @@ import type {
   ActiveServer,
   HeaderAction,
   HeaderState,
+  RailMenuState,
   RailState,
 } from './electron.js';
 import {
@@ -408,6 +410,9 @@ export class DesktopHost {
   // The retained per-profile view manager + the rail child view.
   profileViews: ProfileViewManager | null = null;
   railView: WebContentsView | null = null;
+  /** The desktop-sized rail context popup; the rail view itself is only 72px wide. */
+  private railMenuWindow: BrowserWindow | null = null;
+  private railMenuProfileId: string | null = null;
   // before-quit deferral guard: the first before-quit defers the quit
   // until destroyAll() (and the rail view teardown) completes, then
   // re-quits; the guard keeps the re-entrant before-quit from deferring
@@ -544,6 +549,7 @@ export class DesktopHost {
       this.mainPageReady = false;
       // The close fence above invalidated all old asynchronous work before
       // this serialized native-child teardown begins.
+      this.closeRailMenu();
       for (const child of this.sessionChildren) {
         try {
           if (!child.isDestroyed()) child.close();
@@ -1025,18 +1031,121 @@ export class DesktopHost {
     }
   }
 
+  /** Close the shell-level rail popup, if one is open. */
+  private closeRailMenu(): void {
+    const menu = this.railMenuWindow;
+    this.railMenuWindow = null;
+    this.railMenuProfileId = null;
+    if (menu && !menu.isDestroyed()) menu.close();
+  }
+
+  /** Place the popup just beyond the rail and keep it inside the work area. */
+  private positionRailMenu(
+    menu: BrowserWindow,
+    screenX: number,
+    screenY: number,
+    parent: BrowserWindow,
+  ): void {
+    const [width, height] = menu.getSize();
+    const display = screen.getDisplayNearestPoint({ x: screenX, y: screenY });
+    const work = display.workArea;
+    const parentBounds = parent.getBounds();
+    const railEdge = parentBounds.x + RAIL_WIDTH + 8;
+    const left = Math.max(
+      work.x + 8,
+      Math.min(
+        Math.max(screenX + 10, railEdge),
+        work.x + work.width - width - 8,
+      ),
+    );
+    const top = Math.max(
+      work.y + 8,
+      Math.min(screenY + 4, work.y + work.height - height - 8),
+    );
+    menu.setPosition(Math.round(left), Math.round(top));
+  }
+
+  /** Open the rich rail menu outside the rail WebContentsView's 72px clip. */
+  private openRailMenu(
+    profileId: string,
+    screenX: number,
+    screenY: number,
+  ): void {
+    const parent = this.liveMainWindow();
+    const profile = this.controller?.state().profiles.find(
+      (candidate) => candidate.id === profileId,
+    );
+    if (!parent || !profile) return;
+    this.closeRailMenu();
+
+    const menu = new BrowserWindow({
+      title: 'Phi server menu',
+      parent,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      width: 320,
+      height: 380,
+      useContentSize: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      skipTaskbar: true,
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        preload: path.join(here, 'preload.js'),
+        session: session.defaultSession,
+      },
+    });
+    this.railMenuWindow = menu;
+    this.railMenuProfileId = profileId;
+    this.sessionChildren.add(menu);
+    this.trustedSessionSenders.add(menu.webContents);
+    menu.on('blur', () => {
+      if (this.railMenuWindow === menu) this.closeRailMenu();
+    });
+    menu.on('closed', () => {
+      this.sessionChildren.delete(menu);
+      this.trustedSessionSenders.delete(menu.webContents);
+      if (this.railMenuWindow === menu) {
+        this.railMenuWindow = null;
+        this.railMenuProfileId = null;
+      }
+    });
+
+    void menu
+      .loadFile(path.join(here, 'rail-menu.html'), {
+        query: { profile: profileId },
+      })
+      .then(() => {
+        if (this.railMenuWindow !== menu || menu.isDestroyed()) return;
+        this.positionRailMenu(menu, screenX, screenY, parent);
+        this.pushRailState();
+        menu.show();
+        menu.focus();
+      })
+      .catch((err) => {
+        console.log(`phi-desktop: rail menu loadFile failed: ${String(err)}`);
+        if (this.railMenuWindow === menu) this.closeRailMenu();
+      });
+  }
+
   /**
    * Pushes a fresh phi:rail-state snapshot to the RAIL view's webContents
-   * — the renderer that actually renders the rail (the main window's own
+   * — the renderer that actually renders the list (the main window's own
    * webContents is a covered blank container and must not receive it).
    * The controller's Maps are flattened to plain records (the renderer's
-   * RailState shape).
+   * RailState shape). The same snapshot refreshes an open shell-level menu.
    */
   pushRailState(): void {
     const ctrl = this.controller;
+    if (!ctrl) return;
     const rail = this.railView;
-    if (!ctrl || !rail || !rail.webContents || rail.webContents.isDestroyed())
-      return;
     const st = ctrl.state();
     const state: RailState = {
       profiles: st.profiles.map((p) => {
@@ -1054,7 +1163,24 @@ export class DesktopHost {
       health: Object.fromEntries(st.health),
       unread: Object.fromEntries(st.unread),
     };
-    rail.webContents.send('phi:rail-state', state);
+    if (rail && !rail.webContents.isDestroyed())
+      rail.webContents.send('phi:rail-state', state);
+
+    const menu = this.railMenuWindow;
+    const menuProfileId = this.railMenuProfileId;
+    if (menu && menuProfileId && !menu.isDestroyed()) {
+      const profile = state.profiles.find((item) => item.id === menuProfileId);
+      if (!profile) {
+        this.closeRailMenu();
+      } else {
+        const menuState: RailMenuState = {
+          profile,
+          health: state.health[menuProfileId] ?? 'unknown',
+          unread: state.unread[menuProfileId] ?? 0,
+        };
+        menu.webContents.send('phi:rail-menu-state', menuState);
+      }
+    }
   }
 
   /**
@@ -2227,6 +2353,7 @@ export class DesktopHost {
     // WebContentsView children). before-quit sets `quitting` so explicit
     // quits are never intercepted; child windows carry no close handler.
     win.on('close', (event) => {
+      this.closeRailMenu();
       if (!this.quitting && (this.controller?.state().closeToTray ?? true)) {
         event.preventDefault();
         win.hide();
@@ -2927,6 +3054,39 @@ export class DesktopHost {
       const current = this.liveMainWindow();
       return current !== null && event.sender === current.webContents;
     };
+    const isRailSender = (event: IpcMainEvent): boolean => {
+      const current = this.liveMainWindow();
+      const rail = this.railView;
+      return (
+        current !== null &&
+        rail !== null &&
+        !rail.webContents.isDestroyed() &&
+        event.sender === rail.webContents
+      );
+    };
+    // The rail is only 72px wide. Context menus live in a child window so
+    // they can grow into the body area without being clipped by the rail
+    // WebContentsView.
+    ipcMain.on(
+      'phi:open-rail-menu',
+      (event, id: unknown, screenX: unknown, screenY: unknown) => {
+        if (!isRailSender(event)) return;
+        if (
+          typeof id !== 'string' ||
+          id === '' ||
+          typeof screenX !== 'number' ||
+          !Number.isFinite(screenX) ||
+          typeof screenY !== 'number' ||
+          !Number.isFinite(screenY)
+        )
+          return;
+        this.openRailMenu(id, screenX, screenY);
+      },
+    );
+    ipcMain.on('phi:close-rail-menu', (event) => {
+      if (this.railMenuWindow?.webContents !== event.sender) return;
+      this.closeRailMenu();
+    });
     // Rail renderer click handler (window.electron.postSelectProfile):
     // activate the clicked profile.
     ipcMain.on('phi:select-profile', (event, id: unknown) => {

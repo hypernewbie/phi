@@ -20,7 +20,13 @@ const preloadDir = path.join(here, '..', 'dist-preload');
 // renderer.js needs no copy: tsc emits it directly into dist/ (outDir:
 // dist, include: src) alongside main.js/controller.js/etc., so the
 // renderer.html "./renderer.js" reference resolves to the compiled module.
-const assets = ['renderer.html', 'rail.css', 'picker.html'];
+const assets = [
+  'renderer.html',
+  'rail.css',
+  'rail-menu.html',
+  'rail-menu.css',
+  'picker.html',
+];
 
 mkdirSync(distDir, { recursive: true });
 for (const name of assets) {

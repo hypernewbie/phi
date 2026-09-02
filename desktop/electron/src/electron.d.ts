@@ -32,6 +32,14 @@ export interface RailState {
   unread: Record<string, number>;
 }
 
+/** A context-menu request from the rail is rendered in a shell-level popup,
+ * outside the rail WebContentsView's narrow clipping rectangle. */
+export interface RailMenuState {
+  profile: RailProfile;
+  health: RailHealth;
+  unread: number;
+}
+
 /** Result of an add-server request pushed by the main process on 'phi:add-server-result'. */
 export interface AddServerResult {
   ok: boolean;
@@ -123,10 +131,16 @@ export interface ElectronApi {
   onForwardPayload(cb: (payload: ForwardPayload) => void): () => void;
   /** Subscribe to rail state snapshots (channel 'phi:rail-state'); returns an unsubscribe function. */
   onRailState(cb: (state: RailState) => void): () => void;
+  /** Subscribe to the selected profile's popup state (channel 'phi:rail-menu-state'). */
+  onRailMenuState(cb: (state: RailMenuState) => void): () => void;
   /** Subscribe to add-server results (channel 'phi:add-server-result'); returns an unsubscribe function. */
   onAddServerResult(cb: (result: AddServerResult) => void): () => void;
   /** Ask the main process to activate a saved profile (channel 'phi:select-profile'). */
   postSelectProfile(id: string): void;
+  /** Open the desktop-sized context popup for a rail profile (channel 'phi:open-rail-menu'). */
+  postOpenRailMenu(id: string, screenX: number, screenY: number): void;
+  /** Close the desktop-sized rail context popup (channel 'phi:close-rail-menu'). */
+  postCloseRailMenu(): void;
   /** Ask the main process to open a saved profile's own session selector on its retained view (channel 'phi:open-server-sessions'). */
   postOpenServerSessions(id: string): void;
   /** Ask the main process to open the add-server picker (channel 'phi:open-picker'). */
