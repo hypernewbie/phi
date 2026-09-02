@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
-// Tab strip overflow affordances: +N more chip, all-tabs dropdown
-// grouped by worktree glyph, sidebar worktree legend, mouse-wheel
+// Tab strip overflow affordances: tab-list arrow, all-tabs dropdown
+// grouped by worktree glyph, closing-tab recovery rows, mouse-wheel
 // horizontal scroll, edge auto-scroll during drag, and drop-into-
 // whitespace for the far edge.
 //
@@ -18,9 +18,7 @@ setupDomHarness();
 function mountChromeDom() {
     document.body.innerHTML = `
         <div id="tabs-container"></div>
-        <button id="tab-overflow-btn" class="tab-overflow-btn hidden">
-            <span class="tab-overflow-btn-label"></span>
-        </button>
+        <button id="tab-overflow-btn" class="tab-overflow-btn hidden"></button>
         <div id="tab-overflow-dropdown" class="tab-overflow-dropdown hidden"></div>
         <div id="worktree-legend"></div>
     `;
@@ -111,10 +109,10 @@ function makeTabManager({ withTabs = [], width = 800 } = {}) {
     return tm;
 }
 
-// ---- +N more chip: presence + label -------------------------------
+// ---- Tab-list selector: presence + status --------------------------
 
 describe('updateTabOverflow', () => {
-    it('hides the chip when tabs fit in the visible area', () => {
+    it('hides the selector when tabs fit in the visible area', () => {
         const tm = makeTabManager({
             withTabs: ['t1', 't2', 't3'],
             width: 1200,
@@ -124,7 +122,7 @@ describe('updateTabOverflow', () => {
         expect(btn.classList.contains('hidden')).toBe(true);
     });
 
-    it('shows the chip when tabs overflow', () => {
+    it('shows the selector when tabs overflow', () => {
         // 8 tabs × 150 = 1200, clientWidth=800 -> overflow.
         const tm = makeTabManager({
             withTabs: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
@@ -135,7 +133,7 @@ describe('updateTabOverflow', () => {
         expect(btn.classList.contains('hidden')).toBe(false);
     });
 
-    it('chip label counts how many tabs are past the right edge', () => {
+    it('selector title counts how many tabs are past the right edge', () => {
         // 8 tabs at 150 each = 1200, clientWidth 800. Tabs t1..t5 are
         // visible (0..750). Tabs t6,t7,t8 are at 750..1200 (past 800).
         // So 3 hidden tabs.
@@ -157,8 +155,17 @@ describe('updateTabOverflow', () => {
             tabRects.slice(0, 3),
         );
         tm.updateTabOverflow();
-        const label = document.querySelector('.tab-overflow-btn-label');
-        expect(label.textContent).toBe('+3 more');
+        const btn = document.getElementById('tab-overflow-btn');
+        expect(btn.title).toContain('3 more tabs');
+    });
+
+    it('shows the selector when a tab is in the close grace period', () => {
+        const tm = makeTabManager({ withTabs: ['a'], width: 1200 });
+        tm.tabs.get('a').softClosing = true;
+        tm.updateTabOverflow();
+        const btn = document.getElementById('tab-overflow-btn');
+        expect(btn.classList.contains('hidden')).toBe(false);
+        expect(btn.title).toContain('1 closing tab');
     });
 });
 
@@ -190,6 +197,44 @@ describe('_buildOverflowDropdown', () => {
         // Tab rows are interleaved per their group.
         const rows = dropdown.querySelectorAll('.hostname-dropdown-row');
         expect(rows.length).toBe(3);
+    });
+
+    it('keeps closing tabs out of live worktree groups', () => {
+        const tm = makeTabManager({
+            withTabs: ['A:a', 'A:b'],
+            width: 800,
+        });
+        tm.tabs.get('A:b').softClosing = true;
+        tm._buildOverflowDropdown();
+        const dropdown = document.getElementById('tab-overflow-dropdown');
+        expect(
+            dropdown.querySelector('.tab-overflow-closing-group'),
+        ).toBeTruthy();
+        expect(
+            dropdown.querySelector('.tab-overflow-closing-row').dataset.paneId,
+        ).toBe('A:b');
+        expect(dropdown.querySelectorAll('.hostname-dropdown-row').length).toBe(
+            2,
+        );
+        expect(
+            dropdown.querySelector('.tab-overflow-closing-countdown')
+                .textContent,
+        ).toMatch(/^Closing in \d+s$/);
+    });
+
+    it('clicking a closing tab row invokes Undo and removes the row menu', () => {
+        const tm = makeTabManager({ withTabs: ['a'], width: 800 });
+        tm.tabs.get('a').softClosing = true;
+        tm.undoCloseTab = vi.fn();
+        tm._buildOverflowDropdown();
+        const row = document.querySelector('.tab-overflow-closing-row');
+        row.querySelector('.hostname-dropdown-select-btn').click();
+        expect(tm.undoCloseTab).toHaveBeenCalledWith('a');
+        expect(
+            document
+                .getElementById('tab-overflow-dropdown')
+                .classList.contains('hidden'),
+        ).toBe(true);
     });
 
     it('renders an empty-state message when no tabs are open', () => {
@@ -471,7 +516,7 @@ describe('container drop on whitespace', () => {
 
 // ---- Regression: updateTabOverflow must run AFTER this.tabs.set
 // in createTab(), not before. v0.8.4 had this call ~300 lines before
-// tabs.set which made the overflow chip always one tab behind until
+// tabs.set which made the tab-list selector always one tab behind until
 // some unrelated event triggered a re-render. (The worktree-legend
 // sibling check was removed when the legend itself was removed.)
 

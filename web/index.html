@@ -532,7 +532,8 @@
                         <button
                             id="tab-overflow-btn"
                             class="tab-overflow-btn hidden"
-                            title="Show all open tabs (grouped by worktree)"
+                            title="Show tab list"
+                            aria-label="Show tab list"
                             aria-haspopup="true"
                             aria-expanded="false"
                         >
@@ -544,13 +545,10 @@
                                 stroke-width="2"
                                 stroke-linecap="round"
                                 stroke-linejoin="round"
-                                style="width: 12px; height: 12px"
+                                aria-hidden="true"
                             >
-                                <line x1="3" y1="6" x2="21" y2="6"></line>
-                                <line x1="3" y1="12" x2="21" y2="12"></line>
-                                <line x1="3" y1="18" x2="21" y2="18"></line>
+                                <polyline points="6 9 12 15 18 9"></polyline>
                             </svg>
-                            <span class="tab-overflow-btn-label"></span>
                         </button>
                         <div
                             id="tab-overflow-dropdown"
