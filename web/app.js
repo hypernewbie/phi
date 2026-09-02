@@ -483,7 +483,8 @@ export class App {
                 shouldFit = false,
                 resetDocumentScroll = false,
             ) => {
-                const isMobile = window.innerWidth <= 768;
+                const isDesktop = new URLSearchParams(window.location.search).has('desktop');
+                const isMobile = !isDesktop && window.innerWidth <= 768;
                 if (isMobile && window.visualViewport) {
                     const viewport = window.visualViewport;
 
@@ -522,6 +523,9 @@ export class App {
                 this.updateLayoutPosition(true, true),
             );
             window.visualViewport.addEventListener('scroll', () =>
+                this.updateLayoutPosition(false),
+            );
+            window.addEventListener('resize', () =>
                 this.updateLayoutPosition(false),
             );
 
