@@ -303,6 +303,25 @@ export class ProfileViewManager {
     this.win.contentView.removeChildView(entry.view);
   }
 
+  /** Low memory mode: destroy every inactive retained view, keep only keepId (massively aggro, 1 tab). */
+  hibernateInactive(keepId: string): void {
+    for (const [id, entry] of [...this.views.entries()]) {
+      if (id === keepId) continue;
+      try {
+        this.teardownView(entry);
+      } catch (err) {
+        this.log(`views: hibernateInactive ${id}: ${String(err)}`);
+      }
+      this.views.delete(id);
+      this.log(`views: hibernateInactive — destroyed ${id}, kept ${keepId || '(none)'}`);
+    }
+  }
+
+  /** Restore point for low-memory off: next setActive will lazily recreate. No-op besides log. */
+  restoreAll(): void {
+    this.log(`views: restoreAll — low memory off, ${this.views.size} views retained, rest will lazy-create`);
+  }
+
   private hideActiveView(): void {
     if (this.activeId === null) return;
     const prev = this.views.get(this.activeId);

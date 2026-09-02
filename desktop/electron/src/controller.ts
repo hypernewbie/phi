@@ -97,6 +97,8 @@ export interface ControllerState {
   closeToTray: boolean;
   /** The persisted sync-board desktop-alert preference (default true). */
   syncAlerts: boolean;
+  /** The persisted low-memory mode preference (default false, auto true if <10GB RAM). */
+  lowMemoryMode: boolean;
   /** The persisted desktop-pet preference (default false). */
   petEnabled: boolean;
   /** The persisted desktop-pet zoom percentage (default 100). */
@@ -113,6 +115,7 @@ export type ControllerEvent =
   | { kind: 'health-changed' }
   | { kind: 'close-to-tray-changed' }
   | { kind: 'sync-alerts-changed' }
+  | { kind: 'low-memory-changed' }
   | { kind: 'pet-enabled-changed' }
   | { kind: 'pet-zoom-changed' }
   | { kind: 'pet-idle-dwell-changed'; dwellSeconds: number };
@@ -402,6 +405,7 @@ interface LoadedStore {
   profiles: InternalProfile[];
   closeToTray: boolean;
   syncAlerts: boolean;
+  lowMemoryMode: boolean;
   petEnabled: boolean;
   petZoomPercent: number;
   petIdleDwellSeconds: number;
@@ -472,6 +476,7 @@ function readStore(
       profiles: [],
       closeToTray: true,
       syncAlerts: true,
+      lowMemoryMode: false,
       petEnabled: false,
       petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
       petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -490,6 +495,7 @@ function readStore(
         profiles: [],
         closeToTray: true,
         syncAlerts: true,
+        lowMemoryMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -520,6 +526,7 @@ function readStore(
         profiles: [],
         closeToTray: true,
         syncAlerts: true,
+        lowMemoryMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
@@ -533,6 +540,10 @@ function readStore(
   }
   const syncAlerts =
     typeof obj.syncAlerts === 'boolean' ? obj.syncAlerts : true;
+  const lowMemoryMode =
+    typeof (obj as Record<string, unknown>).lowMemoryMode === 'boolean'
+      ? ((obj as Record<string, unknown>).lowMemoryMode as boolean)
+      : false;
   const petEnabled =
     typeof obj.petEnabled === 'boolean' ? obj.petEnabled : false;
   const hasZoomPercent = Object.hasOwn(obj, 'petZoomPercent');
@@ -584,6 +595,7 @@ function readStore(
     profiles,
     closeToTray: typeof obj.closeToTray === 'boolean' ? obj.closeToTray : true,
     syncAlerts,
+    lowMemoryMode,
     petEnabled,
     petZoomPercent,
     petIdleDwellSeconds,
@@ -601,6 +613,7 @@ function saveStore(
   profiles: InternalProfile[],
   closeToTray: boolean,
   syncAlerts: boolean,
+  lowMemoryMode: boolean,
   petEnabled: boolean,
   petZoomPercent: number,
   petIdleDwellSeconds: number,
@@ -635,6 +648,7 @@ function saveStore(
           })),
           closeToTray,
           syncAlerts,
+          lowMemoryMode,
           petEnabled,
           petZoomPercent,
           petIdleDwellSeconds,
@@ -710,6 +724,7 @@ export class Controller {
   private unread = new Map<string, number>();
   private closeToTray = true;
   private syncAlerts = true;
+  private lowMemoryMode = false;
   private petEnabled = false;
   private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
   private petIdleDwellSeconds = PET_IDLE_DWELL_DEFAULT_SECONDS;
@@ -721,6 +736,7 @@ export class Controller {
     const store = readStore(this.persistPath, false, this.log);
     this.closeToTray = store.closeToTray;
     this.syncAlerts = store.syncAlerts;
+    this.lowMemoryMode = store.lowMemoryMode;
     this.petEnabled = store.petEnabled;
     this.petZoomPercent = store.petZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
@@ -764,6 +780,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -803,6 +820,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -837,6 +855,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
       this.petIdleDwellSeconds,
@@ -878,6 +897,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -901,6 +921,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
       this.petIdleDwellSeconds,
@@ -925,6 +946,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -972,6 +994,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
       this.petIdleDwellSeconds,
@@ -1002,11 +1025,32 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'sync-alerts-changed' });
+  }
+
+  getLowMemoryMode(): boolean {
+    return this.lowMemoryMode;
+  }
+
+  setLowMemoryMode(value: boolean): void {
+    if (value === this.lowMemoryMode) return;
+    this.lowMemoryMode = value;
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+      this.lowMemoryMode,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.petIdleDwellSeconds,
+    );
+    this.emit({ kind: 'low-memory-changed' });
   }
 
   /**
@@ -1030,6 +1074,7 @@ export class Controller {
       this.profiles,
       this.closeToTray,
       this.syncAlerts,
+      this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
       this.petIdleDwellSeconds,
@@ -1058,6 +1103,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -1085,6 +1131,7 @@ export class Controller {
         this.profiles,
         this.closeToTray,
         this.syncAlerts,
+        this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
         this.petIdleDwellSeconds,
@@ -1140,6 +1187,7 @@ export class Controller {
       unread: new Map(this.unread),
       closeToTray: this.closeToTray,
       syncAlerts: this.syncAlerts,
+      lowMemoryMode: this.lowMemoryMode,
       petEnabled: this.petEnabled,
       petZoomPercent: this.petZoomPercent,
       petIdleDwellSeconds: this.petIdleDwellSeconds,

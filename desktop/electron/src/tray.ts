@@ -71,6 +71,7 @@ export type TrayCommand =
   | { kind: 'select-profile'; id: string }
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
+  | { kind: 'toggle-low-memory' }
   | { kind: 'toggle-pet' }
   | { kind: 'install-pet' }
   | { kind: 'pet-zoom-in' }
@@ -109,6 +110,8 @@ export interface TrayDeps {
   getCloseToTray(): boolean;
   /** The persisted sync-board desktop-alert preference (the menu checkbox state). */
   getSyncAlerts(): boolean;
+  /** The persisted low-memory mode preference (default false, massively aggro: 1 tab). */
+  getLowMemoryMode(): boolean;
   /** True when the optional desktop/pet package was discovered (enables the checkbox). */
   getPetAvailable(): boolean;
   /** True when a released build may offer the pet installer. */
@@ -169,6 +172,7 @@ export interface TrayMenuHandlers {
   selectProfile: (id: string) => void;
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
+  toggleLowMemory: () => void;
   togglePet: () => void;
   installPet: () => void;
   petZoomIn: () => void;
@@ -282,6 +286,7 @@ export function buildTrayMenu(
   handlers: TrayMenuHandlers,
   closeToTray: boolean,
   syncAlerts: boolean,
+  lowMemoryMode: boolean,
   petAvailable: boolean,
   petInstallable: boolean = false,
   petInstalling: boolean = false,
@@ -311,6 +316,12 @@ export function buildTrayMenu(
     type: 'checkbox',
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
+  });
+  entries.push({
+    label: 'Low memory mode (1 tab)',
+    type: 'checkbox',
+    checked: lowMemoryMode,
+    click: handlers.toggleLowMemory,
   });
   const petActionsEnabled = petAvailable;
   if (!petAvailable && (petInstallable || petInstalling)) {
@@ -427,6 +438,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-close-to-tray' }),
     toggleSyncAlerts: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
+    toggleLowMemory: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-low-memory' }),
     togglePet: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-pet' }),
     installPet: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'install-pet' }),
@@ -454,6 +467,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       handlers,
       deps.getCloseToTray(),
       deps.getSyncAlerts(),
+      deps.getLowMemoryMode(),
       deps.getPetAvailable(),
       deps.getPetInstallable(),
       deps.getPetInstalling(),
@@ -472,6 +486,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         handlers,
         deps.getCloseToTray(),
         deps.getSyncAlerts(),
+        deps.getLowMemoryMode(),
         deps.getPetAvailable(),
         deps.getPetInstallable(),
         deps.getPetInstalling(),

@@ -646,6 +646,7 @@ export class DesktopHost {
       getUnread: (id) => this.controller?.state().unread.get(id) ?? 0,
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
+      getLowMemoryMode: () => this.controller?.state().lowMemoryMode ?? false,
       getPetAvailable: () => isPetAvailable(this.petRoot),
       getPetInstallable: () =>
         isPetInstallable(
@@ -711,6 +712,18 @@ export class DesktopHost {
               console.log(
                 `phi-desktop: tray toggle-sync-alerts: ${String(err)}`,
               );
+            }
+            break;
+          }
+          case 'toggle-low-memory': {
+            const ctrl = this.controller;
+            if (!ctrl) break;
+            try {
+              ctrl.setLowMemoryMode(!ctrl.getLowMemoryMode());
+              // Apply immediately: hibernate or restore views
+              this.applyLowMemoryMode(ctrl.getLowMemoryMode());
+            } catch (err) {
+              console.log(`phi-desktop: tray toggle-low-memory: ${String(err)}`);
             }
             break;
           }
@@ -992,6 +1005,20 @@ export class DesktopHost {
     for (const p of st.profiles) tray.setUnread(p.id, st.unread.get(p.id) ?? 0);
     const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
     if (active) tray.setActiveProfile(active);
+  }
+
+  applyLowMemoryMode(enabled: boolean): void {
+    // Massively aggro: keep only active WebContentsView alive, destroy all others immediately.
+    // PTY/WS + tabs.json stay alive server-side; next click recreates view via shared session.
+    const mgr = this.profileViews as unknown as { hibernateInactive?: (keepId: string) => void; restoreAll?: () => void } | undefined;
+    if (!mgr) return;
+    if (enabled) {
+      const keepId = this.controller?.state().activeId ?? '';
+      mgr.hibernateInactive?.(keepId);
+    } else {
+      mgr.restoreAll?.();
+    }
+    this.trayHandle?.rebuildMenu();
   }
 
   /**
@@ -2536,9 +2563,23 @@ export class DesktopHost {
       persistPath: app.getPath('userData') + '/profiles.json',
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
+    // Auto-enable low memory mode on <10GB RAM machines (default off, but massively aggro 1-tab).
+    try {
+      const { totalmem } = await import('node:os');
+      const tenGB = 10 * 1024 * 1024 * 1024;
+      // Only auto-enable if key was absent (fresh store) and RAM <10GB — preserve explicit user choice.
+      const raw = (() => { try { return require('node:fs').readFileSync(app.getPath('userData') + '/profiles.json','utf8'); } catch { return ''; } })();
+      const hasKey = raw.includes('lowMemoryMode');
+      if (!hasKey && totalmem() < tenGB && !this.controller.getLowMemoryMode()) {
+        this.controller.setLowMemoryMode(true);
+        console.log(`phi-desktop: auto-enabled low memory mode (RAM ${(totalmem()/1024/1024/1024).toFixed(1)}GB <10GB)`);
+      }
+    } catch {}
     // The first tray was constructed before the controller for boot ordering;
     // rebuild it now so persisted pet state and zoom are in the first usable snapshot.
     this.trayHandle?.rebuildMenu();
+    // Apply low-memory policy on boot if enabled
+    if (this.controller.getLowMemoryMode()) this.applyLowMemoryMode(true);
     // Access-auth state — declared here (before any subscribe callback
     // can fire) so a synchronously-emitted active-changed event during
     // initial state doesn't trigger a ReferenceError trying to read
@@ -2624,6 +2665,9 @@ export class DesktopHost {
         // the tray snapshot and never echoes the event back to the renderer.
         this.refreshPetTrayForZoom(event);
         return;
+      } else if (event.kind === 'low-memory-changed') {
+        this.trayHandle?.rebuildMenu();
+        this.applyLowMemoryMode(this.controller?.getLowMemoryMode() ?? false);
       } else if (
         event.kind === 'unread-changed' ||
         event.kind === 'profiles-changed' ||
