@@ -2,6 +2,17 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.0 — 2026-09-02
+
+### Added
+- **Desktop Low Memory Mode — 1-tab aggro** (`bd19d72`, `26c70ac`, `1745a4a`). Tray checkbox `Low memory mode (1 tab)` (default off, auto-on when `<10GB` RAM on fresh store). Keeps only active `WebContentsView` alive, `hibernateInactive()` destroys all others (`12→7` PIDs, `2230→1023 MB` for 1 open; stays flat when opening a bunch). Live toggle + every `active-changed` re-hibernates, `mostRecent` fallback keeps correct tab.
+
+### Fixed
+- **Desktop cold-render for inactive terminals** (`web/cold-render.js`). Inactive tabs release `xterm`/`WebGL`/`fit` but keep `PTY`/`WS` + draft + `writeBuffer` (`_coldPending`), rebuild via `_buildXterm` + replay `2k` lines on activate. `earlyOutInactive` shared helper for `diff`/`markdown` non-terminals.
+- **Obsidian blank for reloads** (`45002aa`). `WebContentsView.setBackgroundColor('#08080a')` on profile + rail views so `loadURL`/`did-finish-load` doesn't flash white for 1 frame. `BrowserWindow` already `#08080a`.
+- **Desktop never mobile** (`4f14428`). Bottom bar (`#presets-container` + `.input-actions`) was stuck in `768px` mobile mode inside `?desktop=1` views (hidden width `0` at hibernate). `isMobile = !isDesktop && innerWidth<=768` + `window resize` listener clears `--vv-height`.
+- **Electron 43.4.1 → 44.1.1** (`bd19d72`).
+
 ## v0.20.1 — 2026-08-31
 
 ### Fixed
