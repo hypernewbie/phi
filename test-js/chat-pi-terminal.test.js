@@ -190,6 +190,25 @@ function stagedContext(tab) {
 }
 
 describe('Pi RPC TabManager boundaries', () => {
+    it('shows the thinking button only for Pi RPC tabs', () => {
+        const button = document.createElement('button');
+        const tm = Object.create(TabManager.prototype);
+        tm.piThinkingBtn = button;
+        tm.getActiveTab = vi.fn(() => ({ paneId: 'pi', coder: 'pi' }));
+
+        tm._updatePiThinkingButton();
+        expect(button.classList.contains('hidden')).toBe(true);
+
+        tm.getActiveTab.mockReturnValue({
+            paneId: 'pi-rpc:one',
+            coder: 'pi-rpc',
+        });
+        getPiRpcStatus.mockReturnValue({ thinking: 'high' });
+        tm._updatePiThinkingButton();
+        expect(button.classList.contains('hidden')).toBe(false);
+        expect(button.title).toBe('Thinking: high');
+    });
+
     it('keeps the status bar between input and presets in the static DOM', () => {
         const html = readFileSync(join(ROOT, 'web/index.html'), 'utf8');
         const input = html.indexOf('id="input-bar-container"');
