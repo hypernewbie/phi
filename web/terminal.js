@@ -2326,22 +2326,18 @@ export class TabManager {
     _updatePiThinkingButton() {
         if (!this.piThinkingBtn) return;
         const tab = this.getActiveTab();
-        const isPi = tab?.coder === 'pi' || tab?.coder === 'pi-rpc';
-        if (!isPi) {
+        if (tab?.coder !== 'pi-rpc') {
             this.piThinkingBtn.classList.add('hidden');
             return;
         }
-        this.piThinkingBtn.classList.remove('hidden');
-        let level = 'off';
-        if (tab.coder === 'pi-rpc') {
-            const raw = getPiRpcStatus(tab.paneId);
-            const fmt = raw ? formatPiRpcStatus(raw) : null;
-            const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
-            if (rawLevel && rawLevel !== '—') level = String(rawLevel);
-            else level = this._piThinkingLevels?.get(tab.paneId) || 'off';
-        } else {
-            level = this._piThinkingLevels?.get(tab.paneId) || 'off';
-        }
+
+        const raw = getPiRpcStatus(tab.paneId);
+        const fmt = raw ? formatPiRpcStatus(raw) : null;
+        const rawLevel = raw?.thinking ?? fmt?.thinking ?? '';
+        const level =
+            rawLevel && rawLevel !== '—'
+                ? String(rawLevel)
+                : this._piThinkingLevels?.get(tab.paneId) || 'off';
         const cls = thinkingLevelClass(level);
         const isPending = this._piRpcThinkingPending?.paneId === tab.paneId;
         this.piThinkingBtn.className = `direct-mode-btn pi-thinking-btn pi-thinking-btn--${cls}${isPending ? ' disabled' : ''}`;
@@ -2349,10 +2345,7 @@ export class TabManager {
         const label = cls === 'xhigh' ? `${level} (max)` : level;
         this.piThinkingBtn.title = `Thinking: ${label}`;
         this.piThinkingBtn.setAttribute('aria-label', `Thinking ${level}`);
-        if (isPending) this.piThinkingBtn.classList.add('hidden'); // hide briefly? keep disabled
-        // ensure visible unless pending hidden
-        if (!isPending) this.piThinkingBtn.classList.remove('hidden');
-        else this.piThinkingBtn.classList.remove('hidden');
+        this.piThinkingBtn.classList.remove('hidden');
     }
 
     _cyclePiThinking() {
