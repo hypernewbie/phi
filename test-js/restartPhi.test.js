@@ -88,7 +88,7 @@ describe('Restart phi button', () => {
     });
 
     it('clicking a child element inside the modal does NOT close it', async () => {
-        const fetch = mockFetch(() => ({ ok: true }));
+        const _fetch = mockFetch(() => ({ ok: true }));
         const { mgr } = await loadManager();
         const modal = document.getElementById('restart-modal');
         document.getElementById('phi-restart-btn').click();
@@ -121,7 +121,7 @@ describe('Restart phi button', () => {
     });
 
     it('on HTTP error, toasts and re-enables the confirm button', async () => {
-        const fetch = mockFetch(() => ({
+        const _fetch = mockFetch(() => ({
             ok: false,
             status: 500,
             text: 'boom',

@@ -83,10 +83,10 @@ export class SessionsManager {
     setupEventListeners(): void {
         // Coder Selector Tabs
         document.querySelectorAll('.coder-tab').forEach((tab) => {
-            tab.addEventListener('click', (e) => {
+            tab.addEventListener('click', (_e) => {
                 document
-                    .querySelector('.coder-tab.active')!
-                    .classList.remove('active');
+                    .querySelector('.coder-tab.active')
+                    ?.classList.remove('active');
                 tab.classList.add('active');
                 this.activeCoder = tab.getAttribute('data-coder') as string;
                 this.loadSessions();
@@ -535,11 +535,7 @@ export class SessionsManager {
                 // historically framed royal names; reusing the motif
                 // here marks the worktree as "live / inscribed."
                 let hasLiveTab = false;
-                if (
-                    this.app &&
-                    this.app.tabManager &&
-                    this.app.tabManager.tabs
-                ) {
+                if (this.app?.tabManager?.tabs) {
                     const wtPathNorm = normalizePath(wt.path);
                     for (const t of this.app.tabManager.tabs.values()) {
                         if (t.cwd && normalizePath(t.cwd) === wtPathNorm) {
@@ -1055,8 +1051,7 @@ export class SessionsManager {
 
     _openArgsInput(item: HTMLElement, sess: any): void {
         const existing = item.nextElementSibling;
-        if (existing && existing.classList.contains('args-input-row'))
-            existing.remove();
+        if (existing?.classList.contains('args-input-row')) existing.remove();
 
         const row = document.createElement('div');
         row.className = 'args-input-row';
@@ -1200,7 +1195,7 @@ export class SessionsManager {
             }
 
             this.wsModalSuggestions.classList.remove('hidden');
-            suggestions.forEach((sugg: string, idx: number) => {
+            suggestions.forEach((sugg: string, _idx: number) => {
                 const div = document.createElement('div');
                 div.className = 'suggestion-item';
                 div.innerText = sugg;
@@ -1231,7 +1226,7 @@ export class SessionsManager {
     }
 
     async openReviewTab(sess: any): Promise<void> {
-        const paneId = 'review-' + sess.id;
+        const paneId = `review-${sess.id}`;
 
         if (this.app.tabManager.tabs.has(paneId)) {
             this.app.tabManager.switchTab(paneId);

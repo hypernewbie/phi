@@ -14,7 +14,7 @@ function dotClassFor(state) {
     }
 }
 function truncateLabel(label) {
-    return label.length > 24 ? label.slice(0, 23) + '…' : label;
+    return label.length > 24 ? `${label.slice(0, 23)}…` : label;
 }
 /** Hide the shared strip regardless of pane ownership (used when the
  * active tab has no chat handle, e.g. plain terminal tabs). */
@@ -35,7 +35,7 @@ export function createSubagentStrip(isActive, onClick) {
         const chip = document.createElement('button');
         chip.className = 'subagent-chip';
         const dot = document.createElement('span');
-        dot.className = 'dot ' + dotClassFor(run.state);
+        dot.className = `dot ${dotClassFor(run.state)}`;
         const text = document.createElement('span');
         text.className = 'subagent-chip-label';
         text.textContent = truncateLabel(label);

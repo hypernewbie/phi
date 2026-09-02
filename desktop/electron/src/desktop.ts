@@ -1322,7 +1322,7 @@ export class DesktopHost {
     const st = ctrl.state();
     for (const profile of st.profiles) {
       const view = this.viewByOrigin.get(profile.origin);
-      if (!view || !view.webContents || view.webContents.isDestroyed()) {
+      if (!view?.webContents || view.webContents.isDestroyed()) {
         // A profile without a live retained view keeps no rail reading.
         if (this.observedCpu.delete(profile.id)) this.pushRailState();
         if (profile.id === st.activeId && !win.isDestroyed()) {
@@ -1675,8 +1675,7 @@ export class DesktopHost {
     version: 'v1';
     algorithm: 'pbkdf2-sha256';
   } | null> {
-    if (!view || !view.webContents || view.webContents.isDestroyed())
-      return null;
+    if (!view?.webContents || view.webContents.isDestroyed()) return null;
     try {
       const raw = (await view.webContents.executeJavaScript(
         "localStorage.getItem('phi_access_credential_v1')",
@@ -1888,7 +1887,7 @@ export class DesktopHost {
     action: FileAction,
     reason: string,
   ): void {
-    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    if (!view?.webContents || view.webContents.isDestroyed()) return;
     void view.webContents
       .executeJavaScript(toastErrorScript(`"${action.rel}" — ${reason}`))
       .catch(() => {});
@@ -1934,7 +1933,7 @@ export class DesktopHost {
     const profile = st.profiles.find((p) => p.id === st.activeId) ?? null;
     if (!profile) return;
     const view = this.viewByOrigin.get(profile.origin);
-    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    if (!view?.webContents || view.webContents.isDestroyed()) return;
     void view.webContents.executeJavaScript(READ_FILE_ACTION_SCRIPT).then(
       (raw) => {
         if (
@@ -1961,7 +1960,7 @@ export class DesktopHost {
     this.pendingDividers = null;
     if (pending.left === null && pending.right === null) return;
     const view = this.profileViews?.getView(targetId) ?? null;
-    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    if (!view?.webContents || view.webContents.isDestroyed()) return;
     const apply = (): void => {
       if (!view.webContents || view.webContents.isDestroyed()) return;
       void view.webContents
@@ -1977,7 +1976,7 @@ export class DesktopHost {
    * loadedViews gate). */
   openServerSessions(id: string): void {
     const view = this.profileViews?.getView(id) ?? null;
-    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    if (!view?.webContents || view.webContents.isDestroyed()) return;
     const open = (): void => {
       if (!view.webContents || view.webContents.isDestroyed()) return;
       void view.webContents
@@ -1999,12 +1998,7 @@ export class DesktopHost {
       outgoingId === null
         ? null
         : (this.profileViews?.getView(outgoingId) ?? null);
-    if (
-      !outgoing ||
-      !outgoing.webContents ||
-      outgoing.webContents.isDestroyed()
-    )
-      return;
+    if (!outgoing?.webContents || outgoing.webContents.isDestroyed()) return;
     void outgoing.webContents.executeJavaScript(READ_DIVIDERS_SCRIPT).then(
       (raw) => {
         if (generation !== this.sessionGeneration) return;
@@ -2444,7 +2438,7 @@ export class DesktopHost {
         const activeId = this.profileViews?.getActive() ?? null;
         if (activeId !== null) {
           const view = this.profileViews?.getView(activeId) ?? null;
-          if (view && view.webContents && !view.webContents.isDestroyed())
+          if (view?.webContents && !view.webContents.isDestroyed())
             return view.webContents;
         }
         return win.webContents;
@@ -2455,7 +2449,7 @@ export class DesktopHost {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
-        if (view && view.webContents && !view.webContents.isDestroyed())
+        if (view?.webContents && !view.webContents.isDestroyed())
           return view.webContents;
       }
       return win.webContents;
@@ -2468,7 +2462,7 @@ export class DesktopHost {
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
-        if (view && view.webContents && !view.webContents.isDestroyed()) {
+        if (view?.webContents && !view.webContents.isDestroyed()) {
           view.webContents.focus();
         }
       }
@@ -2601,7 +2595,7 @@ export class DesktopHost {
     // The controller is built after the tray and the listener: a persisted,
     // non-secret profile store plus active/unread/health state.
     this.controller = new Controller({
-      persistPath: app.getPath('userData') + '/profiles.json',
+      persistPath: `${app.getPath('userData')}/profiles.json`,
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
     // Auto-enable low memory mode on <10GB RAM machines (default off, but massively aggro 1-tab).
@@ -2612,7 +2606,7 @@ export class DesktopHost {
       const raw = (() => {
         try {
           return require('node:fs').readFileSync(
-            app.getPath('userData') + '/profiles.json',
+            `${app.getPath('userData')}/profiles.json`,
             'utf8',
           );
         } catch {
@@ -3060,8 +3054,7 @@ export class DesktopHost {
       const layoutRail = (): void => {
         if (
           isCurrent() &&
-          this.railView &&
-          this.railView.webContents &&
+          this.railView?.webContents &&
           !this.railView.webContents.isDestroyed()
         ) {
           const b = win.getContentBounds();
@@ -3144,7 +3137,7 @@ export class DesktopHost {
         console.log(`phi-desktop: rail loadFile failed: ${String(err)}`);
       }
       if (!isCurrent()) return;
-      if (rail && rail.webContents && !rail.webContents.isDestroyed())
+      if (rail?.webContents && !rail.webContents.isDestroyed())
         this.pushRailState();
       // The main view page IS the window's own webContents (the vendored
       // header + caption controls + empty body area); the rail and the
@@ -3505,7 +3498,7 @@ export class DesktopHost {
       const profile =
         ctrl.state().profiles.find((p) => p.id === pending.profileId) ?? null;
       const view = profile ? this.viewByOrigin.get(profile.origin) : null;
-      if (!view || !view.webContents || view.webContents.isDestroyed()) {
+      if (!view?.webContents || view.webContents.isDestroyed()) {
         return {
           ok: false,
           code: 'unavailable',
@@ -3722,11 +3715,7 @@ export class DesktopHost {
           this.profileViews?.getView(active.id) ??
           this.viewByOrigin.get(active.origin) ??
           this.viewByOrigin.get(origin);
-        if (
-          bodyView &&
-          bodyView.webContents &&
-          !bodyView.webContents.isDestroyed()
-        ) {
+        if (bodyView?.webContents && !bodyView.webContents.isDestroyed()) {
           try {
             const recovered = await this.recoverFromViewLocalStorage(
               bodyView,
@@ -3960,8 +3949,7 @@ export class DesktopHost {
         this.profileViews?.getView(active.id) ??
         this.viewByOrigin.get(active.origin) ??
         this.viewByOrigin.get(new URL(active.origin).origin);
-      if (!view || !view.webContents || view.webContents.isDestroyed())
-        return null;
+      if (!view?.webContents || view.webContents.isDestroyed()) return null;
       try {
         const raw = await view.webContents.executeJavaScript(
           READ_WORKSPACE_SCRIPT,
@@ -4071,7 +4059,7 @@ export class DesktopHost {
         this.profileViews?.getView(active.id) ??
         this.viewByOrigin.get(active.origin) ??
         this.viewByOrigin.get(new URL(active.origin).origin);
-      if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+      if (!view?.webContents || view.webContents.isDestroyed()) return;
       const action = payload as HeaderAction | null;
       if (action === null || typeof action !== 'object') return;
       if (

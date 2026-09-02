@@ -145,8 +145,8 @@ describe('renderer.html (the rail page)', () => {
     expect(cssSource).toMatch(/#rail-list\s*\{[^}]*overflow-y:\s*auto[^}]*\}/s);
     const addRule = /#rail-add\s*\{([^}]*)\}/s.exec(cssSource);
     expect(addRule).not.toBeNull();
-    expect(addRule![1]).toMatch(/height:\s*40px/);
-    expect(addRule![1]).not.toMatch(/flex/);
+    expect(addRule?.[1]).toMatch(/height:\s*40px/);
+    expect(addRule?.[1]).not.toMatch(/flex/);
     const listIdx = htmlSource.indexOf('<ul id="rail-list"');
     const addIdx = htmlSource.indexOf('<button id="rail-add"');
     expect(listIdx).toBeGreaterThan(-1);
@@ -166,12 +166,12 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
     expect(itemRule).not.toBeNull();
     // .header-btn mirror (web/style.css): 6px radius, flat elevated
     // background, 1px bg-border border — no hand-tuned gradient stack.
-    expect(itemRule![1]).toMatch(/border-radius:\s*6px/);
-    expect(itemRule![1]).not.toMatch(/border-radius:\s*50%/);
-    expect(itemRule![1]).toMatch(/background-color:\s*var\(--bg-elevated\)/);
-    expect(itemRule![1]).toMatch(/border:\s*1px solid var\(--bg-border\)/);
-    expect(itemRule![1]).not.toMatch(/linear-gradient|radial-gradient/);
-    expect(itemRule![1]).not.toMatch(/rgba\(24,\s*24,\s*27/);
+    expect(itemRule?.[1]).toMatch(/border-radius:\s*6px/);
+    expect(itemRule?.[1]).not.toMatch(/border-radius:\s*50%/);
+    expect(itemRule?.[1]).toMatch(/background-color:\s*var\(--bg-elevated\)/);
+    expect(itemRule?.[1]).toMatch(/border:\s*1px solid var\(--bg-border\)/);
+    expect(itemRule?.[1]).not.toMatch(/linear-gradient|radial-gradient/);
+    expect(itemRule?.[1]).not.toMatch(/rgba\(24,\s*24,\s*27/);
   });
 
   it("renders the rail over Phi's obsidian field — the same radial gradient as the web body", () => {
@@ -189,19 +189,19 @@ describe('rail shape language and health treatment (src/rail.css)', () => {
   it('marks health diegetically: offline entries mute the chip; attention keeps the entry-accent lozenge without clipping', () => {
     const item = /\.rail-item\s*\{([^}]*)\}/s.exec(cssSource);
     expect(item).not.toBeNull();
-    expect(item![1]).not.toMatch(/overflow:\s*hidden/);
+    expect(item?.[1]).not.toMatch(/overflow:\s*hidden/);
     const offline = /\.rail-item\.offline\s*\{([^}]*)\}/s.exec(cssSource);
     expect(offline).not.toBeNull();
-    expect(offline![1]).toMatch(/opacity:\s*0\.55/);
-    expect(offline![1]).toMatch(/var\(--bg-border\)/);
+    expect(offline?.[1]).toMatch(/opacity:\s*0\.55/);
+    expect(offline?.[1]).toMatch(/var\(--bg-border\)/);
     // No status block element remains in the stylesheet.
     expect(cssSource).not.toMatch(/\.rail-item\s+\.dot/);
     const attention = /\.rail-item\s+\.attention\s*\{([^}]*)\}/s.exec(
       cssSource,
     );
-    expect(attention![1]).toMatch(/transform:\s*rotate\(45deg\)/);
-    expect(attention![1]).toMatch(/var\(--entry-accent/);
-    expect(attention![1]).toMatch(/var\(--accent/);
+    expect(attention?.[1]).toMatch(/transform:\s*rotate\(45deg\)/);
+    expect(attention?.[1]).toMatch(/var\(--entry-accent/);
+    expect(attention?.[1]).toMatch(/var\(--accent/);
   });
 
   it('keeps no green/red health palette in the rail stylesheet', () => {
@@ -253,9 +253,9 @@ describe('renderer module (src/renderer.ts)', () => {
       // Unread attention marker: textless, shown only when unread > 0.
       const marker = items[0].querySelector('.attention') as HTMLElement | null;
       expect(marker).not.toBeNull();
-      expect(marker!.getAttribute('aria-label')).toBe('Terminal done');
-      expect(marker!.title).toBe('Terminal done');
-      expect(marker!.textContent).toBe('');
+      expect(marker?.getAttribute('aria-label')).toBe('Terminal done');
+      expect(marker?.title).toBe('Terminal done');
+      expect(marker?.textContent).toBe('');
       expect(items[1].querySelector('.attention')).toBeNull();
       // No numeric badge is rendered.
       expect(items[0].querySelector('.badge')).toBeNull();
@@ -503,9 +503,9 @@ describe('rail CPU intensity (src/renderer.ts + src/rail.css)', () => {
   it('derives the intensity from the existing accent tokens only, statically (no warning palette, no animation)', () => {
     const itemRule = /\.rail-item\s*\{([^}]*)\}/s.exec(cssSource);
     expect(itemRule).not.toBeNull();
-    expect(itemRule![1]).toContain('--cpu-strength');
-    expect(itemRule![1]).toMatch(/var\(--entry-cpu,\s*0\)/);
-    expect(itemRule![1]).toContain('var(--entry-accent, var(--accent))');
+    expect(itemRule?.[1]).toContain('--cpu-strength');
+    expect(itemRule?.[1]).toMatch(/var\(--entry-cpu,\s*0\)/);
+    expect(itemRule?.[1]).toContain('var(--entry-accent, var(--accent))');
     // Static intensity at the sampling cadence: no transition/animation.
     expect(cssSource).not.toMatch(/\.rail-item[^{]*\{[^}]*transition/);
     expect(cssSource).not.toMatch(/--warn|--danger|--critical/i);
@@ -538,7 +538,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
       return d;
     });
     const item = doc.querySelectorAll('li.rail-item')[1] as HTMLElement;
-    const evt = new doc.defaultView!.MouseEvent('contextmenu', {
+    const evt = new doc.defaultView.MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
       screenX: 31,
@@ -599,7 +599,7 @@ describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
     clientY: number,
   ): void {
     target.dispatchEvent(
-      new doc.defaultView!.MouseEvent(type, {
+      new doc.defaultView.MouseEvent(type, {
         bubbles: true,
         cancelable: true,
         clientY,

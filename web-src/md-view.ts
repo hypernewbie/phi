@@ -33,7 +33,7 @@ export function mdEventMatchesPath(
 ): boolean {
     if (!dir) return true; // unknown dir: refresh anyway, it's one cheap fetch
     const normDir = dir.replace(/\\/g, '/');
-    const d = normDir.endsWith('/') ? normDir : normDir + '/';
+    const d = normDir.endsWith('/') ? normDir : `${normDir}/`;
     return path.replace(/\\/g, '/').startsWith(d);
 }
 

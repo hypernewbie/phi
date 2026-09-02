@@ -314,7 +314,7 @@ describe('Settings modal — live apply', () => {
     });
 
     it('reuse shell tab checkbox POSTs to /api/config/use-existing-terminal-tab', async () => {
-        mockFetch((url, opts) => {
+        mockFetch((url, _opts) => {
             if (url.includes('/api/config/use-existing-terminal-tab')) {
                 return { enabled: true };
             }

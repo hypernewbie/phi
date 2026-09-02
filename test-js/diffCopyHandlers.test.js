@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { setupDomHarness, mockFetch, stubWebSocket } from './_dom.js';
+import { setupDomHarness, stubWebSocket } from './_dom.js';
 
 // Covers the diff xterm copy wiring added so users can drag-select / Cmd-C
 // out of the diff/status/log pane. Without these handlers, the WebGL renderer

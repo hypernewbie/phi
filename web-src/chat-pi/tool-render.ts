@@ -221,14 +221,14 @@ function appendDiffRows(container: HTMLElement, diffText: string): void {
             const removedLines: ParsedDiffLine[] = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '-') break;
+                if (candidate?.prefix !== '-') break;
                 removedLines.push(candidate);
                 index++;
             }
             const addedLines: ParsedDiffLine[] = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '+') break;
+                if (candidate?.prefix !== '+') break;
                 addedLines.push(candidate);
                 index++;
             }

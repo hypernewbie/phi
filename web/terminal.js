@@ -225,7 +225,7 @@ export class TabManager {
             const data = await res.json();
             const cpu = typeof data.cpu === 'number' ? data.cpu : 0;
             this.applyCPUIndicator(cpu);
-        } catch (e) {
+        } catch (_e) {
             // Silent: decorative feature, never break anything.
         }
     }
@@ -371,7 +371,7 @@ export class TabManager {
         try {
             const raw = localStorage.getItem('phi_tab_order');
             if (raw) saved = JSON.parse(raw);
-        } catch (e) {
+        } catch (_e) {
             // Corrupted entry: just ignore and fall back to API order.
             return;
         }
@@ -553,7 +553,7 @@ export class TabManager {
         strip.addEventListener('drop', (e) => {
             // Only handle drops in the whitespace area. Per-tab drop
             // handlers have already eaten drops that fell on a tab.
-            const targetTab = e.target.closest && e.target.closest('.tab');
+            const targetTab = e.target.closest?.('.tab');
             if (targetTab) return; // per-tab already handled
             e.preventDefault();
             this._stopDragAutoScroll();
@@ -701,7 +701,7 @@ export class TabManager {
             const res = await fetch('/api/terminals');
             if (!res.ok) throw new Error('Failed to load server terminal list');
             const instances = await res.json();
-            if (!instances || !instances.length) {
+            if (!instances?.length) {
                 this.showEmptyState();
             }
 
@@ -764,7 +764,7 @@ export class TabManager {
         // Click/focus input bar → exit direct mode
         this.inputTextArea.addEventListener('focus', () => {
             const activeTab = this.getActiveTab();
-            if (activeTab && activeTab.directMode) {
+            if (activeTab?.directMode) {
                 activeTab.directMode = false;
                 this.updateDirectModeUI(activeTab);
             }
@@ -904,7 +904,7 @@ export class TabManager {
             // steal arrow keys from terminal-internal tools (fzf, less,
             // etc.) on a real keyboard.
             if (window.innerWidth > 768) return;
-            if (!this.inputTextArea || this.inputTextArea.value !== '') return;
+            if (this.inputTextArea?.value !== '') return;
             if (this.inputBarContainer?.classList.contains('hidden')) return;
             const activeTab = this.getActiveTab();
             if (!activeTab || activeTab.isDead) return;
@@ -1012,7 +1012,7 @@ export class TabManager {
         );
         const handleRefreshConsole = () => {
             const activeTab = this.getActiveTab();
-            if (!activeTab || !activeTab.term) return;
+            if (!activeTab?.term) return;
             activeTab.term.refresh(0, activeTab.term.rows - 1);
             this.activateTabViewport(activeTab, {
                 scrollToBottom: true,
@@ -1226,7 +1226,7 @@ export class TabManager {
 
     focusActiveTerminal() {
         const activeTab = this.getActiveTab();
-        if (activeTab && activeTab.term) {
+        if (activeTab?.term) {
             activeTab.term.focus();
         }
     }
@@ -1493,8 +1493,7 @@ export class TabManager {
                       ? 10
                       : 14,
             fontFamily:
-                (this.app && this.app.terminalFontFamily) ||
-                'JetBrains Mono, monospace',
+                this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: {
                 background: '#08080a',
@@ -1533,7 +1532,7 @@ export class TabManager {
         term.open(termContainer);
 
         // Register OSC 52 clipboard handler
-        if (term.parser && term.parser.registerOscHandler) {
+        if (term.parser?.registerOscHandler) {
             term.parser.registerOscHandler(52, (data) => {
                 const parts = data.split(';');
                 if (parts.length < 2) return true;
@@ -1809,7 +1808,7 @@ export class TabManager {
             }
             term.loadAddon(webgl);
             console.log('[term] Loaded WebGL hardware acceleration');
-        } catch (e) {
+        } catch (_e) {
             console.warn('[term] Falling back to standard canvas renderer');
         }
 
@@ -1926,10 +1925,10 @@ export class TabManager {
                             ) {
                                 this.sendInput(
                                     tabInfo,
-                                    '\x1b[200~' + initialCmd + '\x1b[201~\r',
+                                    `\x1b[200~${initialCmd}\x1b[201~\r`,
                                 );
                             } else {
-                                this.sendInput(tabInfo, initialCmd + '\r');
+                                this.sendInput(tabInfo, `${initialCmd}\r`);
                             }
                         }, 1000);
                     }
@@ -1978,14 +1977,10 @@ export class TabManager {
             'wheel',
             (e) => {
                 if (e.deltaY <= 0) return;
-                const buf =
-                    tabInfo.term &&
-                    tabInfo.term.buffer &&
-                    tabInfo.term.buffer.active;
+                const buf = tabInfo.term?.buffer?.active;
                 if (!buf || buf.viewportY >= buf.baseY) return;
                 const vp =
-                    tabInfo.term.element &&
-                    tabInfo.term.element.querySelector('.xterm-viewport');
+                    tabInfo.term.element?.querySelector('.xterm-viewport');
                 if (!vp) return;
                 if (vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 1) {
                     // Same wheel→lines scaling as the opencode handler above.
@@ -2044,10 +2039,7 @@ export class TabManager {
                 scrollToBottomBtn.classList.add('hidden');
                 return;
             }
-            const buf =
-                tabInfo.term &&
-                tabInfo.term.buffer &&
-                tabInfo.term.buffer.active;
+            const buf = tabInfo.term?.buffer?.active;
             if (!buf) return;
             const atBottom = buf.viewportY >= buf.baseY;
             if (atBottom) {
@@ -2064,10 +2056,7 @@ export class TabManager {
             // to the live tail. Lets the user "release" and re-follow
             // without needing to click Jump-to-bottom.
             term.onScroll(() => {
-                const b =
-                    tabInfo.term &&
-                    tabInfo.term.buffer &&
-                    tabInfo.term.buffer.active;
+                const b = tabInfo.term?.buffer?.active;
                 if (b && b.viewportY >= b.baseY) {
                     tabInfo.userFollowBottom = true;
                 }
@@ -2091,10 +2080,7 @@ export class TabManager {
                 requestAnimationFrame(() => {
                     viewportScrollRafPending = false;
                     updateScrollBtn();
-                    const b =
-                        tabInfo.term &&
-                        tabInfo.term.buffer &&
-                        tabInfo.term.buffer.active;
+                    const b = tabInfo.term?.buffer?.active;
                     if (b && b.viewportY >= b.baseY) {
                         tabInfo.userFollowBottom = true;
                     }
@@ -2186,7 +2172,7 @@ export class TabManager {
         // Toast so the user notices the drop even when they're focused on
         // a different tab. The on-terminal reconnect overlay stays for the
         // local UX; this toast covers the peripheral case.
-        if (this.app && this.app.showToast) {
+        if (this.app?.showToast) {
             this.app.showToast(
                 `Connection lost on "${tabInfo.title || tabInfo.coder || 'tab'}"`,
                 {
@@ -2210,7 +2196,7 @@ export class TabManager {
         const bar = this.piRpcStatusBar;
         if (!bar) return;
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.coder !== 'pi-rpc') {
+        if (activeTab?.coder !== 'pi-rpc') {
             bar.classList.add('hidden');
             bar.replaceChildren();
             this._updatePiThinkingButton();
@@ -2222,8 +2208,8 @@ export class TabManager {
         let cwdDisplay = display.cwd;
         if (cwdDisplay && cwdDisplay !== '—') {
             cwdDisplay = cwdDisplay
-                .replace(/^\/Users\/[^\/]+/, '~')
-                .replace(/^\/home\/[^\/]+/, '~');
+                .replace(/^\/Users\/[^/]+/, '~')
+                .replace(/^\/home\/[^/]+/, '~');
         }
         const tokens = [];
         if (display.input !== '—') tokens.push(`↑${display.input}`);
@@ -2265,7 +2251,7 @@ export class TabManager {
                 fillTheme = ' pi-rpc-context-meter-fill--mid';
             else fillTheme = ' pi-rpc-context-meter-fill--high';
         }
-        let meterEl = document.createElement('span');
+        const meterEl = document.createElement('span');
         meterEl.className = 'pi-rpc-context-meter pi-rpc-status-meter';
         meterEl.setAttribute('role', 'progressbar');
         meterEl.setAttribute('aria-valuemin', '0');
@@ -2353,7 +2339,7 @@ export class TabManager {
         if (!tab || (tab.coder !== 'pi' && tab.coder !== 'pi-rpc')) return;
         if (!this._piThinkingLevels) this._piThinkingLevels = new Map();
         if (tab.coder === 'pi') {
-            let cur = this._piThinkingLevels.get(tab.paneId) || 'off';
+            const cur = this._piThinkingLevels.get(tab.paneId) || 'off';
             const norm = normalizeThinkingLevel(cur);
             let idx = PI_THINKING_ORDER.indexOf(norm);
             if (idx === -1) idx = PI_THINKING_ORDER.indexOf('off');
@@ -2462,7 +2448,7 @@ export class TabManager {
 
     _closePiSubagentViewerIfOpen() {
         const tab = this.getActiveTab();
-        if (!tab || tab.coder !== 'pi-rpc') return false;
+        if (tab?.coder !== 'pi-rpc') return false;
         return closePiSubagentViewer(tab.paneId);
     }
 
@@ -2480,7 +2466,7 @@ export class TabManager {
 
     _interruptActivePiRpc() {
         const tab = this.getActiveTab();
-        if (!tab || tab.coder !== 'pi-rpc') return false;
+        if (tab?.coder !== 'pi-rpc') return false;
         const controls = this._piRpcControlsFor(tab);
         if (!controls.ready || controls.exited || !controls.busy) return false;
         void rpcChatInterrupt(tab.paneId)
@@ -3022,7 +3008,7 @@ export class TabManager {
         if (!this.presetsContainer) return;
         const activeTab = this.getActiveTab();
         this.presetsContainer.replaceChildren();
-        if (!activeTab || activeTab.coder !== 'pi-rpc') {
+        if (activeTab?.coder !== 'pi-rpc') {
             this.presetsContainer.classList.add('hidden');
             return;
         }
@@ -3628,7 +3614,7 @@ export class TabManager {
 
         // Undo toast for all soft-closes. The dropdown is the durable
         // recovery affordance; the toast remains a quick shortcut.
-        if (this.app && this.app.showToast) {
+        if (this.app?.showToast) {
             const toastEl = this.app.showToast(
                 `Closed "${tab.title || tab.coder || 'tab'}"`,
                 {
@@ -3741,7 +3727,7 @@ export class TabManager {
     // selection, so it is allowed to restore that tab's project context.
     undoCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
-        if (!tab || !tab.softClosing) return;
+        if (!tab?.softClosing) return;
 
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
@@ -3811,7 +3797,7 @@ export class TabManager {
                 })
                 .catch((err) => {
                     console.error('[tab] failed to kill PTY for', paneId, err);
-                    if (this.app && this.app.showToast) {
+                    if (this.app?.showToast) {
                         this.app.showToast(
                             `Could not close "${tab.title || paneId}" on the server — the underlying process may still be running. Try "Restart phi" if it persists.`,
                             { type: 'error', duration: 8000 },
@@ -4053,14 +4039,14 @@ export class TabManager {
         // still show what we know from the DOM data attributes.
         const glyph = tabEl.dataset.worktreeGlyph || '◆';
         const label = (tab && this.getProjectWorktreeLabel(tab.cwd)) || '—';
-        const path = (tab && tab.cwd) || tabEl.dataset.cwd || '';
+        const path = tab?.cwd || tabEl.dataset.cwd || '';
 
         // Title read at hover-time, never stashed, so renames and truncated
         // tab strips always resolve to the current full title. Mid-createTab
         // the Map entry doesn't exist yet - the .tab-title span does.
         const titleSpan = tabEl.querySelector('.tab-title');
         const titleText =
-            (tab && tab.title) || (titleSpan ? titleSpan.textContent : '');
+            tab?.title || (titleSpan ? titleSpan.textContent : '');
 
         // Live status line - coder-agnostic, from the client-side busy/idle
         // tracking every PTY tab gets (isBusy set on output frames, cleared
@@ -4068,7 +4054,7 @@ export class TabManager {
         // row stays empty and :empty CSS hides it.
         let statusText = '';
         let busy = false;
-        if (tab && tab.isBusy) {
+        if (tab?.isBusy) {
             busy = true;
             statusText = `● busy ${formatDurationMin(Date.now() - (tab.busyStartTime || Date.now()))}`;
         } else if (tab && typeof tab.lastOutputAt === 'number') {
@@ -4338,7 +4324,7 @@ export class TabManager {
 
         // Auto-scroll to the active row so users land on it.
         const active = dropdown.querySelector('.hostname-dropdown-row.active');
-        if (active && active.scrollIntoView) {
+        if (active?.scrollIntoView) {
             active.scrollIntoView({ block: 'nearest' });
         }
         return dropdown;
@@ -4371,7 +4357,7 @@ export class TabManager {
     }
 
     sendInput(tabInfo, payload) {
-        if (!tabInfo || !tabInfo.ws || tabInfo.isDead) {
+        if (!tabInfo?.ws || tabInfo.isDead) {
             this.app.showToast('Tab is disconnected — input not sent', {
                 type: 'error',
             });
@@ -4409,7 +4395,7 @@ export class TabManager {
         // Skip when the drag isn't a file (text/uri-list no-op cleanly).
         const isFileDrag = (e) => {
             const dt = e.dataTransfer;
-            if (!dt || !dt.types) return false;
+            if (!dt?.types) return false;
             return Array.from(dt.types).includes('Files');
         };
 
@@ -4431,7 +4417,7 @@ export class TabManager {
             dragDepth += 1;
             this.inputBarContainer.classList.add('is-drop-target');
         });
-        document.addEventListener('dragleave', (e) => {
+        document.addEventListener('dragleave', (_e) => {
             dragDepth = Math.max(0, dragDepth - 1);
             if (dragDepth === 0) {
                 this.inputBarContainer.classList.remove('is-drop-target');
@@ -4442,8 +4428,7 @@ export class TabManager {
             // handler manages tab reordering. Use closest('.tab') rather
             // than a stored tabsContainer reference so this check stays
             // correct across TabManager instances and test resets.
-            if (e.target && e.target.closest && e.target.closest('.tab'))
-                return;
+            if (e.target?.closest?.('.tab')) return;
             if (!isFileDrag(e)) return;
             e.preventDefault();
             dragDepth = 0;
@@ -4478,7 +4463,7 @@ export class TabManager {
             if (items.length === 0) return; // text paste → let browser handle
             e.preventDefault();
             for (const item of items) {
-                const blob = item.getAsFile && item.getAsFile();
+                const blob = item.getAsFile?.();
                 if (!blob) continue;
                 try {
                     const attachment = await uploadClipboardImage(
@@ -4814,13 +4799,9 @@ export class TabManager {
     // current as of the most recent open event.
     _renderSelfHud() {
         if (!this.selfHudEl) return;
-        const version =
-            (this.app &&
-                this.app.versionInfo &&
-                this.app.versionInfo.version) ||
-            '';
+        const version = this.app?.versionInfo?.version || '';
         const hud = buildSelfHud({
-            hostname: (this.app && this.app.hostname) || '',
+            hostname: this.app?.hostname || '',
             version,
             cpuPercent:
                 typeof this.lastCpuPercent === 'number'
@@ -4909,7 +4890,7 @@ export class TabManager {
         // coder (claude → @path, bash → raw path).
         const coder = activeTab.coder;
         const lines = [];
-        if (val && val.trim()) lines.push(val.trim());
+        if (val?.trim()) lines.push(val.trim());
         for (const a of attachments) {
             lines.push(formatAttachment(coder, a));
         }
@@ -4937,11 +4918,11 @@ export class TabManager {
             // Wrap in bracketed paste markers for large prompts or multiline text
             // to prevent TUI trickle-rendering / autocomplete lagging.
             if (payload.length > 16 || payload.includes('\n')) {
-                payload = '\x1b[200~' + payload + '\x1b[201~';
+                payload = `\x1b[200~${payload}\x1b[201~`;
             }
 
             // No isDead pre-check: sendInput() toasts + shows the reconnect overlay on failure.
-            const sent = this.sendInput(activeTab, payload + '\r');
+            const sent = this.sendInput(activeTab, `${payload}\r`);
             if (!sent) return;
         }
 
@@ -4949,12 +4930,9 @@ export class TabManager {
         // clearing the textarea. Fire-and-forget so a slow disk
         // doesn't hold up the send. The backend handles dedup / cap
         // (FIFO at 100 entries, per-cwd filter).
-        const sentText = val && val.trim() ? val.trim() : '';
+        const sentText = val?.trim() ? val.trim() : '';
         if (sentText) {
-            const cwdForHistory =
-                (this.app.sessionsManager &&
-                    this.app.sessionsManager.activeCWD) ||
-                '';
+            const cwdForHistory = this.app.sessionsManager?.activeCWD || '';
             fetch('/api/prompt-history/append', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -4975,7 +4953,7 @@ export class TabManager {
         this._spamScrollToBottom(activeTab);
 
         // Auto sync clipboard on /copy command
-        if (val && val.includes('/copy')) {
+        if (val?.includes('/copy')) {
             setTimeout(() => {
                 this.app.syncRemoteClipboard();
             }, 300);
@@ -5187,16 +5165,14 @@ export class TabManager {
         this._reloadArmed = true;
 
         // Show a one-time toast so the user knows what's happening.
-        if (this.app && this.app.showToast) {
+        if (this.app?.showToast) {
             this.app.showToast(`phi is ${reason}… reloading when ready.`, {
                 type: 'info',
                 durationMs: 8000,
             });
         }
 
-        const beforeCommit =
-            (this.app && this.app.versionInfo && this.app.versionInfo.commit) ||
-            '';
+        const beforeCommit = this.app?.versionInfo?.commit || '';
         const startedAt = Date.now();
         const maxWaitMs = 10_000;
 
@@ -5214,7 +5190,7 @@ export class TabManager {
                     // tearing down). Different commit or different
                     // build_source (e.g. release->source for a swap)
                     // means the new server is up.
-                    if (data && data.commit && data.commit !== beforeCommit) {
+                    if (data?.commit && data.commit !== beforeCommit) {
                         window.location.reload();
                         return;
                     }
@@ -5245,7 +5221,7 @@ export class TabManager {
         if (tabInfo.ws)
             try {
                 tabInfo.ws.close();
-            } catch (e) {}
+            } catch (_e) {}
 
         // The server replays the whole ring buffer on every attach, so without
         // clearing first a reconnect appends a second copy of the scrollback.
@@ -5366,7 +5342,7 @@ export class TabManager {
         if (tabInfo.ws)
             try {
                 tabInfo.ws.close();
-            } catch (e) {}
+            } catch (_e) {}
 
         fetch('/api/terminals', {
             method: 'POST',
@@ -5549,7 +5525,7 @@ export class TabManager {
     reconnectAllTabsWithToast() {
         const deadCount = this.reconnectAllDead();
         const total = this.tabs.size;
-        if (this.app && this.app.sessionsManager) {
+        if (this.app?.sessionsManager) {
             this.app.sessionsManager.loadSessions();
         }
         if (this.app && typeof this.app.showToast === 'function') {
@@ -5574,11 +5550,11 @@ export class TabManager {
     // window), but resets the attempt budget: a wake is a fresh start, not a
     // continuation of an exhausted backoff run.
     _reviveActiveTabIfDead() {
-        const autoReconnect = this.app.config && this.app.config.auto_reconnect;
+        const autoReconnect = this.app.config?.auto_reconnect;
         if (autoReconnect !== 'visible') return;
         if (document.visibilityState !== 'visible') return;
         const tabInfo = this.getActiveTab();
-        if (!tabInfo || !tabInfo.isDead || tabInfo.reconnectInFlight) return;
+        if (!tabInfo?.isDead || tabInfo.reconnectInFlight) return;
         if (
             tabInfo.coder === 'review' ||
             tabInfo.coder === 'kanban' ||
@@ -5592,7 +5568,7 @@ export class TabManager {
 
     maybeAutoReconnect(tabInfo) {
         if (tabInfo.coder === 'pi-rpc') return false;
-        const autoReconnect = this.app.config && this.app.config.auto_reconnect;
+        const autoReconnect = this.app.config?.auto_reconnect;
         if (autoReconnect !== 'visible') return false;
 
         if (document.visibilityState !== 'visible') return false;
@@ -5740,7 +5716,7 @@ export class TabManager {
             e.key.toLowerCase() === 'f'
         ) {
             const activeTab = this.getActiveTab();
-            if (activeTab && activeTab.term) {
+            if (activeTab?.term) {
                 e.preventDefault();
                 this.toggleFindBar(activeTab);
             }
@@ -5835,7 +5811,7 @@ export class TabManager {
                 this.inputTextArea.placeholder = 'Type a prompt...';
             }
         }
-        this.inputTextArea.style.height = newHeight + 'px';
+        this.inputTextArea.style.height = `${newHeight}px`;
     }
 
     // A wheel, touch, or native scrollbar-thumb gesture is an explicit user
@@ -5953,7 +5929,7 @@ export class TabManager {
         let ok = false;
         try {
             ok = document.execCommand('copy');
-        } catch (e) {
+        } catch (_e) {
             ok = false;
         }
         document.body.removeChild(ta);
@@ -6145,8 +6121,7 @@ export class TabManager {
         }
 
         // force=true bypasses the passive auto_reconnect gate for explicit user actions.
-        const configAutoReconnect =
-            this.app.config && this.app.config.auto_reconnect;
+        const configAutoReconnect = this.app.config?.auto_reconnect;
         if (
             autoReconnect &&
             (force || configAutoReconnect === 'visible') &&
@@ -6214,12 +6189,10 @@ export class TabManager {
 
         const coderPresetInfo = this.app.codersPresetRegistry[coderId];
         const hasCoderPresets =
-            coderPresetInfo &&
-            coderPresetInfo.presets &&
-            coderPresetInfo.presets.length > 0;
+            coderPresetInfo?.presets && coderPresetInfo.presets.length > 0;
 
         // If direct mode, do not render presets
-        if (activeTab && activeTab.directMode) {
+        if (activeTab?.directMode) {
             this.presetsContainer.classList.add('hidden');
             return;
         }
@@ -6494,8 +6467,7 @@ export class TabManager {
             const glyphSpan = document.createElement('span');
             glyphSpan.className = 'hostname-dropdown-glyph';
             glyphSpan.setAttribute('aria-hidden', 'true');
-            glyphSpan.textContent =
-                (tabInfo.tabEl && tabInfo.tabEl.dataset.worktreeGlyph) || '◆';
+            glyphSpan.textContent = tabInfo.tabEl?.dataset.worktreeGlyph || '◆';
 
             const titleSpan = document.createElement('span');
             titleSpan.className = 'hostname-dropdown-title';
@@ -6934,9 +6906,9 @@ export class TabManager {
                           : cmd.command;
                 let payload = combined;
                 if (combined.length > 16 || combined.includes('\n')) {
-                    payload = '\x1b[200~' + combined + '\x1b[201~';
+                    payload = `\x1b[200~${combined}\x1b[201~`;
                 }
-                this.sendInput(activeTab, payload + '\r');
+                this.sendInput(activeTab, `${payload}\r`);
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
                 this.adjustInputHeight();
@@ -7073,7 +7045,7 @@ export class TabManager {
                 if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                     try {
                         tab.fitAddon.fit();
-                    } catch (e) {
+                    } catch (_e) {
                         /* tolerate closed term */
                     }
                 }
@@ -7152,11 +7124,7 @@ export class TabManager {
                         tab.coder === 'bash' || tab.coder === 'pwsh';
                     if (!isActiveAndVisible && isLongTask && !isShellTab) {
                         let promptDetected = false;
-                        if (
-                            tab.term &&
-                            tab.term.buffer &&
-                            tab.term.buffer.active
-                        ) {
+                        if (tab.term?.buffer?.active) {
                             const buffer = tab.term.buffer.active;
                             const line = buffer.getLine(
                                 buffer.cursorY + buffer.baseY,
@@ -7221,7 +7189,7 @@ export class TabManager {
             try {
                 const n = new Notification('Phi Session Done', {
                     body: message,
-                    tag: 'phi-pane-' + tab.paneId,
+                    tag: `phi-pane-${tab.paneId}`,
                     icon: 'screenshot.png',
                     silent: true,
                 });
@@ -7279,9 +7247,7 @@ export class TabManager {
             this._historyPreCycleValue = this.inputTextArea.value;
         }
 
-        const cwd =
-            (this.app.sessionsManager && this.app.sessionsManager.activeCWD) ||
-            '';
+        const cwd = this.app.sessionsManager?.activeCWD || '';
         if (cwd !== this._historyCwd || !this._historyLoaded) {
             // Lazy-load the cache for this cwd.
             const ok = await this._loadPromptHistory(cwd);

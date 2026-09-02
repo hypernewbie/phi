@@ -68,7 +68,7 @@ export interface DataTransferLike {
 export function extractImageItems(
     dt: DataTransferLike | null | undefined,
 ): DataTransferItemLike[] {
-    if (!dt || !dt.items) return [];
+    if (!dt?.items) return [];
     const items: DataTransferItemLike[] = [];
     const raw = dt.items;
     const len = (raw as { length: number }).length;

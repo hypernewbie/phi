@@ -159,12 +159,8 @@ export function applyPrepaintAppearance() {
             }
             s.textContent =
                 'body{' +
-                (a.ui_font_family
-                    ? 'font-family:' + a.ui_font_family + ';'
-                    : '') +
-                (a.ui_font_size >= 10
-                    ? 'font-size:' + a.ui_font_size + 'px;'
-                    : '') +
+                (a.ui_font_family ? `font-family:${a.ui_font_family};` : '') +
+                (a.ui_font_size >= 10 ? `font-size:${a.ui_font_size}px;` : '') +
                 '}';
         }
     } catch {
@@ -182,7 +178,7 @@ export function applyPrepaintFavicon(accent, accentDim) {
             link.type = 'image/svg+xml';
             document.head.appendChild(link);
         }
-        link.href = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+        link.href = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
     } catch {
         /* ignore */
     }

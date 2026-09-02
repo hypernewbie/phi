@@ -32,7 +32,7 @@ describe('electron-builder.json (macOS protocol bundle config)', () => {
     const types = builder.mac?.extendInfo?.CFBundleURLTypes;
     expect(types).toBeDefined();
     expect(Array.isArray(types)).toBe(true);
-    expect(types!.some((t) => t.CFBundleURLSchemes?.includes('phi'))).toBe(
+    expect(types?.some((t) => t.CFBundleURLSchemes?.includes('phi'))).toBe(
       true,
     );
   });

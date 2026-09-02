@@ -72,7 +72,7 @@ function swaggerTypeOk(schema, value) {
 
 function resolveBodySchema(op) {
     const param = (op.parameters || []).find((p) => p.in === 'body');
-    if (!param || !param.schema) return null;
+    if (!param?.schema) return null;
     const ref = param.schema.$ref;
     if (!ref) return param.schema;
     return swagger.definitions[ref.replace('#/definitions/', '')] || null;

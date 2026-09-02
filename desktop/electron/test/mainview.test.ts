@@ -147,8 +147,8 @@ describe('main view page chrome (web/main.css)', () => {
       /\n\.app-header\s*\{([^}]*)\}/,
     );
     expect(directAppHeaderRule).not.toBeNull();
-    expect(directAppHeaderRule![1]).toContain('-webkit-app-region: drag');
-    expect(directAppHeaderRule![1]).not.toMatch(
+    expect(directAppHeaderRule?.[1]).toContain('-webkit-app-region: drag');
+    expect(directAppHeaderRule?.[1]).not.toMatch(
       /background|backdrop|justify-content|height/,
     );
     // Negative assertions: no desktop-side override of brand-name,
@@ -228,11 +228,11 @@ describe('main view page chrome (web/main.css)', () => {
       /\.caption-controls\s*\{([^}]*)\}/,
     );
     expect(captionBlock).not.toBeNull();
-    expect(captionBlock![1]).toContain('position: absolute');
-    expect(captionBlock![1]).toContain('right: 0');
-    expect(captionBlock![1]).toContain('top: 0');
-    expect(captionBlock![1]).toContain('height: 100%');
-    expect(captionBlock![1]).toContain('flex: 0 0 138px');
+    expect(captionBlock?.[1]).toContain('position: absolute');
+    expect(captionBlock?.[1]).toContain('right: 0');
+    expect(captionBlock?.[1]).toContain('top: 0');
+    expect(captionBlock?.[1]).toContain('height: 100%');
+    expect(captionBlock?.[1]).toContain('flex: 0 0 138px');
     // No padded lane reserves a gap beside the window edge.
     expect(mainCssSource).not.toContain('154px');
   });

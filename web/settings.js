@@ -41,7 +41,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const v = app.versionInfo || {};
     const short = (v.commit || '').slice(0, 7);
     verEl.textContent = v.version
-        ? `v${v.version}${short ? ' · ' + short : ''}`
+        ? `v${v.version}${short ? ` · ${short}` : ''}`
         : 'v?';
     verEl.title =
         [v.date, v.buildSource].filter(Boolean).join(' · ') || 'unknown build';
@@ -223,13 +223,13 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const autoReconnectRow = _buildCheckboxRow(
         'Auto-reconnect disconnected terminals (active tab)',
         'settings-auto-reconnect',
-        ((app.config && app.config.auto_reconnect) || 'visible') === 'visible',
+        (app.config?.auto_reconnect || 'visible') === 'visible',
     );
     behGroup.appendChild(autoReconnectRow);
     const fastModeRow = _buildCheckboxRow(
         'Fast mode (disable expensive visual effects)',
         'settings-fast-mode',
-        !!(app.config && app.config.fast_mode),
+        !!app.config?.fast_mode,
     );
     fastModeRow.classList.add('settings-fast-mode-row');
     behGroup.appendChild(fastModeRow);
@@ -244,8 +244,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     headerLabel.className = 'settings-access-title';
     headerLabel.textContent = 'Access password';
     const stateDot = document.createElement('span');
-    stateDot.className =
-        'settings-access-dot ' + (app.accessAuthEnabled ? 'is-on' : 'is-off');
+    stateDot.className = `settings-access-dot ${app.accessAuthEnabled ? 'is-on' : 'is-off'}`;
     const stateText = document.createElement('span');
     stateText.className = 'settings-access-state-text';
     stateText.textContent = app.accessAuthEnabled ? 'Enabled' : 'Disabled';
@@ -431,7 +430,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 { type: 'success' },
             );
         } catch (err) {
-            app.showToast('Font upload failed: ' + err.message, {
+            app.showToast(`Font upload failed: ${err.message}`, {
                 type: 'error',
             });
         }
@@ -540,7 +539,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const piOfflineRow = _buildCheckboxRow(
         'Start pi with --offline (new tabs only)',
         'settings-pi-offline',
-        !!(app.config && app.config.pi_offline),
+        !!app.config?.pi_offline,
     );
     behGroup.appendChild(piOfflineRow);
     piOfflineRow
@@ -565,7 +564,7 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     const claudeSkipPermsRow = _buildCheckboxRow(
         'Start Claude with --dangerously-skip-permissions (new tabs only)',
         'settings-claude-skip-permissions',
-        !!(app.config && app.config.claude_dangerously_skip_permissions),
+        !!app.config?.claude_dangerously_skip_permissions,
     );
     behGroup.appendChild(claudeSkipPermsRow);
     claudeSkipPermsRow

@@ -149,7 +149,7 @@ export function mountChatPi(
     let resetInFlight = false;
     let compactInFlight = false;
     let compactSnapshot = null;
-    let lastCompaction = null;
+    let _lastCompaction = null;
     let sessionActive = false;
     let outgoingSeq = 0;
     const outgoing = [];
@@ -859,7 +859,7 @@ export function mountChatPi(
                 const kept = Array.isArray(data?.result?.messages)
                     ? data.result.messages.length
                     : null;
-                lastCompaction = {
+                _lastCompaction = {
                     summary,
                     id:
                         typeof data?.result?.id === 'string'

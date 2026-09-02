@@ -153,9 +153,7 @@ export class App {
                     const checkWs = setInterval(() => {
                         const tab = this.tabManager.tabs.get(data.pane_id);
                         if (
-                            tab &&
-                            tab.ws &&
-                            tab.ws.ws &&
+                            tab?.ws?.ws &&
                             tab.ws.ws.readyState === WebSocket.OPEN
                         ) {
                             clearInterval(checkWs);
@@ -478,12 +476,14 @@ export class App {
         //      triggered iOS's native focus-scroll — never from generic scroll events.
         // ==========================================
         if (window.visualViewport) {
-            const appEl = document.getElementById('app');
+            const _appEl = document.getElementById('app');
             this.updateLayoutPosition = (
                 shouldFit = false,
                 resetDocumentScroll = false,
             ) => {
-                const isDesktop = new URLSearchParams(window.location.search).has('desktop');
+                const isDesktop = new URLSearchParams(
+                    window.location.search,
+                ).has('desktop');
                 const isMobile = !isDesktop && window.innerWidth <= 768;
                 if (isMobile && window.visualViewport) {
                     const viewport = window.visualViewport;
@@ -657,7 +657,7 @@ export class App {
         const savedLeftWidth = localStorage.getItem('phi_panel_left_width');
         const savedRightWidth = localStorage.getItem('phi_panel_right_width');
         if (savedLeftWidth) {
-            sidebar.style.width = savedLeftWidth + 'px';
+            sidebar.style.width = `${savedLeftWidth}px`;
             const widthNum = parseFloat(savedLeftWidth);
             if (widthNum < 120) {
                 sidebar.classList.add('sidebar-narrow');
@@ -665,7 +665,7 @@ export class App {
                 sidebar.classList.remove('sidebar-narrow');
             }
         }
-        if (savedRightWidth) diffPanel.style.width = savedRightWidth + 'px';
+        if (savedRightWidth) diffPanel.style.width = `${savedRightWidth}px`;
 
         // Left resizing handler
         leftHandle.addEventListener('mousedown', (e) => {
@@ -678,7 +678,7 @@ export class App {
                 const width =
                     moveEvent.clientX - layout.getBoundingClientRect().left;
                 if (width > 60 && width < 450) {
-                    sidebar.style.width = width + 'px';
+                    sidebar.style.width = `${width}px`;
                     localStorage.setItem('phi_panel_left_width', width);
 
                     if (width < 120) {
@@ -715,7 +715,7 @@ export class App {
                 const width =
                     layout.getBoundingClientRect().right - moveEvent.clientX;
                 if (width > 200 && width < 600) {
-                    diffPanel.style.width = width + 'px';
+                    diffPanel.style.width = `${width}px`;
                     localStorage.setItem('phi_panel_right_width', width);
                     this.tabManager.fitActiveTerminal();
                     this.diffController.fitTerminal();
@@ -788,7 +788,7 @@ export class App {
             this.terminalActivity,
         );
 
-        link.href = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+        link.href = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
         document.getElementsByTagName('head')[0].appendChild(link);
     }
 
@@ -815,7 +815,7 @@ export class App {
         const mobile =
             typeof window.matchMedia === 'function' &&
             window.matchMedia('(max-width: 768px)').matches;
-        const on = !!(this.config && this.config.fast_mode) || mobile;
+        const on = !!this.config?.fast_mode || mobile;
         document.body.classList.toggle('fast-mode', on);
     }
 
@@ -1178,8 +1178,7 @@ export class App {
             // this form element) can associate with the form via its `form`
             // attribute. Without this, clicking the type=submit button does
             // nothing because a submit button outside its form never submits.
-            const formId =
-                'config-editor-form-' + Math.random().toString(36).slice(2);
+            const formId = `config-editor-form-${Math.random().toString(36).slice(2)}`;
             body.id = formId;
 
             const inputs = new Map();
@@ -1285,9 +1284,9 @@ export class App {
             // produces "synced but blank newline" over remote/headless
             // sessions). Fall back to no ?pane= if there's no active tab.
             let url = '/api/clipboard';
-            const activeTab = this.tabManager && this.tabManager.getActiveTab();
-            if (activeTab && activeTab.paneId) {
-                url += '?pane=' + encodeURIComponent(activeTab.paneId);
+            const activeTab = this.tabManager?.getActiveTab();
+            if (activeTab?.paneId) {
+                url += `?pane=${encodeURIComponent(activeTab.paneId)}`;
             }
             const res = await fetch(url);
             if (!res.ok) throw new Error('Failed to fetch remote clipboard');
@@ -1296,7 +1295,7 @@ export class App {
             const empty = data && data.empty === true;
 
             if (!empty && text.length > 0) {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
+                if (navigator.clipboard?.writeText) {
                     await navigator.clipboard.writeText(text);
                 } else {
                     // Fallback to classic execCommand method for insecure contexts (e.g. remoting via local HTTP IP address)
@@ -1429,10 +1428,7 @@ export class App {
             if (data.config) {
                 if (copied) {
                     // Already on the clipboard via ClipboardItem.
-                } else if (
-                    navigator.clipboard &&
-                    navigator.clipboard.writeText
-                ) {
+                } else if (navigator.clipboard?.writeText) {
                     await navigator.clipboard.writeText(data.config);
                 } else {
                     const textArea = document.createElement('textarea');
@@ -1502,7 +1498,7 @@ export class App {
             if (btnElement) btnElement.classList.add('loading');
 
             let configText = '';
-            if (navigator.clipboard && navigator.clipboard.readText) {
+            if (navigator.clipboard?.readText) {
                 try {
                     configText = await navigator.clipboard.readText();
                 } catch (e) {
@@ -1664,7 +1660,7 @@ export class App {
                 } else {
                     span.textContent = 'Failed!';
                 }
-                alert('Import failed: ' + e.message);
+                alert(`Import failed: ${e.message}`);
                 setTimeout(() => {
                     btnElement.classList.remove('error');
                     if (span.innerText !== undefined) {
@@ -1828,12 +1824,12 @@ export class App {
             row.appendChild(meta);
 
             if (peer.reachable) {
-                row.title = `${peer.url}\n${peer.tab_count} tabs · ${peer.busy_count} busy\nphi ${peer.version || 'unknown'}\nidle ${peer.idle_min < 0 ? '?' : peer.idle_min + 'm'}`;
+                row.title = `${peer.url}\n${peer.tab_count} tabs · ${peer.busy_count} busy\nphi ${peer.version || 'unknown'}\nidle ${peer.idle_min < 0 ? '?' : `${peer.idle_min}m`}`;
                 row.addEventListener('click', () => {
                     if (peer.url) window.open(peer.url, '_blank', 'noopener');
                 });
             } else {
-                row.title = `${peer.url}\nunreachable${peer.error ? ': ' + peer.error : ''}`;
+                row.title = `${peer.url}\nunreachable${peer.error ? `: ${peer.error}` : ''}`;
                 row.disabled = true;
             }
 

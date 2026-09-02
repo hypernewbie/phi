@@ -1,6 +1,6 @@
 /* Φ phi — AI Sync Board Manager */
 
-import type { AppLike, ToastOptions } from './types.js';
+import type { AppLike } from './types.js';
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
 
 // Sync Board desktop-alert markers: a message whose key or value carries
@@ -130,7 +130,7 @@ export class SyncManager {
         } catch (e) {
             console.error('Failed to save sync coordinator:', e);
             this.app.showToast(
-                'Failed to save coordinator: ' + (e as Error).message,
+                `Failed to save coordinator: ${(e as Error).message}`,
                 { type: 'error' },
             );
         }
@@ -143,11 +143,7 @@ export class SyncManager {
 
         this.pollInterval = setInterval(() => {
             const diffCtrl = this.app.diffController;
-            if (
-                diffCtrl &&
-                diffCtrl.isPanelOpen &&
-                diffCtrl.activeTab === 'sync'
-            ) {
+            if (diffCtrl?.isPanelOpen && diffCtrl.activeTab === 'sync') {
                 this.refreshMessages();
             }
         }, 15000);
@@ -155,7 +151,7 @@ export class SyncManager {
 
     async getCoordinatorUrl(): Promise<string> {
         const config = this.app.sessionsManager.config;
-        return (config && config.sync_coordinator) || 'http://localhost:7070';
+        return config?.sync_coordinator || 'http://localhost:7070';
     }
 
     async fetchWithProxy(
@@ -231,7 +227,7 @@ export class SyncManager {
                 valEl.classList.toggle('collapsed');
             });
 
-            card.querySelector('.sync-edit-btn')!.addEventListener(
+            card.querySelector('.sync-edit-btn')?.addEventListener(
                 'click',
                 (e) => {
                     e.stopPropagation();
@@ -243,7 +239,7 @@ export class SyncManager {
                 },
             );
 
-            card.querySelector('.sync-del-btn')!.addEventListener(
+            card.querySelector('.sync-del-btn')?.addEventListener(
                 'click',
                 async (e) => {
                     e.stopPropagation();
@@ -258,7 +254,7 @@ export class SyncManager {
                             this.refreshMessages();
                         } catch (err) {
                             this.app.showToast(
-                                'Failed to delete: ' + (err as Error).message,
+                                `Failed to delete: ${(err as Error).message}`,
                                 { type: 'error' },
                             );
                         }
@@ -288,7 +284,7 @@ export class SyncManager {
             this.refreshMessages();
         } catch (e) {
             this.app.showToast(
-                'Failed to save message: ' + (e as Error).message,
+                `Failed to save message: ${(e as Error).message}`,
                 { type: 'error' },
             );
         }
@@ -354,7 +350,7 @@ export class SyncManager {
                 keys = list.map((m: any) => m.key).filter(Boolean);
         } catch (e) {
             this.app.showToast(
-                'Failed to read messages: ' + (e as Error).message,
+                `Failed to read messages: ${(e as Error).message}`,
                 { type: 'error' },
             );
             return;

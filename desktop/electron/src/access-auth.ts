@@ -288,8 +288,7 @@ export class AccessAuth {
       }
     }
     const headers: Record<string, string> = {};
-    if (cookie)
-      headers['Cookie'] = `${cookie.cookieName}=${cookie.cookieValue}`;
+    if (cookie) headers.Cookie = `${cookie.cookieName}=${cookie.cookieValue}`;
     try {
       const res = await this.safeFetch(new URL(CONFIG_PATH, origin), {
         headers,

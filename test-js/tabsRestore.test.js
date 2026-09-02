@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 

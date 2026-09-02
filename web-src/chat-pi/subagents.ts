@@ -42,7 +42,7 @@ function dotClassFor(state: unknown): string {
 }
 
 function truncateLabel(label: string): string {
-    return label.length > 24 ? label.slice(0, 23) + '…' : label;
+    return label.length > 24 ? `${label.slice(0, 23)}…` : label;
 }
 
 /** Hide the shared strip regardless of pane ownership (used when the
@@ -70,7 +70,7 @@ export function createSubagentStrip(
         const chip = document.createElement('button');
         chip.className = 'subagent-chip';
         const dot = document.createElement('span');
-        dot.className = 'dot ' + dotClassFor(run.state);
+        dot.className = `dot ${dotClassFor(run.state)}`;
         const text = document.createElement('span');
         text.className = 'subagent-chip-label';
         text.textContent = truncateLabel(label);

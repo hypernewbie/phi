@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import {
     formatAttachment,
@@ -104,7 +104,7 @@ describe('formatChipName', () => {
     });
 
     it('middle-ellipsizes long names but preserves the extension', () => {
-        const long = 'a'.repeat(80) + '.png';
+        const long = `${'a'.repeat(80)}.png`;
         const out = formatChipName(long, 30);
         expect(out.endsWith('.png')).toBe(true);
         expect(out.length).toBeLessThanOrEqual(30);

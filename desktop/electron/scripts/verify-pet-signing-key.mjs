@@ -22,8 +22,7 @@ const normalize = (pem) => pem.replace(/\s+/g, '');
 
 const secret = process.env.PHI_PET_ED25519_PRIVATE_KEY;
 if (
-  !secret ||
-  !secret.includes('BEGIN PRIVATE KEY') ||
+  !secret?.includes('BEGIN PRIVATE KEY') ||
   !secret.includes('END PRIVATE KEY')
 ) {
   console.error(

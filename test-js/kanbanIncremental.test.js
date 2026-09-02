@@ -370,7 +370,7 @@ describe('the cache never keeps a value the server did not accept', () => {
         const { c } = mountBoard();
         const sent = [];
         let firstReject;
-        mockFetch((url, opts) => {
+        mockFetch((_url, opts) => {
             if ((opts?.method || 'GET') === 'GET') {
                 return {
                     ok: true,
@@ -539,7 +539,7 @@ describe('feature roll-ups', () => {
 // ---------------------------------------------------------------------------
 
 describe('refreshBoard', () => {
-    function stubBoardFetch(c, tasks) {
+    function stubBoardFetch(_c, tasks) {
         mockFetch((url) => {
             const target = decodeURIComponent(
                 String(url).split('url=')[1] || '',

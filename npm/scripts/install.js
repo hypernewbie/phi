@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { execSync } = require('child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const https = require('node:https');
+const { execSync } = require('node:child_process');
 
 const version = require('../package.json').version;
 const repo = 'hypernewbie/phi';

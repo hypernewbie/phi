@@ -1181,7 +1181,7 @@ export function createReviewTranscriptView(root, options) {
                             continue;
                         const msg =
                             entry.message ?? entry.data?.message ?? entry.data;
-                        if (!msg || !msg.id) continue;
+                        if (!msg?.id) continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
                         old.push(msg);
@@ -1229,7 +1229,7 @@ export function createReviewTranscriptView(root, options) {
             }
         },
         prependOlder(count) {
-            const totalLen = compactSnapshot
+            const _totalLen = compactSnapshot
                 ? combinedLength()
                 : structuredMessages.length;
             if (currentStart === 0) return false;

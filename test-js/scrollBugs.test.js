@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
 // REGRESSION: User reported "sometimes I mouse-scroll and it jumps right

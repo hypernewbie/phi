@@ -13,13 +13,13 @@ describe('buildProxyUrl', () => {
 
     it('strips exactly one trailing slash off the coordinator base', () => {
         expect(buildProxyUrl('http://host:7070/', '/x')).toBe(
-            '/api/proxy?url=' + encodeURIComponent('http://host:7070/x'),
+            `/api/proxy?url=${encodeURIComponent('http://host:7070/x')}`,
         );
     });
 
     it('only strips a single trailing slash', () => {
         expect(buildProxyUrl('http://host//', '/x')).toBe(
-            '/api/proxy?url=' + encodeURIComponent('http://host//x'),
+            `/api/proxy?url=${encodeURIComponent('http://host//x')}`,
         );
     });
 

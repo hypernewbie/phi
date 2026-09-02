@@ -198,7 +198,7 @@ describe('markdown bundle import', () => {
         // After an empty clipboard read, code falls through to prompt().
         const origPrompt = global.prompt;
         let prompted = false;
-        global.prompt = (msg) => {
+        global.prompt = (_msg) => {
             prompted = true;
             return 'PHIMD:fromprompt:aGVsbG8=';
         };

@@ -64,7 +64,7 @@ function wroteMuted(term) {
 // and records which branch landed. We mirror rather than call real
 // loadData so the test is hermetic (no PTY, no websocket, no DOMs beyond
 // jsdom's defaults).
-async function loadAsActiveTab(activeTab) {
+async function loadAsActiveTab(_activeTab) {
     const mod = await import('../web/diff.js');
     return mod.DiffController.prototype._writeStaticTerminalOutput;
 }
