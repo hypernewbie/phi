@@ -10,11 +10,13 @@ describe('composer', () => {
             streamingBehavior: 'steer',
         });
     });
-    it('/skill: and /template allowed', () => {
-        expect(dispatchComposer('/skill:commit').op).toBe('prompt');
-        expect(dispatchComposer('/template sum').op).toBe('prompt');
-    });
-    it('raw extension rejected', () => {
-        expect(dispatchComposer('/status').kind).toBe('rejected');
+    it('slash commands are sent raw without steer semantics', () => {
+        expect(dispatchComposer('/clear')).toEqual({
+            kind: 'raw',
+            op: 'prompt',
+            message: '/clear',
+        });
+        expect(dispatchComposer('/skill:commit').kind).toBe('raw');
+        expect(dispatchComposer('/template sum').kind).toBe('raw');
     });
 });
