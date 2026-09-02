@@ -26,7 +26,7 @@ const block = (name: string, type = '0', size = 0): Uint8Array => {
   Buffer.from('0000644\0').copy(header, 100);
   Buffer.from('0000000\0').copy(header, 108);
   Buffer.from('0000000\0').copy(header, 116);
-  Buffer.from(size.toString(8).padStart(11, '0') + '\0').copy(header, 124);
+  Buffer.from(`${size.toString(8).padStart(11, '0')}\0`).copy(header, 124);
   Buffer.from('00000000000\0').copy(header, 136);
   header[156] = type.charCodeAt(0);
   Buffer.from('ustar\0').copy(header, 257);

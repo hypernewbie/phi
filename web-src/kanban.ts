@@ -118,13 +118,13 @@ export class KanbanManager {
             document.removeEventListener('keydown', this.escListener);
             this.escListener = null;
         }
-        if (this.activeDetailPanel && this.activeDetailPanel.parentNode) {
+        if (this.activeDetailPanel?.parentNode) {
             this.activeDetailPanel.parentNode.removeChild(
                 this.activeDetailPanel,
             );
         }
         this.activeDetailPanel = null;
-        if (this.activeOverlay && this.activeOverlay.parentNode) {
+        if (this.activeOverlay?.parentNode) {
             this.activeOverlay.parentNode.removeChild(this.activeOverlay);
         }
         this.activeOverlay = null;
@@ -258,7 +258,7 @@ export class KanbanManager {
         username: string,
         password: string,
     ): Promise<string> {
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1/login')}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1/login`)}`;
         const res = await fetch(proxyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -434,8 +434,8 @@ export class KanbanManager {
                     </div>
                 `;
                 container
-                    .querySelector('#kanban-retry-btn')!
-                    .addEventListener('click', () =>
+                    .querySelector('#kanban-retry-btn')
+                    ?.addEventListener('click', () =>
                         this.initTabContainer(container),
                     );
                 return;
@@ -572,13 +572,13 @@ export class KanbanManager {
                 </div>
             `;
             container
-                .querySelector('#kanban-retry-btn')!
-                .addEventListener('click', () =>
+                .querySelector('#kanban-retry-btn')
+                ?.addEventListener('click', () =>
                     this.loadAndRenderBoard(container, isAutoRetry),
                 );
             container
-                .querySelector('#kanban-reconnect-btn')!
-                .addEventListener('click', () => {
+                .querySelector('#kanban-reconnect-btn')
+                ?.addEventListener('click', () => {
                     sessionStorage.removeItem('vikunja_token');
                     this.initTabContainer(container);
                 });
@@ -749,8 +749,8 @@ export class KanbanManager {
         });
 
         container
-            .querySelector('#kanban-refresh-btn')!
-            .addEventListener('click', () => {
+            .querySelector('#kanban-refresh-btn')
+            ?.addEventListener('click', () => {
                 // Refresh in place. Blanking the board the user is looking at is
                 // worse feedback than the toolbar indicator.
                 this.refreshBoard(container);
@@ -879,8 +879,8 @@ export class KanbanManager {
         this.bindBoardDelegates(container);
 
         container
-            .querySelector('#kanban-disconnect-btn')!
-            .addEventListener('click', () => {
+            .querySelector('#kanban-disconnect-btn')
+            ?.addEventListener('click', () => {
                 sessionStorage.removeItem('vikunja_token');
                 fetch('/api/config/kanban-vault', { method: 'DELETE' }).catch(
                     (e) => console.error('Vault delete error:', e),
@@ -1299,7 +1299,7 @@ export class KanbanManager {
                     <textarea id="kanban-note-desc" class="kanban-note-desc" placeholder="Jot down…">${this.escapeHtml(this.stripHtml(selected.description || ''))}</textarea>
                     <div id="kanban-note-preview" class="kanban-note-preview hidden"></div>
                     <div class="kanban-notes-editor-footer">
-                        <span class="kanban-note-meta">${selected.identifier ? this.escapeHtml(selected.identifier) + ' · ' : ''}${this.escapeHtml(this.formatNoteDate(selected.updated || selected.created || ''))}</span>
+                        <span class="kanban-note-meta">${selected.identifier ? `${this.escapeHtml(selected.identifier)} · ` : ''}${this.escapeHtml(this.formatNoteDate(selected.updated || selected.created || ''))}</span>
                     </div>
                 </div>
             `
@@ -2384,7 +2384,7 @@ export class KanbanManager {
         return escapeHtmlUtil(str);
     }
 
-    initSortable(container: HTMLElement, buckets: any[]): void {
+    initSortable(container: HTMLElement, _buckets: any[]): void {
         const lists = container.querySelectorAll('.kanban-cards-list');
         lists.forEach((list) => {
             if (typeof window.Sortable === 'undefined') {
@@ -2499,8 +2499,8 @@ export class KanbanManager {
         `;
 
         panel
-            .querySelector('.kdp-close-btn')!
-            .addEventListener('click', () => this.closeDetailPanel());
+            .querySelector('.kdp-close-btn')
+            ?.addEventListener('click', () => this.closeDetailPanel());
         document.body.appendChild(panel);
         this.activeDetailPanel = panel;
 
@@ -2542,8 +2542,8 @@ export class KanbanManager {
                 </div>
             `;
             panel
-                .querySelector('.kdp-close-btn')!
-                .addEventListener('click', () => this.closeDetailPanel());
+                .querySelector('.kdp-close-btn')
+                ?.addEventListener('click', () => this.closeDetailPanel());
         }
     }
 
@@ -2742,11 +2742,11 @@ export class KanbanManager {
         this.wireFeatureDetailSection(panel, task, cardEl, container);
 
         panel
-            .querySelector('.kdp-close-btn')!
-            .addEventListener('click', () => this.closeDetailPanel());
+            .querySelector('.kdp-close-btn')
+            ?.addEventListener('click', () => this.closeDetailPanel());
         panel
-            .querySelector('.kdp-cancel-btn')!
-            .addEventListener('click', () => this.closeDetailPanel());
+            .querySelector('.kdp-cancel-btn')
+            ?.addEventListener('click', () => this.closeDetailPanel());
 
         // Detail-panel Delete button. Confirms, then deletes the task and closes
         // the panel. The container ref is captured so the board reloads.
@@ -2776,8 +2776,8 @@ export class KanbanManager {
         }
 
         panel
-            .querySelector('.kdp-save-btn')!
-            .addEventListener('click', async () => {
+            .querySelector('.kdp-save-btn')
+            ?.addEventListener('click', async () => {
                 const saveBtn = panel.querySelector(
                     '.kdp-save-btn',
                 ) as HTMLButtonElement;
@@ -2943,8 +2943,8 @@ export class KanbanManager {
     async saveTaskDetail(
         task: any,
         formData: any,
-        cardEl: HTMLElement,
-        container: HTMLElement,
+        _cardEl: HTMLElement,
+        _container: HTMLElement,
     ): Promise<void> {
         const payload = this.taskUpdatePayload(task, formData);
 
@@ -3254,11 +3254,10 @@ export class KanbanManager {
     matchesFilter(task: any, query: string): boolean {
         if (!query) return true;
         if (!task) return false;
-        if (task.title && task.title.toLowerCase().includes(query)) return true;
-        if (task.identifier && task.identifier.toLowerCase().includes(query))
-            return true;
-        return (task.labels || []).some(
-            (l: any) => l.title && l.title.toLowerCase().includes(query),
+        if (task.title?.toLowerCase().includes(query)) return true;
+        if (task.identifier?.toLowerCase().includes(query)) return true;
+        return (task.labels || []).some((l: any) =>
+            l.title?.toLowerCase().includes(query),
         );
     }
 
@@ -3793,13 +3792,13 @@ export class KanbanManager {
         this.assertAddressable(path, body);
         const token = sessionStorage.getItem('vikunja_token');
         const url = localStorage.getItem('vikunja_url');
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(url + '/api/v1' + path)}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(`${url}/api/v1${path}`)}`;
 
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
         };
         if (token && token !== 'null' && token !== 'undefined') {
-            headers['Authorization'] = `Bearer ${token}`;
+            headers.Authorization = `Bearer ${token}`;
         }
 
         const res = await fetch(proxyUrl, {

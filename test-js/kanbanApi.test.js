@@ -27,7 +27,11 @@ beforeEach(() => vi.clearAllMocks());
 describe('KanbanManager.apiRequest', () => {
     it('forwards the specified HTTP method to /api/proxy', async () => {
         const c = ctxWithSession();
-        mockFetch((url, opts) => ({ ok: true, status: 200, json: { id: 42 } }));
+        mockFetch((_url, _opts) => ({
+            ok: true,
+            status: 200,
+            json: { id: 42 },
+        }));
         await c.apiPut('/tasks/42', { title: 'hi' });
         const [callUrl, callOpts] = fetch.mock.calls[0];
         // proxy URL encodes the upstream URL

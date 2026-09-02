@@ -42,8 +42,7 @@ const version = archiveBase.slice('phi-pet-'.length, -'.tar.gz'.length);
 
 const secret = process.env.PHI_PET_ED25519_PRIVATE_KEY;
 if (
-  !secret ||
-  !secret.includes('BEGIN PRIVATE KEY') ||
+  !secret?.includes('BEGIN PRIVATE KEY') ||
   !secret.includes('END PRIVATE KEY')
 ) {
   console.error(

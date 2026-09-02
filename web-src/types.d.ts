@@ -1,5 +1,3 @@
-export {};
-
 export interface ToastOptions {
     type?: 'info' | 'success' | 'error';
     title?: string;

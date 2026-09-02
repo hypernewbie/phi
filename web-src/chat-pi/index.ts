@@ -211,7 +211,7 @@ export function mountChatPi(
         summary?: string | null;
         kept?: number | null;
     } | null = null;
-    let lastCompaction: {
+    let _lastCompaction: {
         summary: string | null;
         id: string | null;
         timestamp: number;
@@ -1035,7 +1035,7 @@ export function mountChatPi(
                     ? ((data as unknown as { result: { messages: unknown[] } })
                           .result.messages.length as number)
                     : null;
-                lastCompaction = {
+                _lastCompaction = {
                     summary,
                     id:
                         typeof (

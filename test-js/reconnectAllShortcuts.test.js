@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 
 describe('Shift+F5 and Ctrl/Cmd+Shift+R reconnect all in handleGlobalTabShortcuts', () => {

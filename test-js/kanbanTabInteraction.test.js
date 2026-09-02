@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { setupDomHarness, mockFetch } from './_dom.js';
+import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import { KanbanManager } from '../web/kanban.js';
 
@@ -264,7 +264,7 @@ describe('BUG-3: closing the kanban tab cleans up listeners + marker', () => {
 
     it('kanbanManager.cleanup() removes the ESC listener and any open overlays', () => {
         const fx = fixtures();
-        const app = makeApp(fx);
+        const _app = makeApp(fx);
         const km = Object.create(KanbanManager.prototype);
         const escHandler = vi.fn();
         km.escListener = escHandler;
@@ -338,9 +338,11 @@ describe('BUG-2: phi_kanban_open is set on openBoard and cleared on cleanup', ()
         const tc = document.createElement('div');
         app.tabManager = {
             tabs: new Map(),
-            createTab: vi.fn((paneId, sessionId, title, coder, ws, cwd) => {
-                app.tabManager.tabs.set(paneId, { termContainer: tc });
-            }),
+            createTab: vi.fn(
+                (paneId, _sessionId, _title, _coder, _ws, _cwd) => {
+                    app.tabManager.tabs.set(paneId, { termContainer: tc });
+                },
+            ),
         };
 
         await km.openBoard();

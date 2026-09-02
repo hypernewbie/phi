@@ -198,7 +198,7 @@ describe('desktop active-server header state (mainview.js)', () => {
       active_cwd: '/common',
     };
     bodyWorkspace = '/beta';
-    recordedActiveServer!({ id: 'beta', origin: 'http://beta/', accent: '' });
+    recordedActiveServer?.({ id: 'beta', origin: 'http://beta/', accent: '' });
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
 
     const select = doc.getElementById('workspace-select') as HTMLSelectElement;
@@ -234,14 +234,18 @@ describe('desktop active-server header state (mainview.js)', () => {
     });
     fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/beta');
 
-    recordedActiveServer!({ id: 'alpha', origin: 'http://alpha/', accent: '' });
-    recordedActiveServer!({ id: 'beta', origin: 'http://beta/', accent: '' });
+    recordedActiveServer?.({
+      id: 'alpha',
+      origin: 'http://alpha/',
+      accent: '',
+    });
+    recordedActiveServer?.({ id: 'beta', origin: 'http://beta/', accent: '' });
     for (let i = 0; i < 5; i += 1) await Promise.resolve();
     expect(
       (doc.getElementById('workspace-select') as HTMLSelectElement).value,
     ).toBe('/beta');
 
-    resolveAlpha!({
+    resolveAlpha?.({
       hostname: 'ALPHA',
       workspaces: ['/alpha'],
       active_cwd: '/alpha',
@@ -291,8 +295,8 @@ describe('desktop auth modal (mainview.js)', () => {
     expect(recordedAuthRequired).not.toBeNull();
     // The main process pushes body obscuring and the auth-required prompt
     // together; tests must drive both to simulate the real flow.
-    recordedBodyObscuring!(true);
-    recordedAuthRequired!({
+    recordedBodyObscuring?.(true);
+    recordedAuthRequired?.({
       requestId: 'r-1',
       profileId: '127-0-0-1-7070',
       origin: 'http://127.0.0.1:7070/',
@@ -318,7 +322,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-2',
       profileId: 'p2',
       origin: 'http://charon:7070/',
@@ -333,7 +337,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-3',
       profileId: 'p3',
       origin: 'http://a/',
@@ -341,7 +345,7 @@ describe('desktop auth modal (mainview.js)', () => {
     });
     expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe('A');
     // Same id, different label → modal updates.
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-3',
       profileId: 'p3',
       origin: 'http://a/',
@@ -358,7 +362,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-open',
       profileId: 'p4',
       origin: 'http://a/',
@@ -366,7 +370,7 @@ describe('desktop auth modal (mainview.js)', () => {
     });
     expect(doc.getElementById('desktop-auth-origin')?.textContent).toBe('A');
     // Different requestId → ignored. The modal still shows A.
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-other',
       profileId: 'p5',
       origin: 'http://b/',
@@ -381,7 +385,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-submit',
       profileId: 'p-sub',
       origin: 'http://a/',
@@ -410,7 +414,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-short',
       profileId: 'p-short',
       origin: 'http://a/',
@@ -442,7 +446,7 @@ describe('desktop auth modal (mainview.js)', () => {
       code: 'invalid-password',
     }));
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-fail',
       profileId: 'p-fail',
       origin: 'http://a/',
@@ -471,7 +475,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-cancel',
       profileId: 'p-cancel',
       origin: 'http://a/',
@@ -495,7 +499,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-esc',
       profileId: 'p-esc',
       origin: 'http://a/',
@@ -520,7 +524,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-active',
       profileId: 'p-active',
       origin: 'http://a/',
@@ -530,7 +534,7 @@ describe('desktop auth modal (mainview.js)', () => {
       doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
     ).toBe(false);
     // Active server switches to a DIFFERENT profile → modal closes.
-    recordedActiveServer!({
+    recordedActiveServer?.({
       id: 'p-other',
       origin: 'http://other/',
       accent: '',
@@ -540,7 +544,7 @@ describe('desktop auth modal (mainview.js)', () => {
     ).toBe(true);
     // Now a push for a NEW requestId must be accepted (the renderer
     // must have cleared its requestId, not just hidden the modal).
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-next',
       profileId: 'p-next',
       origin: 'http://b/',
@@ -558,7 +562,7 @@ describe('desktop auth modal (mainview.js)', () => {
       return;
     }
     const doc = await loadMainView();
-    recordedAuthRequired!({
+    recordedAuthRequired?.({
       requestId: 'r-mru',
       profileId: 'p-mru',
       origin: 'http://a/',
@@ -571,7 +575,7 @@ describe('desktop auth modal (mainview.js)', () => {
     // launch. If the active id matches the modal's profileId, the
     // modal must stay open — otherwise the 401-triggered prompt would
     // open then immediately close.
-    recordedActiveServer!({ id: 'p-mru', origin: 'http://a/', accent: '' });
+    recordedActiveServer?.({ id: 'p-mru', origin: 'http://a/', accent: '' });
     expect(
       doc.getElementById('desktop-auth-modal')?.hasAttribute('hidden'),
     ).toBe(false);
@@ -586,9 +590,9 @@ describe('desktop auth modal (mainview.js)', () => {
     const doc = await loadMainView();
     expect(recordedBodyObscuring).not.toBeNull();
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(false);
-    recordedBodyObscuring!(true);
+    recordedBodyObscuring?.(true);
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(true);
-    recordedBodyObscuring!(false);
+    recordedBodyObscuring?.(false);
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(false);
   });
 });

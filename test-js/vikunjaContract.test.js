@@ -47,7 +47,7 @@ describe('Vikunja swagger contract (locked-in)', () => {
         expect(op.summary).toMatch(/Update a task bucket/i);
         // body schema accepts { task_id }
         const body = (op.parameters || []).find((p) => p.in === 'body');
-        expect(body && body.name).toBe('taskBucket');
+        expect(body?.name).toBe('taskBucket');
     });
 
     it('models.Task exists and has bucket_id + project_id + title', () => {
@@ -63,9 +63,7 @@ describe('Vikunja swagger contract (locked-in)', () => {
         expect(relation).toBeTruthy();
         expect(relation.summary).toMatch(/relation/i);
         const body = (relation.parameters || []).find((p) => p.in === 'body');
-        expect(body && body.schema.$ref).toBe(
-            '#/definitions/models.TaskRelation',
-        );
+        expect(body?.schema.$ref).toBe('#/definitions/models.TaskRelation');
         expect(swagger.definitions['models.RelationKind'].enum).toContain(
             'subtask',
         );
@@ -88,7 +86,7 @@ describe('Vikunja swagger contract (locked-in)', () => {
     });
 
     it('Vendor file is actually Vikunja swagger (sanity)', () => {
-        expect(swagger.info && swagger.info.title).toMatch(/vikunja/i);
+        expect(swagger.info?.title).toMatch(/vikunja/i);
         expect(swagger.swagger).toMatch(/^2\./); // Swagger 2.0
     });
 });

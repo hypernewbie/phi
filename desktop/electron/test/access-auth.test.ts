@@ -214,7 +214,7 @@ describe('AccessAuth.fetchConfig', () => {
     const seen: { cookie: string | null } = { cookie: null };
     const auth = new AccessAuth(async (_url, init) => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
-      seen.cookie = headers['Cookie'] ?? null;
+      seen.cookie = headers.Cookie ?? null;
       return new Response('{}', {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -854,7 +854,7 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     let capturedHeader = '';
     const doFetch = (async (_url: URL, init?: RequestInit) => {
       const headers = init?.headers as Record<string, string> | undefined;
-      capturedHeader = headers?.['Cookie'] || '';
+      capturedHeader = headers?.Cookie || '';
       return new Response('{"workspaces":["/test"]}', {
         status: 200,
         headers: { 'content-type': 'application/json' },

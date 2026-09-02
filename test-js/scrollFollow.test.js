@@ -29,7 +29,7 @@ function makeTab({ viewportY, baseY, follow = true } = {}) {
             // makes the pre-write at-bottom capture
             // load-bearing — computing it after write() would see the
             // post-write buffer and never snap.
-            write: vi.fn((data, cb) => {
+            write: vi.fn((_data, cb) => {
                 tab.term.buffer.active.baseY += 1;
                 if (cb) cb();
             }),

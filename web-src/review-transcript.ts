@@ -1461,7 +1461,7 @@ export function createReviewTranscriptView(
                         const msg = (entry.message ??
                             entry.data?.message ??
                             entry.data) as StructuredMessage & { id?: string };
-                        if (!msg || !msg.id) continue;
+                        if (!msg?.id) continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
                         old.push(msg as StructuredMessage);
@@ -1525,7 +1525,7 @@ export function createReviewTranscriptView(
             }
         },
         prependOlder(count) {
-            const totalLen = compactSnapshot
+            const _totalLen = compactSnapshot
                 ? combinedLength()
                 : structuredMessages.length;
             if (currentStart === 0) return false;

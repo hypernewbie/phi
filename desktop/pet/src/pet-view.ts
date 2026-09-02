@@ -600,7 +600,7 @@ export function initPet(opts: PetInitOptions): PetController {
     cancelVideoFrameSampling();
     anim = STATIC;
     once = false;
-    staticImg.src = MEDIA_PREFIX + "maid-static.png";
+    staticImg.src = `${MEDIA_PREFIX}maid-static.png`;
     staticImg.classList.add("is-front");
     videoA.classList.remove("is-front");
     videoB.classList.remove("is-front");
@@ -632,7 +632,7 @@ export function initPet(opts: PetInitOptions): PetController {
     pending = { anim: next, once: nextOnce, gen: currentGen };
 
     const el = front === 0 ? videoB : videoA;
-    el.src = MEDIA_PREFIX + encodeURIComponent(next) + ".webm";
+    el.src = `${MEDIA_PREFIX + encodeURIComponent(next)}.webm`;
     el.loop = !nextOnce;
     el.muted = true;
     el.autoplay = true;

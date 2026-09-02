@@ -577,7 +577,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     const fetchConfigHandler = fake.ipcHandlers.get('phi:server-config');
     expect(fetchConfigHandler).toBeDefined();
-    const config = await fetchConfigHandler!({ sender: win.webContents });
+    const config = await fetchConfigHandler?.({ sender: win.webContents });
 
     expect(config).toEqual({
       hostname: 'minerva',
@@ -631,7 +631,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
       }
       if (u.includes('/api/config')) {
         const headers = (init?.headers as Record<string, string>) ?? {};
-        const cookie = headers['Cookie'] || headers['cookie'] || '';
+        const cookie = headers.Cookie || headers.cookie || '';
         if (hasSessionCookie || cookie.includes('phi_access_session')) {
           return {
             status: 200,
@@ -693,7 +693,7 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     const fetchConfigHandler = fake.ipcHandlers.get('phi:server-config');
     expect(fetchConfigHandler).toBeDefined();
-    const config = await fetchConfigHandler!({ sender: win.webContents });
+    const config = await fetchConfigHandler?.({ sender: win.webContents });
 
     expect(config).toEqual({
       hostname: 'minerva',

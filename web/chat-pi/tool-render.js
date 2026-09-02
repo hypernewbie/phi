@@ -156,14 +156,14 @@ function appendDiffRows(container, diffText) {
             const removedLines = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '-') break;
+                if (candidate?.prefix !== '-') break;
                 removedLines.push(candidate);
                 index++;
             }
             const addedLines = [];
             while (index < lines.length) {
                 const candidate = parseDiffLine(lines[index]);
-                if (!candidate || candidate.prefix !== '+') break;
+                if (candidate?.prefix !== '+') break;
                 addedLines.push(candidate);
                 index++;
             }

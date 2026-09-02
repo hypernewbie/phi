@@ -12,8 +12,8 @@
 // glow that carries the look. See temp/FASTMODE_PERF_JOURNAL.md.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const css = readFileSync(join(process.cwd(), 'web', 'style.css'), 'utf8');
 

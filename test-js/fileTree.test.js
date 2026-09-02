@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { FileTreeManager } from '../web/filetree.js';
 

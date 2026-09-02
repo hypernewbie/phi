@@ -173,7 +173,7 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
                     },
                 ];
             }
-            throw new Error('unexpected: ' + url);
+            throw new Error(`unexpected: ${url}`);
         });
         const tm = makeTm({ inputText: '' });
         await tm._cyclePromptHistory('older');
@@ -190,7 +190,7 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
                     { ts: 't1', cwd: '/p', text: 'oldest' },
                 ];
             }
-            throw new Error('unexpected: ' + url);
+            throw new Error(`unexpected: ${url}`);
         });
         const tm = makeTm({ inputText: '' });
         await tm._cyclePromptHistory('older'); // 0
@@ -214,7 +214,7 @@ describe('Alt+Up / Alt+Down cycle prompt history', () => {
                     { ts: 't2', cwd: '/p', text: 'middle' },
                 ];
             }
-            throw new Error('unexpected: ' + url);
+            throw new Error(`unexpected: ${url}`);
         });
         const tm = makeTm({ inputText: 'my draft before cycling' });
         await tm._cyclePromptHistory('older'); // 0

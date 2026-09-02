@@ -144,15 +144,15 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
   it('records a folder gesture on right-click of a file row and suppresses the page handlers', () => {
     let pageHandlerRan = false;
     document
-      .querySelector<HTMLElement>('.md-file-item')!
-      .addEventListener('contextmenu', () => {
+      .querySelector<HTMLElement>('.md-file-item')
+      ?.addEventListener('contextmenu', () => {
         pageHandlerRan = true;
       });
     const ev = new MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
     });
-    document.querySelector<HTMLElement>('.md-file-item')!.dispatchEvent(ev);
+    document.querySelector<HTMLElement>('.md-file-item')?.dispatchEvent(ev);
     expect(ev.defaultPrevented).toBe(true);
     expect(pageHandlerRan).toBe(false);
     expect(windowField().__phiFileAction).toEqual({
@@ -225,9 +225,9 @@ describe('toastErrorScript', () => {
     )!;
     expect(toast).not.toBeNull();
     expect(
-      toast.querySelector<HTMLElement>('.toast-message')!.textContent,
+      toast.querySelector<HTMLElement>('.toast-message')?.textContent,
     ).toBe('"plan.md" — not found on this machine');
-    expect(toast.querySelector<HTMLElement>('.toast-title')!.textContent).toBe(
+    expect(toast.querySelector<HTMLElement>('.toast-title')?.textContent).toBe(
       "Couldn't open",
     );
     expect(toast.querySelector<HTMLElement>('.toast-close')).not.toBeNull();
@@ -308,8 +308,8 @@ describe('the divider-width page scripts', () => {
       <div id="sidebar-panel" style="width: 100px"></div>
       <div id="diff-panel" style="width: 999px"></div>`;
     window.eval(applyDividersScript(300, null));
-    expect(document.getElementById('sidebar-panel')!.style.width).toBe('300px');
-    expect(document.getElementById('diff-panel')!.style.width).toBe('999px');
+    expect(document.getElementById('sidebar-panel')?.style.width).toBe('300px');
+    expect(document.getElementById('diff-panel')?.style.width).toBe('999px');
     expect(window.localStorage.getItem('phi_panel_left_width')).toBe('300');
     expect(window.localStorage.getItem('phi_panel_right_width')).toBeNull();
   });

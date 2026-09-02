@@ -253,11 +253,7 @@ export class ProfileViewManager {
     const id = targetId ?? this.activeId;
     if (!id) return;
     const entry = this.views.get(id);
-    if (
-      entry &&
-      entry.view.webContents &&
-      !entry.view.webContents.isDestroyed()
-    ) {
+    if (entry?.view.webContents && !entry.view.webContents.isDestroyed()) {
       if (ignoringCache) {
         entry.view.webContents.reloadIgnoringCache();
       } else {
@@ -313,13 +309,17 @@ export class ProfileViewManager {
         this.log(`views: hibernateInactive ${id}: ${String(err)}`);
       }
       this.views.delete(id);
-      this.log(`views: hibernateInactive — destroyed ${id}, kept ${keepId || '(none)'}`);
+      this.log(
+        `views: hibernateInactive — destroyed ${id}, kept ${keepId || '(none)'}`,
+      );
     }
   }
 
   /** Restore point for low-memory off: next setActive will lazily recreate. No-op besides log. */
   restoreAll(): void {
-    this.log(`views: restoreAll — low memory off, ${this.views.size} views retained, rest will lazy-create`);
+    this.log(
+      `views: restoreAll — low memory off, ${this.views.size} views retained, rest will lazy-create`,
+    );
   }
 
   private hideActiveView(): void {

@@ -34,7 +34,7 @@ function makeCtx(tab) {
         getActiveTab: vi.fn(() => tab),
         _spamScrollToBottom: vi.fn(),
         sendInput: vi.fn((t, payload) => {
-            if (t && t.ws && !t.isDead) t.ws.sendInput(payload);
+            if (t?.ws && !t.isDead) t.ws.sendInput(payload);
         }),
     };
 }

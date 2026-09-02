@@ -72,7 +72,7 @@ const FONT_NAME = 'JetBrains Mono';
 // (400) and the visual difference vs the browser's 500 is minimal:
 // the font's Regular face is closer to the browser's Medium than
 // GDI+'s Bold is.
-const TBAR_FALLBACK_WEIGHT = 400;
+const _TBAR_FALLBACK_WEIGHT = 400;
 
 function pickJetBrainsMonoFile() {
   // The greek subset is the one that contains U+03A6 (Phi). Match
@@ -112,7 +112,7 @@ function loadAccentPalette() {
   const re = /(\w+):\s*\{\s*accent:\s*['"]#([0-9a-fA-F]{6})['"]/g;
   let m = re.exec(body);
   while (m !== null) {
-    entries.push({ name: m[1], hex: '#' + m[2].toLowerCase() });
+    entries.push({ name: m[1], hex: `#${m[2].toLowerCase()}` });
     m = re.exec(body);
   }
   if (entries.length === 0)
@@ -234,7 +234,7 @@ for (const { name, hex } of palette) {
 }
 writeFileSync(
   path.join(ICONS_DIR, 'manifest.json'),
-  JSON.stringify(manifest, null, 2) + '\n',
+  `${JSON.stringify(manifest, null, 2)}\n`,
 );
 console.log(`wrote ${palette.length} accent icons + manifest -> assets/icons/`);
 

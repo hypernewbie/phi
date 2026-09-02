@@ -88,7 +88,7 @@ function makeAddonSandbox() {
 function loadAddon(file) {
     const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
     const sandbox = makeAddonSandbox();
-    const fn = new Function(...ADDON_FN_PARAMS, src + '\nreturn globalThis;');
+    const fn = new Function(...ADDON_FN_PARAMS, `${src}\nreturn globalThis;`);
     return fn(sandbox, sandbox);
 }
 

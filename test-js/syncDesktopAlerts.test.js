@@ -117,7 +117,7 @@ describe('SyncManager — desktop alert title marker', () => {
     it('truncates the marker title to a bounded length', async () => {
         vi.stubGlobal('navigator', { userAgent: 'Electron/33.4.11' });
         bootstrapDom();
-        const longKey = 'k'.repeat(300) + ' PHI_NOTIF';
+        const longKey = `${'k'.repeat(300)} PHI_NOTIF`;
         await refreshWith([msg(longKey, 'x')]);
         expect(document.title.length).toBe(120);
         expect(document.title.startsWith('PHI_NOTIF ')).toBe(true);

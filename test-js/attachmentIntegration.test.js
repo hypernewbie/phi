@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
@@ -207,7 +207,7 @@ describe('attachment wiring — paste', () => {
         const event = new Event('paste', { bubbles: true, cancelable: true });
         // No `items` with kind=file → handler returns early.
         Object.defineProperty(event, 'clipboardData', { value: { items: [] } });
-        const prevented = !tm.inputTextArea.dispatchEvent(event); // dispatchEvent returns false if preventDefault called
+        const _prevented = !tm.inputTextArea.dispatchEvent(event); // dispatchEvent returns false if preventDefault called
         // preventDefault should NOT have been called for text-only paste.
         expect(event.defaultPrevented).toBe(false);
         expect(tm.stagedAttachments).toHaveLength(0);

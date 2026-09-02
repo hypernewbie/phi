@@ -56,7 +56,7 @@ function extractRule(css, selector) {
     // Match selector at start-of-line (or after a newline) followed by
     // optional whitespace and `{`. Inside the braces, non-greedy match
     // since rules have no nested braces.
-    const re = new RegExp('(?:^|\\n)' + escaped + '\\s*\\{[\\s\\S]*?\\}', 'm');
+    const re = new RegExp(`(?:^|\\n)${escaped}\\s*\\{[\\s\\S]*?\\}`, 'm');
     const m = css.match(re);
     return m ? m[0] : '';
 }

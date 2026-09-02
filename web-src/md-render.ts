@@ -41,7 +41,7 @@ export function resolveRelative(baseDir: string, rel: string): string {
         }
         stack.push(seg);
     }
-    return '/' + stack.join('/');
+    return `/${stack.join('/')}`;
 }
 
 // Rewrites relative <img> srcs to the asset endpoint, resolved against
