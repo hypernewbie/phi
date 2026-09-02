@@ -108,14 +108,13 @@ export function badgeText(n: number): string {
  * Imperatively re-renders the whole rail list from a rail-state
  * snapshot (no virtual DOM). `list` defaults to the live #rail-list
  * element; tests pass an explicit element from their own document.
- * An open entry context menu is dismissed first (its target may have
- * changed or vanished).
+ * The shell-level context popup receives its own state update from the
+ * host, so the narrow rail never owns menu geometry.
  */
 export function render(
   state: RailState,
   list: HTMLElement | null = document.getElementById('rail-list'),
 ): void {
-  closeRailMenu();
   if (list === null) return;
   // Active server accent drives the rail chrome; unobserved keeps the fallback.
   const rail = list.closest('#rail') as HTMLElement | null;
@@ -181,16 +180,15 @@ export function render(
     });
     item.addEventListener('contextmenu', (event) => {
       event.preventDefault();
-      openRailMenu(profile, event.clientY);
+      window.electron.postOpenRailMenu(
+        profile.id,
+        event.screenX,
+        event.screenY,
+      );
     });
     list.appendChild(item);
   }
 }
-
-let railMenu: HTMLElement | null = null;
-let railMenuProfile: RailProfile | null = null;
-let railMenuY = 0;
-let railMenuClose: (() => void) | null = null;
 
 /** Native DnD cannot read DataTransfer mid-drag, so track the dragged id here. */
 let draggedProfileId: string | null = null;
@@ -295,158 +293,10 @@ function setupDragAndDrop(list: HTMLElement): void {
   });
 }
 
-function closeRailMenu(): void {
-  railMenuClose?.();
-  railMenuClose = null;
-  if (railMenu !== null) {
-    const active = railMenu.ownerDocument.activeElement;
-    if (active !== null && railMenu.contains(active))
-      (active as HTMLElement).blur();
-    railMenu.hidden = true;
-  }
-  railMenuProfile = null;
-}
-
-/** Clamps the open menu's top so it stays fully inside the rail view. */
-function positionRailMenu(menu: HTMLElement): void {
-  menu.style.top = `${Math.max(4, Math.min(railMenuY, window.innerHeight - menu.offsetHeight - 4))}px`;
-}
-
-function showRailMenuActions(menu: HTMLElement): void {
-  const profile = railMenuProfile;
-  if (profile === null) return;
-  menu.textContent = '';
-  const reloadServer = document.createElement('button');
-  reloadServer.type = 'button';
-  reloadServer.textContent = 'Reload server';
-  reloadServer.addEventListener('click', () => {
-    window.electron.postReloadServer(profile.id);
-    closeRailMenu();
-  });
-  const reloadAll = document.createElement('button');
-  reloadAll.type = 'button';
-  reloadAll.textContent = 'Reload all servers';
-  reloadAll.addEventListener('click', () => {
-    window.electron.postReloadAllServers();
-    closeRailMenu();
-  });
-  const sessions = document.createElement('button');
-  sessions.type = 'button';
-  sessions.textContent = 'Open sessions';
-  sessions.addEventListener('click', () => {
-    window.electron.postOpenServerSessions(profile.id);
-    closeRailMenu();
-  });
-  const rename = document.createElement('button');
-  rename.type = 'button';
-  rename.textContent = 'Rename';
-  rename.addEventListener('click', () => showRailMenuRename(menu));
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'remove';
-  remove.textContent = 'Remove';
-  remove.addEventListener('click', () => showRailMenuRemoveConfirm(menu));
-  menu.append(reloadServer, reloadAll, sessions, rename, remove);
-  positionRailMenu(menu);
-  rename.focus();
-}
-
-function saveRename(input: HTMLInputElement): void {
-  const profile = railMenuProfile;
-  const name = input.value.trim();
-  if (profile !== null && name !== '')
-    window.electron.postRenameProfile(profile.id, name);
-  closeRailMenu();
-}
-
-function showRailMenuRename(menu: HTMLElement): void {
-  const profile = railMenuProfile;
-  if (profile === null) return;
-  menu.textContent = '';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'rename-input';
-  input.value = profile.name;
-  input.spellcheck = false;
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.textContent = 'Save';
-  save.addEventListener('click', () => saveRename(input));
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.textContent = 'Cancel';
-  cancel.addEventListener('click', closeRailMenu);
-  menu.append(input, save, cancel);
-  positionRailMenu(menu);
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      saveRename(input);
-    }
-  });
-  input.focus();
-  input.select();
-}
-
-function showRailMenuRemoveConfirm(menu: HTMLElement): void {
-  const profile = railMenuProfile;
-  if (profile === null) return;
-  menu.textContent = '';
-  const text = document.createElement('p');
-  text.className = 'menu-title';
-  const name = document.createElement('strong');
-  name.textContent = profile.name;
-  text.append('Remove ', name, ` (${profile.origin})?`);
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'remove';
-  remove.textContent = 'Remove';
-  remove.addEventListener('click', () => {
-    window.electron.postRemoveProfile(profile.id);
-    closeRailMenu();
-  });
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.textContent = 'Cancel';
-  cancel.addEventListener('click', closeRailMenu);
-  menu.append(text, remove, cancel);
-  positionRailMenu(menu);
-  remove.focus();
-}
-
-function openRailMenu(profile: RailProfile, y: number): void {
-  const menu = railMenu;
-  if (menu === null) return;
-  closeRailMenu();
-  railMenuProfile = profile;
-  railMenuY = y;
-  menu.hidden = false;
-  menu.style.left = '4px';
-  showRailMenuActions(menu);
-  // The rail gutter is 72px wide, so horizontal placement is fixed.
-  const onKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') closeRailMenu();
-  };
-  const onDocClick = (event: MouseEvent): void => {
-    // composedPath is fixed at dispatch time, so a mode switch inside
-    // the menu cannot turn its own click into an outside click.
-    if (!event.composedPath().includes(menu)) closeRailMenu();
-  };
-  menu.addEventListener('keydown', onKeydown);
-  const menuDoc = menu.ownerDocument;
-  menuDoc.addEventListener('click', onDocClick);
-  railMenuClose = () => {
-    menu.removeEventListener('keydown', onKeydown);
-    menuDoc.removeEventListener('click', onDocClick);
-  };
-}
-
 /** Wires the rail page: the + button opens the add-server picker
  * (window.electron.postOpenPicker); every phi:rail-state snapshot
  * re-renders the list. */
 export function boot(): void {
-  closeRailMenu();
-  railMenu = document.getElementById('rail-menu');
   const list = document.getElementById('rail-list');
   if (list !== null) setupDragAndDrop(list);
   const addButton = document.getElementById('rail-add');

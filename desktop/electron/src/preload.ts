@@ -12,8 +12,15 @@
  *   - onRailState(cb):       subscribe to rail state snapshots pushed by
  *                            the main process (channel 'phi:rail-state');
  *                            returns an unsubscribe function.
+ *   - onRailMenuState(cb):  subscribe to selected-profile state pushed by
+ *                            the shell popup (channel 'phi:rail-menu-state').
  *   - postSelectProfile(id): tell the main process to activate a saved
  *                            profile (channel 'phi:select-profile').
+ *   - postOpenRailMenu(id, screenX, screenY): open the desktop-sized
+ *                            profile context popup (channel
+ *                            'phi:open-rail-menu').
+ *   - postCloseRailMenu(): close the profile context popup (channel
+ *                            'phi:close-rail-menu').
  *   - postOpenServerSessions(id): tell the main process to open a saved
  *                            profile's own session selector on its
  *                            retained view (channel
@@ -56,8 +63,9 @@
  *                            accent); returns an unsubscribe function.
  *
  * The bridge receives main→renderer pushes (deeplink, forward-payload,
- * rail-state, window-state, window-title) and sends renderer→main requests
- * (select-profile, open-server-sessions, open-picker, add-server,
+ * rail-state, rail-menu-state, window-state, window-title) and sends renderer→main requests
+ * (select-profile, open-rail-menu, close-rail-menu, open-server-sessions,
+ * open-picker, add-server,
  * rename-profile, remove-profile, reorder-profile, window-minimize,
  * window-toggle-maximize, window-close). The renderer→main 'phi:deeplink'
  * relay is wired in main.ts for later slices.
@@ -76,6 +84,7 @@ import type {
   AuthUnlockResult,
   HeaderAction,
   HeaderState,
+  RailMenuState,
   RailState,
   WindowState,
 } from './electron.js';
@@ -95,10 +104,18 @@ contextBridge.exposeInMainWorld('electron', {
     subscribe('phi:single-instance-forward', cb),
   onRailState: (cb: (state: RailState) => void): (() => void) =>
     subscribe('phi:rail-state', cb),
+  onRailMenuState: (cb: (state: RailMenuState) => void): (() => void) =>
+    subscribe('phi:rail-menu-state', cb),
   onAddServerResult: (cb: (result: AddServerResult) => void): (() => void) =>
     subscribe('phi:add-server-result', cb),
   postSelectProfile: (id: string): void => {
     ipcRenderer.send('phi:select-profile', id);
+  },
+  postOpenRailMenu: (id: string, screenX: number, screenY: number): void => {
+    ipcRenderer.send('phi:open-rail-menu', id, screenX, screenY);
+  },
+  postCloseRailMenu: (): void => {
+    ipcRenderer.send('phi:close-rail-menu');
   },
   postOpenServerSessions: (id: string): void => {
     ipcRenderer.send('phi:open-server-sessions', id);

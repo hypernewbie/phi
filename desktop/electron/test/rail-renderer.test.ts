@@ -82,8 +82,8 @@ afterEach(() => {
 // remain pointed at the JSDOM document for the whole test, not be
 // reverted on withPage's frame exit. The previous implementation
 // reverted immediately, which broke the contextmenu / drag-and-drop
-// suites (event handlers captured globalThis.document, queried #rail-menu,
-// and got back the vitest-jsdom env document with no rail).
+// suites (event handlers captured globalThis.document and got back the
+// vitest-jsdom env document instead of the active rail document).
 let pendingDocRestore: PropertyDescriptor | null = null;
 
 /** Points the jsdom globals at a parsed page for the duration of a test. */
@@ -513,182 +513,40 @@ describe('rail CPU intensity (src/renderer.ts + src/rail.css)', () => {
 });
 
 describe('rail entry context menu (src/renderer.ts)', () => {
-  function bootPage(): {
-    doc: Document;
-    stateCbs: Array<(state: RailState) => void>;
-    calls: {
-      select: string[];
-      sessions: string[];
-      rename: Array<[string, string]>;
-      remove: string[];
-      reloadServer: string[];
-      reloadAll: number;
-    };
-  } {
-    const calls = {
-      select: [] as string[],
-      sessions: [] as string[],
-      rename: [] as Array<[string, string]>,
-      remove: [] as string[],
-      reloadServer: [] as string[],
-      reloadAll: 0,
-    };
+  it('opens the shell-level popup for the targeted profile and blocks the default menu', () => {
+    const calls: Array<[string, number, number]> = [];
     const stateCbs: Array<(state: RailState) => void> = [];
     (window as { electron?: unknown }).electron = {
       onRailState: (cb: (state: RailState) => void): (() => void) => {
         stateCbs.push(cb);
         return () => {};
       },
-      postSelectProfile: (id: string) => calls.select.push(id),
-      postOpenServerSessions: (id: string) => calls.sessions.push(id),
+      postSelectProfile: () => {},
+      postOpenRailMenu: (id: string, x: number, y: number) =>
+        calls.push([id, x, y]),
       postOpenPicker: () => {},
-      postRenameProfile: (id: string, name: string) =>
-        calls.rename.push([id, name]),
-      postRemoveProfile: (id: string) => calls.remove.push(id),
-      postReloadServer: (id?: string) => calls.reloadServer.push(id ?? ''),
-      postReloadAllServers: () => calls.reloadAll++,
+      postRenameProfile: () => {},
+      postRemoveProfile: () => {},
+      postReorderProfile: () => {},
+      postOpenServerSessions: () => {},
+      postReloadServer: () => {},
+      postReloadAllServers: () => {},
     };
     const doc = withPage(htmlSource, (d) => {
       boot();
       stateCbs[0](SNAPSHOT);
       return d;
     });
-    return { doc, stateCbs, calls };
-  }
-
-  function contextMenu(doc: Document, item: HTMLElement, y = 90): void {
-    item.dispatchEvent(
-      new doc.defaultView!.MouseEvent('contextmenu', {
-        bubbles: true,
-        cancelable: true,
-        clientY: y,
-      }),
-    );
-  }
-
-  it('right-clicking a rail entry opens Reload/Rename/Remove for exactly that profile and blocks the default menu', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
+    const item = doc.querySelectorAll('li.rail-item')[1] as HTMLElement;
     const evt = new doc.defaultView!.MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
-      clientY: 90,
+      screenX: 31,
+      screenY: 97,
     });
-    // preventDefault makes dispatchEvent return false: no default context menu.
-    expect((items[1] as HTMLElement).dispatchEvent(evt)).toBe(false);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    expect(menu.hidden).toBe(false);
-    expect(
-      [...menu.querySelectorAll('button')].map((b) => b.textContent),
-    ).toEqual([
-      'Reload server',
-      'Reload all servers',
-      'Open sessions',
-      'Rename',
-      'Remove',
-    ]);
-    expect(calls.select).toEqual([]);
-  });
-
-  it('Reload server posts phi:reload-profile for that profile and closes the menu', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[0] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[0] as HTMLButtonElement).click(); // Reload server
-    expect(calls.reloadServer).toEqual(['a']);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('Reload all servers posts phi:reload-all-servers and closes the menu', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[0] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[1] as HTMLButtonElement).click(); // Reload all servers
-    expect(calls.reloadAll).toBe(1);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('Open sessions posts phi:open-server-sessions for exactly that profile and closes the menu', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[0] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[2] as HTMLButtonElement).click(); // Open sessions
-    expect(calls.sessions).toEqual(['a']);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('Rename posts phi:rename-profile with the right-clicked profile id and the entered name', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[0] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[3] as HTMLButtonElement).click(); // Rename
-    const input = menu.querySelector('input') as HTMLInputElement;
-    // The rename input is seeded with the targeted profile's current name.
-    expect(input.value).toBe('Alpha Phi');
-    input.value = 'Renamed';
-    input.dispatchEvent(
-      new doc.defaultView!.KeyboardEvent('keydown', {
-        key: 'Enter',
-        bubbles: true,
-      }),
-    );
-    expect(calls.rename).toEqual([['a', 'Renamed']]);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('Remove first shows a confirmation naming the affected destination; Cancel posts nothing', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[0] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[4] as HTMLButtonElement).click(); // Remove
-    const title = menu.querySelector('.menu-title');
-    expect(title?.textContent).toContain('Alpha Phi');
-    expect(title?.textContent).toContain('http://127.0.0.1:7070/');
-    expect(calls.remove).toEqual([]);
-    (menu.querySelectorAll('button')[1] as HTMLButtonElement).click(); // Cancel
-    expect(calls.remove).toEqual([]);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('confirming the removal posts phi:remove-profile for exactly that profile', () => {
-    const { doc, calls } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    contextMenu(doc, items[1] as HTMLElement);
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    (menu.querySelectorAll('button')[4] as HTMLButtonElement).click(); // Remove
-    (menu.querySelectorAll('button')[0] as HTMLButtonElement).click(); // confirm Remove
-    expect(calls.remove).toEqual(['b']);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('dismisses on Escape, on an outside click, and on the next re-render', () => {
-    const { doc, stateCbs } = bootPage();
-    const items = doc.querySelectorAll('li.rail-item');
-    const menu = doc.getElementById('rail-menu') as HTMLElement;
-    contextMenu(doc, items[0] as HTMLElement);
-    expect(menu.hidden).toBe(false);
-    menu.dispatchEvent(
-      new doc.defaultView!.KeyboardEvent('keydown', {
-        key: 'Escape',
-        bubbles: true,
-      }),
-    );
-    expect(menu.hidden).toBe(true);
-    contextMenu(doc, items[0] as HTMLElement);
-    expect(menu.hidden).toBe(false);
-    doc.body.dispatchEvent(
-      new doc.defaultView!.MouseEvent('click', { bubbles: true }),
-    );
-    expect(menu.hidden).toBe(true);
-    contextMenu(doc, items[0] as HTMLElement);
-    expect(menu.hidden).toBe(false);
-    stateCbs[0](SNAPSHOT);
-    expect(menu.hidden).toBe(true);
+    expect(item.dispatchEvent(evt)).toBe(false);
+    expect(calls).toEqual([['b', 31, 97]]);
+    expect(doc.getElementById('rail-menu')).toBeNull();
   });
 });
 
@@ -812,6 +670,9 @@ describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
 describe('rail IPC contract (channel strings)', () => {
   it('exposes the documented rail channels in the preload bridge source', () => {
     expect(preloadSource).toContain("'phi:rail-state'");
+    expect(preloadSource).toContain("'phi:rail-menu-state'");
+    expect(preloadSource).toContain("'phi:open-rail-menu'");
+    expect(preloadSource).toContain("'phi:close-rail-menu'");
     expect(preloadSource).toContain("'phi:select-profile'");
     expect(preloadSource).toContain("'phi:open-picker'");
     expect(preloadSource).toContain("'phi:add-server'");

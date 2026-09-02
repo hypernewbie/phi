@@ -67,6 +67,14 @@ describe('src/main.ts + src/desktop.ts (phase-1 Electron entry)', () => {
     expect(desktopSource).not.toMatch(/\.loadURL\(/);
   });
 
+  it('opens the rail context menu in a shell-level child window', () => {
+    expect(desktopSource).toContain("'phi:open-rail-menu'");
+    expect(desktopSource).toContain("'phi:close-rail-menu'");
+    expect(desktopSource).toContain('rail-menu.html');
+    expect(desktopSource).toContain('outside the rail WebContentsView');
+    expect(desktopSource).toContain('skipTaskbar: true');
+  });
+
   it('grants the browser Clipboard API only to Phi main frames', () => {
     expect(desktopSource).toContain('installClipboardPermissions');
     expect(desktopSource).toContain('setPermissionCheckHandler');

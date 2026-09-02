@@ -1,0 +1,272 @@
+:root {
+  --menu-bg: #111116;
+  --menu-elevated: #17171d;
+  --menu-border: #30303a;
+  --menu-text: #e4e3e9;
+  --menu-dim: #9795a7;
+  --menu-accent: #9b8cff;
+  --menu-accent-soft: color-mix(in srgb, var(--menu-accent) 14%, transparent);
+  --menu-danger: #ff8f9a;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  color: var(--menu-text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  padding: 8px;
+}
+
+#rail-menu-root {
+  min-height: 100%;
+}
+
+.rail-menu-panel {
+  min-height: 100%;
+  padding: 10px;
+  background: linear-gradient(145deg, #17171d 0%, var(--menu-bg) 72%);
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  box-shadow:
+    0 16px 40px rgb(0 0 0 / 48%),
+    0 2px 8px rgb(0 0 0 / 55%),
+    inset 0 1px rgb(255 255 255 / 4%);
+}
+
+.rail-menu-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: start;
+  padding: 2px 2px 12px;
+}
+
+.rail-menu-kicker,
+.rail-menu-section-label {
+  color: var(--menu-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.rail-menu-kicker {
+  grid-column: 1 / -1;
+}
+
+.rail-menu-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--menu-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-menu-identity {
+  grid-column: 1;
+  overflow: hidden;
+  color: var(--menu-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-menu-origin {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--menu-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-menu-close {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  width: 28px;
+  height: 28px;
+  margin-top: -2px;
+  padding: 0;
+  color: var(--menu-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.rail-menu-close:hover,
+.rail-menu-close:focus-visible {
+  color: var(--menu-text);
+  background: var(--menu-border);
+  outline: none;
+}
+
+.rail-menu-status {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--menu-dim);
+  font-size: 11px;
+}
+
+.rail-menu-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--menu-dim);
+}
+
+.rail-menu-status-dot.is-up {
+  background: #70d6a2;
+  box-shadow: 0 0 8px rgb(112 214 162 / 55%);
+}
+
+.rail-menu-status-dot.is-down {
+  background: #ff7885;
+  box-shadow: 0 0 8px rgb(255 120 133 / 45%);
+}
+
+.rail-menu-unread {
+  margin-left: auto;
+  color: var(--menu-accent);
+}
+
+.rail-menu-section-label {
+  padding: 7px 4px 5px;
+}
+
+.rail-menu-action {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  color: var(--menu-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.rail-menu-action:hover,
+.rail-menu-action:focus-visible {
+  background: var(--menu-accent-soft);
+  border-color: color-mix(in srgb, var(--menu-accent) 35%, transparent);
+  outline: none;
+}
+
+.rail-menu-action-icon {
+  color: var(--menu-dim);
+  font-size: 16px;
+  text-align: center;
+}
+
+.rail-menu-action:hover .rail-menu-action-icon,
+.rail-menu-action:focus-visible .rail-menu-action-icon {
+  color: var(--menu-accent);
+}
+
+.rail-menu-action-danger {
+  color: var(--menu-danger);
+}
+
+.rail-menu-action-danger .rail-menu-action-icon {
+  color: var(--menu-danger);
+}
+
+.rail-menu-divider {
+  height: 1px;
+  margin: 7px 4px;
+  background: var(--menu-border);
+}
+
+.rail-menu-form {
+  padding: 2px 2px 0;
+}
+
+.rail-menu-form-label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--menu-dim);
+  font-size: 11px;
+}
+
+.rail-menu-input {
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--menu-text);
+  background: #0b0b0f;
+  border: 1px solid var(--menu-border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+}
+
+.rail-menu-input:focus {
+  border-color: var(--menu-accent);
+  box-shadow: 0 0 0 3px var(--menu-accent-soft);
+}
+
+.rail-menu-confirm {
+  margin: 3px 2px 12px;
+  color: var(--menu-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rail-menu-confirm strong {
+  color: var(--menu-accent);
+}
+
+.rail-menu-form-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.rail-menu-form-actions .rail-menu-action {
+  display: block;
+  min-height: 34px;
+  padding: 7px 8px;
+  text-align: center;
+}
+
+.rail-menu-form-actions .rail-menu-action-danger {
+  background: color-mix(in srgb, var(--menu-danger) 9%, transparent);
+}
