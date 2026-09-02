@@ -1177,7 +1177,7 @@ export class TabManager {
             });
         }
 
-        // Passive scroll listener keeps the +N chip count in sync as the
+        // Passive scroll listener keeps the tab-list selector state in sync as the
         // user horizontally scrolls the strip. rAF-coalesced via a tiny
         // scheduler so we don't over-read.
         const strip = document.getElementById('tabs-container');
@@ -1383,7 +1383,7 @@ export class TabManager {
         tabEl.addEventListener('drop', (e) => this.handleTabDrop(e, paneId));
 
         // Stash the worktree glyph + cwd on the tab DOM so the legend, the
-        // +N dropdown, and the hover preview can read them without a tabs
+        // tab-list dropdown, and the hover preview can read them without a tabs
         // Map lookup (the Map entry lands ~300 lines later - see NOTE below).
         // No native title attribute: the hiero hover card is the tooltip,
         // and a title attr set here would go stale on rename anyway.
@@ -1396,7 +1396,6 @@ export class TabManager {
             <span class="tab-worktree-icon" aria-hidden="true">${glyph}</span>
             <span class="tab-title ${marked ? 'marked' : ''}">${escapeHtml(title)}</span>
             <button class="tab-close">×</button>
-            <button class="tab-reopen" title="Undo close">↻</button>
         `;
 
         const termContainer = document.createElement('div');
@@ -1420,7 +1419,7 @@ export class TabManager {
         // Hide empty state landing page on tab creation
         this.hideEmptyState();
 
-        // NOTE: overflow chip + sidebar legend refresh is intentionally
+        // NOTE: tab-list selector refresh is intentionally
         // NOT done here. createTab() still has 300+ lines to go (PTY
         // spawn, WS attach, xterm.js fit, etc.) before this.tabs.set()
         // runs at line ~1247. Calling these here would render against
@@ -1431,11 +1430,6 @@ export class TabManager {
 
         tabEl.addEventListener('click', (e) => {
             const currentPaneId = tabEl.getAttribute('data-pane-id');
-            if (e.target.closest('.tab-reopen')) {
-                e.stopPropagation();
-                this.undoCloseTab(currentPaneId);
-                return;
-            }
             if (e.target.closest('.tab-close')) {
                 e.stopPropagation();
                 this.closeTab(currentPaneId);
@@ -2117,9 +2111,9 @@ export class TabManager {
             return r;
         };
 
-        // Refresh overflow chip NOW that the tab is registered in
+        // Refresh the tab-list selector NOW that the tab is registered in
         // this.tabs. Previously this was called much earlier in
-        // createTab (line ~899) which left the overflow chip one tab
+        // createTab (line ~899) which left the selector one tab
         // behind until something else triggered a re-render. Now it
         // always reflects the full tab set.
         this.updateTabOverflow();
@@ -3216,10 +3210,30 @@ export class TabManager {
             this._renderPiRpcThinkingDropup();
     }
 
-    switchTab(paneId, { userInitiated = false } = {}) {
+    switchTab(paneId, { userInitiated = false, preserveProject = false } = {}) {
         this._closePiRpcDropups();
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
+            if (
+                activeTab &&
+                userInitiated &&
+                !preserveProject &&
+                this._projectSyncPendingPaneId === paneId
+            ) {
+                // A close handoff deliberately skipped project sync. A later
+                // explicit click on that now-active tab is the opt-in to
+                // perform the normal sidebar/project update.
+                this._projectSyncPendingPaneId = null;
+                const independentView = this._syncProjectForTab(activeTab);
+                this.activateTabViewport(activeTab, {
+                    scrollToBottom: false,
+                    autoReconnect: true,
+                    force: userInitiated,
+                });
+                if (independentView) this.renderPiRpcStatusBar();
+                this.updateDocumentTitle();
+                return;
+            }
             if (activeTab) {
                 // Already on this tab - the user just clicked the active tab to
                 // refocus. Don't scroll the terminal to bottom (loses their
@@ -3306,27 +3320,22 @@ export class TabManager {
         });
         this.saveTabsState();
 
-        // Update sidebar select state and active coder tab, but skip auto-reload since we coordinate it
-        // pi-rpc is a chat tab opened via the eye icon — it must NOT hijack the left Pi tab's
-        // activeCoder or trigger a worktree reload. The Pi tab stays as terminal (pi).
-        const prevCoder = this.app.sessionsManager.activeCoder;
-        if (newTab.coder !== 'pi-rpc') {
-            this.app.sessionsManager.switchCoder(newTab.coder, true);
+        // A close-triggered selection is intentionally visual only. The tab
+        // bar may contain sessions from other projects, but closing the active
+        // tab must not silently change the sidebar's project/worktree. A
+        // genuine user selection uses the normal sync path below.
+        if (preserveProject) {
+            this._projectSyncPendingPaneId = newTab.paneId;
+            this.activateTabViewport(newTab, {
+                scrollToBottom: true,
+                autoReconnect: true,
+                force: userInitiated,
+            });
+            this.updateDocumentTitle();
+            return;
         }
 
-        // BUG-1 fix: kanban and review are independent views — they were opened
-        // with a snapshot of whatever workspace/cwd was active at the time, but
-        // they don't track the user's actual terminal context. If the user has
-        // since switched to a terminal tab in a different workspace/cwd and
-        // then returns to kanban, blindly applying kanban's stale workspace/cwd
-        // would clobber the sidebar and reload worktrees for the wrong project.
-        // So skip the workspace/cwd sync for non-terminal coders entirely.
-        if (
-            newTab.coder === 'kanban' ||
-            newTab.coder === 'review' ||
-            newTab.coder === 'pi-rpc'
-        ) {
-            this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+        if (this._syncProjectForTab(newTab)) {
             this.activateTabViewport(newTab, {
                 scrollToBottom: true,
                 autoReconnect: true,
@@ -3335,7 +3344,36 @@ export class TabManager {
             return;
         }
 
-        // Sync project / workspace context from the tab using normalized paths
+        this.activateTabViewport(newTab, {
+            scrollToBottom: true,
+            autoReconnect: true,
+            force: userInitiated,
+        });
+        this.updateDocumentTitle();
+    }
+
+    // Update sidebar state for an explicit tab selection. Returns true for
+    // independent views whose viewport activation is handled by switchTab.
+    _syncProjectForTab(newTab) {
+        // pi-rpc is a chat tab opened via the eye icon — it must NOT hijack
+        // the left Pi tab's activeCoder or trigger a worktree reload.
+        const prevCoder = this.app.sessionsManager.activeCoder;
+        if (newTab.coder !== 'pi-rpc') {
+            this.app.sessionsManager.switchCoder(newTab.coder, true);
+        }
+
+        // Kanban and review are independent views. They do not track the
+        // user's terminal project context, so never apply their snapshot.
+        if (
+            newTab.coder === 'kanban' ||
+            newTab.coder === 'review' ||
+            newTab.coder === 'pi-rpc'
+        ) {
+            this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
+            return true;
+        }
+
+        // Sync project / workspace context from the tab using normalized paths.
         const workspaceChanged =
             newTab.workspace &&
             normalizePath(this.app.sessionsManager.activeWorkspace) !==
@@ -3362,7 +3400,8 @@ export class TabManager {
                 }
             });
         } else if (coderChanged) {
-            // Workspace is the same, but coder changed. We need to rebuild worktrees to load the sessions for the new coder!
+            // Workspace is the same, but coder changed. Rebuild worktrees for
+            // the new coder.
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
                 this.app.sessionsManager.highlightActiveSession(
@@ -3383,7 +3422,8 @@ export class TabManager {
                 this.app.markdownManager.refreshFiles({ force: false });
             }
         } else {
-            // Workspace, coder, and CWD are all the same, only session might have changed.
+            // Workspace, coder, and CWD are all the same; only the session
+            // may have changed.
             this.app.sessionsManager.highlightActiveSession(newTab.sessionId);
             if (this.app.markdownManager) {
                 this.app.markdownManager.refreshFiles({
@@ -3392,13 +3432,7 @@ export class TabManager {
                 });
             }
         }
-
-        this.activateTabViewport(newTab, {
-            scrollToBottom: true,
-            autoReconnect: true,
-            force: userInitiated,
-        });
-        this.updateDocumentTitle();
+        return false;
     }
 
     togglePinTab(paneId) {
@@ -3529,25 +3563,18 @@ export class TabManager {
         );
     }
 
-    // Soft-close: when the user clicks × on a tab, the tab doesn't actually
-    // go away for SOFT_CLOSE_GRACE_MS - it stays in the strip faded out
-    // with a ↻ reopen button, and an "Undo" toast is shown. This solves
-    // two real problems:
-    //   1. Accidental close was a hard cliff: PTY killed, WS closed, term
-    //      disposed — no way back. Now the user has SOFT_CLOSE_GRACE_MS
-    //      to click Undo (in the toast) or click the ↻ icon (in the
-    //      strip) to restore the tab.
-    //   2. closeTab used to auto-switch to whatever happened to be last in
-    //      the Map (insertion order), which had no relationship to the
-    //      user's current project. Now soft-close never auto-switches:
-    //      the active tab is kept in place under a spinner overlay so
-    //      the user can see what they're losing and still hit undo.
-    // If the user doesn't undo within the grace, finalizeCloseTab()
-    // actually kills the PTY and removes the tab.
+    // Soft-close: when the user clicks × on a tab, the tab leaves the
+    // visible strip for SOFT_CLOSE_GRACE_MS and appears in the tab-list
+    // dropdown with an Undo action. The PTY stays alive until the grace
+    // expires, so an accidental close remains recoverable without making
+    // the real tab bar noisy.
     //
-    // MAX_SOFT_CLOSED_TABS caps how many faded tabs can sit in the strip
-    // at once - past that, the oldest is force-finalized to keep the
-    // strip readable.
+    // Closing the active tab selects the nearest surviving tab, but that
+    // programmatic selection preserves the current project/worktree. Only
+    // an explicit user tab selection is allowed to change the sidebar.
+    //
+    // MAX_SOFT_CLOSED_TABS bounds the grace memory footprint. Past that,
+    // the oldest closing tab is finalized immediately.
     static SOFT_CLOSE_GRACE_MS = 3000;
     static MAX_SOFT_CLOSED_TABS = 3;
 
@@ -3581,13 +3608,13 @@ export class TabManager {
         const tab = this.tabs.get(paneId);
         if (!tab || tab.softClosing) return;
 
+        const wasActive = this.activePaneId === paneId;
         tab.softClosing = true;
         tab.softCloseStartedAt = Date.now();
         tab.tabEl.classList.add('soft-closed');
 
-        // Cap: if too many soft-closed tabs in the strip, force-finalize
-        // the oldest. This keeps the strip readable and bounds the grace
-        // memory footprint.
+        // Cap: if too many closing tabs exist, finalize the oldest. This
+        // keeps the dropdown bounded and the grace memory footprint small.
         const softTabs = Array.from(this.tabs.values()).filter(
             (t) => t.softClosing,
         );
@@ -3597,25 +3624,17 @@ export class TabManager {
                     (a.softCloseStartedAt || 0) - (b.softCloseStartedAt || 0),
             );
             this.finalizeCloseTab(softTabs[0].paneId);
-            return;
+            if (!this.tabs.has(paneId)) return;
         }
 
-        // Active-tab close: keep the user where they are. Spin up a
-        // countdown overlay on top of the terminal so they can see
-        // what they're "losing" and still hit undo. No tab switch, no
-        // surprise "where did my view go" jump.
-        if (this.activePaneId === paneId) {
-            this._showSoftCloseOverlay(tab);
-        }
-
-        // Strip pill: a tiny "5s → 4s" countdown next to the title so
-        // the fading tab itself communicates "you have N seconds to
-        // bring me back." Visible even when the closing tab is not the
-        // active one — keeps the affordance consistent.
         this._startSoftCloseCountdown(tab);
 
-        // Undo toast for ALL soft-closes (active or background). The
-        // toast auto-dismisses after the grace; clicking Undo restores.
+        // Closing the active tab selects a visible survivor. This is the
+        // one switch path that must not change the sidebar project.
+        if (wasActive) this._selectTabAfterClose(paneId);
+
+        // Undo toast for all soft-closes. The dropdown is the durable
+        // recovery affordance; the toast remains a quick shortcut.
         if (this.app && this.app.showToast) {
             const toastEl = this.app.showToast(
                 `Closed "${tab.title || tab.coder || 'tab'}"`,
@@ -3629,148 +3648,104 @@ export class TabManager {
                     },
                 },
             );
-            // showToast returns the toast element so we can dismiss it
-            // early if the user undoes via the ↻ button (otherwise two
-            // dismissals race) or if the cap forces a finalize.
             tab.softCloseToast = toastEl;
         }
 
-        // Schedule finalization.
         tab.softCloseTimer = setTimeout(() => {
             this.finalizeCloseTab(paneId);
         }, TabManager.SOFT_CLOSE_GRACE_MS);
+        this.updateTabOverflow?.();
+        this._refreshOverflowDropdown?.();
     }
 
-    // Build the content-area overlay shown when the active tab is
-    // soft-closing: dark backdrop + spinner ring (drain animation) +
-    // countdown text + "click ↻ to undo" hint. Sits on top of the
-    // terminal so the user keeps visual context while they decide.
-    // Removed on undo or finalize.
-    _showSoftCloseOverlay(tab) {
-        if (!tab.termContainer) return;
-        // Pull the worktree hieroglyph from the tab so the countdown
-        // carries the same visual identity as the tab itself - a tiny
-        // Egyptian wall detail that ties the close-back state to the
-        // worktree it's closing in.
-        const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
-        const overlay = document.createElement('div');
-        overlay.className = 'tab-soft-close-overlay';
-        overlay.innerHTML = `
-            <div class="tab-soft-close-backdrop" aria-hidden="true">${glyph}</div>
-            <div class="tab-soft-close-ring" aria-hidden="true">
-                <svg viewBox="0 0 56 56">
-                    <circle class="tab-soft-close-ring-bg" cx="28" cy="28" r="24"/>
-                    <circle class="tab-soft-close-ring-fg" cx="28" cy="28" r="24"
-                            pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"/>
-                </svg>
-                <div class="tab-soft-close-ring-center">${glyph}</div>
-            </div>
-            <div class="tab-soft-close-text">
-                Closing in <span class="tab-soft-close-secs">5</span>s<span class="tab-soft-close-ellipsis"><span class="d1">.</span><span class="d2">.</span><span class="d3">.</span></span>
-            </div>
-            <div class="tab-soft-close-hint">Click ↻ in the tab strip to undo</div>
-            <button class="tab-soft-close-undo" type="button">↻ Undo close</button>
-        `;
-        // The undo button on the overlay itself: previously the only
-        // affordances were the tiny ↻ in the tab strip (easy to miss
-        // when the closing tab fills the screen) and the corner toast.
-        // Now the closing-tab motif carries its own restore button.
-        const undoBtn = overlay.querySelector('.tab-soft-close-undo');
-        if (undoBtn) {
-            undoBtn.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                this.undoCloseTab(tab.paneId);
-            });
+    _selectTabAfterClose(paneId) {
+        if (this.activePaneId !== paneId) return;
+        const ordered = Array.from(this.tabs.values());
+        const currentIndex = ordered.findIndex((tab) => tab.paneId === paneId);
+        let nextTab = null;
+        for (let offset = 1; offset < ordered.length; offset += 1) {
+            const candidate = ordered[(currentIndex + offset) % ordered.length];
+            if (candidate && !candidate.softClosing) {
+                nextTab = candidate;
+                break;
+            }
         }
-        tab.termContainer.appendChild(overlay);
-        tab.softCloseOverlay = overlay;
-        // Tick the count text + ellipsis pulse while the overlay is up.
-        // Reusing _startSoftCloseCountdown's tick() would be ideal but
-        // it owns its own interval; the overlay updates the count via a
-        // dedicated loop that stops when the overlay is removed.
-        this._tickSoftCloseOverlay(tab);
+        if (nextTab) {
+            this.hideEmptyState?.();
+            this.switchTab(nextTab.paneId, { preserveProject: true });
+            return;
+        }
+
+        // No visible survivor remains. Leave the closing tabs recoverable in
+        // the dropdown, but show the normal empty state during the grace.
+        const tab = this.tabs.get(paneId);
+        tab?.tabEl?.classList.remove('active');
+        tab?.termContainer?.classList.remove('active');
+        this.activePaneId = null;
+        this._closePiRpcDropups?.(true);
+        this._setPiRpcActionVisibility?.(null);
+        this.inputBarContainer?.classList.add('hidden');
+        this.presetsContainer?.replaceChildren();
+        this.presetsContainer?.classList.add('hidden');
+        syncPiSubagentStrip('');
+        this.renderPiRpcStatusBar?.();
+        this.showEmptyState?.();
+        this.updateDocumentTitle?.();
+        this.saveTabsState?.();
     }
 
-    _tickSoftCloseOverlay(tab) {
-        if (!tab.softCloseOverlay) return;
+    _softCloseRemainingSeconds(tab) {
         const startedAt = tab.softCloseStartedAt || Date.now();
-        const duration = TabManager.SOFT_CLOSE_GRACE_MS;
-        const tick = () => {
-            if (!tab.softCloseOverlay) return; // overlay gone -> stop
-            const elapsed = Date.now() - startedAt;
-            const remaining = Math.max(
-                0,
-                Math.ceil((duration - elapsed) / 1000),
-            );
-            const secsEl = tab.softCloseOverlay.querySelector(
-                '.tab-soft-close-secs',
-            );
-            if (secsEl) secsEl.textContent = String(remaining);
-            if (remaining <= 0) return;
-        };
-        tick();
-        tab.softCloseOverlayTimer = setInterval(tick, 250);
+        return Math.max(
+            0,
+            Math.ceil(
+                (TabManager.SOFT_CLOSE_GRACE_MS - (Date.now() - startedAt)) /
+                    1000,
+            ),
+        );
     }
 
-    // Tick a tiny countdown pill on the tab strip entry itself, so users
-    // closing inactive tabs (who don't get the content overlay) still
-    // see how long until finalize. Stops cleanly on undo / finalize.
+    _updateClosingTabCountdown(tab) {
+        const dropdown = document.getElementById('tab-overflow-dropdown');
+        if (!dropdown || dropdown.classList.contains('hidden')) return;
+        for (const row of dropdown.querySelectorAll(
+            '.tab-overflow-closing-row',
+        )) {
+            if (row.dataset.paneId !== tab.paneId) continue;
+            const countdown = row.querySelector(
+                '.tab-overflow-closing-countdown',
+            );
+            if (countdown) {
+                countdown.textContent = `Closing in ${this._softCloseRemainingSeconds(tab)}s`;
+            }
+            break;
+        }
+    }
+
+    // Keep the closing-tab row current while its dropdown is open. When the
+    // dropdown is closed, its next render computes the remaining time fresh.
     _startSoftCloseCountdown(tab) {
-        const startedAt = tab.softCloseStartedAt || Date.now();
-        const duration = TabManager.SOFT_CLOSE_GRACE_MS;
-        const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
-        const pill = document.createElement('span');
-        pill.className = 'tab-soft-close-pill';
-        pill.innerHTML = `
-            <span class="tab-soft-close-pill-glyph">${glyph}</span>
-            <span class="tab-soft-close-pill-text">5s</span>
-        `;
-        tab.tabEl.appendChild(pill);
-        tab.softClosePill = pill;
-        const textEl = pill.querySelector('.tab-soft-close-pill-text');
         const tick = () => {
-            const elapsed = Date.now() - startedAt;
-            const remaining = Math.max(
-                0,
-                Math.ceil((duration - elapsed) / 1000),
-            );
-            if (textEl) textEl.textContent = `${remaining}s`;
-            if (remaining <= 0) {
-                if (tab.softClosePillTimer)
-                    clearInterval(tab.softClosePillTimer);
-                tab.softClosePillTimer = null;
-                return;
+            this._updateClosingTabCountdown(tab);
+            if (this._softCloseRemainingSeconds(tab) <= 0) {
+                this._stopSoftCloseCountdown(tab);
             }
         };
         tick();
-        tab.softClosePillTimer = setInterval(tick, 250);
+        tab.softCloseCountdownTimer = setInterval(tick, 250);
     }
 
     _stopSoftCloseCountdown(tab) {
-        if (tab.softClosePillTimer) {
-            clearInterval(tab.softClosePillTimer);
-            tab.softClosePillTimer = null;
+        if (tab.softCloseCountdownTimer) {
+            clearInterval(tab.softCloseCountdownTimer);
+            tab.softCloseCountdownTimer = null;
         }
-        if (tab.softClosePill) {
-            tab.softClosePill.remove();
-            tab.softClosePill = null;
-        }
-    }
-
-    _removeSoftCloseOverlay(tab) {
-        if (tab.softCloseOverlayTimer) {
-            clearInterval(tab.softCloseOverlayTimer);
-            tab.softCloseOverlayTimer = null;
-        }
-        if (tab.softCloseOverlay) {
-            tab.softCloseOverlay.remove();
-            tab.softCloseOverlay = null;
-        }
+        this.updateTabOverflow?.();
     }
 
     // Reverse a soft-close: cancel the timer, restore the strip entry,
-    // switch back to the tab. Works whether the user clicked Undo in the
-    // toast or the ↻ icon in the strip.
+    // and explicitly select the tab. Explicit Undo is a normal user
+    // selection, so it is allowed to restore that tab's project context.
     undoCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab || !tab.softClosing) return;
@@ -3780,20 +3755,20 @@ export class TabManager {
             tab.softCloseTimer = null;
         }
         if (tab.softCloseToast) {
-            // External dismiss: remove the .show class so CSS animates it
-            // out, then drop from DOM after the 200ms transition.
             tab.softCloseToast.classList.remove('show');
             setTimeout(() => tab.softCloseToast?.remove(), 200);
             tab.softCloseToast = null;
         }
         this._stopSoftCloseCountdown(tab);
-        this._removeSoftCloseOverlay(tab);
 
         tab.softClosing = false;
         tab.softCloseStartedAt = null;
         tab.tabEl.classList.remove('soft-closed');
+        if (this.activePaneId === null) this.hideEmptyState?.();
 
         this.switchTab(paneId, { userInitiated: true });
+        this.updateTabOverflow?.();
+        this._refreshOverflowDropdown?.();
     }
 
     // Actually kill the PTY, close WS, dispose term, drop from Map.
@@ -3823,7 +3798,6 @@ export class TabManager {
             tab.softCloseToast = null;
         }
         this._stopSoftCloseCountdown(tab);
-        this._removeSoftCloseOverlay(tab);
 
         // Kill the server-side PTY process. We previously swallowed
         // failures with .catch(() => {}) — that hid the actual user
@@ -3890,11 +3864,11 @@ export class TabManager {
         this.saveTabsState();
         if (wasPiRpc) this.savePiRpcTabs();
 
-        // Refresh overflow chip to reflect the removal.
+        // Refresh the tab-list selector to reflect the removal.
         this.updateTabOverflow();
+        this._refreshOverflowDropdown?.();
 
         // If we just finalized the last tab, show the empty state now
-        // (no overlay was up because grace expired without undo).
         if (this.tabs.size === 0) {
             this.activePaneId = null;
             this._setPiRpcActionVisibility(null);
@@ -3908,25 +3882,23 @@ export class TabManager {
                 this.app.markdownManager.refreshFiles({ force: true });
             }
         } else if (this.activePaneId === paneId) {
-            // Active tab finalized while other tabs exist (rare:
-            // grace expired without undo). Pick the most recently
-            // surviving tab. We intentionally do NOT auto-switch on
-            // soft-close (see softCloseTab) — this fallback only runs
-            // when the user let the grace expire on a non-last tab.
-            const remaining = Array.from(this.tabs.values());
-            if (remaining.length > 0) {
-                const survivor = remaining[remaining.length - 1];
-                this.switchTab(survivor.paneId, { userInitiated: false });
+            // Defensive fallback for an active tab finalized without the
+            // normal soft-close handoff. Keep this automatic selection
+            // project-neutral for the same reason as the close path.
+            const survivor = Array.from(this.tabs.values()).find(
+                (candidate) => !candidate.softClosing,
+            );
+            if (survivor) {
+                this.switchTab(survivor.paneId, {
+                    userInitiated: false,
+                    preserveProject: true,
+                });
             }
         }
     }
 
-    // pickNextTab was removed: soft-close never auto-switches anymore.
-    // The user stays on the closing tab via the spinner overlay until
-    // they either undo or let the grace expire. The previous priority
-    // chain (same workspace + coder, then same workspace, etc.) caused
-    // silent jumps to a different project on accidental close -
-    // worse than the problem it tried to solve.
+    // Closing-tab selection is handled immediately by _selectTabAfterClose;
+    // the grace timer only finalizes the already-hidden tab.
 
     showEmptyState() {
         const el = document.getElementById('empty-state');
@@ -3944,49 +3916,61 @@ export class TabManager {
         if (el) el.classList.add('hidden');
     }
 
-    // ---- Tab overflow + worktree legend ----------------------------
+    // ---- Tab list selector + worktree grouping ----------------------
     //
-    // The +N "more" chip lives at the right edge of the tabs bar.
-    // It only appears when scrolled-off tabs exist. Click opens a
-    // dropdown listing ALL tabs (grouped by worktree glyph) so the
-    // user can jump to any tab without scrolling blindly. The
-    // sidebar legend summarizes the open worktrees at a glance.
+    // The small down-arrow button appears when tabs overflow or when one
+    // or more tabs are in the close grace period. Its dropdown lists all
+    // live tabs plus a separate Closing tabs section.
 
     updateTabOverflow() {
         const strip = document.getElementById('tabs-container');
         const btn = document.getElementById('tab-overflow-btn');
         if (!strip || !btn) return;
+
+        const closingCount = Array.from(this.tabs?.values?.() || []).filter(
+            (tab) => tab.softClosing,
+        ).length;
         const overflowX = strip.scrollWidth - strip.clientWidth;
-        if (overflowX <= 4) {
-            btn.classList.add('hidden');
-            btn.setAttribute('aria-expanded', 'false');
-            return;
-        }
-        // Count tabs whose left edge is past the visible right edge.
+        const hasOverflow = overflowX > 4;
+
+        // Count live tabs whose right edge is clipped. Soft-closed tabs
+        // remain in the DOM to preserve their order, but are not strip tabs.
         const stripRect = strip.getBoundingClientRect();
         let hiddenCount = 0;
         for (const tabEl of strip.querySelectorAll('.tab')) {
+            if (tabEl.classList.contains('soft-closed')) continue;
             const tabRect = tabEl.getBoundingClientRect();
             if (tabRect.left >= stripRect.right - 1) hiddenCount += 1;
             else if (
                 tabRect.right > stripRect.right + 1 &&
-                tabRect.left > stripRect.left
+                tabRect.left > stripRect.left &&
+                tabRect.right - stripRect.right > tabRect.width / 2
             ) {
-                // Partially-clipped tab: count it as hidden too. Treat
-                // the half-tab as "effectively offscreen" since the
-                // important info (title, x) may be clipped.
-                if (tabRect.right - stripRect.right > tabRect.width / 2)
-                    hiddenCount += 1;
+                hiddenCount += 1;
             }
         }
-        if (hiddenCount <= 0) {
+
+        if (!hasOverflow && closingCount === 0) {
+            this._closeOverflowDropdown();
             btn.classList.add('hidden');
-            btn.setAttribute('aria-expanded', 'false');
             return;
         }
+
         btn.classList.remove('hidden');
-        const label = btn.querySelector('.tab-overflow-btn-label');
-        if (label) label.textContent = `+${hiddenCount} more`;
+        const details = [];
+        if (hiddenCount > 0)
+            details.push(
+                `${hiddenCount} more tab${hiddenCount === 1 ? '' : 's'}`,
+            );
+        if (closingCount > 0)
+            details.push(
+                `${closingCount} closing tab${closingCount === 1 ? '' : 's'}`,
+            );
+        const label = details.length
+            ? `Show tab list (${details.join(', ')})`
+            : 'Show tab list';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
         btn.setAttribute(
             'aria-expanded',
             btn.getAttribute('aria-expanded') === 'true' ? 'true' : 'false',
@@ -4233,11 +4217,16 @@ export class TabManager {
         }
     }
 
+    _refreshOverflowDropdown() {
+        if (!this._overflowDropdownHidden()) this._buildOverflowDropdown();
+    }
+
     _buildOverflowDropdown() {
         const dropdown = document.getElementById('tab-overflow-dropdown');
         if (!dropdown) return null;
         dropdown.innerHTML = '';
-        if (this.tabs.size === 0) {
+        const entries = Array.from(this.tabs?.entries?.() || []);
+        if (entries.length === 0) {
             const empty = document.createElement('div');
             empty.style.padding = '12px';
             empty.style.color = 'var(--text-muted)';
@@ -4246,71 +4235,112 @@ export class TabManager {
             return dropdown;
         }
 
-        // Group by worktree glyph (== by cwd). Stable insertion order
-        // matches first-seen-in-tabs-Map order so a tab the user just
-        // created appears in the section their cursor is on.
+        const faviconFor = (tab) =>
+            tab.faviconUrl ||
+            tab.tabEl?.querySelector('.tab-favicon')?.getAttribute('src') ||
+            '';
+        const appendHeader = (iconText, labelText, itemCount, extra = '') => {
+            const header = document.createElement('div');
+            header.className = `tab-overflow-dropdown-group${extra}`;
+            const icon = document.createElement('span');
+            icon.className = 'tab-overflow-dropdown-group-icon';
+            icon.textContent = iconText;
+            const text = document.createElement('span');
+            text.textContent = labelText;
+            const count = document.createElement('span');
+            count.style.marginLeft = 'auto';
+            count.textContent = `${itemCount} tab${itemCount === 1 ? '' : 's'}`;
+            header.append(icon, text, count);
+            dropdown.appendChild(header);
+        };
+        const appendRow = (paneId, tab, { closing = false } = {}) => {
+            const row = document.createElement('div');
+            row.className = `hostname-dropdown-row${closing ? ' tab-overflow-closing-row' : ''}`;
+            row.dataset.paneId = paneId;
+            if (!closing && paneId === this.activePaneId)
+                row.classList.add('active');
+
+            const selectBtn = document.createElement('button');
+            selectBtn.type = 'button';
+            selectBtn.className = 'hostname-dropdown-select-btn';
+            const faviconImg = document.createElement('img');
+            faviconImg.className = 'hostname-dropdown-favicon';
+            faviconImg.src = faviconFor(tab);
+            faviconImg.alt = tab.coder || '';
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'hostname-dropdown-title';
+            titleSpan.textContent = tab.title || 'Session';
+            selectBtn.append(faviconImg, titleSpan);
+
+            if (closing) {
+                const countdown = document.createElement('span');
+                countdown.className =
+                    'hostname-dropdown-meta tab-overflow-closing-countdown';
+                countdown.textContent = `Closing in ${this._softCloseRemainingSeconds(tab)}s`;
+                selectBtn.appendChild(countdown);
+                selectBtn.title = 'Undo close';
+                selectBtn.addEventListener('click', () => {
+                    this.undoCloseTab(paneId);
+                    this._closeOverflowDropdown();
+                });
+            } else {
+                selectBtn.addEventListener('click', () => {
+                    this.switchTab(paneId, { userInitiated: true });
+                    this._closeOverflowDropdown();
+                });
+            }
+            row.appendChild(selectBtn);
+
+            const actionBtn = document.createElement('button');
+            actionBtn.type = 'button';
+            actionBtn.className = 'hostname-dropdown-close-btn';
+            actionBtn.textContent = closing ? '↻' : '×';
+            actionBtn.title = closing ? 'Undo close' : 'Close session';
+            actionBtn.setAttribute(
+                'aria-label',
+                closing
+                    ? `Undo close ${tab.title || 'session'}`
+                    : `Close ${tab.title || 'session'}`,
+            );
+            actionBtn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (closing) {
+                    this.undoCloseTab(paneId);
+                    this._closeOverflowDropdown();
+                } else {
+                    this.closeTab(paneId);
+                    this._refreshOverflowDropdown();
+                }
+            });
+            row.appendChild(actionBtn);
+            dropdown.appendChild(row);
+        };
+
+        const closingTabs = entries.filter(([, tab]) => tab.softClosing);
+        if (closingTabs.length > 0) {
+            appendHeader(
+                '↻',
+                'Closing tabs',
+                closingTabs.length,
+                ' tab-overflow-closing-group',
+            );
+            for (const [paneId, tab] of closingTabs)
+                appendRow(paneId, tab, { closing: true });
+        }
+
+        // Group live tabs by worktree glyph. Stable insertion order matches
+        // the tabs Map order, including tabs restored from drag-reordering.
         const groups = new Map();
-        for (const [paneId, tab] of this.tabs.entries()) {
-            const glyph = (tab.tabEl && tab.tabEl.dataset.worktreeGlyph) || '◆';
+        for (const [paneId, tab] of entries) {
+            if (tab.softClosing) continue;
+            const glyph = tab.tabEl?.dataset.worktreeGlyph || '◆';
             const label = this.getProjectWorktreeLabel(tab.cwd);
             if (!groups.has(glyph)) groups.set(glyph, { label, items: [] });
             groups.get(glyph).items.push({ paneId, tab });
         }
         for (const [glyph, group] of groups.entries()) {
-            const header = document.createElement('div');
-            header.className = 'tab-overflow-dropdown-group';
-            const icon = document.createElement('span');
-            icon.className = 'tab-overflow-dropdown-group-icon';
-            icon.textContent = glyph;
-            const text = document.createElement('span');
-            text.textContent = group.label;
-            const count = document.createElement('span');
-            count.style.marginLeft = 'auto';
-            count.textContent = `${group.items.length} tab${group.items.length === 1 ? '' : 's'}`;
-            header.appendChild(icon);
-            header.appendChild(text);
-            header.appendChild(count);
-            dropdown.appendChild(header);
-
-            for (const { paneId, tab } of group.items) {
-                const row = document.createElement('div');
-                row.className = 'hostname-dropdown-row';
-                row.dataset.paneId = paneId;
-                if (paneId === this.activePaneId) row.classList.add('active');
-
-                const selectBtn = document.createElement('button');
-                selectBtn.className = 'hostname-dropdown-select-btn';
-                const faviconImg = document.createElement('img');
-                faviconImg.className = 'hostname-dropdown-favicon';
-                faviconImg.src = tab.faviconUrl || '';
-                faviconImg.alt = tab.coder || '';
-                const titleSpan = document.createElement('span');
-                titleSpan.className = 'hostname-dropdown-title';
-                titleSpan.innerText = tab.title || 'Session';
-                selectBtn.appendChild(faviconImg);
-                selectBtn.appendChild(titleSpan);
-                selectBtn.addEventListener('click', () => {
-                    this.switchTab(paneId, { userInitiated: true });
-                    this._closeOverflowDropdown();
-                });
-                row.appendChild(selectBtn);
-
-                const closeBtn = document.createElement('button');
-                closeBtn.className = 'hostname-dropdown-close-btn';
-                closeBtn.innerHTML = '×';
-                closeBtn.title = 'Close session';
-                closeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.closeTab(paneId);
-                    // Re-render after async finalize so the row disappears.
-                    setTimeout(() => {
-                        if (!this._overflowDropdownHidden())
-                            this._buildOverflowDropdown();
-                    }, 50);
-                });
-                row.appendChild(closeBtn);
-                dropdown.appendChild(row);
-            }
+            appendHeader(glyph, group.label, group.items.length);
+            for (const { paneId, tab } of group.items) appendRow(paneId, tab);
         }
 
         // Auto-scroll to the active row so users land on it.

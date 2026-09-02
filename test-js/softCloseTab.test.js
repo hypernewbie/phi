@@ -12,13 +12,9 @@ import { TabManager } from '../web/terminal.js';
 // use vi.useFakeTimers so we can advance the clock without waiting in
 // real time. The MAX_SOFT_CLOSED_TABS cap = 3.
 //
-// pickNextTab was removed: soft-close never auto-switches the active
-// tab. The active tab stays in place with a spinner overlay during the
-// grace; only finalize (after grace expires) commits to "tab is gone,"
-// and at that point if it's the last tab we show the empty state. This
-// is the fix for the user-reported "closing a tab jumps me to a random
-// unrelated project" bug, plus the related "big white XX tab" visual
-// complaint (line-through on title + still-visible × read as XX).
+// Soft-close hides the tab from the strip, selects a visible survivor,
+// and keeps the sidebar project unchanged for that automatic selection.
+// The tab remains recoverable in the tab-list dropdown until finalization.
 
 setupDomHarness();
 
@@ -39,6 +35,8 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
     // Spies for methods called by the soft-close pipeline that don't
     // need real implementations for these tests.
     tm.updateDirectModeUI = vi.fn();
+    tm.activateTabViewport = vi.fn();
+    tm.updateDocumentTitle = vi.fn();
     tm.showEmptyState = vi.fn();
     tm.hideEmptyState = vi.fn();
     tm.updateDisconnectBanner = vi.fn();
@@ -206,7 +204,7 @@ describe('undoCloseTab - reverse a soft-close', () => {
     it('invokes the toast callback when called via the Undo button', () => {
         const tm = makeTm({ withTabs: ['a'] });
         let capturedCallback = null;
-        tm.app.showToast = vi.fn((msg, opts) => {
+        tm.app.showToast = vi.fn((_msg, opts) => {
             capturedCallback = opts.action.callback;
             return { classList: { add: vi.fn(), remove: vi.fn() } };
         });
@@ -218,15 +216,13 @@ describe('undoCloseTab - reverse a soft-close', () => {
     });
 });
 
-// ---- pickNextTab removed (no auto-switch on close) -----------------
+// ---- close selection -------------------------------------------------
 
-describe('pickNextTab - removed', () => {
-    it('pickNextTab no longer exists on TabManager.prototype', () => {
-        // The picker was removed in favor of "stay on the closing tab
-        // with a spinner overlay". The priority chain was a band-aid
-        // for the wrong problem (auto-switching is the problem, not
-        // which tab to switch to).
-        expect(typeof TabManager.prototype.pickNextTab).toBe('undefined');
+describe('close selection', () => {
+    it('has a dedicated helper for automatic survivor selection', () => {
+        expect(typeof TabManager.prototype._selectTabAfterClose).toBe(
+            'function',
+        );
     });
 });
 
@@ -292,36 +288,66 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
     });
 });
 
-// ---- softCloseTab - stay-on-closing-tab behavior --------------------
+// ---- softCloseTab - close selects a project-neutral survivor ------------
 
-describe('softCloseTab - active-tab close keeps the user where they are', () => {
-    it('does NOT switch tabs when the active tab is soft-closed', () => {
+describe('softCloseTab - active-tab close selects a survivor', () => {
+    it('selects the next visible tab without syncing its project', () => {
         const tm = makeTm({
             withTabs: [
                 { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
-                { paneId: 'b', workspace: '/wsZ', coder: 'shell' },
+                {
+                    paneId: 'b',
+                    workspace: '/wsZ',
+                    cwd: '/wsZ',
+                    coder: 'shell',
+                },
             ],
             activePaneId: 'a',
         });
         const switchSpy = vi.spyOn(tm, 'switchTab');
         tm.softCloseTab('a');
-        // No surprise jump to an unrelated project.
-        expect(switchSpy).not.toHaveBeenCalled();
-        expect(tm.activePaneId).toBe('a');
+        expect(switchSpy).toHaveBeenCalledWith('b', {
+            preserveProject: true,
+        });
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.switchCoder).not.toHaveBeenCalled();
+        expect(tm.app.sessionsManager.loadWorktrees).not.toHaveBeenCalled();
+
+        // The explicit second click opts back into normal project sync.
+        tm.switchTab('b', { userInitiated: true });
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsZ',
+        );
     });
 
-    it('does NOT show the empty state immediately when closing the only tab', () => {
-        // The previous behavior surfaced the empty state right away on the
-        // last-tab close. New behavior: keep the user on the fading tab
-        // with the spinner overlay, and only commit to "empty" when the
-        // grace expires (finalizeCloseTab).
+    it('keeps normal user tab selection project-aware', () => {
+        const tm = makeTm({
+            withTabs: [
+                { paneId: 'a', workspace: '/wsA', coder: 'shell' },
+                {
+                    paneId: 'b',
+                    workspace: '/wsZ',
+                    cwd: '/wsZ',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        tm.switchTab('b', { userInitiated: true });
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsZ',
+        );
+    });
+
+    it('shows the empty state while the last tab remains undoable', () => {
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
-        expect(tm.showEmptyState).not.toHaveBeenCalled();
-        expect(tm.activePaneId).toBe('a');
+        expect(tm.showEmptyState).toHaveBeenCalled();
+        expect(tm.activePaneId).toBeNull();
+        expect(tm.tabs.get('a').softClosing).toBe(true);
     });
 
-    it('does NOT auto-switch when closing a background (non-active) tab', () => {
+    it('hides a background closing tab without disturbing the active tab', () => {
         const tm = makeTm({
             withTabs: [
                 { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
@@ -330,123 +356,71 @@ describe('softCloseTab - active-tab close keeps the user where they are', () => 
             activePaneId: 'a',
         });
         const switchSpy = vi.spyOn(tm, 'switchTab');
-        tm.softCloseTab('b'); // closing the background tab
+        tm.softCloseTab('b');
         expect(switchSpy).not.toHaveBeenCalled();
         expect(tm.activePaneId).toBe('a');
+        expect(tm.tabs.get('b').tabEl.classList.contains('soft-closed')).toBe(
+            true,
+        );
     });
 
-    it('active-tab close mounts a content overlay over the terminal', () => {
+    it('does not mount the old content overlay when the active tab closes', () => {
         const tm = makeTm({
-            withTabs: [{ paneId: 'a' }],
+            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
             activePaneId: 'a',
         });
         tm.softCloseTab('a');
         const tab = tm.tabs.get('a');
-        expect(tab.softCloseOverlay).toBeTruthy();
-        // Overlay is appended to the tab's termContainer.
-        expect(tab.termContainer.contains(tab.softCloseOverlay)).toBe(true);
         expect(
-            tab.softCloseOverlay.classList.contains('tab-soft-close-overlay'),
-        ).toBe(true);
-        // Overlay shows a countdown + an undo hint.
-        const text = tab.softCloseOverlay.textContent;
-        expect(text).toMatch(/Closing in/);
-        expect(text).toMatch(/undo/i);
+            tab.termContainer.querySelector('.tab-soft-close-overlay'),
+        ).toBeNull();
+        expect(tab.tabEl.classList.contains('soft-closed')).toBe(true);
+        expect(tm.activePaneId).toBe('b');
     });
 
     it('background-tab close does NOT mount a content overlay', () => {
-        // Background tabs close invisibly — only the strip pill and the
-        // toast should appear, no content overlay (the user isn't on
-        // that tab).
+        // Background tabs close invisibly — the toast and tab-list
+        // dropdown are the recovery affordances.
         const tm = makeTm({
             withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
             activePaneId: 'a',
         });
         tm.softCloseTab('b');
         const tab = tm.tabs.get('b');
-        expect(tab.softCloseOverlay).toBeFalsy();
-    });
-
-    it('adds a countdown pill to the strip entry', () => {
-        const tm = makeTm({
-            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
-            activePaneId: 'a',
-        });
-        tm.softCloseTab('b');
-        const tab = tm.tabs.get('b');
-        expect(tab.softClosePill).toBeTruthy();
-        expect(tab.tabEl.contains(tab.softClosePill)).toBe(true);
         expect(
-            tab.softClosePill.classList.contains('tab-soft-close-pill'),
-        ).toBe(true);
-        // v0.8.5: pill now shows glyph + text. Glyph = the tab's
-        // worktree hieroglyph (or fallback '◆'), text = the countdown
-        // seconds. Both live in dedicated spans.
-        const text = tab.softClosePill.querySelector(
-            '.tab-soft-close-pill-text',
-        );
-        const glyph = tab.softClosePill.querySelector(
-            '.tab-soft-close-pill-glyph',
-        );
-        expect(text).toBeTruthy();
-        expect(glyph).toBeTruthy();
-        expect(text.textContent).toMatch(/^\d+s$/);
+            tab.termContainer.querySelector('.tab-soft-close-overlay'),
+        ).toBeNull();
     });
 
-    it('pill countdown ticks down as the clock advances', () => {
+    it('keeps the closing tab out of the visible strip', () => {
         const tm = makeTm({
             withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
             activePaneId: 'a',
         });
         tm.softCloseTab('b');
         const tab = tm.tabs.get('b');
-        const text = () =>
-            tab.softClosePill.querySelector('.tab-soft-close-pill-text')
-                .textContent;
-        const initial = text();
-        vi.advanceTimersByTime(2500); // 2.5s in
-        const later = text();
-        const initialSec = parseInt(initial, 10);
-        const laterSec = parseInt(later, 10);
-        expect(laterSec).toBeLessThan(initialSec);
+        expect(tab.tabEl.querySelector('.tab-soft-close-pill')).toBeNull();
+        expect(tab.tabEl.classList.contains('soft-closed')).toBe(true);
     });
 
-    it('drops the line-through on the title (no more "X\'d out" visual)', () => {
-        // Regression for the "big white XX tab" report: the previous
-        // styling put a strikethrough on the title, which literally read
-        // as a line through the word plus the still-visible × = an XX
-        // shape. The CSS for .tab.soft-closed .tab-title must NOT use
-        // text-decoration: line-through anymore.
-        const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
-        tm.softCloseTab('a');
-        const tab = tm.tabs.get('a');
-        // We can't actually test computed CSS here (jsdom doesn't run
-        // our stylesheet), but we can verify the production CSS rule no
-        // longer carries line-through by reading the file.
-        const fs = require('fs');
-        const css = fs.readFileSync('web/style.css', 'utf8');
-        // Strip comments so a "/* ... strikethrough ... */" in the comment
-        // doesn't trigger a false positive on the literal string.
-        const cssStripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
-        const ruleMatch = cssStripped.match(
-            /\.tab\.soft-closed\s+\.tab-title\s*\{[^}]*\}/,
-        );
-        expect(ruleMatch).toBeTruthy();
-        expect(ruleMatch[0]).not.toMatch(/line-through/);
+    it('keeps the close-grace countdown ticking for the tab list', () => {
+        const tm = makeTm({
+            withTabs: [{ paneId: 'a' }, { paneId: 'b' }],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+        const tab = tm.tabs.get('b');
+        const initial = tm._softCloseRemainingSeconds(tab);
+        vi.advanceTimersByTime(2500);
+        const later = tm._softCloseRemainingSeconds(tab);
+        expect(later).toBeLessThan(initial);
     });
 
-    it('CSS toggle hides .tab-close and reveals .tab-reopen on soft-closed tabs', () => {
-        // The previous code had inline style="display:none" on .tab-reopen
-        // with no JS or CSS to undo it. Now CSS controls visibility based
-        // on the .soft-closed class.
-        const fs = require('fs');
+    it('CSS hides soft-closed entries instead of styling them in the strip', () => {
+        const fs = require('node:fs');
         const css = fs.readFileSync('web/style.css', 'utf8');
-        expect(css).toMatch(/\.tab \.tab-reopen\s*\{\s*display:\s*none/);
         expect(css).toMatch(
-            /\.tab\.soft-closed \.tab-close\s*\{\s*display:\s*none/,
-        );
-        expect(css).toMatch(
-            /\.tab\.soft-closed \.tab-reopen\s*\{\s*display:\s*flex/,
+            /\.tab\.soft-closed\s*\{[^}]*display:\s*none\s*!important/,
         );
     });
 });
@@ -495,7 +469,7 @@ describe('close lifecycle - load-bearing contracts', () => {
     function deleteCalls() {
         return globalThis.fetch.mock.calls.filter((c) => {
             const url = typeof c[0] === 'string' ? c[0] : c[0]?.url;
-            return url && url.includes('/api/terminals/');
+            return url?.includes('/api/terminals/');
         });
     }
 
@@ -576,65 +550,46 @@ describe('close lifecycle - load-bearing contracts', () => {
         expect(calls).toContain('/api/terminals/a');
     });
 
-    it('5. undo via the strip ↻ button cancels the grace timer AND cleans up overlay/pill/toast', () => {
-        // v0.8.3 bug class: the ↻ button was permanently hidden via
-        // an inline display:none that no CSS or JS undid (dead code).
-        // The toast worked, but the strip did not. Both must work.
+    it('5. undo cancels the grace timer and restores the hidden strip entry', () => {
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
-        // Verify it actually IS soft-closing first.
         expect(tm.tabs.get('a').softClosing).toBe(true);
         expect(tm.tabs.get('a').softCloseTimer).toBeTruthy();
-        expect(tm.tabs.get('a').softCloseOverlay).toBeTruthy();
-        expect(tm.tabs.get('a').softClosePill).toBeTruthy();
         expect(tm.tabs.get('a').softCloseToast).toBeTruthy();
-        // Undo via the strip entry click handler (the production path).
         tm.undoCloseTab('a');
         const tab = tm.tabs.get('a');
         expect(tab.softClosing).toBe(false);
         expect(tab.softCloseTimer).toBeNull();
-        expect(tab.softCloseOverlay).toBeFalsy();
-        expect(tab.softClosePill).toBeFalsy();
+        expect(
+            tab.termContainer.querySelector('.tab-soft-close-overlay'),
+        ).toBeNull();
+        expect(tab.tabEl.querySelector('.tab-soft-close-pill')).toBeNull();
         expect(tab.softCloseToast).toBeNull();
-        // The strip entry returned to its non-soft-closed state.
         expect(tab.tabEl.classList.contains('soft-closed')).toBe(false);
     });
 
-    it('6. closing the last active tab: empty state appears at finalize, not at soft-close', () => {
-        // Previously, softCloseTab showed the empty state immediately
-        // when no other tabs survived. Now the user stays on the
-        // closing tab during the grace period (sees the spinner
-        // overlay). Empty state only after the grace expires.
+    it('6. closing the last active tab shows an undoable empty state', () => {
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
-        // During grace: no empty state, no inputBar reveal.
-        expect(tm.showEmptyState).not.toHaveBeenCalled();
-        expect(tm.activePaneId).toBe('a');
-        // Let the grace expire.
-        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
-        // Now empty state should be visible.
         expect(tm.showEmptyState).toHaveBeenCalled();
         expect(tm.activePaneId).toBeNull();
+        expect(tm.tabs.get('a').softClosing).toBe(true);
+        vi.advanceTimersByTime(TabManager.SOFT_CLOSE_GRACE_MS);
+        expect(tm.tabs.has('a')).toBe(false);
     });
 
     it('7. closing a background tab leaves the active tab untouched', () => {
-        // User is on tab A; closes tab B (background). A should not
-        // gain a soft-close overlay, A's content should not be hidden,
-        // A should still be active. B gets the soft-close treatment.
         const tm = makeTm({
             withTabs: ['a', 'b'],
             activePaneId: 'a',
         });
         tm.softCloseTab('b');
         expect(tm.activePaneId).toBe('a');
-        // A has no overlay.
-        expect(tm.tabs.get('a').softCloseOverlay).toBeFalsy();
         expect(tm.tabs.get('a').softClosing).toBeFalsy();
-        // B has the overlay? No - B is background, only strip pill.
-        expect(tm.tabs.get('b').softCloseOverlay).toBeFalsy();
-        // B has the strip pill and is soft-closing.
         expect(tm.tabs.get('b').softClosing).toBe(true);
-        expect(tm.tabs.get('b').softClosePill).toBeTruthy();
+        expect(tm.tabs.get('b').tabEl.classList.contains('soft-closed')).toBe(
+            true,
+        );
     });
 
     it('8. closeAll triggers DELETE for every pane in the map', () => {

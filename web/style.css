@@ -1370,26 +1370,25 @@ html[data-phi-desktop-root] .app-header {
     flex-shrink: 0;
 }
 
-/* +N more chip: appears at the right edge of the tab strip when the
-   tabs overflow horizontally. Stays pinned (it's a flex sibling of
-   #tabs-container, not inside the scroller). Click opens a dropdown
-   grouping ALL open tabs by worktree glyph, with click-to-switch +
-   marked/pinned/close affordances matching the hostname dropdown. */
+/* Small tab-list arrow: appears beside the tab actions when tabs overflow
+   or while a tab is in the close grace period. It stays pinned (a flex
+   sibling of #tabs-container, not inside the scroller) and opens the full
+   live-tab list plus the separate closing-tab section. */
 .tab-overflow-btn {
     background-color: var(--bg-elevated);
     border: 1px solid var(--accent-soft);
     color: var(--accent-bright);
     cursor: pointer;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 5px 10px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
     border-radius: 5px;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
     transition: all 0.15s;
     margin-bottom: 4px;
-    margin-left: 6px;
+    margin-left: 2px;
     flex-shrink: 0;
     text-shadow: 0 0 6px var(--accent-glow);
     box-shadow: 0 0 12px var(--accent-trace);
@@ -1569,9 +1568,8 @@ html[data-phi-desktop-root] .app-header {
     }
 }
 
-/* Dropdown anchored to the +N chip. Mirrors the hostname dropdown
-   pattern so users get the same interaction model in both locations:
-   icon + worktree glyph + title + meta + marker + pin + close. */
+/* Dropdown anchored to the tab-list arrow. Mirrors the hostname dropdown
+   pattern and adds a separate closing-tab section with live countdowns. */
 .tab-overflow-dropdown {
     position: absolute;
     top: 100%;
@@ -1607,6 +1605,23 @@ html[data-phi-desktop-root] .app-header {
     text-shadow: 0 0 6px var(--accent-glow);
     font-family: var(--font-mono);
     font-size: 13px;
+}
+.tab-overflow-closing-group {
+    color: var(--accent-bright);
+    background-color: var(--accent-trace);
+}
+.tab-overflow-closing-row .hostname-dropdown-select-btn {
+    color: var(--text-muted);
+}
+.tab-overflow-closing-row .hostname-dropdown-meta {
+    color: var(--accent-bright);
+}
+.tab-overflow-closing-row .hostname-dropdown-close-btn {
+    color: var(--accent-bright);
+}
+.tab-overflow-closing-row .hostname-dropdown-close-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--accent-wash);
 }
 
 .reconnect-all-tabs-btn:hover {
@@ -1794,309 +1809,11 @@ html[data-phi-desktop-root] .app-header {
     border-top-color: var(--accent);
 }
 
-/* Soft-close: tab is in the grace period. Strip entry fades, the × is
-   swapped for a ↻ reopen button, and a tiny countdown pill appears next
-   to the title so the user can see how long they have to undo. No more
-   line-through on the title — that read as an "X through the word" and
-   combined with the still-visible × made the tab look like a stuck
-   failure state. The user has SOFT_CLOSE_GRACE_MS to click ↻ (in the
-   strip) or Undo (in the toast) to restore it. */
+/* Soft-close entries leave the real strip immediately. They remain in the
+   tabs Map and DOM so their original order is preserved for Undo; the tab
+   list dropdown is their only visible home during the grace period. */
 .tab.soft-closed {
-    opacity: 0.55;
-}
-.tab.soft-closed .tab-title {
-    /* Dim instead of strikethrough — line-through read as ✗/X'd out. */
-    opacity: 0.7;
-}
-.tab.soft-closed .tab-pin,
-.tab.soft-closed .tab-favicon {
-    opacity: 0.55;
-}
-
-/* × ↻ swap during soft-close: hide the close button, reveal the reopen
-   button. The closed-button was left visible before (dead inline
-   display:none on .tab-reopen and no rule hiding .tab-close), so users
-   had no in-strip undo path — only the toast. */
-.tab .tab-reopen {
-    display: none;
-}
-.tab .tab-close {
-    display: flex;
-}
-.tab.soft-closed .tab-close {
-    display: none;
-}
-.tab.soft-closed .tab-reopen {
-    display: flex;
-}
-
-/* Tiny countdown pill on the strip entry: "5s → 4s → ... → 0" so users
-   closing inactive tabs (who don't see the content overlay) can still
-   tell when the tab will vanish. */
-.tab-soft-close-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    line-height: 1;
-    color: var(--accent-bright);
-    background: linear-gradient(
-        180deg,
-        rgba(124, 106, 247, 0.12),
-        rgba(124, 106, 247, 0.06)
-    );
-    border: 1px solid var(--accent-soft);
-    border-radius: 8px;
-    padding: 2px 7px;
-    margin-left: 2px;
-    flex: 0 0 auto;
-    min-width: 32px;
-    text-align: center;
-    text-shadow: 0 0 4px var(--accent-glow);
-    box-shadow: 0 0 8px var(--accent-trace);
-    /* Reuses the tab's worktree hieroglyph so the pill visually ties to
-       the specific worktree that's closing. The glyph itself drains
-       (opacity 0.7 -> 0.15 + slight scale) over the 5s grace period -
-       same animation timing as the overlay's ring drain, so the two
-       stay visually synchronised. */
-}
-.tab-soft-close-pill-glyph {
-    font-size: 11px;
-    line-height: 1;
-    animation: tab-soft-close-pill-drain 5s linear forwards;
-    color: var(--accent-bright);
-}
-.tab-soft-close-pill-text {
-    font-weight: 600;
-    letter-spacing: 0.02em;
-}
-@keyframes tab-soft-close-pill-drain {
-    from {
-        opacity: 0.85;
-        transform: scale(1);
-    }
-    to {
-        opacity: 0.15;
-        transform: scale(0.7);
-    }
-}
-
-/* Content-area overlay when the active tab is soft-closing: stays on
-   the same terminal under a dark backdrop with a circular drain ring
-   + spinner + countdown so the user can see what they're "losing" and
-   still undo. Removed on undo or finalize. */
-.tab-soft-close-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    background: rgba(8, 8, 10, 0.72);
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
-    z-index: 50;
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    animation: tab-soft-close-fade-in 120ms ease-out;
-    overflow: hidden;
-}
-/* Giant faint hieroglyph backdrop behind the countdown - same glyph
-   as the tab's worktree label, scaled up so it reads as a 'carved
-   stone' backdrop rather than a UI element. Very low opacity so it
-   doesn't compete with the countdown text. */
-.tab-soft-close-backdrop {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 360px;
-    line-height: 1;
-    color: var(--accent-bright);
-    opacity: 0.05;
-    pointer-events: none;
-    z-index: 0;
-    user-select: none;
-    text-shadow: 0 0 80px var(--accent-glow);
-}
-@keyframes tab-soft-close-fade-in {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-.tab-soft-close-ring {
-    position: relative;
-    width: 56px;
-    height: 56px;
-}
-.tab-soft-close-ring svg {
-    width: 100%;
-    height: 100%;
-    transform: rotate(-90deg);
-}
-.tab-soft-close-ring-bg {
-    fill: none;
-    stroke: rgba(255, 255, 255, 0.1);
-    stroke-width: 3;
-}
-.tab-soft-close-ring-fg {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 3;
-    stroke-linecap: round;
-    animation: tab-soft-close-drain 5s linear forwards;
-}
-@keyframes tab-soft-close-drain {
-    from {
-        stroke-dashoffset: 0;
-    }
-    to {
-        stroke-dashoffset: 100;
-    }
-}
-/* Continuous spinner overlaid in the center of the drain ring, so
-   the ring visually communicates both progress (drain) and activity.
-   Replaced in v0.8.5 with a static hieroglyph at the ring center -
-   the worktree glyph, accent-bright with a soft glow. Ties the
-   countdown to the same visual identity as the tab + sidebar +
-   hover preview. */
-.tab-soft-close-ring-spinner {
-    position: absolute;
-    inset: 14px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.08);
-    border-top-color: var(--accent);
-    animation: tab-soft-close-spin 0.9s linear infinite;
-}
-@keyframes tab-soft-close-spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-/* Hieroglyph at the center of the drain ring (replaces spinner). */
-.tab-soft-close-ring-center {
-    position: absolute;
-    inset: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    line-height: 1;
-    color: var(--accent-bright);
-    text-shadow:
-        0 0 10px var(--accent-glow),
-        0 0 18px var(--accent-glow);
-    z-index: 1;
-}
-
-.tab-soft-close-text {
-    font-size: 13px;
-    color: var(--text-primary);
-    letter-spacing: 0.01em;
-    z-index: 1;
-}
-.tab-soft-close-text .tab-soft-close-secs {
-    font-family: var(--font-mono);
-    color: var(--accent-bright);
-    font-weight: 600;
-}
-/* Trailing ellipsis: three dots that pulse '.', '..', '...' in a
-   wave via staggered opacity keyframes. Pure CSS, no JS. The three
-   individual dots are real <span>s so opacity actually transitions. */
-.tab-soft-close-ellipsis {
-    display: inline-block;
-    color: var(--accent-bright);
-    font-family: var(--font-mono);
-    font-weight: 600;
-    margin-left: 1px;
-}
-.tab-soft-close-ellipsis .d1,
-.tab-soft-close-ellipsis .d2,
-.tab-soft-close-ellipsis .d3 {
-    opacity: 0.25;
-    animation: tab-soft-close-ellipsis 1.5s ease-in-out infinite;
-}
-.tab-soft-close-ellipsis .d2 {
-    animation-delay: 0.2s;
-}
-.tab-soft-close-ellipsis .d3 {
-    animation-delay: 0.4s;
-}
-@keyframes tab-soft-close-ellipsis {
-    0%,
-    100% {
-        opacity: 0.25;
-    }
-    40% {
-        opacity: 1;
-    }
-    80% {
-        opacity: 0.25;
-    }
-}
-.tab-soft-close-hint {
-    font-size: 11px;
-    color: var(--text-muted);
-}
-
-/* Undo button on the soft-close overlay itself. The closing-tab
-   motif carries its own restore affordance so the user doesn't have
-   to chase the tiny ↻ in the tab strip or the corner toast — both
-   of which are easy to miss when the closing tab fills the screen.
-   Sized to be obvious, styled in the same glassmorphism as the
-   toast action button. */
-.tab-soft-close-undo {
-    margin-top: 18px;
-    padding: 8px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--accent-bright);
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--accent-soft);
-    border-radius: 999px;
-    cursor: pointer;
-    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-}
-.tab-soft-close-undo:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: var(--accent);
-    box-shadow: 0 0 12px var(--accent-glow);
-    transform: translateY(-1px);
-}
-.tab-soft-close-undo:active {
-    transform: translateY(0);
-}
-.tab-reopen {
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    margin-left: 2px;
-    color: var(--accent, #7c6af7);
-    font-size: 13px;
-    line-height: 1;
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
-    transition:
-        background-color 0.15s ease,
-        color 0.15s ease;
-}
-.tab-reopen:hover {
-    background-color: var(--bg-border);
-    color: var(--text-primary);
+    display: none !important;
 }
 
 /* Attention persists until the tab is clicked, so an infinite pulse here runs
