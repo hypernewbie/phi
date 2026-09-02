@@ -54,7 +54,7 @@ function fakeClient() {
 }
 
 describe('Pi RPC transcript controller', () => {
-    it('rejects a blocked slash command, sends prompts, and renders bubbles', async () => {
+    it('sends slash commands raw, sends prompts, and renders bubbles', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();
         const chat = mountChatPi(root, '/work/demo', wire.client);
@@ -90,7 +90,14 @@ describe('Pi RPC transcript controller', () => {
         expect(root.querySelector('.user-message')?.textContent).toContain(
             'saved text',
         );
-        expect(chat.send('/status')).toBe(false);
+        expect(chat.send('/clear')).toBe(true);
+        expect(wire.sent.at(-1)).toMatchObject({
+            op: 'prompt',
+            sid: 's1',
+            args: { message: '/clear' },
+        });
+        expect(wire.sent.at(-1).args.streamingBehavior).toBeUndefined();
+
         expect(chat.send('hello')).toBe(true);
         expect(wire.sent.at(-1)).toMatchObject({
             op: 'prompt',
