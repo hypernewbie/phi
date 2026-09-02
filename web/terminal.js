@@ -1834,6 +1834,7 @@ export class TabManager {
                 : '');
 
         // Setup WebSocket connection
+        // biome-ignore lint/style/useConst: ws closed over by tabInfo callbacks before assignment
         let ws;
         const tabInfo = {
             paneId,
