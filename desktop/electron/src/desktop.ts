@@ -1021,8 +1021,14 @@ export class DesktopHost {
           viewsCreated?: () => number;
         }
       | undefined;
-    if (!mgr || typeof (mgr as { hibernateInactive?: unknown }).hibernateInactive !== 'function') {
-      console.log(`phi-desktop: applyLowMemoryMode(${enabled}) — no view manager yet`);
+    if (
+      !mgr ||
+      typeof (mgr as { hibernateInactive?: unknown }).hibernateInactive !==
+        'function'
+    ) {
+      console.log(
+        `phi-desktop: applyLowMemoryMode(${enabled}) — no view manager yet`,
+      );
       return;
     }
     if (enabled) {
@@ -1032,13 +1038,21 @@ export class DesktopHost {
       // Fallback: keep first retained view if still empty (e.g. controller activeId blank at boot)
       if (!keepId) {
         try {
-          const any = (mgr as unknown as { views?: Map<string, unknown> })?.views?.keys?.().next?.().value as string | undefined;
+          const any = (
+            mgr as unknown as { views?: Map<string, unknown> }
+          )?.views
+            ?.keys?.()
+            .next?.().value as string | undefined;
           if (any) keepId = any;
         } catch {}
       }
       const before = (mgr as ProfileViewManager).viewsCreated?.() ?? -1;
-      console.log(`phi-desktop: low-memory ON — keep ${keepId || '(none)'} before=${before}`);
-      (mgr as { hibernateInactive: (id: string) => void }).hibernateInactive(keepId);
+      console.log(
+        `phi-desktop: low-memory ON — keep ${keepId || '(none)'} before=${before}`,
+      );
+      (mgr as { hibernateInactive: (id: string) => void }).hibernateInactive(
+        keepId,
+      );
       const after = (mgr as ProfileViewManager).viewsCreated?.() ?? -1;
       console.log(`phi-desktop: low-memory ON — after=${after}`);
     } else {
@@ -2695,6 +2709,9 @@ export class DesktopHost {
         // again after B, and the proof has already been injected into
         // the B view).
         activeEpoch++;
+        if (this.controller?.getLowMemoryMode()) {
+          this.applyLowMemoryMode(true);
+        }
       } else if (event.kind === 'pet-enabled-changed') {
         this.trayHandle?.rebuildMenu();
         if (this.controller?.state().petEnabled) void this.startPet();
