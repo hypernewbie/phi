@@ -13,3 +13,5 @@ allowBuilds:
   # package does not need (real packaging is a later slice); declaring it
   # explicitly keeps `pnpm install` / `pnpm run` from failing on it.
   electron-winstaller: false
+minimumReleaseAgeExclude:
+  - electron@44.1.1
