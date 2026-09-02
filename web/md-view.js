@@ -20,7 +20,7 @@ export function mdEventMatchesPath(dir, path) {
     if (!dir)
         return true; // unknown dir: refresh anyway, it's one cheap fetch
     const normDir = dir.replace(/\\/g, '/');
-    const d = normDir.endsWith('/') ? normDir : normDir + '/';
+    const d = normDir.endsWith('/') ? normDir : `${normDir}/`;
     return path.replace(/\\/g, '/').startsWith(d);
 }
 // Static pages are whitelisted; query values never select arbitrary URLs.

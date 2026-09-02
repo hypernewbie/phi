@@ -221,7 +221,7 @@ export class MarkdownManager {
             const files = await res.json();
             if (requestId !== this.refreshRequestId)
                 return;
-            const key = cwd + ' ' + JSON.stringify(files);
+            const key = `${cwd} ${JSON.stringify(files)}`;
             if (silent && key === this._lastRenderedKey)
                 return;
             this._lastRenderedKey = key;
@@ -246,7 +246,7 @@ export class MarkdownManager {
                     return cwd;
                 if (d.startsWith('/') || /^[A-Za-z]:[\\/]/.test(d))
                     return d;
-                return cwd.replace(/\/+$/, '') + '/' + d.replace(/^\.\//, '');
+                return `${cwd.replace(/\/+$/, '')}/${d.replace(/^\.\//, '')}`;
             });
             if (!dirs.some((d) => normalizePath(d) === normalizePath(data.dir)))
                 return;
@@ -573,7 +573,7 @@ export class MarkdownManager {
     // which release they're reading the changelog for.
     async openChangelogModal() {
         const versionEl = document.getElementById('phi-changelog-btn');
-        const version = ((versionEl && versionEl.textContent) || '').trim();
+        const version = (versionEl?.textContent || '').trim();
         const title = version ? `Changelog — ${version}` : 'Changelog';
         this.modalTitle.innerText = title;
         this.modalBody.innerHTML =
@@ -610,8 +610,8 @@ export class MarkdownManager {
     // methods (go-install/dev) we still show instructions, just without
     // the Apply button.
     _buildUpdateBanner() {
-        const status = this.app && this.app.updateStatus;
-        if (!status || !status.update_available || status.current === 'dev')
+        const status = this.app?.updateStatus;
+        if (!status?.update_available || status.current === 'dev')
             return null;
         const banner = document.createElement('div');
         banner.className = 'update-banner';
@@ -711,7 +711,7 @@ export class MarkdownManager {
         setTimeout(poll, pollIntervalMs);
     }
     _formatProgress(p) {
-        if (!p || !p.phase)
+        if (!p?.phase)
             return '';
         switch (p.phase) {
             case 'downloading':
@@ -784,7 +784,7 @@ export class MarkdownManager {
                 await new Promise((r) => setTimeout(r, 500));
             }
         }
-        catch (err) {
+        catch (_err) {
             restartBtn.disabled = false;
             applyBtn.disabled = false;
             restartBtn.textContent = 'Apply & restart now';
@@ -808,7 +808,7 @@ export class MarkdownManager {
     }
     async _promptAddDir() {
         const dir = prompt('Add markdown directory (relative to workspace, e.g. ./docs):');
-        if (!dir || !dir.trim())
+        if (!dir?.trim())
             return;
         try {
             await fetch('/api/config/markdown-dirs', {
@@ -990,7 +990,7 @@ export class MarkdownManager {
         }
         const suggested = this.markdownClipboard.name;
         let name = prompt('Paste as filename:', suggested);
-        if (!name || !name.trim())
+        if (!name?.trim())
             return;
         name = name.trim();
         const doPaste = async (overwrite = false) => {
@@ -1002,7 +1002,7 @@ export class MarkdownManager {
                     cwd,
                     dir: file.dir,
                     name,
-                    content: this.markdownClipboard.content,
+                    content: this.markdownClipboard?.content,
                     overwrite,
                 }),
             });
@@ -1071,7 +1071,7 @@ export class MarkdownManager {
             }
             text = fallback;
         }
-        if (!text || !text.trim()) {
+        if (!text?.trim()) {
             this.app.showToast('Clipboard is empty', {
                 type: 'error',
                 title: 'Markdown',
@@ -1320,7 +1320,7 @@ body..."></textarea>
         if (dirs.length === 1)
             return dirs[0];
         const select = this.pasteModalDir.querySelector('select');
-        return select && select.value ? select.value : dirs[0] || '';
+        return select?.value ? select.value : dirs[0] || '';
     }
     _setPasteError(msg) {
         this.pasteModalError.textContent = msg;
@@ -1338,7 +1338,7 @@ body..."></textarea>
             return;
         const content = this.pasteModalContent.value;
         const nameRaw = this.pasteModalName.value.trim();
-        if (!content || !content.trim()) {
+        if (!content?.trim()) {
             this._setPasteError('Content is empty.');
             this.pasteModalContent.focus({ preventScroll: true });
             return;
@@ -1386,7 +1386,7 @@ body..."></textarea>
                 throw new Error(text || `HTTP ${res.status}`);
             }
             const data = await res.json().catch(() => ({}));
-            const savedName = (data && data.name) || name;
+            const savedName = data?.name || name;
             // Clear pending BEFORE _closePasteModal: the close guard
             // refuses to close while a request is in flight, and we are
             // past the request.
@@ -1469,7 +1469,7 @@ body..."></textarea>
     }
     async _copyToClipboard(text, msg) {
         try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
+            if (navigator.clipboard?.writeText) {
                 await navigator.clipboard.writeText(text);
             }
             else {
@@ -1484,7 +1484,7 @@ body..."></textarea>
             }
             this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
         }
-        catch (err) {
+        catch (_err) {
             this.app.showToast('Failed to copy content', { type: 'error' });
         }
     }
@@ -1524,7 +1524,7 @@ body..."></textarea>
     async _importMarkdownBundle() {
         let blob = '';
         try {
-            if (navigator.clipboard && navigator.clipboard.readText) {
+            if (navigator.clipboard?.readText) {
                 blob = await navigator.clipboard.readText();
             }
         }
@@ -1532,13 +1532,13 @@ body..."></textarea>
             // Browser blocked clipboard read — fall through to prompt.
             console.warn('[md] clipboard read blocked', err);
         }
-        if (!blob || !blob.trim()) {
+        if (!blob?.trim()) {
             blob =
                 typeof prompt === 'function'
                     ? prompt('Paste your markdown bundle here (starts with PHIMD:):') || ''
                     : '';
         }
-        if (!blob || !blob.trim()) {
+        if (!blob?.trim()) {
             this.app.showToast('No bundle text to import', { type: 'info' });
             return;
         }

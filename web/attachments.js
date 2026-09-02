@@ -32,7 +32,7 @@ export function formatAttachment(coder, attachment) {
 // pass `e.dataTransfer` / `e.clipboardData` in directly; tests pass plain
 // objects with the same shape.
 export function extractImageItems(dt) {
-    if (!dt || !dt.items)
+    if (!dt?.items)
         return [];
     const items = [];
     const raw = dt.items;

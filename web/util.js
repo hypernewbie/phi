@@ -9,7 +9,7 @@ export function projectWorktreeLabel(cwd) {
     if (parts.length === 0)
         return '—';
     if (parts.length >= 2) {
-        return parts[parts.length - 2] + '/' + parts[parts.length - 1];
+        return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
     }
     return parts[parts.length - 1] || '—';
 }
@@ -243,7 +243,7 @@ export function extractVikunjaError(text, status) {
             .trim();
     }
     if (s.length > 240)
-        s = s.slice(0, 240) + '...';
+        s = `${s.slice(0, 240)}...`;
     return s || `Request failed with status ${status}`;
 }
 // toVikunjaId coerces a Vikunja resource id into a positive integer, or null

@@ -61,10 +61,10 @@ export class SessionsManager {
     setupEventListeners() {
         // Coder Selector Tabs
         document.querySelectorAll('.coder-tab').forEach((tab) => {
-            tab.addEventListener('click', (e) => {
+            tab.addEventListener('click', (_e) => {
                 document
                     .querySelector('.coder-tab.active')
-                    .classList.remove('active');
+                    ?.classList.remove('active');
                 tab.classList.add('active');
                 this.activeCoder = tab.getAttribute('data-coder');
                 this.loadSessions();
@@ -443,9 +443,7 @@ export class SessionsManager {
                 // historically framed royal names; reusing the motif
                 // here marks the worktree as "live / inscribed."
                 let hasLiveTab = false;
-                if (this.app &&
-                    this.app.tabManager &&
-                    this.app.tabManager.tabs) {
+                if (this.app?.tabManager?.tabs) {
                     const wtPathNorm = normalizePath(wt.path);
                     for (const t of this.app.tabManager.tabs.values()) {
                         if (t.cwd && normalizePath(t.cwd) === wtPathNorm) {
@@ -855,7 +853,7 @@ export class SessionsManager {
     }
     _openArgsInput(item, sess) {
         const existing = item.nextElementSibling;
-        if (existing && existing.classList.contains('args-input-row'))
+        if (existing?.classList.contains('args-input-row'))
             existing.remove();
         const row = document.createElement('div');
         row.className = 'args-input-row';
@@ -982,7 +980,7 @@ export class SessionsManager {
                 return;
             }
             this.wsModalSuggestions.classList.remove('hidden');
-            suggestions.forEach((sugg, idx) => {
+            suggestions.forEach((sugg, _idx) => {
                 const div = document.createElement('div');
                 div.className = 'suggestion-item';
                 div.innerText = sugg;
@@ -1011,7 +1009,7 @@ export class SessionsManager {
         });
     }
     async openReviewTab(sess) {
-        const paneId = 'review-' + sess.id;
+        const paneId = `review-${sess.id}`;
         if (this.app.tabManager.tabs.has(paneId)) {
             this.app.tabManager.switchTab(paneId);
             return;
