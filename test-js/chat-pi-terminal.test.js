@@ -462,6 +462,48 @@ describe('Pi RPC TabManager boundaries', () => {
         }
     });
 
+    it('derives Pi thinking button colors from the selected accent', () => {
+        const baseRules = extractRuleRecords(BASE_CSS);
+        const levels = {
+            off: {
+                color: 'var(--text-dim)',
+                'border-color': 'var(--bg-border)',
+            },
+            minimal: {
+                color: 'var(--accent-dim)',
+                'border-color': 'var(--accent-dim)',
+            },
+            low: {
+                color: 'var(--accent)',
+                'border-color': 'var(--accent)',
+            },
+            medium: {
+                color: 'var(--accent-bright)',
+                'border-color': 'var(--accent)',
+            },
+            high: {
+                color: 'var(--accent-bright)',
+                'border-color': 'var(--accent-bright)',
+                'box-shadow': '0 0 10px var(--accent-glow)',
+            },
+            xhigh: {
+                color: 'var(--accent-bright)',
+                'border-color': 'var(--accent-bright)',
+                'box-shadow': '0 0 12px var(--accent-glow)',
+            },
+        };
+        for (const [level, declarations] of Object.entries(levels)) {
+            expectRuleDeclarations(
+                baseRules,
+                `.pi-thinking-btn--${level}`,
+                declarations,
+            );
+        }
+        expect(BASE_CSS).not.toMatch(
+            /\.pi-thinking-btn--(?:minimal|low|medium|high|xhigh)[^{]*\{[^}]*#[0-9a-f]{6}/i,
+        );
+    });
+
     it('keeps Pi typography scoped and restores its narrow-screen sizing', () => {
         const baseRules = extractRuleRecords(BASE_CSS);
         const baseContracts = {
