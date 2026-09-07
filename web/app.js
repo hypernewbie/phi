@@ -1497,23 +1497,44 @@ export class App {
         try {
             if (btnElement) btnElement.classList.add('loading');
 
+            const openPasteDialog = async () => {
+                if (typeof this.openConfigEditor === 'function') {
+                    const values = await this.openConfigEditor({
+                        title: 'Paste config',
+                        subtitle: `Paste a config string starting with ${prefix}:`,
+                        fields: [
+                            {
+                                id: 'config',
+                                label: 'Config',
+                                multiline: true,
+                                placeholder: `${prefix}:...`,
+                            },
+                        ],
+                        submitLabel: 'Import',
+                    });
+                    return values?.config || '';
+                }
+                return typeof prompt === 'function'
+                    ? prompt(
+                          `Paste your config string here (starts with ${prefix}:):`,
+                      ) || ''
+                    : '';
+            };
+
             let configText = '';
             if (navigator.clipboard?.readText) {
                 try {
-                    configText = await navigator.clipboard.readText();
+                    configText = (await navigator.clipboard.readText()) || '';
                 } catch (e) {
                     console.warn(
-                        '[config] Browser blocked clipboard read, falling back to prompt',
+                        '[config] Clipboard read blocked, falling back to paste dialog',
                         e,
                     );
-                    configText = prompt(
-                        `Paste your config string here (starts with ${prefix}:):`,
-                    );
                 }
-            } else {
-                configText = prompt(
-                    `Paste your config string here (starts with ${prefix}:):`,
-                );
+            }
+
+            if (!configText?.trim()) {
+                configText = await openPasteDialog();
             }
 
             if (!configText) {
