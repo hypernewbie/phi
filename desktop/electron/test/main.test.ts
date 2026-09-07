@@ -332,7 +332,7 @@ describe('src/desktop.ts (step-5 controller receiver + global hotkey)', () => {
     expect(trayIdx).toBeLessThan(listenerIdx);
     expect(listenerIdx).toBeLessThan(ctorIdx);
     expect(desktopSource).toContain(
-      "app.getPath('userData') + '/profiles.json'",
+      "`${app.getPath('userData')}/profiles.json`",
     );
   });
 

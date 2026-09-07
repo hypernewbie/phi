@@ -760,7 +760,23 @@ export class KanbanManager {
         const addColBtn = container.querySelector('#kanban-add-column-btn');
         if (addColBtn) {
             addColBtn.addEventListener('click', async () => {
-                const title = (prompt('New column name:') || '').trim();
+                let title = '';
+                if (typeof this.app?.openConfigEditor === 'function') {
+                    const values = await this.app.openConfigEditor({
+                        title: 'New column name',
+                        fields: [
+                            {
+                                id: 'name',
+                                label: 'Column Name',
+                                placeholder: 'e.g. In Progress',
+                            },
+                        ],
+                        submitLabel: 'Create',
+                    });
+                    title = (values?.name || '').trim();
+                } else if (typeof prompt === 'function') {
+                    title = (prompt('New column name:') || '').trim();
+                }
                 if (!title) return;
                 try {
                     await this.createBucket(title, container);

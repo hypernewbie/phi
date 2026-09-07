@@ -42,7 +42,7 @@ export interface AppLike {
     terminalFontSize?: number;
     customFontName?: string;
     loadCustomFont?: () => Promise<void>;
-    openConfigEditor?: (...args: any[]) => void;
+    openConfigEditor?: (...args: any[]) => Promise<any>;
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;
 }

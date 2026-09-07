@@ -930,9 +930,27 @@ export class MarkdownManager {
     }
 
     async _promptAddDir(): Promise<void> {
-        const dir = prompt(
-            'Add markdown directory (relative to workspace, e.g. ./docs):',
-        );
+        let dir: string | undefined = '';
+        if (typeof this.app?.openConfigEditor === 'function') {
+            const values = await this.app.openConfigEditor({
+                title: 'Add markdown directory',
+                subtitle: 'Relative to workspace, e.g. ./docs',
+                fields: [
+                    {
+                        id: 'dir',
+                        label: 'Directory',
+                        placeholder: './docs',
+                    },
+                ],
+                submitLabel: 'Add',
+            });
+            dir = values?.dir;
+        } else if (typeof prompt === 'function') {
+            dir =
+                prompt(
+                    'Add markdown directory (relative to workspace, e.g. ./docs):',
+                ) ?? undefined;
+        }
         if (!dir?.trim()) return;
         try {
             await fetch('/api/config/markdown-dirs', {
@@ -1136,7 +1154,24 @@ export class MarkdownManager {
             return;
         }
         const suggested = this.markdownClipboard.name;
-        let name = prompt('Paste as filename:', suggested);
+        let name: string | null = null;
+        if (typeof this.app?.openConfigEditor === 'function') {
+            const values = await this.app.openConfigEditor({
+                title: 'Paste as filename',
+                fields: [
+                    {
+                        id: 'name',
+                        label: 'Filename',
+                        value: suggested,
+                        placeholder: 'filename.md',
+                    },
+                ],
+                submitLabel: 'Paste',
+            });
+            name = values?.name ?? null;
+        } else if (typeof prompt === 'function') {
+            name = prompt('Paste as filename:', suggested);
+        }
         if (!name?.trim()) return;
         name = name.trim();
 
@@ -1723,12 +1758,28 @@ body..."></textarea>
             console.warn('[md] clipboard read blocked', err);
         }
         if (!blob?.trim()) {
-            blob =
-                typeof prompt === 'function'
-                    ? prompt(
-                          'Paste your markdown bundle here (starts with PHIMD:):',
-                      ) || ''
-                    : '';
+            if (typeof this.app?.openConfigEditor === 'function') {
+                const values = await this.app.openConfigEditor({
+                    title: 'Paste markdown bundle',
+                    subtitle:
+                        'Paste your markdown bundle here (starts with PHIMD:):',
+                    fields: [
+                        {
+                            id: 'bundle',
+                            label: 'Bundle',
+                            multiline: true,
+                            placeholder: 'PHIMD:...',
+                        },
+                    ],
+                    submitLabel: 'Import',
+                });
+                blob = values?.bundle || '';
+            } else if (typeof prompt === 'function') {
+                blob =
+                    prompt(
+                        'Paste your markdown bundle here (starts with PHIMD:):',
+                    ) || '';
+            }
         }
         if (!blob?.trim()) {
             this.app.showToast('No bundle text to import', { type: 'info' });
