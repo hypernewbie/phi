@@ -245,7 +245,7 @@ describe('desktop active-server header state (mainview.js)', () => {
       (doc.getElementById('workspace-select') as HTMLSelectElement).value,
     ).toBe('/beta');
 
-    resolveAlpha?.({
+    (resolveAlpha as any)?.({
       hostname: 'ALPHA',
       workspaces: ['/alpha'],
       active_cwd: '/alpha',

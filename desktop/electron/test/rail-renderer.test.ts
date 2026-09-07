@@ -538,7 +538,7 @@ describe('rail entry context menu (src/renderer.ts)', () => {
       return d;
     });
     const item = doc.querySelectorAll('li.rail-item')[1] as HTMLElement;
-    const evt = new doc.defaultView.MouseEvent('contextmenu', {
+    const evt = new doc.defaultView!.MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
       screenX: 31,
@@ -599,7 +599,7 @@ describe('rail drag-and-drop reorder (src/renderer.ts)', () => {
     clientY: number,
   ): void {
     target.dispatchEvent(
-      new doc.defaultView.MouseEvent(type, {
+      new doc.defaultView!.MouseEvent(type, {
         bubbles: true,
         cancelable: true,
         clientY,
