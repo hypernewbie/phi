@@ -140,7 +140,7 @@ export class TabManager {
         this._piRpcModelExpandedGroup = null;
         this._piRpcFavorites = null;
         this._piRpcFavoritesLoaded = false;
-        this._piRpcModelAllModelsAutoOpened = false;
+        this._piRpcModelAutoOpened = false;
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
             (paneId, status) => {
                 // Model change Invalidates thinking-level cache (different model → different set)
@@ -2602,7 +2602,7 @@ export class TabManager {
             this._piRpcModelQuery = '';
             this._piRpcModels = null;
             this._piRpcModelExpandedGroup = null;
-            this._piRpcModelAllModelsAutoOpened = false;
+            this._piRpcModelAutoOpened = false;
             const sticky = document.createElement('div');
             sticky.className = 'pi-rpc-model-sticky';
             const header = document.createElement('div');
@@ -2869,17 +2869,43 @@ export class TabManager {
                 alwaysExpanded: true,
             });
         }
-        sections.push({
-            id: 'all-models',
-            label: 'All Models',
-            rows: favoriteRows.length > 0 ? restRows : models,
-            alwaysExpanded: false,
-        });
-        // Auto-open All Models the first time the picker renders with no
-        // favorites, so the user does not have to click to see anything.
-        if (favoriteRows.length === 0 && !this._piRpcModelAllModelsAutoOpened) {
-            this._piRpcModelExpandedGroup = 'all-models';
-            this._piRpcModelAllModelsAutoOpened = true;
+        // Group the remaining models by provider in first-seen order, so
+        // the first screen shows provider sections instead of a flat list.
+        const providerSource = favoriteRows.length > 0 ? restRows : models;
+        const groupByProvider = new Map();
+        for (const model of providerSource) {
+            let rows = groupByProvider.get(model.provider);
+            if (!rows) {
+                rows = [];
+                groupByProvider.set(model.provider, rows);
+            }
+            rows.push(model);
+        }
+        for (const [provider, rows] of groupByProvider) {
+            sections.push({
+                id: `provider:${provider.replace(/\s+/g, '-')}`,
+                label: provider,
+                rows,
+                alwaysExpanded: false,
+            });
+        }
+        // Auto-open the active model's provider group the first time the
+        // picker renders with no favorites (first provider otherwise), so
+        // the user does not have to click to see anything.
+        if (
+            favoriteRows.length === 0 &&
+            !this._piRpcModelAutoOpened &&
+            sections.length > 0
+        ) {
+            this._piRpcModelAutoOpened = true;
+            let openId = sections[0].id;
+            if (activeModel) {
+                const hit = sections.find(
+                    (section) => section.label === activeModel.provider,
+                );
+                if (hit) openId = hit.id;
+            }
+            this._piRpcModelExpandedGroup = openId;
         }
         // Auto-expand the first section with a hit while the user is
         // searching. The user's manual expansion choice is overridden;
