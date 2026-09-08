@@ -712,8 +712,8 @@ describe('Pi RPC TabManager boundaries', () => {
         tm.renderPresets('pi-rpc');
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
-        // With no favorites and no modelPresets, the picker renders a single
-        // "All Models" group that is auto-expanded — nothing to toggle.
+        // With no favorites and no modelPresets, the picker renders
+        // provider groups, auto-expanding the first — nothing to toggle.
         expect(rpcChatModels).toHaveBeenCalledWith(tab.paneId);
         expect(dropup.textContent).toContain('Model · current-model');
         expect(dropup.textContent).toContain('Friendly model');
@@ -768,7 +768,8 @@ describe('Pi RPC TabManager boundaries', () => {
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
 
-        // With no favorites, only "All Models" exists and is expanded.
+        // With no favorites, provider groups render; the first (remote)
+        // is auto-expanded and holds both remote rows. local stays collapsed.
         const allGroup = dropup.querySelector('.pi-rpc-model-group');
         expect(allGroup).not.toBeNull();
         expect(
@@ -776,7 +777,13 @@ describe('Pi RPC TabManager boundaries', () => {
                 .querySelector('.pi-rpc-model-group-toggle')
                 .getAttribute('aria-expanded'),
         ).toBe('true');
-        expect(allGroup.querySelectorAll('.pi-rpc-model-row')).toHaveLength(3);
+        expect(allGroup.querySelectorAll('.pi-rpc-model-row')).toHaveLength(2);
+        const localGroup = dropup.querySelectorAll('.pi-rpc-model-group')[1];
+        expect(
+            localGroup
+                .querySelector('.pi-rpc-model-group-toggle')
+                .getAttribute('aria-expanded'),
+        ).toBe('false');
 
         const search = dropup.querySelector('.pi-rpc-model-search');
         search.value = 'xyzzy';
@@ -900,14 +907,14 @@ describe('Pi RPC TabManager boundaries', () => {
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
 
-        // With no favorites and only an All Models section, it starts open.
+        // With no favorites, the first provider section starts open.
         expect(
             dropup
                 .querySelector('.pi-rpc-model-group-toggle')
                 .getAttribute('aria-expanded'),
         ).toBe('true');
 
-        // Manually collapse All Models.
+        // Manually collapse the remote provider group.
         dropup
             .querySelector('.pi-rpc-model-group-toggle')
             .dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -917,7 +924,7 @@ describe('Pi RPC TabManager boundaries', () => {
                 .getAttribute('aria-expanded'),
         ).toBe('false');
 
-        // Typing a query auto-expands the (only) section.
+        // Typing a query auto-expands the first section with a hit.
         const search = dropup.querySelector('.pi-rpc-model-search');
         search.value = 'friendly';
         search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -941,7 +948,7 @@ describe('Pi RPC TabManager boundaries', () => {
         ).toBe('false');
     });
 
-    it('seeds favorites from model_presets.pi on first open and renders Favorites + All Models', async () => {
+    it('seeds favorites from model_presets.pi on first open and renders Favorites + provider groups', async () => {
         const row = document.createElement('div');
         const dropup = document.createElement('div');
         dropup.id = 'pi-rpc-model-dropup';
@@ -976,7 +983,7 @@ describe('Pi RPC TabManager boundaries', () => {
         await Promise.resolve();
 
         const groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
-        expect(groups).toHaveLength(2);
+        expect(groups).toHaveLength(3);
         expect(
             groups[0].querySelector('.pi-rpc-model-group-label').textContent,
         ).toContain('Favorites (1)');
@@ -988,12 +995,15 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(groups[0].querySelector('.pi-rpc-model-row')).not.toBeNull();
         expect(
             groups[1].querySelector('.pi-rpc-model-group-label').textContent,
-        ).toContain('All Models (2)');
+        ).toContain('remote (1)');
         expect(
             groups[1]
                 .querySelector('.pi-rpc-model-group-toggle')
                 .getAttribute('aria-expanded'),
         ).toBe('false');
+        expect(
+            groups[2].querySelector('.pi-rpc-model-group-label').textContent,
+        ).toContain('local (1)');
         // Seeded favorites were also persisted to localStorage.
         expect(localStorage.getItem('phi.piRpc.favorites')).toBe(
             JSON.stringify(['remote/model-id']),
@@ -1030,8 +1040,8 @@ describe('Pi RPC TabManager boundaries', () => {
         row.querySelector('.pi-rpc-model-trigger').click();
         await Promise.resolve();
 
-        // No favorites yet — only All Models with both rows, both stars empty.
-        let allRows = [...dropup.querySelectorAll('.pi-rpc-model-row')];
+        // No favorites yet — one provider group holds both rows, stars empty.
+        const allRows = [...dropup.querySelectorAll('.pi-rpc-model-row')];
         expect(allRows).toHaveLength(2);
         expect([
             ...dropup.querySelectorAll('.pi-rpc-model-star.is-favorite'),
@@ -1042,7 +1052,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(friendlyStar.getAttribute('aria-pressed')).toBe('false');
         friendlyStar.click();
 
-        // Now: Favorites (1) + All Models (1). The star shows pressed.
+        // Now: Favorites (1) + remote (1). The star shows pressed.
         let groups = [...dropup.querySelectorAll('.pi-rpc-model-group')];
         expect(groups).toHaveLength(2);
         expect(groups[0].querySelector('.pi-rpc-model-row')).not.toBeNull();
@@ -1062,7 +1072,7 @@ describe('Pi RPC TabManager boundaries', () => {
         expect(groups).toHaveLength(1);
         expect(
             groups[0].querySelector('.pi-rpc-model-group-label').textContent,
-        ).toContain('All Models (2)');
+        ).toContain('remote (2)');
         expect(JSON.parse(localStorage.getItem('phi.piRpc.favorites'))).toEqual(
             [],
         );
