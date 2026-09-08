@@ -220,6 +220,7 @@ func resetSession(ctx context.Context, mgr *rpc.Manager, inst *rpc.Instance) (an
 	// Pi has accepted the reset. The old path and transcript are invalid now;
 	// the subsequent get_state is allowed to repopulate only a fresh path.
 	mgr.UpdateSessionPath(inst, "")
+	mgr.ClearPublicSessionPath(inst)
 	inst.ResetTranscript()
 	fresh, err := refreshState(ctx, inst)
 	if err != nil {

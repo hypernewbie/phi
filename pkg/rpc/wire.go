@@ -188,6 +188,9 @@ func (m *Manager) applyPiResponse(inst *Instance, resp piResponse) {
 	metadata := applyPiMetadata(inst, resp)
 	if resp.Command == "get_state" && metadata.sessionFileSet {
 		m.UpdateSessionPath(inst, metadata.sessionFile)
+		// An existing (resumed) session publishes its path immediately; a
+		// fresh session's future file publishes nothing until Pi writes it.
+		m.promoteSessionPath(inst)
 	}
 }
 
@@ -294,6 +297,11 @@ func (m *Manager) handlePiEvent(inst *Instance, line []byte, ev piEvent) {
 	case "agent_end":
 		// Pi's settled event, not agent_end, owns the end of the active turn.
 	case "agent_settled":
+		// Pi has appended the finalized messages to its session file by the
+		// time it settles, so the raw path (when present) is now file-backed.
+		// Publish it before the idle-state update so subscribers that act on
+		// the busy=false boundary already see the resume path.
+		m.promoteSessionPath(inst)
 		st := inst.StateCopy()
 		if st.Busy {
 			st.Busy = false

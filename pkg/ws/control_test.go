@@ -1440,13 +1440,20 @@ func TestControlResetCancellationPreservesTranscriptAndPath(t *testing.T) {
 
 func TestControlSuccessfulResetClearsAndRefreshesNewSessionPath(t *testing.T) {
 	child := newControlFakeChild()
+	// Seed a published resume path for the old session: the bootstrap and
+	// reset-preflight get_state responses name an existing regular file, so
+	// the manager promotes it into State.SessionPath before the reset.
+	oldSession := filepath.Join(t.TempDir(), "old.jsonl")
+	if err := os.WriteFile(oldSession, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var stateCalls atomic.Int32
 	var newSessionCalls atomic.Int32
 	respondControlCommands(child, func(command map[string]any) (any, bool, string) {
 		switch command["type"] {
 		case "get_state":
 			call := stateCalls.Add(1)
-			path := "/sessions/old.jsonl"
+			path := oldSession
 			if call >= 3 {
 				path = "/sessions/new.jsonl"
 			}
@@ -1497,7 +1504,13 @@ func TestControlSuccessfulResetClearsAndRefreshesNewSessionPath(t *testing.T) {
 	if !payload.Reset || payload.State.Model != "fresh-model" || len(inst.SnapshotCopy().Messages) != 0 || inst.SessionPathCopy() != "/sessions/new.jsonl" {
 		t.Fatalf("reset did not clear/refresh canonical state: payload=%+v path=%q snapshot=%+v", payload, inst.SessionPathCopy(), inst.SnapshotCopy())
 	}
-	oldLease, err := mgr.BeginSpawn(context.Background(), rpc.SpawnOptions{Cwd: "/w/reset", SessionPath: "/sessions/old.jsonl"})
+	// The old public resume path is gone and the new one is not published:
+	// /sessions/new.jsonl does not exist as a regular file, so a reload
+	// after Clear must open a fresh chat instead of resuming either path.
+	if state := inst.StateCopy(); state.SessionPath != "" {
+		t.Fatalf("successful reset kept a published resume path: %q", state.SessionPath)
+	}
+	oldLease, err := mgr.BeginSpawn(context.Background(), rpc.SpawnOptions{Cwd: "/w/reset", SessionPath: oldSession})
 	if err != nil || !oldLease.Created() {
 		t.Fatalf("old session path was still deduplicated after reset: lease=%#v err=%v", oldLease, err)
 	}

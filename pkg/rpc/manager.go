@@ -390,6 +390,48 @@ func (m *Manager) UpdateSessionPath(inst *Instance, path string) {
 	}
 }
 
+// promoteSessionPath publishes inst's raw session path into the public
+// State.SessionPath only when os.Stat reports an existing regular file.
+// Pi reports a future sessionFile in get_state before its first assistant
+// message writes the file; that future path must never become a browser
+// resume path. The raw Instance.SessionPathCopy() value is never replaced,
+// and an empty, missing, or nonregular path leaves the public state as is.
+func (m *Manager) promoteSessionPath(inst *Instance) {
+	if inst == nil {
+		return
+	}
+	raw := inst.SessionPathCopy()
+	if raw == "" {
+		return
+	}
+	if info, err := os.Stat(raw); err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	st := inst.StateCopy()
+	if st.SessionPath == raw {
+		return
+	}
+	st.SessionPath = raw
+	inst.SetState(st)
+	inst.Emit(EvtStateChanged, nil, st)
+}
+
+// ClearPublicSessionPath removes the published State.SessionPath resume
+// path. It must not alter the raw live-child ownership path, which Pi
+// repopulates on its next get_state response.
+func (m *Manager) ClearPublicSessionPath(inst *Instance) {
+	if inst == nil {
+		return
+	}
+	st := inst.StateCopy()
+	if st.SessionPath == "" {
+		return
+	}
+	st.SessionPath = ""
+	inst.SetState(st)
+	inst.Emit(EvtStateChanged, nil, st)
+}
+
 // subagentStep and subagentTranscript shape the op response: the run's
 // steps with their fork-session transcripts merged in message order.
 type subagentStep struct {
