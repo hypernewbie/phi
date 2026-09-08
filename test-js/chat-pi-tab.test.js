@@ -36,14 +36,60 @@ describe('openPiRpcChatTab', () => {
         expect(mountRpcChat).toHaveBeenCalledTimes(3);
         const mountPaneIds = mountRpcChat.mock.calls.map((call) => call[0]);
         expect(new Set(mountPaneIds)).toEqual(new Set(paneIds));
-        expect(createTab.mock.calls[0]).toMatchObject([
+        expect(createTab.mock.calls[0]).toEqual([
             paneIds[0],
             '',
             'Pi RPC · demo',
             'pi-rpc',
             '',
             '/work/demo',
+            true,
+            false,
+            '',
+            null,
         ]);
+    });
+
+    it('passes a resumed session path and a fresh null as the final createTab argument', () => {
+        const tabs = new Map();
+        const createTab = vi.fn((paneId) => {
+            tabs.set(paneId, { termContainer: document.createElement('div') });
+        });
+        const manager = { tabs, createTab, switchTab: vi.fn() };
+        const resumedPath = '/work/demo/.pi/resumed.jsonl';
+
+        openPiRpcChatTab(manager, '/work/demo', resumedPath, 'Resumed');
+        openPiRpcChatTab(manager, '/work/demo');
+
+        // Resumed tab carries its exact session path; fresh tab carries
+        // an explicit null so Clear semantics stay distinguishable from
+        // a legacy path-based pane ID.
+        expect(createTab).toHaveBeenNthCalledWith(
+            1,
+            `pi-rpc:session:${encodeURIComponent(resumedPath)}`,
+            '',
+            'Resumed',
+            'pi-rpc',
+            '',
+            '/work/demo',
+            true,
+            false,
+            '',
+            resumedPath,
+        );
+        expect(createTab).toHaveBeenNthCalledWith(
+            2,
+            expect.stringMatching(/^pi-rpc:[0-9a-f-]+$/),
+            '',
+            'Pi RPC · demo',
+            'pi-rpc',
+            '',
+            '/work/demo',
+            true,
+            false,
+            '',
+            null,
+        );
     });
 
     it('uses Phi terminal font settings for the Pi RPC container', () => {
@@ -93,6 +139,10 @@ describe('openPiRpcChatTab', () => {
             'pi-rpc',
             '',
             '/work/demo',
+            true,
+            false,
+            '',
+            firstPath,
         );
         expect(createTab).toHaveBeenNthCalledWith(
             2,
@@ -102,6 +152,10 @@ describe('openPiRpcChatTab', () => {
             'pi-rpc',
             '',
             '/work/demo',
+            true,
+            false,
+            '',
+            secondPath,
         );
         expect(switchTab).toHaveBeenCalledWith(
             `pi-rpc:session:${encodeURIComponent(firstPath)}`,

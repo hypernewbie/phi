@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -203,8 +205,154 @@ func TestGetStateMetadataUpdatesBusyQueueAndManagerSessionPath(t *testing.T) {
 	if inst.SessionPathCopy() != "/sessions/fresh.jsonl" {
 		t.Fatalf("manager did not own session path update: %q", inst.SessionPathCopy())
 	}
+	// /sessions/fresh.jsonl does not exist: Pi's future path must stay raw
+	// ownership only and must not be published as a resume path.
+	if state.SessionPath != "" {
+		t.Fatalf("nonexistent session file published as resume path: %q", state.SessionPath)
+	}
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("nonexistent session file published an event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
 	if _, err := m.Lookup(inst.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestGetStatePromotesPersistedSessionFile pins the resume-path contract
+// for an existing session: a get_state response whose sessionFile names a
+// regular file updates the raw manager path AND publishes State.SessionPath.
+func TestGetStatePromotesPersistedSessionFile(t *testing.T) {
+	_, fp, inst, sub := wireManagerFixture(t)
+	sessionFile := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	if err := os.WriteFile(sessionFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wireResponse(t, fp, inst, "get_state", fmt.Sprintf(`{"sessionFile":%q,"isStreaming":false,"isCompacting":false}`, sessionFile))
+	// First stateChanged is the canonical metadata merge (no path yet);
+	// the promotion follows as its own stateChanged. Instance state is
+	// already final by observation time, so the split is asserted on the
+	// event payloads, not on StateCopy.
+	metadata := nextWireEvent(t, sub)
+	if metadata.Evt != EvtStateChanged {
+		t.Fatalf("metadata did not publish stateChanged: %+v", metadata)
+	}
+	if state, ok := metadata.Data.(State); !ok || state.SessionPath != "" {
+		t.Fatalf("metadata merge published a resume path: %+v", metadata.Data)
+	}
+	event := nextWireEvent(t, sub)
+	if event.Evt != EvtStateChanged {
+		t.Fatalf("promotion did not publish stateChanged: %+v", event)
+	}
+	state := inst.StateCopy()
+	if state.SessionPath != sessionFile {
+		t.Fatalf("existing session file not published: %q", state.SessionPath)
+	}
+	if inst.SessionPathCopy() != sessionFile {
+		t.Fatalf("manager did not own session path update: %q", inst.SessionPathCopy())
+	}
+}
+
+// TestAgentSettledPromotesPersistedSessionPath covers the fresh-session
+// resume flow: Pi reports a future sessionFile in get_state (nothing
+// published), writes the file with its first finalized messages, and only
+// then settles. agent_settled must publish the path before the busy=false
+// stateChanged so subscribers see the resume identity at the idle boundary.
+func TestAgentSettledPromotesPersistedSessionPath(t *testing.T) {
+	_, fp, inst, sub := wireManagerFixture(t)
+	sessionFile := filepath.Join(t.TempDir(), "fresh.jsonl")
+	wireResponse(t, fp, inst, "get_state", fmt.Sprintf(`{"sessionFile":%q,"isStreaming":false,"isCompacting":false}`, sessionFile))
+	nextWireEvent(t, sub) // metadata stateChanged
+	if state := inst.StateCopy(); state.SessionPath != "" {
+		t.Fatalf("future session file published before Pi wrote it: %q", state.SessionPath)
+	}
+	// Pi appends the finalized first reply, then settles.
+	if err := os.WriteFile(sessionFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_start"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("agent_start did not publish stateChanged: %+v", event)
+	}
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	promoted := nextWireEvent(t, sub)
+	if promoted.Evt != EvtStateChanged {
+		t.Fatalf("settled promotion did not publish stateChanged: %+v", promoted)
+	}
+	if state, ok := promoted.Data.(State); !ok || state.SessionPath != sessionFile || !state.Busy {
+		t.Fatalf("settled promotion missing resume path or not pre-idle: %+v", promoted.Data)
+	}
+	idle := nextWireEvent(t, sub)
+	if idle.Evt != EvtStateChanged {
+		t.Fatalf("agent_settled did not clear busy state: %+v", idle)
+	}
+	state := inst.StateCopy()
+	if state.Busy || state.SessionPath != sessionFile {
+		t.Fatalf("settled state = %+v", state)
+	}
+	// Consume the settled stats refresh so the follow-up goroutine exits.
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "get_session_stats" {
+			t.Fatalf("unexpected settled refresh: %#v", command)
+		}
+		id, _ := command["id"].(string)
+		line := fmt.Sprintf(`{"type":"response","id":%q,"command":"get_session_stats","success":true,"data":{}}`+"\n", id)
+		if _, err := fp.stdoutW.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent_settled did not refresh stats")
+	}
+}
+
+// TestAgentSettledMissingSessionFileClearsBusyWithoutResumePath pins the
+// no-file interval: a session Pi has not written yet must clear Busy at the
+// settle boundary without publishing a resume path or an extra event.
+func TestAgentSettledMissingSessionFileClearsBusyWithoutResumePath(t *testing.T) {
+	_, fp, inst, sub := wireManagerFixture(t)
+	wireResponse(t, fp, inst, "get_state", `{"sessionFile":"/sessions/never-written.jsonl","isStreaming":true,"isCompacting":false}`)
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("metadata did not publish stateChanged: %+v", event)
+	}
+	if state := inst.StateCopy(); !state.Busy {
+		t.Fatal("streaming metadata must keep the session busy")
+	}
+	if _, err := fp.stdoutW.Write([]byte(`{"type":"agent_settled"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if event := nextWireEvent(t, sub); event.Evt != EvtStateChanged {
+		t.Fatalf("agent_settled did not publish stateChanged: %+v", event)
+	}
+	state := inst.StateCopy()
+	if state.Busy {
+		t.Fatal("agent_settled did not clear Busy")
+	}
+	if state.SessionPath != "" {
+		t.Fatalf("missing session file published a resume path: %q", state.SessionPath)
+	}
+	select {
+	case event := <-sub.Channel():
+		t.Fatalf("missing session file published an extra event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case command := <-fp.commands:
+		if command["type"] != "get_session_stats" {
+			t.Fatalf("unexpected settled refresh: %#v", command)
+		}
+		id, _ := command["id"].(string)
+		line := fmt.Sprintf(`{"type":"response","id":%q,"command":"get_session_stats","success":true,"data":{}}`+"\n", id)
+		if _, err := fp.stdoutW.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent_settled did not refresh stats")
 	}
 }
 

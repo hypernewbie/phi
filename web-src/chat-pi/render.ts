@@ -15,6 +15,9 @@ export interface PiRpcStatus {
     cacheReadTokens?: number | null;
     cacheWriteTokens?: number | null;
     skills?: string[] | null;
+    /** Backend-published resume path. Empty until Pi's session file
+     * exists; the backend only ever publishes a file-backed path. */
+    sessionPath?: string | null;
 }
 
 export interface PiRpcStatusDisplay {

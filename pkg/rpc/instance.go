@@ -35,6 +35,12 @@ type State struct {
 	Busy                bool     `json:"busy"`
 	Status              string   `json:"status"` // "live" | "exited"
 	QueueDepth          int      `json:"queueDepth"`
+	// SessionPath is the published resume path: a nonempty value
+	// identifies an existing regular Pi session file that Phi can
+	// reopen after a reload. The manager promotes it from the raw
+	// Instance.SessionPathCopy() value only after the file exists;
+	// the raw value itself may point at a file Pi has not written yet.
+	SessionPath string `json:"sessionPath,omitempty"`
 }
 
 // Message is one transcript entry; message_end.message is authoritative.

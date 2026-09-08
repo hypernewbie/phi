@@ -455,6 +455,75 @@ describe('Pi RPC transcript controller', () => {
         expect(root.textContent).not.toContain('spawned');
     });
 
+    it('retains the backend sessionPath and drops it only on an accepted reset', async () => {
+        const root = document.createElement('div');
+        const wire = fakeClient();
+        const statuses = [];
+        const chat = mountChatPi(
+            root,
+            '/work/demo',
+            wire.client,
+            undefined,
+            (status) => {
+                if (status) statuses.push(status);
+            },
+        );
+        wire.emit({
+            t: 'res',
+            id: 'sp',
+            ok: true,
+            data: {
+                sid: 's1',
+                snapshot: { lastSeq: 0, messages: [] },
+                state: { sessionPath: '/w/.pi/live.jsonl' },
+            },
+        });
+        await Promise.resolve();
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/.pi/live.jsonl');
+        // A settle-boundary stateChanged promotes a newly published path...
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 1,
+            evt: 'stateChanged',
+            data: { sessionPath: '/w/.pi/settled.jsonl' },
+        });
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/.pi/settled.jsonl');
+        // ...and an empty value must not wipe it.
+        wire.emit({
+            t: 'evt',
+            sid: 's1',
+            seq: 2,
+            evt: 'stateChanged',
+            data: { sessionPath: '' },
+        });
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/.pi/settled.jsonl');
+
+        // A cancelled reset keeps the cached status path.
+        const cancelled = chat.resetChat();
+        wire.emit({
+            t: 'res',
+            id: 'reset',
+            ok: true,
+            data: { cancelled: true },
+        });
+        await cancelled;
+        expect(statuses.at(-1)?.sessionPath).toBe('/w/.pi/settled.jsonl');
+
+        // An accepted reset removes it before the promise resolves, so a
+        // later control repaint cannot promote the old path again.
+        const accepted = chat.resetChat();
+        wire.emit({
+            t: 'res',
+            id: 'reset',
+            ok: true,
+            data: { cancelled: false, reset: true },
+        });
+        await accepted;
+        expect(statuses.at(-1)?.sessionPath).toBeUndefined();
+        expect('sessionPath' in statuses.at(-1)).toBe(false);
+    });
+
     it('keeps typed metadata across error-only and malformed state events', async () => {
         const root = document.createElement('div');
         const wire = fakeClient();

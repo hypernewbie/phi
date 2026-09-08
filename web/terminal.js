@@ -143,6 +143,7 @@ export class TabManager {
         this._piRpcModelAutoOpened = false;
         this._piRpcStatusUnsubscribe = subscribePiRpcStatus(
             (paneId, status) => {
+                this._promotePiRpcSessionPath(paneId, status);
                 // Model change Invalidates thinking-level cache (different model → different set)
                 const m = status?.model ?? getPiRpcStatus(paneId)?.model ?? '';
                 const prev = this._piLastModel?.get(paneId);
@@ -303,14 +304,34 @@ export class TabManager {
                     cwd: t.cwd || '',
                     title: t.title || '',
                     workspace: t.workspace || '',
-                    sessionPath: t.paneId.startsWith('pi-rpc:session:')
-                        ? decodeURIComponent(
-                              t.paneId.slice('pi-rpc:session:'.length),
-                          )
-                        : undefined,
+                    sessionPath: this._piRpcStoredSessionPath(t),
                 }));
             localStorage.setItem('phi_pi_rpc_tabs', JSON.stringify(piTabs));
         } catch {}
+    }
+
+    // Serialize a pi-rpc tab's resume path. An explicit nonempty string is
+    // exact; explicit null means Clear removed the path and must NOT fall
+    // back to the pane ID. Only legacy in-memory tabs that predate the
+    // sessionPath property still decode from pi-rpc:session:<path> panes.
+    _piRpcStoredSessionPath(tab) {
+        if (tab.sessionPath) return tab.sessionPath;
+        if (tab.sessionPath === null) return null;
+        return tab.paneId.startsWith('pi-rpc:session:')
+            ? decodeURIComponent(tab.paneId.slice('pi-rpc:session:'.length))
+            : null;
+    }
+
+    // A backend-published sessionPath is file-backed by the manager
+    // contract: promote it onto the matching tab and persist, saving only
+    // when the stored path actually changes.
+    _promotePiRpcSessionPath(paneId, status) {
+        const path = status?.sessionPath;
+        if (!path) return;
+        const tab = this.tabs?.get(paneId);
+        if (!tab || tab.coder !== 'pi-rpc' || tab.sessionPath === path) return;
+        tab.sessionPath = path;
+        this.savePiRpcTabs();
     }
 
     restorePiRpcTabs() {
@@ -325,6 +346,13 @@ export class TabManager {
                 const title =
                     t.title ||
                     `Pi RPC · ${t.cwd ? t.cwd.split('/').pop() : t.paneId}`;
+                // Only a stored nonempty path resumes; null (Clear) or a
+                // legacy missing field mounts a fresh chat. The path is
+                // passed into createTab before its first savePiRpcTabs call.
+                const sessionPath =
+                    typeof t.sessionPath === 'string' && t.sessionPath
+                        ? t.sessionPath
+                        : null;
                 this.createTab(
                     t.paneId,
                     '',
@@ -332,6 +360,10 @@ export class TabManager {
                     'pi-rpc',
                     t.workspace || '',
                     t.cwd || '',
+                    true,
+                    false,
+                    '',
+                    sessionPath,
                 );
                 const tab = this.tabs.get(t.paneId);
                 if (!tab) continue;
@@ -347,12 +379,12 @@ export class TabManager {
                     this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
                 tab.termContainer.style.fontSize = `${fontSize}px`;
                 try {
-                    if (t.sessionPath)
+                    if (sessionPath)
                         mountRpcChat(
                             t.paneId,
                             tab.termContainer,
                             t.cwd || '',
-                            t.sessionPath,
+                            sessionPath,
                         );
                     else mountRpcChat(t.paneId, tab.termContainer, t.cwd || '');
                 } catch (e) {
@@ -1355,6 +1387,7 @@ export class TabManager {
         pinned = true,
         marked = false,
         initialCmd = '',
+        piRpcSessionPath = null,
     ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
@@ -1474,6 +1507,11 @@ export class TabManager {
                 pinned: !!pinned,
                 marked: !!marked,
             };
+            if (coder === 'pi-rpc') {
+                // Durable resume identity: the exact Pi session path for a
+                // resumed tab, null for a fresh tab (Clear also sets null).
+                tabInfo.sessionPath = piRpcSessionPath || null;
+            }
             this.tabs.set(paneId, tabInfo);
             this.switchTab(paneId);
             if (coder === 'pi-rpc') this.savePiRpcTabs();
@@ -2574,6 +2612,21 @@ export class TabManager {
         };
     }
 
+    // A cancelled or rejected Clear keeps the existing resume path; only
+    // an accepted reset drops it, together with the per-chat history.
+    _onPiRpcResetResult(paneId, data) {
+        if (data?.cancelled === true) return;
+        // A fresh session has no per-chat history.
+        const resetTab = this.tabs.get(paneId);
+        if (resetTab) {
+            resetTab.promptHistory = [];
+            resetTab.chatHistoryCursor = -1;
+            resetTab.chatHistoryPreCycleValue = undefined;
+            resetTab.sessionPath = null;
+        }
+        this.savePiRpcTabs();
+    }
+
     _piRpcError(error, title = 'Pi RPC') {
         const message =
             error instanceof Error
@@ -3165,14 +3218,7 @@ export class TabManager {
             }
             Promise.resolve(resetResult)
                 .then((data) => {
-                    if (data?.cancelled === true) return;
-                    // A fresh session has no per-chat history.
-                    const resetTab = this.tabs.get(paneId);
-                    if (resetTab) {
-                        resetTab.promptHistory = [];
-                        resetTab.chatHistoryCursor = -1;
-                        resetTab.chatHistoryPreCycleValue = undefined;
-                    }
+                    this._onPiRpcResetResult(paneId, data);
                 })
                 .catch((error) => this._piRpcError(error, 'Reset Chat'))
                 .finally(() => {

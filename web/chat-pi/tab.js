@@ -27,7 +27,20 @@ export function openPiRpcChatTab(tabManager, cwd, sessionPath, sessionTitle) {
             ? sessionTitle
             : `Pi RPC · ${getLastFolderName(cwd) || cwd}`;
     const workspace = tabManager.app?.sessionsManager?.activeWorkspace ?? '';
-    tabManager.createTab(paneId, '', title, 'pi-rpc', workspace, cwd);
+    // The final argument carries the durable resume path: the exact
+    // session path for a resumed tab, null for a fresh tab.
+    tabManager.createTab(
+        paneId,
+        '',
+        title,
+        'pi-rpc',
+        workspace,
+        cwd,
+        true,
+        false,
+        '',
+        sessionPath || null,
+    );
     const tab = tabManager.tabs.get(paneId);
     if (!tab) return;
     applyTerminalFont(tab.termContainer, tabManager.app);

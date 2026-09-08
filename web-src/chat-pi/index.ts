@@ -63,6 +63,14 @@ function mergeState(status: PiRpcStatus, state: unknown): boolean {
             changed = true;
         }
     }
+    // The backend publishes sessionPath only after the session file
+    // exists, and never clears it through state; an empty value must
+    // not wipe a previously promoted path. Same set-and-mark shape as
+    // every other merged field.
+    if (typeof source.sessionPath === 'string' && source.sessionPath) {
+        status.sessionPath = source.sessionPath;
+        changed = true;
+    }
     const numbers = [
         'inputTokens',
         'outputTokens',
@@ -805,6 +813,13 @@ export function mountChatPi(
                 if (data?.cancelled === true) return data;
                 if (data?.reset !== true)
                     throw new Error('Pi reset was not accepted');
+                // Clear removed the resume identity: drop the cached
+                // status path before the reset promise resolves so a later
+                // control repaint cannot promote the old path again.
+                if (localStatus.sessionPath !== undefined) {
+                    delete localStatus.sessionPath;
+                    notifyStatus();
+                }
                 if (typeof data.stateWarning === 'string' && data.stateWarning)
                     status.textContent = `Warning: ${data.stateWarning}`;
                 // The sequenced transcriptReset event is the only successful clear
