@@ -120,11 +120,11 @@ export class FileTreeManager {
         actionBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            this._showContextMenu(rel, actionBtn);
+            this._showContextMenu(entry, rel, actionBtn);
         });
         item.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            this._showContextMenu(rel, actionBtn);
+            this._showContextMenu(entry, rel, actionBtn);
         });
         row.appendChild(item);
         row.appendChild(actionBtn);
@@ -163,16 +163,31 @@ export class FileTreeManager {
             this.app.tabManager.adjustInputHeight();
         }
     }
+    /** Open the file in the markdown modal via MarkdownManager.previewFile.
+     *  The cwd snapshot is taken at click time so a mid-modal rail switch
+     *  doesn't resolve the relative path against the new server's cwd. */
+    _previewFile(rel) {
+        const md = this.app.markdownManager;
+        if (!md)
+            return;
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        const name = rel.slice(Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\')) + 1);
+        void md.previewFile({ path: rel, name }, cwd);
+    }
     _createContextMenu() {
         const menu = document.createElement('div');
         menu.className = 'md-context-menu ft-context-menu hidden';
         document.body.appendChild(menu);
         return menu;
     }
-    _showContextMenu(rel, anchorEl) {
+    _showContextMenu(entry, rel, anchorEl) {
         if (!this.contextMenuEl)
             return;
         this.contextMenuEl.innerHTML = '';
+        // Preview is a file-only action; directories have nothing to
+        // preview, and the click-toggle-dir gesture is what they get.
+        // Single-click Insert stays unchanged (architect's review: do
+        // not replace single-click behavior with preview).
         const actions = [
             {
                 icon: '@',
@@ -181,6 +196,14 @@ export class FileTreeManager {
                 handler: () => this._insertPath(rel),
             },
         ];
+        if (!entry.dir) {
+            actions.push({
+                icon: '◳',
+                label: 'Preview',
+                className: 'preview',
+                handler: () => this._previewFile(rel),
+            });
+        }
         actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
