@@ -55,6 +55,7 @@ const WEB_JS_MODULES = [
   'header-state.js',
   'theme.js',
   'prepaint.js',
+  'file-viewer.js',
 ];
 
 /** Browser vendor subdirectory the module graph imports (auth.js imports

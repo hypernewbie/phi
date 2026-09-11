@@ -143,12 +143,12 @@ export class FileTreeManager {
         actionBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            this._showContextMenu(rel, actionBtn);
+            this._showContextMenu(entry, rel, actionBtn);
         });
 
         item.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            this._showContextMenu(rel, actionBtn);
+            this._showContextMenu(entry, rel, actionBtn);
         });
 
         row.appendChild(item);
@@ -196,6 +196,17 @@ export class FileTreeManager {
         }
     }
 
+    /** Open the file in the markdown modal via MarkdownManager.previewFile.
+     *  The cwd snapshot is taken at click time so a mid-modal rail switch
+     *  doesn't resolve the relative path against the new server's cwd. */
+    _previewFile(rel: string): void {
+        const md = (this.app as unknown as { markdownManager?: { previewFile: (f: { path: string; name: string }, cwd: string) => void } }).markdownManager;
+        if (!md) return;
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        const name = rel.slice(Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\')) + 1);
+        void md.previewFile({ path: rel, name }, cwd);
+    }
+
     _createContextMenu(): HTMLElement {
         const menu = document.createElement('div');
         menu.className = 'md-context-menu ft-context-menu hidden';
@@ -203,11 +214,20 @@ export class FileTreeManager {
         return menu;
     }
 
-    _showContextMenu(rel: string, anchorEl: HTMLElement): void {
+    _showContextMenu(entry: FSEntry, rel: string, anchorEl: HTMLElement): void {
         if (!this.contextMenuEl) return;
         this.contextMenuEl.innerHTML = '';
 
-        const actions = [
+        // Preview is a file-only action; directories have nothing to
+        // preview, and the click-toggle-dir gesture is what they get.
+        // Single-click Insert stays unchanged (architect's review: do
+        // not replace single-click behavior with preview).
+        const actions: Array<{
+            icon: string;
+            label: string;
+            className: string;
+            handler: () => void | Promise<void>;
+        }> = [
             {
                 icon: '@',
                 label: 'Insert @path',
@@ -215,6 +235,14 @@ export class FileTreeManager {
                 handler: () => this._insertPath(rel),
             },
         ];
+        if (!entry.dir) {
+            actions.push({
+                icon: '◳',
+                label: 'Preview',
+                className: 'preview',
+                handler: () => this._previewFile(rel),
+            });
+        }
 
         actions.forEach((action) => {
             const btn = document.createElement('button');

@@ -32,6 +32,13 @@ export class MarkdownManager {
     _pasteConflict;
     _diagInterval;
     currentRawContent;
+    /** Handle returned by mountFileView for the active non-markdown
+     *  preview (image / video / audio / pdf / code / json). Tracked so
+     *  closeModal and the next openFile can release the underlying
+     *  Plyr/Viewer.js instance and stop audio playback. Markdown
+     *  previews don't allocate a handle because renderMarkdownSafe +
+     *  innerHTML='' is sufficient cleanup. */
+    _currentFileView;
     markdownClipboard;
     contextMenuEl;
     refreshRequestId;
@@ -59,6 +66,7 @@ export class MarkdownManager {
         this.pasteModalClose = document.getElementById('md-paste-modal-close');
         this._pastePending = false;
         this._pasteConflict = false;
+        this._currentFileView = null;
         this.currentRawContent = '';
         this.markdownClipboard = null;
         this.contextMenuEl = this._createContextMenu();
@@ -419,10 +427,60 @@ export class MarkdownManager {
             this.modalBody.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml(e.message)}</div>`;
         }
     }
+    /** Preview an arbitrary workspace file in the markdown modal. Used
+     *  by the file tree's Preview context-menu action. Dispatches by
+     *  extension through mountFileView (image / video / audio / pdf /
+     *  code / json / text / download). Markdown files take the same
+     *  path as openFile so the in-list and file-tree entry points
+     *  converge on the same renderer. */
+    async previewFile(f, cwd) {
+        // Tear down any previous non-markdown viewer; its underlying
+        // Plyr/Viewer instance would otherwise outlive the swap.
+        if (this._currentFileView) {
+            try {
+                this._currentFileView.dispose();
+            }
+            catch {
+                /* see closeModal */
+            }
+            this._currentFileView = null;
+        }
+        this._setModalTitle(f.name);
+        this.modalBody.innerHTML =
+            '<div class="md-rendering">Loading…</div>';
+        this.modal.classList.remove('hidden');
+        this.currentRawContent = '';
+        const { mountFileView } = await import('./file-viewer.js');
+        const handle = await mountFileView({
+            path: f.path,
+            cwd,
+            container: this.modalBody,
+        });
+        // Store the handle AFTER mount succeeds so a failed mount does
+        // not pin a stale dispose on closeModal. If the user closes the
+        // modal mid-mount, closeModal's dispose runs against the new
+        // handle once it resolves; a teardown race there is acceptable
+        // because the libraries tolerate double-destroy.
+        this._currentFileView = handle;
+    }
     closeModal() {
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
+        // Release any active file-viewer handle so Plyr/Viewer.js stop
+        // audio playback and remove their event listeners. innerHTML=''
+        // alone leaves the <video> element's audio context alive in
+        // Chromium; calling dispose first stops playback cleanly.
+        if (this._currentFileView) {
+            try {
+                this._currentFileView.dispose();
+            }
+            catch {
+                // Dispose may throw if the underlying library is already
+                // torn down; that is harmless.
+            }
+            this._currentFileView = null;
+        }
     }
     _openRestartModal() {
         if (this.restartModal)

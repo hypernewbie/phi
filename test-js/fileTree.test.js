@@ -168,7 +168,7 @@ describe('FileTreeManager', () => {
         ).toBe(true);
     });
 
-    it('the ⋯ button opens a one-action context menu that inserts the path and closes', async () => {
+    it('the ⋯ button opens a context menu with Insert + Preview for files (Insert closes)', async () => {
         installFetch({
             '': {
                 truncated: false,
@@ -184,9 +184,14 @@ describe('FileTreeManager', () => {
         const menu = document.querySelector('.ft-context-menu');
         expect(menu.classList.contains('hidden')).toBe(false);
         const actions = menu.querySelectorAll('.md-context-action');
-        expect(actions.length).toBe(1);
+        // Insert @path stays as the first action; Preview is the new
+        // second action for files (not directories — that's a separate
+        // context).
+        expect(actions.length).toBe(2);
         expect(actions[0].classList.contains('insert-path')).toBe(true);
         expect(actions[0].textContent).toContain('Insert @path');
+        expect(actions[1].classList.contains('preview')).toBe(true);
+        expect(actions[1].textContent).toContain('Preview');
 
         actions[0].click();
         await Promise.resolve();
