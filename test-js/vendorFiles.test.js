@@ -271,3 +271,103 @@ describe('xterm addons contain the expected namespace assignment', () => {
         },
     );
 });
+
+// File-tree viewer vendors (2026-09-11). Each file must be present, not
+// truncated (regression for the 2026-07-11 xterm-addon truncation
+// incident), and must expose the global the dispatcher expects. We do
+// not deeply exercise the libraries here — that's the renderer's job —
+// only the load-and-parse smoke test, identical in shape to the xterm
+// addon coverage above.
+const FILE_VIEWER_VENDORS = [
+    {
+        dir: 'viewerjs',
+        files: [
+            { name: 'viewer.min.js', parser: 'js' },
+            { name: 'viewer.min.css', parser: 'css' },
+        ],
+    },
+    {
+        dir: 'plyr',
+        files: [
+            { name: 'plyr.polyfilled.js', parser: 'js' },
+            { name: 'plyr.css', parser: 'css' },
+            { name: 'plyr.svg', parser: 'binary' },
+            { name: 'blank.mp4', parser: 'mp4' },
+        ],
+    },
+    {
+        dir: 'json-viewer',
+        files: [{ name: 'json-viewer.bundle.js', parser: 'js' }],
+    },
+];
+
+describe('file-tree viewer vendor libraries load', () => {
+    it.each(FILE_VIEWER_VENDORS)(
+        '$dir/ files are present and parse without error',
+        ({ dir, files }) => {
+            for (const f of files) {
+                const buf = readFileSync(join(VENDOR_DIR, dir, f.name));
+                expect(
+                    buf.length,
+                    `${dir}/${f.name} is empty or truncated`,
+                ).toBeGreaterThan(100);
+                if (f.parser === 'js') {
+                    const src = buf.toString('utf8');
+                    expect(
+                        () => new Function(src),
+                        `${dir}/${f.name} failed to parse as JavaScript`,
+                    ).not.toThrow();
+                } else if (f.parser === 'mp4') {
+                    // MP4 starts with an `ftyp` box at offset 4; check the
+                    // magic bytes are present so the file isn't truncated
+                    // mid-header.
+                    expect(
+                        buf.length >= 32 &&
+                            buf.slice(4, 8).toString('ascii') === 'ftyp',
+                        `${dir}/${f.name} is not a valid MP4 (missing ftyp box)`,
+                    ).toBe(true);
+                } else if (f.parser === 'binary') {
+                    // SVG starts with `<?xml` or `<svg`.
+                    const head = buf.slice(0, 64).toString('utf8').trimStart();
+                    expect(
+                        head.startsWith('<?xml') || head.startsWith('<svg'),
+                        `${dir}/${f.name} is not valid SVG`,
+                    ).toBe(true);
+                }
+                // CSS: presence is enough; we don't parse it.
+            }
+        },
+    );
+
+    it('viewerjs/viewer.min.js defines window.Viewer as a constructor', () => {
+        const src = readFileSync(
+            join(VENDOR_DIR, 'viewerjs', 'viewer.min.js'),
+            'utf8',
+        );
+        // UMD assignment: `e.Viewer=` or `.exports.Viewer=`.
+        expect(/[\.\b]Viewer\s*=/.test(src)).toBe(true);
+    });
+
+    it('plyr/plyr.polyfilled.js defines window.Plyr as a constructor', () => {
+        const src = readFileSync(
+            join(VENDOR_DIR, 'plyr', 'plyr.polyfilled.js'),
+            'utf8',
+        );
+        expect(/[\.\b]Plyr\s*=/.test(src)).toBe(true);
+    });
+
+    it('json-viewer/json-viewer.bundle.js defines a custom element', () => {
+        // @alenaksu/json-viewer registers `<json-viewer>` as a custom
+        // element (customElements.define call). If the bundle is
+        // truncated the registration never fires and the dispatcher
+        // can't instantiate.
+        const src = readFileSync(
+            join(VENDOR_DIR, 'json-viewer', 'json-viewer.bundle.js'),
+            'utf8',
+        );
+        expect(
+            src.includes('customElements'),
+            'json-viewer.bundle.js does not register a custom element',
+        ).toBe(true);
+    });
+});

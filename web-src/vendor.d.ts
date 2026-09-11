@@ -21,6 +21,16 @@ declare global {
         Sortable: any;
         DOMPurify: any;
         Chart: any;
+        Viewer: any;
+        Plyr: any;
+        customElements: {
+            get(name: string): any;
+            define(
+                name: string,
+                ctor: any,
+                options?: ElementDefinitionOptions,
+            ): void;
+        };
         Diff: {
             diffWords(
                 oldStr: string,

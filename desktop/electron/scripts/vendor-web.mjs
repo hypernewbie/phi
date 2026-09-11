@@ -60,7 +60,15 @@ const WEB_JS_MODULES = [
 /** Browser vendor subdirectory the module graph imports (auth.js imports
  *  './vendor/noble-hashes/...', so the relative layout is preserved under
  *  web/vendor/). */
-const WEB_JS_VENDOR_DIRS = ['noble-hashes'];
+/** Browser vendor subdirectories the module graph imports (auth.js imports
+ *  './vendor/noble-hashes/...', so the relative layout is preserved under
+ *  web/vendor/). Also includes the file-tree viewer libraries loaded by
+ *  web/index.html (Viewer.js, Plyr, @alenaksu/json-viewer) — these have
+ *  no module-graph imports but must be copied so the desktop main view
+ *  page renders image/video/audio/json preview the same way the browser
+ *  page does. PDF preview uses Chromium's built-in viewer via iframe —
+ *  no vendored pdfjs assets. */
+const WEB_JS_VENDOR_DIRS = ['noble-hashes', 'viewerjs', 'plyr', 'json-viewer'];
 
 /** Browser app subdirectories the module graph imports. */
 const WEB_JS_MODULE_DIRS = ['chat-pi'];
