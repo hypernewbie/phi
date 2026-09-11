@@ -284,6 +284,7 @@ func main() {
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/markdown/asset", handleMarkdownAsset)
+	http.HandleFunc("/api/file/asset", handleFileAsset)
 	http.HandleFunc("/api/markdown/paste", handleMarkdownPaste)
 	http.HandleFunc("/api/markdown/delete", handleMarkdownDelete)
 	http.HandleFunc("/api/markdown/copy-all-worktrees", handleMarkdownCopyAllWorktrees)
