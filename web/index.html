@@ -21,6 +21,20 @@
         <script src="vendor/diff2html.min.js"></script>
         <script src="vendor/purify.min.js"></script>
         <script src="vendor/chart.umd.js"></script>
+        <!-- File-tree viewer libraries (vendored; see web-src/vendor.d.ts).
+             Viewer.js: image viewer (zoom/pan/touch/destroy). Plyr: video
+             and audio. @alenaksu/json-viewer: collapsible JSON tree.
+             PDF preview reuses Chromium's built-in viewer via iframe —
+             pdfjs-dist 4.x dropped the prebuilt viewer.html from the npm
+             package and the GitHub source is ~3.5MB, neither matches
+             "almost no code" — Chromium's viewer is excellent in Electron
+             and Chrome. Add pdfjs later only if text extraction or form
+             scripting becomes a requirement. -->
+        <script src="vendor/viewerjs/viewer.min.js"></script>
+        <link rel="stylesheet" href="vendor/viewerjs/viewer.min.css">
+        <script src="vendor/plyr/plyr.polyfilled.js"></script>
+        <link rel="stylesheet" href="vendor/plyr/plyr.css">
+        <script src="vendor/json-viewer/json-viewer.bundle.js"></script>
         <link rel="stylesheet" href="vendor/pi-template.css">
         <link rel="stylesheet" href="style.css">
         <!-- Fonts are vendored (web/vendor/fonts/). phi runs on LAN and airgapped
