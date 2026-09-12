@@ -44,15 +44,15 @@ var preBrotli map[string][]byte
 // small. .bcmap is a binary cmap used by pdfjs and is already deflate-
 // compressed (skipping gzip).
 var compressibleStaticExts = map[string]bool{
-	".css":   true,
-	".html":  true,
-	".js":    true,
-	".mjs":   true,
-	".md":    true,
-	".svg":   true,
-	".wav":   true,
-	".json":  true,
-	".map":   true,
+	".css":  true,
+	".html": true,
+	".js":   true,
+	".mjs":  true,
+	".md":   true,
+	".svg":  true,
+	".wav":  true,
+	".json": true,
+	".map":  true,
 }
 
 // mimeOverride fixes mime.TypeByExtension on platforms whose OS MIME
