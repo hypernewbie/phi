@@ -382,7 +382,7 @@ describe('file-tree viewer vendor libraries load', () => {
             'utf8',
         );
         // UMD assignment: `e.Viewer=` or `.exports.Viewer=`.
-        expect(/[\.\b]Viewer\s*=/.test(src)).toBe(true);
+        expect(/[.\b]Viewer\s*=/.test(src)).toBe(true);
     });
 
     it('plyr/plyr.polyfilled.js defines window.Plyr as a constructor', () => {
@@ -390,7 +390,7 @@ describe('file-tree viewer vendor libraries load', () => {
             join(VENDOR_DIR, 'plyr', 'plyr.polyfilled.js'),
             'utf8',
         );
-        expect(/[\.\b]Plyr\s*=/.test(src)).toBe(true);
+        expect(/[.\b]Plyr\s*=/.test(src)).toBe(true);
     });
 
     it('json-viewer/json-viewer.bundle.js defines a custom element', () => {
@@ -418,8 +418,7 @@ describe('file-tree viewer vendor libraries load', () => {
             'utf8',
         );
         expect(
-            src.includes('import * as pdfjsLib') &&
-                src.includes('pdf.min.mjs'),
+            src.includes('import * as pdfjsLib') && src.includes('pdf.min.mjs'),
             'wrapper.html does not import pdf.min.mjs',
         ).toBe(true);
         expect(
