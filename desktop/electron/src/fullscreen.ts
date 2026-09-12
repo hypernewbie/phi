@@ -15,20 +15,40 @@
  */
 import type { BrowserWindow, WebContents } from 'electron';
 
-/** Installs the plain-F11 fullscreen toggle on one webContents. */
+/** Installs the plain-F11 and macOS Ctrl+Cmd+F fullscreen toggle on one webContents. */
+export function isFullscreenToggleInput(input: {
+  type: string;
+  key: string;
+  control?: boolean;
+  alt?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+}): boolean {
+  if (input.type !== 'keyDown') return false;
+
+  const isPlainF11 =
+    input.key === 'F11' &&
+    !input.control &&
+    !input.alt &&
+    !input.meta &&
+    !input.shift;
+
+  const isMacNativeFullscreen =
+    (input.key === 'f' || input.key === 'F') &&
+    Boolean(input.control) &&
+    Boolean(input.meta) &&
+    !input.alt &&
+    !input.shift;
+
+  return isPlainF11 || isMacNativeFullscreen;
+}
+
 export function installFullscreenToggle(
   contents: WebContents,
   win: BrowserWindow,
 ): void {
   contents.on('before-input-event', (event, input) => {
-    if (
-      input.type === 'keyDown' &&
-      input.key === 'F11' &&
-      !input.control &&
-      !input.alt &&
-      !input.meta &&
-      !input.shift
-    ) {
+    if (isFullscreenToggleInput(input)) {
       event.preventDefault();
       if (!win.isDestroyed()) win.setFullScreen(!win.isFullScreen());
     }
