@@ -329,7 +329,7 @@ export class TabManager {
         const path = status?.sessionPath;
         if (!path) return;
         const tab = this.tabs?.get(paneId);
-        if (!tab || tab.coder !== 'pi-rpc' || tab.sessionPath === path) return;
+        if (tab?.coder !== 'pi-rpc' || tab.sessionPath === path) return;
         tab.sessionPath = path;
         this.savePiRpcTabs();
     }
@@ -2996,7 +2996,7 @@ export class TabManager {
                 if (Array.isArray(v))
                     parsed = v.filter((s) => typeof s === 'string');
             }
-        } catch (error) {
+        } catch (_error) {
             // ignore — fall through to seed from config
         }
         if (parsed && parsed.length > 0) {
@@ -3016,7 +3016,7 @@ export class TabManager {
                     'phi.piRpc.favorites',
                     JSON.stringify(seeded),
                 );
-            } catch (error) {
+            } catch (_error) {
                 // localStorage may be unavailable; in-memory copy is enough
                 // for this session.
             }
@@ -3038,7 +3038,7 @@ export class TabManager {
                 'phi.piRpc.favorites',
                 JSON.stringify([...this._piRpcFavorites]),
             );
-        } catch (error) {
+        } catch (_error) {
             // localStorage may be unavailable; UI still updates this session.
         }
         this._buildPiRpcModelList();

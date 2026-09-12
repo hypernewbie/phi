@@ -200,10 +200,21 @@ export class FileTreeManager {
      *  The cwd snapshot is taken at click time so a mid-modal rail switch
      *  doesn't resolve the relative path against the new server's cwd. */
     _previewFile(rel: string): void {
-        const md = (this.app as unknown as { markdownManager?: { previewFile: (f: { path: string; name: string }, cwd: string) => void } }).markdownManager;
+        const md = (
+            this.app as unknown as {
+                markdownManager?: {
+                    previewFile: (
+                        f: { path: string; name: string },
+                        cwd: string,
+                    ) => void;
+                };
+            }
+        ).markdownManager;
         if (!md) return;
         const cwd = this.app.sessionsManager?.activeCWD || '';
-        const name = rel.slice(Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\')) + 1);
+        const name = rel.slice(
+            Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\')) + 1,
+        );
         void md.previewFile({ path: rel, name }, cwd);
     }
 
