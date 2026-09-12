@@ -79,10 +79,31 @@ describe('installFullscreenToggle (plain-F11 fullscreen)', () => {
     expect(fullscreenStates).toEqual([]);
   });
 
+  it('toggles fullscreen on macOS native Ctrl+Cmd+F keyDown and preventDefaults it', () => {
+    const { fire, fullscreenStates } = makeHarness();
+    fire({ type: 'keyDown', key: 'f', control: true, meta: true });
+    expect(fullscreenStates).toEqual([true]);
+    fire({ type: 'keyDown', key: 'F', control: true, meta: true });
+    expect(fullscreenStates).toEqual([true, false]);
+  });
+
+  it('leaves modified Ctrl+Cmd+F chords untouched (Shift/Alt)', () => {
+    const { fire, fullscreenStates } = makeHarness();
+    for (const input of [
+      { type: 'keyDown', key: 'f', control: true, meta: true, shift: true },
+      { type: 'keyDown', key: 'f', control: true, meta: true, alt: true },
+    ]) {
+      const ev = fire(input as InputLike);
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(fullscreenStates).toEqual([]);
+  });
+
   it('leaves other keys and keyUp events untouched', () => {
     const { fire, fullscreenStates } = makeHarness();
     fire({ type: 'keyDown', key: 'Escape' });
     fire({ type: 'keyUp', key: 'F11' });
+    fire({ type: 'keyUp', key: 'f', control: true, meta: true });
     fire({ type: 'keyDown', key: 'Enter' });
     expect(fullscreenStates).toEqual([]);
   });
