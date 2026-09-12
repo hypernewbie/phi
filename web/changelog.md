@@ -2,6 +2,16 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.2 — 2026-09-12
+
+### Added
+- **File-tree inline preview** (`a20381a`, `da53759`, `5f86077`, `5e8d052`). Click `⋯` on a file-tree entry → "Preview" opens the file in the existing markdown modal. Image (PNG/JPG/GIF/WebP/SVG/AVIF/BMP/ICO) via vendored **Viewer.js 1.13.0** with zoom/pan/touch/fullscreen. Video (MP4/WebM/MOV/M4V/OGV/MKV) and audio (MP3/M4A/OGG/WAV/FLAC/Opus) via vendored **Plyr 3.8.4** with full controls. PDF via vendored **pdfjs-dist 5.4.149** (wrapper.html → PDFViewer UI + worker, 194 vendored files including CJK cmaps, standard Type 1 fonts, JBIG2/JPEG2000 image decoders). Markdown via existing marked+DOMPurify. Code (40+ languages) via existing hljs. JSON via vendored **@alenaksu/json-viewer 2.1.2** (collapsible/filterable tree). Text/log/csv via `<pre>`. Everything else (zip, exe, archives) → Download button. Lifecycle: every viewer returns `{dispose()}`; closeModal and replacement both dispose so Plyr audio context and Viewer.js back-references release cleanly.
+- **`/api/file/asset`** server endpoint (`da53759`). Cwd-relative resolver mirroring handleFSList's gate (EvalSymlinks + HasPrefix containment); http.ServeFile provides Range/HEAD/If-Modified-Since for video scrubbing and large-image lazy-load. Active-content extensions (HTML/JS/CSS/XML/XSLT/WASM/MHT) forced to `text/plain` + `Content-Disposition: attachment` so the browser never renders them as same-origin active documents — safe-representation allowlist, not executable blocklist.
+
+### Fixed
+- **`/static/.mjs` MIME override** (`5e8d052`). Windows `mime.TypeByExtension` returns `text/plain; charset=utf-8` for `.mjs`, which Chromium refuses to load as an ES module. mimeOverride forces `text/javascript; charset=utf-8` for `.mjs` and `application/wasm` for `.wasm` regardless of platform. Identity-encoding fix: serveStatic's identity path now pre-sets Content-Type so the override reaches the browser (FileServer would otherwise re-detect). `.mjs` added to compressibleStaticExts (gzip ~70%).
+- **Plyr CDN URL** (`a20381a`). blankVideo config points at the vendored `web/vendor/plyr/blank.mp4` so the player never reaches `cdn.plyr.io`.
+
 ## v0.21.0 — 2026-09-02
 
 ### Added
