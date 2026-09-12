@@ -9529,6 +9529,13 @@ body.fast-mode .input-bar-container {
     -webkit-backdrop-filter: none !important;
 }
 
+/* Fast mode kills the blur above but the beauty pass left these surfaces
+   translucent — without blur the drawer reads as broken-transparent over
+   terminal text. Restore the opaque panel behind it; blur stays off. */
+body.fast-mode .sidebar-panel {
+    background-color: var(--bg-panel) !important;
+}
+
 /* ═══════════════════════════════════════════════════════════
    STANDALONE MARKDOWN VIEWER (md.html pop-out window)
    ═══════════════════════════════════════════════════════════ */
