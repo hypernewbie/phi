@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<!--
+  Φ phi — PDF.js viewer wrapper (vendored Mozilla PDF.js runtime).
+
+  Loaded as an iframe by web-src/file-viewer.ts when the dispatcher
+  sees a .pdf extension. The wrapper renders the toolbar (page nav,
+  zoom, scale), instantiates the pdfjs.PDFViewer UI, and streams the
+  PDF bytes from /api/file/asset via the ?file= query param.
+
+  Everything in this file is intentionally minimal: the heavy UI
+  comes from the vendored pdf_viewer.mjs and pdf_viewer.css, which
+  include the exact same components Mozilla's online viewer uses.
+  We deliberately do not ship the "Open file" button (we feed the
+  URL ourselves) or Firefox integration shims — those live in the
+  GitHub generic viewer source but are unused here.
+
+  CSP: same-origin only (no inline scripts beyond this single module;
+  no eval). nosniff comes from the server response on /api/file/asset.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Viewer</title>
+    <link rel="stylesheet" href="./pdf_viewer.css" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: #404040;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+        #toolbar {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            background: #2b2b2b;
+            color: #f0f0f0;
+            font: 12px/1.4 system-ui, -apple-system, sans-serif;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        #toolbar button, #toolbar select, #toolbar input {
+            background: #404040;
+            color: #f0f0f0;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 3px 8px;
+            font: inherit;
+            cursor: pointer;
+        }
+        #toolbar button:hover:not(:disabled) { background: #505050; }
+        #toolbar button:disabled { opacity: 0.4; cursor: default; }
+        #pageNumber {
+            width: 48px;
+            text-align: right;
+        }
+        #numPages { color: #aaa; }
+        #viewerContainer {
+            flex: 1 1 auto;
+            overflow: auto;
+            background: #404040;
+        }
+        .pdfViewer .page {
+            margin: 8px auto;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        }
+        #loadingBar {
+            position: fixed;
+            top: 32px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: #1a73e8;
+            transform-origin: left center;
+            transform: scaleX(0);
+            transition: transform 80ms linear;
+            z-index: 10;
+        }
+        #error {
+            padding: 24px;
+            color: #ff8a80;
+            font: 13px/1.5 system-ui, sans-serif;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbar" role="toolbar" aria-label="PDF controls">
+        <button id="prev" title="Previous page (←)">‹</button>
+        <button id="next" title="Next page (→)">›</button>
+        <input id="pageNumber" type="number" min="1" value="1" aria-label="Page number" />
+        <span id="numPages">/ 0</span>
+        <span style="flex: 1"></span>
+        <button id="zoomOut" title="Zoom out (-)">−</button>
+        <select id="scaleSelect" title="Zoom level">
+            <option value="auto">Auto</option>
+            <option value="page-width">Page Width</option>
+            <option value="page-fit">Page Fit</option>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1">100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+            <option value="3">300%</option>
+        </select>
+        <button id="zoomIn" title="Zoom in (+)">+</button>
+    </div>
+    <div id="loadingBar"></div>
+    <div id="viewerContainer">
+        <div id="error" hidden></div>
+        <div id="viewer" class="pdfViewer"></div>
+    </div>
+    <script type="module">
+        // pdfjs core: rendering + worker dispatch.
+        import * as pdfjsLib from "./pdf.min.mjs";
+        // pdfjs viewer UI: EventBus, PDFViewer, link service, find bar.
+        import {
+            EventBus,
+            PDFLinkService,
+            PDFFindController,
+            PDFViewer,
+        } from "./pdf_viewer.mjs";
+
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+            "./pdf.worker.min.mjs",
+            import.meta.url,
+        ).toString();
+        // Image decoders (JBIG2, JPEG2000) ship as a separate wasm asset;
+        // PDF.js auto-loads it when it sees a JBIG2/JPEG2000 stream.
+        pdfjsLib.GlobalWorkerOptions.imageDecoderPath = new URL(
+            "./image_decoders/",
+            import.meta.url,
+        ).toString();
+        // CMaps + standard fonts live next to the worker; PDF.js fetches
+        // them by URL when a PDF uses non-embedded CJK fonts or the
+        // standard Type 1 faces.
+        const cMapUrl = new URL("./cmaps/", import.meta.url).toString();
+        const standardFontDataUrl = new URL(
+            "./standard_fonts/",
+            import.meta.url,
+        ).toString();
+
+        const params = new URLSearchParams(location.search);
+        const fileUrl = params.get("file");
+        if (!fileUrl) {
+            showError("Missing 'file' query parameter.");
+        } else {
+            init(fileUrl).catch((e) => showError(String(e?.message ?? e)));
+        }
+
+        async function init(url) {
+            const eventBus = new EventBus();
+            const linkService = new PDFLinkService({ eventBus });
+            const findController = new PDFFindController({
+                eventBus,
+                linkService,
+            });
+            const pdfViewer = new PDFViewer({
+                container: document.getElementById("viewerContainer"),
+                viewer: document.getElementById("viewer"),
+                eventBus,
+                linkService,
+                findController,
+                textLayerMode: 1,
+                annotationMode: 0,
+            });
+            linkService.setViewer(pdfViewer);
+
+            // Toolbar wiring. Same handlers as Mozilla's online viewer.
+            const prev = document.getElementById("prev");
+            const next = document.getElementById("next");
+            const pageNumber = document.getElementById("pageNumber");
+            const numPages = document.getElementById("numPages");
+            const zoomOut = document.getElementById("zoomOut");
+            const zoomIn = document.getElementById("zoomIn");
+            const scaleSelect = document.getElementById("scaleSelect");
+            const loadingBar = document.getElementById("loadingBar");
+
+            prev.addEventListener("click", () => {
+                if (pdfViewer.currentPageNumber > 1)
+                    pdfViewer.currentPageNumber -= 1;
+            });
+            next.addEventListener("click", () => {
+                if (pdfViewer.currentPageNumber < pdfViewer.pagesCount)
+                    pdfViewer.currentPageNumber += 1;
+            });
+            pageNumber.addEventListener("change", () => {
+                const v = parseInt(pageNumber.value, 10);
+                if (Number.isInteger(v))
+                    pdfViewer.currentPageNumber = v;
+            });
+            zoomOut.addEventListener("click", () => {
+                let s = parseFloat(scaleSelect.value);
+                if (!Number.isFinite(s)) s = pdfViewer.currentScaleValue;
+                pdfViewer.currentScale = Math.max(0.25, s - 0.25);
+                scaleSelect.value = String(pdfViewer.currentScale);
+            });
+            zoomIn.addEventListener("click", () => {
+                let s = parseFloat(scaleSelect.value);
+                if (!Number.isFinite(s)) s = pdfViewer.currentScaleValue;
+                pdfViewer.currentScale = s + 0.25;
+                scaleSelect.value = String(pdfViewer.currentScale);
+            });
+            scaleSelect.addEventListener("change", () => {
+                pdfViewer.currentScaleValue = scaleSelect.value;
+            });
+
+            eventBus.on("pagesloaded", () => {
+                numPages.textContent = `/ ${pdfViewer.pagesCount}`;
+                pageNumber.max = String(pdfViewer.pagesCount);
+                scaleSelect.value = String(pdfViewer.currentScaleValue);
+            });
+            eventBus.on("pagechanging", (evt) => {
+                pageNumber.value = String(evt.pageNumber);
+            });
+            eventBus.on("scalechanging", (evt) => {
+                if (
+                    evt.presetValue !== undefined &&
+                    evt.presetValue !== "auto" &&
+                    evt.presetValue !== "page-width" &&
+                    evt.presetValue !== "page-fit"
+                ) {
+                    scaleSelect.value = String(evt.scale);
+                }
+            });
+            eventBus.on("pagerendered", () => {
+                prev.disabled = pdfViewer.currentPageNumber <= 1;
+                next.disabled =
+                    pdfViewer.currentPageNumber >= pdfViewer.pagesCount;
+            });
+            // Loading bar: pulse on each rendered page.
+            eventBus.on("progress", (evt) => {
+                const p = evt.loaded / evt.total || 0;
+                loadingBar.style.transform = `scaleX(${p})`;
+            });
+            eventBus.on("pagesloaded", () => {
+                loadingBar.style.transform = "scaleX(1)";
+                setTimeout(() => {
+                    loadingBar.style.transform = "scaleX(0)";
+                }, 200);
+            });
+
+            // Keyboard: arrows + page nav. Wired on the document so the
+            // toolbar buttons stay focused after click without losing
+            // keyboard nav.
+            document.addEventListener("keydown", (e) => {
+                if (e.target instanceof HTMLInputElement) return;
+                if (e.target instanceof HTMLSelectElement) return;
+                if (e.key === "ArrowLeft") prev.click();
+                else if (e.key === "ArrowRight") next.click();
+                else if (e.key === "+" || e.key === "=") zoomIn.click();
+                else if (e.key === "-") zoomOut.click();
+                else if (e.key === "Home") {
+                    pdfViewer.currentPageNumber = 1;
+                } else if (e.key === "End") {
+                    pdfViewer.currentPageNumber = pdfViewer.pagesCount;
+                }
+            });
+
+            const loadingTask = pdfjsLib.getDocument({
+                url,
+                cMapUrl,
+                cMapPacked: true,
+                standardFontDataUrl,
+            });
+            const pdf = await loadingTask.promise;
+            pdfViewer.setDocument(pdf);
+            // Anchor links for #page=N&zoom=auto etc.
+            linkService.setHash(window.location.hash);
+        }
+
+        function showError(message) {
+            const el = document.getElementById("error");
+            el.textContent = message;
+            el.hidden = false;
+            document.getElementById("toolbar").hidden = true;
+        }
+    </script>
+</body>
+</html>

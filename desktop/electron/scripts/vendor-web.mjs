@@ -64,12 +64,32 @@ const WEB_JS_MODULES = [
 /** Browser vendor subdirectories the module graph imports (auth.js imports
  *  './vendor/noble-hashes/...', so the relative layout is preserved under
  *  web/vendor/). Also includes the file-tree viewer libraries loaded by
- *  web/index.html (Viewer.js, Plyr, @alenaksu/json-viewer) — these have
- *  no module-graph imports but must be copied so the desktop main view
- *  page renders image/video/audio/json preview the same way the browser
- *  page does. PDF preview uses Chromium's built-in viewer via iframe —
- *  no vendored pdfjs assets. */
-const WEB_JS_VENDOR_DIRS = ['noble-hashes', 'viewerjs', 'plyr', 'json-viewer'];
+ *  web/index.html (Viewer.js, Plyr, @alenaksu/json-viewer, pdfjs) —
+ *  these have no module-graph imports but must be copied so the desktop
+ *  main view page renders image/video/audio/json/pdf preview the same
+ *  way the browser page does. PDF.js has nested subdirs (cmaps/,
+ *  standard_fonts/, image_decoders/) — the recursive copy below
+ *  preserves them. */
+const WEB_JS_VENDOR_DIRS = [
+  'noble-hashes',
+  'viewerjs',
+  'plyr',
+  'json-viewer',
+  'pdfjs',
+];
+
+/** Recursively copies a directory tree. PDF.js has nested subdirs
+ *  (cmaps/, standard_fonts/, image_decoders/) that the simple
+ *  readdirSync-copy loop does not handle — this does. */
+function copyDirRecursive(src, dest) {
+  mkdirSync(dest, { recursive: true });
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+    else if (entry.isFile()) copyFileSync(srcPath, destPath);
+  }
+}
 
 /** Browser app subdirectories the module graph imports. */
 const WEB_JS_MODULE_DIRS = ['chat-pi'];
@@ -165,10 +185,7 @@ for (const name of WEB_JS_MODULES) {
 for (const dir of WEB_JS_VENDOR_DIRS) {
   const src = path.join(webRoot, 'vendor', dir);
   const dest = path.join(vendorJsDir, 'vendor', dir);
-  mkdirSync(dest, { recursive: true });
-  for (const entry of readdirSync(src)) {
-    copyFileSync(path.join(src, entry), path.join(dest, entry));
-  }
+  copyDirRecursive(src, dest);
 }
 for (const dir of WEB_JS_MODULE_DIRS) {
   const src = path.join(webRoot, dir);
