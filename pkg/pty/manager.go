@@ -354,6 +354,11 @@ func (m *Manager) ListActive() []*PTYInstance {
 
 	list := make([]*PTYInstance, 0, len(m.instances))
 	for _, inst := range m.instances {
+		// Died-in-place corpses are skipped so refresh can't resurrect
+		// them as phantom tabs. Pty-nil restore ghosts still list.
+		if inst.Pty != nil && inst.IsPtyDead() {
+			continue
+		}
 		list = append(list, inst)
 	}
 	return list
