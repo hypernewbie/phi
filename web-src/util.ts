@@ -519,3 +519,40 @@ export function formatHudCpu(hud: SelfHud): string {
     if (hud.cpuPercent == null) return 'cpu —';
     return `cpu ${Math.round(hud.cpuPercent)}%`;
 }
+
+// isMacPlatform checks whether the client is running on macOS.
+export function isMacPlatform(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    if (
+        navigator.platform &&
+        navigator.platform.toUpperCase().indexOf('MAC') >= 0
+    ) {
+        return true;
+    }
+    const navAny = navigator as unknown as {
+        userAgentData?: { platform?: string };
+    };
+    if (navAny.userAgentData?.platform === 'macOS') {
+        return true;
+    }
+    return Boolean(
+        navigator.userAgent && /Macintosh|Mac OS X/i.test(navigator.userAgent),
+    );
+}
+
+// tabShortcutDigit extracts the 1-9 digit from a keyboard event,
+// handling physical scan codes (Digit1..9) for platforms like macOS where
+// Option/Alt character composition replaces e.key (e.g. Option+1 -> ¡).
+export function tabShortcutDigit(e: {
+    key?: string;
+    code?: string;
+}): number | null {
+    if (e.key && e.key >= '1' && e.key <= '9') {
+        return parseInt(e.key, 10);
+    }
+    if (e.code && /^Digit([1-9])$/.test(e.code)) {
+        return parseInt(e.code.slice(5), 10);
+    }
+    return null;
+}
+
