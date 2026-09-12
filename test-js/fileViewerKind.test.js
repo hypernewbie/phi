@@ -61,6 +61,13 @@ describe('file-viewer kindFor', () => {
         expect(kindFor('.unknown')).toBe('download');
     });
 
+    it('classifies PDF to the pdf kind (vendored PDF.js wrapper)', () => {
+        // The dispatcher mounts vendor/pdfjs/wrapper.html?file=... for
+        // PDF files. A regression here would silently break PDF preview
+        // by routing .pdf through the wrong mount function.
+        expect(kindFor('.pdf')).toBe('pdf');
+    });
+
     it('is case-insensitive on extension', () => {
         expect(kindFor('.PNG')).toBe('image');
         expect(kindFor('.MP4')).toBe('video');

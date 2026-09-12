@@ -39,13 +39,33 @@ var preBrotli map[string][]byte
 
 // compressibleStaticExts lists embedded extensions worth encoding.
 // woff2 is internally brotli-compressed (gzip grows it) and images are
-// already compressed; bell.wav is raw PCM and shrinks ~58-68%.
+// already compressed; bell.wav is raw PCM and shrinks ~58-68%. .mjs
+// is text and compresses ~70% with gzip; .wasm is binary but already
+// small. .bcmap is a binary cmap used by pdfjs and is already deflate-
+// compressed (skipping gzip).
 var compressibleStaticExts = map[string]bool{
-	".css":  true,
-	".html": true,
-	".js":   true,
-	".md":   true,
-	".wav":  true,
+	".css":   true,
+	".html":  true,
+	".js":    true,
+	".mjs":   true,
+	".md":    true,
+	".svg":   true,
+	".wav":   true,
+	".json":  true,
+	".map":   true,
+}
+
+// mimeOverride fixes mime.TypeByExtension on platforms whose OS MIME
+// db returns wrong values. Windows in particular reports .mjs as
+// text/plain; charset=utf-8, which Chromium refuses to load as an ES
+// module. The vendored PDF.js runtime is .mjs (pdf.min.mjs,
+// pdf.worker.min.mjs) so this override is load-bearing for the file
+// viewer feature. .bcmap is application/octet-stream by default; the
+// pdfjs worker fetches it by URL and ignores the MIME, so we leave
+// that one alone.
+var mimeOverride = map[string]string{
+	".mjs":  "text/javascript; charset=utf-8",
+	".wasm": "application/wasm",
 }
 
 // staticCompressionOn captures compression_enabled once at startup —
@@ -69,7 +89,11 @@ func initStaticAssets(root fs.FS) {
 			return nil
 		}
 		sum := sha256.Sum256(data)
-		ctype := mime.TypeByExtension(path.Ext(p))
+		ext := path.Ext(p)
+		ctype := mimeOverride[ext]
+		if ctype == "" {
+			ctype = mime.TypeByExtension(ext)
+		}
 		if ctype == "" {
 			ctype = http.DetectContentType(data)
 		}
@@ -220,9 +244,13 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 		body = a.compressed(webRoot, p, enc)
 	}
 	if body == nil {
-		// Identity: ServeContent handles Range, Content-Type, and 304s
-		// against the pre-set quoted ETag.
+		// Identity: FileServer dispatches to ServeContent which handles
+		// Range, If-Match/If-None-Match, and Content-Type. Set
+		// Content-Type BEFORE the call: ServeContent only sets it when
+		// the header is empty, so pre-setting with our mimeOverride'd
+		// value keeps Windows from serving .mjs as text/plain.
 		w.Header().Set("Etag", a.etag(""))
+		w.Header().Set("Content-Type", a.ctype)
 		http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
 		return
 	}

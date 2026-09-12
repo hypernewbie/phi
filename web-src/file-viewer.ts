@@ -201,17 +201,24 @@ function mountMedia(
 }
 
 function mountPdf(url: string, container: HTMLElement): FileViewHandle {
+    // Use the vendored PDF.js wrapper instead of Chromium's built-in
+    // viewer: cross-browser consistent toolbar (page nav, zoom, scale
+    // picker, find), support for non-embedded CJK fonts via the
+    // vendored cmaps/, and standard Type 1 fonts via standard_fonts/.
+    // The wrapper receives the asset URL as a ?file= query param.
+    const wrapperUrl = `vendor/pdfjs/wrapper.html?file=${encodeURIComponent(url)}`;
     const iframe = document.createElement('iframe');
     iframe.className = 'file-viewer-pdf';
-    iframe.src = url;
+    iframe.src = wrapperUrl;
     iframe.title = 'PDF preview';
     iframe.setAttribute('allow', 'fullscreen');
     container.appendChild(iframe);
     return {
         dispose() {
             // Removing the src stops the iframe's pending PDF download
-            // (Chromium's plugin otherwise continues fetching in the
-            // background). InnerHTML='' removes the node.
+            // and tears down the in-iframe PDFViewer state. Without
+            // this the worker keeps streaming the PDF in the background
+            // after the modal closes.
             iframe.removeAttribute('src');
             container.innerHTML = '';
         },

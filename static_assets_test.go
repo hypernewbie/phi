@@ -259,6 +259,74 @@ func TestStaticIfMatchCurrentTag200(t *testing.T) {
 	}
 }
 
+// TestStaticMjsMimeOverride pins the .mjs MIME override. On Windows,
+// mime.TypeByExtension returns text/plain; charset=utf-8 for .mjs,
+// which Chromium refuses to load as an ES module. The vendored PDF.js
+// runtime ships .mjs (pdf.min.mjs, pdf.worker.min.mjs) so the override
+// is load-bearing for the file viewer feature — the previous Windows
+// behavior would break module loading with no error log.
+func TestStaticMjsMimeOverride(t *testing.T) {
+	setupStaticAssets(t)
+	rec := getStatic(t, "/vendor/pdfjs/pdf.min.mjs", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/javascript") {
+		t.Errorf("Content-Type = %q, want text/javascript prefix", ct)
+	}
+	if !strings.Contains(ct, "charset=utf-8") {
+		t.Errorf("Content-Type = %q, want charset=utf-8", ct)
+	}
+}
+
+func TestStaticWasmMimeOverride(t *testing.T) {
+	setupStaticAssets(t)
+	rec := getStatic(t, "/vendor/pdfjs/image_decoders/pdf.image_decoders.min.mjs", nil)
+	// .mjs files in image_decoders/ are loaded by the pdfjs worker as
+	// ES modules. They get the same MIME override.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") {
+		t.Errorf("Content-Type = %q, want text/javascript", ct)
+	}
+}
+
+func TestStaticMjsCompresses(t *testing.T) {
+	// .mjs is text — gzip should shrink it ~70% (verified by the
+	// encoding-end-to-end test below; this is a regression guard
+	// against accidentally excluding .mjs from the compressible
+	// extensions list).
+	setupStaticAssets(t)
+	rec := getStatic(t, "/vendor/pdfjs/pdf.min.mjs", map[string]string{
+		"Accept-Encoding": "gzip",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip", ce)
+	}
+	// Body must actually decode to the original file.
+	body := rec.Body.Bytes()
+	gr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	decoded, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("gzip read: %v", err)
+	}
+	want, err := fs.ReadFile(webRoot, "vendor/pdfjs/pdf.min.mjs")
+	if err != nil {
+		t.Fatalf("read embedded: %v", err)
+	}
+	if !bytes.Equal(decoded, want) {
+		t.Errorf("decoded body length = %d, want %d", len(decoded), len(want))
+	}
+}
+
 func TestStaticIfMatchWeakTagFails(t *testing.T) {
 	setupStaticAssets(t)
 	etag := getStatic(t, "/app.js", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("Etag")

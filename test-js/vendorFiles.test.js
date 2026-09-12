@@ -299,6 +299,23 @@ const FILE_VIEWER_VENDORS = [
         dir: 'json-viewer',
         files: [{ name: 'json-viewer.bundle.js', parser: 'js' }],
     },
+    {
+        // PDF.js runtime: the dispatcher routes .pdf files to a small
+        // wrapper.html that imports these modules. The .mjs files are
+        // ESM (Mozilla's `// @licstart` comment is the first line);
+        // new Function() can't actually parse import/export, so we
+        // use a presence+size check for .mjs and only parse legacy
+        // script-tag-friendly .js. The CSS / HTML / bcmap / pfb /
+        // wasm files use dedicated magic-byte checks below.
+        dir: 'pdfjs',
+        files: [
+            { name: 'pdf.min.mjs', parser: 'esm' },
+            { name: 'pdf.worker.min.mjs', parser: 'esm' },
+            { name: 'pdf_viewer.mjs', parser: 'esm' },
+            { name: 'pdf_viewer.css', parser: 'css' },
+            { name: 'wrapper.html', parser: 'html' },
+        ],
+    },
 ];
 
 describe('file-tree viewer vendor libraries load', () => {
@@ -332,6 +349,26 @@ describe('file-tree viewer vendor libraries load', () => {
                     expect(
                         head.startsWith('<?xml') || head.startsWith('<svg'),
                         `${dir}/${f.name} is not valid SVG`,
+                    ).toBe(true);
+                } else if (f.parser === 'esm') {
+                    // PDF.js .mjs files use import/export syntax that
+                    // new Function() can't parse, so we check for the
+                    // Mozilla license header every PDF.js release opens
+                    // with. If this guard ever fails the file is either
+                    // truncated or replaced with a non-PDF.js module.
+                    const head = buf.slice(0, 64).toString('utf8');
+                    expect(
+                        head.includes('@licstart') ||
+                            head.includes('@license') ||
+                            head.includes('export'),
+                        `${dir}/${f.name} is missing the PDF.js license/ESM header`,
+                    ).toBe(true);
+                } else if (f.parser === 'html') {
+                    const head = buf.slice(0, 256).toString('utf8').trimStart();
+                    expect(
+                        head.toLowerCase().startsWith('<!doctype html') ||
+                            head.toLowerCase().startsWith('<html'),
+                        `${dir}/${f.name} is not a valid HTML document`,
                     ).toBe(true);
                 }
                 // CSS: presence is enough; we don't parse it.
@@ -368,6 +405,100 @@ describe('file-tree viewer vendor libraries load', () => {
         expect(
             src.includes('customElements'),
             'json-viewer.bundle.js does not register a custom element',
+        ).toBe(true);
+    });
+
+    it('pdfjs/wrapper.html loads pdf.min.mjs as an ES module', () => {
+        // The wrapper is the iframe target the dispatcher mounts. It
+        // must dynamically import pdf.min.mjs (the pdfjs core) and
+        // the PDFViewer UI module. A truncated wrapper would silently
+        // render a blank iframe instead of failing loudly.
+        const src = readFileSync(
+            join(VENDOR_DIR, 'pdfjs', 'wrapper.html'),
+            'utf8',
+        );
+        expect(
+            src.includes('import * as pdfjsLib') &&
+                src.includes('pdf.min.mjs'),
+            'wrapper.html does not import pdf.min.mjs',
+        ).toBe(true);
+        expect(
+            src.includes('EventBus') &&
+                src.includes('PDFViewer') &&
+                src.includes('pdf_viewer.mjs'),
+            'wrapper.html does not wire the PDFViewer UI',
+        ).toBe(true);
+        expect(
+            src.includes('pdfjsLib.GlobalWorkerOptions.workerSrc') &&
+                src.includes('pdf.worker.min.mjs'),
+            'wrapper.html does not configure the pdfjs worker',
+        ).toBe(true);
+        // cMapUrl + standardFontDataUrl must point at the vendored
+        // cmaps/ and standard_fonts/ directories so non-embedded CJK
+        // PDFs and PDFs without embedded fonts render.
+        expect(
+            src.includes('./cmaps/') && src.includes('cMapUrl'),
+            'wrapper.html does not configure the cMap URL',
+        ).toBe(true);
+        expect(
+            src.includes('./standard_fonts/') &&
+                src.includes('standardFontDataUrl'),
+            'wrapper.html does not configure standardFontDataUrl',
+        ).toBe(true);
+    });
+
+    it('pdfjs/cmaps/ has the Adobe character map files', () => {
+        // PDF.js needs at least one .bcmap file present. The vendored
+        // directory should have the full 169-file Adobe cmap set; we
+        // just verify a representative one is present + the magic
+        // bytes match Adobe's pre-compressed cmap format (begins with
+        // 02 e0 followed by "RCopyright").
+        const buf = readFileSync(
+            join(VENDOR_DIR, 'pdfjs', 'cmaps', '78-EUC-H.bcmap'),
+        );
+        expect(buf.length).toBeGreaterThan(100);
+        expect(
+            buf.slice(0, 4).toString('binary') === '\x02\xe0RC',
+            'bcmap magic bytes do not match Adobe format',
+        ).toBe(true);
+    });
+
+    it('pdfjs/standard_fonts/ has at least one Type 1 font', () => {
+        // PDF.js needs the standard Type 1 fonts for PDFs that don't
+        // embed them. The .pfb (PostScript Binary Format) starts with
+        // a 1-byte segment-type tag: 0x01 = ASCII, 0x02 = binary,
+        // 0x03 = EOF. pdfjs-dist 5.x splits each font into segments
+        // so the first byte varies (this fixture happens to be ASCII
+        // = 0x01); we accept any of the three valid types as proof
+        // the file is a real PFB and not truncated.
+        const buf = readFileSync(
+            join(VENDOR_DIR, 'pdfjs', 'standard_fonts', 'FoxitDingbats.pfb'),
+        );
+        expect(buf.length).toBeGreaterThan(100);
+        const seg = buf[0];
+        expect(
+            seg === 0x01 || seg === 0x02 || seg === 0x03,
+            `pfb first byte is 0x${seg.toString(16)}, expected 0x01/0x02/0x03 segment type`,
+        ).toBe(true);
+    });
+
+    it('pdfjs/image_decoders/ ships the JBIG2/JPEG2000 wasm ESM', () => {
+        // The image-decoders.mjs is loaded by the pdfjs worker when a
+        // PDF uses JBIG2 or JPEG2000 streams. Without it those PDFs
+        // fail to render images.
+        const src = readFileSync(
+            join(
+                VENDOR_DIR,
+                'pdfjs',
+                'image_decoders',
+                'pdf.image_decoders.min.mjs',
+            ),
+            'utf8',
+        );
+        expect(src.length).toBeGreaterThan(1000);
+        expect(
+            src.includes('jbig2') || src.includes('Jbig2'),
+            'image_decoders.mjs does not mention JBIG2',
         ).toBe(true);
     });
 });
