@@ -2368,6 +2368,10 @@ export class DesktopHost {
         ],
       },
       { role: 'editMenu' },
+      {
+        label: 'View',
+        submenu: [{ role: 'togglefullscreen' }],
+      },
       { role: 'windowMenu' },
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
