@@ -4,7 +4,17 @@ import { kindFor } from '../web/file-viewer.js';
 
 describe('file-viewer kindFor', () => {
     it('classifies image extensions', () => {
-        for (const ext of ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif', '.bmp', '.ico']) {
+        for (const ext of [
+            '.png',
+            '.jpg',
+            '.jpeg',
+            '.gif',
+            '.webp',
+            '.svg',
+            '.avif',
+            '.bmp',
+            '.ico',
+        ]) {
             expect(kindFor(ext)).toBe('image');
         }
     });
@@ -16,7 +26,15 @@ describe('file-viewer kindFor', () => {
     });
 
     it('classifies audio extensions', () => {
-        for (const ext of ['.mp3', '.m4a', '.ogg', '.oga', '.wav', '.flac', '.opus']) {
+        for (const ext of [
+            '.mp3',
+            '.m4a',
+            '.ogg',
+            '.oga',
+            '.wav',
+            '.flac',
+            '.opus',
+        ]) {
             expect(kindFor(ext)).toBe('audio');
         }
     });
@@ -44,7 +62,7 @@ describe('file-viewer kindFor', () => {
             ['.css', 'css'],
             ['.diff', 'diff'],
         ];
-        for (const [ext, lang] of cases) {
+        for (const [ext] of cases) {
             expect(kindFor(ext)).toBe('code');
         }
     });
