@@ -793,3 +793,58 @@ func TestBeginDrain_RejectsNewSpawns(t *testing.T) {
 		t.Errorf("expected no instances to be created during drain, got %d", len(manager.ListActive()))
 	}
 }
+
+// TestListActive_SkipsCorpsesKeepsGhosts: a naturally-exited PTY stays in
+// the registry but must not be listed (else refresh resurrects it as a
+// phantom tab); a Pty-nil restore ghost must still be listed.
+func TestListActive_SkipsCorpsesKeepsGhosts(t *testing.T) {
+	manager := NewManager()
+	shell, args := getTestShell()
+	live, err := manager.Spawn(context.Background(), "", shell, args, "shell", "list-live")
+	if err != nil {
+		t.Fatalf("Spawn live: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Kill(live.ID) })
+
+	doomed, err := manager.Spawn(context.Background(), "", shell, args, "shell", "list-doomed")
+	if err != nil {
+		t.Fatalf("Spawn doomed: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Kill(doomed.ID) })
+
+	go func() { _, _ = io.Copy(io.Discard, doomed.Pty) }()
+	if _, err := doomed.Pty.Write([]byte("exit\r\n")); err != nil {
+		t.Fatalf("write exit: %v", err)
+	}
+	select {
+	case <-doomed.Pty.Closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for shell to exit")
+	}
+
+	manager.mu.Lock()
+	manager.instances["ghost"] = &PTYInstance{ID: "ghost"}
+	manager.mu.Unlock()
+	t.Cleanup(func() {
+		manager.mu.Lock()
+		delete(manager.instances, "ghost")
+		manager.mu.Unlock()
+	})
+
+	ids := map[string]bool{}
+	for _, inst := range manager.ListActive() {
+		ids[inst.ID] = true
+	}
+	if !ids[live.ID] {
+		t.Error("live instance missing from ListActive")
+	}
+	if !ids["ghost"] {
+		t.Error("Pty-nil restore ghost missing from ListActive")
+	}
+	if ids[doomed.ID] {
+		t.Error("died-in-place corpse listed (refresh would resurrect it as a phantom tab)")
+	}
+	if _, found := manager.Get(doomed.ID); !found {
+		t.Error("corpse should stay in the registry; only the listing skips it")
+	}
+}
