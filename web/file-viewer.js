@@ -81,18 +81,12 @@ const CODE_LANG = {
 };
 export function kindFor(ext) {
     const e = ext.toLowerCase();
-    if (IMG_EXT.test(e))
-        return 'image';
-    if (VID_EXT.test(e))
-        return 'video';
-    if (AUD_EXT.test(e))
-        return 'audio';
-    if (e === '.pdf')
-        return 'pdf';
-    if (MD_EXT.test(e))
-        return 'markdown';
-    if (e === '.json' || JSON_EXT.test(e))
-        return 'json';
+    if (IMG_EXT.test(e)) return 'image';
+    if (VID_EXT.test(e)) return 'video';
+    if (AUD_EXT.test(e)) return 'audio';
+    if (e === '.pdf') return 'pdf';
+    if (MD_EXT.test(e)) return 'markdown';
+    if (e === '.json' || JSON_EXT.test(e)) return 'json';
     if (Object.prototype.hasOwnProperty.call(CODE_LANG, e.slice(1)))
         return 'code';
     return 'download';
@@ -146,8 +140,7 @@ function mountImage(url, container) {
         dispose() {
             try {
                 viewer.destroy();
-            }
-            catch {
+            } catch {
                 // Viewer.destroy throws if called twice; that's fine.
             }
             container.innerHTML = '';
@@ -171,8 +164,7 @@ function mountMedia(url, container, isVideo) {
         dispose() {
             try {
                 player.destroy();
-            }
-            catch {
+            } catch {
                 // Player may already be destroyed if the user navigates
                 // away mid-playback; that's fine.
             }
@@ -217,7 +209,11 @@ async function mountMarkdown(url, container, signal) {
         throw new Error(`Failed to load (${res.status} ${res.statusText})`);
     const text = await res.text();
     container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(text)}</div>`;
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 async function mountCode(url, ext, container, signal) {
     const lang = CODE_LANG[ext.slice(1)] || 'plaintext';
@@ -235,9 +231,12 @@ async function mountCode(url, ext, container, signal) {
     pre.appendChild(code);
     container.innerHTML = '';
     container.appendChild(pre);
-    if (window.hljs)
-        window.hljs.highlightElement(code);
-    return { dispose: () => { container.innerHTML = ''; } };
+    if (window.hljs) window.hljs.highlightElement(code);
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 async function mountJson(url, container, signal) {
     container.innerHTML = '<div class="md-rendering">Loading…</div>';
@@ -250,8 +249,7 @@ async function mountJson(url, container, signal) {
     let parsed;
     try {
         parsed = JSON.parse(text);
-    }
-    catch {
+    } catch {
         parsed = undefined;
     }
     const el = document.createElement('json-viewer');
@@ -261,23 +259,32 @@ async function mountJson(url, container, signal) {
         // circumvents innerHTML and any prototype-pollution surface
         // from a crafted JSON key like `__proto__`.
         el.data = parsed;
-    }
-    else {
+    } else {
         // Invalid JSON: render the raw text as a code block.
         el.textContent = text;
     }
     container.innerHTML = '';
     container.appendChild(el);
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 function mountDownload(url, path, container) {
-    const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+    const name = path.slice(
+        Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
+    );
     container.innerHTML =
         `<div class="file-viewer-download">` +
-            `<p>Can't preview <code>${escapeHtml(name)}</code>.</p>` +
-            `<a class="file-viewer-download-btn" href="${escapeHtml(url)}" download="${escapeHtml(name)}">Download</a>` +
-            `</div>`;
-    return { dispose: () => { container.innerHTML = ''; } };
+        `<p>Can't preview <code>${escapeHtml(name)}</code>.</p>` +
+        `<a class="file-viewer-download-btn" href="${escapeHtml(url)}" download="${escapeHtml(name)}">Download</a>` +
+        `</div>`;
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 function escapeHtml(s) {
     return String(s)

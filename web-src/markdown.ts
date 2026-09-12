@@ -515,7 +515,10 @@ export class MarkdownManager {
      *  code / json / text / download). Markdown files take the same
      *  path as openFile so the in-list and file-tree entry points
      *  converge on the same renderer. */
-    async previewFile(f: { path: string; name: string }, cwd: string): Promise<void> {
+    async previewFile(
+        f: { path: string; name: string },
+        cwd: string,
+    ): Promise<void> {
         // Tear down any previous non-markdown viewer; its underlying
         // Plyr/Viewer instance would otherwise outlive the swap.
         if (this._currentFileView) {
@@ -527,8 +530,7 @@ export class MarkdownManager {
             this._currentFileView = null;
         }
         this._setModalTitle(f.name);
-        this.modalBody.innerHTML =
-            '<div class="md-rendering">Loading…</div>';
+        this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
 

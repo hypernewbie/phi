@@ -236,7 +236,11 @@ async function mountMarkdown(
         throw new Error(`Failed to load (${res.status} ${res.statusText})`);
     const text = await res.text();
     container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(text)}</div>`;
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 
 async function mountCode(
@@ -261,7 +265,11 @@ async function mountCode(
     container.innerHTML = '';
     container.appendChild(pre);
     if (window.hljs) window.hljs.highlightElement(code);
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 
 async function mountJson(
@@ -295,17 +303,31 @@ async function mountJson(
     }
     container.innerHTML = '';
     container.appendChild(el);
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 
-function mountDownload(url: string, path: string, container: HTMLElement): FileViewHandle {
-    const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+function mountDownload(
+    url: string,
+    path: string,
+    container: HTMLElement,
+): FileViewHandle {
+    const name = path.slice(
+        Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
+    );
     container.innerHTML =
         `<div class="file-viewer-download">` +
         `<p>Can't preview <code>${escapeHtml(name)}</code>.</p>` +
         `<a class="file-viewer-download-btn" href="${escapeHtml(url)}" download="${escapeHtml(name)}">Download</a>` +
         `</div>`;
-    return { dispose: () => { container.innerHTML = ''; } };
+    return {
+        dispose: () => {
+            container.innerHTML = '';
+        },
+    };
 }
 
 function escapeHtml(s: string): string {
