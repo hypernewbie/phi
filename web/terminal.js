@@ -13,6 +13,8 @@ import {
     formatHudCpu,
     formatDurationMin,
     escapeHtml,
+    isMacPlatform,
+    tabShortcutDigit,
 } from './util.js';
 import {
     applyBrandCpuTier,
@@ -1620,9 +1622,8 @@ export class TabManager {
         );
 
         term.attachCustomKeyEventHandler((e) => {
+            const isMac = isMacPlatform();
             if (e.type === 'keydown') {
-                const isMac =
-                    navigator.platform.toUpperCase().indexOf('MAC') >= 0;
                 const isCopy =
                     (isMac && e.metaKey && e.key.toLowerCase() === 'c') ||
                     (!isMac &&
@@ -1677,8 +1678,12 @@ export class TabManager {
                 }
                 return false;
             }
-            // Support Alt+1..9 tab switching inside xterm
-            if (e.altKey && e.key >= '1' && e.key <= '9') {
+            // Support Alt+1..9 (and Cmd+1..9 / Option+1..9 on macOS) tab switching inside xterm
+            const isTabSwitchModifier =
+                !e.ctrlKey &&
+                !e.shiftKey &&
+                (e.altKey || (isMac && e.metaKey));
+            if (isTabSwitchModifier && tabShortcutDigit(e) !== null) {
                 if (e.type === 'keydown') {
                     this.handleGlobalTabShortcuts(e);
                 }
@@ -5852,14 +5857,15 @@ export class TabManager {
             return;
         }
 
-        if (
-            e.altKey &&
+        const isMac = isMacPlatform();
+        const isTabSwitchModifier =
             !e.ctrlKey &&
-            !e.metaKey &&
-            e.key >= '1' &&
-            e.key <= '9'
-        ) {
-            const num = parseInt(e.key, 10);
+            !e.shiftKey &&
+            (e.altKey || (isMac && e.metaKey));
+        const digit = isTabSwitchModifier ? tabShortcutDigit(e) : null;
+
+        if (digit !== null) {
+            const num = digit;
             const paneIds = Array.from(this.tabs.keys());
             if (paneIds.length === 0) return;
 
@@ -5867,10 +5873,10 @@ export class TabManager {
 
             let targetPaneId;
             if (num === 9) {
-                // Alt+9 switches to the last tab
+                // Alt+9 / Cmd+9 switches to the last tab
                 targetPaneId = paneIds[paneIds.length - 1];
             } else {
-                // Alt+1 to Alt+8 switch to corresponding index
+                // Alt+1..8 / Cmd+1..8 switch to corresponding index
                 const idx = num - 1;
                 if (idx < paneIds.length) {
                     targetPaneId = paneIds[idx];

@@ -79,8 +79,8 @@ Session controls:
 Tabs are the active working surface.
 
 - Click a tab to switch to it.
-- Use `Alt+1` through `Alt+8` to switch to a numbered tab.
-- Use `Alt+9` to switch to the last tab.
+- Use `Alt+1` through `Alt+8` (or `Cmd+1` through `Cmd+8` on macOS) to switch to a numbered tab.
+- Use `Alt+9` (or `Cmd+9` on macOS) to switch to the last tab.
 - Phi stores open tab state in browser storage and attempts to restore tabs on reload.
 - Switching tabs updates the active workspace/CWD context for Git and Markdown panels.
 
@@ -326,8 +326,8 @@ Common shortcuts:
 
 | Shortcut | Action |
 | --- | --- |
-| `Alt+1` to `Alt+8` | Switch to tab 1 through 8 |
-| `Alt+9` | Switch to last tab |
+| `Alt+1` to `Alt+8` / `Cmd+1` to `Cmd+8` | Switch to tab 1 through 8 |
+| `Alt+9` / `Cmd+9` | Switch to last tab |
 | `Ctrl+Shift+Enter` | Recall previous shell command and execute it |
 | `Ctrl+Shift+F` | Find in terminal output |
 | `Ctrl+Shift+D` | Open diagnostics panel |
