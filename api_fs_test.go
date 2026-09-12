@@ -101,11 +101,16 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	mustWriteFile(t, filepath.Join(dir, ".gitignore"), "ignored.txt\nbuild/\n")
+	mustWriteFile(t, filepath.Join(dir, ".gitignore"), "ignored.txt\nignored.md\nnotes.md/\nbuild/\n")
 	mustWriteFile(t, filepath.Join(dir, "ignored.txt"), "x")
+	mustWriteFile(t, filepath.Join(dir, "ignored.md"), "x")
 	mustWriteFile(t, filepath.Join(dir, "keep.txt"), "x")
 	if err := os.Mkdir(filepath.Join(dir, "build"), 0o755); err != nil {
 		t.Fatalf("mkdir build: %v", err)
+	}
+	// Dirs bypass the filter so ignored folders stay browsable.
+	if err := os.Mkdir(filepath.Join(dir, "notes.md"), 0o755); err != nil {
+		t.Fatalf("mkdir notes.md: %v", err)
 	}
 
 	w := httptest.NewRecorder()
@@ -119,15 +124,35 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 	for _, e := range resp.Entries {
 		names[e.Name] = true
 	}
-	for _, want := range []string{"keep.txt", ".gitignore"} {
+	for _, want := range []string{"keep.txt", ".gitignore", "ignored.md", "build", "notes.md"} {
 		if !names[want] {
 			t.Errorf("expected %q to be present, entries=%+v", want, resp.Entries)
 		}
 	}
-	for _, notWant := range []string{"ignored.txt", "build", ".git"} {
+	for _, notWant := range []string{"ignored.txt", ".git"} {
 		if names[notWant] {
 			t.Errorf("expected %q to be absent, entries=%+v", notWant, resp.Entries)
 		}
+	}
+
+	// Inside an ignored dir: non-md files stay filtered, .md shows.
+	mustWriteFile(t, filepath.Join(dir, "build", "out.js"), "x")
+	mustWriteFile(t, filepath.Join(dir, "build", "notes.md"), "x")
+	w = httptest.NewRecorder()
+	handleFSList(w, fsListRequest(dir, "build"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	sub := decodeFSListResponse(t, w)
+	subNames := map[string]bool{}
+	for _, e := range sub.Entries {
+		subNames[e.Name] = true
+	}
+	if !subNames["notes.md"] {
+		t.Errorf("expected notes.md inside ignored dir, entries=%+v", sub.Entries)
+	}
+	if subNames["out.js"] {
+		t.Errorf("expected out.js filtered inside ignored dir, entries=%+v", sub.Entries)
 	}
 }
 

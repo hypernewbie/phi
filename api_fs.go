@@ -79,8 +79,7 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 
 	isRepo := gitutil.IsGitRepo(r.Context(), resolved)
 
-	// Candidate entries plus the key used for the batched ignore check;
-	// dirs get a trailing slash so directory-only patterns (`build/`) match.
+	// Candidates plus the key used for the batched ignore check.
 	type cand struct {
 		entry FSEntry
 		key   string
@@ -104,7 +103,10 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 			key = name + "/"
 		}
 		cands = append(cands, cand{FSEntry{Name: name, Dir: isDir}, key})
-		checkNames = append(checkNames, key)
+		// Dirs and .md files bypass gitignore; only other files are checked.
+		if !isDir && !strings.EqualFold(filepath.Ext(name), ".md") {
+			checkNames = append(checkNames, key)
+		}
 	}
 
 	var ignored map[string]bool
