@@ -2,7 +2,11 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
-## v0.20.2 — 2026-09-12
+## v0.20.3 — 2026-09-12
+
+(Same content as the never-published v0.20.2 attempt; the v0.20.2 release
+run failed on GoReleaser's dirty-tree check and no artifacts were
+published, so the release number moved to v0.20.3.)
 
 ### Added
 - **File-tree inline preview** (`a20381a`, `da53759`, `5f86077`, `5e8d052`). Click `⋯` on a file-tree entry → "Preview" opens the file in the existing markdown modal. Image (PNG/JPG/GIF/WebP/SVG/AVIF/BMP/ICO) via vendored **Viewer.js 1.13.0** with zoom/pan/touch/fullscreen. Video (MP4/WebM/MOV/M4V/OGV/MKV) and audio (MP3/M4A/OGG/WAV/FLAC/Opus) via vendored **Plyr 3.8.4** with full controls. PDF via vendored **pdfjs-dist 5.4.149** (wrapper.html → PDFViewer UI + worker, 194 vendored files including CJK cmaps, standard Type 1 fonts, JBIG2/JPEG2000 image decoders). Markdown via existing marked+DOMPurify. Code (40+ languages) via existing hljs. JSON via vendored **@alenaksu/json-viewer 2.1.2** (collapsible/filterable tree). Text/log/csv via `<pre>`. Everything else (zip, exe, archives) → Download button. Lifecycle: every viewer returns `{dispose()}`; closeModal and replacement both dispose so Plyr audio context and Viewer.js back-references release cleanly.
