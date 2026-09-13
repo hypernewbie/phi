@@ -49,6 +49,23 @@ describe('standalone Config surface routing', () => {
         expect(document.querySelector('.settings-modal')).toBeTruthy();
     });
 
+    it('native config popout closes its owning window instead of blanking it', () => {
+        const close = vi.spyOn(window, 'close').mockImplementation(() => {});
+
+        openSettingsModal(buildApp(), ACCENTS, {
+            standalone: true,
+            nativePopout: true,
+        });
+        const overlay = document.querySelector('.settings-overlay');
+        document.querySelector('.modal-close-btn').click();
+
+        expect(close).toHaveBeenCalledTimes(1);
+        // In Electron the document goes away with its BrowserWindow. Keeping
+        // this mounted here proves the renderer does not leave a black child
+        // behind by unmounting its only surface first.
+        expect(document.querySelector('.settings-overlay')).toBe(overlay);
+    });
+
     it('desktop Config action (?desktop=1) opens the named child window, not the in-page modal', () => {
         window.history.replaceState(null, '', '/?desktop=1');
         const open = vi.spyOn(window, 'open').mockReturnValue({ opener: null });
@@ -57,7 +74,7 @@ describe('standalone Config surface routing', () => {
 
         expect(open).toHaveBeenCalledTimes(1);
         expect(open).toHaveBeenCalledWith(
-            '/config.html',
+            '/config.html?desktop-popout=1',
             'phi-config',
             'width=860,height=1000',
         );
