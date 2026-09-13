@@ -1877,6 +1877,29 @@ describe('electron-builder.json (native branding)', () => {
       'phi-client-${version}-${os}-${arch}.${ext}',
     );
   });
+
+  it('unpacks assets for native Windows icon and tray access (asarUnpack)', () => {
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
+      asarUnpack?: string[];
+    };
+    expect(builder.asarUnpack).toContain('assets/**');
+  });
+
+  it('aligns electronVersion with devDependencies.electron in package.json', () => {
+    const builder = JSON.parse(
+      readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
+    ) as {
+      electronVersion?: string;
+    };
+    const pkg = JSON.parse(
+      readFileSync(path.join(here, '..', 'package.json'), 'utf8'),
+    ) as {
+      devDependencies?: { electron?: string };
+    };
+    expect(builder.electronVersion).toBe(pkg.devDependencies?.electron);
+  });
 });
 
 describe('src/desktop.ts (sync board desktop alerts)', () => {
