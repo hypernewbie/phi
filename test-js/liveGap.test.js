@@ -132,6 +132,23 @@ describe('_onLiveGap', () => {
     });
 });
 
+describe('output-dropped control', () => {
+    it('renders a local banner without touching seq accounting', () => {
+        // The server sends this 0x02 off the byte stream precisely so a
+        // slow-client warning never perturbs liveSeq / watermarks.
+        const c = Object.create(TabManager.prototype);
+        c.writeToTerminal = vi.fn();
+        const tab = { paneId: 'p', queuedSeq: 100, drainedSeq: 100 };
+        c.handleControlMessage(tab, { type: 'output-dropped' });
+        expect(c.writeToTerminal).toHaveBeenCalledTimes(1);
+        expect(String(c.writeToTerminal.mock.calls[0][1])).toContain(
+            'slow client',
+        );
+        expect(tab.queuedSeq).toBe(100);
+        expect(tab.drainedSeq).toBe(100);
+    });
+});
+
 describe('_trackBootstrap', () => {
     it('prunes settled entries so reconnects do not leak slots', async () => {
         const c = Object.create(TabManager.prototype);
