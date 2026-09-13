@@ -152,6 +152,7 @@ describe('web/vendor/*.js - parse integrity', () => {
         'xterm-addon-webgl.js',
         'xterm-addon-unicode11.js',
         'xterm-addon-serialize.js',
+        'xterm-headless.js',
     ])('%s parses as valid JavaScript', (filename) => {
         const src = readFileSync(join(VENDOR_DIR, filename), 'utf8');
         // Catches truncation mid-statement (the regression we hit on 2026-07-11).
