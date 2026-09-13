@@ -49,6 +49,7 @@ import {
   PET_ZOOM_MAX_PERCENT,
   PET_ZOOM_MIN_PERCENT,
 } from './controller.js';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -435,11 +436,19 @@ export function wireTrayEvents(
  * Wails missing-icon convention).
  */
 export function setupTray(deps: TrayDeps): TrayHandle {
-  const iconPath = deps.iconPath ?? TRAY_ICON_PATH;
+  let iconPath = deps.iconPath ?? TRAY_ICON_PATH;
+  const unpacked = iconPath.replace('app.asar', 'app.asar.unpacked');
+  if (existsSync(unpacked)) {
+    iconPath = unpacked;
+  }
   let icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty() && iconPath.endsWith('.ico')) {
     // Windows ICO only: other platforms fall back to the sibling PNG.
-    icon = nativeImage.createFromPath(iconPath.replace(/\.ico$/, '.png'));
+    const pngPath = iconPath.replace(/\.ico$/, '.png');
+    const unpackedPng = pngPath.replace('app.asar', 'app.asar.unpacked');
+    icon = nativeImage.createFromPath(
+      existsSync(unpackedPng) ? unpackedPng : pngPath,
+    );
   }
   if (icon.isEmpty()) {
     deps.log(

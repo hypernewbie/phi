@@ -186,10 +186,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  *  128/256 entries rendered through GDI+ at native resolution, with
  *  proper antialiasing at each size. The 256x256 PNG is retained
  *  as the fallback for surfaces that don't accept .ico. */
-const APP_ICON_PATH =
-  process.platform === 'win32'
-    ? path.join(here, '..', 'assets', 'icon.ico')
-    : path.join(here, '..', 'assets', 'icon.png');
+function resolveAppIconPath(): string {
+  const base =
+    process.platform === 'win32'
+      ? path.join(here, '..', 'assets', 'icon.ico')
+      : path.join(here, '..', 'assets', 'icon.png');
+  const unpacked = base.replace('app.asar', 'app.asar.unpacked');
+  return existsSync(unpacked) ? unpacked : base;
+}
+const APP_ICON_PATH = resolveAppIconPath();
 
 /** Smoke mode is driven by the e2e harness (test/smoke.test.ts, `pnpm run smoke`). */
 const SMOKE = process.env.PHI_DESKTOP_SMOKE === '1';

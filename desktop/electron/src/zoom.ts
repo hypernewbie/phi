@@ -86,7 +86,14 @@ export function nextContentZoomPercent(
 /** Applies a persisted content-zoom percentage to one content WebContents. */
 export function applyContentZoom(target: WebContents, percent: number): void {
   if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
-  target.setZoomMode('manual');
+  if (
+    typeof (target as { setZoomMode?: (mode: string) => void }).setZoomMode ===
+    'function'
+  ) {
+    (target as { setZoomMode?: (mode: string) => void }).setZoomMode?.(
+      'manual',
+    );
+  }
   target.setZoomFactor(percent / 100);
 }
 
