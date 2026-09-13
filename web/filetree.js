@@ -32,16 +32,23 @@ export class FileTreeManager {
     // refresh re-renders the whole tree for the active cwd, refetching the
     // root and every expanded directory (no cache — freshness by refetch).
     // Callers are already gated on the files tab being visible (refreshDiff's
-    // files branch and _toggleDir), so no visibility check is needed here.
+    // files branch and cwd changes). Folder expand/collapse does NOT come
+    // through here — _toggleDir mutates the existing DOM incrementally, so
+    // clicking a folder never flashes the panel or rebuilds unrelated rows.
     async refresh() {
         const requestId = ++this.refreshRequestId;
-        this.treeEl.innerHTML = '<div class="md-list-loading">Loading...</div>';
+        // Only an empty tree shows the loading splash. Re-fetching over
+        // existing content swaps the new fragment in when it arrives; the
+        // user keeps looking at the stale tree instead of a black flash.
+        if (this.treeEl.children.length === 0) {
+            this.treeEl.innerHTML =
+                '<div class="md-list-loading">Loading...</div>';
+        }
         try {
             const frag = await this._renderDir('', 0, requestId);
             if (requestId !== this.refreshRequestId || !frag)
                 return;
-            this.treeEl.innerHTML = '';
-            this.treeEl.appendChild(frag);
+            this.treeEl.replaceChildren(frag);
         }
         catch (e) {
             if (requestId !== this.refreshRequestId)
@@ -100,6 +107,11 @@ export class FileTreeManager {
     _buildRow(entry, rel, depth) {
         const row = document.createElement('div');
         row.className = 'md-file-row';
+        // Incremental expand/collapse walks these: rows are flat siblings
+        // ordered by depth, so a folder owns every following row with a
+        // greater depth until the next row at depth <= its own.
+        row.dataset.rel = rel;
+        row.dataset.depth = String(depth);
         const item = document.createElement('button');
         item.className = 'md-file-item';
         item.style.paddingLeft = `${8 + depth * 14}px`;
@@ -133,14 +145,96 @@ export class FileTreeManager {
         row.appendChild(actionBtn);
         return row;
     }
+    // Expand/collapse mutates the rendered tree in place. A collapse is
+    // pure DOM removal — no fetch, no rebuild. An expand fetches exactly
+    // the clicked directory and inserts its rows below the folder's last
+    // descendant; siblings and every other expanded folder stay untouched
+    // (no panel-wide flash, no loss of scroll position). Children whose
+    // rels are still in the expanded set re-expand recursively.
     _toggleDir(rel) {
+        const row = this.treeEl.querySelector(`.md-file-row[data-rel="${CSS.escape(rel)}"]`);
+        if (!row) {
+            // Row not rendered (stale rel after a cwd switch): fall back
+            // to the full rebuild instead of inserting orphans.
+            if (this.expanded.has(rel))
+                this.expanded.delete(rel);
+            else
+                this.expanded.add(rel);
+            void this.refresh();
+            return;
+        }
+        const depth = Number(row.dataset.depth || '0');
+        const chev = row.querySelector('.ft-chevron');
         if (this.expanded.has(rel)) {
             this.expanded.delete(rel);
+            let el = row.nextElementSibling;
+            while (el &&
+                el.classList.contains('md-file-row') &&
+                Number(el.dataset.depth || '0') > depth) {
+                const next = el.nextElementSibling;
+                el.remove();
+                el = next;
+            }
+            if (chev)
+                chev.textContent = '▸';
         }
         else {
             this.expanded.add(rel);
+            if (chev)
+                chev.textContent = '▾';
+            void this._expandDir(rel, depth, row);
         }
-        this.refresh();
+    }
+    // Fetches one directory and inserts its rows after parentRow's subtree.
+    // Captures the current refreshRequestId so a full refresh() that starts
+    // mid-fetch still wins (it bumps the counter and rebuilds the tree).
+    async _expandDir(rel, depth, parentRow) {
+        const requestId = this.refreshRequestId;
+        let data;
+        try {
+            data = await this._fetchDir(rel);
+        }
+        catch (e) {
+            if (requestId !== this.refreshRequestId)
+                return;
+            this.expanded.delete(rel);
+            const chev = parentRow.querySelector('.ft-chevron');
+            if (chev)
+                chev.textContent = '▸';
+            this.app.showToast(`Failed to open ${rel}`, {
+                type: 'error',
+                title: e.message,
+            });
+            return;
+        }
+        if (requestId !== this.refreshRequestId)
+            return;
+        // Insert below the folder's last descendant (rows are ordered flat
+        // by depth); directly after the folder when it has no children yet.
+        let anchor = parentRow;
+        let el = parentRow.nextElementSibling;
+        while (el &&
+            el.classList.contains('md-file-row') &&
+            Number(el.dataset.depth || '0') > depth) {
+            anchor = el;
+            el = el.nextElementSibling;
+        }
+        const frag = document.createDocumentFragment();
+        const dirRows = [];
+        for (const entry of data.entries) {
+            const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+            const rowEl = this._buildRow(entry, childRel, depth + 1);
+            frag.appendChild(rowEl);
+            if (entry.dir && this.expanded.has(childRel)) {
+                dirRows.push({ rel: childRel, row: rowEl });
+            }
+        }
+        anchor.after(frag);
+        // Re-expand remembered grandchildren below their freshly inserted
+        // rows (same in-place path — never a panel rebuild).
+        for (const { rel: childRel, row: childRow } of dirRows) {
+            void this._expandDir(childRel, depth + 1, childRow);
+        }
     }
     // Inserts the cwd-relative path into the chat textarea at the cursor,
     // formatted for the active tab's coder (claude → @path, bash → raw).

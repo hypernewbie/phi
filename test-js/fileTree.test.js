@@ -101,9 +101,15 @@ describe('FileTreeManager', () => {
         expect(textarea.value).toBe('main.go');
     });
 
-    it('clicking a dir row expands it, fetches its children, and indents them', async () => {
+    it('clicking a dir row expands it in place: fetches only that dir, existing rows keep their identity', async () => {
         const fetchMock = installFetch({
-            '': { truncated: false, entries: [{ name: 'src', dir: true }] },
+            '': {
+                truncated: false,
+                entries: [
+                    { name: 'src', dir: true },
+                    { name: 'other.go', dir: false },
+                ],
+            },
             src: {
                 truncated: false,
                 entries: [{ name: 'main.go', dir: false }],
@@ -113,59 +119,166 @@ describe('FileTreeManager', () => {
         await manager.refresh();
 
         const dirItem = manager.treeEl.querySelector('.md-file-item');
+        const dirRow = dirItem.closest('.md-file-row');
+        const siblingRow = manager.treeEl.querySelectorAll('.md-file-row')[1];
+        fetchMock.mockClear();
         dirItem.click();
 
-        await vi.waitFor(() => {
-            const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-            expect(urls.some((u) => u.includes('path=src'))).toBe(true);
-        });
+        // Only the clicked directory is fetched — no root refetch, no
+        // Loading splash, no panel rebuild.
         await vi.waitFor(() => {
             expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
-                2,
+                3,
             );
         });
-
-        // refresh() rebuilds treeEl from scratch, so the pre-click `dirItem`
-        // reference is now a detached node — re-query the live row.
+        const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+        expect(urls).toHaveLength(1);
+        expect(urls[0]).toContain('path=src');
+        expect(manager.treeEl.querySelector('.md-list-loading')).toBeNull();
+        // In-place surgery: the clicked folder row and its sibling keep
+        // their DOM identity (a rebuild would have replaced every node).
+        expect(dirRow.isConnected).toBe(true);
+        expect(manager.treeEl.querySelectorAll('.md-file-row')[0]).toBe(dirRow);
+        expect(manager.treeEl.querySelectorAll('.md-file-row')[2]).toBe(
+            siblingRow,
+        );
         const rows = manager.treeEl.querySelectorAll('.md-file-row');
-        const rootItem = rows[0].querySelector('.md-file-item');
-        const childItem = rows[1].querySelector('.md-file-item');
-        expect(rootItem.querySelector('.ft-chevron').textContent).toBe('▾');
-        const rootPad = parseInt(rootItem.style.paddingLeft, 10);
-        const childPad = parseInt(childItem.style.paddingLeft, 10);
+        expect(rows[0].querySelector('.ft-chevron').textContent).toBe('▾');
+        const rootPad = parseInt(
+            rows[0].querySelector('.md-file-item').style.paddingLeft,
+            10,
+        );
+        const childPad = parseInt(
+            rows[1].querySelector('.md-file-item').style.paddingLeft,
+            10,
+        );
         expect(childPad).toBeGreaterThan(rootPad);
+        // Children are inserted between the folder and its sibling.
+        expect(rows[1].dataset.rel).toBe('src/main.go');
+        expect(rows[2].dataset.rel).toBe('other.go');
     });
 
-    it('collapsing a dir row removes its children and refetches root', async () => {
+    it('collapsing a dir row removes only its descendants, with no fetch at all', async () => {
         const fetchMock = installFetch({
-            '': { truncated: false, entries: [{ name: 'src', dir: true }] },
+            '': {
+                truncated: false,
+                entries: [
+                    { name: 'src', dir: true },
+                    { name: 'main.go', dir: false },
+                ],
+            },
             src: {
+                truncated: false,
+                entries: [
+                    { name: 'deep', dir: true },
+                    { name: 'a.go', dir: false },
+                ],
+            },
+            'src/deep': {
+                truncated: false,
+                entries: [{ name: 'b.go', dir: false }],
+            },
+        });
+        const manager = makeManager(makeApp());
+        await manager.refresh();
+
+        // Expand src, then its nested dir: src/deep/b.go at depth 2.
+        manager.treeEl
+            .querySelector('.md-file-row[data-rel="src"] .md-file-item')
+            .click();
+        await vi.waitFor(() =>
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                4,
+            ),
+        );
+        manager.treeEl
+            .querySelector('.md-file-row[data-rel="src/deep"] .md-file-item')
+            .click();
+        await vi.waitFor(() =>
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                5,
+            ),
+        );
+
+        fetchMock.mockClear();
+        // Collapse src: its whole subtree (deep + b.go) disappears in one
+        // DOM pass. Nothing is refetched — the old behavior rebuilt the
+        // entire panel from a Loading splash on every collapse.
+        manager.treeEl
+            .querySelector('.md-file-row[data-rel="src"] .md-file-item')
+            .click();
+        await vi.waitFor(() =>
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                2,
+            ),
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+        const rows = manager.treeEl.querySelectorAll('.md-file-row');
+        expect(rows[0].querySelector('.ft-chevron').textContent).toBe('▸');
+        expect(rows[1].dataset.rel).toBe('main.go');
+
+        // Re-expanding src re-fetches it and re-expands the remembered
+        // src/deep child in place.
+        manager.treeEl
+            .querySelector('.md-file-row[data-rel="src"] .md-file-item')
+            .click();
+        await vi.waitFor(() =>
+            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
+                5,
+            ),
+        );
+        const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+        expect(
+            urls.some((u) => u.includes('path=src&') || u.endsWith('path=src')),
+        ).toBe(true);
+        expect(
+            urls.some(
+                (u) =>
+                    u.includes('path=src%2Fdeep') ||
+                    u.includes('path=src/deep'),
+            ),
+        ).toBe(true);
+    });
+
+    it('refresh() over existing content swaps in place instead of flashing Loading', async () => {
+        const fetchMock = installFetch({
+            '': {
                 truncated: false,
                 entries: [{ name: 'main.go', dir: false }],
             },
         });
         const manager = makeManager(makeApp());
         await manager.refresh();
+        const row = manager.treeEl.querySelector('.md-file-row');
 
-        manager.treeEl.querySelector('.md-file-item').click();
-        await vi.waitFor(() => {
-            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
-                2,
-            );
-        });
-
-        fetchMock.mockClear();
-        manager.treeEl.querySelector('.md-file-item').click(); // collapse
-
-        await vi.waitFor(() => {
-            expect(manager.treeEl.querySelectorAll('.md-file-row').length).toBe(
-                1,
-            );
-        });
-        const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-        expect(
-            urls.some((u) => u.includes('path=') && !u.includes('path=src')),
-        ).toBe(true);
+        // A second refresh (tab re-entry, cwd change) keeps the old tree
+        // visible while refetching; the splash only belongs to the empty
+        // first load.
+        let resolveSecond;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => {
+                await new Promise((r) => {
+                    resolveSecond = r;
+                });
+                return {
+                    ok: true,
+                    json: async () => ({
+                        truncated: false,
+                        entries: [{ name: 'renamed.go', dir: false }],
+                    }),
+                };
+            }),
+        );
+        const second = manager.refresh();
+        await Promise.resolve();
+        expect(manager.treeEl.querySelector('.md-list-loading')).toBeNull();
+        expect(manager.treeEl.querySelector('.md-file-row')).toBe(row);
+        resolveSecond();
+        await second;
+        expect(manager.treeEl.querySelector('.md-file-name').textContent).toBe(
+            'renamed.go',
+        );
     });
 
     it('the ⋯ button opens a context menu with Insert + Preview + Open in Explorer for files (Insert closes)', async () => {
