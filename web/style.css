@@ -3478,6 +3478,11 @@ html[data-phi-desktop-root] .app-header {
     display: flex;
     flex-direction: column;
     overflow: visible;
+    /* Tall-modal contract — the same design the compact block mandates:
+       content never exceeds the viewport, the body is the scroller, the
+       footer stays pinned. No-ops for fitting modals (max-height only
+       bites when tall, auto only scrolls on overflow). */
+    max-height: calc(100vh - 48px);
 }
 
 .modal-overlay:not(.hidden) .modal-content {
@@ -3501,6 +3506,7 @@ html[data-phi-desktop-root] .app-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
 }
 
 .modal-header h3 {
@@ -3525,6 +3531,16 @@ html[data-phi-desktop-root] .app-header {
 
 .modal-body {
     padding: 18px;
+    flex: 1 1 auto;
+    min-height: 0; /* lets flex actually shrink inside the capped content */
+    overflow-y: auto;
+}
+
+/* Exemption: the workspace modal's autocomplete dropdown must escape the
+   body box. Its content is a fixed single input that can never exceed
+   the modal, so the scroller is pure cost there. */
+#ws-modal .modal-body {
+    overflow: visible;
 }
 
 .input-autocomplete-wrapper {
@@ -3598,6 +3614,7 @@ html[data-phi-desktop-root] .app-header {
     justify-content: flex-end;
     gap: 10px;
     background-color: rgba(255, 255, 255, 0.01);
+    flex-shrink: 0;
 }
 
 .modal-footer button {
