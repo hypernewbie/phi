@@ -202,12 +202,27 @@ function termPerfMeasureBetween(name, startTs, endTs) {
             typeof performance !== 'undefined' &&
             performance.measure &&
             typeof startTs === 'number'
-        )
+        ) {
+            const dur = (endTs ?? performance.now()) - startTs;
             performance.measure(`phi:${name}`, {
                 start: startTs,
-                duration: (endTs ?? performance.now()) - startTs,
+                duration: dur,
             });
+            return dur;
+        }
     } catch (_e) {}
+    return 0;
+}
+// Tablet-gate readout without devtools: one greppable console line per
+// attach, one warn per genuinely slow fit. Remote-console copy-paste is
+// the only measurement path on the weak device, so these stay terse.
+// Exported for the threshold contract test; production import graph
+// is unaffected.
+export function termPerfLogSlowFit(ms, cols, rows, bufLen) {
+    if (ms >= 50)
+        console.warn(
+            `[phi-perf] slow fit: ${ms.toFixed(0)}ms grid=${cols}x${rows} buf=${bufLen}`,
+        );
 }
 function termPerfMeasureSince(name, startTime) {
     try {
@@ -1818,11 +1833,15 @@ export class TabManager {
         if (!tabInfo._perfWrote) {
             tabInfo._perfWrote = true;
             termPerfMark('first-write');
-            if (tabInfo._perfAttachAt)
-                termPerfMeasureBetween(
+            if (tabInfo._perfAttachAt) {
+                const attachMs = termPerfMeasureBetween(
                     'attach-to-first-write',
                     tabInfo._perfAttachAt,
                 );
+                console.info(
+                    `[phi-perf] attach-to-first-write: ${attachMs.toFixed(0)}ms`,
+                );
+            }
         }
 
         if (tabInfo.loaderEl && !tabInfo.hasStarted) {
@@ -6840,7 +6859,13 @@ export class TabManager {
             }
 
             activeTab.fitAddon.fit();
-            termPerfMeasureSince('fit', _fitT0);
+            const fitMs = termPerfMeasureSince('fit', _fitT0);
+            termPerfLogSlowFit(
+                fitMs,
+                activeTab.term.cols,
+                activeTab.term.rows,
+                buffer.length,
+            );
 
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);

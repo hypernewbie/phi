@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
-import { TabManager } from '../web/terminal.js';
+import { TabManager, termPerfLogSlowFit } from '../web/terminal.js';
 
 // Live-gap healing (hot-v1 §6): a small missing interval must patch
 // invisibly through the normal write queue; only an oversize interval
@@ -146,6 +146,56 @@ describe('output-dropped control', () => {
         );
         expect(tab.queuedSeq).toBe(100);
         expect(tab.drainedSeq).toBe(100);
+    });
+});
+
+describe('perf readout without devtools', () => {
+    it('logs one greppable line for attach latency on first write', () => {
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+        try {
+            const tab = {
+                isDead: false,
+                writeBuffer: '',
+                writePending: false,
+                userFollowBottom: true,
+                term: {
+                    buffer: { active: { viewportY: 0, baseY: 0 } },
+                    write(d, cb) {
+                        if (cb) cb();
+                    },
+                    scrollToBottom: vi.fn(),
+                    _core: { viewport: { syncScrollArea: vi.fn() } },
+                },
+                _perfAttachAt: performance.now() - 100,
+            };
+            c.writeToTerminal(tab, 'hi');
+            expect(info).toHaveBeenCalledTimes(1);
+            expect(String(info.mock.calls[0][0])).toMatch(
+                /\[phi-perf\] attach-to-first-write: \d+ms/,
+            );
+            // Second write stays silent: one line per attach.
+            c.writeToTerminal(tab, 'hi');
+            expect(info).toHaveBeenCalledTimes(1);
+        } finally {
+            info.mockRestore();
+        }
+    });
+
+    it('warns only on genuinely slow fits (>=50ms)', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            termPerfLogSlowFit(49.9, 80, 24, 100);
+            expect(warn).not.toHaveBeenCalled();
+            termPerfLogSlowFit(50, 80, 24, 10000);
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0][0])).toBe(
+                '[phi-perf] slow fit: 50ms grid=80x24 buf=10000',
+            );
+        } finally {
+            warn.mockRestore();
+        }
     });
 });
 
