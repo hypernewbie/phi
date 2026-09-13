@@ -87,6 +87,11 @@ type Config struct {
 	// that is already running.
 	ClaudeDangerouslySkipPermissions bool `json:"claude_dangerously_skip_permissions"`
 
+	// AgyThemeAnsi dynamically adapts xterm's ANSI colour palette to match
+	// Phi's active accent theme for agy tabs. Scoped specifically to agy;
+	// off by default so normal shell tabs and other coders remain untouched.
+	AgyThemeAnsi bool `json:"agy_theme_ansi"`
+
 	// CompressionEnabled gates gzip/brotli encoding of embedded web
 	// assets. Defaults to true, seeded in loadConfig before unmarshal
 	// (absent key keeps the default; explicit false wins). Operators
