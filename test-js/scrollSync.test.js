@@ -169,7 +169,12 @@ function mountRealTab({ coder = 'bash' } = {}) {
     // has nothing to do with the listeners under test and would otherwise
     // reject noisily against jsdom's relative-URL fetch.
     tm.createTab('p1', 'sess-p1', 'Title', coder, '', '', false);
-    return tm.tabs.get('p1');
+    const tab = tm.tabs.get('p1');
+    // The stub WebSocket never fires onopen, so the deferred open never
+    // runs on its own. Production opens on ATTACH_HEAD / first legacy
+    // frame / the 300ms fallback; tests force the same post-open path.
+    tm._openTermAndViewport(tab);
+    return tab;
 }
 
 describe('DOM scroll listener installed by createTab (drives the real handler)', () => {

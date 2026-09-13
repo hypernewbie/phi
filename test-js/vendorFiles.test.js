@@ -42,12 +42,20 @@ const XTERM_ADDONS = [
         namespace: 'Unicode11Addon',
         className: 'Unicode11Addon',
     },
+    {
+        file: 'xterm-addon-serialize.js',
+        namespace: 'SerializeAddon',
+        className: 'SerializeAddon',
+    },
 ];
 
-// UMD wrappers reference either `self` or `globalThis` as free variables.
-// When we evaluate via `new Function`, both must be in the parameter list
-// so the IIFE can resolve them.
-const ADDON_FN_PARAMS = ['self', 'globalThis'];
+// UMD wrappers reference either `self` or `globalThis` as free variables
+// (and some — e.g. xterm-addon-serialize — take a CommonJS branch when
+// `exports` is in scope, which vitest's module runner provides). All of
+// them must resolve into the sandbox so we can inspect the result, and
+// anything attached via the CJS branch is copied back onto the sandbox
+// global so namespace assertions see it either way.
+const ADDON_FN_PARAMS = ['self', 'globalThis', 'module', 'exports'];
 
 function makeAddonSandbox() {
     const sandbox = {
@@ -79,21 +87,51 @@ function makeAddonSandbox() {
     };
     sandbox.globalThis = sandbox;
     sandbox.self = sandbox;
+    // CJS-branch hosts: some UMDs assign `module.exports = t()` or
+    // `exports.<Ns> = t()`. Give them a fresh module whose exports object
+    // loadAddon reconciles back onto the sandbox afterwards.
+    sandbox.module = { exports: {} };
+    sandbox.exports = sandbox.module.exports;
     return sandbox;
 }
 
 // Evaluate an addon in the sandbox and return the resulting globalThis.
-// Different addons expose their constructor on different keys; the caller
-// picks.
-function loadAddon(file) {
+// Different addons expose their constructor on different keys; pass the
+// expected `namespace` so a CommonJS-branch UMD (which replaces
+// `module.exports` with the whole export object — exactly what the
+// browser branch assigns to `e.<Namespace>`) is surfaced under that name.
+function loadAddon(file, namespace, opts) {
     const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
     const sandbox = makeAddonSandbox();
     const fn = new Function(...ADDON_FN_PARAMS, `${src}\nreturn globalThis;`);
-    return fn(sandbox, sandbox);
+    const result = fn(sandbox, sandbox, sandbox.module, sandbox.exports);
+    if (sandbox.module.exports !== sandbox.exports) {
+        // `module.exports = t()` branch: the replacement IS the namespace
+        // object the browser branch assigns to `e.<Namespace> = t()`.
+        if (namespace && !(namespace in result))
+            result[namespace] = sandbox.module.exports;
+    } else {
+        // `factory(exports)` / `exports.<Key> = t()` mutation branch.
+        // jsdiff-style factories mutate their TARGET (the object the
+        // browser branch passes in) — that target is the namespace, so
+        // map it wholesale. Addon-style UMDs assign a self-named key
+        // onto the target; those map per-key.
+        const cjs = sandbox.module.exports;
+        if (cjs && typeof cjs === 'object') {
+            if (opts?.target && namespace && !(namespace in result)) {
+                result[namespace] = cjs;
+            } else {
+                for (const key of Object.keys(cjs)) {
+                    if (!(key in result)) result[key] = cjs[key];
+                }
+            }
+        }
+    }
+    return result;
 }
 
 function loadJsDiff() {
-    return loadAddon('jsdiff.min.js');
+    return loadAddon('jsdiff.min.js', 'Diff', { target: true });
 }
 
 // All vendor scripts must parse without syntax errors. Uses Node's strict
@@ -113,6 +151,7 @@ describe('web/vendor/*.js - parse integrity', () => {
         'xterm-addon-search.js',
         'xterm-addon-webgl.js',
         'xterm-addon-unicode11.js',
+        'xterm-addon-serialize.js',
     ])('%s parses as valid JavaScript', (filename) => {
         const src = readFileSync(join(VENDOR_DIR, filename), 'utf8');
         // Catches truncation mid-statement (the regression we hit on 2026-07-11).
@@ -195,7 +234,7 @@ describe('xterm addons expose the expected constructor on globalThis', () => {
     );
     for (const { file, namespace, className } of RUNTIME_ADDONS) {
         it(`${file} sets globalThis.${namespace}.${className}`, () => {
-            const result = loadAddon(file);
+            const result = loadAddon(file, namespace);
 
             // Assert the namespace object exists.
             const ns = result[namespace];
@@ -229,7 +268,8 @@ describe('xterm addons expose the expected constructor on globalThis', () => {
 // rather than a full evaluate-in-sandbox test.
 describe('createTab addons can be constructed without throwing', () => {
     it('window.SearchAddon.SearchAddon can be instantiated', () => {
-        const Ctor = loadAddon('xterm-addon-search.js').SearchAddon.SearchAddon;
+        const Ctor = loadAddon('xterm-addon-search.js', 'SearchAddon')
+            .SearchAddon.SearchAddon;
         expect(
             () => new Ctor(),
             'new SearchAddon() must not throw',
@@ -237,8 +277,8 @@ describe('createTab addons can be constructed without throwing', () => {
     });
 
     it('window.Unicode11Addon.Unicode11Addon can be instantiated', () => {
-        const Ctor = loadAddon('xterm-addon-unicode11.js').Unicode11Addon
-            .Unicode11Addon;
+        const Ctor = loadAddon('xterm-addon-unicode11.js', 'Unicode11Addon')
+            .Unicode11Addon.Unicode11Addon;
         expect(
             () => new Ctor(),
             'new Unicode11Addon() must not throw',
@@ -246,8 +286,18 @@ describe('createTab addons can be constructed without throwing', () => {
     });
 
     it('window.FitAddon.FitAddon can be instantiated', () => {
-        const Ctor = loadAddon('xterm-addon-fit.js').FitAddon.FitAddon;
+        const Ctor = loadAddon('xterm-addon-fit.js', 'FitAddon').FitAddon
+            .FitAddon;
         expect(() => new Ctor(), 'new FitAddon() must not throw').not.toThrow();
+    });
+
+    it('window.SerializeAddon.SerializeAddon can be instantiated', () => {
+        const Ctor = loadAddon('xterm-addon-serialize.js', 'SerializeAddon')
+            .SerializeAddon.SerializeAddon;
+        expect(
+            () => new Ctor(),
+            'new SerializeAddon() must not throw',
+        ).not.toThrow();
     });
 });
 

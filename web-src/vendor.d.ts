@@ -13,6 +13,7 @@ declare global {
         Terminal: any;
         FitAddon: any;
         SearchAddon: any;
+        SerializeAddon?: any;
         WebglAddon: any;
         Unicode11Addon: any;
         marked: any;
