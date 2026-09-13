@@ -50,6 +50,7 @@ const WEB_JS_MODULES = [
   'sync.js',
   'auth.js',
   'settings.js',
+  'quota.js',
   'desktop.js',
   'config.js',
   'header-state.js',

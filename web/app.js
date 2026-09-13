@@ -18,6 +18,7 @@ import {
     clampPanelWidth,
 } from './util.js';
 import { SyncManager } from './sync.js';
+import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
 import { openSettingsModal } from './settings.js';
 import { markDesktopView } from './desktop.js';
@@ -581,6 +582,9 @@ export class App {
 
         // 10. Swipe Gestures for Drawers on Mobile
         this.setupMobileGestures();
+
+        // 11. Sidebar quota button (footer pill, next to ?).
+        initQuotaButton();
 
         console.log('[app] Phi initialized successfully');
     }
