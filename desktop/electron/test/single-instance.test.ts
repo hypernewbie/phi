@@ -239,10 +239,12 @@ describe('setupSingleInstance', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const send = vi.fn();
     const restore = vi.fn();
+    const show = vi.fn();
     const focus = vi.fn();
     const win = fakeWindow({
       webContents: { send, isDestroyed: () => false },
       restore,
+      show,
       focus,
       isMinimized: () => true,
     });
@@ -264,6 +266,7 @@ describe('setupSingleInstance', () => {
       value: 'https://example.com/',
     });
     expect(restore).toHaveBeenCalledTimes(1); // was minimized
+    expect(show).toHaveBeenCalledTimes(1);
     expect(focus).toHaveBeenCalledTimes(1);
   });
 
@@ -325,15 +328,17 @@ describe('setupSingleInstance', () => {
     });
   });
 
-  it('does not restore a non-minimized window', () => {
+  it('does not restore a non-minimized window but still shows and focuses it', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const restore = vi.fn();
+    const show = vi.fn();
     const focus = vi.fn();
-    const win = fakeWindow({ restore, focus, isMinimized: () => false });
+    const win = fakeWindow({ restore, show, focus, isMinimized: () => false });
     const handle = setupSingleInstance(win, FORWARD_CHANNEL);
     handle.installListener();
     secondInstanceListener()({}, ['phi://profile/x']);
     expect(restore).not.toHaveBeenCalled();
+    expect(show).toHaveBeenCalledTimes(1);
     expect(focus).toHaveBeenCalledTimes(1);
   });
 

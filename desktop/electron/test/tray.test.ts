@@ -17,6 +17,9 @@
  * setupTray — so importing this test file's target is inert outside a real
  * Electron runtime (the same convention as src/single-instance.ts).
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Menu } from 'electron';
 
@@ -794,6 +797,46 @@ describe('setupTray (wiring, recording fakes)', () => {
       TRAY_ICON_PATH,
       TRAY_ICON_PATH.replace(/\.ico$/, '.png'),
     ]);
+  });
+
+  it('resolves the app.asar.unpacked path when iconPath points inside app.asar', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'phi-tray-test-'));
+    try {
+      const unpackedDir = path.join(tmpDir, 'app.asar.unpacked', 'assets');
+      fs.mkdirSync(unpackedDir, { recursive: true });
+      const unpackedIco = path.join(unpackedDir, 'tray.ico');
+      fs.writeFileSync(unpackedIco, 'fake-ico');
+
+      const asarIco = path.join(tmpDir, 'app.asar', 'assets', 'tray.ico');
+      setupTrayForTest({ deps: { iconPath: asarIco } });
+      const calls = (
+        fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>
+      ).mock.calls.map((c) => c[0] as string);
+      expect(calls[0]).toBe(unpackedIco);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the unpacked sibling PNG when the unpacked ICO decodes empty', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'phi-tray-test-'));
+    try {
+      const unpackedDir = path.join(tmpDir, 'app.asar.unpacked', 'assets');
+      fs.mkdirSync(unpackedDir, { recursive: true });
+      const unpackedIco = path.join(unpackedDir, 'tray.ico');
+      const unpackedPng = path.join(unpackedDir, 'tray.png');
+      fs.writeFileSync(unpackedIco, 'fake-ico');
+      fs.writeFileSync(unpackedPng, 'fake-png');
+
+      const asarIco = path.join(tmpDir, 'app.asar', 'assets', 'tray.ico');
+      setupTrayForTest({ deps: { iconPath: asarIco } });
+      const calls = (
+        fakeNativeImage.createFromPath as ReturnType<typeof vi.fn>
+      ).mock.calls.map((c) => c[0] as string);
+      expect(calls).toEqual([unpackedIco, unpackedPng]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('resizes the icon to 16x16 and marks as template image on macOS', () => {

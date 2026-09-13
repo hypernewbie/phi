@@ -502,4 +502,37 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     manager.reloadActive('p1', true);
     expect(views[0].reloadIgnoringCacheCalls).toBe(1);
   });
+
+  it('creates and activates a view whose WebContents has no setZoomMode (real WebContents parity)', () => {
+    const win = makeFakeWindow();
+    let loadedUrl = '';
+    let zoomFactorApplied = 0;
+    const manager = new ProfileViewManager({
+      win: win.win,
+      makeView: () =>
+        ({
+          setBounds: () => {},
+          setVisible: () => {},
+          webContents: {
+            on: () => {},
+            loadURL: (url: string) => {
+              loadedUrl = url;
+              return Promise.resolve();
+            },
+            setZoomFactor: (f: number) => {
+              zoomFactorApplied = f;
+            },
+          },
+        }) as unknown as WebContentsView,
+      defaultBounds: () => ({ ...DEFAULT_BOUNDS }),
+      railWidth: 72,
+      getContentZoomPercent: () => 125,
+      onZoomAction: () => {},
+    });
+
+    manager.addProfile('real-profile', 'http://127.0.0.1:7070/');
+    expect(() => manager.setActive('real-profile')).not.toThrow();
+    expect(loadedUrl).toBe('http://127.0.0.1:7070/?desktop=1');
+    expect(zoomFactorApplied).toBe(1.25);
+  });
 });
