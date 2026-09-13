@@ -116,7 +116,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ altKey: true, key: '2', code: 'Digit2' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-2', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-2', {
+            userInitiated: true,
+        });
     });
 
     it('switches to last tab via Alt+9', () => {
@@ -124,7 +126,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ altKey: true, key: '9', code: 'Digit9' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', {
+            userInitiated: true,
+        });
     });
 
     it('switches to tab via Cmd+1..9 on macOS', () => {
@@ -132,7 +136,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ metaKey: true, key: '3', code: 'Digit3' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-3', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-3', {
+            userInitiated: true,
+        });
     });
 
     it('switches to last tab via Cmd+9 on macOS', () => {
@@ -140,7 +146,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ metaKey: true, key: '9', code: 'Digit9' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', {
+            userInitiated: true,
+        });
     });
 
     it('switches to tab via Option+1 on macOS where key is ¡ and code is Digit1', () => {
@@ -148,7 +156,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ altKey: true, key: '¡', code: 'Digit1' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-1', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-1', {
+            userInitiated: true,
+        });
     });
 
     it('switches to last tab via Option+9 on macOS where key is ª and code is Digit9', () => {
@@ -156,7 +166,9 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ altKey: true, key: 'ª', code: 'Digit9' });
         run(ctx, e);
         expect(e.preventDefault).toHaveBeenCalled();
-        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', { userInitiated: true });
+        expect(ctx.switchTab).toHaveBeenCalledWith('pane-4', {
+            userInitiated: true,
+        });
     });
 
     it('ignores Ctrl+number chords (reserved for rail / control codes)', () => {
@@ -169,7 +181,12 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
 
     it('ignores Shift-modified chords', () => {
         const ctx = makeCtx(4);
-        const e = makeEvent({ altKey: true, shiftKey: true, key: '1', code: 'Digit1' });
+        const e = makeEvent({
+            altKey: true,
+            shiftKey: true,
+            key: '1',
+            code: 'Digit1',
+        });
         run(ctx, e);
         expect(e.preventDefault).not.toHaveBeenCalled();
         expect(ctx.switchTab).not.toHaveBeenCalled();

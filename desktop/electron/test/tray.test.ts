@@ -606,9 +606,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       100,
       125,
     );
-    const content = menu.find(
-      (entry) => entry.label === 'Content Zoom (125%)',
-    );
+    const content = menu.find((entry) => entry.label === 'Content Zoom (125%)');
     expect(content?.submenu?.map((entry) => entry.label)).toEqual([
       'Zoom In',
       'Zoom Out',

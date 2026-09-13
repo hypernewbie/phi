@@ -140,7 +140,9 @@ describe('Settings Modal Agy Theme ANSI toggle', () => {
         checkbox.dispatchEvent(new Event('change'));
 
         expect(app.config.agy_theme_ansi).toBe(true);
-        expect(app.tabManager.applyThemeToAllActiveTerminals).toHaveBeenCalled();
+        expect(
+            app.tabManager.applyThemeToAllActiveTerminals,
+        ).toHaveBeenCalled();
 
         // Check POST request
         const postCall = fetchMock.mock.calls.find(

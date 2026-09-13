@@ -1242,10 +1242,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     const popupIdx = desktopSource.indexOf('createWindow: (options) => {');
     expect(popupIdx).toBeGreaterThan(-1);
     expect(
-      desktopSource.indexOf(
-        'installZoomShortcuts(child.webContents',
-        popupIdx,
-      ),
+      desktopSource.indexOf('installZoomShortcuts(child.webContents', popupIdx),
     ).toBeGreaterThan(popupIdx);
     expect(
       desktopSource.indexOf(
@@ -1254,7 +1251,7 @@ describe('src/desktop.ts (main view page + window controls)', () => {
       ),
     ).toBeGreaterThan(popupIdx);
     expect(desktopSource).toContain(
-      "import {\n  applyContentZoom,\n  installZoomShortcuts,\n  nextContentZoomPercent,",
+      'import {\n  applyContentZoom,\n  installZoomShortcuts,\n  nextContentZoomPercent,',
     );
   });
 

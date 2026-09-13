@@ -856,8 +856,7 @@ export class DesktopHost {
   /** Reads the controller-owned global desktop-content zoom percentage. */
   private getContentZoomPercent(): number {
     return (
-      this.controller?.getContentZoomPercent() ??
-      CONTENT_ZOOM_DEFAULT_PERCENT
+      this.controller?.getContentZoomPercent() ?? CONTENT_ZOOM_DEFAULT_PERCENT
     );
   }
 
@@ -2456,8 +2455,7 @@ export class DesktopHost {
               {
                 label: 'Actual Size (100%)',
                 accelerator: 'CmdOrCtrl+0',
-                enabled:
-                  contentZoomPercent !== CONTENT_ZOOM_DEFAULT_PERCENT,
+                enabled: contentZoomPercent !== CONTENT_ZOOM_DEFAULT_PERCENT,
                 click: () => this.requestContentZoom('reset'),
               },
             ],

@@ -182,10 +182,7 @@ export class ProfileViewManager {
       const bounds = this.defaultBounds();
       existing.view.setBounds(bounds);
       existing.lastBounds = bounds;
-      applyContentZoom(
-        existing.view.webContents,
-        this.getContentZoomPercent(),
-      );
+      applyContentZoom(existing.view.webContents, this.getContentZoomPercent());
       existing.view.setVisible(true);
       // Keyboard/shortcuts route to the newly shown view (the outgoing
       // view kept focus until now).

@@ -347,9 +347,7 @@ describe('DesktopHost optional pet lifecycle', () => {
         );
         const found = [...templates]
           .reverse()
-          .find((template) =>
-            template.some((entry) => entry.label === 'Pet'),
-          );
+          .find((template) => template.some((entry) => entry.label === 'Pet'));
         if (!found) throw new Error('tray template was never built');
         return found;
       };
@@ -590,12 +588,13 @@ describe('DesktopHost optional pet lifecycle', () => {
         host.start({ installListener: vi.fn() } as never),
       ).rejects.toBe(startupStop);
       const templates = fakeMenu.buildFromTemplate.mock.calls.map(
-        (call) =>
-          call[0] as Array<{ label: string; click?: () => void }>,
+        (call) => call[0] as Array<{ label: string; click?: () => void }>,
       );
-      const template = [...templates].reverse().find((candidate) =>
-        candidate.some((entry) => entry.label === 'Install Pet…'),
-      );
+      const template = [...templates]
+        .reverse()
+        .find((candidate) =>
+          candidate.some((entry) => entry.label === 'Install Pet…'),
+        );
       if (!template) throw new Error('tray template was never built');
       template.find((entry) => entry.label === 'Install Pet…')?.click?.();
       await flush();
