@@ -294,11 +294,14 @@ describe('setupSingleInstance', () => {
     });
   });
 
-  it('hands second-instance payloads to a host-owned lifecycle callback', () => {
+  it('hands second-instance payloads to a host-owned lifecycle callback and foregrounds the window', () => {
     fakeApp.requestSingleInstanceLock.mockReturnValue(true);
     const handleLaunch = vi.fn();
+    const show = vi.fn();
+    const focus = vi.fn();
+    const win = fakeWindow({ show, focus, isMinimized: () => false });
     const handle = setupSingleInstance(
-      fakeWindow(),
+      win,
       FORWARD_CHANNEL,
       undefined,
       handleLaunch,
@@ -312,6 +315,8 @@ describe('setupSingleInstance', () => {
       { kind: 'deep-link', value: 'phi://profile/home' },
       { kind: 'server', value: 'https://example.com/' },
     ]);
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(1);
   });
 
   it('forwards server payloads too when onServerUrl is absent (phase-2 contract)', () => {

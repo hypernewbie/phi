@@ -28,11 +28,15 @@ import type { Menu } from 'electron';
 const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
   class FakeTray {
     static instances: FakeTray[] = [];
+    static constructHook: (() => void) | null = null;
     toolTip = '';
     listeners = new Map<string, () => void>();
     popups: unknown[] = [];
     destroyed = false;
     constructor() {
+      if (FakeTray.constructHook) {
+        FakeTray.constructHook();
+      }
       FakeTray.instances.push(this);
     }
     setToolTip(t: string): void {
@@ -160,6 +164,7 @@ function setupTrayForTest(
 }
 
 beforeEach(() => {
+  FakeTray.constructHook = null;
   vi.clearAllMocks();
 });
 
@@ -837,6 +842,23 @@ describe('setupTray (wiring, recording fakes)', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('falls back to sibling PNG when primary Tray construction throws', () => {
+    let callCount = 0;
+    FakeTray.constructHook = () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error('GDI notify icon registration failed');
+      }
+    };
+    const { tray, log } = setupTrayForTest({
+      deps: { iconPath: '/assets/tray.ico' },
+    });
+    expect(tray).toBeDefined();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('failed to create tray icon'),
+    );
   });
 
   it('resizes the icon to 16x16 and marks as template image on macOS', () => {

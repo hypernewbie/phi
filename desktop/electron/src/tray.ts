@@ -462,7 +462,24 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       icon.setTemplateImage(true);
     }
   }
-  const tray = new Tray(icon);
+  let tray: Tray;
+  try {
+    tray = new Tray(icon);
+  } catch (err) {
+    deps.log(
+      `phi-desktop: failed to create tray icon (${String(err)}); attempting fallback`,
+    );
+    const pngPath = iconPath.replace(/\.ico$/, '.png');
+    const unpackedPng = pngPath.replace('app.asar', 'app.asar.unpacked');
+    const fallback = nativeImage.createFromPath(
+      existsSync(unpackedPng) ? unpackedPng : pngPath,
+    );
+    try {
+      tray = new Tray(fallback);
+    } catch {
+      tray = new Tray(nativeImage.createEmpty());
+    }
+  }
   tray.setToolTip('Phi');
 
   const state: { active: TrayProfile | null; unread: Map<string, number> } = {

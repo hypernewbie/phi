@@ -206,10 +206,7 @@ export function setupSingleInstance(
         const win = resolveWindow(window);
         const payloads = classifyArgv(argv);
         if (onLaunchPayloads) {
-          // The host queues, recreates if necessary, and foregrounds only
-          // the current shell after it is ready.
           onLaunchPayloads(payloads);
-          return;
         } else if (onServerUrl) {
           // Compatibility path for existing provider-based callers/tests.
           for (const payload of payloads) {
