@@ -1541,7 +1541,9 @@ export class TabManager {
                 );
             } else if (info.head > from) {
                 // Gap too old/large to replay live: continue live, nudge a
-                // redraw, and leave the interval to the archive.
+                // redraw, and leave the interval behind. The bytes stay in
+                // the server ring until evicted, but the live screen moves
+                // on without them.
                 this._nudgeRedraw(tabInfo);
             }
             return;
@@ -1614,8 +1616,8 @@ export class TabManager {
             }
         }
         pty.abandonGap(to);
-        // Honest marker instead of silently missing output: the archive has
-        // the full interval; the live screen skips it.
+        // Honest marker instead of silently missing output: the live
+        // screen skips the dropped interval and resumes at the new head.
         this.writeToTerminal(
             tabInfo,
             `\r\n\x1b[33m[phi: ${to - from} output bytes dropped — resumed live]\x1b[0m\r\n`,
@@ -6712,6 +6714,10 @@ export class TabManager {
                     proposed.cols === activeTab.term.cols &&
                     proposed.rows === activeTab.term.rows
                 ) {
+                    // Gate tooling continuity: skipped fits cost ~one
+                    // layout read, so they emit their own mark instead of
+                    // silently absenting the `fit` measure.
+                    termPerfMark('fit-skipped');
                     return;
                 }
             }
