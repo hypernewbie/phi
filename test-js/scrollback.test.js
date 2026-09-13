@@ -4,10 +4,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// The live xterm no longer needs to hold the whole server replay ring:
-// the hot-v1 attach restores the screen from a bounded checkpoint +
-// <=64KiB delta, and the recording archive owns deep history. The
-// earlier "replay truncation at xterm's 1000-line default" regression
+// UX law: the live xterm keeps the full scrollback — normal scroll-up
+// must show history with no button hunt and no mode switch. Open-path
+// speed comes from the hot-v1 live-only attach (no 1 MiB replay) +
+// checkpoint bootstrap, never from truncating the visible buffer.
+// The earlier "replay truncation at xterm's 1000-line default" regression
 // is now covered structurally here.
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -17,7 +18,7 @@ const terminalJsPath = path.join(
 );
 
 describe('xterm scrollback configuration', () => {
-    it('sets an explicit bounded scrollback of 512 lines on the Terminal constructor', () => {
+    it('sets an explicit 10000-line scrollback on the Terminal constructor', () => {
         const src = readFileSync(terminalJsPath, 'utf8');
         const ctorStart = src.indexOf('new window.Terminal({');
         expect(ctorStart).toBeGreaterThan(-1);
@@ -26,13 +27,21 @@ describe('xterm scrollback configuration', () => {
 
         const match = ctorBody.match(/scrollback:\s*(\d+)/);
         expect(match).not.toBeNull();
-        expect(Number(match[1])).toBe(512);
+        expect(Number(match[1])).toBe(10000);
     });
 
-    it('the bounded live buffer is safe: the checkpoint bootstrap exists', () => {
+    it('does not cap the live buffer at the 512-row experiment value', () => {
+        const src = readFileSync(terminalJsPath, 'utf8');
+        const ctorStart = src.indexOf('new window.Terminal({');
+        const ctorEnd = src.indexOf('});', ctorStart);
+        const ctorBody = src.slice(ctorStart, ctorEnd);
+        expect(ctorBody).not.toMatch(/scrollback:\s*512\b/);
+    });
+
+    it('fast open does not depend on truncating scrollback: the checkpoint bootstrap exists', () => {
         const src = readFileSync(terminalJsPath, 'utf8');
         // Screen restore on attach (pre-open write) and quiet-tab uploads
-        // are what keep a 512-row live terminal complete.
+        // are what keep attach fast without a 1 MiB replay.
         expect(src).toContain('_onAttachHead');
         expect(src).toContain('serialize({ scrollback: 0 })');
         expect(src).toContain('/checkpoint');

@@ -1830,7 +1830,12 @@ export class TabManager {
         const { HistoryStore } = await import('./history.js');
         const { startArchiveWorker } = await import('./archive.js');
         const store = new HistoryStore({ origin: location.origin });
-        const from = Math.max(tabInfo.paneOldest, head - 65536);
+        // Deep history owns everything the live scrollback cannot show:
+        // fetch the full recording from the oldest retained byte, not
+        // just a recent window (a 64 KiB tail would duplicate what's
+        // already visible via scroll-up). The worker parses off-thread
+        // and IndexedDB caches the chunks, so repeat opens are cheap.
+        const from = tabInfo.paneOldest;
         const fetched = await store.fetchRange(
             tabInfo.paneId,
             tabInfo.paneEpoch,
@@ -2170,12 +2175,13 @@ export class TabManager {
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
-            // Deep history never enters the live xterm — the
-            // hot-v1 attach restores the screen from a checkpoint + a
-            // ≤64KiB delta, so the live buffer only needs a small recent
-            // tail. Every fit/reflow is bounded by this constant; the
-            // recording archive owns anything older.
-            scrollback: 512,
+            // UX law: the live terminal keeps the full scrollback. Normal
+            // scroll-up must show history with no button hunt and no mode
+            // switch. Open-path speed comes from the hot-v1 live-only
+            // attach (no 1 MiB replay) + checkpoint bootstrap, not from
+            // truncating what the user can see. A full-buffer reflow on a
+            // genuine resize is accepted cost: lag beats missing history.
+            scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
             theme: this.getTerminalTheme(coder),
         });
 
@@ -2714,8 +2720,8 @@ export class TabManager {
 
         // Archive button: opens a read-only overlay of recorded
         // history (TERMPERF §5 presentation tier). The live xterm
-        // never holds more than ~512 rows; recorded history is the
-        // only way to see older output.
+        // keeps the full 10000-row scrollback for normal scroll-up;
+        // the archive covers history older than the live buffer holds.
         const archiveBtn = document.createElement('button');
         archiveBtn.className = 'archive-btn hidden';
         archiveBtn.type = 'button';
@@ -2753,16 +2759,19 @@ export class TabManager {
             } else {
                 scrollToBottomBtn.classList.remove('hidden');
             }
-            // Show the archive button only when the live terminal has
-            // recorded enough that the cache adds new rows beyond the
-            // live 512-row tail.
+            // Deep-history archive button: visible whenever the server
+            // holds a recording. Recent history is always in the live
+            // 10000-row scrollback via normal scroll-up; the archive is
+            // strictly beyond-scrollback history, never a replacement.
+            // (Byte seqs can't precisely express "rows beyond
+            // scrollback" without parsing, so any recording qualifies.)
             if (tabInfo.archiveBtn) {
                 const oldest = tabInfo.paneOldest;
                 const head = tabInfo.queuedSeq;
                 if (
                     oldest !== undefined &&
                     head !== undefined &&
-                    head - oldest > 512
+                    head > oldest
                 ) {
                     tabInfo.archiveBtn.classList.remove('hidden');
                 } else {
