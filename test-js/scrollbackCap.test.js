@@ -3,11 +3,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// TERMPERF §4: the live xterm scrollback cap is the structural fix for
-// the 70s resize — every fit/reflow is bounded by it. These tests pin
-// the constant in the source AND that nothing reintroduces the old
-// unbounded value, and that hot-v1 never falls back to whole-ring replay.
-
+// The structural fix for the resize-stall: every live fit/reflow is
+// bounded by the live scrollback cap. Tests pin the constant in source
+// and that hot-v1 still routes recording fetches instead of replay.
 describe('live scrollback cap', () => {
     const src = readFileSync(join(process.cwd(), 'web', 'terminal.js'), 'utf8');
 

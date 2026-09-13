@@ -4,14 +4,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// Updated for TERMPERF (temp/TERMPERF.md §4): the live xterm no longer
-// needs to hold the server's whole replay ring — the hot-v1 attach
-// restores the screen from a bounded checkpoint + <=64KiB delta, and the
-// recording archive owns deep history. The original regression this file
-// guarded (replay truncation at xterm's 1000-line default) is now covered
-// structurally: 512 rows is explicitly configured, and the bootstrap
-// path that makes a small live buffer safe is present in source.
-
+// The live xterm no longer needs to hold the whole server replay ring:
+// the hot-v1 attach restores the screen from a bounded checkpoint +
+// <=64KiB delta, and the recording archive owns deep history. The
+// earlier "replay truncation at xterm's 1000-line default" regression
+// is now covered structurally here.
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     '..',

@@ -179,22 +179,17 @@ const PI_MODEL_STEP_MS = 200;
 // rather than a failed attempt that happened to reach onopen.
 const AUTO_RECONNECT_STABLE_MS = 5000;
 
-// TERMPERF (temp/TERMPERF.md §7): lightweight User Timing marks around
-// attach, writes, and fits so a real device can answer "where did the
-// seconds go" from DevTools (performance.getEntriesByName('phi:*')).
-// Timeline marks land on meaningful events only (ws open, first write of
-// an attach); durations are recorded as measures only when they exceed
-// SLOW_MS so the timing buffers stay small on long-lived pages. Purely
-// observational: no behavior change, all APIs guarded.
-const TERM_PERF_SLOW_MS = 16;
-// TERMPERF §3: the bounded delta ever written into the live terminal on
-// attach/reconnect/gap (checkpoint itself is separately capped server-side
-// at 128 KiB). Together they bound the first live payload regardless of
-// session age.
+// Configuration for performance marks and the bounded screen-checkpoint
+// pipeline (see temp/TERMPERF.md).
+const PERF_SLOW_MS = 16;
+// Bounded delta ever written into the live terminal on attach/reconnect
+// (checkpoint itself is separately capped server-side at 128 KiB). Together
+// they bound the first live payload regardless of session age.
 const HOT_DELTA_LIMIT_BYTES = 64 * 1024;
-// How long output must stay quiet before the client uploads a screen
-// checkpoint (TERMPERF §3 — debounce so busy streams don't serialize).
+// After output stays quiet this long, the client uploads a screen
+// checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
+
 function termPerfMark(name) {
     try {
         if (typeof performance !== 'undefined' && performance.mark)
@@ -218,7 +213,7 @@ function termPerfMeasureSince(name, startTime) {
     try {
         const dur = performance.now() - startTime;
         if (
-            dur >= TERM_PERF_SLOW_MS &&
+            dur >= PERF_SLOW_MS &&
             typeof performance !== 'undefined' &&
             performance.measure
         )
@@ -267,9 +262,9 @@ export class TabManager {
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
 
-        // TERMPERF §3: when the page goes away, leave a fresh screen
-        // checkpoint behind so the next client restores instantly instead
-        // of falling back to the bounded delta.
+        // On pagehide, leave a fresh screen checkpoint behind so the next
+        // client restores instantly instead of falling back to the bounded
+        // delta.
         if (typeof window !== 'undefined') {
             window.addEventListener('pagehide', () => {
                 for (const tab of this.tabs.values()) {
@@ -1415,11 +1410,11 @@ export class TabManager {
         }
     }
 
-    // ── TERMPERF hot-v1: attach bootstrap, gap repair, checkpoints ──
+    // ── Hot-v1 attach bootstrap, gap repair, screen checkpoints ──
 
     // The bounded delta ever allowed into the live terminal on attach or
-    // reconnect (TERMPERF §3/§6). Checkpoint + delta ≤ 192 KiB first
-    // payload, independent of session age.
+    // reconnect. Checkpoint + delta ≤ 192 KiB first payload,
+    // independent of session age.
     _paneData(tabInfo, data) {
         const pty = tabInfo.ws;
         if (pty && pty.mode === 'legacy') {
@@ -1472,7 +1467,7 @@ export class TabManager {
             return {
                 start: hdr.start,
                 end: hdr.end,
-                bytes: data.byteLength,
+                byteLength: data.byteLength,
                 text: new TextDecoder().decode(data),
                 resizes: hdr.resizes || [],
             };
@@ -1498,8 +1493,10 @@ export class TabManager {
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
 
         if (!tabInfo._termOpened) {
-            // Fresh tab: write the checkpoint + bounded delta BEFORE open so
-            // xterm parses once and renders one frame (TERMPERF §3).
+            // Fresh tab: write the checkpoint synchronously, open the
+            // terminal, and release held live frames so first paint is
+            // not gated on the network. The bounded tail delta is
+            // fetched in the background and appended when it arrives.
             if (info.ckpt) {
                 try {
                     tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
@@ -1508,24 +1505,21 @@ export class TabManager {
                 }
                 this.writeToTerminal(tabInfo, info.ckpt.ansi);
             }
-            const from = info.ckpt
-                ? info.ckpt.through
-                : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
-            if (info.head > from) {
-                const d = await this._fetchRecordingRange(
-                    tabInfo.paneId,
-                    from,
-                    info.head,
-                );
-                if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
-                    this.writeToTerminal(tabInfo, d.text);
-                }
-            }
             tabInfo.paneEpoch = info.epoch;
+            tabInfo.paneOldest = info.oldest;
             tabInfo.queuedSeq = info.head;
             tabInfo.drainedSeq = info.head;
             this._openTermAndViewport(tabInfo);
             pty.release();
+            const from = info.ckpt
+                ? info.ckpt.through
+                : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+            if (info.head > from) {
+                tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
+                tabInfo._pendingBootstraps.push(
+                    this._bootstrapDelta(tabInfo, from, info.head),
+                );
+            }
             return;
         }
 
@@ -1533,28 +1527,23 @@ export class TabManager {
             // Reconnect to the same pane: resume from our watermark. Apply a
             // small retained delta; never reset, never 1 MiB replay (§6).
             const from = tabInfo.drainedSeq ?? info.head;
+            tabInfo.paneEpoch = info.epoch;
+            tabInfo.paneOldest = info.oldest;
+            pty.release();
             if (
                 info.head > from &&
                 from >= info.oldest &&
                 info.head - from <= HOT_DELTA_LIMIT_BYTES
             ) {
-                const d = await this._fetchRecordingRange(
-                    tabInfo.paneId,
-                    from,
-                    info.head,
+                tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
+                tabInfo._pendingBootstraps.push(
+                    this._bootstrapDelta(tabInfo, from, info.head),
                 );
-                if (d && d.start === from) {
-                    this.writeToTerminal(tabInfo, d.text);
-                    tabInfo.queuedSeq = info.head;
-                    tabInfo.drainedSeq = info.head;
-                }
             } else if (info.head > from) {
                 // Gap too old/large to replay live: continue live, nudge a
                 // redraw, and leave the interval to the archive.
                 this._nudgeRedraw(tabInfo);
             }
-            tabInfo.paneEpoch = info.epoch;
-            pty.release();
             return;
         }
 
@@ -1572,23 +1561,36 @@ export class TabManager {
         if (info.ckpt) {
             this.writeToTerminal(tabInfo, info.ckpt.ansi);
         }
+        tabInfo.paneEpoch = info.epoch;
+        tabInfo.paneOldest = info.oldest;
+        tabInfo.queuedSeq = info.head;
+        tabInfo.drainedSeq = info.head;
+        pty.release();
         const from = info.ckpt
             ? info.ckpt.through
             : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
         if (info.head > from) {
-            const d = await this._fetchRecordingRange(
-                tabInfo.paneId,
-                from,
-                info.head,
+            tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
+            tabInfo._pendingBootstraps.push(
+                this._bootstrapDelta(tabInfo, from, info.head),
             );
-            if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
-                this.writeToTerminal(tabInfo, d.text);
-            }
         }
-        tabInfo.paneEpoch = info.epoch;
-        tabInfo.queuedSeq = info.head;
-        tabInfo.drainedSeq = info.head;
-        pty.release();
+    }
+
+    // Fetches the bounded attach/reconnect delta in the background and
+    // appends it to the live terminal after the network completes.
+    // Aborted silently when the page is gone or the pane is dead; bounded
+    // by HOT_DELTA_LIMIT_BYTES so we never silently flood scrollback.
+    async _bootstrapDelta(tabInfo, from, head) {
+        if (tabInfo.isDead) return;
+        const d = await this._fetchRecordingRange(tabInfo.paneId, from, head);
+        if (tabInfo.isDead) return;
+        if (!d || d.start !== from || d.byteLength > HOT_DELTA_LIMIT_BYTES) {
+            return;
+        }
+        this.writeToTerminal(tabInfo, d.text);
+        tabInfo.queuedSeq = head;
+        tabInfo.drainedSeq = head;
     }
 
     async _onLiveGap(tabInfo, from, to) {
@@ -1733,7 +1735,7 @@ export class TabManager {
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
-        // TERMPERF: first live/replay byte of an attach. Measured against
+        // First live/replay byte of an attach. Measured against
         // the socket-open mark so attach latency is attributable end-to-end.
         if (!tabInfo._perfWrote) {
             tabInfo._perfWrote = true;
@@ -1793,7 +1795,7 @@ export class TabManager {
         tabInfo.writeBuffer = '';
         tabInfo.writePending = true;
 
-        // TERMPERF: measures xterm parse+render time for the batch (slow
+        // Measures xterm parse+render time for each batch (slow
         // ones only). Recorded from buffer swap to write callback.
         const _writeT0 = performance.now();
 
@@ -1813,7 +1815,7 @@ export class TabManager {
             }
             tabInfo.term._core?.viewport?.syncScrollArea(true);
 
-            // TERMPERF hot-v1: when the queue is fully drained, the xterm
+            // hot-v1: when the queue is fully drained, the xterm
             // state now reflects every byte up to queuedSeq. That makes
             // drainedSeq a valid checkpoint watermark.
             if (
@@ -2025,7 +2027,7 @@ export class TabManager {
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
-            // TERMPERF §4: deep history NEVER enters the live xterm — the
+            // Deep history never enters the live xterm — the
             // hot-v1 attach restores the screen from a checkpoint + a
             // ≤64KiB delta, so the live buffer only needs a small recent
             // tail. Every fit/reflow is bounded by this constant; the
@@ -2040,7 +2042,7 @@ export class TabManager {
         const searchAddon = new window.SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
 
-        // TERMPERF §3: screen-checkpoint serializer. Loaded when the vendor
+        // Screen-checkpoint serializer; loaded when the vendor
         // addon is present; its absence only disables client checkpoints
         // (attach then falls back to the bounded delta).
         let serializeAddon = null;
@@ -2390,7 +2392,7 @@ export class TabManager {
             writePending: false,
             loaderEl: loaderEl,
             hasStarted: false,
-            // TERMPERF hot-v1 bookkeeping.
+            // hot-v1 bookkeeping.
             serializeAddon,
             _termOpened: false,
             _ckptEnabled: true,
@@ -5775,7 +5777,7 @@ export class TabManager {
                 tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
         } else if (control.type === 'output-dropped') {
-            // TERMPERF: hot-v1 slow-client warning. Rendered locally — it is
+            // Hot-v1 slow-client warning. Rendered locally —
             // not part of the byte stream, so seq accounting is untouched.
             this.writeToTerminal(
                 tabInfo,
@@ -6694,7 +6696,7 @@ export class TabManager {
                 activeTab.term.options.fontSize = size;
             }
 
-            // TERMPERF: every fit reflows the whole live buffer; timing it
+            // Every fit reflows the live buffer; timing it
             // is how the tablet gate distinguishes "fit is slow" from
             // "network delivery is slow".
             const _fitT0 = performance.now();
