@@ -1444,9 +1444,12 @@ export class TabManager {
     // detect ring truncation.
     async _fetchRecordingRange(paneId, from, through) {
         try {
+            // Bounded: delivery startup (release) waits on this fetch, so
+            // a wedged request must degrade to a skipped delta, never a
+            // frozen terminal. Same-origin and ≤64 KiB in practice.
             const res = await fetch(
                 `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${from}&through=${through}`,
-                { cache: 'no-store' },
+                { cache: 'no-store', signal: AbortSignal.timeout(10000) },
             );
             if (!res.ok) return null;
             const buf = new Uint8Array(await res.arrayBuffer());
@@ -1510,15 +1513,13 @@ export class TabManager {
             tabInfo.queuedSeq = info.head;
             tabInfo.drainedSeq = info.head;
             this._openTermAndViewport(tabInfo);
-            pty.release();
             const from = info.ckpt
                 ? info.ckpt.through
                 : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
             if (info.head > from) {
-                this._trackBootstrap(
-                    tabInfo,
-                    this._bootstrapDelta(tabInfo, from, info.head),
-                );
+                this._bootstrappedRelease(tabInfo, pty, from, info.head);
+            } else {
+                pty.release();
             }
             return;
         }
@@ -1529,22 +1530,21 @@ export class TabManager {
             const from = tabInfo.drainedSeq ?? info.head;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
-            pty.release();
             if (
                 info.head > from &&
                 from >= info.oldest &&
                 info.head - from <= HOT_DELTA_LIMIT_BYTES
             ) {
-                this._trackBootstrap(
-                    tabInfo,
-                    this._bootstrapDelta(tabInfo, from, info.head),
-                );
-            } else if (info.head > from) {
-                // Gap too old/large to replay live: continue live, nudge a
-                // redraw, and leave the interval behind. The bytes stay in
-                // the server ring until evicted, but the live screen moves
-                // on without them.
-                this._nudgeRedraw(tabInfo);
+                this._bootstrappedRelease(tabInfo, pty, from, info.head);
+            } else {
+                pty.release();
+                if (info.head > from) {
+                    // Gap too old/large to replay live: continue live, nudge a
+                    // redraw, and leave the interval behind. The bytes stay in
+                    // the server ring until evicted, but the live screen moves
+                    // on without them.
+                    this._nudgeRedraw(tabInfo);
+                }
             }
             return;
         }
@@ -1567,15 +1567,13 @@ export class TabManager {
         tabInfo.paneOldest = info.oldest;
         tabInfo.queuedSeq = info.head;
         tabInfo.drainedSeq = info.head;
-        pty.release();
         const from = info.ckpt
             ? info.ckpt.through
             : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
         if (info.head > from) {
-            this._trackBootstrap(
-                tabInfo,
-                this._bootstrapDelta(tabInfo, from, info.head),
-            );
+            this._bootstrappedRelease(tabInfo, pty, from, info.head);
+        } else {
+            pty.release();
         }
     }
 
@@ -1583,6 +1581,31 @@ export class TabManager {
     // appends it to the live terminal after the network completes.
     // Aborted silently when the page is gone or the pane is dead; bounded
     // by HOT_DELTA_LIMIT_BYTES so we never silently flood scrollback.
+    // Ordered bootstrap: the delta must enqueue BEFORE live delivery
+    // starts, or older bytes land below newer ones and watermarks regress.
+    // Live frames stay held until the delta is queued (or definitively
+    // skipped); the checkpoint already painted, so first paint never waits
+    // on the network. The release targets the attach-time socket only: a
+    // reconnect swaps tabInfo.ws, and releasing a stale socket would flush
+    // its orphaned frames into the new stream.
+    _bootstrappedRelease(tabInfo, pty, from, head) {
+        const boot = (async () => {
+            try {
+                await this._bootstrapDelta(tabInfo, from, head);
+            } finally {
+                if (tabInfo._bootstrapGate === boot)
+                    tabInfo._bootstrapGate = null;
+                if (tabInfo.ws === pty) {
+                    try {
+                        pty.release();
+                    } catch (_e) {}
+                }
+            }
+        })();
+        tabInfo._bootstrapGate = boot;
+        this._trackBootstrap(tabInfo, boot);
+    }
+
     // Tracked bootstrap: prod never awaits these, so settled entries prune
     // themselves (no per-reconnect slot leak) and rejections are swallowed
     // here — a failed delta only means a slower open, never a crash.
@@ -1603,8 +1626,13 @@ export class TabManager {
 
     async _bootstrapDelta(tabInfo, from, head) {
         if (tabInfo.isDead) return;
+        // Stale when the socket swapped mid-fetch (reconnect during a slow
+        // fetch): the old stream's bytes must not land in the new one, and
+        // watermarks must not regress — verify the socket before touching
+        // anything.
+        const ws = tabInfo.ws;
         const d = await this._fetchRecordingRange(tabInfo.paneId, from, head);
-        if (tabInfo.isDead) return;
+        if (tabInfo.isDead || tabInfo.ws !== ws) return;
         if (!d || d.start !== from || d.byteLength > HOT_DELTA_LIMIT_BYTES) {
             return;
         }
@@ -1616,6 +1644,14 @@ export class TabManager {
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
         if (!pty || pty.mode !== 'hot') return;
+        // Order with an in-flight bootstrap: the delta must enqueue first,
+        // or the patch (newer bytes) lands below it. Stale when the socket
+        // swapped mid-fetch: verify identity before touching watermarks.
+        const gate = tabInfo._bootstrapGate;
+        if (gate) {
+            await gate.catch(() => {});
+            if (tabInfo.isDead || tabInfo.ws !== pty) return;
+        }
         // One gap fetch per tab at a time. Concurrent onGap events
         // describe overlapping ranges of the same hole; letting two
         // patches interleave would deliver stale bytes at the new head
@@ -1631,7 +1667,9 @@ export class TabManager {
             } finally {
                 tabInfo._gapInFlight = false;
             }
-            if (tabInfo.isDead) return;
+            // Stale fetch (socket swapped mid-flight): the old stream's
+            // patch must not land in the new one.
+            if (tabInfo.isDead || tabInfo.ws !== pty) return;
             if (
                 d &&
                 d.start === from &&
