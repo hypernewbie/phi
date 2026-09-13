@@ -6,7 +6,8 @@
     "output": "out"
   },
   "files": ["dist/**", "src/**", "web/**", "assets/**", "package.json"],
-  "electronVersion": "43.4.1",
+  "asarUnpack": ["assets/**"],
+  "electronVersion": "44.1.1",
   "win": {
     "icon": "assets/icon.png"
   },

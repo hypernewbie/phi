@@ -34,6 +34,7 @@ function fakeWindow(
     webContents: { send: vi.fn(), isDestroyed: () => false },
     isDestroyed: () => false,
     restore: vi.fn(),
+    show: vi.fn(),
     focus: vi.fn(),
     isMinimized: () => false,
     ...overrides,

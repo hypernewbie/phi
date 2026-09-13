@@ -53,6 +53,7 @@ export interface SingleInstanceWindow {
   };
   isDestroyed(): boolean;
   restore(): void;
+  show?(): void;
   focus(): void;
   isMinimized(): boolean;
 }
@@ -169,6 +170,7 @@ function forwardToWindow(
 function foregroundWindow(win: SingleInstanceWindow | null): void {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
+  if (typeof win.show === 'function') win.show();
   win.focus();
 }
 

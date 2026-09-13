@@ -177,6 +177,15 @@ describe('applyContentZoom', () => {
     expect(target.setZoomMode).not.toHaveBeenCalled();
     expect(target.setZoomFactor).not.toHaveBeenCalled();
   });
+
+  it('safely applies zoom when target lacks setZoomMode (real WebContents)', () => {
+    const target = {
+      setZoomFactor: vi.fn(),
+      isDestroyed: () => false,
+    };
+    applyContentZoom(target as never, 125);
+    expect(target.setZoomFactor).toHaveBeenCalledWith(1.25);
+  });
 });
 
 describe('installZoomShortcuts', () => {
