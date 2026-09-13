@@ -146,10 +146,13 @@ export class FileTreeManager {
             this._showContextMenu(entry, rel, actionBtn);
         });
 
-        item.addEventListener('contextmenu', (e) => {
+        const onContextMenu = (e: MouseEvent) => {
             e.preventDefault();
+            e.stopPropagation();
             this._showContextMenu(entry, rel, actionBtn);
-        });
+        };
+        item.addEventListener('contextmenu', onContextMenu);
+        row.addEventListener('contextmenu', onContextMenu);
 
         row.appendChild(item);
         row.appendChild(actionBtn);
@@ -218,6 +221,22 @@ export class FileTreeManager {
         void md.previewFile({ path: rel, name }, cwd);
     }
 
+    /** Open the file or directory in the OS file explorer on desktop hosts. */
+    _openInExplorer(rel: string): void {
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        (window as any).__phiFileAction = { kind: 'folder', rel, cwd };
+        const isDesktop =
+            document.documentElement.hasAttribute('data-phi-desktop') ||
+            new URLSearchParams(location.search).get('desktop') === '1' ||
+            Boolean((window as any).__phiDesktop);
+        if (!isDesktop) {
+            this.app?.showToast?.(
+                'Open in Explorer is only available in the desktop app',
+                { type: 'info' },
+            );
+        }
+    }
+
     _createContextMenu(): HTMLElement {
         const menu = document.createElement('div');
         menu.className = 'md-context-menu ft-context-menu hidden';
@@ -254,6 +273,12 @@ export class FileTreeManager {
                 handler: () => this._previewFile(rel),
             });
         }
+        actions.push({
+            icon: '📂',
+            label: 'Open in Explorer',
+            className: 'open-explorer',
+            handler: () => this._openInExplorer(rel),
+        });
 
         actions.forEach((action) => {
             const btn = document.createElement('button');

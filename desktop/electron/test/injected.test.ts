@@ -89,7 +89,6 @@ describe('the injected script constants', () => {
       "'.worktree-section.active[data-worktree-path]'",
     );
     expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'open'");
-    expect(INSTALL_FILE_ACTION_SCRIPT).toContain("'folder'");
   });
 
   it('guard the listener install with a window flag (idempotent injection)', () => {
@@ -141,7 +140,7 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
     });
   });
 
-  it('records a folder gesture on right-click of a file row and suppresses the page handlers', () => {
+  it('does not suppress contextmenu so the page context menu can open', () => {
     let pageHandlerRan = false;
     document
       .querySelector<HTMLElement>('.md-file-item')
@@ -153,13 +152,8 @@ describe('the install script against the file-tree DOM (jsdom)', () => {
       cancelable: true,
     });
     document.querySelector<HTMLElement>('.md-file-item')?.dispatchEvent(ev);
-    expect(ev.defaultPrevented).toBe(true);
-    expect(pageHandlerRan).toBe(false);
-    expect(windowField().__phiFileAction).toEqual({
-      kind: 'folder',
-      rel: 'docs/plan.md',
-      cwd: 'C:\\work',
-    });
+    expect(pageHandlerRan).toBe(true);
+    expect(windowField().__phiFileAction).toBeUndefined();
   });
 
   it('ignores directory rows and the action button', () => {

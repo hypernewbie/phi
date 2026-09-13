@@ -168,7 +168,7 @@ describe('FileTreeManager', () => {
         ).toBe(true);
     });
 
-    it('the ⋯ button opens a context menu with Insert + Preview for files (Insert closes)', async () => {
+    it('the ⋯ button opens a context menu with Insert + Preview + Open in Explorer for files (Insert closes)', async () => {
         installFetch({
             '': {
                 truncated: false,
@@ -184,14 +184,13 @@ describe('FileTreeManager', () => {
         const menu = document.querySelector('.ft-context-menu');
         expect(menu.classList.contains('hidden')).toBe(false);
         const actions = menu.querySelectorAll('.md-context-action');
-        // Insert @path stays as the first action; Preview is the new
-        // second action for files (not directories — that's a separate
-        // context).
-        expect(actions.length).toBe(2);
+        expect(actions.length).toBe(3);
         expect(actions[0].classList.contains('insert-path')).toBe(true);
         expect(actions[0].textContent).toContain('Insert @path');
         expect(actions[1].classList.contains('preview')).toBe(true);
         expect(actions[1].textContent).toContain('Preview');
+        expect(actions[2].classList.contains('open-explorer')).toBe(true);
+        expect(actions[2].textContent).toContain('Open in Explorer');
 
         actions[0].click();
         await Promise.resolve();
@@ -199,6 +198,82 @@ describe('FileTreeManager', () => {
         const textarea = document.getElementById('input-textarea');
         expect(textarea.value).toBe('@main.go');
         expect(menu.classList.contains('hidden')).toBe(true);
+    });
+
+    it('right-click on a file row opens the context menu with Open in Explorer below Preview', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        const manager = makeManager(makeApp());
+        await manager.refresh();
+
+        const item = manager.treeEl.querySelector('.md-file-item');
+        const ev = new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+        });
+        item.dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(true);
+
+        const menu = document.querySelector('.ft-context-menu');
+        expect(menu.classList.contains('hidden')).toBe(false);
+        const actions = menu.querySelectorAll('.md-context-action');
+        expect(actions.length).toBe(3);
+        expect(actions[1].textContent).toContain('Preview');
+        expect(actions[2].textContent).toContain('Open in Explorer');
+    });
+
+    it('clicking Open in Explorer records a folder action on window.__phiFileAction', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        const manager = makeManager(makeApp());
+        await manager.refresh();
+
+        delete window.__phiFileAction;
+        const actionBtn = manager.treeEl.querySelector('.md-file-action-btn');
+        actionBtn.click();
+
+        const menu = document.querySelector('.ft-context-menu');
+        const openExplorerBtn = menu.querySelector(
+            '.md-context-action.open-explorer',
+        );
+        openExplorerBtn.click();
+        await Promise.resolve();
+
+        expect(window.__phiFileAction).toEqual({
+            kind: 'folder',
+            rel: 'main.go',
+            cwd: '/ws',
+        });
+        expect(menu.classList.contains('hidden')).toBe(true);
+    });
+
+    it('context menu for a directory row includes Insert @path and Open in Explorer', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'src', dir: true }],
+            },
+        });
+        const manager = makeManager(makeApp());
+        await manager.refresh();
+
+        const actionBtn = manager.treeEl.querySelector('.md-file-action-btn');
+        actionBtn.click();
+
+        const menu = document.querySelector('.ft-context-menu');
+        expect(menu.classList.contains('hidden')).toBe(false);
+        const actions = menu.querySelectorAll('.md-context-action');
+        expect(actions.length).toBe(2);
+        expect(actions[0].textContent).toContain('Insert @path');
+        expect(actions[1].textContent).toContain('Open in Explorer');
     });
 
     it('renders a truncated note when the response is marked truncated', async () => {
