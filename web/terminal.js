@@ -192,10 +192,9 @@ export class TabManager {
         this.attachmentStrip = document.getElementById('attachment-strip');
         this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
         this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
-        // Software-keyboard coalescing (see scheduleKeyboardFit): the
-        // slide animation fires geometry bursts that must settle into one
-        // scroll-neutral fit, never per-frame PTY resizes.
-        this._keyboardFitTimer = null;
+        // Last-seen window dims for classifyGeometryChange. On touch
+        // shells a height-only change is the software keyboard, which
+        // must NEVER refit (frozen rows) — see setupEventListeners.
         this._lastWindowW =
             typeof window !== 'undefined' ? window.innerWidth : 0;
         this._lastWindowH =
@@ -886,34 +885,27 @@ export class TabManager {
             const activeTab = this.getActiveTab();
             if (activeTab?.directMode) {
                 activeTab.directMode = false;
-                this.updateDirectModeUI(activeTab);
+                // Coarse pointers: the keyboard is opening right now.
+                // Toggle the UI but NEVER fit for it — frozen rows.
+                this.updateDirectModeUI(activeTab, isCoarseViewport());
             }
             if (isCoarseViewport()) {
                 // Only an input-focus transition may correct iOS WebKit's
                 // focus-scroll. Generic page/terminal scrolling must never
                 // be reset to the document origin.
                 //
-                // The xterm refit goes through the scroll-neutral
-                // keyboard path, not an immediate fit: at focus time the
-                // keyboard has not resized anything yet, so an immediate
-                // fit would yank scroll and fire a gratuitous PTY resize
-                // for zero geometry change. The trailing keyboard fit
-                // settles after the slide animation instead.
+                // No fit, no PTY send, no scroll touch of any kind: the
+                // keyboard overlays, the grid stays. (NEVER contract.)
                 this.app.updateLayoutPosition?.(false, true);
-                this.scheduleKeyboardFit();
             }
         });
 
         this.inputTextArea.addEventListener('blur', () => {
             if (isCoarseViewport()) {
-                // Refit after the keyboard hides, but do not reset document
-                // scroll: the user may already be scrolling terminal output.
-                // Same scroll-neutral keyboard path: the hide animation is
-                // still mid-flight at 150ms, so coalesce instead of fitting
-                // half-settled geometry with a scroll yank.
+                // Keyboard hiding: refresh the var only. No fit, no PTY
+                // send, no scroll touch — frozen rows both ways.
                 setTimeout(() => {
                     this.app.updateLayoutPosition?.(false);
-                    this.scheduleKeyboardFit();
                 }, 150);
             }
         });
@@ -1170,28 +1162,12 @@ export class TabManager {
             }
         });
 
-        // Fit active terminal on window resize. A height-only change at
-        // identical width is the software keyboard (Android; iOS keyboards
-        // never fire window resize) — those bursts coalesce into one
-        // scroll-neutral fit instead of flashing the TUI per frame.
-        let resizeTimeout;
-        window.addEventListener('resize', () => {
-            if (
-                this.classifyGeometryChange(
-                    window.innerWidth,
-                    window.innerHeight,
-                ) === 'keyboard'
-            ) {
-                this.scheduleKeyboardFit();
-                return;
-            }
-            this.startResize();
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
-                this.fitActiveTerminal();
-                this.endResize();
-            }, 100);
-        });
+        // Window resize: on touch shells a height-only change is the
+        // software keyboard, which must NEVER refit, resend, or touch
+        // scroll (frozen rows — the keyboard overlays, the grid stays).
+        // Width changes (rotation, drawer) and every fine-pointer
+        // resize (including docked devtools) keep the immediate path.
+        window.addEventListener('resize', () => this.handleWindowResize());
 
         const hostEl = document.getElementById('hostname-display');
         if (hostEl) {
@@ -1443,7 +1419,7 @@ export class TabManager {
         });
     }
 
-    updateDirectModeUI(tab) {
+    updateDirectModeUI(tab, skipFit = false) {
         this._setPiRpcActionVisibility(tab);
 
         // Save scroll state before DOM changes alter the terminal height
@@ -1482,7 +1458,10 @@ export class TabManager {
             }
         }
 
-        this.fitActiveTerminal();
+        // skipFit is the NEVER-keyboard contract: the focus-driven
+        // direct-mode exit toggles chrome whose layout shift must not
+        // refit, resend, or scroll while the keyboard is moving.
+        if (!skipFit) this.fitActiveTerminal();
     }
 
     createTab(
@@ -6239,54 +6218,24 @@ export class TabManager {
         return !widthChanged && heightChanged ? 'keyboard' : 'layout';
     }
 
-    _cancelKeyboardFit() {
-        if (this._keyboardFitTimer) {
-            clearTimeout(this._keyboardFitTimer);
-            this._keyboardFitTimer = null;
-        }
-    }
-
-    // scheduleKeyboardFit coalesces a software-keyboard geometry burst
-    // into ONE trailing fit (~200ms after the last event). Unlike
-    // fitActiveTerminal it is scroll-neutral by construction: no scroll
-    // capture/restore, no _spamScroll, no font churn — the keyboard must
-    // never yank scroll position or flash the TUI. The backend resize
-    // fires only when dims actually changed, so a tap-in-tap-out that
-    // settles identically sends nothing at all. Any real-layout fit
-    // cancels the pending keyboard fit first (see fitActiveTerminal).
-    scheduleKeyboardFit() {
-        this._cancelKeyboardFit();
-        this._keyboardFitTimer = setTimeout(() => {
-            this._keyboardFitTimer = null;
-            const activeTab = this.getActiveTab();
-            if (!activeTab || activeTab.isDead || !activeTab.term) return;
-            try {
-                const term = activeTab.term;
-                const prevCols = term.cols;
-                const prevRows = term.rows;
-                if (
-                    activeTab.fitAddon &&
-                    typeof activeTab.fitAddon.fit === 'function'
-                ) {
-                    activeTab.fitAddon.fit();
-                }
-                if (term.cols !== prevCols || term.rows !== prevRows) {
-                    this.sendResizeToBackend(activeTab);
-                }
-            } catch (_e) {
-                /* tolerate closed term */
-            }
-            try {
-                this.app?.diffController?.fitTerminal();
-            } catch (_e) {
-                /* tolerate closed diff */
-            }
-        }, 200);
+    // handleWindowResize is the single choke point for window geometry.
+    // Extracted as a method (not an inline closure) so the NEVER-keyboard
+    // contract is unit-testable in test-js/keyboardFit.test.js.
+    handleWindowResize() {
+        const kind = this.classifyGeometryChange(
+            window.innerWidth,
+            window.innerHeight,
+        );
+        if (kind === 'keyboard' && isCoarseViewport()) return;
+        this.startResize();
+        clearTimeout(this._windowResizeTimeout);
+        this._windowResizeTimeout = setTimeout(() => {
+            this.fitActiveTerminal();
+            this.endResize();
+        }, 100);
     }
 
     fitActiveTerminal() {
-        // A real-layout fit always supersedes a pending keyboard fit.
-        this._cancelKeyboardFit();
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
 

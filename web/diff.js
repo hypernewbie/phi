@@ -1,6 +1,6 @@
 /* Φ phi — Git Diff & Git Log Controller */
 import { PTYWebSocket } from './ws.js';
-import { getLastFolderName, worktreeGlyph, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, } from './util.js';
+import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, } from './util.js';
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
 //   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
@@ -171,9 +171,22 @@ export class DiffController {
                 this.refreshDiff(true); // Don't reload the list when user just changes selection
             });
         }
-        // Debounced resize fitting
+        // Debounced resize fitting — suppressed for software-keyboard
+        // geometry (height-only change on touch shells) under the NEVER
+        // contract: the keyboard must not refit, resend, or scroll the
+        // diff terminal either. Width changes and fine-pointer resizes
+        // keep the immediate path.
         let resizeTimeout;
+        let lastW = window.innerWidth;
+        let lastH = window.innerHeight;
         window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const heightOnly = w === lastW && h !== lastH;
+            lastW = w;
+            lastH = h;
+            if (heightOnly && isCoarseViewport())
+                return;
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 if (this.isPanelOpen)
