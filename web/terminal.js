@@ -1600,7 +1600,11 @@ export class TabManager {
         if (!pty || pty.mode !== 'hot') return;
         if (to - from <= HOT_DELTA_LIMIT_BYTES) {
             const d = await this._fetchRecordingRange(tabInfo.paneId, from, to);
-            if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
+            if (
+                d &&
+                d.start === from &&
+                d.byteLength <= HOT_DELTA_LIMIT_BYTES
+            ) {
                 // Deliver via the patch path so seq accounting and held
                 // frames stay contiguous. The bytes must reach the terminal
                 // through the normal write queue afterwards.
