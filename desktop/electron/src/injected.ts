@@ -10,7 +10,7 @@
 
 /** One desktop file-tree gesture recorded by the injected page listener. */
 export interface FileAction {
-  /** 'open': double-click a file — open with the local default handler; 'folder': right-click — reveal in Explorer. */
+  /** 'open': double-click a file — open with the local default handler; 'folder': reveal in Explorer via context menu. */
   kind: 'open' | 'folder';
   /** CWD-relative path from the file row's title. */
   rel: string;
@@ -19,12 +19,13 @@ export interface FileAction {
 }
 
 /**
- * Installs delegated dblclick/contextmenu listeners on the file-tree list
- * (idempotent via a window guard) that record the gesture on
+ * Installs delegated dblclick listener on the file-tree list
+ * (idempotent via a window guard) that records the gesture on
  * window.__phiFileAction. Only FILE rows (rows carrying
  * .md-file-icon-doc) record — directory rows and the ⋯ action button are
  * left to the page. Capture phase wins over the page's own row handlers;
- * click-to-insert behavior is untouched.
+ * click-to-insert behavior is untouched. Right-click contextmenu is
+ * left to the page so it can open the context menu with Open in Explorer.
  */
 export const INSTALL_FILE_ACTION_SCRIPT = `(() => {
   if (window.__phiFileActionInstalled) return;
@@ -53,13 +54,6 @@ export const INSTALL_FILE_ACTION_SCRIPT = `(() => {
     e.preventDefault();
     e.stopPropagation();
     record('open', rel, activeCwd());
-  }, true);
-  list.addEventListener('contextmenu', (e) => {
-    const rel = fileRel(e.target);
-    if (!rel) return;
-    e.preventDefault();
-    e.stopPropagation();
-    record('folder', rel, activeCwd());
   }, true);
 })()`;
 
