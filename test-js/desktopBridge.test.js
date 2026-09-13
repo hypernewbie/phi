@@ -38,7 +38,7 @@ describe('tryNative (desktop bridge)', () => {
 
     describe('?desktop=1 marker without a bridge', () => {
         const popouts = [
-            ['config', '/config.html', 'phi-config'],
+            ['config', '/config.html?desktop-popout=1', 'phi-config'],
             ['help', '/md.html?page=help', 'phi-help'],
             ['changelog', '/md.html?page=changelog', 'phi-changelog'],
         ];

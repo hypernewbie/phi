@@ -1,6 +1,8 @@
 // Desktop hosts may claim an action; browsers keep the existing fallback.
 const NATIVE_POPOUT_PAGES = {
-    config: '/config.html',
+    // The config page needs to close its owning native popup, not merely
+    // unmount its full-page settings overlay (which leaves a black window).
+    config: '/config.html?desktop-popout=1',
     help: '/md.html?page=help',
     changelog: '/md.html?page=changelog',
 };

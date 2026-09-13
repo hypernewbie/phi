@@ -49,7 +49,12 @@ async function bootConfigPage() {
             if (vres.ok) app.versionInfo = await vres.json();
         } catch {}
 
-        App.prototype.openSettingsModal.call(app, { standalone: true });
+        App.prototype.openSettingsModal.call(app, {
+            standalone: true,
+            nativePopout:
+                new URLSearchParams(location.search).get('desktop-popout') ===
+                '1',
+        });
     } catch (err) {
         console.error('[config] Settings page failed to load:', err);
         const overlay = document.createElement('div');

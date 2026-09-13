@@ -360,6 +360,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
 
     const close = () => {
         document.removeEventListener('keydown', onKeydown);
+        // config.html fills an Electron child BrowserWindow. Removing its
+        // only overlay leaves the native window alive but black; close the
+        // owning popup instead. The marker is attached only by tryNative(),
+        // so normal in-page settings keep their existing modal behavior.
+        if (opts.nativePopout) {
+            window.close();
+            return;
+        }
         overlay.classList.add('hidden');
         overlay.remove();
     };
