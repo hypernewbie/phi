@@ -4,15 +4,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// Regression guard for the "scrollback truncates replay" hardening finding:
-// the server can replay up to `terminal.replayBufferBytes` (default 1MiB) of
-// output on reconnect, but xterm.js defaults to a 1000-line client-side
-// scrollback buffer, silently discarding everything above that on the very
-// terminal that's supposed to show it. There's no practical way to exercise
-// the real `new window.Terminal(...)` construction path in jsdom (it needs a
-// canvas/WebGL-capable Terminal + FitAddon + SearchAddon), so — matching the
-// existing source-assertion pattern used for the initGlobalShortcuts wiring
-// regression guard — this asserts the option is present in source directly.
+// Updated for TERMPERF (temp/TERMPERF.md §4): the live xterm no longer
+// needs to hold the server's whole replay ring — the hot-v1 attach
+// restores the screen from a bounded checkpoint + <=64KiB delta, and the
+// recording archive owns deep history. The original regression this file
+// guarded (replay truncation at xterm's 1000-line default) is now covered
+// structurally: 512 rows is explicitly configured, and the bootstrap
+// path that makes a small live buffer safe is present in source.
 
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -22,7 +20,7 @@ const terminalJsPath = path.join(
 );
 
 describe('xterm scrollback configuration', () => {
-    it('sets an explicit scrollback of at least 10000 lines on the Terminal constructor', () => {
+    it('sets an explicit bounded scrollback of 512 lines on the Terminal constructor', () => {
         const src = readFileSync(terminalJsPath, 'utf8');
         const ctorStart = src.indexOf('new window.Terminal({');
         expect(ctorStart).toBeGreaterThan(-1);
@@ -31,6 +29,15 @@ describe('xterm scrollback configuration', () => {
 
         const match = ctorBody.match(/scrollback:\s*(\d+)/);
         expect(match).not.toBeNull();
-        expect(Number(match[1])).toBeGreaterThanOrEqual(10000);
+        expect(Number(match[1])).toBe(512);
+    });
+
+    it('the bounded live buffer is safe: the checkpoint bootstrap exists', () => {
+        const src = readFileSync(terminalJsPath, 'utf8');
+        // Screen restore on attach (pre-open write) and quiet-tab uploads
+        // are what keep a 512-row live terminal complete.
+        expect(src).toContain('_onAttachHead');
+        expect(src).toContain('serialize({ scrollback: 0 })');
+        expect(src).toContain('/checkpoint');
     });
 });

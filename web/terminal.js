@@ -2025,7 +2025,12 @@ export class TabManager {
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
-            scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
+            // TERMPERF §4: deep history NEVER enters the live xterm — the
+            // hot-v1 attach restores the screen from a checkpoint + a
+            // ≤64KiB delta, so the live buffer only needs a small recent
+            // tail. Every fit/reflow is bounded by this constant; the
+            // recording archive owns anything older.
+            scrollback: 512,
             theme: this.getTerminalTheme(coder),
         });
 
