@@ -1616,11 +1616,26 @@ export class TabManager {
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
         if (!pty || pty.mode !== 'hot') return;
+        // One gap fetch per tab at a time. Concurrent onGap events
+        // describe overlapping ranges of the same hole; letting two
+        // patches interleave would deliver stale bytes at the new head
+        // (duplication plus loss). The in-flight patch's flush re-fires
+        // onGap if a gap remains, so dropping concurrent events converges
+        // instead of stalling.
+        if (tabInfo._gapInFlight) return;
         if (to - from <= HOT_DELTA_LIMIT_BYTES) {
-            const d = await this._fetchRecordingRange(tabInfo.paneId, from, to);
+            tabInfo._gapInFlight = true;
+            let d = null;
+            try {
+                d = await this._fetchRecordingRange(tabInfo.paneId, from, to);
+            } finally {
+                tabInfo._gapInFlight = false;
+            }
+            if (tabInfo.isDead) return;
             if (
                 d &&
                 d.start === from &&
+                d.byteLength > 0 &&
                 d.byteLength <= HOT_DELTA_LIMIT_BYTES
             ) {
                 // Deliver via the patch path so seq accounting and held

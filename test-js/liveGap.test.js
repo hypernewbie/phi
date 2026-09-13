@@ -86,6 +86,50 @@ describe('_onLiveGap', () => {
         expect(p.abandonGap).not.toHaveBeenCalled();
         expect(c.writeToTerminal).not.toHaveBeenCalled();
     });
+
+    it('serializes overlapping gap events: one fetch, one patch', async () => {
+        // A backpressure burst fires onGap per dropped frame while the
+        // first patch is still fetching. Concurrent patches would deliver
+        // stale bytes at the new head (duplication plus loss); the second
+        // event must wait, and the first patch's flush re-fires if a gap
+        // remains, so dropping it converges instead of stalling.
+        const p = pty();
+        let resolveFetch;
+        const gate = new Promise((r) => {
+            resolveFetch = r;
+        });
+        let fetchCalls = 0;
+        const c = ctx(async () => {
+            fetchCalls++;
+            await gate;
+            return { start: 100, end: 105, byteLength: 5, text: 'hello' };
+        });
+        const t = tab(p);
+        const first = c._onLiveGap(t, 100, 105);
+        const second = c._onLiveGap(t, 100, 108);
+        await second; // returns immediately without fetching
+        expect(fetchCalls).toBe(1);
+        resolveFetch();
+        await first;
+        expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(t._gapInFlight).toBe(false);
+    });
+
+    it('abandons a zero-byte patch instead of re-firing forever', async () => {
+        // An empty patch would not advance liveSeq; flushing would re-fire
+        // the same gap and fetch it again in a hot loop.
+        const p = pty();
+        const c = ctx(async () => ({
+            start: 100,
+            end: 105,
+            byteLength: 0,
+            text: '',
+        }));
+        await c._onLiveGap(tab(p), 100, 105);
+        expect(p.applyGapPatch).not.toHaveBeenCalled();
+        expect(p.abandonGap).toHaveBeenCalledWith(105);
+    });
 });
 
 describe('_trackBootstrap', () => {
