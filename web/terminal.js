@@ -1905,38 +1905,48 @@ export class TabManager {
         // ones only). Recorded from buffer swap to write callback.
         const _writeT0 = performance.now();
 
-        tabInfo.term.write(data, () => {
-            termPerfMeasureSince('write-batch', _writeT0);
-            tabInfo.writePending = false;
-            if (tabInfo.isDead) {
-                tabInfo.writeBuffer = '';
-                return;
-            }
-
-            // xterm has parsed this complete batch, so its buffer state is
-            // current. scrollToBottom changes ydisp, which is the coordinate
-            // the viewport uses to set native scrollTop; synchronize after it.
-            if (followBottom && tabInfo.userFollowBottom !== false) {
-                tabInfo.term.scrollToBottom();
-            }
-            tabInfo.term._core?.viewport?.syncScrollArea(true);
-
-            // hot-v1: when the queue is fully drained, the xterm
-            // state now reflects every byte up to queuedSeq. That makes
-            // drainedSeq a valid checkpoint watermark.
-            if (
-                tabInfo.writeBuffer.length === 0 &&
-                tabInfo.queuedSeq !== undefined &&
-                (!tabInfo.ws || tabInfo.ws.mode === 'hot')
-            ) {
-                if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
-                    tabInfo.drainedSeq = tabInfo.queuedSeq;
-                    this._scheduleCheckpointUpload(tabInfo);
+        // xterm throws past its internal backlog cap (flood). Without this
+        // guard writePending sticks true and the tab bricks until reload —
+        // the throw already means the batch is refused, so drop it and
+        // keep the pump alive.
+        try {
+            tabInfo.term.write(data, () => {
+                termPerfMeasureSince('write-batch', _writeT0);
+                tabInfo.writePending = false;
+                if (tabInfo.isDead) {
+                    tabInfo.writeBuffer = '';
+                    return;
                 }
-            }
 
-            this._flushTerminalWrite(tabInfo);
-        });
+                // xterm has parsed this complete batch, so its buffer state is
+                // current. scrollToBottom changes ydisp, which is the coordinate
+                // the viewport uses to set native scrollTop; synchronize after it.
+                if (followBottom && tabInfo.userFollowBottom !== false) {
+                    tabInfo.term.scrollToBottom();
+                }
+                tabInfo.term._core?.viewport?.syncScrollArea(true);
+
+                // hot-v1: when the queue is fully drained, the xterm
+                // state now reflects every byte up to queuedSeq. That makes
+                // drainedSeq a valid checkpoint watermark.
+                if (
+                    tabInfo.writeBuffer.length === 0 &&
+                    tabInfo.queuedSeq !== undefined &&
+                    (!tabInfo.ws || tabInfo.ws.mode === 'hot')
+                ) {
+                    if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
+                        tabInfo.drainedSeq = tabInfo.queuedSeq;
+                        this._scheduleCheckpointUpload(tabInfo);
+                    }
+                }
+
+                this._flushTerminalWrite(tabInfo);
+            });
+        } catch (e) {
+            console.error('[term] write failed, dropping batch:', e);
+            tabInfo.writePending = false;
+            if (!tabInfo.isDead) this._flushTerminalWrite(tabInfo);
+        }
     }
 
     updateDirectModeUI(tab, skipFit = false) {
