@@ -136,6 +136,11 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 			if len(payload) >= 4 && inst.Pty != nil {
 				cols := binary.BigEndian.Uint16(payload[0:2])
 				rows := binary.BigEndian.Uint16(payload[2:4])
+				// Record the resize marker at the pane's current output head
+				// so archive replay can order it against output (TERMPERF §1).
+				// Recorded before the PTY takes the new size: bytes after the
+				// marker were produced under it.
+				hub.RecordResize(inst.ID, cols, rows)
 				resizeErr := inst.Pty.Resize(cols, rows)
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
@@ -200,7 +205,14 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	}
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
-	hub.AttachWithReplay(inst.ID, client)
+	if r.URL.Query().Get("term_proto") == "hot-v1" {
+		// Live-only attach: no replay enters the live terminal (TERMPERF
+		// §2). The client bootstraps its screen from the opaque checkpoint
+		// in ATTACH_HEAD plus a bounded recording delta fetched over HTTP.
+		hub.AttachHot(inst.ID, client)
+	} else {
+		hub.AttachWithReplay(inst.ID, client)
+	}
 
 	go client.WritePump()
 

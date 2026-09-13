@@ -53,6 +53,44 @@ func (r *RingBuffer) Write(p []byte) {
 	}
 }
 
+// RangeView returns a copy of the logical byte range [startOff, endOff)
+// relative to the ring's start (offset 0 = oldest retained byte).
+// endOff is clamped to the used size; startOff beyond the used size or a
+// negative span yields nil. Callers holding the PaneHub lock get a
+// consistent view because writes and reads both happen under it.
+func (r *RingBuffer) RangeView(startOff, endOff int) []byte {
+	if r == nil || r.size == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	used := r.write
+	if r.wrapped {
+		used = r.size
+	}
+	if startOff < 0 || endOff <= startOff || startOff >= used {
+		return nil
+	}
+	if endOff > used {
+		endOff = used
+	}
+	n := endOff - startOff
+	res := make([]byte, n)
+	// The write index is the logical start when wrapped; before wrap the
+	// logical start is byte 0.
+	logStart := 0
+	if r.wrapped {
+		logStart = r.write
+	}
+	for i := 0; i < n; i++ {
+		src := (logStart + startOff + i) % r.size
+		res[i] = r.buf[src]
+	}
+	return res
+}
+
+// Snapshot() returns a copy of the entire retained stream.
 func (r *RingBuffer) Snapshot() []byte {
 	if r == nil || r.size == 0 {
 		return nil

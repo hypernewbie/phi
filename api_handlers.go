@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,6 +100,70 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/recording") {
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/recording")
+		var from, through uint64
+		if v, err := strconv.ParseUint(r.URL.Query().Get("from"), 10, 64); err == nil {
+			from = v
+		}
+		if v, err := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64); err == nil {
+			through = v
+		}
+		rec, ok := wsHub.Recording(id, from, through)
+		if !ok {
+			http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
+			return
+		}
+		resizes := make([][3]uint64, 0, len(rec.Resizes))
+		for _, m := range rec.Resizes {
+			resizes = append(resizes, [3]uint64{m.AtSeq, uint64(m.Cols), uint64(m.Rows)})
+		}
+		hdr, _ := json.Marshal(ws.RecordingHeaderJSON{
+			Epoch: rec.Epoch, Start: rec.Start, End: rec.End, Resizes: resizes,
+		})
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		var lenb [4]byte
+		binary.BigEndian.PutUint32(lenb[:], uint32(len(hdr)))
+		_, _ = w.Write(lenb[:])
+		_, _ = w.Write(hdr)
+		_, _ = w.Write(rec.Data)
+		return
+	}
+
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/checkpoint") {
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/checkpoint")
+		var req struct {
+			Epoch   uint64 `json:"epoch"`
+			Through uint64 `json:"through"`
+			Cols    uint16 `json:"cols"`
+			Rows    uint16 `json:"rows"`
+			Ansi    string `json:"ansi"`
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, ws.MaxCheckpointBytes*2+4096))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ansi := []byte(req.Ansi)
+		if len(ansi) > ws.MaxCheckpointBytes {
+			http.Error(w, "checkpoint too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if !wsHub.StoreCheckpoint(id, ws.CheckpointUpload{
+			Epoch: req.Epoch, Through: req.Through, Cols: req.Cols, Rows: req.Rows, Ansi: ansi,
+		}) {
+			http.Error(w, "stale checkpoint (epoch/through mismatch)", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
