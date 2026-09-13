@@ -96,6 +96,41 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         expect(c._spamScroll).toHaveBeenCalled();
     });
 
+    it('sizes a fresh socket once, then stays silent on later skips', () => {
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        t.ws = { id: 'sock-1' };
+        const c = ctx(t);
+        c.fitActiveTerminal();
+        // Client reflow skipped, but the backend never saw this socket.
+        expect(t.fitAddon.fit).not.toHaveBeenCalled();
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+        c.fitActiveTerminal();
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+        // Socket swap (reconnect) re-arms the one-time sync.
+        t.ws = { id: 'sock-2' };
+        c.fitActiveTerminal();
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(2);
+    });
+
+    it('a genuine fit records the socket for later skips', () => {
+        const t = tab(80, 24, { cols: 100, rows: 30 });
+        t.ws = { id: 'sock-1' };
+        const c = ctx(t);
+        c.fitActiveTerminal();
+        expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+        // Geometry settles onto the new grid: pure skip, no resend.
+        t.term.cols = 100;
+        t.term.rows = 30;
+        t.fitAddon.proposeDimensions = vi.fn(() => ({
+            cols: 100,
+            rows: 30,
+        }));
+        c.fitActiveTerminal();
+        expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+    });
+
     it('ignores dead or missing tabs', () => {
         const c = ctx(null);
         expect(() => c.fitActiveTerminal()).not.toThrow();
