@@ -179,6 +179,51 @@ const PI_MODEL_STEP_MS = 200;
 // rather than a failed attempt that happened to reach onopen.
 const AUTO_RECONNECT_STABLE_MS = 5000;
 
+// TERMPERF (temp/TERMPERF.md §7): lightweight User Timing marks around
+// attach, writes, and fits so a real device can answer "where did the
+// seconds go" from DevTools (performance.getEntriesByName('phi:*')).
+// Timeline marks land on meaningful events only (ws open, first write of
+// an attach); durations are recorded as measures only when they exceed
+// SLOW_MS so the timing buffers stay small on long-lived pages. Purely
+// observational: no behavior change, all APIs guarded.
+const TERM_PERF_SLOW_MS = 16;
+function termPerfMark(name) {
+    try {
+        if (typeof performance !== 'undefined' && performance.mark)
+            performance.mark(`phi:${name}`);
+    } catch (_e) {}
+}
+function termPerfMeasureBetween(name, startTs, endTs) {
+    try {
+        if (
+            typeof performance !== 'undefined' &&
+            performance.measure &&
+            typeof startTs === 'number'
+        )
+            performance.measure(`phi:${name}`, {
+                start: startTs,
+                duration: (endTs ?? performance.now()) - startTs,
+            });
+    } catch (_e) {}
+}
+function termPerfMeasureSince(name, startTime) {
+    try {
+        const dur = performance.now() - startTime;
+        if (
+            dur >= TERM_PERF_SLOW_MS &&
+            typeof performance !== 'undefined' &&
+            performance.measure
+        )
+            performance.measure(`phi:${name}`, {
+                start: startTime,
+                duration: dur,
+            });
+        return dur;
+    } catch (_e) {
+        return 0;
+    }
+}
+
 export class TabManager {
     constructor(app) {
         this.app = app;
@@ -1352,6 +1397,18 @@ export class TabManager {
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
+        // TERMPERF: first live/replay byte of an attach. Measured against
+        // the socket-open mark so attach latency is attributable end-to-end.
+        if (!tabInfo._perfWrote) {
+            tabInfo._perfWrote = true;
+            termPerfMark('first-write');
+            if (tabInfo._perfAttachAt)
+                termPerfMeasureBetween(
+                    'attach-to-first-write',
+                    tabInfo._perfAttachAt,
+                );
+        }
+
         if (tabInfo.loaderEl && !tabInfo.hasStarted) {
             tabInfo.hasStarted = true;
             const loader = tabInfo.loaderEl;
@@ -1400,7 +1457,12 @@ export class TabManager {
         tabInfo.writeBuffer = '';
         tabInfo.writePending = true;
 
+        // TERMPERF: measures xterm parse+render time for the batch (slow
+        // ones only). Recorded from buffer swap to write callback.
+        const _writeT0 = performance.now();
+
         tabInfo.term.write(data, () => {
+            termPerfMeasureSince('write-batch', _writeT0);
             tabInfo.writePending = false;
             if (tabInfo.isDead) {
                 tabInfo.writeBuffer = '';
@@ -2002,6 +2064,9 @@ export class TabManager {
             },
             () => this._handleTerminalDisconnect(tabInfo),
             () => {
+                tabInfo._perfAttachAt = performance.now();
+                tabInfo._perfWrote = false;
+                termPerfMark('ws-open');
                 try {
                     if (tabInfo === this.getActiveTab()) {
                         this.activateTabViewport(tabInfo, {
@@ -5467,6 +5532,9 @@ export class TabManager {
                 },
                 () => {
                     opened = true;
+                    tabInfo._perfAttachAt = performance.now();
+                    tabInfo._perfWrote = false;
+                    termPerfMark('ws-open');
                     // Clearing the backoff here on open (rather than after the
                     // connection survives) meant the counter could never climb:
                     // open -> die -> retry reset it every cycle, so the
@@ -5603,6 +5671,9 @@ export class TabManager {
                     },
                     () => {
                         opened = true;
+                        tabInfo._perfAttachAt = performance.now();
+                        tabInfo._perfWrote = false;
+                        termPerfMark('ws-open');
                         tabInfo.isDead = false;
                         tabInfo.isBusy = false;
                         tabInfo.lastOutputAt = undefined;
@@ -6245,6 +6316,11 @@ export class TabManager {
                 activeTab.term.options.fontSize = size;
             }
 
+            // TERMPERF: every fit reflows the whole live buffer; timing it
+            // is how the tablet gate distinguishes "fit is slow" from
+            // "network delivery is slow".
+            const _fitT0 = performance.now();
+
             // Capture scroll state PRE-FIT
             const buffer = activeTab.term.buffer.active;
             let isAtBottom;
@@ -6276,6 +6352,7 @@ export class TabManager {
             }
 
             activeTab.fitAddon.fit();
+            termPerfMeasureSince('fit', _fitT0);
 
             // Restore scroll state POST-FIT using the unified helper to synchronise viewport
             this._spamScroll(activeTab, isAtBottom, scrollY);
