@@ -241,4 +241,47 @@ describe('archive overlay wiring', () => {
         expect(err).toBeInstanceOf(Error);
         expect(String(err.message)).toContain('simulated worker failure');
     });
+
+    it('loads deep history from the oldest retained byte, not a 64 KiB tail', async () => {
+        // UX-law regression: the archive once fetched [head-65536, head),
+        // duplicating what scroll-up already shows. It must fetch from
+        // paneOldest so beyond-scrollback history is actually visible.
+        vi.stubGlobal('Worker', successWorkerClass());
+        const seenUrls = [];
+        const payload = new TextEncoder().encode('old-bytes');
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(async (url) => {
+                seenUrls.push(String(url));
+                const hdr = new TextEncoder().encode(
+                    JSON.stringify({
+                        epoch: 7,
+                        start: 0,
+                        end: payload.byteLength,
+                        resizes: [],
+                    }),
+                );
+                const buf = new Uint8Array(
+                    4 + hdr.byteLength + payload.byteLength,
+                );
+                new DataView(buf.buffer).setUint32(0, hdr.byteLength, false);
+                buf.set(hdr, 4);
+                buf.set(payload, 4 + hdr.byteLength);
+                return {
+                    ok: true,
+                    arrayBuffer: async () => buf.buffer.slice(0),
+                };
+            }),
+        );
+        const tm = makeTm();
+        tm.createTab('p5', 's5', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p5');
+        tab.paneEpoch = 7;
+        tab.paneOldest = 0;
+        tab.queuedSeq = 500000; // >> 64 KiB: old code fetched from 434464
+        await tm._loadArchiveRows(tab, 500000);
+        expect(seenUrls.length).toBeGreaterThan(0);
+        expect(seenUrls[0]).toContain('from=0');
+        expect(seenUrls[0]).toContain('through=500000');
+    });
 });
