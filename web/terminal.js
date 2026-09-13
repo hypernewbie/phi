@@ -192,6 +192,14 @@ export class TabManager {
         this.attachmentStrip = document.getElementById('attachment-strip');
         this.stagedAttachments = []; // Attachment[] — populated by drop/paste, drained by send
         this.lastCpuPercent = null; // updated by applyCPUIndicator; read by the self-HUD popover
+        // Software-keyboard coalescing (see scheduleKeyboardFit): the
+        // slide animation fires geometry bursts that must settle into one
+        // scroll-neutral fit, never per-frame PTY resizes.
+        this._keyboardFitTimer = null;
+        this._lastWindowW =
+            typeof window !== 'undefined' ? window.innerWidth : 0;
+        this._lastWindowH =
+            typeof window !== 'undefined' ? window.innerHeight : 0;
         // Prompt history. Alt+Up / Alt+Down on the textarea cycles through
         // previously-sent prompts in the active cwd. _historyCursor is the
         // index into _historyCache for the currently-shown entry; -1 means
@@ -1152,9 +1160,21 @@ export class TabManager {
             }
         });
 
-        // Fit active terminal on window resize
+        // Fit active terminal on window resize. A height-only change at
+        // identical width is the software keyboard (Android; iOS keyboards
+        // never fire window resize) — those bursts coalesce into one
+        // scroll-neutral fit instead of flashing the TUI per frame.
         let resizeTimeout;
         window.addEventListener('resize', () => {
+            if (
+                this.classifyGeometryChange(
+                    window.innerWidth,
+                    window.innerHeight,
+                ) === 'keyboard'
+            ) {
+                this.scheduleKeyboardFit();
+                return;
+            }
             this.startResize();
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
@@ -6196,7 +6216,67 @@ export class TabManager {
         }
     }
 
+    // classifyGeometryChange distinguishes software-keyboard animation
+    // (height moves at identical width) from real layout changes
+    // (rotation, drawer, window drag). Pure over its inputs except for
+    // updating the last-seen dims; unit-tested in
+    // test-js/keyboardFit.test.js.
+    classifyGeometryChange(w, h) {
+        const widthChanged = w !== this._lastWindowW;
+        const heightChanged = h !== this._lastWindowH;
+        this._lastWindowW = w;
+        this._lastWindowH = h;
+        return !widthChanged && heightChanged ? 'keyboard' : 'layout';
+    }
+
+    _cancelKeyboardFit() {
+        if (this._keyboardFitTimer) {
+            clearTimeout(this._keyboardFitTimer);
+            this._keyboardFitTimer = null;
+        }
+    }
+
+    // scheduleKeyboardFit coalesces a software-keyboard geometry burst
+    // into ONE trailing fit (~200ms after the last event). Unlike
+    // fitActiveTerminal it is scroll-neutral by construction: no scroll
+    // capture/restore, no _spamScroll, no font churn — the keyboard must
+    // never yank scroll position or flash the TUI. The backend resize
+    // fires only when dims actually changed, so a tap-in-tap-out that
+    // settles identically sends nothing at all. Any real-layout fit
+    // cancels the pending keyboard fit first (see fitActiveTerminal).
+    scheduleKeyboardFit() {
+        this._cancelKeyboardFit();
+        this._keyboardFitTimer = setTimeout(() => {
+            this._keyboardFitTimer = null;
+            const activeTab = this.getActiveTab();
+            if (!activeTab || activeTab.isDead || !activeTab.term) return;
+            try {
+                const term = activeTab.term;
+                const prevCols = term.cols;
+                const prevRows = term.rows;
+                if (
+                    activeTab.fitAddon &&
+                    typeof activeTab.fitAddon.fit === 'function'
+                ) {
+                    activeTab.fitAddon.fit();
+                }
+                if (term.cols !== prevCols || term.rows !== prevRows) {
+                    this.sendResizeToBackend(activeTab);
+                }
+            } catch (_e) {
+                /* tolerate closed term */
+            }
+            try {
+                this.app?.diffController?.fitTerminal();
+            } catch (_e) {
+                /* tolerate closed diff */
+            }
+        }, 200);
+    }
+
     fitActiveTerminal() {
+        // A real-layout fit always supersedes a pending keyboard fit.
+        this._cancelKeyboardFit();
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.isDead) return;
 
