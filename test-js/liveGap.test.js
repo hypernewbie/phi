@@ -197,6 +197,89 @@ describe('write drain advances the checkpoint watermark', () => {
     });
 });
 
+describe('bootstrap gate', () => {
+    it('a gap patch waits for the in-flight delta so order holds', async () => {
+        // Gap during attach fetch: patch bytes are newer than the delta
+        // and must enqueue after it, never before.
+        const p = pty();
+        let resolveGate;
+        const gate = new Promise((r) => {
+            resolveGate = r;
+        });
+        const fetchMock = vi.fn(async () => ({
+            start: 100,
+            end: 105,
+            byteLength: 5,
+            text: 'hello',
+        }));
+        const c = ctx(fetchMock);
+        const t = tab(p);
+        t._bootstrapGate = gate;
+        const gapCall = c._onLiveGap(t, 100, 105);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(fetchMock).not.toHaveBeenCalled();
+        resolveGate();
+        await gapCall;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('a swapped socket during the gate wait aborts the patch', async () => {
+        const p = pty();
+        const fetchMock = vi.fn(async () => ({
+            start: 100,
+            end: 105,
+            byteLength: 5,
+            text: 'hello',
+        }));
+        const c = ctx(fetchMock);
+        const t = tab(p);
+        let resolveGate;
+        t._bootstrapGate = new Promise((r) => {
+            resolveGate = r;
+        });
+        const gapCall = c._onLiveGap(t, 100, 105);
+        t.ws = { mode: 'hot' }; // reconnect won the race
+        resolveGate();
+        await gapCall;
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(p.applyGapPatch).not.toHaveBeenCalled();
+    });
+});
+
+function recordingEnvelope(text, start, end) {
+    const bytes = new TextEncoder().encode(text);
+    const json = new TextEncoder().encode(
+        JSON.stringify({ epoch: 7, start, end, resizes: [] }),
+    );
+    const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
+    new DataView(buf.buffer).setUint32(0, json.byteLength, false);
+    buf.set(json, 4);
+    buf.set(bytes, 4 + json.byteLength);
+    return { ok: true, arrayBuffer: async () => buf.buffer.slice(0) };
+}
+
+describe('recording fetch', () => {
+    it('bounds the fetch with a timeout so delivery startup cannot hang', async () => {
+        const c = Object.create(TabManager.prototype);
+        let seenInit;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url, init) => {
+                seenInit = init;
+                return recordingEnvelope('delta', 0, 5);
+            }),
+        );
+        try {
+            const d = await c._fetchRecordingRange('p', 0, 5);
+            expect(d.text).toBe('delta');
+            expect(seenInit?.signal instanceof AbortSignal).toBe(true);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
+
 describe('_trackBootstrap', () => {
     it('prunes settled entries so reconnects do not leak slots', async () => {
         const c = Object.create(TabManager.prototype);

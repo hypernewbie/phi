@@ -253,6 +253,73 @@ describe('PTYWebSocket hot-v1 framing', () => {
 });
 
 describe('TabManager hot attach bootstrap', () => {
+    it('holds live until the delta enqueues: checkpoint, delta, live in order', async () => {
+        // Busy-pane attach: live frames arriving during the delta fetch
+        // must not jump ahead of it, or older bytes land below newer
+        // ones and watermarks regress.
+        stubTerminalGlobal();
+        const tm = makeTm();
+        let resolveFetch;
+        const gate = new Promise((r) => {
+            resolveFetch = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(() => gate),
+        );
+        tm.createTab('p9', 's9', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p9');
+        const ansi = new TextEncoder().encode('CHECKPOINT-ANSI');
+        tab.ws.ws.emitAttachHead(
+            {
+                epoch: 7,
+                oldest: 0,
+                head: 100,
+                ckpt: { through: 60, cols: 120, rows: 40, len: ansi.length },
+            },
+            ansi,
+        );
+        // Live arrives while the delta fetch is still in flight: held.
+        tab.ws.ws.emitHot(100, 'live!');
+        await new Promise((r) => setTimeout(r, 0));
+        expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI']);
+        // Delta resolves: enqueued before the held live frames release.
+        resolveFetch(recordingResponse('delta-bytes', 60, 100));
+        await flushBootstrap(tab);
+        expect(tab.term.writes).toEqual([
+            'CHECKPOINT-ANSI',
+            'delta-bytes',
+            'live!',
+        ]);
+        expect(tab.queuedSeq).toBe(105);
+    });
+
+    it('stale bootstrap on socket swap writes nothing and releases nothing', async () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        let resolveFetch;
+        const gate = new Promise((r) => {
+            resolveFetch = r;
+        });
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(() => gate),
+        );
+        tm.createTab('p10', 's10', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p10');
+        const oldPty = tab.ws;
+        const releaseSpy = vi.spyOn(oldPty, 'release');
+        tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
+        // Reconnect swaps the socket while the delta fetch is in flight.
+        tab.ws = { mode: 'hot', release: vi.fn() };
+        resolveFetch(recordingResponse('stale-delta', 0, 100));
+        await flushBootstrap(tab);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(tab.term.writes).toEqual([]);
+        expect(tab.queuedSeq).toBe(100);
+        expect(releaseSpy).not.toHaveBeenCalled();
+    });
+
     it('writes checkpoint + delta before open, then live continues', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
