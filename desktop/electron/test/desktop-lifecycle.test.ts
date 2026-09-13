@@ -75,6 +75,8 @@ const fake = vi.hoisted(() => {
     setZoomLevel(level: number): void {
       this.zoom = level;
     }
+    setZoomMode(): void {}
+    setZoomFactor(): void {}
     setWindowOpenHandler(): void {}
   }
 

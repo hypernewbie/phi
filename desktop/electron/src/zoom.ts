@@ -1,14 +1,16 @@
 /**
- * Ctrl/Cmd + (+/- / 0) zoom in, zoom out, and reset zoom shortcuts for the
- * phi-desktop shell.
+ * Ctrl/Cmd + (+/- / 0) content-zoom shortcuts for the phi-desktop shell.
  *
  * Pure TypeScript: only 'electron' type imports (erased at runtime), so
  * vitest runs it directly and every Electron surface arrives injected —
  * matching the convention in fullscreen.ts, reload.ts, and views.ts.
  *
- * before-input-event fires per webContents, so the helper is installed
- * on every desktop-owned surface: the retained remote body views (via
- * ProfileViewManager), the main window's host page, and child popups/picker.
+ * Content zoom is global application state owned by the controller. The
+ * shortcuts therefore never mutate the focused webContents directly:
+ * before-input-event fires per webContents, so the helper is installed on
+ * every desktop-owned surface, but every chord is projected to a global
+ * zoom action. The host loop selects the next persisted percentage and
+ * fans the resulting zoom factor out to every live content view.
  *
  * Chords supported:
  *   - Zoom in: Ctrl/Cmd + Plus, Equal, Add, NumpadAdd
@@ -17,6 +19,10 @@
  * Alt chords are left untouched.
  */
 import type { WebContents } from 'electron';
+import {
+  CONTENT_ZOOM_DEFAULT_PERCENT,
+  CONTENT_ZOOM_LEVELS,
+} from './controller.js';
 
 export type ZoomAction = 'in' | 'out' | 'reset';
 
@@ -52,31 +58,48 @@ export function resolveZoomAction(input: ZoomChordInput): ZoomAction | null {
   return null;
 }
 
-/** Applies a zoom action to the target WebContents. */
-export function applyZoomAction(target: WebContents, action: ZoomAction): void {
-  if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
-  const current =
-    typeof target.getZoomLevel === 'function' ? target.getZoomLevel() : 0;
-  if (action === 'in') {
-    target.setZoomLevel(Math.min(current + 0.5, 9.0));
-  } else if (action === 'out') {
-    target.setZoomLevel(Math.max(current - 0.5, -8.0));
-  } else if (action === 'reset') {
-    target.setZoomLevel(0);
+/** Selects the next canonical content-zoom percentage for a global action. */
+export function nextContentZoomPercent(
+  current: number,
+  action: ZoomAction,
+): number {
+  if (action === 'reset') return CONTENT_ZOOM_DEFAULT_PERCENT;
+  const exact = CONTENT_ZOOM_LEVELS.indexOf(current);
+  if (exact >= 0) {
+    if (action === 'in') {
+      return CONTENT_ZOOM_LEVELS[
+        Math.min(exact + 1, CONTENT_ZOOM_LEVELS.length - 1)
+      ];
+    }
+    return CONTENT_ZOOM_LEVELS[Math.max(exact - 1, 0)];
   }
+  const higher = CONTENT_ZOOM_LEVELS.findIndex((level) => level > current);
+  if (higher < 0) {
+    return action === 'in'
+      ? CONTENT_ZOOM_LEVELS[CONTENT_ZOOM_LEVELS.length - 1]
+      : CONTENT_ZOOM_LEVELS[CONTENT_ZOOM_LEVELS.length - 2];
+  }
+  if (action === 'in') return CONTENT_ZOOM_LEVELS[higher];
+  return CONTENT_ZOOM_LEVELS[Math.max(higher - 1, 0)];
 }
 
-/** Installs the zoom shortcuts on one webContents. */
+/** Applies a persisted content-zoom percentage to one content WebContents. */
+export function applyContentZoom(target: WebContents, percent: number): void {
+  if (typeof target.isDestroyed === 'function' && target.isDestroyed()) return;
+  target.setZoomMode('manual');
+  target.setZoomFactor(percent / 100);
+}
+
+/** Installs the global content-zoom shortcuts on one webContents. */
 export function installZoomShortcuts(
   contents: WebContents,
-  targetGetter?: () => WebContents | null,
+  onAction: (action: ZoomAction) => void,
 ): void {
   contents.on('before-input-event', (event, input) => {
     const action = resolveZoomAction(input);
     if (action !== null) {
       event.preventDefault();
-      const target = targetGetter ? (targetGetter() ?? contents) : contents;
-      applyZoomAction(target, action);
+      onAction(action);
     }
   });
 }

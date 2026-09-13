@@ -249,6 +249,11 @@ describe('src/desktop.ts (phase-4 system tray + host loop)', () => {
     expect(desktopSource).toContain("case 'pet-zoom-in'");
     expect(desktopSource).toContain("case 'pet-zoom-out'");
     expect(desktopSource).toContain("case 'pet-reset-zoom'");
+    expect(desktopSource).toContain("case 'content-zoom-in'");
+    expect(desktopSource).toContain("case 'content-zoom-out'");
+    expect(desktopSource).toContain("case 'content-zoom-reset'");
+    expect(desktopSource).toContain('requestContentZoom');
+    expect(desktopSource).toContain('getContentZoomPercent:');
     expect(desktopSource).toContain('setPetZoomFromTray');
     expect(desktopSource).toContain('setZoomPercent(savedPercent)');
     expect(desktopSource).toContain("case 'quit'");
@@ -1218,13 +1223,19 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     );
   });
 
-  it('installs the zoom shortcuts on the main view, picker, and popups', () => {
-    expect(desktopSource).toContain('installZoomShortcuts(win.webContents');
+  it('routes the zoom shortcuts on every owned surface to the global content action', () => {
+    const mainZoomIdx = desktopSource.indexOf(
+      'installZoomShortcuts(win.webContents',
+    );
+    expect(mainZoomIdx).toBeGreaterThan(-1);
+    const mainZoomRegion = desktopSource.slice(mainZoomIdx, mainZoomIdx + 300);
+    expect(mainZoomRegion).toContain('requestContentZoom(action)');
+    expect(mainZoomRegion).not.toContain('return view.webContents;');
     const pickerIdx = desktopSource.indexOf("ipcMain.on('phi:open-picker'");
     expect(pickerIdx).toBeGreaterThan(-1);
     expect(
       desktopSource.indexOf(
-        'installZoomShortcuts(picker.webContents)',
+        'installZoomShortcuts(picker.webContents',
         pickerIdx,
       ),
     ).toBeGreaterThan(pickerIdx);
@@ -1232,12 +1243,18 @@ describe('src/desktop.ts (main view page + window controls)', () => {
     expect(popupIdx).toBeGreaterThan(-1);
     expect(
       desktopSource.indexOf(
-        'installZoomShortcuts(child.webContents)',
+        'installZoomShortcuts(child.webContents',
+        popupIdx,
+      ),
+    ).toBeGreaterThan(popupIdx);
+    expect(
+      desktopSource.indexOf(
+        'applyContentZoom(\n                    child.webContents,',
         popupIdx,
       ),
     ).toBeGreaterThan(popupIdx);
     expect(desktopSource).toContain(
-      "import { installZoomShortcuts } from './zoom.js'",
+      "import {\n  applyContentZoom,\n  installZoomShortcuts,\n  nextContentZoomPercent,",
     );
   });
 
@@ -1790,6 +1807,11 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
     expect(menuRegion).not.toContain("role: 'fileMenu'");
     expect(menuRegion).not.toContain("role: 'viewMenu'");
     // macOS keeps the system menu bar functional (app menu + edit menu for clipboard + window menu).
+    expect(menuRegion).toContain('Content Zoom (${contentZoomPercent}%)');
+    expect(menuRegion).toContain("label: 'Zoom In'");
+    expect(menuRegion).toContain("label: 'Zoom Out'");
+    expect(menuRegion).toContain("label: 'Actual Size (100%)'");
+    expect(menuRegion).toContain('rebuildAppMenu()');
     expect(menuRegion).toContain("{ role: 'editMenu' }");
     expect(menuRegion).toContain("{ role: 'windowMenu' }");
     expect(menuRegion).toContain("role: 'about'");

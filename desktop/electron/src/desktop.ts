@@ -63,6 +63,7 @@ import {
 import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
 import { parseMainArgs } from './argv.js';
 import {
+  CONTENT_ZOOM_DEFAULT_PERCENT,
   Controller,
   parseEndpoint,
   PET_BASE_VISUAL_WIDTH_DIP,
@@ -103,7 +104,12 @@ import {
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
 import { installReloadShortcut } from './reload.js';
-import { installZoomShortcuts } from './zoom.js';
+import {
+  applyContentZoom,
+  installZoomShortcuts,
+  nextContentZoomPercent,
+  type ZoomAction,
+} from './zoom.js';
 import {
   ALWAYS_SAFE_RAIL_CHORDS,
   TERMINAL_FOCUS_SCRIPT,
@@ -381,6 +387,8 @@ export class DesktopHost {
   private launchForegroundPending = false;
   private mainPageReady = false;
   private readonly sessionChildren = new Set<BrowserWindow>();
+  /** Same-server popup windows that follow global desktop-content zoom. */
+  private readonly contentPopups = new Set<BrowserWindow>();
   /** Local current-session renderers permitted to mutate host state. */
   private readonly trustedSessionSenders = new Set<WebContents>();
   private abortCurrentAuth: (() => void) | null = null;
@@ -558,6 +566,7 @@ export class DesktopHost {
         }
       }
       this.sessionChildren.clear();
+      this.contentPopups.clear();
       this.trustedSessionSenders.clear();
       const views = this.profileViews;
       const rail = this.railView;
@@ -659,6 +668,7 @@ export class DesktopHost {
       getPetEnabled: () => this.controller?.state().petEnabled ?? false,
       getPetZoomPercent: () =>
         this.controller?.state().petZoomPercent ?? PET_ZOOM_DEFAULT_PERCENT,
+      getContentZoomPercent: () => this.getContentZoomPercent(),
       // The intent bridge (the host loop): show foregrounds the main
       // window; select-profile lands in the controller; quit is owned here
       // (log, notify the main window's renderer, then app.quit()).
@@ -753,6 +763,15 @@ export class DesktopHost {
           case 'pet-reset-zoom':
             this.setPetZoomFromTray(PET_ZOOM_DEFAULT_PERCENT);
             break;
+          case 'content-zoom-in':
+            this.requestContentZoom('in');
+            break;
+          case 'content-zoom-out':
+            this.requestContentZoom('out');
+            break;
+          case 'content-zoom-reset':
+            this.requestContentZoom('reset');
+            break;
           case 'pet-settings':
             void this.openPetSettings();
             break;
@@ -831,6 +850,41 @@ export class DesktopHost {
       this.petHandle?.setZoomPercent(savedPercent);
     } catch (err) {
       console.log(`phi-desktop: tray pet zoom: ${String(err)}`);
+    }
+  }
+
+  /** Reads the controller-owned global desktop-content zoom percentage. */
+  private getContentZoomPercent(): number {
+    return (
+      this.controller?.getContentZoomPercent() ??
+      CONTENT_ZOOM_DEFAULT_PERCENT
+    );
+  }
+
+  /**
+   * Requests a global content-zoom action. The controller owns and persists
+   * the percentage; its change event fans the value out to live content
+   * views. Local shell, rail, picker, and popup chrome stay at 100%.
+   */
+  private requestContentZoom(action: ZoomAction): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    const current = ctrl.getContentZoomPercent();
+    const next = nextContentZoomPercent(current, action);
+    if (next === current) return;
+    try {
+      ctrl.setContentZoomPercent(next);
+    } catch (err) {
+      console.log(`phi-desktop: content zoom: ${String(err)}`);
+    }
+  }
+
+  private applyContentZoomToViews(percent: number): void {
+    this.profileViews?.setContentZoomPercent(percent);
+    for (const popup of this.contentPopups) {
+      if (!popup.isDestroyed()) {
+        applyContentZoom(popup.webContents, percent);
+      }
     }
   }
 
@@ -1174,6 +1228,9 @@ export class DesktopHost {
     this.railMenuProfileId = profileId;
     this.sessionChildren.add(menu);
     this.trustedSessionSenders.add(menu.webContents);
+    installZoomShortcuts(menu.webContents, (action) =>
+      this.requestContentZoom(action),
+    );
     menu.on('blur', () => {
       if (this.railMenuWindow === menu) this.closeRailMenu();
     });
@@ -2207,6 +2264,8 @@ export class DesktopHost {
         close: () => {},
         focus: () => {},
         isDestroyed: () => false,
+        setZoomMode: () => {},
+        setZoomFactor: () => {},
       },
       setBounds: () => {},
       setVisible: () => {},
@@ -2338,10 +2397,6 @@ export class DesktopHost {
    * actions stay functional.
    */
   installAppMenu(): void {
-    if (process.platform !== 'darwin') {
-      Menu.setApplicationMenu(null);
-      return;
-    }
     if (typeof app.setAboutPanelOptions === 'function') {
       app.setAboutPanelOptions({
         applicationName: 'phi-client',
@@ -2354,6 +2409,20 @@ export class DesktopHost {
         iconPath: path.join(here, '..', 'assets', 'icon.png'),
       });
     }
+    this.rebuildAppMenu();
+  }
+
+  /**
+   * Rebuilds the macOS application menu so the Content Zoom parent label
+   * always shows the persisted percentage. Menu callbacks use the same
+   * controller-owned global action as keyboard shortcuts and tray items.
+   */
+  private rebuildAppMenu(): void {
+    if (process.platform !== 'darwin') {
+      Menu.setApplicationMenu(null);
+      return;
+    }
+    const contentZoomPercent = this.getContentZoomPercent();
     const template: MenuItemConstructorOptions[] = [
       {
         label: 'phi-client',
@@ -2370,7 +2439,32 @@ export class DesktopHost {
       { role: 'editMenu' },
       {
         label: 'View',
-        submenu: [{ role: 'togglefullscreen' }],
+        submenu: [
+          {
+            label: `Content Zoom (${contentZoomPercent}%)`,
+            submenu: [
+              {
+                label: 'Zoom In',
+                accelerator: 'CmdOrCtrl+=',
+                click: () => this.requestContentZoom('in'),
+              },
+              {
+                label: 'Zoom Out',
+                accelerator: 'CmdOrCtrl+-',
+                click: () => this.requestContentZoom('out'),
+              },
+              {
+                label: 'Actual Size (100%)',
+                accelerator: 'CmdOrCtrl+0',
+                enabled:
+                  contentZoomPercent !== CONTENT_ZOOM_DEFAULT_PERCENT,
+                click: () => this.requestContentZoom('reset'),
+              },
+            ],
+          },
+          { type: 'separator' },
+          { role: 'togglefullscreen' },
+        ],
       },
       { role: 'windowMenu' },
     ];
@@ -2449,15 +2543,9 @@ export class DesktopHost {
       },
       (ignoringCache) => this.profileViews?.reloadAll(ignoringCache),
     );
-    installZoomShortcuts(win.webContents, () => {
-      const activeId = this.profileViews?.getActive() ?? null;
-      if (activeId !== null) {
-        const view = this.profileViews?.getView(activeId) ?? null;
-        if (view?.webContents && !view.webContents.isDestroyed())
-          return view.webContents;
-      }
-      return win.webContents;
-    });
+    installZoomShortcuts(win.webContents, (action) =>
+      this.requestContentZoom(action),
+    );
     // A sync-alert taskbar flash clears when the window regains focus; the
     // main view page also reflects the focus state (native dim-when-unfocused).
     win.on('focus', () => {
@@ -2579,6 +2667,8 @@ export class DesktopHost {
           height: 800 - HEADER_HEIGHT,
         }),
         railWidth: RAIL_WIDTH,
+        getContentZoomPercent: () => CONTENT_ZOOM_DEFAULT_PERCENT,
+        onZoomAction: () => {},
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
       });
       this.profileViews.addProfile('127-0-0-1-7070', 'http://127.0.0.1:7070/');
@@ -2632,6 +2722,9 @@ export class DesktopHost {
     // The first tray was constructed before the controller for boot ordering;
     // rebuild it now so persisted pet state and zoom are in the first usable snapshot.
     this.trayHandle?.rebuildMenu();
+    // The application menu was installed before the controller for boot
+    // ordering; rebuild it now so the persisted Content Zoom label is current.
+    this.rebuildAppMenu();
     // Apply low-memory policy on boot if enabled
     if (this.controller.getLowMemoryMode()) this.applyLowMemoryMode(true);
     // Access-auth state — declared here (before any subscribe callback
@@ -2716,6 +2809,10 @@ export class DesktopHost {
         else this.stopPet();
       } else if (event.kind === 'pet-idle-dwell-changed') {
         this.setPetIdleDwellFromController(event.dwellSeconds);
+      } else if (event.kind === 'content-zoom-changed') {
+        this.applyContentZoomToViews(event.percent);
+        this.trayHandle?.rebuildMenu();
+        this.rebuildAppMenu();
       } else if (event.kind === 'pet-zoom-changed') {
         // Renderer-originated zoom requests already receive their exact
         // controller result in pet-main; this subscription only refreshes
@@ -2866,10 +2963,18 @@ export class DesktopHost {
                   attachNavGuard(child.webContents);
                   installFullscreenToggle(child.webContents, child);
                   installReloadShortcut(child.webContents);
-                  installZoomShortcuts(child.webContents);
+                  applyContentZoom(
+                    child.webContents,
+                    this.getContentZoomPercent(),
+                  );
+                  installZoomShortcuts(child.webContents, (action) =>
+                    this.requestContentZoom(action),
+                  );
                   this.sessionChildren.add(child);
+                  this.contentPopups.add(child);
                   child.once('closed', () => {
                     this.sessionChildren.delete(child);
+                    this.contentPopups.delete(child);
                     this.pushActiveServer();
                   });
                   return child.webContents;
@@ -3041,6 +3146,8 @@ export class DesktopHost {
         makeView,
         defaultBounds,
         railWidth: RAIL_WIDTH,
+        getContentZoomPercent: () => this.getContentZoomPercent(),
+        onZoomAction: (action) => this.requestContentZoom(action),
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
       });
       // Sync every persisted profile into the view manager so setActive
@@ -3125,6 +3232,9 @@ export class DesktopHost {
       this.railView = rail;
       this.trustedSessionSenders.add(rail.webContents);
       win.contentView.addChildView(rail);
+      installZoomShortcuts(rail.webContents, (action) =>
+        this.requestContentZoom(action),
+      );
       // Re-apply the bounds once the page loads, then push a fresh rail
       // snapshot.
       rail.webContents.on('did-finish-load', () => {
@@ -3270,7 +3380,9 @@ export class DesktopHost {
       void picker.loadFile(path.join(here, 'picker.html'));
       installFullscreenToggle(picker.webContents, parent);
       installReloadShortcut(picker.webContents);
-      installZoomShortcuts(picker.webContents);
+      installZoomShortcuts(picker.webContents, (action) =>
+        this.requestContentZoom(action),
+      );
       picker.once('ready-to-show', () => {
         if (!picker.isDestroyed()) picker.show();
       });

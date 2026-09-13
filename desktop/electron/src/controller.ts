@@ -68,6 +68,14 @@ export const PET_ZOOM_MIN_PERCENT = 50;
 export const PET_ZOOM_MAX_PERCENT = 300;
 export const PET_ZOOM_DEFAULT_PERCENT = 100;
 export const PET_ZOOM_STEP_PERCENT = 25;
+
+/** Canonical persisted desktop-content zoom configuration. */
+export const CONTENT_ZOOM_MIN_PERCENT = 50;
+export const CONTENT_ZOOM_MAX_PERCENT = 300;
+export const CONTENT_ZOOM_DEFAULT_PERCENT = 100;
+export const CONTENT_ZOOM_LEVELS: readonly number[] = [
+  50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300,
+];
 export const PET_BASE_VISUAL_WIDTH_DIP = 192;
 export const PET_IDLE_DWELL_MIN_SECONDS = 1;
 export const PET_IDLE_DWELL_MAX_SECONDS = 3600;
@@ -103,6 +111,8 @@ export interface ControllerState {
   petEnabled: boolean;
   /** The persisted desktop-pet zoom percentage (default 100). */
   petZoomPercent: number;
+  /** The persisted global desktop-content zoom percentage (default 100). */
+  contentZoomPercent: number;
   /** The persisted unattended-rest interval in milliseconds. */
   petIdleDwellSeconds: number;
 }
@@ -118,6 +128,7 @@ export type ControllerEvent =
   | { kind: 'low-memory-changed' }
   | { kind: 'pet-enabled-changed' }
   | { kind: 'pet-zoom-changed' }
+  | { kind: 'content-zoom-changed'; percent: number }
   | { kind: 'pet-idle-dwell-changed'; dwellSeconds: number };
 
 /** A subscription callback (fire-and-forget; never awaited by the controller). */
@@ -408,6 +419,7 @@ interface LoadedStore {
   lowMemoryMode: boolean;
   petEnabled: boolean;
   petZoomPercent: number;
+  contentZoomPercent: number;
   petIdleDwellSeconds: number;
 }
 
@@ -427,6 +439,14 @@ function isPetZoomPercent(value: unknown): value is number {
     value >= PET_ZOOM_MIN_PERCENT &&
     value <= PET_ZOOM_MAX_PERCENT &&
     (value - PET_ZOOM_MIN_PERCENT) % PET_ZOOM_STEP_PERCENT === 0
+  );
+}
+
+function isContentZoomPercent(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    CONTENT_ZOOM_LEVELS.includes(value)
   );
 }
 
@@ -479,6 +499,7 @@ function readStore(
       lowMemoryMode: false,
       petEnabled: false,
       petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+      contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
       petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
     };
   }
@@ -498,6 +519,7 @@ function readStore(
         lowMemoryMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+        contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
       };
     }
@@ -513,6 +535,7 @@ function readStore(
     syncAlerts?: unknown;
     petEnabled?: unknown;
     petZoomPercent?: unknown;
+    contentZoomPercent?: unknown;
     petIdleDwellSeconds?: unknown;
     petScaleTick?: unknown;
   } | null;
@@ -529,6 +552,7 @@ function readStore(
         lowMemoryMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
+        contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
         petIdleDwellSeconds: PET_IDLE_DWELL_DEFAULT_SECONDS,
       };
     }
@@ -552,6 +576,9 @@ function readStore(
     : hasZoomPercent
       ? PET_ZOOM_DEFAULT_PERCENT
       : migrateLegacyPetScaleTick(obj.petScaleTick);
+  const contentZoomPercent = isContentZoomPercent(obj.contentZoomPercent)
+    ? obj.contentZoomPercent
+    : CONTENT_ZOOM_DEFAULT_PERCENT;
   const petIdleDwellSeconds = isPetIdleDwellSeconds(obj.petIdleDwellSeconds)
     ? obj.petIdleDwellSeconds
     : PET_IDLE_DWELL_DEFAULT_SECONDS;
@@ -598,6 +625,7 @@ function readStore(
     lowMemoryMode,
     petEnabled,
     petZoomPercent,
+    contentZoomPercent,
     petIdleDwellSeconds,
   };
 }
@@ -616,6 +644,7 @@ function saveStore(
   lowMemoryMode: boolean,
   petEnabled: boolean,
   petZoomPercent: number,
+  contentZoomPercent: number,
   petIdleDwellSeconds: number,
 ): void {
   const dir = path.dirname(persistPath);
@@ -651,6 +680,7 @@ function saveStore(
           lowMemoryMode,
           petEnabled,
           petZoomPercent,
+          contentZoomPercent,
           petIdleDwellSeconds,
         },
         null,
@@ -727,6 +757,7 @@ export class Controller {
   private lowMemoryMode = false;
   private petEnabled = false;
   private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
+  private contentZoomPercent = CONTENT_ZOOM_DEFAULT_PERCENT;
   private petIdleDwellSeconds = PET_IDLE_DWELL_DEFAULT_SECONDS;
   private listeners = new Set<ControllerListener>();
 
@@ -739,6 +770,7 @@ export class Controller {
     this.lowMemoryMode = store.lowMemoryMode;
     this.petEnabled = store.petEnabled;
     this.petZoomPercent = store.petZoomPercent;
+    this.contentZoomPercent = store.contentZoomPercent;
     this.petIdleDwellSeconds = store.petIdleDwellSeconds;
     for (const p of store.profiles) {
       this.profiles.push(p);
@@ -783,6 +815,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -823,6 +856,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -858,6 +892,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'profiles-changed' });
@@ -900,6 +935,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -924,6 +960,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'profiles-changed' });
@@ -949,6 +986,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -997,6 +1035,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'close-to-tray-changed' });
@@ -1028,6 +1067,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'sync-alerts-changed' });
@@ -1048,6 +1088,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'low-memory-changed' });
@@ -1077,6 +1118,7 @@ export class Controller {
       this.lowMemoryMode,
       this.petEnabled,
       this.petZoomPercent,
+      this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'pet-enabled-changed' });
@@ -1106,6 +1148,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -1113,6 +1156,41 @@ export class Controller {
       throw err;
     }
     this.emit({ kind: 'pet-zoom-changed' });
+    return true;
+  }
+
+  /** The canonical persisted global desktop-content zoom percentage. */
+  getContentZoomPercent(): number {
+    return this.contentZoomPercent;
+  }
+
+  /**
+   * Persists the global desktop-content zoom percentage. Invalid values are
+   * rejected without mutation; persistence failures restore the prior
+   * percentage and rethrow.
+   */
+  setContentZoomPercent(percent: number): boolean {
+    if (!isContentZoomPercent(percent)) return false;
+    if (percent === this.contentZoomPercent) return true;
+    const oldPercent = this.contentZoomPercent;
+    this.contentZoomPercent = percent;
+    try {
+      saveStore(
+        this.persistPath,
+        this.profiles,
+        this.closeToTray,
+        this.syncAlerts,
+        this.lowMemoryMode,
+        this.petEnabled,
+        this.petZoomPercent,
+        this.contentZoomPercent,
+        this.petIdleDwellSeconds,
+      );
+    } catch (err) {
+      this.contentZoomPercent = oldPercent;
+      throw err;
+    }
+    this.emit({ kind: 'content-zoom-changed', percent });
     return true;
   }
 
@@ -1134,6 +1212,7 @@ export class Controller {
         this.lowMemoryMode,
         this.petEnabled,
         this.petZoomPercent,
+        this.contentZoomPercent,
         this.petIdleDwellSeconds,
       );
     } catch (err) {
@@ -1190,6 +1269,7 @@ export class Controller {
       lowMemoryMode: this.lowMemoryMode,
       petEnabled: this.petEnabled,
       petZoomPercent: this.petZoomPercent,
+      contentZoomPercent: this.contentZoomPercent,
       petIdleDwellSeconds: this.petIdleDwellSeconds,
     };
   }

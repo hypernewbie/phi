@@ -98,6 +98,10 @@ const work: TrayProfile = {
   origin: 'http://10.0.0.5:7070/',
 };
 
+/** Content Zoom lives in the tray outside macOS, where the View menu owns it. */
+const trayContentZoomEntry =
+  process.platform === 'darwin' ? [] : ['Content Zoom (100%)'];
+
 /** The menu template Menu.buildFromTemplate was last called with. */
 function lastTemplate(): TrayMenuEntry[] {
   const call = fakeMenu.buildFromTemplate.mock.calls.at(-1);
@@ -141,6 +145,7 @@ function setupTrayForTest(
     getPetInstalling: () => false,
     getPetEnabled: () => false,
     getPetZoomPercent: () => 100,
+    getContentZoomPercent: () => 100,
     ipcSend,
     log,
     ...opts.deps,
@@ -169,6 +174,9 @@ describe('buildTrayMenu (pure menu builder)', () => {
     petZoomIn: () => {},
     petZoomOut: () => {},
     petResetZoom: () => {},
+    contentZoomIn: () => {},
+    contentZoomOut: () => {},
+    contentZoomReset: () => {},
     quit: () => {},
     ...over,
   });
@@ -584,9 +592,147 @@ describe('buildTrayMenu (pure menu builder)', () => {
     expect(handlers.petResetZoom).toHaveBeenCalledTimes(1);
   });
 
+  it('builds a separate Content Zoom group in browser-style order with boundary enablement', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+      125,
+    );
+    const content = menu.find(
+      (entry) => entry.label === 'Content Zoom (125%)',
+    );
+    expect(content?.submenu?.map((entry) => entry.label)).toEqual([
+      'Zoom In',
+      'Zoom Out',
+      'Actual Size (100%)',
+    ]);
+    expect(content?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    const minimum = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+      50,
+    ).find((entry) => entry.label === 'Content Zoom (50%)');
+    expect(minimum?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    const actual = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+      100,
+    ).find((entry) => entry.label === 'Content Zoom (100%)');
+    expect(actual?.submenu?.map((entry) => entry.enabled)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it('omits Content Zoom when no persisted percentage is supplied', () => {
+    const menu = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    expect(menu.some((entry) => entry.label.startsWith('Content Zoom'))).toBe(
+      false,
+    );
+  });
+
+  it('calls each Content Zoom handler', () => {
+    const handlers = mkHandlers({
+      contentZoomIn: vi.fn(),
+      contentZoomOut: vi.fn(),
+      contentZoomReset: vi.fn(),
+    });
+    const content = buildTrayMenu(
+      [],
+      handlers,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+      125,
+    ).find((entry) => entry.label === 'Content Zoom (125%)');
+    content?.submenu?.forEach((entry) => {
+      if (entry.click) clickEntry(entry);
+    });
+    expect(handlers.contentZoomIn).toHaveBeenCalledTimes(1);
+    expect(handlers.contentZoomOut).toHaveBeenCalledTimes(1);
+    expect(handlers.contentZoomReset).toHaveBeenCalledTimes(1);
+  });
+
+  it.runIf(process.platform !== 'darwin')(
+    'posts Content Zoom commands through setupTray',
+    () => {
+      const { ipcSend } = setupTrayForTest({
+        deps: { getContentZoomPercent: () => 125 },
+      });
+      const content = lastTemplate().find(
+        (entry) => entry.label === 'Content Zoom (125%)',
+      );
+      content?.submenu?.forEach((entry) => {
+        if (entry.click) clickEntry(entry);
+      });
+      expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+        kind: 'content-zoom-in',
+      });
+      expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+        kind: 'content-zoom-out',
+      });
+      expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+        kind: 'content-zoom-reset',
+      });
+    },
+  );
+
   it('posts Pet commands through setupTray', () => {
     const { ipcSend } = setupTrayForTest({
-      deps: { getPetAvailable: () => true, getPetZoomPercent: () => 125 },
+      deps: {
+        getPetAvailable: () => true,
+        getPetZoomPercent: () => 125,
+        getContentZoomPercent: () => 100,
+      },
     });
     const pet = lastTemplate().find((entry) => entry.label === 'Pet');
     pet?.submenu?.forEach((entry) => {
@@ -679,6 +825,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
+      ...trayContentZoomEntry,
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -726,6 +873,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
+      ...trayContentZoomEntry,
       'Quit',
     ]);
     expect(template[1].submenu?.map((e) => e.label)).toEqual([
@@ -761,6 +909,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
+      ...trayContentZoomEntry,
       'Quit',
     ]);
   });

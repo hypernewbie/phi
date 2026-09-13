@@ -28,6 +28,7 @@ const { fakeApp, fakeMenu, fakeNativeImage, fakeNet, fakeDialog, FakeTray } =
       },
       fakeMenu: {
         buildFromTemplate: vi.fn((template: unknown[]) => ({ template })),
+        setApplicationMenu: vi.fn(),
       },
       fakeNativeImage: {
         createFromPath: vi.fn(() => ({ isEmpty: () => false })),
@@ -333,15 +334,28 @@ describe('DesktopHost optional pet lifecycle', () => {
       const controller = host.controller;
       expect(controller).not.toBeNull();
 
+      const trayTemplate = (): Array<{
+        label: string;
+        submenu?: Array<{ label: string }>;
+      }> => {
+        const templates = fakeMenu.buildFromTemplate.mock.calls.map(
+          (call) =>
+            call[0] as Array<{
+              label: string;
+              submenu?: Array<{ label: string }>;
+            }>,
+        );
+        const found = [...templates]
+          .reverse()
+          .find((template) =>
+            template.some((entry) => entry.label === 'Pet'),
+          );
+        if (!found) throw new Error('tray template was never built');
+        return found;
+      };
       const readout = (): string => {
-        const template = fakeMenu.buildFromTemplate.mock.calls.at(
-          -1,
-        )?.[0] as Array<{
-          label: string;
-          submenu?: Array<{ label: string }>;
-        }>;
         return (
-          template.find((entry) => entry.label === 'Pet')?.submenu?.[1]
+          trayTemplate().find((entry) => entry.label === 'Pet')?.submenu?.[1]
             ?.label ?? ''
         );
       };
@@ -575,9 +589,14 @@ describe('DesktopHost optional pet lifecycle', () => {
       await expect(
         host.start({ installListener: vi.fn() } as never),
       ).rejects.toBe(startupStop);
-      const template = fakeMenu.buildFromTemplate.mock.calls.at(
-        -1,
-      )?.[0] as Array<{ label: string; click?: () => void }>;
+      const templates = fakeMenu.buildFromTemplate.mock.calls.map(
+        (call) =>
+          call[0] as Array<{ label: string; click?: () => void }>,
+      );
+      const template = [...templates].reverse().find((candidate) =>
+        candidate.some((entry) => entry.label === 'Install Pet…'),
+      );
+      if (!template) throw new Error('tray template was never built');
       template.find((entry) => entry.label === 'Install Pet…')?.click?.();
       await flush();
       await flush();

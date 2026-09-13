@@ -43,7 +43,11 @@
 import type { BrowserWindow, WebContentsView } from 'electron';
 import { installFullscreenToggle } from './fullscreen.js';
 import { installReloadShortcut } from './reload.js';
-import { installZoomShortcuts } from './zoom.js';
+import {
+  applyContentZoom,
+  installZoomShortcuts,
+  type ZoomAction,
+} from './zoom.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -63,6 +67,10 @@ export interface ProfileViewManagerOptions {
   defaultBounds: () => ViewBounds;
   /** The rail gutter width (the active view's x offset). */
   railWidth: number;
+  /** Reads the persisted global content-zoom percentage. */
+  getContentZoomPercent: () => number;
+  /** Routes a body-view zoom chord to the controller-owned global action. */
+  onZoomAction: (action: ZoomAction) => void;
   /** Diagnostics logger (defaults to a no-op). */
   log?: (s: string) => void;
 }
@@ -97,6 +105,8 @@ export class ProfileViewManager {
   private readonly makeView: (origin: string) => WebContentsView;
   private readonly defaultBounds: () => ViewBounds;
   private readonly railWidth: number;
+  private readonly getContentZoomPercent: () => number;
+  private readonly onZoomAction: (action: ZoomAction) => void;
   private readonly log: (s: string) => void;
   private readonly profiles = new Map<string, RegisteredProfile>();
   private readonly views = new Map<string, ViewEntry>();
@@ -107,6 +117,8 @@ export class ProfileViewManager {
     this.makeView = opts.makeView;
     this.defaultBounds = opts.defaultBounds;
     this.railWidth = opts.railWidth;
+    this.getContentZoomPercent = opts.getContentZoomPercent;
+    this.onZoomAction = opts.onZoomAction;
     this.log = opts.log ?? (() => {});
   }
 
@@ -170,6 +182,10 @@ export class ProfileViewManager {
       const bounds = this.defaultBounds();
       existing.view.setBounds(bounds);
       existing.lastBounds = bounds;
+      applyContentZoom(
+        existing.view.webContents,
+        this.getContentZoomPercent(),
+      );
       existing.view.setVisible(true);
       // Keyboard/shortcuts route to the newly shown view (the outgoing
       // view kept focus until now).
@@ -201,6 +217,17 @@ export class ProfileViewManager {
   /** The retained view for a profile id, or null when none exists yet. */
   getView(id: string): WebContentsView | null {
     return this.views.get(id)?.view ?? null;
+  }
+
+  /**
+   * Fans a persisted global content-zoom percentage out to every live
+   * retained view, including hidden views (so a low-memory recreation or
+   * re-activation never shows an unzoomed frame first).
+   */
+  setContentZoomPercent(percent: number): void {
+    for (const entry of this.views.values()) {
+      applyContentZoom(entry.view.webContents, percent);
+    }
   }
 
   /** The count of retained (created) views — the smoke-payload surface. */
@@ -349,12 +376,14 @@ export class ProfileViewManager {
     const bounds = this.defaultBounds();
     view.setBounds(bounds);
     entry.lastBounds = bounds;
+    applyContentZoom(view.webContents, this.getContentZoomPercent());
     view.webContents.on('did-finish-load', () => {
       const current = this.views.get(id);
       if (!current || current.view !== view) return; // removed meanwhile
       const fresh = this.defaultBounds();
       view.setBounds(fresh);
       current.lastBounds = fresh;
+      applyContentZoom(view.webContents, this.getContentZoomPercent());
       current.loaded = true;
       // If an access-auth modal is currently open (or the active id
       // switched away), leave the view hidden. ProfileViewManager
@@ -373,7 +402,9 @@ export class ProfileViewManager {
     installReloadShortcut(view.webContents, undefined, (ignoringCache) =>
       this.reloadAll(ignoringCache),
     );
-    installZoomShortcuts(view.webContents);
+    installZoomShortcuts(view.webContents, (action) =>
+      this.onZoomAction(action),
+    );
     const rootUrl = new URL(origin);
     rootUrl.searchParams.set('desktop', '1');
     view.webContents.loadURL(rootUrl.toString());
