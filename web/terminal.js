@@ -4824,6 +4824,13 @@ export class TabManager {
                 this.selfHudCloseTimer = null;
             }
             if (Date.now() - lastClosedAt < HUD_REOPEN_COOLDOWN_MS) return;
+            // The sessions slide-out owns the left of the screen while
+            // open, and the brand-anchored HUD floats above it (z-index
+            // 9999). Refuse to open until the drawer closes — on touch
+            // this is the tap path, on mouse the hover path; both funnel
+            // here.
+            const sidebar = document.getElementById('sidebar-panel');
+            if (sidebar && sidebar.classList.contains('drawer-open')) return;
             this._renderSelfHud();
             this._openSelfHud();
         };

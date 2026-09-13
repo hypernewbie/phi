@@ -116,6 +116,12 @@ export class App {
             mobileSidebarToggle.addEventListener('click', (e) => {
                 e.stopPropagation();
                 sidebar.classList.toggle('drawer-open');
+                // An open HUD floats above the slide-out (z-index), so
+                // opening the drawer dismisses it. Same call the edge
+                // swipe makes below.
+                if (sidebar.classList.contains('drawer-open')) {
+                    this.tabManager?._closeSelfHudNow?.();
+                }
             });
 
             // Close drawer when clicking outside it
@@ -621,6 +627,8 @@ export class App {
                         if (sidebarDrawer && touchStartX < 40) {
                             // Swipe from left edge -> Open Sessions drawer
                             sidebar?.classList.add('drawer-open');
+                            // The brand-anchored HUD would float above it.
+                            this.tabManager?._closeSelfHudNow?.();
                         } else if (
                             diffDrawer &&
                             diffPanel &&
