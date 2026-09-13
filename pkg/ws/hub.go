@@ -1,6 +1,9 @@
 package ws
 
 import (
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -29,6 +32,12 @@ type Client struct {
 	LastDropWarning time.Time
 	FullSince       time.Time
 
+	// Hot marks a hot-v1 terminal-protocol attachment (term_proto=hot-v1
+	// on /ws/pane). Hot clients receive 0x08 ATTACH_HEAD at attach and
+	// 0x09 LIVE_OUTPUT frames thereafter, instead of the legacy 1 MiB
+	// replay + 0x01 frames. See temp/TERMPERF.md.
+	Hot bool
+
 	// Logger carries this client's comp=ws + conn+pane fields (set by
 	// HandleWS, built on componentLogger()) so every log line for its
 	// lifetime — writes, overflow, frame traces — correlates back to the
@@ -46,11 +55,48 @@ func (c *Client) logger() *slog.Logger {
 	return componentLogger()
 }
 
+// ResizeMarker records a backend resize at the output sequence where it
+// took effect: every byte at seq >= AtSeq was produced under ColsxRows.
+// Archive replay applies markers in order so history reflows the way the
+// live terminal did.
+type ResizeMarker struct {
+	AtSeq uint64
+	Cols  uint16
+	Rows  uint16
+}
+
+// paneCheckpoint is the newest client-uploaded screen snapshot (plan
+// TERMPERF §3). ANSI is stored opaquely; the server never parses it.
+type paneCheckpoint struct {
+	Through uint64 // output seq the snapshot reflects (exclusive head)
+	Cols    uint16
+	Rows    uint16
+	Ansi    []byte
+}
+
 type PaneHub struct {
 	clients map[*Client]bool
 	mu      sync.Mutex
 	Ring    *RingBuffer
+
+	// epoch changes identity: a fresh random value per pane creation, so
+	// stale clients/caches cannot mix output from a previous PTY lifetime
+	// under the same pane id.
+	epoch uint64
+
+	// total is the head output sequence: the count of bytes ever ingested
+	// for this pane. Bytes carry absolute seqs [0, total); oldest retained
+	// is total - retained.
+	total uint64
+
+	// resizes is a bounded FIFO of resize markers ordered by AtSeq.
+	resizes []ResizeMarker
+
+	// ckpt is the newest accepted client checkpoint, if any.
+	ckpt *paneCheckpoint
 }
+
+const maxResizeMarkers = 512
 
 type Hub struct {
 	panes             map[string]*PaneHub
@@ -84,10 +130,35 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 		ph = &PaneHub{
 			clients: make(map[*Client]bool),
 			Ring:    ring,
+			epoch:   randomEpoch(),
 		}
 		h.panes[paneID] = ph
 	}
 	return ph
+}
+
+func randomEpoch() uint64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return binary.BigEndian.Uint64(b[:])
+	}
+	n := time.Now().UnixNano()
+	return uint64(n)<<32 | uint64(n>>32)
+}
+
+// LookupPane returns the pane hub without creating one.
+func (h *Hub) LookupPane(paneID string) (*PaneHub, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ph, ok := h.panes[paneID]
+	return ph, ok
+}
+
+// EpochOf exposes the pane identity epoch for diagnostics/tests.
+func (ph *PaneHub) EpochOf() uint64 {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	return ph.epoch
 }
 
 func (h *Hub) Register(paneID string, client *Client) {
@@ -96,6 +167,208 @@ func (h *Hub) Register(paneID string, client *Client) {
 	ph.clients[client] = true
 	ph.mu.Unlock()
 	log.Printf("[ws] Registered client for pane %s", paneID)
+}
+
+// PanePosition is the seq-space snapshot a hot attach or recording read
+// is taken against. Oldest is the first retained byte seq, Head is one
+// past the newest byte (so live output resumes at exactly Head).
+type PanePosition struct {
+	Epoch  uint64
+	Oldest uint64
+	Head   uint64
+}
+
+// positionLocked reads the pane's seq state under ph.mu.
+func (ph *PaneHub) positionLocked() PanePosition {
+	retained := uint64(0)
+	if ph.Ring != nil {
+		used, _ := ph.Ring.Stats()
+		retained = uint64(used)
+	}
+	oldest := ph.total
+	if retained > ph.total {
+		retained = ph.total
+	}
+	oldest = ph.total - retained
+	return PanePosition{Epoch: ph.epoch, Oldest: oldest, Head: ph.total}
+}
+
+// attachHeadJSON is the JSON header carried by the 0x08 ATTACH_HEAD frame
+// and by the /recording HTTP response. In ATTACH_HEAD, Checkpoint is nil
+// unless a usable client snapshot exists, in which case the raw ANSI bytes
+// follow the JSON header in the same frame.
+type attachHeadJSON struct {
+	Epoch  uint64          `json:"epoch"`
+	Oldest uint64          `json:"oldest"`
+	Head   uint64          `json:"head"`
+	Ckpt   *checkpointJSON `json:"ckpt,omitempty"`
+}
+
+type checkpointJSON struct {
+	Through uint64 `json:"through"`
+	Cols    uint16 `json:"cols"`
+	Rows    uint16 `json:"rows"`
+	Len     int    `json:"len"`
+}
+
+// RecordingHeaderJSON is the header of the /recording HTTP response; raw
+// bytes follow it in the body, exactly as with ATTACH_HEAD.
+type RecordingHeaderJSON struct {
+	Epoch   uint64      `json:"epoch"`
+	Start   uint64      `json:"start"`
+	End     uint64      `json:"end"`
+	Resizes [][3]uint64 `json:"resizes"` // [atSeq, cols, rows]
+}
+
+// frameFramedJSON builds [msgType][u32 jsonLen BE][json bytes][extra bytes].
+func frameFramedJSON(msgType byte, v any, extra []byte) []byte {
+	j, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	frame := make([]byte, 1+4+len(j)+len(extra))
+	frame[0] = msgType
+	binary.BigEndian.PutUint32(frame[1:5], uint32(len(j)))
+	copy(frame[5:], j)
+	copy(frame[5+len(j):], extra)
+	return frame
+}
+
+// AttachHot registers a hot-v1 client and enqueues its 0x08 ATTACH_HEAD
+// frame. Registration and the head capture happen under the pane lock, so
+// the client is guaranteed to receive every 0x09 LIVE_OUTPUT frame with
+// startSeq >= Head: the boundary is atomic, no gap, no duplication.
+// Nothing from before Head is pushed — history stays off the live path.
+func (h *Hub) AttachHot(paneID string, client *Client) {
+	ph := h.GetOrCreatePaneHub(paneID)
+	ph.mu.Lock()
+	pos := ph.positionLocked()
+
+	hdr := attachHeadJSON{Epoch: pos.Epoch, Oldest: pos.Oldest, Head: pos.Head}
+	var extra []byte
+	if ph.ckpt != nil && ph.ckpt.Through <= pos.Head {
+		hdr.Ckpt = &checkpointJSON{
+			Through: ph.ckpt.Through,
+			Cols:    ph.ckpt.Cols,
+			Rows:    ph.ckpt.Rows,
+			Len:     len(ph.ckpt.Ansi),
+		}
+		extra = ph.ckpt.Ansi
+	}
+	frame := frameFramedJSON(0x08, hdr, extra)
+	if frame != nil {
+		client.Send <- frame
+	}
+
+	client.Hot = true
+	ph.clients[client] = true
+	ph.mu.Unlock()
+	log.Printf("[ws] Registered hot-v1 client for pane %s (epoch %d, head %d, live-only)", paneID, pos.Epoch, pos.Head)
+}
+
+// RecordResize notes a backend resize at the pane's current head seq.
+// Called from ReadPump when the client resizes; the marker orders resizes
+// against output for archive replay. Idempotent for consecutive
+// same-size resizes (TUI redraw nudges) to keep the ring small.
+func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
+	ph := h.GetOrCreatePaneHub(paneID)
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if n := len(ph.resizes); n > 0 {
+		last := ph.resizes[n-1]
+		if last.Cols == cols && last.Rows == rows {
+			return
+		}
+	}
+	ph.resizes = append(ph.resizes, ResizeMarker{AtSeq: ph.total, Cols: cols, Rows: rows})
+	if len(ph.resizes) > maxResizeMarkers {
+		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
+	}
+}
+
+// Recording is the server's bounded terminal recording read (plan §5):
+// raw output bytes for [from, min(through, head)) plus the resize markers
+// that fall inside that span. from is clamped up to oldest so a caller can
+// discover truncation by comparing Start with its requested from.
+type Recording struct {
+	Epoch   uint64
+	Start   uint64
+	End     uint64
+	Data    []byte
+	Resizes []ResizeMarker
+}
+
+func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
+	ph, ok := h.LookupPane(paneID)
+	if !ok {
+		return Recording{}, false
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+
+	pos := ph.positionLocked()
+	if from > pos.Head {
+		return Recording{}, false
+	}
+	if from < pos.Oldest {
+		from = pos.Oldest
+	}
+	end := through
+	if end > pos.Head {
+		end = pos.Head
+	}
+	rec := Recording{Epoch: pos.Epoch, Start: from, End: end}
+	if end > from && ph.Ring != nil {
+		rec.Data = ph.Ring.RangeView(int(from-pos.Oldest), int(end-pos.Oldest))
+	}
+	for _, m := range ph.resizes {
+		if m.AtSeq >= from && m.AtSeq <= end {
+			rec.Resizes = append(rec.Resizes, m)
+		}
+	}
+	return rec, true
+}
+
+// MaxCheckpointBytes bounds client-uploaded screen snapshots.
+const MaxCheckpointBytes = 128 * 1024
+
+// StoreCheckpoint validates and stores the newest client screen snapshot.
+// Rules (plan §3): epoch must match the live pane, Through must not exceed
+// the head, payloads are size-bounded, and only the newest valid
+// checkpoint is kept. The ANSI bytes are stored opaquely.
+type CheckpointUpload struct {
+	Epoch   uint64
+	Through uint64
+	Cols    uint16
+	Rows    uint16
+	Ansi    []byte
+}
+
+func (h *Hub) StoreCheckpoint(paneID string, up CheckpointUpload) bool {
+	ph, ok := h.LookupPane(paneID)
+	if !ok {
+		return false
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+
+	if up.Epoch != ph.epoch {
+		return false
+	}
+	if up.Through > ph.total {
+		return false
+	}
+	if up.Cols == 0 || up.Rows == 0 || len(up.Ansi) == 0 || len(up.Ansi) > MaxCheckpointBytes {
+		return false
+	}
+	if ph.ckpt != nil && up.Through <= ph.ckpt.Through {
+		// Stale or duplicate upload; keep the newer snapshot.
+		return true
+	}
+	ans := make([]byte, len(up.Ansi))
+	copy(ans, up.Ansi)
+	ph.ckpt = &paneCheckpoint{Through: up.Through, Cols: up.Cols, Rows: up.Rows, Ansi: ans}
+	return true
 }
 
 func (h *Hub) AttachWithReplay(paneID string, client *Client) {
@@ -224,17 +497,36 @@ func (h *Hub) deliverOrDrop(client *Client, msg []byte) {
 
 	// Could not reclaim space in 100 drops: log and move on, will retry next tick.
 	client.logger().Warn("ws send buffer still full after 100 drops, deferring frame")
+	h.injectDropWarning(client, now)
+}
 
-	if now.Sub(client.LastDropWarning) > 5*time.Second {
-		client.LastDropWarning = now
-		warningStr := "\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"
-		warningMsg := make([]byte, 1+len(warningStr))
-		warningMsg[0] = 0x01
-		copy(warningMsg[1:], warningStr)
-		select {
-		case client.Send <- warningMsg:
-		default:
+// injectDropWarning delivers the rate-limited slow-client notice. Hot
+// clients account for every byte by seq, so injecting warning text into
+// the 0x09 stream would corrupt that accounting — they get a 0x02
+// control frame the client renders itself, off the byte stream. Legacy
+// clients keep the historical inline 0x01 text.
+func (h *Hub) injectDropWarning(client *Client, now time.Time) {
+	if now.Sub(client.LastDropWarning) <= 5*time.Second {
+		return
+	}
+	client.LastDropWarning = now
+	if client.Hot {
+		warnCtl := frameFramedJSON(0x02, map[string]string{"type": "output-dropped"}, nil)
+		if warnCtl != nil {
+			select {
+			case client.Send <- warnCtl:
+			default:
+			}
 		}
+		return
+	}
+	warningStr := "\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n"
+	warningMsg := make([]byte, 1+len(warningStr))
+	warningMsg[0] = 0x01
+	copy(warningMsg[1:], warningStr)
+	select {
+	case client.Send <- warningMsg:
+	default:
 	}
 }
 
@@ -243,18 +535,34 @@ func (h *Hub) Ingest(paneID string, payload []byte) {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
-	// 1. Write to ring buffer
+	// 1. Write to ring buffer and assign the absolute seq range
+	start := ph.total
 	if ph.Ring != nil {
 		ph.Ring.Write(payload)
 	}
+	ph.total += uint64(len(payload))
 
-	// 2. Broadcast to clients
-	msg := make([]byte, len(payload)+1)
-	msg[0] = 0x01
-	copy(msg[1:], payload)
-
+	// 2. Broadcast to clients. Hot clients receive 0x09 LIVE_OUTPUT frames
+	// with the seq prefix; legacy clients keep the bare 0x01 replay framing
+	// so old cached pages keep working during migration.
+	var legacyMsg, hotMsg []byte
 	for client := range ph.clients {
-		h.deliverOrDrop(client, msg)
+		if client.Hot {
+			if hotMsg == nil {
+				hotMsg = make([]byte, 9+len(payload))
+				hotMsg[0] = 0x09
+				binary.BigEndian.PutUint64(hotMsg[1:9], start)
+				copy(hotMsg[9:], payload)
+			}
+			h.deliverOrDrop(client, hotMsg)
+		} else {
+			if legacyMsg == nil {
+				legacyMsg = make([]byte, len(payload)+1)
+				legacyMsg[0] = 0x01
+				copy(legacyMsg[1:], payload)
+			}
+			h.deliverOrDrop(client, legacyMsg)
+		}
 	}
 }
 
