@@ -2,6 +2,14 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.5 — 2026-09-13
+
+### Fixed
+- **Terminal-first layout on constrained screens** (`096cd30`, `e6dd6e3`). Sessions yields into a drawer below 1024px and Diff below 1280px; docked columns are each capped at 25vw. Terminal font size is now a preferred reading scale resolved from FitAddon's measured grid instead of phone/desktop buckets, so tablets and narrow windows keep a usable column count. Old Chromium falls back to `innerHeight` when `visualViewport` is absent or stale, so the input bar can no longer be cut off.
+- **File tree folder clicks rebuild-free** (`4832c04`). Expanding a folder fetches only that directory and inserts its rows in place; collapsing is pure DOM removal with no fetch. Re-entering the tab swaps new content in without a Loading flash.
+- **Desktop Config popout closes its window** (`6ed9edf`). The standalone Config close button used to unmount its only overlay, leaving a black child window; it now closes the owning native popup.
+- **Desktop foregrounding & tray fallback** (`7b140ec`, `c83036b`, `cf96d3c`). Unconditional foregrounding on launch, guarded `setZoomMode`, unpacked tray assets, plus regression tests.
+
 ## v0.20.4 — 2026-09-13
 
 ### Added
