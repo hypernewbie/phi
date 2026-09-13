@@ -7,10 +7,11 @@ import {
     clampPanelWidth,
 } from '../web/util.js';
 
-// Column panel proportional caps (see web-src/util.ts, AGENTS.md
-// "Viewport contract"). The terminal is the primary surface; side
-// columns are subordinate chrome and must never claim half the window
-// because of a width remembered from a bigger monitor.
+// Terminal-first panel topology (see web-src/util.ts, AGENTS.md
+// "Viewport contract"). The terminal is the primary surface; each
+// docked side column gets at most one quarter, so two can never consume
+// more than half the window because of a width remembered from a bigger
+// monitor.
 //
 // CSS cannot import JS constants, so this file pins both forms:
 //   - web/style.css base .sidebar-panel / .diff-panel rules carry
@@ -50,21 +51,39 @@ function mediaBlock(marker) {
 }
 
 describe('column panel proportional caps', () => {
-    it('base sidebar rule caps at 32vw / 450px', () => {
+    it('base sidebar rule caps at 25vw / 450px', () => {
         expect(baseRule('.sidebar-panel')).toMatch(
-            /max-width:\s*min\(450px,\s*32vw\)/,
+            /max-width:\s*min\(450px,\s*25vw\)/,
         );
     });
 
-    it('base diff rule caps at 40vw / 600px', () => {
+    it('base diff rule caps at 25vw / 600px', () => {
         expect(baseRule('.diff-panel')).toMatch(
-            /max-width:\s*min\(600px,\s*40vw\)/,
+            /max-width:\s*min\(600px,\s*25vw\)/,
         );
     });
 
     it('JS constants match the CSS fractions', () => {
-        expect(SIDEBAR_PANEL_CAP).toEqual({ min: 60, max: 450, vw: 0.32 });
-        expect(DIFF_PANEL_CAP).toEqual({ min: 200, max: 600, vw: 0.4 });
+        expect(SIDEBAR_PANEL_CAP).toEqual({ min: 60, max: 450, vw: 0.25 });
+        expect(DIFF_PANEL_CAP).toEqual({ min: 200, max: 600, vw: 0.25 });
+    });
+
+    it('moves Sessions into a drawer before it can crush a narrow terminal', () => {
+        const constrainedSidebar = mediaBlock(
+            '@media (min-width: 769px) and (max-width: 1023px)',
+        );
+        expect(constrainedSidebar).toMatch(
+            /#left-resize-handle\s*\{[^}]*display:\s*none/s,
+        );
+        expect(constrainedSidebar).toMatch(
+            /\.mobile-only-btn\s*\{[^}]*display:\s*flex/s,
+        );
+        expect(constrainedSidebar).toMatch(
+            /\.sidebar-panel\s*\{[^}]*position:\s*fixed[^}]*transform:\s*translateX\(-100%\)/s,
+        );
+        expect(constrainedSidebar).toMatch(
+            /\.sidebar-panel\.drawer-open\s*\{[^}]*translateX\(0\)/s,
+        );
     });
 
     it('fixed-width drawer overlays clear max-width so vw caps cannot squeeze them', () => {
@@ -82,26 +101,26 @@ describe('column panel proportional caps', () => {
             /\.diff-panel\s*\{[^}]*width:\s*320px !important[^}]*max-width:\s*none/s,
         );
 
-        const tabletSlideOver = mediaBlock(
-            '@media (min-width: 769px) and (max-width: 1024px)',
+        const constrainedDiffDrawer = mediaBlock(
+            '@media (min-width: 769px) and (max-width: 1279px)',
         );
-        expect(tabletSlideOver).toMatch(
+        expect(constrainedDiffDrawer).toMatch(
             /\.diff-panel\s*\{[^}]*width:\s*320px !important[^}]*max-width:\s*none/s,
         );
     });
 });
 
 describe('clampPanelWidth', () => {
-    it('caps a big-monitor width to the viewport fraction', () => {
+    it('caps a big-monitor width to one quarter of the viewport', () => {
         // 450px dragged on a 2560px monitor, replayed on a 900px window:
-        // 900 * 0.32 = 288 - the sessions column can no longer claim 50%.
-        expect(clampPanelWidth(450, SIDEBAR_PANEL_CAP, 900)).toBe(288);
+        // it becomes 225px, never a 50%-wide sessions column.
+        expect(clampPanelWidth(450, SIDEBAR_PANEL_CAP, 900)).toBe(225);
         expect(clampPanelWidth(450, SIDEBAR_PANEL_CAP, 2560)).toBe(450);
     });
 
-    it('caps the diff column at 40vw', () => {
-        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 900)).toBe(360);
-        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 1600)).toBe(600);
+    it('caps the diff column at 25vw', () => {
+        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 900)).toBe(225);
+        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 2400)).toBe(600);
     });
 
     it('leaves in-range widths untouched', () => {
@@ -117,7 +136,7 @@ describe('clampPanelWidth', () => {
     it('derives the drag upper bound (handle stops where CSS stops)', () => {
         // initResizers uses clampPanelWidth(cap.max, cap) as the live
         // drag ceiling; it must equal the CSS used-width cap.
-        expect(clampPanelWidth(450, SIDEBAR_PANEL_CAP, 900)).toBe(288);
-        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 900)).toBe(360);
+        expect(clampPanelWidth(450, SIDEBAR_PANEL_CAP, 900)).toBe(225);
+        expect(clampPanelWidth(600, DIFF_PANEL_CAP, 900)).toBe(225);
     });
 });

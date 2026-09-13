@@ -9,6 +9,9 @@ import {
     buildPhiFaviconSvg,
     isCoarseViewport,
     isCompactViewport,
+    isSidebarDrawerViewport,
+    isDiffDrawerViewport,
+    visibleViewportHeight,
     COMPACT_VIEWPORT_QUERY,
     SIDEBAR_PANEL_CAP,
     DIFF_PANEL_CAP,
@@ -484,69 +487,72 @@ export class App {
         //   5. Correct document scroll only from the input-focus path that
         //      triggered iOS's native focus-scroll — never from generic scroll events.
         // ==========================================
-        if (window.visualViewport) {
-            const _appEl = document.getElementById('app');
-            this.updateLayoutPosition = (
-                shouldFit = false,
-                resetDocumentScroll = false,
-            ) => {
-                const isDesktop = new URLSearchParams(
-                    window.location.search,
-                ).has('desktop');
-                // Soft-keyboard ergonomics are capability-based, not
-                // width-based: an 820px iPad is a touch device whose
-                // on-screen keyboard must not cover the input bar.
-                // Fine-pointer shells (and the ?desktop embed) never get
-                // --vv-height written, so their CSS fallback is
-                // pixel-identical to a desktop browser.
-                const isTouchShell = !isDesktop && isCoarseViewport();
-                if (isTouchShell && window.visualViewport) {
-                    const viewport = window.visualViewport;
+        // Define this even when old Chromium lacks visualViewport. Android
+        // Chrome's window.innerHeight is the only usable fallback there;
+        // modern Safari/Chromium still take the visualViewport path through
+        // visibleViewportHeight().
+        this.updateLayoutPosition = (
+            shouldFit = false,
+            resetDocumentScroll = false,
+        ) => {
+            const isDesktop = new URLSearchParams(window.location.search).has(
+                'desktop',
+            );
+            // Soft-keyboard ergonomics are capability-based, not
+            // width-based: an 820px iPad is a touch device whose on-screen
+            // keyboard must not cover the input bar. Fine-pointer shells
+            // (and the ?desktop embed) never get --vv-height written, so
+            // their CSS fallback is pixel-identical to a desktop browser.
+            const isTouchShell = !isDesktop && isCoarseViewport();
+            const height = visibleViewportHeight();
+            if (isTouchShell && height > 0) {
+                document.documentElement.style.setProperty(
+                    '--vv-height',
+                    `${height}px`,
+                );
 
-                    // Update the CSS variable for the actual visual viewport height.
-                    // This perfectly accounts for the space above the iOS keyboard.
-                    document.documentElement.style.setProperty(
-                        '--vv-height',
-                        `${viewport.height}px`,
-                    );
-
-                    // iOS may move the document to reveal a focused input.
-                    // Correct that specific focus side effect only; doing this
-                    // for every scroll event steals terminal/page scrolling.
-                    if (
-                        resetDocumentScroll &&
-                        (window.scrollY > 0 || window.scrollX > 0)
-                    ) {
-                        window.scrollTo(0, 0);
-                    }
-
-                    if (shouldFit) {
-                        this.tabManager?.fitActiveTerminal();
-                        this.diffController?.fitTerminal();
-                    }
-                } else {
-                    document.documentElement.style.removeProperty(
-                        '--vv-height',
-                    );
+                // iOS may move the document to reveal a focused input.
+                // Correct that specific focus side effect only; doing this
+                // for every scroll event steals terminal/page scrolling.
+                if (
+                    resetDocumentScroll &&
+                    (window.scrollY > 0 || window.scrollX > 0)
+                ) {
+                    window.scrollTo(0, 0);
                 }
-            };
 
-            // Keyboard geometry changes are layout events, so they may
-            // correct iOS focus-scroll; visualViewport scroll remains a user
-            // gesture and must never reset the document origin.
-            window.visualViewport.addEventListener('resize', () =>
-                this.updateLayoutPosition(true, true),
-            );
-            window.visualViewport.addEventListener('scroll', () =>
-                this.updateLayoutPosition(false),
-            );
-            window.addEventListener('resize', () =>
-                this.updateLayoutPosition(false),
-            );
+                if (shouldFit) {
+                    this.tabManager?.fitActiveTerminal();
+                    this.diffController?.fitTerminal();
+                }
+            } else {
+                document.documentElement.style.removeProperty('--vv-height');
+            }
+        };
 
-            // Run initially to position correctly
-            this.updateLayoutPosition(true);
-        }
+        // Keyboard geometry changes are layout events, so they may correct
+        // iOS focus-scroll; visualViewport scroll remains a user gesture and
+        // must never reset the document origin. Old Chromium has no
+        // visualViewport, but its window resize/orientation/page-show events
+        // still refresh the innerHeight fallback.
+        window.visualViewport?.addEventListener('resize', () =>
+            this.updateLayoutPosition(true, true),
+        );
+        window.visualViewport?.addEventListener('scroll', () =>
+            this.updateLayoutPosition(false),
+        );
+        window.addEventListener('resize', () =>
+            this.updateLayoutPosition(false),
+        );
+        window.addEventListener('orientationchange', () =>
+            this.updateLayoutPosition(true),
+        );
+        window.addEventListener('pageshow', () =>
+            this.updateLayoutPosition(true),
+        );
+
+        // Run initially to position correctly.
+        this.updateLayoutPosition(true);
 
         // Prevent pinch-to-zoom gestures on mobile viewports
         document.addEventListener(
@@ -583,9 +589,11 @@ export class App {
         document.addEventListener(
             'touchstart',
             (e) => {
-                // Drawers exist only in the compact layout (width OR
-                // touch-landscape — see isCompactViewport).
-                if (!isCompactViewport()) return;
+                // Drawer topology is content-first: sessions yields below
+                // 1024px, diff below 1280px, plus the compact layout.
+                if (!isSidebarDrawerViewport() && !isDiffDrawerViewport()) {
+                    return;
+                }
                 touchStartX = e.touches[0].clientX;
                 touchStartY = e.touches[0].clientY;
             },
@@ -595,7 +603,9 @@ export class App {
         document.addEventListener(
             'touchend',
             (e) => {
-                if (!isCompactViewport()) return;
+                const sidebarDrawer = isSidebarDrawerViewport();
+                const diffDrawer = isDiffDrawerViewport();
+                if (!sidebarDrawer && !diffDrawer) return;
                 const touchEndX = e.changedTouches[0].clientX;
                 const touchEndY = e.changedTouches[0].clientY;
 
@@ -608,23 +618,30 @@ export class App {
                 ) {
                     if (diffX > 0) {
                         // Swipe Right
-                        if (touchStartX < 40) {
-                            // Swipe from left edge -> Open Sidebar Drawer
+                        if (sidebarDrawer && touchStartX < 40) {
+                            // Swipe from left edge -> Open Sessions drawer
                             sidebar?.classList.add('drawer-open');
                         } else if (
+                            diffDrawer &&
                             diffPanel &&
                             !diffPanel.classList.contains('hidden')
                         ) {
-                            // Swipe right inside panel -> Close Diff Drawer
+                            // Swipe right inside panel -> Close Diff drawer
                             this.diffController?.togglePanel(false);
                         }
                     } else {
                         // Swipe Left
-                        if (window.innerWidth - touchStartX < 40) {
-                            // Swipe from right edge -> Open Diff Drawer
+                        if (
+                            diffDrawer &&
+                            window.innerWidth - touchStartX < 40
+                        ) {
+                            // Swipe from right edge -> Open Diff drawer
                             this.diffController?.togglePanel(true);
-                        } else if (sidebar?.classList.contains('drawer-open')) {
-                            // Swipe left inside sidebar -> Close Sidebar Drawer
+                        } else if (
+                            sidebarDrawer &&
+                            sidebar?.classList.contains('drawer-open')
+                        ) {
+                            // Swipe left inside sidebar -> Close Sessions drawer
                             sidebar.classList.remove('drawer-open');
                         }
                     }

@@ -1,12 +1,7 @@
 import { mountRpcChat } from './controller.js';
-import { getLastFolderName, isCompactViewport } from '../util.js';
+import { getLastFolderName, terminalPreferredFontSize } from '../util.js';
 function applyTerminalFont(container, app) {
-    const configuredSize = app?.terminalFontSize;
-    let fontSize = isCompactViewport() ? 10 : 14;
-    const numericSize = Number(configuredSize);
-    if (Number.isFinite(numericSize) && numericSize >= 8 && numericSize <= 32) {
-        fontSize = numericSize;
-    }
+    const fontSize = terminalPreferredFontSize(app?.terminalFontSize);
     container.style.fontFamily =
         app?.terminalFontFamily || 'JetBrains Mono, monospace';
     container.style.fontSize = `${fontSize}px`;
