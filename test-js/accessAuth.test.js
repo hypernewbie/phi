@@ -196,3 +196,69 @@ describe('deriveVerifier native acceleration', () => {
         }
     });
 });
+
+describe('unlock overlay slow-derive feedback', () => {
+    const submitOverlay = async () => {
+        let resolveLogin;
+        const loginGate = new Promise((r) => {
+            resolveLogin = r;
+        });
+        mockFetch((url) => {
+            if (url === '/api/auth/status') return { ...STATUS, iterations: 1 };
+            if (url === '/api/auth/login') return loginGate;
+            throw new Error(`unexpected fetch ${url}`);
+        });
+        const boot = bootstrapAccessAuth();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const overlay = document.querySelector('.access-auth-overlay');
+        const form = overlay.querySelector('form');
+        overlay.querySelector('input[type="password"]').value = KAT_PASSWORD;
+        form.dispatchEvent(new Event('submit', { cancelable: true }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return {
+            boot,
+            overlay,
+            button: overlay.querySelector('button[type="submit"]'),
+            subtitle: overlay.querySelector('.access-auth-subtitle'),
+            release: () => resolveLogin({ ok: true }),
+        };
+    };
+
+    it('warns while deriving on the pure-JS fallback path', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', {
+            getRandomValues: webcrypto.getRandomValues,
+        });
+        try {
+            const state = await submitOverlay();
+            expect(state.button.textContent).toBe('Deriving key…');
+            expect(state.subtitle.textContent).toBe(
+                'Strong key derivation can take up to a minute on slower devices.',
+            );
+            expect(state.button.disabled).toBe(true);
+            state.release();
+            await expect(state.boot).resolves.toEqual({ enabled: true });
+            expect(document.querySelector('.access-auth-overlay')).toBeNull();
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+        }
+    });
+
+    it('stays quiet on the native path (fast derive)', async () => {
+        __test__.resetNativeDerive();
+        vi.stubGlobal('crypto', webcrypto);
+        try {
+            const state = await submitOverlay();
+            expect(state.button.textContent).toBe('Sign in');
+            expect(state.subtitle.textContent).toBe(
+                'Enter your password to continue.',
+            );
+            state.release();
+            await expect(state.boot).resolves.toEqual({ enabled: true });
+        } finally {
+            vi.unstubAllGlobals();
+            __test__.resetNativeDerive();
+        }
+    });
+});
