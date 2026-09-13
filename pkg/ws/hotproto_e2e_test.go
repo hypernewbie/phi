@@ -1,9 +1,9 @@
 package ws
 
-// End-to-end hot-v1 negotiation over a real WebSocket: the query param
-// must switch HandleWS to the live-only attach, and the byte stream the
-// client observes must be 0x08 ATTACH_HEAD followed by contiguous 0x09
-// LIVE_OUTPUT frames — never the legacy replay or 0x06.
+// Hot-v1 protocol: end-to-end negotiation over a real WebSocket. The
+// query param must switch HandleWS to the live-only attach, and the byte
+// stream the client observes must be 0x08 ATTACH_HEAD followed by
+// contiguous 0x09 LIVE_OUTPUT frames — never the legacy replay or 0x06.
 
 import (
 	"encoding/binary"

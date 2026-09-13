@@ -42,8 +42,8 @@ export interface PTYWebSocketCallbacks {
     onOpen?: () => void;
 }
 
-// TERMPERF (temp/TERMPERF.md): the hot-v1 terminal protocol. The socket
-// is requested with ?term_proto=hot-v1; a hot server answers with an
+// Hot-v1 terminal protocol (see temp/TERMPERF.md). The socket is
+// requested with ?term_proto=hot-v1; a hot server answers with an
 // 0x08 ATTACH_HEAD frame (epoch / oldest / head + optional opaque screen
 // checkpoint) and then 0x09 LIVE_OUTPUT frames carrying absolute byte
 // seqs. Deep history never enters the live stream — it is fetched over

@@ -2,10 +2,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 
-// TERMPERF (temp/TERMPERF.md §7): instrumentation must be purely
-// observational — marks land on meaningful events (ws-open, first write
-// of an attach) and slow durations (>16ms) become measures. These tests
-// pin the observable contract without coupling to internals.
+// Lightweight User Timing instrumentation: marks and slow-path measures
+// so DevTools can answer "where did the seconds go" on a real device.
+// Purely observational: no behavior change.
 
 function makeTm() {
     const tm = Object.create(TabManager.prototype);
@@ -18,7 +17,7 @@ function makeTm() {
     return tm;
 }
 
-describe('TERMPERF instrumentation', () => {
+describe('terminal performance instrumentation', () => {
     let markSpy;
     let measureSpy;
 

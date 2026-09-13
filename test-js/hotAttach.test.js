@@ -4,18 +4,11 @@ import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import { PTYWebSocket } from '../web/ws.js';
 
-// TERMPERF hot-v1 client contract (temp/TERMPERF.md §3, §6). These tests
-// pin the e2e behavior the plan calls non-negotiable:
-//
-//   - fresh attach with checkpoint: checkpoint + bounded delta are queued
-//     BEFORE the terminal opens, then live frames continue in order;
-//   - fresh attach without checkpoint: bounded tail delta (≤64KiB) only,
-//     never the whole ring;
-//   - reconnect same epoch: no reset, small delta applied once;
-//   - epoch change: reset + fresh bootstrap;
-//   - a live gap beyond the delta cap is never silently swallowed: the
-//     screen shows an honest notice and live continues;
-//   - legacy servers (no 0x08) keep the exact pre-hot behavior.
+// Hot-v1 client contract (see temp/TERMPERF.md). These tests pin the
+// e2e behavior: fresh attach with checkpoint queues the snapshot and a
+// bounded delta BEFORE open, reconnects resume from the drain watermark
+// without resetting, gap repairs flush in order, and the legacy replay
+// path is preserved for old servers.
 
 setupDomHarness();
 
@@ -113,6 +106,11 @@ function stubTerminalGlobal() {
     vi.stubGlobal('FitAddon', { FitAddon: class {} });
     vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
     return opened;
+}
+
+async function flushBootstrap(tab) {
+    await Promise.all(tab._pendingBootstraps || []);
+    await new Promise((r) => setTimeout(r, 0));
 }
 
 function recordingResponse(text, start, end) {
@@ -252,7 +250,7 @@ describe('TabManager hot attach bootstrap', () => {
             },
             ansi,
         );
-        await new Promise((r) => setTimeout(r, 0));
+        await flushBootstrap(tab);
 
         // Terminal sized to the checkpoint before anything renders.
         expect(tab.term.cols).toBe(120);
@@ -307,8 +305,7 @@ describe('TabManager hot attach bootstrap', () => {
         tm.createTab('p3', 's3', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p3');
         tab.ws.ws.emitAttachHead({ epoch: 9, oldest: 0, head: 10 });
-        await new Promise((r) => setTimeout(r, 0));
-
+        await flushBootstrap(tab);
         expect(tab.term.writes).toEqual([]);
         expect(tab.term.opened).toBe(true);
     });

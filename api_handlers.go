@@ -112,9 +112,19 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		if v, err := strconv.ParseUint(r.URL.Query().Get("through"), 10, 64); err == nil {
 			through = v
 		}
+		var wantEpoch uint64
+		var hasEpoch bool
+		if v, err := strconv.ParseUint(r.URL.Query().Get("epoch"), 10, 64); err == nil {
+			wantEpoch = v
+			hasEpoch = true
+		}
 		rec, ok := wsHub.Recording(id, from, through)
 		if !ok {
 			http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
+			return
+		}
+		if hasEpoch && rec.Epoch != wantEpoch {
+			http.Error(w, "epoch mismatch", http.StatusConflict)
 			return
 		}
 		resizes := make([][3]uint64, 0, len(rec.Resizes))

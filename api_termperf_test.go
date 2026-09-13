@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -92,6 +93,31 @@ func TestRecordingEndpointPartialRangeAndErrors(t *testing.T) {
 	handleFallback(wBad, reqBad)
 	if wBad.Code != http.StatusBadRequest {
 		t.Fatalf("from beyond head should 400, got %d", wBad.Code)
+	}
+}
+
+func TestRecordingEndpointRejectsWrongEpoch(t *testing.T) {
+	setupHotHub(t)
+	wsHub.Ingest("pane-3", []byte("hello"))
+
+	ph, ok := wsHub.LookupPane("pane-3")
+	if !ok {
+		t.Fatal("pane-3 missing")
+	}
+	// Right epoch: 200.
+	reqOK := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/terminals/pane-3/recording?from=0&through=5&epoch=%d", ph.EpochOf()), nil)
+	wOK := httptest.NewRecorder()
+	handleFallback(wOK, reqOK)
+	if wOK.Code != http.StatusOK {
+		t.Fatalf("matching epoch should 200, got %d", wOK.Code)
+	}
+
+	// Wrong epoch: 409.
+	reqBad := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-3/recording?from=0&through=5&epoch=999", nil)
+	wBad := httptest.NewRecorder()
+	handleFallback(wBad, reqBad)
+	if wBad.Code != http.StatusConflict {
+		t.Fatalf("wrong epoch should 409, got %d", wBad.Code)
 	}
 }
 

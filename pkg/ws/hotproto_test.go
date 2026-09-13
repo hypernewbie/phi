@@ -1,7 +1,7 @@
 package ws
 
-// TERMPERF (temp/TERMPERF.md): the hot-v1 protocol. These tests pin the
-// server invariants the plan calls non-negotiable:
+// Hot-v1 protocol invariants (see temp/TERMPERF.md). These tests pin the
+// server contracts the plan calls non-negotiable.
 //
 //   - attach is atomic: a hot client gets ATTACH_HEAD with the head H and
 //     then only LIVE_OUTPUT frames with startSeq >= H (no gap, no dupes);

@@ -65,8 +65,8 @@ type ResizeMarker struct {
 	Rows  uint16
 }
 
-// paneCheckpoint is the newest client-uploaded screen snapshot (plan
-// TERMPERF §3). ANSI is stored opaquely; the server never parses it.
+// paneCheckpoint is the newest client-uploaded screen snapshot. ANSI is
+// stored opaquely; the server never parses it.
 type paneCheckpoint struct {
 	Through uint64 // output seq the snapshot reflects (exclusive head)
 	Cols    uint16
