@@ -240,6 +240,19 @@ describe('PTYWebSocket hot-v1 framing', () => {
         expect(pty.liveSeq).toBe(10);
     });
 
+    it('a malformed ATTACH_HEAD closes so the host reconnects instead of holding forever', () => {
+        const data = vi.fn();
+        const onClose = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, onClose, null, {});
+        const closeSpy = vi.spyOn(pty.ws, 'close');
+        pty.ws.emit(0x08, new Uint8Array(2)); // < 4-byte header: malformed
+        expect(closeSpy).toHaveBeenCalled();
+        expect(pty.mode).toBe('unknown'); // never entered hot on garbage
+        // The close event reaches the host, which owns reconnect/backoff.
+        pty.ws.onclose();
+        expect(onClose).toHaveBeenCalled();
+    });
+
     it('legacy frames flip the mode and deliver like the old protocol', () => {
         const data = vi.fn();
         const onControl = vi.fn();
