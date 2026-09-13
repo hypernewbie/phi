@@ -32,6 +32,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"fast_mode":                           cfg.FastMode,
 		"pi_offline":                          cfg.PiOffline,
 		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
+		"agy_theme_ansi":                      cfg.AgyThemeAnsi,
 		"auto_reconnect":                      cfg.AutoReconnect,
 		"sync_coordinator":                    cfg.SyncCoordinator,
 		"ui_font_family":                      cfg.UIFontFamily,
@@ -527,6 +528,30 @@ func handleClaudeDangerouslySkipPermissions(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.ClaudeDangerouslySkipPermissions})
+}
+
+// handleAgyThemeAnsi toggles whether xterm's ANSI colour palette dynamically
+// matches Phi's active accent theme for agy coder tabs.
+func handleAgyThemeAnsi(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := loadConfig()
+	cfg.AgyThemeAnsi = req.Enabled
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.AgyThemeAnsi})
 }
 
 // handleAutoReconnect toggles the automatic-reconnect master switch (wake,

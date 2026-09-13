@@ -586,6 +586,32 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 );
             }
         });
+
+    const agyThemeAnsiRow = _buildCheckboxRow(
+        'Harmonise Agy terminal colours with active Phi theme',
+        'settings-agy-theme-ansi',
+        !!app.config?.agy_theme_ansi,
+    );
+    behGroup.appendChild(agyThemeAnsiRow);
+    agyThemeAnsiRow
+        .querySelector('input')
+        ?.addEventListener('change', async (e) => {
+            const enabled = !!e.target.checked;
+            if (app.config) app.config.agy_theme_ansi = enabled;
+            app.tabManager?.applyThemeToAllActiveTerminals?.();
+            try {
+                await fetch('/api/config/agy-theme-ansi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist agy-theme-ansi toggle',
+                    err,
+                );
+            }
+        });
     setPasswordBtn.addEventListener('click', async () => {
         const newPw = newInput.value;
         const confirmPw = confirmInput.value;

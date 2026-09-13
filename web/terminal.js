@@ -49,6 +49,79 @@ import {
     syncPiSubagentStrip,
 } from './chat-pi/controller.js';
 import { formatPiRpcStatus } from './chat-pi/render.js';
+import { ACCENT_COLORS } from './theme.js';
+
+export const DEFAULT_ANSI_THEME = {
+    background: '#08080a',
+    foreground: '#e4e3e9',
+    cursor: '#7c6af7',
+    cursorAccent: '#08080a',
+    black: '#18181b',
+    red: '#ef4444',
+    green: '#22c55e',
+    yellow: '#eab308',
+    blue: '#3b82f6',
+    magenta: '#a855f7',
+    cyan: '#06b6d4',
+    white: '#fafafa',
+    brightBlack: '#71717a',
+    brightRed: '#f87171',
+    brightGreen: '#4ade80',
+    brightYellow: '#facc15',
+    brightBlue: '#60a5fa',
+    brightMagenta: '#c084fc',
+    brightCyan: '#22d3ee',
+    brightWhite: '#ffffff',
+};
+
+// getTerminalTheme derives the xterm theme object for a tab.
+// Normal tabs and tabs for unselected coders receive the standard
+// ANSI palette with only cursor colour updated. When agy_theme_ansi
+// is enabled and the coder is agy, ANSI accent slots (blue, cyan,
+// magenta) harmonise with Phi's active accent theme while preserving
+// semantic red/green/yellow indicators.
+export function getTerminalTheme(
+    coder,
+    accentColorKeyOrHex,
+    config,
+    activeThemeKey,
+) {
+    const isAgyThemed = coder === 'agy' && !!config?.agy_theme_ansi;
+    const themeKey =
+        activeThemeKey ||
+        (typeof document !== 'undefined' &&
+            document.documentElement?.getAttribute('data-theme-color')) ||
+        'purple';
+    const tokens = ACCENT_COLORS?.[themeKey] || ACCENT_COLORS?.purple || {
+        accent: '#7c6af7',
+        accentDim: '#5b4ec2',
+        accentBright: '#9a8dfa',
+    };
+    const cursorColor =
+        accentColorKeyOrHex ||
+        (typeof document !== 'undefined' &&
+            document.documentElement?.style?.getPropertyValue('--accent')) ||
+        tokens.accent;
+
+    if (!isAgyThemed) {
+        return {
+            ...DEFAULT_ANSI_THEME,
+            cursor: cursorColor,
+        };
+    }
+
+    return {
+        ...DEFAULT_ANSI_THEME,
+        cursor: cursorColor,
+        blue: tokens.accentDim,
+        brightBlue: tokens.accentBright,
+        cyan: tokens.accent,
+        brightCyan: tokens.accentBright,
+        magenta: tokens.accent,
+        brightMagenta: tokens.accentBright,
+        selectionBackground: `${tokens.accent}40`,
+    };
+}
 
 // Pi thinking levels — bonus/pi_themes/phi_violet.json colors:
 //  off darkGray #252525 → minimal gray #474747 → low #6d28d9 → medium #ddd6fe → high #a78bfa → xhigh white #e3e3e4
@@ -1540,31 +1613,7 @@ export class TabManager {
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
-            theme: {
-                background: '#08080a',
-                foreground: '#e4e3e9',
-                cursor:
-                    document.documentElement.style.getPropertyValue(
-                        '--accent',
-                    ) || '#7c6af7',
-                cursorAccent: '#08080a',
-                black: '#18181b',
-                red: '#ef4444',
-                green: '#22c55e',
-                yellow: '#eab308',
-                blue: '#3b82f6',
-                magenta: '#a855f7',
-                cyan: '#06b6d4',
-                white: '#fafafa',
-                brightBlack: '#71717a',
-                brightRed: '#f87171',
-                brightGreen: '#4ade80',
-                brightYellow: '#facc15',
-                brightBlue: '#60a5fa',
-                brightMagenta: '#c084fc',
-                brightCyan: '#22d3ee',
-                brightWhite: '#ffffff',
-            },
+            theme: this.getTerminalTheme(coder),
         });
 
         const fitAddon = new window.FitAddon.FitAddon();
@@ -7153,13 +7202,26 @@ export class TabManager {
         dropup.appendChild(footer);
     }
 
+    getTerminalTheme(coder, accentColorKeyOrHex) {
+        return getTerminalTheme(
+            coder,
+            accentColorKeyOrHex,
+            this.app?.config,
+        );
+    }
+
     applyThemeToAllActiveTerminals(color) {
+        const activeColor =
+            color ||
+            (typeof document !== 'undefined' &&
+                document.documentElement?.style?.getPropertyValue('--accent')) ||
+            '#7c6af7';
         for (const tab of this.tabs.values()) {
             if (tab.term) {
-                tab.term.options.theme = {
-                    ...tab.term.options.theme,
-                    cursor: color,
-                };
+                tab.term.options.theme = this.getTerminalTheme(
+                    tab.coder,
+                    activeColor,
+                );
             }
         }
     }
