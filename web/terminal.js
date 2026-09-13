@@ -1732,6 +1732,146 @@ export class TabManager {
         );
     }
 
+    // Archive overlay toggle (TERMPERF §5 presentation tier). Streams
+    // recorded history rows from HistoryStore + the worker into a thin
+    // modal above the live terminal — the only path to bytes older
+    // than the live scrollback cap.
+    _toggleArchive(tabInfo) {
+        if (tabInfo.archiveOpen) {
+            this._closeArchive(tabInfo);
+            return;
+        }
+        if (tabInfo.paneEpoch === undefined || tabInfo.paneOldest === undefined) {
+            return;
+        }
+        const head = tabInfo.queuedSeq || 0;
+        if (head <= tabInfo.paneOldest) {
+            return;
+        }
+        tabInfo.archiveOpen = true;
+        if (tabInfo.archiveBtn) tabInfo.archiveBtn.textContent = '\u2715';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'archive-overlay';
+        overlay.style.cssText =
+            'position:absolute;left:0;right:0;top:0;bottom:0;z-index:50;' +
+            'background:var(--accent-wash);color:var(--accent);' +
+            'display:flex;flex-direction:column;font-family:inherit;';
+        const bar = document.createElement('div');
+        bar.style.cssText =
+            'display:flex;align-items:center;padding:6px 12px;' +
+            'border-bottom:1px solid var(--accent-edge);gap:8px;';
+        const title = document.createElement('span');
+        title.textContent = 'Recorded history';
+        title.style.cssText = 'flex:1;font-weight:600;';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.textContent = '\u2715';
+        closeBtn.title = 'Back to live terminal (Esc)';
+        closeBtn.style.cssText =
+            'border:1px solid var(--accent-edge);background:transparent;color:inherit;' +
+            'border-radius:4px;padding:2px 10px;cursor:pointer;';
+        bar.appendChild(title);
+        bar.appendChild(closeBtn);
+        const out = document.createElement('pre');
+        out.style.cssText =
+            'flex:1;margin:0;padding:8px 12px;overflow:auto;white-space:pre-wrap;' +
+            'font-family:inherit;font-size:13px;';
+        out.textContent = 'Loading…';
+        overlay.appendChild(bar);
+        overlay.appendChild(out);
+        tabInfo.termContainer.appendChild(overlay);
+        tabInfo.archiveOverlay = overlay;
+        tabInfo.archiveOutput = out;
+
+        const close = () => this._closeArchive(tabInfo);
+        closeBtn.addEventListener('click', close);
+        tabInfo._archiveEsc = (e) => {
+            if (e.key === 'Escape') close();
+        };
+        document.addEventListener('keydown', tabInfo._archiveEsc);
+
+        // Open the iframe-shaped fetch asynchronously. Errors here are
+        // shown inline in the overlay so the live terminal is never
+        // affected.
+        this._loadArchiveRows(tabInfo, head)
+            .then((text) => {
+                if (!tabInfo.archiveOpen) return;
+                out.textContent = text || '(no archive rows yet)';
+            })
+            .catch((e) => {
+                if (!tabInfo.archiveOpen) return;
+                out.textContent = 'archive error: ' + (e.message || e);
+            });
+    }
+
+    _closeArchive(tabInfo) {
+        if (!tabInfo.archiveOpen) return;
+        tabInfo.archiveOpen = false;
+        if (tabInfo._archiveEsc) {
+            document.removeEventListener('keydown', tabInfo._archiveEsc);
+            tabInfo._archiveEsc = null;
+        }
+        if (tabInfo.archiveOverlay) {
+            tabInfo.archiveOverlay.remove();
+            tabInfo.archiveOverlay = null;
+            tabInfo.archiveOutput = null;
+        }
+        if (tabInfo.archiveBtn) tabInfo.archiveBtn.textContent = '\u2756';
+    }
+
+    // Pulls the per-pane recording chunk(s) from the HistoryStore and
+    // runs the headless worker to convert them to row blocks. Resolves
+    // with the rendered text. Errors propagate to the caller.
+    async _loadArchiveRows(tabInfo, head) {
+        const { HistoryStore } = await import('./history.js');
+        const { startArchiveWorker } = await import('./archive.js');
+        const store = new HistoryStore({ origin: location.origin });
+        const from = Math.max(tabInfo.paneOldest, head - 65536);
+        const fetched = await store.fetchRange(
+            tabInfo.paneId,
+            tabInfo.paneEpoch,
+            from,
+            head,
+        );
+        if (!fetched || fetched.bytes.byteLength === 0) {
+            return '';
+        }
+        const markers = await store.getMarkers(
+            tabInfo.paneId,
+            tabInfo.paneEpoch,
+        );
+        const blocks = [];
+        await new Promise((resolve, reject) => {
+            startArchiveWorker(
+                [
+                    {
+                        paneId: tabInfo.paneId,
+                        cols: 80,
+                        rows: 24,
+                        chunks: [
+                            {
+                                start: fetched.cachedStart ?? from,
+                                end: head,
+                                bytes: fetched.bytes,
+                            },
+                        ],
+                        markers,
+                    },
+                ],
+                {
+                    onRows: (_id, b) => blocks.push(...b),
+                    // Surface worker errors via the surrounding Promise;
+                    // throwing inside the message callback leaves the
+                    // overlay stuck on "Loading…".
+                    onError: (_id, msg) => reject(new Error(msg)),
+                    onDone: () => resolve(),
+                },
+            );
+        });
+        return blocks.flatMap((b) => b.lines).join('\n');
+    }
+
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
@@ -2569,6 +2709,27 @@ export class TabManager {
         termContainer.appendChild(scrollToBottomBtn);
         tabInfo.scrollToBottomBtn = scrollToBottomBtn;
 
+        // Archive button: opens a read-only overlay of recorded
+        // history (TERMPERF §5 presentation tier). The live xterm
+        // never holds more than ~512 rows; recorded history is the
+        // only way to see older output.
+        const archiveBtn = document.createElement('button');
+        archiveBtn.className = 'archive-btn hidden';
+        archiveBtn.type = 'button';
+        archiveBtn.title = 'Browse recorded history';
+        archiveBtn.innerHTML = '\u2756';
+        archiveBtn.style.cssText =
+            'position:absolute;right:8px;top:8px;width:32px;height:32px;' +
+            'border-radius:16px;background:rgba(255,255,255,0.06);' +
+            'color:var(--accent);font-size:16px;border:1px solid var(--accent-edge);' +
+            'cursor:pointer;';
+        archiveBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleArchive(tabInfo);
+        });
+        termContainer.appendChild(archiveBtn);
+        tabInfo.archiveBtn = archiveBtn;
+
         const updateScrollBtn = () => {
             if (
                 tabInfo.isDead ||
@@ -2577,6 +2738,7 @@ export class TabManager {
                 tabInfo.coder === 'pi-rpc'
             ) {
                 scrollToBottomBtn.classList.add('hidden');
+                if (tabInfo.archiveBtn) tabInfo.archiveBtn.classList.add('hidden');
                 return;
             }
             const buf = tabInfo.term?.buffer?.active;
@@ -2586,6 +2748,22 @@ export class TabManager {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
                 scrollToBottomBtn.classList.remove('hidden');
+            }
+            // Show the archive button only when the live terminal has
+            // recorded enough that the cache adds new rows beyond the
+            // live 512-row tail.
+            if (tabInfo.archiveBtn) {
+                const oldest = tabInfo.paneOldest;
+                const head = tabInfo.queuedSeq;
+                if (
+                    oldest !== undefined &&
+                    head !== undefined &&
+                    head - oldest > 512
+                ) {
+                    tabInfo.archiveBtn.classList.remove('hidden');
+                } else {
+                    tabInfo.archiveBtn.classList.add('hidden');
+                }
             }
         };
         if (term.onScroll) {
