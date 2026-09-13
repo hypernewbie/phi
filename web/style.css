@@ -1327,25 +1327,6 @@ html[data-phi-desktop-root] .app-header {
     position: relative;
 }
 
-/* Greek key (meander) border along the top of the terminal panel.
-   Static 6px-tall SVG strip; the motif repeats across the panel width.
-   Subtle: accent at 20% opacity. Sets the Hellenic geometric frame
-   without motion or weight. */
-.terminal-panel::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 6px;
-    pointer-events: none;
-    z-index: 5;
-    opacity: 0.2;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6'><path d='M0 0 H6 V3 H3 V0 M0 0 V3 H3 V0 M9 0 V6 H15 V0 H12 V3 H9 M18 0 V6 H24 V0' fill='none' stroke='currentColor' stroke-width='0.7'/></svg>");
-    background-repeat: repeat-x;
-    color: var(--accent);
-}
-
 .terminal-tabs-bar {
     background-color: var(--bg-panel);
     border-bottom: 1px solid var(--bg-border);
@@ -3628,6 +3609,205 @@ html[data-phi-desktop-root] .app-header {
     width: min(520px, calc(100vw - 24px));
 }
 
+/* ── Model quota overlay ───────────────────────────────────────────────
+   Structure reuses .modal-overlay/.modal-content/.modal-header/body/
+   footer, so compact rules (keyboard-aware heights, pinned footer)
+   apply with no quota-specific media queries. Only the inner quota
+   chrome is styled here. */
+.quota-modal {
+    width: min(560px, calc(100vw - 24px));
+}
+
+.quota-source {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--bg-border);
+    background-color: rgba(255, 255, 255, 0.01);
+    flex-shrink: 0;
+}
+
+.quota-source label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.quota-source input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+}
+
+.quota-source input:focus {
+    border-color: var(--accent-edge);
+    box-shadow: 0 0 0 1px var(--accent-edge);
+}
+
+.quota-source .btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.quota-saved {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.quota-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.quota-section h4 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+}
+
+.quota-section + .quota-section,
+.quota-raw + .quota-section,
+.quota-section + .quota-raw {
+    border-top: 1px solid var(--bg-border);
+    padding-top: 12px;
+}
+
+.quota-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 3px 0;
+}
+
+.quota-row.is-disabled {
+    opacity: 0.45;
+}
+
+.quota-label {
+    flex: 0 0 92px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: capitalize;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.quota-bar {
+    flex: 1;
+    min-width: 40px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-border);
+    overflow: hidden;
+}
+
+.quota-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+    transition: width 0.2s ease;
+}
+
+.quota-fill.is-low {
+    background: var(--red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.35);
+}
+
+.quota-val {
+    flex: 0 0 40px;
+    text-align: right;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+
+.quota-note {
+    flex: 0 1 auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.quota-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.quota-pre {
+    margin: 4px 0 0;
+    padding: 10px 12px;
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+    background: var(--bg-base);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.quota-raw {
+    margin: 0;
+}
+
+.quota-raw summary {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 0;
+}
+
+.quota-error {
+    font-size: 12px;
+    color: var(--red);
+    padding: 8px 0;
+}
+
+.quota-warn {
+    font-size: 12px;
+    color: var(--color-amber, #fbbf24);
+    padding: 2px 0 6px;
+}
+
+.quota-retry {
+    padding: 4px 0;
+}
+
+.quota-updated {
+    margin-right: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
 /* ── Access password prompt ────────────────────────────────────────────── */
 
 .access-auth-overlay {
@@ -4733,32 +4913,15 @@ html[data-phi-config-page] .settings-modal {
     flex-direction: column;
     margin-bottom: 8px;
     border-radius: 6px;
-    /* overflow:visible so the meander divider ::before on the next
-       section can sit in the gap. Children have their own border-radius
-       so the lack of clipping is invisible. */
     overflow: visible;
     position: relative;
 }
 
-/* Greek key meander divider between sidebar worktree sections.
-   Same SVG as .terminal-panel::before, sized smaller (4px tall) and
-   dimmer (10% opacity). Geometric punctuation instead of bare space
-   between groups. Sits in the margin-bottom gap of the previous
-   section. */
-.worktree-section + .worktree-section::before {
-    content: "";
-    position: absolute;
-    top: -5px;
-    left: 14px;
-    right: 14px;
-    height: 4px;
-    pointer-events: none;
-    opacity: 0.1;
-    color: var(--accent);
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6'><path d='M0 0 H6 V3 H3 V0 M0 0 V3 H3 V0 M9 0 V6 H15 V0 H12 V3 H9 M18 0 V6 H24 V0' fill='none' stroke='currentColor' stroke-width='0.7'/></svg>");
-    background-repeat: repeat-x;
-    background-size: 24px 4px;
-}
+/* NOTE (2026-09-13, user verdict): no meander divider between worktree
+   sections. The fret read as random dashes (accent-tinted, subpixel-
+   fragile) and its visibility was incoherent — body.fast-mode hides
+   panel chrome per-device, so it appeared on some devices and not
+   others. Sections are separated by margin alone. */
 
 .worktree-header {
     display: flex;
@@ -9605,7 +9768,6 @@ body.fast-mode #input-textarea:focus {
    motion. They carry mobile's visual fixes into the unified profile (the
    decoration hide is the 2026-07-14 "gradient square" fix); without them,
    forcing the profile on mobile would regress those fixes. */
-body.fast-mode .terminal-panel::before,
 body.fast-mode .empty-state-decoration {
     display: none;
 }
