@@ -261,6 +261,18 @@ function showUnlockPrompt() {
             event.preventDefault();
             error.textContent = '';
             submit.disabled = true;
+            // On the pure-JS fallback path (plain-HTTP LAN origins, where
+            // browsers expose no SubtleCrypto), 600k PBKDF2 iterations can
+            // take tens of seconds on weak devices. Say so instead of a
+            // dead button. (WASM was measured slower than noble here:
+            // hash-wasm's pbkdf2 loops in JS around per-iteration WASM
+            // boundary crossings - 2.7x noble at c=600000.)
+            const slowDerive = !(await nativeDerive());
+            if (slowDerive) {
+                submit.textContent = 'Deriving key…';
+                subtitle.textContent =
+                    'Strong key derivation can take up to a minute on slower devices.';
+            }
             try {
                 const status = await getStatus();
                 if (!status.enabled) {
@@ -283,6 +295,8 @@ function showUnlockPrompt() {
                     err instanceof Error ? err.message : 'Unable to unlock Phi';
             } finally {
                 submit.disabled = false;
+                submit.textContent = 'Sign in';
+                subtitle.textContent = 'Enter your password to continue.';
             }
         });
 
