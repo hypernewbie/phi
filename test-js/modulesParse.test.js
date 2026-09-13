@@ -57,11 +57,13 @@ describe('front-end ES modules parse cleanly', () => {
 // property between `term.open(termContainer)` and the main-branch
 // `const tabInfo = { ... }` is a TDZ trap.
 //
-// We find the slice from the first `term.open(termContainer)`
-// inside createTab() to the next `const tabInfo`, and assert no
-// `tabInfo.X = ...` assignment exists in that slice.
+// We assert the deferred-open contract introduced with hot-v1:
+// createTab never opens the terminal itself (the open lives in
+// _openTermAndViewport so the checkpoint can be written pre-open), and
+// no top-level `tabInfo.X = ...` assignment appears before the first
+// `const tabInfo` declaration (the original TDZ trap).
 describe('no TDZ trap between term.open() and the next const tabInfo in createTab()', () => {
-    it('terminal.js: tabInfo.X = ... assignments only come after both const tabInfo declarations', () => {
+    it('terminal.js: createTab defers term.open to _openTermAndViewport', () => {
         const src = fs.readFileSync('web/terminal.js', 'utf8');
         const startMatch = src.match(/\n {4}createTab\(/);
         expect(startMatch, 'createTab() not found').toBeTruthy();
@@ -77,31 +79,47 @@ describe('no TDZ trap between term.open() and the next const tabInfo in createTa
         }
         const body = src.slice(openIdx, i);
 
-        // Find the slice AFTER the first `term.open(termContainer)`
-        // (that's the spot where the original bug lived).
-        const termOpenIdx = body.indexOf('term.open(termContainer)');
-        expect(
-            termOpenIdx,
-            'no term.open(termContainer) inside createTab()',
-        ).toBeGreaterThan(0);
-        const afterOpen = body.slice(termOpenIdx);
-        // Find the next `const tabInfo` after that.
-        const nextDecl = afterOpen.indexOf('const tabInfo');
-        expect(nextDecl, 'no const tabInfo after term.open()').toBeGreaterThan(
+        // The open call itself must not live in createTab anymore.
+        expect(body).not.toContain('term.open(termContainer)');
+
+        // tabInfo.X assignments before `const tabInfo` are only legal
+        // inside nested callbacks (indent > 8 spaces under biome). A
+        // createTab-top-level assignment (indent 8) is the TDZ trap.
+        const declIdx = body.indexOf('const tabInfo');
+        expect(declIdx, 'no const tabInfo inside createTab()').toBeGreaterThan(
             0,
         );
-        const slice = afterOpen.slice(0, nextDecl);
-
-        // Strip line + block comments so the heuristic doesn't false-fire
-        // on documentation that mentions `tabInfo.X = ...`.
-        const stripped = slice
+        const before = body
+            .slice(0, declIdx)
             .split('\n')
             .map((l) => l.replace(/\/\/.*$/, ''))
             .join('\n')
             .replace(/\/\*[\s\S]*?\*\//g, '');
+        const topLevel = before
+            .split('\n')
+            .filter((l) => /^ {8}tabInfo\.\w+\s*=/.test(l));
         expect(
-            /\btabInfo\.\w+\s*=/.test(stripped),
-            'tabInfo.X = ... assignment found between term.open() and the next const tabInfo (TDZ trap)',
-        ).toBe(false);
+            topLevel,
+            'tabInfo.X = ... assignment at createTab top level before const tabInfo (TDZ trap)',
+        ).toEqual([]);
+    });
+
+    it('terminal.js: _openTermAndViewport performs the open and the textarea focus patch', () => {
+        const src = fs.readFileSync('web/terminal.js', 'utf8');
+        const startMatch = src.match(/\n {4}_openTermAndViewport\(/);
+        expect(startMatch, '_openTermAndViewport() not found').toBeTruthy();
+        const createStart = startMatch.index + 1;
+        const openIdx = src.indexOf('{', createStart);
+        let depth = 1;
+        let i = openIdx + 1;
+        while (depth > 0 && i < src.length) {
+            const ch = src[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') depth--;
+            i++;
+        }
+        const body = src.slice(openIdx, i);
+        expect(body).toContain('.open(');
+        expect(body).toContain('textarea.xterm-helper-textarea');
     });
 });

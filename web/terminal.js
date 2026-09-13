@@ -187,6 +187,14 @@ const AUTO_RECONNECT_STABLE_MS = 5000;
 // SLOW_MS so the timing buffers stay small on long-lived pages. Purely
 // observational: no behavior change, all APIs guarded.
 const TERM_PERF_SLOW_MS = 16;
+// TERMPERF §3: the bounded delta ever written into the live terminal on
+// attach/reconnect/gap (checkpoint itself is separately capped server-side
+// at 128 KiB). Together they bound the first live payload regardless of
+// session age.
+const HOT_DELTA_LIMIT_BYTES = 64 * 1024;
+// How long output must stay quiet before the client uploads a screen
+// checkpoint (TERMPERF §3 — debounce so busy streams don't serialize).
+const CHECKPOINT_QUIET_MS = 2000;
 function termPerfMark(name) {
     try {
         if (typeof performance !== 'undefined' && performance.mark)
@@ -258,6 +266,19 @@ export class TabManager {
         this.sendInputBtn = document.getElementById('send-input-btn');
         this.cancelInputBtn = document.getElementById('cancel-input-btn');
         this.copyInputBtn = document.getElementById('copy-input-btn');
+
+        // TERMPERF §3: when the page goes away, leave a fresh screen
+        // checkpoint behind so the next client restores instantly instead
+        // of falling back to the bounded delta.
+        if (typeof window !== 'undefined') {
+            window.addEventListener('pagehide', () => {
+                for (const tab of this.tabs.values()) {
+                    if (tab.serializeAddon && !tab.isDead) {
+                        this._uploadCheckpoint(tab);
+                    }
+                }
+            });
+        }
         this.directModeToggle = document.getElementById('direct-mode-toggle');
         this.presetsContainer = document.getElementById('presets-container');
         this.piRpcStatusBar = document.getElementById('pi-rpc-status-bar');
@@ -1394,6 +1415,321 @@ export class TabManager {
         }
     }
 
+    // ── TERMPERF hot-v1: attach bootstrap, gap repair, checkpoints ──
+
+    // The bounded delta ever allowed into the live terminal on attach or
+    // reconnect (TERMPERF §3/§6). Checkpoint + delta ≤ 192 KiB first
+    // payload, independent of session age.
+    _paneData(tabInfo, data) {
+        const pty = tabInfo.ws;
+        if (pty && pty.mode === 'legacy') {
+            // Legacy server: open immediately if the hot bootstrap never
+            // happened — replayed bytes parse fine pre-open, but the tests'
+            // DOM and any legacy-visible behavior must not wait 300ms.
+            if (!tabInfo._termOpened) this._openTermAndViewport(tabInfo);
+            // Legacy server: keep the reset-on-first-replayed-byte dance so
+            // reconnects don't double the scrollback.
+            if (tabInfo.awaitingReplay) {
+                tabInfo.awaitingReplay = false;
+                try {
+                    tabInfo.term.reset();
+                } catch (e) {
+                    console.error('[term] reset on replay failed:', e);
+                }
+            }
+        }
+        this.writeToTerminal(tabInfo, data);
+        if (pty && pty.mode === 'hot') {
+            tabInfo.queuedSeq = pty.lastFrameEnd;
+        }
+    }
+
+    // Fetches a raw recording range from the server. Returns
+    // { text, bytes, start, end } or null. The caller checks start to
+    // detect ring truncation.
+    async _fetchRecordingRange(paneId, from, through) {
+        try {
+            const res = await fetch(
+                `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${from}&through=${through}`,
+                { cache: 'no-store' },
+            );
+            if (!res.ok) return null;
+            const buf = new Uint8Array(await res.arrayBuffer());
+            if (buf.byteLength < 4) return null;
+            const jsonLen =
+                ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>>
+                0;
+            if (4 + jsonLen > buf.byteLength) return null;
+            let hdr;
+            try {
+                hdr = JSON.parse(
+                    new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)),
+                );
+            } catch (_e) {
+                return null;
+            }
+            const data = buf.subarray(4 + jsonLen);
+            return {
+                start: hdr.start,
+                end: hdr.end,
+                bytes: data.byteLength,
+                text: new TextDecoder().decode(data),
+                resizes: hdr.resizes || [],
+            };
+        } catch (_e) {
+            return null;
+        }
+    }
+
+    // Attaches the hot protocol's data/gap callbacks onto a pane's socket
+    // options. Returns the PTYWebSocketOptions object for the ctor.
+    _hotOptions(tabInfo) {
+        return {
+            hot: true,
+            onAttachHead: (info) => this._onAttachHead(tabInfo, info),
+            onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
+        };
+    }
+
+    async _onAttachHead(tabInfo, info) {
+        const pty = tabInfo.ws;
+        if (!pty || pty.mode !== 'hot') return;
+        const prevEpoch = tabInfo.paneEpoch;
+        const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
+
+        if (!tabInfo._termOpened) {
+            // Fresh tab: write the checkpoint + bounded delta BEFORE open so
+            // xterm parses once and renders one frame (TERMPERF §3).
+            if (info.ckpt) {
+                try {
+                    tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
+                } catch (_e) {
+                    /* default size; post-open fit corrects it */
+                }
+                this.writeToTerminal(tabInfo, info.ckpt.ansi);
+            }
+            const from = info.ckpt
+                ? info.ckpt.through
+                : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+            if (info.head > from) {
+                const d = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    from,
+                    info.head,
+                );
+                if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
+                    this.writeToTerminal(tabInfo, d.text);
+                }
+            }
+            tabInfo.paneEpoch = info.epoch;
+            tabInfo.queuedSeq = info.head;
+            tabInfo.drainedSeq = info.head;
+            this._openTermAndViewport(tabInfo);
+            pty.release();
+            return;
+        }
+
+        if (samePane) {
+            // Reconnect to the same pane: resume from our watermark. Apply a
+            // small retained delta; never reset, never 1 MiB replay (§6).
+            const from = tabInfo.drainedSeq ?? info.head;
+            if (
+                info.head > from &&
+                from >= info.oldest &&
+                info.head - from <= HOT_DELTA_LIMIT_BYTES
+            ) {
+                const d = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    from,
+                    info.head,
+                );
+                if (d && d.start === from) {
+                    this.writeToTerminal(tabInfo, d.text);
+                    tabInfo.queuedSeq = info.head;
+                    tabInfo.drainedSeq = info.head;
+                }
+            } else if (info.head > from) {
+                // Gap too old/large to replay live: continue live, nudge a
+                // redraw, and leave the interval to the archive.
+                this._nudgeRedraw(tabInfo);
+            }
+            tabInfo.paneEpoch = info.epoch;
+            pty.release();
+            return;
+        }
+
+        // Different pane lifetime under the same id: fresh start. The
+        // existing buffer belongs to a dead epoch — reset it.
+        try {
+            tabInfo.term.reset();
+        } catch (e) {
+            console.error('[term] reset on epoch change failed:', e);
+        }
+        if (tabInfo._pendingResetBanner) {
+            this.writeToTerminal(tabInfo, tabInfo._pendingResetBanner);
+            tabInfo._pendingResetBanner = null;
+        }
+        if (info.ckpt) {
+            this.writeToTerminal(tabInfo, info.ckpt.ansi);
+        }
+        const from = info.ckpt
+            ? info.ckpt.through
+            : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+        if (info.head > from) {
+            const d = await this._fetchRecordingRange(
+                tabInfo.paneId,
+                from,
+                info.head,
+            );
+            if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
+                this.writeToTerminal(tabInfo, d.text);
+            }
+        }
+        tabInfo.paneEpoch = info.epoch;
+        tabInfo.queuedSeq = info.head;
+        tabInfo.drainedSeq = info.head;
+        pty.release();
+    }
+
+    async _onLiveGap(tabInfo, from, to) {
+        const pty = tabInfo.ws;
+        if (!pty || pty.mode !== 'hot') return;
+        if (to - from <= HOT_DELTA_LIMIT_BYTES) {
+            const d = await this._fetchRecordingRange(tabInfo.paneId, from, to);
+            if (d && d.start === from && d.bytes <= HOT_DELTA_LIMIT_BYTES) {
+                // Deliver via the patch path so seq accounting and held
+                // frames stay contiguous. The bytes must reach the terminal
+                // through the normal write queue afterwards.
+                const text = d.text;
+                const savedSeq = pty.liveSeq;
+                pty.applyGapPatch(new TextEncoder().encode(text));
+                // applyGapPatch delivers through onData → _paneData →
+                // writeToTerminal, which queues in order. Re-assert the
+                // watermark direction in case of ordering races.
+                if (pty.liveSeq < savedSeq) pty.liveSeq = savedSeq;
+                tabInfo.queuedSeq = pty.lastFrameEnd;
+                return;
+            }
+        }
+        pty.abandonGap(to);
+        // Honest marker instead of silently missing output: the archive has
+        // the full interval; the live screen skips it.
+        this.writeToTerminal(
+            tabInfo,
+            `\r\n\x1b[33m[phi: ${to - from} output bytes dropped — viewable in history]\x1b[0m\r\n`,
+        );
+    }
+
+    _nudgeRedraw(tabInfo) {
+        // A SIGWINCH-sized resize of the current grid makes full-screen
+        // TUIs repaint; line-oriented shells redraw their prompt line.
+        try {
+            const { cols, rows } = tabInfo.term;
+            tabInfo.ws?.sendResize(cols, rows);
+        } catch (_e) {}
+    }
+
+    _scheduleCheckpointUpload(tabInfo) {
+        if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled) return;
+        clearTimeout(tabInfo._ckptTimer);
+        tabInfo._ckptTimer = setTimeout(() => {
+            tabInfo._ckptTimer = null;
+            this._uploadCheckpoint(tabInfo);
+        }, CHECKPOINT_QUIET_MS);
+    }
+
+    _uploadCheckpoint(tabInfo) {
+        const pty = tabInfo.ws;
+        if (
+            !tabInfo.serializeAddon ||
+            !pty ||
+            pty.mode !== 'hot' ||
+            tabInfo.isDead ||
+            tabInfo.paneEpoch === undefined ||
+            tabInfo.drainedSeq === undefined
+        )
+            return;
+        let ansi = '';
+        try {
+            ansi = tabInfo.serializeAddon.serialize({ scrollback: 0 });
+        } catch (e) {
+            console.error('[term] serialize failed:', e);
+            return;
+        }
+        if (!ansi) return;
+        const payload = {
+            epoch: tabInfo.paneEpoch,
+            through: tabInfo.drainedSeq,
+            cols: tabInfo.term.cols,
+            rows: tabInfo.term.rows,
+            ansi,
+        };
+        // Fire-and-forget: a failed upload only means the next attach uses
+        // the bounded-delta fallback instead of the snapshot.
+        fetch(
+            `/api/terminals/${encodeURIComponent(tabInfo.paneId)}/checkpoint`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            },
+        )
+            .then((res) => {
+                if (res.ok) termPerfMark('ckpt-uploaded');
+            })
+            .catch(() => {});
+    }
+
+    _openTermAndViewport(tabInfo) {
+        if (tabInfo._termOpened) {
+            if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+            return;
+        }
+        clearTimeout(tabInfo._openFallbackTimer);
+        tabInfo._termOpened = true;
+        try {
+            tabInfo.term.open(tabInfo.termContainer);
+        } catch (e) {
+            console.error('[term] open failed:', e);
+        }
+        // Prevent browser viewport jump when xterm focuses its hidden
+        // textarea (moved out of createTab so hot tabs can open late).
+        const textarea = tabInfo.termContainer.querySelector(
+            'textarea.xterm-helper-textarea',
+        );
+        if (textarea) {
+            const originalFocus = textarea.focus.bind(textarea);
+            textarea.focus = (options) => {
+                originalFocus({ preventScroll: true, ...options });
+            };
+        }
+        // Hooks that need the open terminal's DOM (xterm viewport etc.).
+        for (const hook of tabInfo._postOpenHooks || []) {
+            try {
+                hook(tabInfo.term);
+            } catch (e) {
+                console.error('[term] post-open hook failed:', e);
+            }
+        }
+        tabInfo._postOpenHooks = [];
+        if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+    }
+
+    // Called from each socket's onOpen. Hot tabs wait briefly for
+    // ATTACH_HEAD (so the checkpoint can be written pre-open); everything
+    // else opens immediately.
+    _paneOpened(tabInfo) {
+        if (tabInfo._termOpened) {
+            if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+            return;
+        }
+        clearTimeout(tabInfo._openFallbackTimer);
+        tabInfo._openFallbackTimer = setTimeout(
+            () => this._openTermAndViewport(tabInfo),
+            300,
+        );
+    }
+
     writeToTerminal(tabInfo, data) {
         if (tabInfo.isDead) return;
 
@@ -1476,6 +1812,20 @@ export class TabManager {
                 tabInfo.term.scrollToBottom();
             }
             tabInfo.term._core?.viewport?.syncScrollArea(true);
+
+            // TERMPERF hot-v1: when the queue is fully drained, the xterm
+            // state now reflects every byte up to queuedSeq. That makes
+            // drainedSeq a valid checkpoint watermark.
+            if (
+                tabInfo.writeBuffer.length === 0 &&
+                tabInfo.queuedSeq !== undefined &&
+                (!tabInfo.ws || tabInfo.ws.mode === 'hot')
+            ) {
+                if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
+                    tabInfo.drainedSeq = tabInfo.queuedSeq;
+                    this._scheduleCheckpointUpload(tabInfo);
+                }
+            }
 
             this._flushTerminalWrite(tabInfo);
         });
@@ -1685,8 +2035,19 @@ export class TabManager {
         const searchAddon = new window.SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
 
-        // Open in DOM
-        term.open(termContainer);
+        // TERMPERF §3: screen-checkpoint serializer. Loaded when the vendor
+        // addon is present; its absence only disables client checkpoints
+        // (attach then falls back to the bounded delta).
+        let serializeAddon = null;
+        if (window.SerializeAddon?.SerializeAddon) {
+            serializeAddon = new window.SerializeAddon.SerializeAddon();
+            term.loadAddon(serializeAddon);
+        }
+
+        // Open in DOM — deferred. Hot-v1 tabs wait for ATTACH_HEAD so the
+        // screen checkpoint + bounded delta are written pre-open (one
+        // render); legacy/fallback opens run via _paneOpened's 300ms guard.
+        // _openTermAndViewport performs the actual open + textarea patch.
 
         // Register OSC 52 clipboard handler
         if (term.parser?.registerOscHandler) {
@@ -1710,16 +2071,8 @@ export class TabManager {
             });
         }
 
-        // Prevent browser viewport jump when xterm focuses its hidden textarea
-        const textarea = termContainer.querySelector(
-            'textarea.xterm-helper-textarea',
-        );
-        if (textarea) {
-            const originalFocus = textarea.focus.bind(textarea);
-            textarea.focus = (options) => {
-                originalFocus({ preventScroll: true, ...options });
-            };
-        }
+        // (textarea focus patch moved into _openTermAndViewport — the
+        // textarea does not exist until term.open runs)
 
         // Right-click on terminal → copy xterm selection.
         // Uses capture phase on termContainer so we fire BEFORE xterm's own
@@ -2032,6 +2385,14 @@ export class TabManager {
             writePending: false,
             loaderEl: loaderEl,
             hasStarted: false,
+            // TERMPERF hot-v1 bookkeeping.
+            serializeAddon,
+            _termOpened: false,
+            _ckptEnabled: true,
+            paneEpoch: undefined,
+            paneOldest: undefined,
+            queuedSeq: undefined,
+            drainedSeq: undefined,
             // Scrollbar follow mode. xterm's native syncScrollArea leaves
             // the scrollbar stale when PTY output grows without a layout
             // reflow (e.g., the input bar auto-resize that fires when the
@@ -2055,9 +2416,9 @@ export class TabManager {
         }
 
         ws = new PTYWebSocket(
-            paneId,
+            tabInfo.paneId,
             (data) => {
-                this.writeToTerminal(tabInfo, data);
+                this._paneData(tabInfo, data);
             },
             (control) => {
                 this.handleControlMessage(tabInfo, control);
@@ -2067,40 +2428,45 @@ export class TabManager {
                 tabInfo._perfAttachAt = performance.now();
                 tabInfo._perfWrote = false;
                 termPerfMark('ws-open');
-                try {
-                    if (tabInfo === this.getActiveTab()) {
-                        this.activateTabViewport(tabInfo, {
-                            scrollToBottom: true,
-                            autoReconnect: false,
-                        });
-                    } else {
-                        tabInfo.fitAddon.fit();
-                        this.sendResizeToBackend(tabInfo);
+                // Viewport activation waits for the hot bootstrap (or the
+                // 300ms fallback) — _openTermAndViewport runs it after open.
+                tabInfo._pendingViewport = () => {
+                    try {
+                        if (tabInfo === this.getActiveTab()) {
+                            this.activateTabViewport(tabInfo, {
+                                scrollToBottom: true,
+                                autoReconnect: false,
+                            });
+                        } else {
+                            tabInfo.fitAddon.fit();
+                            this.sendResizeToBackend(tabInfo);
+                        }
+                    } catch (e) {
+                        console.error(
+                            '[term] Fit/resize error on initial socket open:',
+                            e,
+                        );
                     }
-
-                    if (initialCmd) {
-                        // Deliver startup command after terminal settles
-                        setTimeout(() => {
-                            if (
-                                initialCmd.length > 16 ||
-                                initialCmd.includes('\n')
-                            ) {
-                                this.sendInput(
-                                    tabInfo,
-                                    `\x1b[200~${initialCmd}\x1b[201~\r`,
-                                );
-                            } else {
-                                this.sendInput(tabInfo, `${initialCmd}\r`);
-                            }
-                        }, 1000);
-                    }
-                } catch (e) {
-                    console.error(
-                        '[term] Fit/resize error on initial socket open:',
-                        e,
-                    );
+                };
+                this._paneOpened(tabInfo);
+                if (initialCmd) {
+                    // Deliver startup command after terminal settles
+                    setTimeout(() => {
+                        if (
+                            initialCmd.length > 16 ||
+                            initialCmd.includes('\n')
+                        ) {
+                            this.sendInput(
+                                tabInfo,
+                                `\x1b[200~${initialCmd}\x1b[201~\r`,
+                            );
+                        } else {
+                            this.sendInput(tabInfo, `${initialCmd}\r`);
+                        }
+                    }, 1000);
                 }
             },
+            this._hotOptions(tabInfo),
         );
 
         tabInfo.ws = ws;
@@ -2122,12 +2488,17 @@ export class TabManager {
             cancelFollowForUserScroll,
             { capture: true, passive: true },
         );
-        term.element
-            ?.querySelector('.xterm-viewport')
-            ?.addEventListener('pointerdown', cancelFollowForUserScroll, {
-                capture: true,
-                passive: true,
-            });
+        // Pointerdown needs the xterm viewport, which only exists after the
+        // deferred open — install it post-open instead.
+        tabInfo._postOpenHooks = tabInfo._postOpenHooks || [];
+        tabInfo._postOpenHooks.push((openedTerm) => {
+            openedTerm.element
+                ?.querySelector('.xterm-viewport')
+                ?.addEventListener('pointerdown', cancelFollowForUserScroll, {
+                    capture: true,
+                    passive: true,
+                });
+        });
 
         // Escape hatch: when the DOM scroll area is stale, wheel-down clamps
         // at a fake bottom while real output sits below (viewportY < baseY).
@@ -5398,6 +5769,13 @@ export class TabManager {
             if (localStorage.getItem('phi_replay_divider') === 'true') {
                 tabInfo.term.write('\r\n\x1b[33m─── live ───\x1b[0m\r\n');
             }
+        } else if (control.type === 'output-dropped') {
+            // TERMPERF: hot-v1 slow-client warning. Rendered locally — it is
+            // not part of the byte stream, so seq accounting is untouched.
+            this.writeToTerminal(
+                tabInfo,
+                '\r\n\x1b[33m[phi: output dropped — slow client]\x1b[0m\r\n',
+            );
         } else if (control.type === 'server-shutdown') {
             // Plan §3.1 / Phase 9: server announces restart/update/shutdown
             // and arms a client-side reload poller. The page reloads when
@@ -5492,15 +5870,7 @@ export class TabManager {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
                 (data) => {
-                    if (tabInfo.awaitingReplay) {
-                        tabInfo.awaitingReplay = false;
-                        try {
-                            tabInfo.term.reset();
-                        } catch (e) {
-                            console.error('[term] reset on replay failed:', e);
-                        }
-                    }
-                    this.writeToTerminal(tabInfo, data);
+                    this._paneData(tabInfo, data);
                 },
                 (control) => {
                     this.handleControlMessage(tabInfo, control);
@@ -5573,6 +5943,7 @@ export class TabManager {
                         });
                     }, 100);
                 },
+                this._hotOptions(tabInfo),
             );
             tabInfo.ws = newWs;
         } catch (e) {
@@ -5639,17 +6010,18 @@ export class TabManager {
                     this.activePaneId = data.pane_id;
                 }
 
-                // Reset terminal screen and print visual cue
+                // Reset terminal screen; the visual cue is written after the
+                // hot attach bootstrap lands (an epoch change resets again,
+                // which would erase a banner written now).
                 tabInfo.term.reset();
-                tabInfo.term.write(
-                    '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n',
-                );
+                tabInfo._pendingResetBanner =
+                    '\x1b[2J\x1b[H\r\n\x1b[33m[Restarted Session]\x1b[0m\r\n';
 
                 let opened = false;
                 const newWs = new PTYWebSocket(
                     tabInfo.paneId,
                     (msg) => {
-                        this.writeToTerminal(tabInfo, msg);
+                        this._paneData(tabInfo, msg);
                     },
                     (control) => {
                         this.handleControlMessage(tabInfo, control);
@@ -5690,6 +6062,7 @@ export class TabManager {
                             });
                         }, 100);
                     },
+                    this._hotOptions(tabInfo),
                 );
                 tabInfo.ws = newWs;
 
