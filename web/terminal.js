@@ -6694,7 +6694,14 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
 
         try {
-            const size = this.resolveTerminalFontSize(activeTab);
+            // One DOM measurement per fit: the proposal feeds both font
+            // resolution and the same-geometry skip check below.
+            const proposed = activeTab.fitAddon?.proposeDimensions?.();
+            const size = this.resolveTerminalFontSize(
+                activeTab,
+                this.app?.terminalFontSize,
+                proposed,
+            );
             if (activeTab.term.options.fontSize !== size) {
                 activeTab.term.options.fontSize = size;
             } else if (!this.isResizing) {
@@ -6708,7 +6715,6 @@ export class TabManager {
                 // cleared after a non-resize fit). Skipping mid-resize
                 // would strand stale coordinates for a later genuine fit
                 // to restore as a viewport jump.
-                const proposed = activeTab.fitAddon?.proposeDimensions?.();
                 if (
                     proposed &&
                     proposed.cols === activeTab.term.cols &&
@@ -7741,12 +7747,18 @@ export class TabManager {
     // This is deliberately separate from fitting/scroll restoration: it only
     // chooses options.fontSize before the existing fit path runs, leaving the
     // hard-won _spamScroll timing behavior untouched.
-    resolveTerminalFontSize(tab, preference = this.app?.terminalFontSize) {
-        const proposed = tab?.fitAddon?.proposeDimensions?.();
+    resolveTerminalFontSize(
+        tab,
+        preference = this.app?.terminalFontSize,
+        proposed,
+    ) {
+        // The caller may pass pre-measured proposeDimensions so the fit
+        // path measures the DOM once and reuses it for the skip check.
+        const dims = proposed ?? tab?.fitAddon?.proposeDimensions?.();
         return responsiveTerminalFontSize(
             terminalPreferredFontSize(preference),
             Number(tab?.term?.options?.fontSize),
-            proposed?.cols,
+            dims?.cols,
             TERMINAL_TARGET_COLUMNS,
         );
     }
