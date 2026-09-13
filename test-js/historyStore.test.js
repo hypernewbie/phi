@@ -14,7 +14,7 @@ class FakeReq {
         this.result = result;
     }
     ok() {
-        queueMicrotask(() => this.onsuccess && this.onsuccess({}));
+        queueMicrotask(() => this.onsuccess?.({}));
     }
 }
 FakeReq.prototype.onsuccess = null;
@@ -98,7 +98,6 @@ class FakeDB {
         return tx;
     }
     onupgradeneeded() {}
-    set onupgradeneeded(_fn) {}
 }
 
 function buildFactoryAndDB() {
@@ -117,7 +116,7 @@ function buildFactoryAndDB() {
                 this._onsuccess = fn;
                 queueMicrotask(() => {
                     // No real upgrade needed (objectStore already exists in ctor).
-                    fn && fn({});
+                    fn?.({});
                 });
             },
         });

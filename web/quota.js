@@ -196,7 +196,7 @@ const RENDERERS = {
             c.lines.find((l) => String(l).startsWith('Account:')) || ''
         ).replace(/^Account:\s*/, '');
         return section(
-            'Codex' + (account ? ` · ${account}` : ''),
+            `Codex${account ? ` · ${account}` : ''}`,
             `<pre class="quota-pre">${escapeHtml(c.lines.join('\n'))}</pre>` +
                 (c.syncing ? '<div class="quota-note">syncing…</div>' : ''),
         );
