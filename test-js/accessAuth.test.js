@@ -272,7 +272,25 @@ describe('unlock overlay slow-derive feedback', () => {
                 overlay.querySelector('button[type="submit"]').textContent,
             ).toBe('Signing in…');
             rejectLogin({ ok: false });
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            // The post-reject path crosses a real webcrypto derive plus
+            // fetch/UI hops; a single fixed tick flakes under CI load.
+            // Poll for the settled state instead of assuming tick count.
+            // Assertions below are unchanged.
+            {
+                const deadline = Date.now() + 2000;
+                for (;;) {
+                    const label = overlay.querySelector(
+                        'button[type="submit"]',
+                    ).textContent;
+                    if (label === 'Sign in') break;
+                    if (Date.now() > deadline) {
+                        throw new Error(
+                            `button never restored (last: ${JSON.stringify(label)})`,
+                        );
+                    }
+                    await new Promise((r) => setTimeout(r, 10));
+                }
+            }
             const button = overlay.querySelector('button[type="submit"]');
             expect(button.textContent).toBe('Sign in');
             expect(button.disabled).toBe(false);
