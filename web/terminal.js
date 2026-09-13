@@ -892,11 +892,15 @@ export class TabManager {
                 // Only an input-focus transition may correct iOS WebKit's
                 // focus-scroll. Generic page/terminal scrolling must never
                 // be reset to the document origin.
-                this.app.updateLayoutPosition?.(true, true);
-                setTimeout(
-                    () => this.app.updateLayoutPosition?.(true, true),
-                    50,
-                );
+                //
+                // The xterm refit goes through the scroll-neutral
+                // keyboard path, not an immediate fit: at focus time the
+                // keyboard has not resized anything yet, so an immediate
+                // fit would yank scroll and fire a gratuitous PTY resize
+                // for zero geometry change. The trailing keyboard fit
+                // settles after the slide animation instead.
+                this.app.updateLayoutPosition?.(false, true);
+                this.scheduleKeyboardFit();
             }
         });
 
@@ -904,7 +908,13 @@ export class TabManager {
             if (isCoarseViewport()) {
                 // Refit after the keyboard hides, but do not reset document
                 // scroll: the user may already be scrolling terminal output.
-                setTimeout(() => this.app.updateLayoutPosition?.(true), 150);
+                // Same scroll-neutral keyboard path: the hide animation is
+                // still mid-flight at 150ms, so coalesce instead of fitting
+                // half-settled geometry with a scroll yank.
+                setTimeout(() => {
+                    this.app.updateLayoutPosition?.(false);
+                    this.scheduleKeyboardFit();
+                }, 150);
             }
         });
 

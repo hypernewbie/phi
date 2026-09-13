@@ -131,3 +131,44 @@ describe('fitActiveTerminal supersedes keyboard fits', () => {
         expect(fit).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('input-bar focus/blur routing', () => {
+    // Tapping the input (keyboard open) and dismissing it (keyboard
+    // close) used to run immediate fits with _spamScroll — the scroll
+    // yank survived the vv-burst coalescing because it fired BEFORE the
+    // burst. Both must route through the scroll-neutral keyboard path.
+    it('focus/blur handlers fit only via scheduleKeyboardFit', async () => {
+        const { readFileSync } = await import('node:fs');
+        const src = readFileSync('web/terminal.js', 'utf8');
+        const focusStart = src.indexOf(
+            "inputTextArea.addEventListener('focus'",
+        );
+        const inputStart = src.indexOf(
+            "inputTextArea.addEventListener('input'",
+        );
+        expect(focusStart).toBeGreaterThan(-1);
+        expect(inputStart).toBeGreaterThan(focusStart);
+        const strip = (s) =>
+            s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+        const block = strip(src.slice(focusStart, inputStart));
+        const blurAt = block.indexOf("addEventListener('blur'");
+        expect(blurAt).toBeGreaterThan(-1);
+        const focusBlock = block.slice(0, blurAt);
+        const blurBlock = block.slice(blurAt);
+        for (const [name, b] of [
+            ['focus', focusBlock],
+            ['blur', blurBlock],
+        ]) {
+            expect(b, `${name} must schedule a keyboard fit`).toContain(
+                'scheduleKeyboardFit',
+            );
+            expect(b, `${name} must not run an immediate fit`).not.toContain(
+                'fitActiveTerminal',
+            );
+            expect(
+                b,
+                `${name} must not fit via updateLayoutPosition(true`,
+            ).not.toMatch(/updateLayoutPosition\?\.\(true/);
+        }
+    });
+});
