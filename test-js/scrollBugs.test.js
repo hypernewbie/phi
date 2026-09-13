@@ -211,9 +211,12 @@ describe('bottom and document-scroll contracts', () => {
         const src = fs.readFileSync('web/app.js', 'utf8');
         expect(src).not.toContain("window.addEventListener('scroll'");
         // visualViewport is optional on old Chromium; when present its
-        // resize/scroll wiring retains the iOS-proven behavior.
+        // resize/scroll wiring retains the iOS-proven behavior. The
+        // keyboard burst must NOT fit per frame (TUI flash + scroll yank):
+        // the var + focus-scroll fix go immediately, the xterm refit
+        // coalesces through the scroll-neutral keyboard path.
         expect(src).toMatch(
-            /window\.visualViewport\??\.addEventListener\(\s*'resize',\s*\(\) =>\s*this\.updateLayoutPosition\(true, true\),?\s*\)/,
+            /window\.visualViewport\??\.addEventListener\(\s*'resize',[\s\S]*?this\.updateLayoutPosition\(false, true\)[\s\S]*?scheduleKeyboardFit/,
         );
         expect(src).toMatch(
             /window\.visualViewport\??\.addEventListener\(\s*'scroll',\s*\(\) =>\s*this\.updateLayoutPosition\(false\),?\s*\)/,
