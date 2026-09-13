@@ -149,6 +149,54 @@ describe('output-dropped control', () => {
     });
 });
 
+describe('write drain advances the checkpoint watermark', () => {
+    function drainTab(mode) {
+        const stored = [];
+        return {
+            tab: {
+                isDead: false,
+                writeBuffer: '',
+                writePending: false,
+                userFollowBottom: true,
+                term: {
+                    buffer: { active: { viewportY: 5, baseY: 5 } },
+                    write(d, cb) {
+                        stored.push(d);
+                        if (cb) cb();
+                    },
+                    scrollToBottom: vi.fn(),
+                    _core: { viewport: { syncScrollArea: vi.fn() } },
+                },
+                queuedSeq: 100,
+                drainedSeq: 50,
+                ws: { mode },
+            },
+            stored,
+        };
+    }
+
+    it('hot: drained batch advances drainedSeq and schedules an upload', () => {
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        const { tab, stored } = drainTab('hot');
+        c.writeToTerminal(tab, 'hi');
+        expect(stored).toEqual(['hi']);
+        expect(tab.drainedSeq).toBe(100);
+        expect(c._scheduleCheckpointUpload).toHaveBeenCalledWith(tab);
+    });
+
+    it('legacy: drained batch leaves the hot watermark alone', () => {
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        const { tab } = drainTab('legacy');
+        c.writeToTerminal(tab, 'hi');
+        expect(tab.drainedSeq).toBe(50);
+        expect(c._scheduleCheckpointUpload).not.toHaveBeenCalled();
+    });
+});
+
 describe('_trackBootstrap', () => {
     it('prunes settled entries so reconnects do not leak slots', async () => {
         const c = Object.create(TabManager.prototype);
