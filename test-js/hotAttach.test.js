@@ -203,6 +203,31 @@ describe('PTYWebSocket hot-v1 framing', () => {
         expect(pty.liveSeq).toBe(9);
     });
 
+    it('flush stops at an internal gap instead of skipping bytes', () => {
+        // Backpressure drops (deliverOrDrop) strand held frames across a
+        // hole. Flushing across it would lose [102,110) silently; the
+        // flush must stop and re-fire onGap so the host patches it.
+        const data = vi.fn();
+        const onGap = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
+        pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
+        pty.ws.emitHot(100, 'aa'); // held (pre-release)
+        pty.ws.emitHot(110, 'bb'); // held + onGap(100, 110)
+        expect(onGap).toHaveBeenCalledWith(100, 110);
+        pty.release();
+        expect(data.mock.calls.map((c) => c[0])).toEqual(['aa']);
+        expect(onGap).toHaveBeenLastCalledWith(102, 110);
+        expect(pty.liveSeq).toBe(102);
+        // Host patches the remainder; the held tail flushes in order.
+        pty.applyGapPatch(new TextEncoder().encode('01234567'));
+        expect(data.mock.calls.map((c) => c[0])).toEqual([
+            'aa',
+            '01234567',
+            'bb',
+        ]);
+        expect(pty.liveSeq).toBe(112);
+    });
+
     it('abandonGap skips the range and keeps live contiguous', () => {
         const data = vi.fn();
         const pty = new PTYWebSocket('p', data, null, null, null, {});
