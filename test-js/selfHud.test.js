@@ -396,3 +396,111 @@ describe('brand HUD popover', () => {
         expect(tm.selfHudOpen).toBe(false);
     });
 });
+
+describe('brand HUD vs sessions slide-out drawer', () => {
+    let tm;
+    let brand;
+    let popover;
+
+    function makeTm() {
+        const m = Object.create(TabManager.prototype);
+        m.tabs = new Map();
+        m.lastCpuPercent = 42;
+        m.app = {
+            hostname: 'atlas',
+            versionInfo: { version: '0.10.1' },
+        };
+        m.getActiveTab = () => ({ paneId: 'p1', coder: 'pi', isDead: false });
+        return m;
+    }
+
+    beforeEach(() => {
+        document.body.innerHTML = `
+            <div class="brand" id="brand">
+                <span class="logo">Φ</span>
+                <span class="brand-name">phi</span>
+                <div class="hostname-wrapper">
+                    <span id="hostname-display">atlas</span>
+                </div>
+            </div>
+            <div id="sidebar-panel" class="sidebar-panel"></div>
+            <div id="self-hud-popover" class="self-hud hidden"></div>
+        `;
+        brand = document.getElementById('brand');
+        popover = document.getElementById('self-hud-popover');
+        tm = makeTm();
+        tm.selfHudEl = popover;
+        tm.selfHudOpen = false;
+        tm.selfHudCloseTimer = null;
+        tm._initBrandHud();
+        tm.tabs.set('p1', {
+            paneId: 'p1',
+            coder: 'pi',
+            isDead: false,
+            isBusy: false,
+            isAttention: false,
+        });
+    });
+
+    it('refuses to open while the sessions drawer is open', () => {
+        document.getElementById('sidebar-panel').classList.add('drawer-open');
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(tm.selfHudOpen).toBe(false);
+        expect(popover.classList.contains('hidden')).toBe(true);
+    });
+
+    it('opens normally once the drawer closes', () => {
+        const sidebar = document.getElementById('sidebar-panel');
+        sidebar.classList.add('drawer-open');
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(tm.selfHudOpen).toBe(false);
+        sidebar.classList.remove('drawer-open');
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(tm.selfHudOpen).toBe(true);
+        expect(popover.classList.contains('hidden')).toBe(false);
+    });
+
+    it('touch tap on the brand does nothing while the drawer is open', () => {
+        window.matchMedia = (query) => ({
+            matches: query === '(hover: none)',
+            media: query,
+        });
+        try {
+            // Re-wire with the touch toggle now that hover is absent.
+            tm._initBrandHud();
+            document
+                .getElementById('sidebar-panel')
+                .classList.add('drawer-open');
+            brand.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(tm.selfHudOpen).toBe(false);
+            expect(popover.classList.contains('hidden')).toBe(true);
+
+            document
+                .getElementById('sidebar-panel')
+                .classList.remove('drawer-open');
+            brand.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(tm.selfHudOpen).toBe(true);
+        } finally {
+            delete window.matchMedia;
+        }
+    });
+
+    it('dismisses an open HUD through the closer the drawer-open sites call', () => {
+        brand.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        expect(tm.selfHudOpen).toBe(true);
+        // app.js invokes exactly this when the slide-out opens
+        // (hamburger tap, left-edge swipe).
+        expect(typeof tm._closeSelfHudNow).toBe('function');
+        vi.useFakeTimers();
+        try {
+            tm._closeSelfHudNow();
+            expect(tm.selfHudOpen).toBe(false);
+            expect(popover.classList.contains('is-open')).toBe(false);
+            // The fade-out hides it from layout after 220ms.
+            vi.advanceTimersByTime(250);
+            expect(popover.classList.contains('hidden')).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
