@@ -15,6 +15,7 @@
     "build": "node scripts/vendor-web.mjs && node scripts/gen-icon.mjs && tsc -p tsconfig.build.json && tsc -p tsconfig.preload.json && node scripts/copy-assets.mjs",
     "gen:icon": "node scripts/gen-icon.mjs",
     "typecheck": "tsc -p tsconfig.json",
+    "pretest": "node scripts/vendor-web.mjs",
     "test": "vitest run",
     "dev": "electron .",
     "package": "electron-builder",
