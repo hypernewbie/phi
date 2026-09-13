@@ -6819,6 +6819,14 @@ export class TabManager {
                     // layout read, so they emit their own mark instead of
                     // silently absenting the `fit` measure.
                     termPerfMark('fit-skipped');
+                    if (activeTab._sizedWs !== activeTab.ws) {
+                        // First fit on a fresh socket: the client reflow is
+                        // correctly skipped, but the backend PTY still has
+                        // its spawn size (not the grid the user sees).
+                        // Tell it once; later skips stay silent.
+                        activeTab._sizedWs = activeTab.ws;
+                        this.sendResizeToBackend(activeTab);
+                    }
                     return;
                 }
             }
@@ -6877,6 +6885,7 @@ export class TabManager {
             }
 
             this.sendResizeToBackend(activeTab);
+            activeTab._sizedWs = activeTab.ws;
         } catch (e) {
             console.error('[term] Fit error:', e);
         }
