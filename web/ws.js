@@ -156,6 +156,12 @@ export class PTYWebSocket {
         const parsed = parseFramedHeader(payload);
         if (!parsed) {
             console.error('[ws] Malformed ATTACH_HEAD frame');
+            // No head means no seq base: staying held would brick the tab
+            // silently. Close and let the host reconnect path redial.
+            try {
+                this.ws.close();
+            }
+            catch (_e) { }
             return;
         }
         this.mode = 'hot';
