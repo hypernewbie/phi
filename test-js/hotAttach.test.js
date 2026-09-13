@@ -413,4 +413,22 @@ describe('checkpoint upload', () => {
         expect(body.rows).toBe(30);
         expect(body.ansi).toBe('SNAPSHOT');
     });
+
+    it('drops the upload when the terminal is gone instead of throwing', () => {
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+        vi.stubGlobal('fetch', fetchMock);
+
+        tm.createTab('p8', 's8', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p8');
+        tab.serializeAddon = { serialize: () => 'SNAPSHOT' };
+        tab.paneEpoch = 7;
+        tab.drainedSeq = 50;
+        tab.term = undefined; // torn-down tab racing the quiet timer
+        tab.ws = { mode: 'hot' };
+
+        expect(() => tm._uploadCheckpoint(tab)).not.toThrow();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
 });

@@ -1671,6 +1671,7 @@ export class TabManager {
             !pty ||
             pty.mode !== 'hot' ||
             tabInfo.isDead ||
+            !tabInfo.term ||
             tabInfo.paneEpoch === undefined ||
             tabInfo.drainedSeq === undefined
         )
