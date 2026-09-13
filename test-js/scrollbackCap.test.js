@@ -27,18 +27,21 @@ describe('live scrollback restored', () => {
         expect(ctorBody).not.toMatch(/scrollback:\s*512\b/);
     });
 
-    it('the archive button gates on recording presence, not a 512-row tail', () => {
-        // head - oldest > 512 mixed byte seqs with row counts; any
-        // recording now qualifies since scroll-up covers recent history.
-        expect(src).not.toContain('head - oldest > 512');
-        expect(src).toContain('head > oldest');
-    });
-
-    it('the archive loads from the oldest retained byte, not a 64 KiB tail', () => {
-        // A 64 KiB window would duplicate what's already visible via
-        // scroll-up; the archive is strictly beyond-scrollback history.
-        expect(src).not.toContain('head - 65536');
-        expect(src).toContain('const from = tabInfo.paneOldest;');
+    it('no archive sidecar remains in the live terminal', () => {
+        // The overlay era is over: history lives in the live 10000-row
+        // scrollback via normal scroll-up. No button, no overlay, no
+        // worker/IndexedDB pipeline behind the terminal.
+        for (const token of [
+            '_toggleArchive',
+            '_closeArchive',
+            '_loadArchiveRows',
+            'archiveBtn',
+            'archiveOverlay',
+            'startArchiveWorker',
+            'HistoryStore',
+        ]) {
+            expect(src).not.toContain(token);
+        }
     });
 
     it('hot clients never receive the legacy replay path in PTYWebSocket', () => {
