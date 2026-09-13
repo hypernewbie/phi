@@ -2,7 +2,7 @@
 
 import type { AppLike } from './types.js';
 import { PTYWebSocket } from './ws.js';
-import { getLastFolderName, worktreeGlyph } from './util.js';
+import { getLastFolderName, worktreeGlyph, isCompactViewport } from './util.js';
 
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
@@ -225,7 +225,7 @@ export class DiffController {
     }
 
     initTerminal(): void {
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
         this.term = new window.Terminal({
             cursorBlink: false,
             cursorStyle: 'underline',
@@ -275,16 +275,17 @@ export class DiffController {
         // permission + execCommand fallback for insecure contexts).
         this._wireCopyHandlers(this.term, this.diffTermContainer);
 
-        // Load initial state from local storage. Desktop defaults to
-        // open; mobile defaults to closed unless the user has
-        // previously opened it. (Diff panel is a desktop-first tool —
-        // defaulting to closed on phones avoids it eating half the
-        // viewport on first launch.)
+        // Load initial state from local storage. Wide viewports default
+        // to open; compact and tablet-width viewports default to closed
+        // unless the user has previously opened it. (Diff panel is a
+        // desktop-first tool — below 1025px it renders as a slide-over
+        // drawer instead of a side-by-side column, and auto-opening a
+        // drawer over the terminal on first launch is hostile.)
         const openState = localStorage.getItem('phi_diff_panel_open');
-        const isMobileForInit = window.innerWidth <= 768;
-        const shouldOpen = isMobileForInit
-            ? openState === 'true'
-            : openState !== 'false';
+        const wideEnough = window.innerWidth > 1024;
+        const shouldOpen = wideEnough
+            ? openState !== 'false'
+            : openState === 'true';
         this.togglePanel(shouldOpen);
     }
 
@@ -418,7 +419,7 @@ export class DiffController {
     fitTerminal(): void {
         if (!this.term || !this.isPanelOpen) return;
         try {
-            const isMobile = window.innerWidth <= 768;
+            const isMobile = isCompactViewport();
             const size = isMobile ? 10 : 12;
             if (this.term.options.fontSize !== size) {
                 this.term.options.fontSize = size;
@@ -1493,7 +1494,7 @@ export class DiffController {
     }
 
     toggleRichDiffLayout(): void {
-        if (window.innerWidth <= 768) return;
+        if (isCompactViewport()) return;
         this.currentLayout =
             this.currentLayout === 'line-by-line'
                 ? 'side-by-side'
@@ -1514,7 +1515,7 @@ export class DiffController {
             return;
         }
 
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
         const outputFormat = isMobile ? 'line-by-line' : this.currentLayout;
 
         const diffHtml = window.Diff2Html.html(rawDiffText, {

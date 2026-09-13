@@ -67,7 +67,10 @@ function maskCssComments(css) {
 function extractMobileBlocks(css) {
     const masked = maskCssComments(css);
     const blocks = [];
-    const re = /@media\s*\(max-width:\s*768px\)\s*\{/g;
+    // Compact-layout prelude: (max-width: 768px) plus the touch-landscape
+    // clause (see AGENTS.md "Viewport contract" and
+    // test-js/compactViewport.test.js).
+    const re = /@media[^{]*\(max-width:\s*768px\)[^{]*\{/g;
     let match = re.exec(masked);
     while (match !== null) {
         const contentStart = match.index + match[0].length;

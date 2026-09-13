@@ -4,7 +4,13 @@ import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { FileTreeManager } from './filetree.js';
 import { KanbanManager } from './kanban.js';
-import { escapeHtml, buildPhiFaviconSvg } from './util.js';
+import {
+    escapeHtml,
+    buildPhiFaviconSvg,
+    isCoarseViewport,
+    isCompactViewport,
+    COMPACT_VIEWPORT_QUERY,
+} from './util.js';
 import { SyncManager } from './sync.js';
 import { bootstrapAccessAuth } from './auth.js';
 import { openSettingsModal } from './settings.js';
@@ -50,7 +56,7 @@ export class App {
         this.applyFastMode();
         if (typeof window.matchMedia === 'function') {
             window
-                .matchMedia('(max-width: 768px)')
+                .matchMedia(COMPACT_VIEWPORT_QUERY)
                 .addEventListener('change', () => this.applyFastMode());
         }
 
@@ -484,8 +490,14 @@ export class App {
                 const isDesktop = new URLSearchParams(
                     window.location.search,
                 ).has('desktop');
-                const isMobile = !isDesktop && window.innerWidth <= 768;
-                if (isMobile && window.visualViewport) {
+                // Soft-keyboard ergonomics are capability-based, not
+                // width-based: an 820px iPad is a touch device whose
+                // on-screen keyboard must not cover the input bar.
+                // Fine-pointer shells (and the ?desktop embed) never get
+                // --vv-height written, so their CSS fallback is
+                // pixel-identical to a desktop browser.
+                const isTouchShell = !isDesktop && isCoarseViewport();
+                if (isTouchShell && window.visualViewport) {
                     const viewport = window.visualViewport;
 
                     // Update the CSS variable for the actual visual viewport height.
@@ -568,7 +580,9 @@ export class App {
         document.addEventListener(
             'touchstart',
             (e) => {
-                if (window.innerWidth > 768) return;
+                // Drawers exist only in the compact layout (width OR
+                // touch-landscape — see isCompactViewport).
+                if (!isCompactViewport()) return;
                 touchStartX = e.touches[0].clientX;
                 touchStartY = e.touches[0].clientY;
             },
@@ -578,7 +592,7 @@ export class App {
         document.addEventListener(
             'touchend',
             (e) => {
-                if (window.innerWidth > 768) return;
+                if (!isCompactViewport()) return;
                 const touchEndX = e.changedTouches[0].clientX;
                 const touchEndY = e.changedTouches[0].clientY;
 
@@ -814,7 +828,7 @@ export class App {
     applyFastMode() {
         const mobile =
             typeof window.matchMedia === 'function' &&
-            window.matchMedia('(max-width: 768px)').matches;
+            window.matchMedia(COMPACT_VIEWPORT_QUERY).matches;
         const on = !!this.config?.fast_mode || mobile;
         document.body.classList.toggle('fast-mode', on);
     }

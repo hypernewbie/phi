@@ -13,19 +13,22 @@ import { readFileSync } from 'node:fs';
 // ends. We read web/style.css as text and assert the mobile block contains
 // the right shape — same pattern as test-js/scrollBugs.test.js:212.
 //
-// Constraint: every fix must live inside @media (max-width: 768px) { ... }
-// blocks. The negative-guard test at the bottom asserts the base
-// .modal-overlay still says `height: 100vh` — proving no desktop pixel
-// changed.
+// Constraint: every fix must live inside the compact-layout blocks
+// (the `@media (max-width: 768px), … (pointer: coarse)` prelude — see
+// AGENTS.md "Viewport contract"). The negative-guard test at the bottom
+// asserts the base .modal-overlay still says `height: 100vh` — proving no
+// desktop pixel changed.
 
 const CSS = readFileSync('web/style.css', 'utf8');
 
-// Extract every @media (max-width: 768px) { ... } block. These are the
-// mobile-only rules; we assert they contain the new shape and the base
-// rules do not.
+// Extract every compact-layout @media block (the prelude is
+// `(max-width: 768px), (max-height: 500px) and (orientation: landscape)
+// and (pointer: coarse)` — extended 2026-08-12, see AGENTS.md). These are
+// the compact-only rules; we assert they contain the new shape and the
+// base rules do not.
 function extractMobileBlocks(css) {
     const blocks = [];
-    const re = /@media\s*\(max-width:\s*768px\)\s*\{/g;
+    const re = /@media[^{]*\(max-width:\s*768px\)[^{]*\{/g;
     let m = re.exec(css);
     while (m !== null) {
         const start = m.index + m[0].length;
