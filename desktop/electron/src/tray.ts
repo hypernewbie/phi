@@ -42,6 +42,9 @@
  */
 import { Menu, nativeImage, Tray } from 'electron';
 import {
+  CONTENT_ZOOM_DEFAULT_PERCENT,
+  CONTENT_ZOOM_MAX_PERCENT,
+  CONTENT_ZOOM_MIN_PERCENT,
   PET_ZOOM_DEFAULT_PERCENT,
   PET_ZOOM_MAX_PERCENT,
   PET_ZOOM_MIN_PERCENT,
@@ -77,6 +80,9 @@ export type TrayCommand =
   | { kind: 'pet-zoom-in' }
   | { kind: 'pet-zoom-out' }
   | { kind: 'pet-reset-zoom' }
+  | { kind: 'content-zoom-in' }
+  | { kind: 'content-zoom-out' }
+  | { kind: 'content-zoom-reset' }
   | { kind: 'pet-settings' }
   | { kind: 'quit' };
 
@@ -122,6 +128,8 @@ export interface TrayDeps {
   getPetEnabled(): boolean;
   /** The persisted desktop-pet zoom percentage. */
   getPetZoomPercent(): number;
+  /** The persisted global desktop-content zoom percentage. */
+  getContentZoomPercent(): number;
   /** Posts a TrayCommand on a channel (the host loop bridges intents). */
   ipcSend(channel: string, payload: unknown): void;
   /** Failure/one-time logger (production: console; tests record it). */
@@ -178,6 +186,9 @@ export interface TrayMenuHandlers {
   petZoomIn: () => void;
   petZoomOut: () => void;
   petResetZoom: () => void;
+  contentZoomIn: () => void;
+  contentZoomOut: () => void;
+  contentZoomReset: () => void;
   petSettings?: () => void;
   quit: () => void;
 }
@@ -292,6 +303,7 @@ export function buildTrayMenu(
   petInstalling: boolean = false,
   petEnabled: boolean = false,
   petZoomPercent = PET_ZOOM_DEFAULT_PERCENT,
+  contentZoomPercent: number | null = null,
 ): TrayMenuEntry[] {
   const entries: TrayMenuEntry[] = [
     { label: 'Show Phi', click: handlers.show },
@@ -366,6 +378,28 @@ export function buildTrayMenu(
           label: 'Pet settings…',
           enabled: petActionsEnabled,
           click: handlers.petSettings,
+        },
+      ],
+    });
+  }
+  if (contentZoomPercent !== null) {
+    entries.push({
+      label: `Content Zoom (${contentZoomPercent}%)`,
+      submenu: [
+        {
+          label: 'Zoom In',
+          enabled: contentZoomPercent < CONTENT_ZOOM_MAX_PERCENT,
+          click: handlers.contentZoomIn,
+        },
+        {
+          label: 'Zoom Out',
+          enabled: contentZoomPercent > CONTENT_ZOOM_MIN_PERCENT,
+          click: handlers.contentZoomOut,
+        },
+        {
+          label: 'Actual Size (100%)',
+          enabled: contentZoomPercent !== CONTENT_ZOOM_DEFAULT_PERCENT,
+          click: handlers.contentZoomReset,
         },
       ],
     });
@@ -449,6 +483,12 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-zoom-out' }),
     petResetZoom: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-reset-zoom' }),
+    contentZoomIn: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'content-zoom-in' }),
+    contentZoomOut: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'content-zoom-out' }),
+    contentZoomReset: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'content-zoom-reset' }),
     petSettings: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'pet-settings' }),
     quit: () => {
@@ -473,6 +513,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.getPetInstalling(),
       deps.getPetEnabled(),
       deps.getPetZoomPercent(),
+      process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
     ),
   );
   wireTrayEvents(tray, () => menu, process.platform);
@@ -492,6 +533,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         deps.getPetInstalling(),
         deps.getPetEnabled(),
         deps.getPetZoomPercent(),
+        process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
       ),
     );
   };

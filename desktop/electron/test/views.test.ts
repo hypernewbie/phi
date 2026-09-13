@@ -19,6 +19,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContentsView } from 'electron';
 import { ProfileViewManager } from '../src/views.js';
+import type { ZoomAction } from '../src/zoom.js';
 
 interface ViewBounds {
   x: number;
@@ -38,6 +39,8 @@ interface RecordingView {
   focusCalls: number;
   loadHandlers: Array<() => void>;
   beforeInputHandlers: Array<(event: unknown, input: unknown) => void>;
+  zoomModes: string[];
+  zoomFactors: number[];
   webContentsDestroyed: boolean;
   reloadCalls: number;
   reloadIgnoringCacheCalls: number;
@@ -50,8 +53,9 @@ function makeFakeView(): RecordingView {
   const loadHandlers: Array<() => void> = [];
   const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> =
     [];
+  const zoomModes: string[] = [];
+  const zoomFactors: number[] = [];
   const webContentsDestroyed = false;
-  let zoomLevel = 0;
   const rec: RecordingView = {
     view: {
       setBounds: (b: ViewBounds) => setBoundsCalls.push({ ...b }),
@@ -80,9 +84,11 @@ function makeFakeView(): RecordingView {
         focus: () => {
           rec.focusCalls += 1;
         },
-        getZoomLevel: () => zoomLevel,
-        setZoomLevel: (l: number) => {
-          zoomLevel = l;
+        setZoomMode: (mode: string) => {
+          zoomModes.push(mode);
+        },
+        setZoomFactor: (factor: number) => {
+          zoomFactors.push(factor);
         },
         isDestroyed: () => rec.webContentsDestroyed,
       },
@@ -95,6 +101,8 @@ function makeFakeView(): RecordingView {
     focusCalls: 0,
     loadHandlers,
     beforeInputHandlers,
+    zoomModes,
+    zoomFactors,
     webContentsDestroyed,
     reloadCalls: 0,
     reloadIgnoringCacheCalls: 0,
@@ -147,9 +155,14 @@ interface ManagerHarness {
 
 const DEFAULT_BOUNDS: ViewBounds = { x: 72, y: 0, width: 1128, height: 800 };
 
-function makeManager(opts?: { bounds?: () => ViewBounds }): ManagerHarness {
+function makeManager(opts?: {
+  bounds?: () => ViewBounds;
+  contentZoomPercent?: number;
+  onZoomAction?: (action: ZoomAction) => void;
+}): ManagerHarness & { zoomActions: ZoomAction[] } {
   const win = makeFakeWindow();
   const views: RecordingView[] = [];
+  const zoomActions: ZoomAction[] = [];
   const manager = new ProfileViewManager({
     win: win.win,
     makeView: () => {
@@ -159,9 +172,15 @@ function makeManager(opts?: { bounds?: () => ViewBounds }): ManagerHarness {
     },
     defaultBounds: opts?.bounds ?? (() => ({ ...DEFAULT_BOUNDS })),
     railWidth: 72,
+    getContentZoomPercent: () => opts?.contentZoomPercent ?? 125,
+    onZoomAction:
+      opts?.onZoomAction ??
+      ((action: ZoomAction) => {
+        zoomActions.push(action);
+      }),
     log: () => {},
   });
-  return { manager, win, views };
+  return { manager, win, views, zoomActions };
 }
 
 describe('ProfileViewManager (retained per-profile views)', () => {
@@ -372,7 +391,7 @@ describe('ProfileViewManager (retained per-profile views)', () => {
   });
 
   it('installs the plain-F11 fullscreen toggle, F5 reload, and zoom shortcuts on every retained body view', () => {
-    const { manager, views, win } = makeManager();
+    const { manager, views, win, zoomActions } = makeManager();
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
     manager.setActive('p1');
@@ -401,7 +420,8 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(ev2.preventDefault).not.toHaveBeenCalled();
     expect(win.fullscreenStates).toEqual([true]);
 
-    // Zoom shortcut on the focused body view zooms the webContents.
+    // A zoom shortcut on the focused body view routes the chord to the
+    // controller-owned global action without mutating that view directly.
     const ev3 = { preventDefault: vi.fn() };
     views[1].beforeInputHandlers[2](ev3 as never, {
       type: 'keyDown',
@@ -411,11 +431,47 @@ describe('ProfileViewManager (retained per-profile views)', () => {
       meta: false,
     });
     expect(ev3.preventDefault).toHaveBeenCalled();
-    expect(
-      (
-        views[1].view.webContents as unknown as { getZoomLevel: () => number }
-      ).getZoomLevel(),
-    ).toBeCloseTo(0.5);
+    expect(zoomActions).toEqual(['in']);
+  });
+
+  it('applies persisted content zoom before load and before first visibility', () => {
+    const { manager, views } = makeManager({ contentZoomPercent: 150 });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(views[0].zoomModes).toEqual(['manual']);
+    expect(views[0].zoomFactors).toEqual([1.5]);
+    expect(views[0].setVisibleCalls).toEqual([false]);
+    views[0].loadHandlers[0]();
+    expect(views[0].zoomModes).toEqual(['manual', 'manual']);
+    expect(views[0].zoomFactors).toEqual([1.5, 1.5]);
+    expect(views[0].setVisibleCalls).toEqual([false, true]);
+  });
+
+  it('reapplies persisted content zoom when low-memory recreation materializes a view', () => {
+    const { manager, views } = makeManager({ contentZoomPercent: 125 });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    manager.hibernateInactive('p2');
+    manager.setActive('p1');
+    expect(views).toHaveLength(3);
+    expect(views[2].zoomModes).toEqual(['manual']);
+    expect(views[2].zoomFactors).toEqual([1.25]);
+  });
+
+  it('fans a content-zoom change out to hidden views and reapplies it on reactivation', () => {
+    const { manager, views } = makeManager({ contentZoomPercent: 100 });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    manager.setContentZoomPercent(1.25 * 100);
+    expect(views[0].zoomFactors.at(-1)).toBe(1.25);
+    expect(views[1].zoomFactors.at(-1)).toBe(1.25);
+    manager.setActive('p1');
+    expect(views[0].zoomFactors.at(-1)).toBe(1);
+    expect(views[0].setVisibleCalls.at(-1)).toBe(true);
   });
 
   it('reloadAll reloads every created retained view (Idea E)', () => {

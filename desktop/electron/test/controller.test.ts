@@ -24,6 +24,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONTENT_ZOOM_DEFAULT_PERCENT,
+  CONTENT_ZOOM_LEVELS,
   Controller,
   ControllerError,
   PET_ZOOM_DEFAULT_PERCENT,
@@ -851,6 +853,84 @@ describe('Controller: pet-zoom preference', () => {
     >;
     expect(saved.petZoomPercent).toBe(125);
     expect(saved).not.toHaveProperty('petScaleTick');
+  });
+});
+
+describe('Controller: content-zoom preference', () => {
+  it('defaults missing and off-list values to 100%', () => {
+    for (const value of [undefined, null, '125', 120, 49, 301, 125.5]) {
+      writeFileSync(
+        persistPath(),
+        JSON.stringify({
+          profiles: [],
+          ...(value === undefined ? {} : { contentZoomPercent: value }),
+        }),
+        'utf8',
+      );
+      expect(makeController().getContentZoomPercent()).toBe(
+        CONTENT_ZOOM_DEFAULT_PERCENT,
+      );
+    }
+    expect(makeController().state().contentZoomPercent).toBe(
+      CONTENT_ZOOM_DEFAULT_PERCENT,
+    );
+  });
+
+  it('round trips every canonical level and emits the changed percentage', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    for (const percent of CONTENT_ZOOM_LEVELS) {
+      expect(c.setContentZoomPercent(percent)).toBe(true);
+    }
+    expect(c.getContentZoomPercent()).toBe(
+      CONTENT_ZOOM_LEVELS[CONTENT_ZOOM_LEVELS.length - 1],
+    );
+    expect(events.at(-1)).toEqual({
+      kind: 'content-zoom-changed',
+      percent: CONTENT_ZOOM_LEVELS[CONTENT_ZOOM_LEVELS.length - 1],
+    });
+    expect(
+      new Controller({ persistPath: persistPath() }).getContentZoomPercent(),
+    ).toBe(CONTENT_ZOOM_LEVELS[CONTENT_ZOOM_LEVELS.length - 1]);
+    expect(c.setContentZoomPercent(120)).toBe(false);
+    expect(events).toHaveLength(CONTENT_ZOOM_LEVELS.length);
+  });
+
+  it('rolls back a changed percentage when persistence fails without emitting an event', () => {
+    const c = makeController();
+    c.setContentZoomPercent(125);
+    const events: ControllerEvent[] = [];
+    c.subscribe((event) => events.push(event));
+    rmSync(persistPath());
+    mkdirSync(persistPath());
+    expect(() => c.setContentZoomPercent(150)).toThrowError(ControllerError);
+    expect(c.getContentZoomPercent()).toBe(125);
+    expect(events).toEqual([]);
+  });
+
+  it('preserves the percentage through every unrelated preference and profile save path', () => {
+    const c = makeController();
+    c.setContentZoomPercent(150);
+    const p = c.add('http://127.0.0.1:7070/');
+    const q = c.add('http://10.0.0.5:7070/');
+    c.reorder(q.id, p.id);
+    c.rename(p.id, 'Home');
+    c.setLastUsed(p.id);
+    c.setActive(p.id);
+    c.setCloseToTray(false);
+    c.setSyncAlerts(false);
+    c.setPetEnabled(true);
+    c.setPetZoomPercent(125);
+    c.remove(q.id);
+    const reloaded = new Controller({ persistPath: persistPath() });
+    expect(reloaded.getContentZoomPercent()).toBe(150);
+    expect(reloaded.state().contentZoomPercent).toBe(150);
+    const saved = JSON.parse(readFileSync(persistPath(), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(saved.contentZoomPercent).toBe(150);
   });
 });
 
