@@ -6,6 +6,7 @@ package ws
 // contiguous 0x09 LIVE_OUTPUT frames — never the legacy replay or 0x06.
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -117,5 +118,92 @@ func TestHandleWS_LegacyDefaultIsReplay(t *testing.T) {
 	}
 	if frame2[0] != 0x06 || len(frame2) != 1 {
 		t.Fatalf("expected bare 0x06 replay-complete, got %v", frame2)
+	}
+}
+
+// Attach-path byte bound: the "faster by a LOT" claim as a regression
+// gate. With a 200 KiB ring, a hot client must observe only a small
+// ATTACH_HEAD before going live, while a legacy client still receives
+// every retained byte. Deterministic: frame sizes only, no timing.
+func TestHotAttachBoundedWhileLegacyReplaysAll(t *testing.T) {
+	payload := bytes.Repeat([]byte("0123456789ABCDEF"), (200*1024)/16)
+	if len(payload) != 200*1024 {
+		t.Fatalf("bad fixture size %d", len(payload))
+	}
+
+	newPane := func(hub *Hub, id string) (*httptest.Server, *pty.PTYInstance) {
+		manager := pty.NewManager()
+		inst := &pty.PTYInstance{
+			ID:  id,
+			Pty: &pty.Pty{Closed: make(chan struct{})},
+		}
+		return hotServer(t, hub, manager, inst), inst
+	}
+
+	// Hot: header only, no replay bytes.
+	hub := NewHub(256 * 1024)
+	server, _ := newPane(hub, "hot-pane")
+	defer server.Close()
+	hub.Ingest("hot-pane", payload)
+	hotURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?term_proto=hot-v1"
+	conn, _, err := websocket.DefaultDialer.Dial(hotURL, nil)
+	if err != nil {
+		t.Fatalf("dial hot: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, head, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read attach head: %v", err)
+	}
+	if head[0] != 0x08 {
+		t.Fatalf("expected 0x08 ATTACH_HEAD, got 0x%02x", head[0])
+	}
+	if len(head) >= 4096 {
+		t.Fatalf(
+			"hot attach shipped %d bytes for a %d-byte ring; want header-only (<4KiB)",
+			len(head), len(payload),
+		)
+	}
+
+	// Legacy: every retained byte, then 0x06.
+	hub2 := NewHub(256 * 1024)
+	server2, _ := newPane(hub2, "legacy-pane")
+	defer server2.Close()
+	hub2.Ingest("legacy-pane", payload)
+	legacyURL := "ws" + strings.TrimPrefix(server2.URL, "http")
+	conn2, _, err := websocket.DefaultDialer.Dial(legacyURL, nil)
+	if err != nil {
+		t.Fatalf("dial legacy: %v", err)
+	}
+	defer conn2.Close()
+	_ = conn2.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, replay, err := conn2.ReadMessage()
+	if err != nil {
+		t.Fatalf("read replay: %v", err)
+	}
+	if replay[0] != 0x01 {
+		t.Fatalf("expected 0x01 replay chunks, got 0x%02x", replay[0])
+	}
+	// Replay is chunked at 32 KiB per frame; accumulate to 0x06.
+	got := len(replay) - 1
+	for {
+		_, f, err := conn2.ReadMessage()
+		if err != nil {
+			t.Fatalf("read replay chunk: %v", err)
+		}
+		if len(f) == 1 && f[0] == 0x06 {
+			break
+		}
+		if f[0] != 0x01 {
+			t.Fatalf("expected 0x01 chunk or 0x06 done, got 0x%02x", f[0])
+		}
+		got += len(f) - 1
+	}
+	if got != len(payload) {
+		t.Fatalf(
+			"legacy replay = %d bytes, want full %d-byte ring",
+			got, len(payload),
+		)
 	}
 }
