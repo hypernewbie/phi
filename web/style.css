@@ -27,6 +27,17 @@
         "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
         sans-serif;
     --font-mono: "JetBrains Mono", "Courier New", Courier, monospace;
+
+    /* JS replaces this with a measured px value on touch shells. Keeping
+       a valid baseline here makes every var(--vv-height, 100dvh) consumer
+       safe on old Chromium, which does not parse the dvh fallback unit. */
+    --vv-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+    :root {
+        --vv-height: 100dvh;
+    }
 }
 
 * {
@@ -845,12 +856,10 @@ html[data-phi-desktop-root] .app-header {
     flex-direction: column;
     width: 260px;
     min-width: 180px;
-    /* Proportional cap: the sessions column must never eat more than
-       ~1/3 of the window. flex-shrink: 0 + a remembered drag width from
-       a big monitor (up to 450px) used to claim 50% of a 900px window.
-       max-width clamps even the inline style.width replayed from
-       localStorage by initResizers(). */
-    max-width: min(450px, 32vw);
+    /* Docked navigation is subordinate chrome: it owns at most one
+       quarter of the viewport. max-width clamps even the inline
+       style.width replayed from localStorage by initResizers(). */
+    max-width: min(450px, 25vw);
     flex-shrink: 0;
     /* Inset obsidian edge on the right side mirrors the
        app-header's bottom edge — glass panels feel 'carved from
@@ -3314,11 +3323,10 @@ html[data-phi-desktop-root] .app-header {
     flex-direction: column;
     width: 340px;
     min-width: 200px;
-    /* Same proportional-cap rule as the sessions column: the diff
-       column yields past 40% of the window even when a remembered
-       drag width (phi_panel_right_width) says otherwise. 600px matches
-       the drag range; the old 1200px cap was unreachable. */
-    max-width: min(600px, 40vw);
+    /* Same terminal-first budget as navigation: when both side panels
+       are docked they can consume at most half the viewport together.
+       600px matches the drag range; the old 1200px cap was unreachable. */
+    max-width: min(600px, 25vw);
     flex-shrink: 0;
 }
 
@@ -4112,8 +4120,8 @@ html[data-phi-config-page] .settings-modal {
         top: 48px;
         bottom: 0;
         width: 280px !important; /* Force fixed width on drawer */
-        max-width: none; /* base 32vw cap must not squeeze the drawer on phones */
-        height: calc(100dvh - 48px);
+        max-width: none; /* base 25vw cap must not squeeze the drawer on phones */
+        height: calc(var(--vv-height) - 48px);
         z-index: 1000;
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -4132,8 +4140,8 @@ html[data-phi-config-page] .settings-modal {
         top: 48px;
         bottom: 0;
         width: 320px !important;
-        max-width: none; /* base 40vw cap must not squeeze the drawer */
-        height: calc(100dvh - 48px);
+        max-width: none; /* base 25vw cap must not squeeze the drawer */
+        height: calc(var(--vv-height) - 48px);
         z-index: 1000;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -4509,17 +4517,40 @@ html[data-phi-config-page] .settings-modal {
     }
 }
 
-/* ── TABLET DIFF SLIDE-OVER (769–1024px) ───────────────────────────────
-   At tablet width a side-by-side diff panel (340px) plus the sidebar
-   (260px) leaves the terminal a ~200px sliver (~25 columns). Instead
-   the diff panel reuses the compact slide-over drawer: the terminal
-   keeps the full column and diff opens as an overlay sheet from the
-   right. DiffController.togglePanel already adds `mobile-open` on
-   every open; above 1024px that class stays a no-op. The panel also
-   defaults to closed at boot on these widths (see web-src/diff.ts). */
-@media (min-width: 769px) and (max-width: 1024px) {
-    /* Only the DIFF handle is hidden — the sidebar keeps its resizer
-       (the sidebar remains a side-by-side column in this range). */
+/* ── CONSTRAINED SIDE-PANEL TOPOLOGY ───────────────────────────────────
+   A full 14px terminal needs roughly 640px for an 80-column working
+   grid. Below 1024px the sessions navigation yields into a drawer;
+   below 1280px diff yields into its drawer. This is content geometry,
+   not a phone/tablet identity test: desktop windows and tablets get the
+   same terminal-first hierarchy at the same available width. */
+@media (min-width: 769px) and (max-width: 1023px) {
+    #left-resize-handle {
+        display: none !important;
+    }
+
+    .mobile-only-btn {
+        display: flex !important;
+    }
+
+    .sidebar-panel {
+        position: fixed;
+        left: 0;
+        top: 48px;
+        bottom: 0;
+        width: min(320px, calc(100vw - 24px)) !important;
+        max-width: none;
+        z-index: 1100;
+        transform: translateX(-100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .sidebar-panel.drawer-open {
+        transform: translateX(0);
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1279px) {
     #right-resize-handle {
         display: none !important;
     }
@@ -4530,7 +4561,7 @@ html[data-phi-config-page] .settings-modal {
         top: 48px; /* desktop header height in this range */
         bottom: 0;
         width: 320px !important;
-        max-width: none; /* base 40vw cap must not squeeze the drawer */
+        max-width: none; /* base 25vw cap must not squeeze the drawer */
         z-index: 1200;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);

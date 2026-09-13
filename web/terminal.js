@@ -18,6 +18,9 @@ import {
     isCoarseViewport,
     isCompactViewport,
     prefersInputBarFocus,
+    terminalPreferredFontSize,
+    responsiveTerminalFontSize,
+    TERMINAL_TARGET_COLUMNS,
 } from './util.js';
 import {
     applyBrandCpuTier,
@@ -447,13 +450,9 @@ export class TabManager {
                 const tab = this.tabs.get(t.paneId);
                 if (!tab) continue;
                 // Mirror openPiRpcChatTab font wiring so F5 text matches live
-                const sz = Number(this.app?.terminalFontSize);
-                const fontSize =
-                    Number.isFinite(sz) && sz >= 8 && sz <= 32
-                        ? sz
-                        : isCompactViewport()
-                          ? 10
-                          : 14;
+                const fontSize = terminalPreferredFontSize(
+                    this.app?.terminalFontSize,
+                );
                 tab.termContainer.style.fontFamily =
                     this.app?.terminalFontFamily || 'JetBrains Mono, monospace';
                 tab.termContainer.style.fontSize = `${fontSize}px`;
@@ -1597,20 +1596,12 @@ export class TabManager {
             return;
         }
 
-        const isMobile = isCompactViewport();
-
-        // Initialize xterm.js instance
+        // Initialize xterm.js instance. The preferred size is resolved
+        // against FitAddon's measured grid on the first fit below.
         const term = new window.Terminal({
             cursorBlink: true,
             cursorStyle: 'bar',
-            fontSize:
-                this.app &&
-                this.app.terminalFontSize >= 8 &&
-                this.app.terminalFontSize <= 32
-                    ? this.app.terminalFontSize
-                    : isMobile
-                      ? 10
-                      : 14,
+            fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
             scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
@@ -6203,15 +6194,7 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
 
         try {
-            const isMobile = isCompactViewport();
-            const size =
-                this.app &&
-                this.app.terminalFontSize >= 8 &&
-                this.app.terminalFontSize <= 32
-                    ? this.app.terminalFontSize
-                    : isMobile
-                      ? 10
-                      : 14;
+            const size = this.resolveTerminalFontSize(activeTab);
             if (activeTab.term.options.fontSize !== size) {
                 activeTab.term.options.fontSize = size;
             }
@@ -7225,6 +7208,20 @@ export class TabManager {
         }
     }
 
+    // Resolve a preferred reading scale against FitAddon's actual grid.
+    // This is deliberately separate from fitting/scroll restoration: it only
+    // chooses options.fontSize before the existing fit path runs, leaving the
+    // hard-won _spamScroll timing behavior untouched.
+    resolveTerminalFontSize(tab, preference = this.app?.terminalFontSize) {
+        const proposed = tab?.fitAddon?.proposeDimensions?.();
+        return responsiveTerminalFontSize(
+            terminalPreferredFontSize(preference),
+            Number(tab?.term?.options?.fontSize),
+            proposed?.cols,
+            TERMINAL_TARGET_COLUMNS,
+        );
+    }
+
     // applyFontToAllActiveTerminals sets a new fontFamily on every
     // live xterm and re-fits the viewport so layout stays correct.
     // Empty/invalid input falls back to 'JetBrains Mono, monospace'.
@@ -7256,12 +7253,18 @@ export class TabManager {
     // changes cols/rows, unlike family). Deliberately does NOT touch any
     // scroll / _spamScroll timing (see AGENTS.md hard-won-stabilization rule).
     applyTerminalFontSizeToAll(size) {
-        const isMobile = isCompactViewport();
-        const safe = size >= 8 && size <= 32 ? size : isMobile ? 10 : 14;
+        const preferred = terminalPreferredFontSize(size);
+        const activeTab = this.getActiveTab();
         for (const tab of this.tabs.values()) {
             if (!tab.term) continue;
-            if (tab.term.options.fontSize === safe) continue;
-            tab.term.options.fontSize = safe;
+            // A hidden xterm has no meaningful proposed dimensions. Keep its
+            // preferred scale; activation resolves it once it has a viewport.
+            const resolved =
+                tab === activeTab
+                    ? this.resolveTerminalFontSize(tab, preferred)
+                    : preferred;
+            if (tab.term.options.fontSize === resolved) continue;
+            tab.term.options.fontSize = resolved;
             if (tab.fitAddon && typeof tab.fitAddon.fit === 'function') {
                 try {
                     tab.fitAddon.fit();
@@ -7271,11 +7274,9 @@ export class TabManager {
                 }
             }
         }
-        // The diff panel xterm lives on app.diffController (not in this.tabs),
-        // so the loop above skips it. Route through the controller's own
-        // live-apply hook so the diff screen respects the slider like every
-        // other xterm instead of staying pinned at its hardcoded 10/12.
-        this.app.diffController?.applyFontSize?.(safe);
+        // Diff's xterm is outside this.tabs. Its controller uses the same
+        // preference-as-scale policy against its own measured grid.
+        this.app.diffController?.applyFontSize?.();
     }
 
     pollTerminalIdleAndNotifications() {

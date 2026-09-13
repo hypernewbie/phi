@@ -2,7 +2,14 @@
 
 import type { AppLike } from './types.js';
 import { PTYWebSocket } from './ws.js';
-import { getLastFolderName, worktreeGlyph, isCompactViewport } from './util.js';
+import {
+    getLastFolderName,
+    worktreeGlyph,
+    isDiffDrawerViewport,
+    terminalPreferredFontSize,
+    responsiveTerminalFontSize,
+    DIFF_TERMINAL_TARGET_COLUMNS,
+} from './util.js';
 
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
@@ -225,12 +232,12 @@ export class DiffController {
     }
 
     initTerminal(): void {
-        const isMobile = isCompactViewport();
         this.term = new window.Terminal({
             cursorBlink: false,
             cursorStyle: 'underline',
-            fontSize: isMobile ? 10 : 12,
-            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: terminalPreferredFontSize(this.app.terminalFontSize),
+            fontFamily:
+                this.app.terminalFontFamily || 'JetBrains Mono, monospace',
             theme: {
                 background: '#08080a',
                 foreground: '#e4e3e9',
@@ -275,17 +282,13 @@ export class DiffController {
         // permission + execCommand fallback for insecure contexts).
         this._wireCopyHandlers(this.term, this.diffTermContainer);
 
-        // Load initial state from local storage. Wide viewports default
-        // to open; compact and tablet-width viewports default to closed
-        // unless the user has previously opened it. (Diff panel is a
-        // desktop-first tool — below 1025px it renders as a slide-over
-        // drawer instead of a side-by-side column, and auto-opening a
-        // drawer over the terminal on first launch is hostile.)
+        // Diff only docks once both side panels still leave the terminal
+        // an 80-column working grid. Below that it is a drawer and defaults
+        // closed unless the user explicitly opened it before.
         const openState = localStorage.getItem('phi_diff_panel_open');
-        const wideEnough = window.innerWidth > 1024;
-        const shouldOpen = wideEnough
-            ? openState !== 'false'
-            : openState === 'true';
+        const shouldOpen = isDiffDrawerViewport()
+            ? openState === 'true'
+            : openState !== 'false';
         this.togglePanel(shouldOpen);
     }
 
@@ -419,8 +422,13 @@ export class DiffController {
     fitTerminal(): void {
         if (!this.term || !this.isPanelOpen) return;
         try {
-            const isMobile = isCompactViewport();
-            const size = isMobile ? 10 : 12;
+            const proposed = this.fitAddon?.proposeDimensions?.();
+            const size = responsiveTerminalFontSize(
+                terminalPreferredFontSize(this.app.terminalFontSize),
+                Number(this.term.options.fontSize),
+                proposed?.cols,
+                DIFF_TERMINAL_TARGET_COLUMNS,
+            );
             if (this.term.options.fontSize !== size) {
                 this.term.options.fontSize = size;
             }
@@ -431,6 +439,18 @@ export class DiffController {
         } catch (e) {
             console.error('[diff] Fit error:', e);
         }
+    }
+
+    // The settings preference is intentionally a preferred reading scale;
+    // fitTerminal resolves the actual size from this panel's measured grid.
+    applyFontSize(): void {
+        this.fitTerminal();
+    }
+
+    applyFontFamily(family: string): void {
+        if (!this.term) return;
+        this.term.options.fontFamily = family || 'JetBrains Mono, monospace';
+        this.fitTerminal();
     }
 
     _writeStaticTerminalOutput(text: string, emptyText: string): void {
@@ -1494,7 +1514,7 @@ export class DiffController {
     }
 
     toggleRichDiffLayout(): void {
-        if (isCompactViewport()) return;
+        if (isDiffDrawerViewport()) return;
         this.currentLayout =
             this.currentLayout === 'line-by-line'
                 ? 'side-by-side'
@@ -1515,11 +1535,11 @@ export class DiffController {
             return;
         }
 
-        const isMobile = isCompactViewport();
-        const outputFormat = isMobile ? 'line-by-line' : this.currentLayout;
+        const isDrawer = isDiffDrawerViewport();
+        const outputFormat = isDrawer ? 'line-by-line' : this.currentLayout;
 
         const diffHtml = window.Diff2Html.html(rawDiffText, {
-            drawFileList: !isMobile,
+            drawFileList: !isDrawer,
             matching: 'lines',
             outputFormat,
             colorScheme: 'dark',

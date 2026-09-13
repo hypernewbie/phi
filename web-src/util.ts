@@ -608,17 +608,18 @@ export function prefersInputBarFocus(): boolean {
     return isCompactViewport() || isCoarseViewport();
 }
 
-// ── Column panel proportional caps ─────────────────────────────────────
-// Side columns are subordinate chrome; the terminal is the primary
-// surface and must never be crushed by panel widths remembered from a
-// bigger monitor (phi_panel_left_width / phi_panel_right_width are
-// replayed unclamped at boot, and both panels are flex-shrink: 0).
-// These constants mirror the CSS `max-width: min(<px>, <vw>)` caps in
-// the base .sidebar-panel / .diff-panel rules in web/style.css; the
-// drag handlers use them so the resize handle stops exactly where the
-// CSS cap stops. test-js/panelCaps.test.js pins the two forms in sync.
-export const SIDEBAR_PANEL_CAP = { min: 60, max: 450, vw: 0.32 };
-export const DIFF_PANEL_CAP = { min: 200, max: 600, vw: 0.4 };
+// ── Terminal-first panel topology ──────────────────────────────────────
+// A terminal is the primary work surface. Navigation and diff columns are
+// useful only while they leave it a usable grid, so each docked panel may
+// consume at most one quarter of the viewport. With both visible, the
+// terminal therefore retains at least half; at the 1280px full-layout
+// threshold that is ~640px / an 80-column 14px terminal.
+//
+// Stored drag widths remain preferences, not commands: they are clamped to
+// these caps when replayed and while dragging. CSS mirrors the vw values in
+// .sidebar-panel / .diff-panel; test-js/panelCaps.test.js pins both forms.
+export const SIDEBAR_PANEL_CAP = { min: 60, max: 450, vw: 0.25 };
+export const DIFF_PANEL_CAP = { min: 200, max: 600, vw: 0.25 };
 
 export function clampPanelWidth(
     px: number,
@@ -629,4 +630,101 @@ export function clampPanelWidth(
 ): number {
     const capPx = Math.min(cap.max, viewportWidth * cap.vw);
     return Math.max(cap.min, Math.min(px, capPx));
+}
+
+// The drawer thresholds are content geometry, not device detection. A
+// docked sessions column needs ~260px beside an ~80-column terminal, so it
+// yields below 1024px. A docked diff needs another ~340px, so it yields below
+// 1280px. The compact layout remains its own modality-aware condition above.
+export const SIDEBAR_DRAWER_VIEWPORT_QUERY = '(max-width: 1023px)';
+export const DIFF_DRAWER_VIEWPORT_QUERY = '(max-width: 1279px)';
+
+function matchesViewportQuery(
+    query: string,
+    fallbackMaxWidth: number,
+): boolean {
+    if (typeof window === 'undefined') return false;
+    if (typeof window.matchMedia === 'function') {
+        return window.matchMedia(query).matches;
+    }
+    return window.innerWidth <= fallbackMaxWidth;
+}
+
+export function isSidebarDrawerViewport(): boolean {
+    return (
+        isCompactViewport() ||
+        matchesViewportQuery(SIDEBAR_DRAWER_VIEWPORT_QUERY, 1023)
+    );
+}
+
+export function isDiffDrawerViewport(): boolean {
+    return (
+        isCompactViewport() ||
+        matchesViewportQuery(DIFF_DRAWER_VIEWPORT_QUERY, 1279)
+    );
+}
+
+// ── Responsive terminal typography ─────────────────────────────────────
+// terminal_font_size is a preferred reading scale, never an absolute pixel
+// command. On a roomy terminal it renders exactly as selected; when space is
+// constrained it scales only as far down as needed to preserve a conventional
+// 80-column working grid, never below the readable default floor (unless the
+// user explicitly selected an even smaller size). The calculation consumes
+// FitAddon's real column measurement, so it follows the active font family,
+// browser zoom, DPI and available terminal width instead of guessing device
+// classes or hardcoding phone/tablet/desktop sizes.
+export const TERMINAL_DEFAULT_FONT_SIZE = 14;
+export const TERMINAL_MIN_READABLE_FONT_SIZE = 10;
+export const TERMINAL_TARGET_COLUMNS = 80;
+export const DIFF_TERMINAL_TARGET_COLUMNS = 48;
+
+export function terminalPreferredFontSize(value: unknown): number {
+    const size = Number(value);
+    return Number.isFinite(size) && size >= 8 && size <= 32
+        ? size
+        : TERMINAL_DEFAULT_FONT_SIZE;
+}
+
+export function responsiveTerminalFontSize(
+    preferredSize: number,
+    renderedSize: number,
+    renderedColumns: number | undefined,
+    targetColumns: number = TERMINAL_TARGET_COLUMNS,
+): number {
+    const preferred = terminalPreferredFontSize(preferredSize);
+    const size = Number(renderedSize);
+    const columns = Number(renderedColumns);
+    if (
+        !Number.isFinite(size) ||
+        size <= 0 ||
+        !Number.isFinite(columns) ||
+        columns <= 0 ||
+        !Number.isFinite(targetColumns) ||
+        targetColumns <= 0
+    ) {
+        return preferred;
+    }
+
+    // Cell width is effectively proportional to font size. FitAddon's
+    // measured grid therefore tells us the largest whole-pixel size that
+    // still fits the target number of columns in this exact terminal.
+    const largestThatFits = Math.floor((size * columns) / targetColumns);
+    const floor = Math.min(preferred, TERMINAL_MIN_READABLE_FONT_SIZE);
+    return Math.max(floor, Math.min(preferred, largestThatFits));
+}
+
+// Old Chromium can lack visualViewport entirely; some old Android builds
+// expose it but report a stale larger height while window.innerHeight has the
+// real visible height. Taking the smaller valid measurement is conservative:
+// it keeps the input bar above browser/system chrome without changing modern
+// Safari, where visualViewport is already the smaller keyboard-aware value.
+export function visibleViewportHeight(): number {
+    if (typeof window === 'undefined') return 0;
+    const layoutHeight = window.innerHeight;
+    const visualHeight = window.visualViewport?.height ?? 0;
+    const validLayout = Number.isFinite(layoutHeight) && layoutHeight > 0;
+    const validVisual = Number.isFinite(visualHeight) && visualHeight > 0;
+    if (validLayout && validVisual) return Math.min(layoutHeight, visualHeight);
+    if (validVisual) return visualHeight;
+    return validLayout ? layoutHeight : 0;
 }

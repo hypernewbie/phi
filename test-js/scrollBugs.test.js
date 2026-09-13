@@ -210,11 +210,13 @@ describe('bottom and document-scroll contracts', () => {
         const fs = await import('node:fs');
         const src = fs.readFileSync('web/app.js', 'utf8');
         expect(src).not.toContain("window.addEventListener('scroll'");
+        // visualViewport is optional on old Chromium; when present its
+        // resize/scroll wiring retains the iOS-proven behavior.
         expect(src).toMatch(
-            /window\.visualViewport\.addEventListener\(\s*'resize',\s*\(\) =>\s*this\.updateLayoutPosition\(true, true\),?\s*\)/,
+            /window\.visualViewport\??\.addEventListener\(\s*'resize',\s*\(\) =>\s*this\.updateLayoutPosition\(true, true\),?\s*\)/,
         );
         expect(src).toMatch(
-            /window\.visualViewport\.addEventListener\(\s*'scroll',\s*\(\) =>\s*this\.updateLayoutPosition\(false\),?\s*\)/,
+            /window\.visualViewport\??\.addEventListener\(\s*'scroll',\s*\(\) =>\s*this\.updateLayoutPosition\(false\),?\s*\)/,
         );
     });
 });
