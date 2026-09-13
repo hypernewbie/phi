@@ -328,6 +328,34 @@ describe('recording fetch', () => {
             vi.unstubAllGlobals();
         }
     });
+
+    it('degrades without a timeout on browsers lacking AbortSignal.timeout', async () => {
+        const c = Object.create(TabManager.prototype);
+        const realTimeout = AbortSignal.timeout;
+        let seenInit;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url, init) => {
+                seenInit = init;
+                return recordingEnvelope('delta', 0, 5);
+            }),
+        );
+        try {
+            Object.defineProperty(AbortSignal, 'timeout', {
+                configurable: true,
+                value: undefined,
+            });
+            const d = await c._fetchRecordingRange('p', 0, 5);
+            expect(d.text).toBe('delta');
+            expect(seenInit?.signal).toBe(undefined);
+        } finally {
+            Object.defineProperty(AbortSignal, 'timeout', {
+                configurable: true,
+                value: realTimeout,
+            });
+            vi.unstubAllGlobals();
+        }
+    });
 });
 
 describe('_trackBootstrap', () => {
