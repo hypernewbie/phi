@@ -1,7 +1,15 @@
-// Optional access-password bootstrap for Phi. This deliberately uses the
-// audited @noble/hashes implementation rather than a hand-written crypto
-// routine so it also works when Phi is served over a LAN HTTP address where
-// SubtleCrypto is not exposed by the browser.
+// Optional access-password bootstrap for Phi.
+//
+// PBKDF2-SHA256 runs natively via WebCrypto (crypto.subtle) whenever the
+// runtime exposes it — secure contexts such as http://localhost, HTTPS,
+// and the desktop body view — which is ~10-40x faster than JS on weak
+// devices. On plain-HTTP LAN origins, where browsers do not expose
+// SubtleCrypto at all, this falls back to the audited @noble/hashes
+// implementation. Both paths produce identical bytes (RFC 8018); a
+// 1-iteration cross-check against noble runs once per page load before
+// the native path is trusted, so a broken or tampered SubtleCrypto can
+// never produce a verifier the Go server would reject — or worse, a
+// bootstrap verifier that locks the user out.
 import { pbkdf2Async } from './vendor/noble-hashes/pbkdf2.js';
 import { hmac } from './vendor/noble-hashes/hmac.js';
 import { sha256 } from './vendor/noble-hashes/sha2.js';
@@ -51,6 +59,76 @@ async function getStatus() {
     return status;
 }
 
+async function deriveVerifierNative(subtle, password, salt, iterations) {
+    const key = await subtle.importKey(
+        'raw',
+        password,
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits'],
+    );
+    const bits = await subtle.deriveBits(
+        {
+            name: 'PBKDF2',
+            hash: 'SHA-256',
+            salt,
+            iterations,
+        },
+        key,
+        256,
+    );
+    return new Uint8Array(bits);
+}
+
+// Resolves to a native derive function, or false when only noble is
+// usable. Memoized as a promise so concurrent callers share one probe.
+// The probe derives a 1-iteration verifier through BOTH implementations
+// (microseconds) and only trusts the native path on a byte-for-byte match.
+async function probeNativeDerive() {
+    const subtle = globalThis.crypto?.subtle;
+    if (
+        !subtle ||
+        typeof subtle.importKey !== 'function' ||
+        typeof subtle.deriveBits !== 'function'
+    ) {
+        return false;
+    }
+    try {
+        const katPassword = new TextEncoder().encode('phi-native-derive-kat');
+        const katSalt = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+        const expected = await pbkdf2Async(sha256, katPassword, katSalt, {
+            c: 1,
+            dkLen: 32,
+        });
+        const actual = await deriveVerifierNative(
+            subtle,
+            katPassword,
+            katSalt,
+            1,
+        );
+        if (
+            actual.length !== expected.length ||
+            !expected.every((byte, i) => byte === actual[i])
+        ) {
+            return false;
+        }
+        return (password, salt, iterations) =>
+            deriveVerifierNative(subtle, password, salt, iterations);
+    } catch {
+        return false;
+    }
+}
+
+let nativeDerivePromise;
+function nativeDerive() {
+    if (!nativeDerivePromise) nativeDerivePromise = probeNativeDerive();
+    return nativeDerivePromise;
+}
+
+function resetNativeDerive() {
+    nativeDerivePromise = undefined;
+}
+
 async function deriveVerifier(password, status) {
     if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
         throw new Error(
@@ -58,6 +136,14 @@ async function deriveVerifier(password, status) {
         );
     }
     const salt = base64URLToBytes(status.salt);
+    const native = await nativeDerive();
+    if (native) {
+        return native(
+            new TextEncoder().encode(password),
+            salt,
+            status.iterations,
+        );
+    }
     return pbkdf2Async(sha256, password, salt, {
         c: status.iterations,
         dkLen: 32,
@@ -297,4 +383,7 @@ export const __test__ = {
     clearCredential,
     createPasswordRecord,
     storeCredential,
+    deriveVerifier,
+    nativeDerive,
+    resetNativeDerive,
 };
