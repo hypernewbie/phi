@@ -270,3 +270,35 @@ describe('openQuotaOverlay', () => {
         expect(document.querySelector('.quota-overlay')).toBeNull();
     });
 });
+
+describe('tall-modal base contract', () => {
+    // The quota overlay is the first modal taller than a short window.
+    // Base rules must cap content at the viewport with the body as the
+    // scroller — previously only the compact block did this, so tall
+    // modals grew past the viewport with no scroll container anywhere.
+    it('base .modal-content caps height, .modal-body scrolls, chrome stays pinned', async () => {
+        const { readFileSync } = await import('node:fs');
+        const css = readFileSync('web/style.css', 'utf8').replace(
+            /\/\*[\s\S]*?\*\//g,
+            '',
+        );
+        const rule = (selector) => {
+            const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const m = css.match(
+                new RegExp(`(?:^|\\n)${escaped}\\s*\\{[\\s\\S]*?\\n\\}`, 'm'),
+            );
+            if (!m) throw new Error(`${selector} base rule not found`);
+            return m[0];
+        };
+        expect(rule('.modal-content')).toMatch(
+            /max-height:\s*calc\(100vh - 48px\)/,
+        );
+        expect(rule('.modal-body')).toMatch(/overflow-y:\s*auto/);
+        expect(rule('.modal-body')).toMatch(/min-height:\s*0/);
+        expect(rule('.modal-footer')).toMatch(/flex-shrink:\s*0/);
+        expect(rule('.modal-header')).toMatch(/flex-shrink:\s*0/);
+        // The workspace modal's autocomplete dropdown must escape its
+        // body — the single documented exemption.
+        expect(rule('#ws-modal .modal-body')).toMatch(/overflow:\s*visible/);
+    });
+});
