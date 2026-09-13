@@ -520,3 +520,18 @@ export function isCompactViewport() {
 export function prefersInputBarFocus() {
     return isCompactViewport() || isCoarseViewport();
 }
+// ── Column panel proportional caps ─────────────────────────────────────
+// Side columns are subordinate chrome; the terminal is the primary
+// surface and must never be crushed by panel widths remembered from a
+// bigger monitor (phi_panel_left_width / phi_panel_right_width are
+// replayed unclamped at boot, and both panels are flex-shrink: 0).
+// These constants mirror the CSS `max-width: min(<px>, <vw>)` caps in
+// the base .sidebar-panel / .diff-panel rules in web/style.css; the
+// drag handlers use them so the resize handle stops exactly where the
+// CSS cap stops. test-js/panelCaps.test.js pins the two forms in sync.
+export const SIDEBAR_PANEL_CAP = { min: 60, max: 450, vw: 0.32 };
+export const DIFF_PANEL_CAP = { min: 200, max: 600, vw: 0.4 };
+export function clampPanelWidth(px, cap, viewportWidth = typeof window !== 'undefined' ? window.innerWidth : cap.max) {
+    const capPx = Math.min(cap.max, viewportWidth * cap.vw);
+    return Math.max(cap.min, Math.min(px, capPx));
+}

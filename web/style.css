@@ -845,7 +845,12 @@ html[data-phi-desktop-root] .app-header {
     flex-direction: column;
     width: 260px;
     min-width: 180px;
-    max-width: 450px;
+    /* Proportional cap: the sessions column must never eat more than
+       ~1/3 of the window. flex-shrink: 0 + a remembered drag width from
+       a big monitor (up to 450px) used to claim 50% of a 900px window.
+       max-width clamps even the inline style.width replayed from
+       localStorage by initResizers(). */
+    max-width: min(450px, 32vw);
     flex-shrink: 0;
     /* Inset obsidian edge on the right side mirrors the
        app-header's bottom edge — glass panels feel 'carved from
@@ -3309,7 +3314,11 @@ html[data-phi-desktop-root] .app-header {
     flex-direction: column;
     width: 340px;
     min-width: 200px;
-    max-width: 1200px;
+    /* Same proportional-cap rule as the sessions column: the diff
+       column yields past 40% of the window even when a remembered
+       drag width (phi_panel_right_width) says otherwise. 600px matches
+       the drag range; the old 1200px cap was unreachable. */
+    max-width: min(600px, 40vw);
     flex-shrink: 0;
 }
 
@@ -4103,6 +4112,7 @@ html[data-phi-config-page] .settings-modal {
         top: 48px;
         bottom: 0;
         width: 280px !important; /* Force fixed width on drawer */
+        max-width: none; /* base 32vw cap must not squeeze the drawer on phones */
         height: calc(100dvh - 48px);
         z-index: 1000;
         transform: translateX(-100%);
@@ -4122,6 +4132,7 @@ html[data-phi-config-page] .settings-modal {
         top: 48px;
         bottom: 0;
         width: 320px !important;
+        max-width: none; /* base 40vw cap must not squeeze the drawer */
         height: calc(100dvh - 48px);
         z-index: 1000;
         transform: translateX(100%);
@@ -4519,6 +4530,7 @@ html[data-phi-config-page] .settings-modal {
         top: 48px; /* desktop header height in this range */
         bottom: 0;
         width: 320px !important;
+        max-width: none; /* base 40vw cap must not squeeze the drawer */
         z-index: 1200;
         transform: translateX(100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);

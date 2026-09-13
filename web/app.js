@@ -10,6 +10,9 @@ import {
     isCoarseViewport,
     isCompactViewport,
     COMPACT_VIEWPORT_QUERY,
+    SIDEBAR_PANEL_CAP,
+    DIFF_PANEL_CAP,
+    clampPanelWidth,
 } from './util.js';
 import { SyncManager } from './sync.js';
 import { bootstrapAccessAuth } from './auth.js';
@@ -667,19 +670,30 @@ export class App {
         const diffPanel = document.getElementById('diff-panel');
         const layout = document.querySelector('.main-layout');
 
-        // Load saved sizes from localStorage
+        // Load saved sizes from localStorage. The stored preference keeps
+        // the big-monitor value untouched; the APPLIED width is clamped to
+        // the proportional panel caps (see web-src/util.ts) so a width
+        // dragged on a large screen can never claim half of a small one.
         const savedLeftWidth = localStorage.getItem('phi_panel_left_width');
         const savedRightWidth = localStorage.getItem('phi_panel_right_width');
         if (savedLeftWidth) {
-            sidebar.style.width = `${savedLeftWidth}px`;
             const widthNum = parseFloat(savedLeftWidth);
+            sidebar.style.width = `${clampPanelWidth(
+                widthNum,
+                SIDEBAR_PANEL_CAP,
+            )}px`;
             if (widthNum < 120) {
                 sidebar.classList.add('sidebar-narrow');
             } else {
                 sidebar.classList.remove('sidebar-narrow');
             }
         }
-        if (savedRightWidth) diffPanel.style.width = `${savedRightWidth}px`;
+        if (savedRightWidth) {
+            diffPanel.style.width = `${clampPanelWidth(
+                parseFloat(savedRightWidth),
+                DIFF_PANEL_CAP,
+            )}px`;
+        }
 
         // Left resizing handler
         leftHandle.addEventListener('mousedown', (e) => {
@@ -691,7 +705,11 @@ export class App {
             const doDrag = (moveEvent) => {
                 const width =
                     moveEvent.clientX - layout.getBoundingClientRect().left;
-                if (width > 60 && width < 450) {
+                const capPx = clampPanelWidth(
+                    SIDEBAR_PANEL_CAP.max,
+                    SIDEBAR_PANEL_CAP,
+                );
+                if (width > SIDEBAR_PANEL_CAP.min && width < capPx) {
                     sidebar.style.width = `${width}px`;
                     localStorage.setItem('phi_panel_left_width', width);
 
@@ -728,7 +746,11 @@ export class App {
             const doDrag = (moveEvent) => {
                 const width =
                     layout.getBoundingClientRect().right - moveEvent.clientX;
-                if (width > 200 && width < 600) {
+                const capPx = clampPanelWidth(
+                    DIFF_PANEL_CAP.max,
+                    DIFF_PANEL_CAP,
+                );
+                if (width > DIFF_PANEL_CAP.min && width < capPx) {
                     diffPanel.style.width = `${width}px`;
                     localStorage.setItem('phi_panel_right_width', width);
                     this.tabManager.fitActiveTerminal();
