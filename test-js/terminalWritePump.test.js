@@ -54,6 +54,34 @@ describe('single-flight terminal write pump', () => {
         expect(tab.writePending).toBe(false);
     });
 
+    it('a throwing xterm write drops the batch but keeps the pump alive', () => {
+        // xterm throws past its internal backlog cap (flood — most likely
+        // on the slowest devices). Without the guard writePending sticks
+        // true and the tab bricks until reload.
+        const { manager, tab } = makeHarness();
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            let failOnce = true;
+            const written = [];
+            tab.term.write = vi.fn((data, cb) => {
+                if (failOnce) {
+                    failOnce = false;
+                    throw new Error('flood');
+                }
+                written.push(data);
+                if (cb) cb();
+            });
+            manager.writeToTerminal(tab, 'doomed');
+            expect(tab.writePending).toBe(false);
+            manager.writeToTerminal(tab, 'alive');
+            expect(written).toEqual(['alive']);
+            expect(tab.writePending).toBe(false);
+            expect(errors).toHaveBeenCalledTimes(1);
+        } finally {
+            errors.mockRestore();
+        }
+    });
+
     it('preserves ordering when output arrives during a later batch', () => {
         const { callbacks, manager, tab } = makeHarness();
 
