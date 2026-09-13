@@ -2,6 +2,20 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.4 — 2026-09-13
+
+### Added
+- **File tree right-click context menu & Open in Explorer** (`df08d61`). Right-clicking files in the Files tab now opens the context menu instead of immediately launching Explorer. Added "Open in Explorer" directly below "Preview", allowing users to reveal the file or directory on desktop hosts.
+- **Claude Code CLI themes** (`37234d8`). 22 matching themes for the Claude Code CLI (`bonus/claude_themes/`) mirroring all Phi accent colours.
+- **Opt-in Agy terminal ANSI theme harmonisation** (`433d98d`). Configurable option (`agy_theme_ansi`) to harmonise Google Antigravity terminal colours with Phi's active accent.
+- **macOS tab navigation shortcuts** (`47becd0`). Support for Cmd+1..9 and Option+1..9 tab switching on macOS.
+- **Desktop fullscreen & zoom** (`26e40a4`, `8367a1a`, `e9d50d7`). Persisted global content zoom (Ctrl/Cmd+=, -, 0), View > Toggle Full Screen menu, and macOS Ctrl+Cmd+F fullscreen shortcut.
+
+### Fixed
+- **Auth derive performance & UX** (`984679b`, `20ea43b`, `e41050b`). Native WebCrypto PBKDF2 verifier derivation for instant sign-in, progress indicators on slow pure-JS fallbacks, and streamlined 'Signing in' state.
+- **Mobile layout geometry** (`85666d3`, `faca3ae`). Separated input modality from layout geometry and ensured opaque sidebar fallback when fast mode disables blur.
+- **PTY lifecycle cleanup** (`52371af`). `ListActive` cleanly skips dead-in-place corpses.
+
 ## v0.20.3 — 2026-09-12
 
 (Same content as the never-published v0.20.2 attempt; the v0.20.2 release
