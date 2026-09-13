@@ -92,11 +92,12 @@ export function getTerminalTheme(
         (typeof document !== 'undefined' &&
             document.documentElement?.getAttribute('data-theme-color')) ||
         'purple';
-    const tokens = ACCENT_COLORS?.[themeKey] || ACCENT_COLORS?.purple || {
-        accent: '#7c6af7',
-        accentDim: '#5b4ec2',
-        accentBright: '#9a8dfa',
-    };
+    const tokens = ACCENT_COLORS?.[themeKey] ||
+        ACCENT_COLORS?.purple || {
+            accent: '#7c6af7',
+            accentDim: '#5b4ec2',
+            accentBright: '#9a8dfa',
+        };
     const cursorColor =
         accentColorKeyOrHex ||
         (typeof document !== 'undefined' &&
@@ -7203,18 +7204,16 @@ export class TabManager {
     }
 
     getTerminalTheme(coder, accentColorKeyOrHex) {
-        return getTerminalTheme(
-            coder,
-            accentColorKeyOrHex,
-            this.app?.config,
-        );
+        return getTerminalTheme(coder, accentColorKeyOrHex, this.app?.config);
     }
 
     applyThemeToAllActiveTerminals(color) {
         const activeColor =
             color ||
             (typeof document !== 'undefined' &&
-                document.documentElement?.style?.getPropertyValue('--accent')) ||
+                document.documentElement?.style?.getPropertyValue(
+                    '--accent',
+                )) ||
             '#7c6af7';
         for (const tab of this.tabs.values()) {
             if (tab.term) {
