@@ -44,6 +44,23 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         expect(c.sendResizeToBackend).not.toHaveBeenCalled();
     });
 
+    it('measures the DOM once per fit with the real font resolver', () => {
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        const c = Object.create(TabManager.prototype);
+        c.getActiveTab = vi.fn(() => t);
+        c.app = { terminalFontSize: 14 };
+        c.sendResizeToBackend = vi.fn();
+        c._spamScroll = vi.fn();
+        // resolveTerminalFontSize NOT stubbed: the shared proposal feeds
+        // both font resolution (14 == 14, no change) and the skip check.
+        c.fitActiveTerminal();
+        expect(t.fitAddon.proposeDimensions).toHaveBeenCalledTimes(1);
+        expect(t.term.options.fontSize).toBe(14);
+        expect(t.fitAddon.fit).not.toHaveBeenCalled();
+        expect(c._spamScroll).not.toHaveBeenCalled();
+        expect(c.sendResizeToBackend).not.toHaveBeenCalled();
+    });
+
     it('fits when the proposed geometry differs', () => {
         const t = tab(80, 24, { cols: 100, rows: 30 });
         const c = ctx(t);
