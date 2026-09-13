@@ -543,14 +543,11 @@ export class App {
         // visualViewport, but its window resize/orientation/page-show events
         // still refresh the innerHeight fallback.
         //
-        // The keyboard slide is a burst of vv-resize frames: the CSS var +
-        // focus-scroll fix go immediately (the input bar must ride the
-        // keyboard), but the xterm refit coalesces through the
-        // scroll-neutral keyboard path — one trailing fit instead of a
-        // per-frame PTY resize that flashes the TUI and yanks scroll.
+        // NEVER contract: the var + focus-scroll fix go immediately (the
+        // input bar must ride the keyboard), but NOTHING else — no fit,
+        // no PTY send, no scroll touch. Frozen rows both ways.
         window.visualViewport?.addEventListener('resize', () => {
             this.updateLayoutPosition(false, true);
-            this.tabManager?.scheduleKeyboardFit?.();
         });
         window.visualViewport?.addEventListener('scroll', () =>
             this.updateLayoutPosition(false),
