@@ -1462,9 +1462,18 @@ export class TabManager {
             // Bounded: delivery startup (release) waits on this fetch, so
             // a wedged request must degrade to a skipped delta, never a
             // frozen terminal. Same-origin and ≤64 KiB in practice.
+            // Old Chromium lacks AbortSignal.timeout: degrade to an
+            // unbounded fetch there (as before) rather than failing
+            // every delta closed.
             const res = await fetch(
                 `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${from}&through=${through}`,
-                { cache: 'no-store', signal: AbortSignal.timeout(10000) },
+                {
+                    cache: 'no-store',
+                    signal:
+                        typeof AbortSignal.timeout === 'function'
+                            ? AbortSignal.timeout(10000)
+                            : undefined,
+                },
             );
             if (!res.ok) return null;
             const buf = new Uint8Array(await res.arrayBuffer());
