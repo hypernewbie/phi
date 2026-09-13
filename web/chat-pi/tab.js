@@ -1,8 +1,8 @@
 import { mountRpcChat } from './controller.js';
-import { getLastFolderName } from '../util.js';
+import { getLastFolderName, isCompactViewport } from '../util.js';
 function applyTerminalFont(container, app) {
     const configuredSize = app?.terminalFontSize;
-    let fontSize = window.innerWidth <= 768 ? 10 : 14;
+    let fontSize = isCompactViewport() ? 10 : 14;
     const numericSize = Number(configuredSize);
     if (Number.isFinite(numericSize) && numericSize >= 8 && numericSize <= 32) {
         fontSize = numericSize;

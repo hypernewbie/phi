@@ -15,6 +15,9 @@ import {
     escapeHtml,
     isMacPlatform,
     tabShortcutDigit,
+    isCoarseViewport,
+    isCompactViewport,
+    prefersInputBarFocus,
 } from './util.js';
 import {
     applyBrandCpuTier,
@@ -171,7 +174,7 @@ export class TabManager {
         this.ctrlTBtn = document.getElementById('ctrl-t-btn');
         this.lastInputValue = '';
 
-        if (window.innerWidth <= 768 && this.inputTextArea) {
+        if (isCompactViewport() && this.inputTextArea) {
             this.inputTextArea.placeholder = 'Type a prompt...';
         }
 
@@ -374,7 +377,7 @@ export class TabManager {
                 const fontSize =
                     Number.isFinite(sz) && sz >= 8 && sz <= 32
                         ? sz
-                        : window.innerWidth <= 768
+                        : isCompactViewport()
                           ? 10
                           : 14;
                 tab.termContainer.style.fontFamily =
@@ -804,7 +807,7 @@ export class TabManager {
                 activeTab.directMode = false;
                 this.updateDirectModeUI(activeTab);
             }
-            if (window.innerWidth <= 768) {
+            if (isCoarseViewport()) {
                 // Only an input-focus transition may correct iOS WebKit's
                 // focus-scroll. Generic page/terminal scrolling must never
                 // be reset to the document origin.
@@ -817,7 +820,7 @@ export class TabManager {
         });
 
         this.inputTextArea.addEventListener('blur', () => {
-            if (window.innerWidth <= 768) {
+            if (isCoarseViewport()) {
                 // Refit after the keyboard hides, but do not reset document
                 // scroll: the user may already be scrolling terminal output.
                 setTimeout(() => this.app.updateLayoutPosition?.(true), 150);
@@ -939,7 +942,7 @@ export class TabManager {
             // original textarea-bound path; document-level capture would
             // steal arrow keys from terminal-internal tools (fzf, less,
             // etc.) on a real keyboard.
-            if (window.innerWidth > 768) return;
+            if (!isCoarseViewport()) return;
             if (this.inputTextArea?.value !== '') return;
             if (this.inputBarContainer?.classList.contains('hidden')) return;
             const activeTab = this.getActiveTab();
@@ -1520,7 +1523,7 @@ export class TabManager {
             return;
         }
 
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
 
         // Initialize xterm.js instance
         const term = new window.Terminal({
@@ -1680,9 +1683,7 @@ export class TabManager {
             }
             // Support Alt+1..9 (and Cmd+1..9 / Option+1..9 on macOS) tab switching inside xterm
             const isTabSwitchModifier =
-                !e.ctrlKey &&
-                !e.shiftKey &&
-                (e.altKey || (isMac && e.metaKey));
+                !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
             if (isTabSwitchModifier && tabShortcutDigit(e) !== null) {
                 if (e.type === 'keydown') {
                     this.handleGlobalTabShortcuts(e);
@@ -5104,7 +5105,7 @@ export class TabManager {
         const sent = this.sendInput(activeTab, bytes);
         if (!sent) return;
 
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = prefersInputBarFocus();
         if (isMobile && !activeTab.directMode && this.inputTextArea) {
             this.inputTextArea.focus({ preventScroll: true });
         } else {
@@ -5207,7 +5208,7 @@ export class TabManager {
                 this.sendToTab(tabInfo, '\r');
             }, 200);
         }
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = prefersInputBarFocus();
         if (isMobile && !tabInfo.directMode && this.inputTextArea) {
             this.inputTextArea.focus({ preventScroll: true });
         } else {
@@ -5859,9 +5860,7 @@ export class TabManager {
 
         const isMac = isMacPlatform();
         const isTabSwitchModifier =
-            !e.ctrlKey &&
-            !e.shiftKey &&
-            (e.altKey || (isMac && e.metaKey));
+            !e.ctrlKey && !e.shiftKey && (e.altKey || (isMac && e.metaKey));
         const digit = isTabSwitchModifier ? tabShortcutDigit(e) : null;
 
         if (digit !== null) {
@@ -5941,8 +5940,8 @@ export class TabManager {
         let newHeight = this.inputTextArea.scrollHeight;
         // If empty, prevent the placeholder wrap from making the textarea fat
         if (this.inputTextArea.value.trim() === '') {
-            newHeight = window.innerWidth <= 768 ? 36 : 40;
-            if (window.innerWidth <= 768) {
+            newHeight = isCompactViewport() ? 36 : 40;
+            if (isCompactViewport()) {
                 this.inputTextArea.placeholder = 'Type a prompt...';
             }
         }
@@ -6154,7 +6153,7 @@ export class TabManager {
         if (!activeTab || activeTab.isDead) return;
 
         try {
-            const isMobile = window.innerWidth <= 768;
+            const isMobile = isCompactViewport();
             const size =
                 this.app &&
                 this.app.terminalFontSize >= 8 &&
@@ -6240,7 +6239,7 @@ export class TabManager {
         // keys normally. Direct mode still wins — if the tab is in
         // direct mode, the xterm is where the user is typing.
         if (
-            window.innerWidth <= 768 &&
+            prefersInputBarFocus() &&
             !tabInfo.directMode &&
             !tabInfo.isDead &&
             this.inputTextArea &&
@@ -6295,14 +6294,13 @@ export class TabManager {
                 width: window.innerWidth,
             };
             let left = btnRect.left - containerRect.left;
-            const dropupWidth =
-                window.innerWidth <= 768
-                    ? Math.min(280, window.innerWidth - 24)
-                    : dropupId === 'pi-rpc-model-dropup'
-                      ? 420
-                      : dropupId === 'pi-rpc-thinking-dropup'
-                        ? 280
-                        : 320;
+            const dropupWidth = isCompactViewport()
+                ? Math.min(280, window.innerWidth - 24)
+                : dropupId === 'pi-rpc-model-dropup'
+                  ? 420
+                  : dropupId === 'pi-rpc-thinking-dropup'
+                    ? 280
+                    : 320;
             left = Math.max(
                 12,
                 Math.min(left, containerRect.width - dropupWidth - 12),
@@ -6334,7 +6332,7 @@ export class TabManager {
 
         this.presetsContainer.classList.remove('hidden');
 
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
 
         // 1. Render Static Coder Presets / Slash Menu
         if (hasCoderPresets) {
@@ -7197,7 +7195,7 @@ export class TabManager {
     // changes cols/rows, unlike family). Deliberately does NOT touch any
     // scroll / _spamScroll timing (see AGENTS.md hard-won-stabilization rule).
     applyTerminalFontSizeToAll(size) {
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
         const safe = size >= 8 && size <= 32 ? size : isMobile ? 10 : 14;
         for (const tab of this.tabs.values()) {
             if (!tab.term) continue;

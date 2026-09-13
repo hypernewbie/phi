@@ -5,6 +5,7 @@ import {
     formatWorkspaceLabel as formatWorkspaceLabelUtil,
     worktreeGlyph,
     displayHostname,
+    isCompactViewport,
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
@@ -217,7 +218,7 @@ export class SessionsManager {
         this._measureSpan.textContent = text;
         const textWidth = this._measureSpan.getBoundingClientRect().width;
 
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
         const padding = isMobile ? 24 : 28;
         const calculatedWidth = Math.ceil(textWidth + padding);
 

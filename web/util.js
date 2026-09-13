@@ -474,3 +474,49 @@ export function tabShortcutDigit(e) {
     }
     return null;
 }
+// ── Viewport contract: modality ≠ geometry ──────────────────────────────
+// The old `window.innerWidth <= 768` scalar conflated two independent
+// questions — input modality (touch vs fine pointer) and layout geometry
+// (how much room the terminal has) — and broke real devices: an 820px
+// iPad got no software-keyboard tracking, a 932×430 landscape phone got
+// desktop chrome with no drawer access. The three canonical conditions
+// below each have a CSS form (web/style.css media preludes) and a JS
+// form (these helpers); test-js/compactViewport.test.js pins them in
+// sync. See AGENTS.md "Viewport contract" for the full rationale.
+// COMPACT_VIEWPORT_QUERY is the matchMedia form of the compact-layout
+// condition. It must stay equivalent to the CSS prelude
+// `@media (max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)`
+// used by every compact block in web/style.css.
+export const COMPACT_VIEWPORT_QUERY = '(max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
+// isCoarseViewport: the primary input is touch (finger-first device).
+// Drives soft-keyboard ergonomics on ANY width — an 820px iPad is still
+// a touch device whose on-screen keyboard must not cover the input bar.
+// matchMedia guard mirrors the isTouch idiom in terminal.js (jsdom has
+// no matchMedia; treat as fine-pointer desktop).
+export function isCoarseViewport() {
+    return (typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches);
+}
+// isCompactViewport: the compact (drawer) layout applies. Narrow width
+// always compacts regardless of input device (a 600px desktop window
+// genuinely needs drawers — the hamburger stays operable with a mouse);
+// a short landscape viewport compacts only on touch devices, where the
+// swipe-driven drawer UX was designed. Mirrors COMPACT_VIEWPORT_QUERY.
+export function isCompactViewport() {
+    if (typeof window === 'undefined')
+        return false;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (w <= 768)
+        return true;
+    return h <= 500 && w >= h && isCoarseViewport();
+}
+// prefersInputBarFocus: after staging input or activating a tab, touch
+// ergonomics focus the staged input bar so the soft keyboard stays up.
+// True on compact viewports and any coarse-pointer device; false on
+// fine-pointer desktops so terminal-internal tools (fzf, less) keep
+// normal key capture. Strictly a superset of the old <=768 behavior.
+export function prefersInputBarFocus() {
+    return isCompactViewport() || isCoarseViewport();
+}

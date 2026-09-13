@@ -1,4 +1,4 @@
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 export function normalizePath(p) {
@@ -171,7 +171,7 @@ export class SessionsManager {
         this._measureSpan.style.letterSpacing = style.letterSpacing;
         this._measureSpan.textContent = text;
         const textWidth = this._measureSpan.getBoundingClientRect().width;
-        const isMobile = window.innerWidth <= 768;
+        const isMobile = isCompactViewport();
         const padding = isMobile ? 24 : 28;
         const calculatedWidth = Math.ceil(textWidth + padding);
         const minW = isMobile ? 50 : 60;

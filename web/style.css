@@ -63,7 +63,12 @@ body {
 .app-container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    /* --vv-height is written only on coarse-pointer (touch) shells by
+       app.js from window.visualViewport, so an on-screen keyboard can
+       never cover the input bar — at ANY width (an 820px iPad is a
+       touch device too). Fine-pointer shells never get the var, so the
+       100vh fallback is pixel-identical to the old rule. */
+    height: var(--vv-height, 100vh);
     width: 100vw;
 }
 
@@ -1562,7 +1567,8 @@ html[data-phi-desktop-root] .app-header {
 }
 /* Mobile: tabs bar hidden at <=768px so the preview would never
    fire, but be explicit anyway. */
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .tab-hiero-preview {
         display: none !important;
     }
@@ -2041,7 +2047,8 @@ html[data-phi-desktop-root] .app-header {
     animation: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     /* The empty-state landing (logo + title + launch buttons + meta)
        must remain fully visible on mobile — shrink padding + font sizes
        so the content actually fits inside a 375px-wide viewport without
@@ -3940,7 +3947,8 @@ html[data-phi-desktop-root] .app-header {
     gap: 8px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .settings-swatch-grid {
         grid-template-columns: repeat(5, 28px);
     }
@@ -4052,7 +4060,8 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* MOBILE RESPONSIVE DRAWERS */
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     html,
     body {
         position: fixed;
@@ -4489,7 +4498,48 @@ html[data-phi-config-page] .settings-modal {
     }
 }
 
-@media (max-width: 768px) {
+/* ── TABLET DIFF SLIDE-OVER (769–1024px) ───────────────────────────────
+   At tablet width a side-by-side diff panel (340px) plus the sidebar
+   (260px) leaves the terminal a ~200px sliver (~25 columns). Instead
+   the diff panel reuses the compact slide-over drawer: the terminal
+   keeps the full column and diff opens as an overlay sheet from the
+   right. DiffController.togglePanel already adds `mobile-open` on
+   every open; above 1024px that class stays a no-op. The panel also
+   defaults to closed at boot on these widths (see web-src/diff.ts). */
+@media (min-width: 769px) and (max-width: 1024px) {
+    /* Only the DIFF handle is hidden — the sidebar keeps its resizer
+       (the sidebar remains a side-by-side column in this range). */
+    #right-resize-handle {
+        display: none !important;
+    }
+
+    .diff-panel {
+        position: fixed;
+        right: 0;
+        top: 48px; /* desktop header height in this range */
+        bottom: 0;
+        width: 320px !important;
+        z-index: 1200;
+        transform: translateX(100%);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        border-left: 1px solid var(--bg-border);
+    }
+
+    .diff-panel:not(.hidden).mobile-open {
+        transform: translateX(0);
+    }
+
+    .diff-panel.hidden {
+        transform: translateX(100%);
+        /* Keep it flex so the transform transition works — same pattern
+           as the compact drawer block above. */
+        display: flex !important;
+    }
+}
+
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .md-modal-body.diff-modal-body {
         padding: 0 !important;
         overflow-x: auto !important;
@@ -6642,7 +6692,8 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* MOBILE RESPONSIVE OVERRIDES */
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .mobile-only {
         display: inline-flex !important;
     }
@@ -7311,7 +7362,8 @@ html[data-phi-config-page] .settings-modal {
 }
 
 /* Mobile Responsiveness */
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .kanban-toolbar {
         flex-direction: column;
         align-items: stretch;
@@ -9002,7 +9054,8 @@ html[data-phi-config-page] .settings-modal {
     font: 9px var(--font-mono);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .kanban-view-switch {
         order: 3;
     }
@@ -9155,7 +9208,8 @@ html[data-phi-config-page] .settings-modal {
     white-space: nowrap;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .kanban-stats-view {
         padding: 16px 12px;
     }
@@ -9204,7 +9258,8 @@ html[data-phi-config-page] .settings-modal {
     min-height: 208px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .kanban-stats-charts {
         grid-template-columns: 1fr;
     }
@@ -9471,7 +9526,8 @@ html[data-phi-config-page] .settings-modal {
     flex: 1;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
     .kanban-notes-view {
         flex-direction: column;
     }
