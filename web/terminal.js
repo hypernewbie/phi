@@ -1741,7 +1741,10 @@ export class TabManager {
             this._closeArchive(tabInfo);
             return;
         }
-        if (tabInfo.paneEpoch === undefined || tabInfo.paneOldest === undefined) {
+        if (
+            tabInfo.paneEpoch === undefined ||
+            tabInfo.paneOldest === undefined
+        ) {
             return;
         }
         const head = tabInfo.queuedSeq || 0;
@@ -1801,7 +1804,7 @@ export class TabManager {
             })
             .catch((e) => {
                 if (!tabInfo.archiveOpen) return;
-                out.textContent = 'archive error: ' + (e.message || e);
+                out.textContent = `archive error: ${e.message || e}`;
             });
     }
 
@@ -2738,7 +2741,8 @@ export class TabManager {
                 tabInfo.coder === 'pi-rpc'
             ) {
                 scrollToBottomBtn.classList.add('hidden');
-                if (tabInfo.archiveBtn) tabInfo.archiveBtn.classList.add('hidden');
+                if (tabInfo.archiveBtn)
+                    tabInfo.archiveBtn.classList.add('hidden');
                 return;
             }
             const buf = tabInfo.term?.buffer?.active;
@@ -5460,7 +5464,7 @@ export class TabManager {
             // this is the tap path, on mouse the hover path; both funnel
             // here.
             const sidebar = document.getElementById('sidebar-panel');
-            if (sidebar && sidebar.classList.contains('drawer-open')) return;
+            if (sidebar?.classList.contains('drawer-open')) return;
             this._renderSelfHud();
             this._openSelfHud();
         };

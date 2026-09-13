@@ -117,7 +117,7 @@ beforeAll(async () => {
     });
     // The bundle is `(()=>{...})()`: pure side-effect IIFE, no return.
     vm.runInContext(bundle, ctx, { filename: 'xterm-headless.js' });
-    if (!ctx.exports || !ctx.exports.Terminal) {
+    if (!ctx.exports?.Terminal) {
         throw new Error(
             'xterm-headless did not expose Terminal in the sandbox',
         );
@@ -248,12 +248,12 @@ describe('archive parser core', () => {
                         {
                             start: 0,
                             end: 82,
-                            bytes: 'A'.repeat(81) + '\r\n',
+                            bytes: `${'A'.repeat(81)}\r\n`,
                         },
                         {
                             start: 81,
                             end: 122,
-                            bytes: 'B'.repeat(40) + '\r\n',
+                            bytes: `${'B'.repeat(40)}\r\n`,
                         },
                     ],
                     markers: marker ? [marker] : [],

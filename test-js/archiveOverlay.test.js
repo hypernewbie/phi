@@ -102,7 +102,11 @@ function successWorkerClass() {
                     });
                 if (this.onmessage)
                     this.onmessage({
-                        data: { type: 'done', paneId: message.paneId, lines: 0 },
+                        data: {
+                            type: 'done',
+                            paneId: message.paneId,
+                            lines: 0,
+                        },
                     });
             });
         }
@@ -195,8 +199,14 @@ describe('archive overlay wiring', () => {
                             resizes: [],
                         }),
                     );
-                    const buf = new Uint8Array(4 + json.byteLength + recordingBytes.byteLength);
-                    new DataView(buf.buffer).setUint32(0, json.byteLength, false);
+                    const buf = new Uint8Array(
+                        4 + json.byteLength + recordingBytes.byteLength,
+                    );
+                    new DataView(buf.buffer).setUint32(
+                        0,
+                        json.byteLength,
+                        false,
+                    );
                     buf.set(json, 4);
                     buf.set(recordingBytes, 4 + json.byteLength);
                     return buf.buffer.slice(0);
