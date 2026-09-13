@@ -88,6 +88,33 @@ describe('_onLiveGap', () => {
     });
 });
 
+describe('_trackBootstrap', () => {
+    it('prunes settled entries so reconnects do not leak slots', async () => {
+        const c = Object.create(TabManager.prototype);
+        const tab = {};
+        let resolveIt;
+        const gate = new Promise((r) => {
+            resolveIt = r;
+        });
+        c._trackBootstrap(tab, gate);
+        expect(tab._pendingBootstraps.length).toBe(1);
+        resolveIt();
+        await gate;
+        await new Promise((r) => setTimeout(r, 0));
+        expect(tab._pendingBootstraps.length).toBe(0);
+    });
+
+    it('swallows rejections without unhandled errors', async () => {
+        const c = Object.create(TabManager.prototype);
+        const tab = {};
+        // A rejection with only this tracker attached must not surface
+        // as an unhandled rejection (vitest fails the run on those).
+        c._trackBootstrap(tab, Promise.reject(new Error('boom')));
+        await new Promise((r) => setTimeout(r, 10));
+        expect(tab._pendingBootstraps.length).toBe(0);
+    });
+});
+
 describe('_bootstrapDelta', () => {
     it('drops an oversize delta without touching the buffer or watermarks', async () => {
         const c = ctx(async () => ({

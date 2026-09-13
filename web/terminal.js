@@ -1515,8 +1515,8 @@ export class TabManager {
                 ? info.ckpt.through
                 : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
             if (info.head > from) {
-                tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
-                tabInfo._pendingBootstraps.push(
+                this._trackBootstrap(
+                    tabInfo,
                     this._bootstrapDelta(tabInfo, from, info.head),
                 );
             }
@@ -1535,8 +1535,8 @@ export class TabManager {
                 from >= info.oldest &&
                 info.head - from <= HOT_DELTA_LIMIT_BYTES
             ) {
-                tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
-                tabInfo._pendingBootstraps.push(
+                this._trackBootstrap(
+                    tabInfo,
                     this._bootstrapDelta(tabInfo, from, info.head),
                 );
             } else if (info.head > from) {
@@ -1572,8 +1572,8 @@ export class TabManager {
             ? info.ckpt.through
             : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
         if (info.head > from) {
-            tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
-            tabInfo._pendingBootstraps.push(
+            this._trackBootstrap(
+                tabInfo,
                 this._bootstrapDelta(tabInfo, from, info.head),
             );
         }
@@ -1583,6 +1583,24 @@ export class TabManager {
     // appends it to the live terminal after the network completes.
     // Aborted silently when the page is gone or the pane is dead; bounded
     // by HOT_DELTA_LIMIT_BYTES so we never silently flood scrollback.
+    // Tracked bootstrap: prod never awaits these, so settled entries prune
+    // themselves (no per-reconnect slot leak) and rejections are swallowed
+    // here — a failed delta only means a slower open, never a crash.
+    // Tests use the live array as a flush barrier; Promise.all snapshots
+    // at call time, so pruning after settle is invisible to them.
+    _trackBootstrap(tabInfo, promise) {
+        tabInfo._pendingBootstraps = tabInfo._pendingBootstraps || [];
+        tabInfo._pendingBootstraps.push(promise);
+        promise
+            .catch(() => {})
+            .finally(() => {
+                const arr = tabInfo._pendingBootstraps;
+                if (!arr) return;
+                const i = arr.indexOf(promise);
+                if (i >= 0) arr.splice(i, 1);
+            });
+    }
+
     async _bootstrapDelta(tabInfo, from, head) {
         if (tabInfo.isDead) return;
         const d = await this._fetchRecordingRange(tabInfo.paneId, from, head);
