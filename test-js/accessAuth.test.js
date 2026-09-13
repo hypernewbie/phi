@@ -224,18 +224,19 @@ describe('unlock overlay slow-derive feedback', () => {
         };
     };
 
-    it('warns while deriving on the pure-JS fallback path', async () => {
+    it('shows the busy state while signing in', async () => {
         __test__.resetNativeDerive();
         vi.stubGlobal('crypto', {
             getRandomValues: webcrypto.getRandomValues,
         });
         try {
             const state = await submitOverlay();
-            expect(state.button.textContent).toBe('Deriving key…');
-            expect(state.subtitle.textContent).toBe(
-                'Strong key derivation can take up to a minute on slower devices.',
-            );
+            expect(state.button.textContent).toBe('Signing in…');
             expect(state.button.disabled).toBe(true);
+            // The subtitle never changes - no crypto narration in the UI.
+            expect(state.subtitle.textContent).toBe(
+                'Enter your password to continue.',
+            );
             state.release();
             await expect(state.boot).resolves.toEqual({ enabled: true });
             expect(document.querySelector('.access-auth-overlay')).toBeNull();
@@ -245,20 +246,45 @@ describe('unlock overlay slow-derive feedback', () => {
         }
     });
 
-    it('stays quiet on the native path (fast derive)', async () => {
+    it('restores the button after a wrong password', async () => {
         __test__.resetNativeDerive();
         vi.stubGlobal('crypto', webcrypto);
         try {
-            const state = await submitOverlay();
-            expect(state.button.textContent).toBe('Sign in');
-            expect(state.subtitle.textContent).toBe(
-                'Enter your password to continue.',
-            );
-            state.release();
-            await expect(state.boot).resolves.toEqual({ enabled: true });
+            let rejectLogin;
+            const gate = new Promise((r) => {
+                rejectLogin = r;
+            });
+            mockFetch((url) => {
+                if (url === '/api/auth/status')
+                    return { ...STATUS, iterations: 1 };
+                if (url === '/api/auth/login') return gate;
+                throw new Error();
+            });
+            const boot = bootstrapAccessAuth();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const overlay = document.querySelector('.access-auth-overlay');
+            const form = overlay.querySelector('form');
+            overlay.querySelector('input[type="password"]').value =
+                KAT_PASSWORD;
+            form.dispatchEvent(new Event('submit', { cancelable: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(
+                overlay.querySelector('button[type="submit"]').textContent,
+            ).toBe('Signing in…');
+            rejectLogin({ ok: false });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const button = overlay.querySelector('button[type="submit"]');
+            expect(button.textContent).toBe('Sign in');
+            expect(button.disabled).toBe(false);
+            expect(
+                overlay.querySelector('.access-auth-error').textContent,
+            ).toBe('Wrong password');
+            overlay.remove();
+            void boot;
         } finally {
             vi.unstubAllGlobals();
             __test__.resetNativeDerive();
+            document.querySelector('.access-auth-overlay')?.remove();
         }
     });
 });
