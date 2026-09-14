@@ -378,6 +378,74 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     ]);
   });
 
+  it('closes the add-server picker without touching the destroyed window (picker closed cleanup)', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const first = fake.FakeBrowserWindow.instances[0];
+    first.webContents.emit('did-finish-load');
+    await flush();
+
+    const openPicker = fake.ipcEvents.get('phi:open-picker');
+    if (!openPicker) throw new Error('picker handler missing');
+    openPicker({ sender: first.webContents });
+    const picker = fake.FakeBrowserWindow.instances[1];
+    const contents = picker.webContents;
+    // Real Electron throws "Object has been destroyed" when webContents
+    // is read off a closed BrowserWindow; mimic that so this test pins
+    // the cleanup against the real post-destroy contract. Emit 'closed'
+    // directly: the fake's finishClose teardown itself reads webContents,
+    // which the native side owns in production.
+    picker.webContents.destroyed = true;
+    Object.defineProperty(picker, 'webContents', {
+      configurable: true,
+      get(): never {
+        throw new TypeError('Object has been destroyed');
+      },
+    });
+    // This is the add-PC dialog close that used to pop the "JavaScript
+    // error in the main process" box while still adding the server.
+    expect(() => picker.emit('closed')).not.toThrow();
+    const internals = host as unknown as {
+      trustedSessionSenders: Set<unknown>;
+      sessionChildren: Set<unknown>;
+    };
+    expect(internals.trustedSessionSenders.has(contents)).toBe(false);
+    expect(internals.sessionChildren.has(picker)).toBe(false);
+  });
+
+  it('closes the rail server menu without touching the destroyed window (menu closed cleanup)', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const first = fake.FakeBrowserWindow.instances[0];
+    first.webContents.emit('did-finish-load');
+    await flush();
+
+    const profile = host.controller?.add('https://menu.example.test/');
+    if (!profile) throw new Error('controller missing');
+    const profileId = profile.id;
+    (
+      host as unknown as {
+        openRailMenu: (id: string, x: number, y: number) => void;
+      }
+    ).openRailMenu(profileId, 0, 0);
+    const menu = fake.FakeBrowserWindow.instances[1];
+    const contents = menu.webContents;
+    menu.webContents.destroyed = true;
+    Object.defineProperty(menu, 'webContents', {
+      configurable: true,
+      get(): never {
+        throw new TypeError('Object has been destroyed');
+      },
+    });
+    expect(() => menu.emit('closed')).not.toThrow();
+    const internals = host as unknown as {
+      trustedSessionSenders: Set<unknown>;
+      sessionChildren: Set<unknown>;
+    };
+    expect(internals.trustedSessionSenders.has(contents)).toBe(false);
+    expect(internals.sessionChildren.has(menu)).toBe(false);
+  });
+
   it('drains queued launch payloads only after the replacement main view is ready (queue drain)', async () => {
     const host = new DesktopHost();
     await host.start(primary);
