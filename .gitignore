@@ -8,6 +8,8 @@ config.json
 temp/
 /webdist/
 coverage/
+test-results/
+playwright-report/
 *.out
 node_modules/
 

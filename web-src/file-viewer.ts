@@ -25,6 +25,34 @@ export interface FileViewHandle {
     dispose(): void;
 }
 
+// Preview vendor bundles (Viewer.js, Plyr, json-viewer) are NOT in
+// web/index.html's <script> tags — they load here, on first use, so
+// every page load doesn't pay for a video player and an image
+// lightbox nobody opened. One cached promise per URL: concurrent
+// opens share the in-flight <script>, repeat opens pay nothing.
+// The `ready` predicate lets harnesses that pre-stub the global
+// (jsdom tests) skip the fetch entirely.
+const vendorLoads = new Map<string, Promise<void>>();
+
+function ensureVendorScript(src: string, ready: () => boolean): Promise<void> {
+    if (ready()) return Promise.resolve();
+    let pending = vendorLoads.get(src);
+    if (!pending) {
+        pending = new Promise<void>((resolve, reject) => {
+            const el = document.createElement('script');
+            el.src = src;
+            el.onload = () => resolve();
+            el.onerror = () => reject(new Error(`Failed to load ${src}`));
+            document.head.appendChild(el);
+        });
+        // A failed load must not pin the rejection forever; the next
+        // open retries instead of hanging on a settled rejection.
+        pending.catch(() => vendorLoads.delete(src));
+        vendorLoads.set(src, pending);
+    }
+    return pending;
+}
+
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i;
 const VID_EXT = /\.(mp4|m4v|mov|webm|ogv|mkv)$/i;
 const AUD_EXT = /\.(mp3|m4a|ogg|oga|wav|flac|opus)$/i;
@@ -134,7 +162,15 @@ export async function mountFileView(opts: {
     }
 }
 
-function mountImage(url: string, container: HTMLElement): FileViewHandle {
+async function mountImage(
+    url: string,
+    container: HTMLElement,
+): Promise<FileViewHandle> {
+    await ensureVendorScript(
+        'vendor/viewerjs/viewer.min.js',
+        () =>
+            (window as unknown as Record<string, unknown>).Viewer !== undefined,
+    );
     const img = document.createElement('img');
     img.className = 'file-viewer-image';
     img.src = url;
@@ -164,11 +200,15 @@ function mountImage(url: string, container: HTMLElement): FileViewHandle {
     };
 }
 
-function mountMedia(
+async function mountMedia(
     url: string,
     container: HTMLElement,
     isVideo: boolean,
-): FileViewHandle {
+): Promise<FileViewHandle> {
+    await ensureVendorScript(
+        'vendor/plyr/plyr.polyfilled.js',
+        () => (window as unknown as Record<string, unknown>).Plyr !== undefined,
+    );
     const el = document.createElement(isVideo ? 'video' : 'audio');
     el.className = isVideo ? 'file-viewer-video' : 'file-viewer-audio';
     el.src = url;
@@ -282,6 +322,10 @@ async function mountJson(
     if (!res.ok)
         throw new Error(`Failed to load (${res.status} ${res.statusText})`);
     const text = await res.text();
+    await ensureVendorScript(
+        'vendor/json-viewer/json-viewer.bundle.js',
+        () => customElements.get('json-viewer') !== undefined,
+    );
     // Try strict JSON first; json5/jsonc fall through to a raw text
     // view since alenaksu/json-viewer expects valid JSON.
     let parsed: unknown;

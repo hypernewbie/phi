@@ -31,11 +31,12 @@
              "almost no code" — Chromium's viewer is excellent in Electron
              and Chrome. Add pdfjs later only if text extraction or form
              scripting becomes a requirement. -->
-        <script src="vendor/viewerjs/viewer.min.js"></script>
+        <!-- Preview vendor JS (Viewer.js, Plyr, json-viewer) is NOT here:
+             file-viewer.js injects each bundle on first use so page load
+             doesn't pay for viewers nobody opens. Their small CSS stays
+eager to avoid a first-open unstyled flash. -->
         <link rel="stylesheet" href="vendor/viewerjs/viewer.min.css">
-        <script src="vendor/plyr/plyr.polyfilled.js"></script>
         <link rel="stylesheet" href="vendor/plyr/plyr.css">
-        <script src="vendor/json-viewer/json-viewer.bundle.js"></script>
         <link rel="stylesheet" href="vendor/pi-template.css">
         <link rel="stylesheet" href="style.css">
         <!-- Fonts are vendored (web/vendor/fonts/). phi runs on LAN and airgapped
