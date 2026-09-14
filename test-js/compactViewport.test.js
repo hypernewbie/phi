@@ -24,7 +24,8 @@ import {
 //      base-rule consumer must keep the identical pre-var fallback so
 //      fine-pointer desktops are pixel-identical.
 //   3. Terminal-first side panels: below 1024px Sessions is a drawer;
-//      below 1280px Diff is a drawer. Full side-by-side waits until the
+//      below 1280px Diff is a drawer; portrait-tall (h/w ≥ 1.1) windows
+//      drawer Sessions at any width. Full side-by-side waits until the
 //      terminal retains an 80-column working grid.
 //
 // If any assertion here fails, a form drifted — fix all forms in one
@@ -140,6 +141,40 @@ describe('terminal-first drawer topology', () => {
         setViewport(1400, 430);
         expect(isSidebarDrawerViewport()).toBe(true);
         expect(isDiffDrawerViewport()).toBe(true);
+    });
+
+    it('portrait-tall windows drawer Sessions at any width, Diff untouched', () => {
+        // iPad portrait 820×1180 (h/w 1.44): Sessions slides over so the
+        // terminal keeps its grid; Diff still keys off width alone.
+        delete window.matchMedia;
+        setViewport(820, 1180);
+        expect(isSidebarDrawerViewport()).toBe(true);
+
+        setViewport(1400, 1600);
+        expect(isSidebarDrawerViewport()).toBe(true);
+        expect(isDiffDrawerViewport()).toBe(false);
+
+        // Same widths, landscape: docked.
+        setViewport(1400, 900);
+        expect(isSidebarDrawerViewport()).toBe(false);
+        expect(isDiffDrawerViewport()).toBe(false);
+
+        // Boundary-adjacent landscape stays docked (h/w 0.99 < 1.1).
+        setViewport(1024, 1010);
+        expect(isSidebarDrawerViewport()).toBe(false);
+    });
+
+    it('matchMedia path honors the portrait leg of the drawer query', () => {
+        setMatchMedia({
+            '(max-width: 1023px), (max-aspect-ratio: 10/11)': true,
+        });
+        setViewport(1400, 1600);
+        expect(isSidebarDrawerViewport()).toBe(true);
+        setMatchMedia({
+            '(max-width: 1023px), (max-aspect-ratio: 10/11)': false,
+        });
+        setViewport(1400, 900);
+        expect(isSidebarDrawerViewport()).toBe(false);
     });
 });
 
@@ -258,9 +293,13 @@ describe('style.css terminal-first side panels', () => {
 
     it('769–1023px turns Sessions into a slide-over drawer', () => {
         const m = CSS.match(
-            /@media \(min-width: 769px\) and \(max-width: 1023px\) \{[\s\S]*?\n\}/,
+            /@media \(min-width: 769px\) and \(max-width: 1023px\)[^{]*\{[\s\S]*?\n\}/,
         );
         expect(m, 'constrained Sessions media block not found').toBeTruthy();
+        const prelude = m[0].slice(0, m[0].indexOf('{'));
+        // Portrait-tall windows drawer at any width via the aspect leg.
+        expect(prelude).toContain('(min-width: 1024px)');
+        expect(prelude).toContain('(max-aspect-ratio: 10/11)');
         const block = m[0];
         expect(block).toMatch(/#left-resize-handle\s*\{[^}]*display:\s*none/);
         expect(block).toMatch(/\.mobile-only-btn\s*\{[^}]*display:\s*flex/);

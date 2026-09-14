@@ -540,25 +540,36 @@ export function clampPanelWidth(px, cap, viewportWidth = typeof window !== 'unde
 }
 // The drawer thresholds are content geometry, not device detection. A
 // docked sessions column needs ~260px beside an ~80-column terminal, so it
-// yields below 1024px. A docked diff needs another ~340px, so it yields below
-// 1280px. The compact layout remains its own modality-aware condition above.
-export const SIDEBAR_DRAWER_VIEWPORT_QUERY = '(max-width: 1023px)';
+// yields below 1024px — and in portrait-tall windows (height/width ≥ 1.1)
+// at any width, where a side column would crush the terminal grid. A
+// docked diff needs another ~340px, so it yields below 1280px. The compact
+// layout remains its own modality-aware condition above.
+export const SIDEBAR_DRAWER_VIEWPORT_QUERY = '(max-width: 1023px), (max-aspect-ratio: 10/11)';
 export const DIFF_DRAWER_VIEWPORT_QUERY = '(max-width: 1279px)';
-function matchesViewportQuery(query, fallbackMaxWidth) {
+function matchesViewportQuery(query, fallback) {
     if (typeof window === 'undefined')
         return false;
     if (typeof window.matchMedia === 'function') {
         return window.matchMedia(query).matches;
     }
-    return window.innerWidth <= fallbackMaxWidth;
+    return fallback();
+}
+// Height/width ≥ 1.1. Mirrors the (max-aspect-ratio: 10/11) leg above for
+// browsers without matchMedia.
+function isPortraitTallViewport() {
+    if (typeof window === 'undefined')
+        return false;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    return w > 0 && h / w >= 1.1;
 }
 export function isSidebarDrawerViewport() {
     return (isCompactViewport() ||
-        matchesViewportQuery(SIDEBAR_DRAWER_VIEWPORT_QUERY, 1023));
+        matchesViewportQuery(SIDEBAR_DRAWER_VIEWPORT_QUERY, () => window.innerWidth <= 1023 || isPortraitTallViewport()));
 }
 export function isDiffDrawerViewport() {
     return (isCompactViewport() ||
-        matchesViewportQuery(DIFF_DRAWER_VIEWPORT_QUERY, 1279));
+        matchesViewportQuery(DIFF_DRAWER_VIEWPORT_QUERY, () => window.innerWidth <= 1279));
 }
 // ── Responsive terminal typography ─────────────────────────────────────
 // terminal_font_size is a preferred reading scale, never an absolute pixel
