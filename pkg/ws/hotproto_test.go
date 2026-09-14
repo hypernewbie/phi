@@ -1,6 +1,6 @@
 package ws
 
-// Hot-v1 protocol invariants (see temp/TERMPERF.md). These tests pin the
+// Hot-v1 protocol invariants (see temp/SUPERHIGHWAY.md). These tests pin the
 // server contracts the plan calls non-negotiable.
 //
 //   - attach is atomic: a hot client gets ATTACH_HEAD with the head H and
