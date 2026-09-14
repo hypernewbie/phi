@@ -4719,10 +4719,13 @@ html[data-phi-config-page] .settings-modal {
 /* ── CONSTRAINED SIDE-PANEL TOPOLOGY ───────────────────────────────────
    A full 14px terminal needs roughly 640px for an 80-column working
    grid. Below 1024px the sessions navigation yields into a drawer;
-   below 1280px diff yields into its drawer. This is content geometry,
+   below 1280px diff yields into its drawer. Portrait-tall windows
+   (height/width ≥ 1.1) drawer Sessions at any width — a docked side
+   column would crush the grid there. This is content geometry,
    not a phone/tablet identity test: desktop windows and tablets get the
    same terminal-first hierarchy at the same available width. */
-@media (min-width: 769px) and (max-width: 1023px) {
+@media (min-width: 769px) and (max-width: 1023px),
+    (min-width: 1024px) and (max-aspect-ratio: 10 / 11) {
     #left-resize-handle {
         display: none !important;
     }
