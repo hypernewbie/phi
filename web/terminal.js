@@ -180,7 +180,7 @@ const PI_MODEL_STEP_MS = 200;
 const AUTO_RECONNECT_STABLE_MS = 5000;
 
 // Configuration for performance marks and the bounded screen-checkpoint
-// pipeline (see temp/TERMPERF.md).
+// pipeline (see temp/SUPERHIGHWAY.md).
 const PERF_SLOW_MS = 16;
 // Bounded delta ever written into the live terminal on attach/reconnect
 // (checkpoint itself is separately capped server-side at 128 KiB). Together
