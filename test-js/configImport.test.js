@@ -49,11 +49,7 @@ describe('config import fallback', () => {
         },
     );
 
-    it.each([
-        'PHIQUICKCMDS:example',
-        'PHITERMCMDS:example',
-        'PHICMDS:example',
-    ])(
+    it.each(['PHIQUICKCMDS:example', 'PHITERMCMDS:example', 'PHICMDS:example'])(
         'cmds import accepts %s (whatever copy produced)',
         async (pasted) => {
             vi.stubGlobal('navigator', { clipboard: undefined });
