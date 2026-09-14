@@ -354,7 +354,21 @@ describe('TabManager hot attach bootstrap', () => {
         expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI']);
         resolveDelta();
         await flushBootstrap(tab);
-        await new Promise((r) => setTimeout(r, 200));
+        // The gap-patch tail crosses fetch + message-callback chains;
+        // poll for the settled write list instead of assuming tick
+        // counts (fixed sleeps flake under parallel-suite load).
+        {
+            const deadline = Date.now() + 5000;
+            for (;;) {
+                if (tab.term.writes.length === 5) break;
+                if (Date.now() > deadline) {
+                    throw new Error(
+                        `gap tail never settled (writes=${JSON.stringify(tab.term.writes)})`,
+                    );
+                }
+                await new Promise((r) => setTimeout(r, 10));
+            }
+        }
         expect(seenRanges).toContainEqual([80, 100]);
         expect(seenRanges).toContainEqual([102, 110]);
         expect(tab.term.writes).toEqual([
