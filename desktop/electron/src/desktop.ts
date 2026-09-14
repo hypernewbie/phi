@@ -1231,8 +1231,11 @@ export class DesktopHost {
     this.railMenuWindow = menu;
     this.railMenuProfileId = profileId;
     this.sessionChildren.add(menu);
-    this.trustedSessionSenders.add(menu.webContents);
-    installZoomShortcuts(menu.webContents, (action) =>
+    // Capture the WebContents now: reading menu.webContents inside the
+    // 'closed' handler throws "Object has been destroyed".
+    const menuContents = menu.webContents;
+    this.trustedSessionSenders.add(menuContents);
+    installZoomShortcuts(menuContents, (action) =>
       this.requestContentZoom(action),
     );
     menu.on('blur', () => {
@@ -1240,7 +1243,7 @@ export class DesktopHost {
     });
     menu.on('closed', () => {
       this.sessionChildren.delete(menu);
-      this.trustedSessionSenders.delete(menu.webContents);
+      this.trustedSessionSenders.delete(menuContents);
       if (this.railMenuWindow === menu) {
         this.railMenuWindow = null;
         this.railMenuProfileId = null;
@@ -3375,10 +3378,13 @@ export class DesktopHost {
         },
       });
       this.sessionChildren.add(picker);
-      this.trustedSessionSenders.add(picker.webContents);
+      // Capture the WebContents now: reading picker.webContents inside
+      // the 'closed' handler throws "Object has been destroyed".
+      const pickerContents = picker.webContents;
+      this.trustedSessionSenders.add(pickerContents);
       picker.once('closed', () => {
         this.sessionChildren.delete(picker);
-        this.trustedSessionSenders.delete(picker.webContents);
+        this.trustedSessionSenders.delete(pickerContents);
       });
       void picker.loadFile(path.join(here, 'picker.html'));
       installFullscreenToggle(picker.webContents, parent);
