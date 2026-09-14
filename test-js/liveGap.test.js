@@ -142,6 +142,32 @@ describe('_onLiveGap', () => {
         expect(t._gapInFlight).toBe(false);
     });
 
+    it('a gate-waiter whose hole healed meanwhile dissolves silently', async () => {
+        const p = pty();
+        let resolveGate;
+        const gate = new Promise((r) => {
+            resolveGate = r;
+        });
+        const fetchMock = vi.fn(async () => ({
+            start: 100,
+            end: 108,
+            byteLength: 8,
+            bytes: new TextEncoder().encode('stale!!!'),
+            text: 'stale!!!',
+        }));
+        const c = ctx(fetchMock);
+        const t = tab(p);
+        t._bootstrapGate = gate;
+        const call = c._onLiveGap(t, 100, 108);
+        // A flush-stop re-fire patched ahead while this event waited.
+        p.liveSeq = 102;
+        resolveGate();
+        await call;
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(p.applyGapPatch).not.toHaveBeenCalled();
+        expect(p.abandonGap).not.toHaveBeenCalled();
+    });
+
     it('dissolves when a newer bootstrap generation begins mid-fetch', async () => {
         const p = pty();
         let resolveFetch;
@@ -246,6 +272,58 @@ describe('perf readout without devtools', () => {
         } finally {
             warn.mockRestore();
         }
+    });
+});
+
+describe('_bootstrapDelta watermarks wait for parse', () => {
+    function drainTab() {
+        const callbacks = [];
+        const tab = {
+            isDead: false,
+            writeBuffer: '',
+            writePending: false,
+            userFollowBottom: true,
+            term: {
+                buffer: { active: { viewportY: 0, baseY: 0 } },
+                write(d, cb) {
+                    callbacks.push(cb);
+                },
+                scrollToBottom: vi.fn(),
+                _core: { viewport: { syncScrollArea: vi.fn() } },
+            },
+            queuedSeq: 90,
+            drainedSeq: 90,
+            paneId: 'p',
+            ws: { mode: 'hot' },
+        };
+        return { tab, callbacks };
+    }
+
+    it('does not advance watermarks until xterm parses the delta', async () => {
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        c._fetchRecordingRange = vi.fn(async () => ({
+            start: 90,
+            end: 100,
+            byteLength: 10,
+            bytes: new TextEncoder().encode('0123456789'),
+            text: '0123456789',
+        }));
+        const released = vi.fn();
+        const { tab, callbacks } = drainTab();
+        const p = c._bootstrapDelta(tab, 90, 100, undefined, released);
+        await new Promise((r) => setTimeout(r, 0));
+        // Enqueued and released, but xterm has not parsed: watermarks
+        // must still show the honest pre-parse frontier.
+        expect(released).toHaveBeenCalledTimes(1);
+        expect(tab.drainedSeq).toBe(90);
+        expect(tab.queuedSeq).toBe(90);
+        expect(callbacks.length).toBe(1);
+        callbacks.shift()();
+        await p;
+        expect(tab.queuedSeq).toBe(100);
+        expect(tab.drainedSeq).toBe(100);
     });
 });
 
@@ -428,6 +506,8 @@ describe('_bootstrappedRelease generation', () => {
             paneEpoch: 7,
             ws: pty,
             queuedSeq: 100,
+            writeBuffer: '',
+            writePending: false,
         };
         c._bootstrappedRelease(tab, pty, 0, 100);
         c._bootstrappedRelease(tab, pty, 50, 100);
@@ -502,6 +582,8 @@ describe('_bootstrapDelta', () => {
             paneId: 'p',
             queuedSeq: 90,
             drainedSeq: 90,
+            writeBuffer: '',
+            writePending: false,
         };
         await c._bootstrapDelta(t, 90, 100);
         expect(c.writeToTerminal).toHaveBeenCalledWith(t, '0123456789');

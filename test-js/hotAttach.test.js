@@ -436,6 +436,8 @@ describe('TabManager hot attach bootstrap', () => {
         }
         expect(seenRanges).toContainEqual([80, 100]);
         expect(seenRanges).toContainEqual([102, 110]);
+        // The superseded [100,110) gate-waiter dissolves: never fetched.
+        expect(seenRanges).not.toContainEqual([100, 110]);
         expect(tab.term.writes).toEqual([
             'CHECKPOINT-ANSI',
             'D'.repeat(20),
