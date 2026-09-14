@@ -138,12 +138,20 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 }
 
 func randomEpoch() uint64 {
+	// Epochs ride the wire as JSON numbers and JS clients round-trip
+	// them through doubles, which lose integer precision above 2^53.
+	// A full 64-bit epoch would come back with different low bits, so
+	// every epoch-scoped check (checkpoint store, recording fetch)
+	// would spuriously mismatch in production while tests with small
+	// epochs stay green. 53 random bits still uniquely identify a pane
+	// lifetime, and epoch 0 is valid everywhere (never a sentinel).
+	const doubleSafeMask = uint64((1 << 53) - 1)
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err == nil {
-		return binary.BigEndian.Uint64(b[:])
+		return binary.BigEndian.Uint64(b[:]) & doubleSafeMask
 	}
 	n := time.Now().UnixNano()
-	return uint64(n)<<32 | uint64(n>>32)
+	return (uint64(n)<<32 | uint64(n>>32)) & doubleSafeMask
 }
 
 // LookupPane returns the pane hub without creating one.
