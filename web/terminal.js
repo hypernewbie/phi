@@ -1678,7 +1678,7 @@ export class TabManager {
 
     async _onAttachHead(tabInfo, info) {
         const pty = tabInfo.ws;
-        if (!pty || pty.mode !== 'hot') return;
+        if (pty?.mode !== 'hot') return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
 
