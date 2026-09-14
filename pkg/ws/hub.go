@@ -35,7 +35,7 @@ type Client struct {
 	// Hot marks a hot-v1 terminal-protocol attachment (term_proto=hot-v1
 	// on /ws/pane). Hot clients receive 0x08 ATTACH_HEAD at attach and
 	// 0x09 LIVE_OUTPUT frames thereafter, instead of the legacy 1 MiB
-	// replay + 0x01 frames. See temp/SUPERHIGHWAY.md.
+	// replay + 0x01 frames.
 	Hot bool
 
 	// Logger carries this client's comp=ws + conn+pane fields (set by
