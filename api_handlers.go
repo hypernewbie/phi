@@ -144,8 +144,8 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 				rec, ok = wsHub.Recording(id, mfrom, mthrough)
 				if !ok {
 					http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
-				return
-			}
+					return
+				}
 				if hasEpoch && rec.Epoch != wantEpoch {
 					http.Error(w, "epoch mismatch", http.StatusConflict)
 					return
