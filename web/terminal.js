@@ -186,6 +186,9 @@ const PERF_SLOW_MS = 16;
 // (checkpoint itself is separately capped server-side at 128 KiB). Together
 // they bound the first live payload regardless of session age.
 const HOT_DELTA_LIMIT_BYTES = 64 * 1024;
+// Full live scrollback, desktop and unset-mobile alike. The mobile lane
+// below references this — never a second literal.
+const LIVE_SCROLLBACK_ROWS = 10000;
 // Bounded in-memory recording-chunk cache backing hash-cache
 // negotiation (concept 4): Map preserves insertion order, so the oldest
 // entry is evicted first. 16 entries x <=64 KiB mirrors the ring cap.
@@ -2160,6 +2163,27 @@ export class TabManager {
         if (!skipFit) this.fitActiveTerminal();
     }
 
+    // Mobile-only scrollback lane. Desktop always keeps the full
+    // LIVE_SCROLLBACK_ROWS; under the fast-mode gate (forced on for
+    // mobile viewports, or user fast_mode) a valid mobileScrollbackRows
+    // setting shrinks new tabs. 0/unset/garbage = full: the fail-safe
+    // direction is always toward visible history, never away.
+    // Pure over (fastMode, setting) except reading the DOM gate, so it
+    // is unit-testable with a stubbed body class.
+    _liveScrollbackRows() {
+        try {
+            if (document?.body?.classList?.contains('fast-mode')) {
+                const n = Number(this.app?.mobileScrollbackRows) || 0;
+                if (n >= 500 && n <= LIVE_SCROLLBACK_ROWS) {
+                    return Math.floor(n);
+                }
+            }
+        } catch (_e) {
+            /* fail-safe below */
+        }
+        return LIVE_SCROLLBACK_ROWS;
+    }
+
     createTab(
         paneId,
         sessionId,
@@ -2315,7 +2339,9 @@ export class TabManager {
             // attach (no 1 MiB replay) + checkpoint bootstrap, not from
             // truncating what the user can see. A full-buffer reflow on a
             // genuine resize is accepted cost: lag beats missing history.
-            scrollback: 10000, // avoid truncating the server's replay-on-reconnect buffer
+            // Mobile may shrink via _liveScrollbackRows (fast-mode gate);
+            // desktop always keeps LIVE_SCROLLBACK_ROWS.
+            scrollback: this._liveScrollbackRows(),
             theme: this.getTerminalTheme(coder),
         });
 

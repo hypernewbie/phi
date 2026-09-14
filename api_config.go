@@ -39,6 +39,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"ui_font_size":                        cfg.UIFontSize,
 		"terminal_font_family":                cfg.TerminalFontFamily,
 		"terminal_font_size":                  cfg.TerminalFontSize,
+		"mobile_scrollback_rows":              cfg.MobileScrollbackRows,
 	})
 }
 
@@ -402,14 +403,34 @@ func handleAppearanceUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if v, ok := req["mobile_scrollback_rows"]; ok {
+		switch n := v.(type) {
+		case float64:
+			cfg.MobileScrollbackRows = int(n)
+		case int:
+			cfg.MobileScrollbackRows = n
+		}
+		// 0 = unset/full history. Otherwise clamp to a range that
+		// keeps scroll-up useful on small screens without letting a
+		// typo brick history.
+		if cfg.MobileScrollbackRows != 0 {
+			if cfg.MobileScrollbackRows < 500 {
+				cfg.MobileScrollbackRows = 500
+			}
+			if cfg.MobileScrollbackRows > 10000 {
+				cfg.MobileScrollbackRows = 10000
+			}
+		}
+	}
 	saveConfig(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ui_font_family":       cfg.UIFontFamily,
-		"ui_font_size":         cfg.UIFontSize,
-		"terminal_font_family": cfg.TerminalFontFamily,
-		"terminal_font_size":   cfg.TerminalFontSize,
+		"ui_font_family":         cfg.UIFontFamily,
+		"ui_font_size":           cfg.UIFontSize,
+		"terminal_font_family":   cfg.TerminalFontFamily,
+		"terminal_font_size":     cfg.TerminalFontSize,
+		"mobile_scrollback_rows": cfg.MobileScrollbackRows,
 	})
 }
 

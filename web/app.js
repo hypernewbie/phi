@@ -921,6 +921,7 @@ export class App {
                     ui_font_size: this.uiFontSize || 0,
                     terminal_font_family: this.terminalFontFamily || '',
                     terminal_font_size: this.terminalFontSize || 0,
+                    mobile_scrollback_rows: this.mobileScrollbackRows || 0,
                     custom_font_name: this.customFontName || '',
                 }),
             );
@@ -1048,6 +1049,7 @@ export class App {
                     ui_font_size: this.uiFontSize || 0,
                     terminal_font_family: this.terminalFontFamily || '',
                     terminal_font_size: this.terminalFontSize || 0,
+                    mobile_scrollback_rows: this.mobileScrollbackRows || 0,
                 }),
             });
         } catch (e) {
@@ -1078,6 +1080,8 @@ export class App {
                     this.uiFontSize = Number(ls?.ui_font_size) || 0;
                     this.terminalFontFamily = ls?.terminal_font_family || '';
                     this.terminalFontSize = Number(ls?.terminal_font_size) || 0;
+                    this.mobileScrollbackRows =
+                        Number(ls?.mobile_scrollback_rows) || 0;
                     this.customFontName = ls?.custom_font_name || '';
                     this.applyUIFont?.();
                     this.tabManager?.applyFontToAllActiveTerminals?.(

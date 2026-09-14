@@ -114,6 +114,36 @@ describe('handleWindowResize NEVER suppression', () => {
         vi.advanceTimersByTime(5000);
         expect(m.fitActiveTerminal).not.toHaveBeenCalled();
     });
+
+    it('rotation while the keyboard is open recovers: exactly one fit', () => {
+        // Suppression is stateless per event (classify updates its
+        // baseline every call), so a width change after a suppressed
+        // burst must fit — never stuck silent, never a catch-up storm.
+        const m = makeTm();
+        setPointer(true);
+        for (const h of [700, 660, 640]) {
+            setWindow(1024, h);
+            m.handleWindowResize();
+        }
+        setWindow(768, 640);
+        m.handleWindowResize();
+        vi.advanceTimersByTime(5000);
+        expect(m.fitActiveTerminal).toHaveBeenCalledTimes(1);
+        expect(m.endResize).toHaveBeenCalledTimes(1);
+    });
+
+    it('a same-dims event is not suppressed as keyboard (downstream skip owns it)', () => {
+        // classify reports layout for unchanged geometry; the cheap
+        // same-dims skip inside fitActiveTerminal (fitSkip.test.js) —
+        // not the NEVER gate — decides the rest. The gate must not eat
+        // events it cannot classify.
+        const m = makeTm();
+        setPointer(true);
+        setWindow(1024, 768);
+        m.handleWindowResize();
+        vi.advanceTimersByTime(5000);
+        expect(m.fitActiveTerminal).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe('NEVER source contract', () => {

@@ -56,6 +56,12 @@ type Config struct {
 	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
 	TerminalFontSize   int    `json:"terminal_font_size,omitempty"`
 
+	// MobileScrollbackRows shrinks xterm history on mobile ONLY (the
+	// fast-mode gate, forced on for mobile viewports). 0/unset means
+	// full history, same as desktop. Desktop never reads this field.
+	// Applies to new tabs; clamped server-side in handleAppearanceUpdate.
+	MobileScrollbackRows int `json:"mobile_scrollback_rows,omitempty"`
+
 	// UseExistingTerminalTab, when true, makes the command panel route
 	// terminal commands to the first alive bash/pwsh tab instead of
 	// spawning a new one. Defaults to false (preserves prior behavior
