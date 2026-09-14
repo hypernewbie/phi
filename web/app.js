@@ -8,7 +8,6 @@ import {
     escapeHtml,
     buildPhiFaviconSvg,
     isCoarseViewport,
-    isCompactViewport,
     isSidebarDrawerViewport,
     isDiffDrawerViewport,
     visibleViewportHeight,
