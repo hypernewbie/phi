@@ -307,6 +307,67 @@ describe('TabManager hot attach bootstrap', () => {
         expect(tab.queuedSeq).toBe(105);
     });
 
+    it('gap during the bootstrap window heals in order after release', async () => {
+        // The exact tablet scenario: busy attach (live held for the
+        // delta) plus a backpressure drop inside the held frames.
+        // Expected stream: ckpt, delta [80,100), live [100,102),
+        // patch [102,110), held tail [110,112) — fully contiguous,
+        // zero loss, zero duplication.
+        stubTerminalGlobal();
+        const tm = makeTm();
+        const seenRanges = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation((url) => {
+                const m = String(url).match(/from=(\d+).*through=(\d+)/);
+                const from = Number(m[1]);
+                const through = Number(m[2]);
+                seenRanges.push([from, through]);
+                if (from === 80)
+                    return gateDelta.then(() =>
+                        recordingResponse('D'.repeat(20), 80, 100),
+                    );
+                return Promise.resolve(
+                    recordingResponse('P'.repeat(8), 102, 110),
+                );
+            }),
+        );
+        let resolveDelta;
+        const gateDelta = new Promise((r) => {
+            resolveDelta = r;
+        });
+        tm.createTab('p11', 's11', 'T', 'bash', '', '', false);
+        const tab = tm.tabs.get('p11');
+        const ansi = new TextEncoder().encode('CHECKPOINT-ANSI');
+        tab.ws.ws.emitAttachHead(
+            {
+                epoch: 7,
+                oldest: 0,
+                head: 100,
+                ckpt: { through: 80, cols: 120, rows: 40, len: ansi.length },
+            },
+            ansi,
+        );
+        tab.ws.ws.emitHot(100, 'aa');
+        tab.ws.ws.emitHot(110, 'bb'); // dropped [102,110) behind it
+        await new Promise((r) => setTimeout(r, 0));
+        expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI']);
+        resolveDelta();
+        await flushBootstrap(tab);
+        await new Promise((r) => setTimeout(r, 200));
+        expect(seenRanges).toContainEqual([80, 100]);
+        expect(seenRanges).toContainEqual([102, 110]);
+        expect(tab.term.writes).toEqual([
+            'CHECKPOINT-ANSI',
+            'D'.repeat(20),
+            'aa',
+            'P'.repeat(8),
+            'bb',
+        ]);
+        expect(tab.ws.liveSeq).toBe(112);
+        expect(tab.queuedSeq).toBe(112);
+    });
+
     it('stale bootstrap on socket swap writes nothing and releases nothing', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
