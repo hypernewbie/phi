@@ -116,6 +116,24 @@ describe('_onLiveGap', () => {
         expect(t._gapInFlight).toBe(false);
     });
 
+    it('dissolves when a newer bootstrap generation begins mid-fetch', async () => {
+        const p = pty();
+        let resolveFetch;
+        const gate = new Promise((r) => {
+            resolveFetch = r;
+        });
+        const c = ctx(() => gate);
+        const t = tab(p);
+        t._bootstrapGen = 1;
+        const call = c._onLiveGap(t, 100, 105);
+        t._bootstrapGen = 2;
+        resolveFetch({ start: 100, end: 105, byteLength: 5, text: 'stale' });
+        await call;
+        expect(p.applyGapPatch).not.toHaveBeenCalled();
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(c.writeToTerminal).not.toHaveBeenCalled();
+    });
+
     it('abandons a zero-byte patch instead of re-firing forever', async () => {
         // An empty patch would not advance liveSeq; flushing would re-fire
         // the same gap and fetch it again in a hot loop.

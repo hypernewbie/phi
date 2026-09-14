@@ -1847,11 +1847,14 @@ export class TabManager {
         // Order with an in-flight bootstrap: the delta must enqueue first,
         // or the patch (newer bytes) lands below it. Stale when the socket
         // swapped mid-fetch: verify identity before touching watermarks.
+        // Superseded when a newer bootstrap generation began mid-fetch:
+        // the new head owns the stream now, so this patch dissolves.
         const gate = tabInfo._bootstrapGate;
         if (gate) {
             await gate.catch(() => {});
             if (tabInfo.isDead || tabInfo.ws !== pty) return;
         }
+        const bootGen = tabInfo._bootstrapGen;
         // One gap fetch per tab at a time. Concurrent onGap events
         // describe overlapping ranges of the same hole; letting two
         // patches interleave would deliver stale bytes at the new head
@@ -1873,8 +1876,14 @@ export class TabManager {
                 tabInfo._gapInFlight = false;
             }
             // Stale fetch (socket swapped mid-flight): the old stream's
-            // patch must not land in the new one.
-            if (tabInfo.isDead || tabInfo.ws !== pty) return;
+            // patch must not land in the new one. Superseded fetch (new
+            // bootstrap generation began): the new head owns ordering.
+            if (
+                tabInfo.isDead ||
+                tabInfo.ws !== pty ||
+                tabInfo._bootstrapGen !== bootGen
+            )
+                return;
             if (
                 d &&
                 d.start === from &&
