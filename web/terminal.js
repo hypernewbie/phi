@@ -186,6 +186,24 @@ const PERF_SLOW_MS = 16;
 // (checkpoint itself is separately capped server-side at 128 KiB). Together
 // they bound the first live payload regardless of session age.
 const HOT_DELTA_LIMIT_BYTES = 64 * 1024;
+// Bounded in-memory recording-chunk cache backing hash-cache
+// negotiation (concept 4): Map preserves insertion order, so the oldest
+// entry is evicted first. 16 entries x <=64 KiB mirrors the ring cap.
+const REC_CACHE_ENTRIES = 16;
+const REC_CACHE_ROUNDS = 68;
+
+// FNV-1a/64 over raw bytes, lowercase hex16. Must match pkg/ws
+// ChunkHash bit-for-bit (vectors pinned in hashcache_test.go and
+// test-js/hashCache.test.js). BigInt keeps the 64-bit multiply exact;
+// chunks are small and infrequent, so clarity beats bit-twiddling.
+export function fnv1a64Hex(bytes) {
+    let h = 0xcbf29ce484222325n;
+    for (let i = 0; i < bytes.length; i++) {
+        h ^= BigInt(bytes[i]);
+        h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    return h.toString(16).padStart(16, '0');
+}
 // After output stays quiet this long, the client uploads a screen
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
@@ -1457,7 +1475,14 @@ export class TabManager {
     // Fetches a raw recording range from the server. Returns
     // { text, bytes, start, end } or null. The caller checks start to
     // detect ring truncation.
-    async _fetchRecordingRange(paneId, from, through) {
+    //
+    // Hash-cache assembly loop: cached chunks are declared via `have`;
+    // the server skips verified prefixes (204 when fully known) and the
+    // loop fills the rest round by round. The assembled span always
+    // starts at `from` or the call returns null, so callers keep their
+    // exact d.start === from contract. epoch scopes the cache: unknown
+    // epochs fetch plain, exactly as before.
+    async _fetchRecordingRange(paneId, from, through, epoch) {
         try {
             // Bounded: delivery startup (release) waits on this fetch, so
             // a wedged request must degrade to a skipped delta, never a
@@ -1465,41 +1490,172 @@ export class TabManager {
             // Old Chromium lacks AbortSignal.timeout: degrade to an
             // unbounded fetch there (as before) rather than failing
             // every delta closed.
-            const res = await fetch(
-                `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${from}&through=${through}`,
-                {
-                    cache: 'no-store',
-                    signal:
-                        typeof AbortSignal.timeout === 'function'
-                            ? AbortSignal.timeout(10000)
-                            : undefined,
-                },
-            );
-            if (!res.ok) return null;
-            const buf = new Uint8Array(await res.arrayBuffer());
-            if (buf.byteLength < 4) return null;
-            const jsonLen =
-                ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>>
-                0;
-            if (4 + jsonLen > buf.byteLength) return null;
-            let hdr;
-            try {
-                hdr = JSON.parse(
-                    new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)),
+            const signal =
+                typeof AbortSignal.timeout === 'function'
+                    ? AbortSignal.timeout(10000)
+                    : undefined;
+            const parts = [];
+            const resizes = [];
+            let cursor = from;
+            for (let round = 0; round < REC_CACHE_ROUNDS; round++) {
+                if (cursor >= through) break;
+                const have = this._recHave(paneId, epoch, cursor, through);
+                const res = await fetch(
+                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${have ? `&have=${have}` : ''}`,
+                    { cache: 'no-store', signal },
                 );
-            } catch (_e) {
-                return null;
+                if (res.status === 204) {
+                    // Server verified our declaration covers the rest.
+                    const tail = this._recCachedSpan(
+                        paneId,
+                        epoch,
+                        cursor,
+                        through,
+                    );
+                    if (!tail) return null;
+                    parts.push(tail.bytes);
+                    resizes.push(...tail.resizes);
+                    cursor = through;
+                    break;
+                }
+                if (!res.ok) return null;
+                const buf = new Uint8Array(await res.arrayBuffer());
+                if (buf.byteLength < 4) return null;
+                const jsonLen =
+                    ((buf[0] << 24) |
+                        (buf[1] << 16) |
+                        (buf[2] << 8) |
+                        buf[3]) >>>
+                    0;
+                if (4 + jsonLen > buf.byteLength) return null;
+                let hdr;
+                try {
+                    hdr = JSON.parse(
+                        new TextDecoder().decode(buf.subarray(4, 4 + jsonLen)),
+                    );
+                } catch (_e) {
+                    return null;
+                }
+                // The server skips have-verified prefixes, so its span may
+                // start past the cursor: fill [cursor, hdr.start) from the
+                // cache that justified the skip. Unfillable gaps (ring
+                // truncation, evicted cache) stay null, exactly as before.
+                if (hdr.start < cursor || hdr.start > through) return null;
+                if (hdr.start > cursor) {
+                    const gap = this._recCachedSpan(
+                        paneId,
+                        epoch,
+                        cursor,
+                        hdr.start,
+                    );
+                    if (!gap) return null;
+                    parts.push(gap.bytes);
+                    resizes.push(...gap.resizes);
+                }
+                const data = buf.subarray(4 + jsonLen);
+                this._recCacheStore(
+                    paneId,
+                    epoch,
+                    hdr.start,
+                    hdr.end,
+                    data,
+                    hdr.resizes || [],
+                );
+                parts.push(data);
+                resizes.push(...(hdr.resizes || []));
+                if (hdr.end <= cursor) return null;
+                cursor = hdr.end;
             }
-            const data = buf.subarray(4 + jsonLen);
+            if (cursor < through) return null;
+            let byteLength = 0;
+            for (const p of parts) byteLength += p.byteLength;
+            const bytes = new Uint8Array(byteLength);
+            let off = 0;
+            for (const p of parts) {
+                bytes.set(p, off);
+                off += p.byteLength;
+            }
             return {
-                start: hdr.start,
-                end: hdr.end,
-                byteLength: data.byteLength,
-                text: new TextDecoder().decode(data),
-                resizes: hdr.resizes || [],
+                start: from,
+                end: through,
+                byteLength: bytes.byteLength,
+                bytes,
+                text: new TextDecoder().decode(bytes),
+                resizes,
             };
         } catch (_e) {
             return null;
+        }
+    }
+
+    _recCacheKey(paneId, epoch, start) {
+        return `${paneId}|${epoch}|${start}`;
+    }
+
+    // Declares cached chunks intersecting [cursor, through) for this
+    // pane+epoch, oldest first. Empty when nothing is cached (cold URLs
+    // stay byte-identical to the pre-cache format).
+    _recHave(paneId, epoch, cursor, through) {
+        if (epoch === undefined || !this._recChunkCache) return '';
+        const decl = [];
+        for (const [key, c] of this._recChunkCache) {
+            const [pid, ep, st] = key.split('|');
+            if (pid !== paneId || Number(ep) !== epoch) continue;
+            const start = Number(st);
+            if (c.end > cursor && start < through && decl.length < 64) {
+                decl.push(`${start}:${c.end}:${c.hash}`);
+            }
+        }
+        return decl.join(',');
+    }
+
+    // Assembles [cursor, through) wholly from cache; null unless the
+    // cached chunks chain contiguously from the cursor.
+    _recCachedSpan(paneId, epoch, cursor, through) {
+        if (epoch === undefined || !this._recChunkCache) return null;
+        const bytes = [];
+        const resizes = [];
+        let at = cursor;
+        while (at < through) {
+            const c = this._recChunkCache.get(
+                this._recCacheKey(paneId, epoch, at),
+            );
+            if (!c || c.end <= at) return null;
+            const take = Math.min(c.end, through) - at;
+            bytes.push(c.bytes.subarray(0, take));
+            resizes.push(...c.resizes);
+            at += take;
+        }
+        let byteLength = 0;
+        for (const p of bytes) byteLength += p.byteLength;
+        const out = new Uint8Array(byteLength);
+        let off = 0;
+        for (const p of bytes) {
+            out.set(p, off);
+            off += p.byteLength;
+        }
+        return { bytes: out, resizes };
+    }
+
+    _recCacheStore(paneId, epoch, start, end, data, resizes) {
+        if (epoch === undefined || end <= start) return;
+        if (!this._recChunkCache) this._recChunkCache = new Map();
+        // One pane lifetime per id: drop other-epoch entries so a dead
+        // epoch can never satisfy a new one.
+        for (const key of this._recChunkCache.keys()) {
+            const [pid, ep] = key.split('|');
+            if (pid === paneId && Number(ep) !== epoch) {
+                this._recChunkCache.delete(key);
+            }
+        }
+        this._recChunkCache.set(this._recCacheKey(paneId, epoch, start), {
+            end,
+            hash: fnv1a64Hex(data),
+            bytes: data.slice(),
+            resizes: resizes || [],
+        });
+        while (this._recChunkCache.size > REC_CACHE_ENTRIES) {
+            this._recChunkCache.delete(this._recChunkCache.keys().next().value);
         }
     }
 
@@ -1655,7 +1811,12 @@ export class TabManager {
         // watermarks must not regress — verify the socket before touching
         // anything.
         const ws = tabInfo.ws;
-        const d = await this._fetchRecordingRange(tabInfo.paneId, from, head);
+        const d = await this._fetchRecordingRange(
+            tabInfo.paneId,
+            from,
+            head,
+            tabInfo.paneEpoch,
+        );
         if (tabInfo.isDead || tabInfo.ws !== ws) return;
         if (!d || d.start !== from || d.byteLength > HOT_DELTA_LIMIT_BYTES) {
             return;
@@ -1687,7 +1848,12 @@ export class TabManager {
             tabInfo._gapInFlight = true;
             let d = null;
             try {
-                d = await this._fetchRecordingRange(tabInfo.paneId, from, to);
+                d = await this._fetchRecordingRange(
+                    tabInfo.paneId,
+                    from,
+                    to,
+                    tabInfo.paneEpoch,
+                );
             } finally {
                 tabInfo._gapInFlight = false;
             }

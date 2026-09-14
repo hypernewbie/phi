@@ -127,6 +127,31 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "epoch mismatch", http.StatusConflict)
 			return
 		}
+		// Hash-cache negotiation: the client declares the chunks it
+		// already holds; verified prefixes are skipped and only the
+		// first uncovered run is returned (same envelope). Fully
+		// covered spans answer 204 with no body. Absent or garbage
+		// declarations behave exactly as before (full range).
+		if have := r.URL.Query().Get("have"); have != "" {
+			mfrom, mthrough, haveAll := ws.MissingRun(from, through, rec.Data, rec.Start, ws.ParseHave(have))
+			if haveAll {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if mfrom > from {
+				// Re-derive the run from the narrowed span so Start/End
+				// and markers stay consistent with the bytes sent.
+				rec, ok = wsHub.Recording(id, mfrom, mthrough)
+				if !ok {
+					http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
+				return
+			}
+				if hasEpoch && rec.Epoch != wantEpoch {
+					http.Error(w, "epoch mismatch", http.StatusConflict)
+					return
+				}
+			}
+		}
 		resizes := make([][3]uint64, 0, len(rec.Resizes))
 		for _, m := range rec.Resizes {
 			resizes = append(resizes, [3]uint64{m.AtSeq, uint64(m.Cols), uint64(m.Rows)})
