@@ -30,7 +30,8 @@ const fsListMaxEntries = 1000
 // tree panel. The requested path is relative to cwd and confined to it —
 // including through symlinks (both sides are EvalSymlinks-resolved before
 // the prefix check, so an in-tree symlink cannot escape the workspace).
-// Inside a git repo, gitignored entries are filtered via gitutil.IgnoredNames;
+// Inside a git repo, gitignored entries are filtered via gitutil.IgnoredNames —
+// except when listing inside an ignored dir itself, which shows everything;
 // outside one, dotfiles are hidden (the /api/fs/autocomplete precedent).
 // `.git` is always hidden. Symlink entries are listed as leaves, never dirs.
 func handleFSList(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +80,20 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 
 	isRepo := gitutil.IsGitRepo(r.Context(), resolved)
 
+	// Listing inside an ignored dir shows everything: the user explicitly
+	// browsed there, so gitignore has nothing left to protect (a png or
+	// pdf dropped in temp/ must be reachable, not just the .md files).
+	// Root-level filtering below is unchanged.
+	insideIgnored := false
+	if isRepo && rel != "" {
+		self, err := gitutil.IgnoredNames(r.Context(), base, []string{filepath.ToSlash(rel) + "/"})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		insideIgnored = self[filepath.ToSlash(rel)+"/"]
+	}
+
 	// Candidates plus the key used for the batched ignore check.
 	type cand struct {
 		entry FSEntry
@@ -110,7 +125,7 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var ignored map[string]bool
-	if isRepo {
+	if isRepo && !insideIgnored {
 		ignored, err = gitutil.IgnoredNames(r.Context(), resolved, checkNames)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
