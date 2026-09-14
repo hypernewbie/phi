@@ -4,6 +4,11 @@ import { gzipSync } from 'node:zlib';
 import { createHeadlessSandbox } from './_xtermHeadless.js';
 
 // SUPERHIGHWAY §1–3: speed-of-light + write-path + batch-framing sweeps.
+// DORMANT BY DESIGN: this file never runs in the default suite
+// (`npx vitest run` skips it). Invoke explicitly when numbers are needed:
+//
+//   PHI_SWEEP=1 npx vitest run test-js/writeSweep.test.js
+//
 // A real headless xterm parses the payloads; the suite reports
 // bytes/sec per payload shape and per write batch size, and asserts the
 // properties that must hold regardless of machine speed:
@@ -108,7 +113,9 @@ beforeAll(() => {
     Terminal = createHeadlessSandbox().Terminal;
 });
 
-describe('write-path sweeps (numbers are data, asserts are guards)', () => {
+describe.skipIf(!process.env.PHI_SWEEP)(
+    'write-path sweeps (numbers are data, asserts are guards)',
+    () => {
     it('§1 speed of light: 1 MiB mixed payload parses correctly + reports ceiling', async () => {
         const { short, long, ansi, mixed } = buildPayloads();
         for (const [name, data] of Object.entries({
