@@ -2159,9 +2159,8 @@ export class TabManager {
             ) {
                 resolve();
             } else {
-                (tabInfo._drainWaiters = tabInfo._drainWaiters || []).push(
-                    resolve,
-                );
+                if (!tabInfo._drainWaiters) tabInfo._drainWaiters = [];
+                tabInfo._drainWaiters.push(resolve);
             }
         });
     }
