@@ -1772,16 +1772,25 @@ export class TabManager {
     // reconnect swaps tabInfo.ws, and releasing a stale socket would flush
     // its orphaned frames into the new stream.
     _bootstrappedRelease(tabInfo, pty, from, head) {
+        // Generation counters serialize overlapping bootstraps on one
+        // socket (a second head while a delta fetch is in flight): only
+        // the newest generation writes or releases; older ones dissolve.
+        // Production sends one head per connection, so this is purely
+        // defensive — but without it a duplicate head would append a
+        // stale delta below newer bytes.
+        const gen = (tabInfo._bootstrapGen ?? 0) + 1;
+        tabInfo._bootstrapGen = gen;
         const boot = (async () => {
             try {
-                await this._bootstrapDelta(tabInfo, from, head);
+                await this._bootstrapDelta(tabInfo, from, head, gen);
             } finally {
-                if (tabInfo._bootstrapGate === boot)
+                if (tabInfo._bootstrapGate === boot) {
                     tabInfo._bootstrapGate = null;
-                if (tabInfo.ws === pty) {
-                    try {
-                        pty.release();
-                    } catch (_e) {}
+                    if (tabInfo.ws === pty) {
+                        try {
+                            pty.release();
+                        } catch (_e) {}
+                    }
                 }
             }
         })();
@@ -1807,12 +1816,13 @@ export class TabManager {
             });
     }
 
-    async _bootstrapDelta(tabInfo, from, head) {
+    async _bootstrapDelta(tabInfo, from, head, expectGen) {
         if (tabInfo.isDead) return;
         // Stale when the socket swapped mid-fetch (reconnect during a slow
         // fetch): the old stream's bytes must not land in the new one, and
         // watermarks must not regress — verify the socket before touching
-        // anything.
+        // anything. Superseded when a newer bootstrap generation exists:
+        // only the newest generation may write.
         const ws = tabInfo.ws;
         const d = await this._fetchRecordingRange(
             tabInfo.paneId,
@@ -1821,6 +1831,8 @@ export class TabManager {
             tabInfo.paneEpoch,
         );
         if (tabInfo.isDead || tabInfo.ws !== ws) return;
+        if (expectGen !== undefined && tabInfo._bootstrapGen !== expectGen)
+            return;
         if (!d || d.start !== from || d.byteLength > HOT_DELTA_LIMIT_BYTES) {
             return;
         }
