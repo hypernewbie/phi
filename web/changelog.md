@@ -2,6 +2,21 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.20.6 — 2026-09-14
+
+### Added
+- **Recording hash-cache negotiation** (`19ff0b3`). Reconnects declare cached recording chunks (`have=start:end:hash`); the server skips verified prefixes and answers 204 when the client already holds the range. Stateless per request, FNV-1a/64 pinned identical in Go and JS.
+- **Mobile-only scrollback setting** (`0cce971`). `mobile_scrollback_rows` shrinks xterm history under the fast-mode gate only (0 = full, server-clamped 500–10000, new tabs). Desktop keeps the full 10000 rows unconditionally.
+- **Write-sweep harness** (`9f35547`, dormant unless `PHI_SWEEP=1`). Headless-xterm throughput per payload shape and batch framing, with a byte-identical-rows corruption guard.
+
+### Fixed
+- **Full live scrollback restored** (`9c82b4b`, `72bdd97`). The 512-row cap hid history behind an overlay; scroll-up shows the full 10000-row buffer again and the sidecar pipeline is removed. Open-path speed comes from the hot-v1 live-only attach plus checkpoint bootstrap, not truncation.
+- **Bootstrap and gap races** (`0e43cea`, `c712f7f`, `70c0731`, `5b183c8`). Ordered delta-before-live release, stale-socket guards, overlapping bootstraps converge on the newest generation, small live gaps heal instead of dropping.
+- **Same-dims fits are free** (`72bdd97`, `cca70da`, `4f27c17`). Unchanged geometry skips reflow, scroll capture, and timers; fresh sockets still get one backend size sync.
+- **Write pump cannot brick** (`dc0ba3b`). A flood-throwing xterm write drops its batch instead of stalling the pump.
+- **Epoch safety for JSON clients** (`4fbc90c`, `f3d6fb5`). Epochs stay inside the double-safe integer range; malformed attach heads redial (`0256cc1`).
+- **Compression pinned on** (`0cce971`). The production upgrader keeps `EnableCompression`; no benchmark gets a vote on the wire format.
+
 ## v0.20.5 — 2026-09-13
 
 ### Fixed
