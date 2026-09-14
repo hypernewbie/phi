@@ -49,6 +49,82 @@ describe('config import fallback', () => {
         },
     );
 
+    it.each([
+        'PHIQUICKCMDS:example',
+        'PHITERMCMDS:example',
+        'PHICMDS:example',
+    ])(
+        'cmds import accepts %s (whatever copy produced)',
+        async (pasted) => {
+            vi.stubGlobal('navigator', { clipboard: undefined });
+            vi.stubGlobal('prompt', vi.fn());
+            const fetch = vi.fn(async () => ({
+                ok: true,
+                text: async () => '',
+            }));
+            vi.stubGlobal('fetch', fetch);
+
+            const button = document.createElement('button');
+            const context = {
+                openConfigEditor: App.prototype.openConfigEditor,
+            };
+            const importing = App.prototype._doImportConfig.call(
+                context,
+                '/api/config/import-cmds',
+                button,
+                ['PHIQUICKCMDS', 'PHITERMCMDS', 'PHICMDS'],
+            );
+
+            const textarea = document.getElementById('config-editor-config');
+            expect(textarea).toBeTruthy();
+            textarea.value = pasted;
+            document.querySelector('.config-editor-footer .btn-accent').click();
+
+            await importing;
+
+            expect(fetch).toHaveBeenCalledWith(
+                '/api/config/import-cmds',
+                expect.objectContaining({
+                    body: JSON.stringify({ config: pasted }),
+                }),
+            );
+        },
+    );
+
+    it('cmds import still rejects an unknown prefix without POSTing', async () => {
+        vi.stubGlobal('navigator', { clipboard: undefined });
+        vi.stubGlobal('prompt', vi.fn());
+        const fetch = vi.fn(async () => ({
+            ok: true,
+            text: async () => '',
+        }));
+        vi.stubGlobal('fetch', fetch);
+        const alert = vi.fn();
+        vi.stubGlobal('alert', alert);
+
+        const button = document.createElement('button');
+        const context = {
+            openConfigEditor: App.prototype.openConfigEditor,
+        };
+        const importing = App.prototype._doImportConfig.call(
+            context,
+            '/api/config/import-cmds',
+            button,
+            ['PHIQUICKCMDS', 'PHITERMCMDS', 'PHICMDS'],
+        );
+
+        const textarea = document.getElementById('config-editor-config');
+        textarea.value = 'PHIBOGUS:example';
+        document.querySelector('.config-editor-footer .btn-accent').click();
+
+        await importing;
+
+        expect(fetch).not.toHaveBeenCalled();
+        expect(alert).toHaveBeenCalledWith(
+            expect.stringContaining('PHIQUICKCMDS'),
+        );
+    });
+
     it('falls back to browser prompt when openConfigEditor is not available', async () => {
         vi.stubGlobal('navigator', { clipboard: undefined });
         const prompt = vi.fn(() => 'PHICONFIG:example');
