@@ -85,17 +85,6 @@ function fmtStamp(value) {
     return fmtClock(t < 1e12 ? t * 1000 : t);
 }
 
-function fmtDur(ms) {
-    const t = Number(ms);
-    if (!Number.isFinite(t) || t < 0) return '—';
-    const s = Math.floor(t / 1000);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m`;
-    return `${s}s`;
-}
-
 function section(title, inner) {
     return (
         `<section class="quota-section"><h4>${escapeHtml(title)}</h4>` +
