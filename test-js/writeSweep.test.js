@@ -34,11 +34,9 @@ function writeAll(term, data) {
 function buildPayloads() {
     const shortLine = (i) => `ok ${String(i).padStart(6, '0')}\r\n`;
     const longLine = (i) =>
-        `L${String(i).padStart(6, '0')} ` + 'x'.repeat(190) + '\r\n';
+        `L${String(i).padStart(6, '0')} ${'x'.repeat(190)}\r\n`;
     const ansiLine = (i) =>
-        `\x1b[1;3${i % 8}m#${String(i).padStart(6, '0')}\x1b[0m ` +
-        `\x1b[38;5;${i % 256}m▓░\x1b[0m progress ${(i * 7) % 100}%\r` +
-        `\x1b[Kdone ${i}\r\n`;
+        `\x1b[1;3${i % 8}m#${String(i).padStart(6, '0')}\x1b[0m \x1b[38;5;${i % 256}m▓░\x1b[0m progress ${(i * 7) % 100}%\r\x1b[Kdone ${i}\r\n`;
     // Array-join, not += with a byteLength check per line (quadratic).
     const grow = (fn) => {
         const parts = [];
@@ -52,13 +50,16 @@ function buildPayloads() {
         return parts.join('');
     };
     const mixed = (() => {
-        let s = '';
+        const parts = [];
+        let bytes = 0;
         let i = 0;
-        while (Buffer.byteLength(s) < TARGET_BYTES) {
-            s += `$ run ${i}\r\n` + shortLine(i) + ansiLine(i) + longLine(i);
+        while (bytes < TARGET_BYTES) {
+            const s = [`$ run ${i}\r\n`, shortLine(i), ansiLine(i), longLine(i)].join('');
+            parts.push(s);
+            bytes += Buffer.byteLength(s);
             i++;
         }
-        return s;
+        return parts.join('');
     })();
     return {
         short: grow(shortLine),
@@ -116,43 +117,49 @@ beforeAll(() => {
 describe.skipIf(!process.env.PHI_SWEEP)(
     'write-path sweeps (numbers are data, asserts are guards)',
     () => {
-    it('§1 speed of light: 1 MiB mixed payload parses correctly + reports ceiling', async () => {
-        const { short, long, ansi, mixed } = buildPayloads();
-        for (const [name, data] of Object.entries({
-            short,
-            long,
-            ansi,
-            mixed,
-        })) {
-            const { ms, text } = await sweep({}, `light-${name}`, data, 0);
-            // Correctness: every payload shape survives the parse intact.
-            expect(text.length).toBeGreaterThan(0);
-            expect(ms).toBeLessThan(CEILING_MS);
-            const ratio = (
-                gzipSync(Buffer.from(data)).byteLength / data.length
-            ).toFixed(3);
-            console.log(
-                `[sweep/light] ${name}: ${fmtMBs(data.length, ms)} ` +
-                    `(${(data.length / 1024).toFixed(0)} KiB in ${ms.toFixed(1)}ms, ` +
-                    `deflate-ratio ${ratio})`,
-            );
-        }
-    });
+        it('§1 speed of light: 1 MiB mixed payload parses correctly + reports ceiling', async () => {
+            const { short, long, ansi, mixed } = buildPayloads();
+            for (const [name, data] of Object.entries({
+                short,
+                long,
+                ansi,
+                mixed,
+            })) {
+                const { ms, text } = await sweep({}, `light-${name}`, data, 0);
+                // Correctness: every payload shape survives the parse intact.
+                expect(text.length).toBeGreaterThan(0);
+                expect(ms).toBeLessThan(CEILING_MS);
+                const ratio = (
+                    gzipSync(Buffer.from(data)).byteLength / data.length
+                ).toFixed(3);
+                console.log(
+                    `[sweep/light] ${name}: ${fmtMBs(data.length, ms)} ` +
+                        `(${(data.length / 1024).toFixed(0)} KiB in ${ms.toFixed(1)}ms, ` +
+                        `deflate-ratio ${ratio})`,
+                );
+            }
+        });
 
-    it('§3 batch framing never corrupts: 4K→1M chunkings render identical rows', async () => {
-        const { mixed } = buildPayloads();
-        const reference = await sweep({}, 'batch-ref', mixed, 0);
-        for (const size of [4096, 16384, 65536, 262144]) {
-            const { ms, text } = await sweep({}, `batch-${size}`, mixed, size);
-            expect(text).toBe(reference.text);
+        it('§3 batch framing never corrupts: 4K→1M chunkings render identical rows', async () => {
+            const { mixed } = buildPayloads();
+            const reference = await sweep({}, 'batch-ref', mixed, 0);
+            for (const size of [4096, 16384, 65536, 262144]) {
+                const { ms, text } = await sweep(
+                    {},
+                    `batch-${size}`,
+                    mixed,
+                    size,
+                );
+                expect(text).toBe(reference.text);
+                console.log(
+                    `[sweep/batch] ${(size / 1024).toFixed(0)}K chunks: ` +
+                        `${fmtMBs(mixed.length, ms)} (${ms.toFixed(1)}ms)`,
+                );
+            }
             console.log(
-                `[sweep/batch] ${(size / 1024).toFixed(0)}K chunks: ` +
-                    `${fmtMBs(mixed.length, ms)} (${ms.toFixed(1)}ms)`,
+                `[sweep/batch] single write: ${fmtMBs(mixed.length, reference.ms)} ` +
+                    `(${reference.ms.toFixed(1)}ms)`,
             );
-        }
-        console.log(
-            `[sweep/batch] single write: ${fmtMBs(mixed.length, reference.ms)} ` +
-                `(${reference.ms.toFixed(1)}ms)`,
-        );
-    });
-});
+        });
+    },
+);
