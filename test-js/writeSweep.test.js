@@ -54,7 +54,12 @@ function buildPayloads() {
         let bytes = 0;
         let i = 0;
         while (bytes < TARGET_BYTES) {
-            const s = [`$ run ${i}\r\n`, shortLine(i), ansiLine(i), longLine(i)].join('');
+            const s = [
+                `$ run ${i}\r\n`,
+                shortLine(i),
+                ansiLine(i),
+                longLine(i),
+            ].join('');
             parts.push(s);
             bytes += Buffer.byteLength(s);
             i++;
