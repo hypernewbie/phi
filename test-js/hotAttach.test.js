@@ -4,7 +4,7 @@ import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 import { PTYWebSocket } from '../web/ws.js';
 
-// Hot-v1 client contract (see temp/TERMPERF.md). These tests pin the
+// Hot-v1 client contract (see temp/SUPERHIGHWAY.md). These tests pin the
 // e2e behavior: fresh attach with checkpoint queues the snapshot and a
 // bounded delta BEFORE open, reconnects resume from the drain watermark
 // without resetting, gap repairs flush in order, and the legacy replay
