@@ -18,11 +18,8 @@ let liveScrollback;
 
 function readLiveScrollback() {
     const src = readFileSync(TERMINAL_JS, 'utf8');
-    const ctorStart = src.indexOf('new window.Terminal({');
-    if (ctorStart < 0) throw new Error('live Terminal ctor not found');
-    const ctorBody = src.slice(ctorStart, src.indexOf('});', ctorStart));
-    const match = ctorBody.match(/scrollback:\s*(\d+)/);
-    if (!match) throw new Error('scrollback option not found in live ctor');
+    const match = src.match(/const LIVE_SCROLLBACK_ROWS = (\d+);/);
+    if (!match) throw new Error('LIVE_SCROLLBACK_ROWS const not found');
     return Number(match[1]);
 }
 

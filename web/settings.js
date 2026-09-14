@@ -179,6 +179,18 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     );
     appGroup.appendChild(termSizeRow);
 
+    // Mobile-only lane: shrinks xterm history under the fast-mode gate
+    // (forced on for mobile viewports). 0 = full history, same as
+    // desktop. Applies to new tabs; existing tabs keep their buffer.
+    const mobileScrollRow = _buildNumberRow(
+        'Mobile scrollback rows (0 = full, new tabs)',
+        'settings-mobile-scrollback',
+        app.mobileScrollbackRows || 0,
+        0,
+        10000,
+    );
+    appGroup.appendChild(mobileScrollRow);
+
     const uploadRow = document.createElement('div');
     uploadRow.className = 'settings-row';
     const uploadLabel = document.createElement('label');
@@ -416,6 +428,22 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         if (!Number.isFinite(n) || n < 8 || n > 32) return;
         app.terminalFontSize = n;
         app.tabManager?.applyTerminalFontSizeToAll(n);
+        app._saveAppearanceLocal();
+        debouncedPersist();
+    });
+    mobileScrollRow.querySelector('input')?.addEventListener('input', (e) => {
+        const raw = e.target.value.trim();
+        // 0/blank = full history (the unset sentinel). Otherwise clamp
+        // to the server range; out-of-range input is ignored, never
+        // half-applied.
+        if (raw === '') {
+            app.mobileScrollbackRows = 0;
+        } else {
+            const n = parseInt(raw, 10);
+            if (!Number.isFinite(n) || n < 0 || n > 10000) return;
+            if (n !== 0 && n < 500) return;
+            app.mobileScrollbackRows = n;
+        }
         app._saveAppearanceLocal();
         debouncedPersist();
     });

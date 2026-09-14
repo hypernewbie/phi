@@ -165,6 +165,39 @@ func TestHandleAppearanceUpdate_ClampsTerminalFontSize(t *testing.T) {
 	}
 }
 
+func TestHandleAppearanceUpdate_ClampsMobileScrollback(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{100, 500},     // below min
+		{499, 500},     // just below min
+		{500, 500},     // at min — unchanged
+		{2000, 2000},   // middle — unchanged
+		{10000, 10000}, // at max — unchanged
+		{99999, 10000}, // above max
+		{0, 0},         // zero (sentinel for full history) — must NOT clamp up
+	}
+	for _, tc := range cases {
+		t.Run("", func(t *testing.T) {
+			withTempConfig(t)
+			body := `{"mobile_scrollback_rows":` + itoaSmall(tc.in) + `}`
+			req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
+				strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handleAppearanceUpdate(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+			}
+			cfg := loadConfig()
+			if cfg.MobileScrollbackRows != tc.want {
+				t.Errorf("rows %d: got %d want %d", tc.in, cfg.MobileScrollbackRows, tc.want)
+			}
+		})
+	}
+}
+
 // TestHandleAppearanceUpdate_RequiresPost — GET/DELETE/etc. all 405.
 func TestHandleAppearanceUpdate_RequiresPost(t *testing.T) {
 	withTempConfig(t)

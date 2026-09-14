@@ -12,19 +12,23 @@ import { join } from 'node:path';
 describe('live scrollback restored', () => {
     const src = readFileSync(join(process.cwd(), 'web', 'terminal.js'), 'utf8');
 
-    it('live terminals are created with scrollback 10000', () => {
-        const all = [...src.matchAll(/scrollback:\s*(\d+)/g)].map((m) =>
-            Number(m[1]),
+    it('live terminals resolve scrollback through the mobile gate', () => {
+        const all = [...src.matchAll(/scrollback:\s*([^,\n]+)/g)].map((m) =>
+            m[1].trim(),
         );
-        expect(all).toContain(10000);
+        expect(all).toContain('this._liveScrollbackRows()');
+        expect(all.some((v) => /^\d+$/.test(v) && Number(v) < 10000)).toBe(
+            false,
+        );
     });
 
-    it('the 512-row cap value is gone from the live constructor', () => {
+    it('no sub-10000 scrollback literal remains anywhere in the live path', () => {
         const ctorStart = src.indexOf('new window.Terminal({');
         expect(ctorStart).toBeGreaterThan(-1);
         const ctorEnd = src.indexOf('});', ctorStart);
         const ctorBody = src.slice(ctorStart, ctorEnd);
         expect(ctorBody).not.toMatch(/scrollback:\s*512\b/);
+        expect(ctorBody).not.toMatch(/scrollback:\s*\d/);
     });
 
     it('no archive sidecar remains in the live terminal', () => {

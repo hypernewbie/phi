@@ -18,16 +18,21 @@ const terminalJsPath = path.join(
 );
 
 describe('xterm scrollback configuration', () => {
-    it('sets an explicit 10000-line scrollback on the Terminal constructor', () => {
+    it('defines one LIVE_SCROLLBACK_ROWS constant at 10000', () => {
+        const src = readFileSync(terminalJsPath, 'utf8');
+        const match = src.match(/const LIVE_SCROLLBACK_ROWS = (\d+);/);
+        expect(match).not.toBeNull();
+        expect(Number(match[1])).toBe(10000);
+    });
+
+    it('creates live terminals from _liveScrollbackRows (mobile gate), not a literal', () => {
         const src = readFileSync(terminalJsPath, 'utf8');
         const ctorStart = src.indexOf('new window.Terminal({');
         expect(ctorStart).toBeGreaterThan(-1);
         const ctorEnd = src.indexOf('});', ctorStart);
         const ctorBody = src.slice(ctorStart, ctorEnd);
-
-        const match = ctorBody.match(/scrollback:\s*(\d+)/);
-        expect(match).not.toBeNull();
-        expect(Number(match[1])).toBe(10000);
+        expect(ctorBody).toContain('scrollback: this._liveScrollbackRows()');
+        expect(ctorBody).not.toMatch(/scrollback:\s*\d/);
     });
 
     it('does not cap the live buffer at the 512-row experiment value', () => {
