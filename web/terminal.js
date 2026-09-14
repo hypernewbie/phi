@@ -7229,7 +7229,7 @@ export class TabManager {
     sendResizeToBackend(tab) {
         if (!tab || tab.isDead) return false;
         const term = tab.term;
-        if (term && term.cols && term.rows && tab.ws) {
+        if (term?.cols && term.rows && tab.ws) {
             return tab.ws.sendResize(term.cols, term.rows) !== false;
         }
         return false;
