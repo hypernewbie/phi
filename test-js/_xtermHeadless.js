@@ -114,8 +114,7 @@ export function createHeadlessSandbox() {
     }
     return {
         Terminal: ctx.exports.Terminal,
-        runSource: (src, filename) =>
-            vm.runInContext(src, ctx, { filename }),
+        runSource: (src, filename) => vm.runInContext(src, ctx, { filename }),
         ctx,
     };
 }
