@@ -1843,7 +1843,7 @@ export class TabManager {
 
     async _onLiveGap(tabInfo, from, to) {
         const pty = tabInfo.ws;
-        if (!pty || pty.mode !== 'hot') return;
+        if (pty?.mode !== 'hot') return;
         // Order with an in-flight bootstrap: the delta must enqueue first,
         // or the patch (newer bytes) lands below it. Stale when the socket
         // swapped mid-fetch: verify identity before touching watermarks.
