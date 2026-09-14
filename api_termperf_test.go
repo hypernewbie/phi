@@ -164,3 +164,58 @@ func TestCheckpointEndpointStoreAndConflict(t *testing.T) {
 }
 
 func itoa(v uint64) string { return strconv.FormatUint(v, 10) }
+
+func TestRecordingHaveNegotiation(t *testing.T) {
+	setupHotHub(t)
+	wsHub.Ingest("pane-have", []byte("0123456789abcdefghij")) // head=20
+
+	get := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/terminals/pane-have/recording"+query, nil)
+		w := httptest.NewRecorder()
+		handleFallback(w, req)
+		return w
+	}
+	spanOf := func(w *httptest.ResponseRecorder) (uint64, uint64, string) {
+		t.Helper()
+		body := w.Body.Bytes()
+		n := binary.BigEndian.Uint32(body[0:4])
+		var hdr ws.RecordingHeaderJSON
+		if err := json.Unmarshal(body[4:4+n], &hdr); err != nil {
+			t.Fatalf("bad header json: %v", err)
+		}
+		return hdr.Start, hdr.End, string(body[4+n:])
+	}
+	have := func(s, e uint64, data string) string {
+		return fmt.Sprintf("%d:%d:%x", s, e, ws.ChunkHash([]byte(data)))
+	}
+
+	// Fully known span: 204, zero bytes.
+	full := have(0, 10, "0123456789") + "," + have(10, 20, "abcdefghij")
+	if w := get("?from=0&through=20&have=" + full); w.Code != http.StatusNoContent {
+		t.Fatalf("all-known should 204, got %d", w.Code)
+	}
+	if w := get("?from=0&through=20&have=" + full); w.Body.Len() != 0 {
+		t.Fatalf("204 must carry no body, got %d bytes", w.Body.Len())
+	}
+
+	// Prefix known: only the suffix travels.
+	w := get("?from=0&through=20&have=" + have(0, 10, "0123456789"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("prefix-known should 200, got %d", w.Code)
+	}
+	if s, e, data := spanOf(w); s != 10 || e != 20 || data != "abcdefghij" {
+		t.Fatalf("span = [%d,%d) %q, want [10,20) suffix", s, e, data)
+	}
+
+	// Wrong hash: treated as unknown, full range resent.
+	w = get("?from=0&through=20&have=" + have(0, 10, "xxxxxxxxxx"))
+	if s, e, data := spanOf(w); s != 0 || e != 20 || data != "0123456789abcdefghij" {
+		t.Fatalf("mismatch span = [%d,%d) %q, want full range", s, e, data)
+	}
+
+	// Garbage declaration: identical to no declaration.
+	w = get("?from=0&through=20&have=garbage!!!")
+	if s, e, _ := spanOf(w); s != 0 || e != 20 {
+		t.Fatalf("garbage-have span = [%d,%d), want full range", s, e)
+	}
+}
