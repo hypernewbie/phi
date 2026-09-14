@@ -888,7 +888,14 @@ export class App {
         const mobile =
             typeof window.matchMedia === 'function' &&
             window.matchMedia(COMPACT_VIEWPORT_QUERY).matches;
-        const on = !!this.config?.fast_mode || mobile;
+        // Third input: the browser's own mobile flag. Catches massive
+        // tablets that are geometrically indistinguishable from desktops.
+        // Chromium-only — Safari/Firefox report undefined, which is falsy,
+        // so unsupported browsers fall back to the geometry/config logic.
+        const deviceMobile =
+            typeof navigator !== 'undefined' &&
+            navigator.userAgentData?.mobile === true;
+        const on = !!this.config?.fast_mode || mobile || deviceMobile;
         document.body.classList.toggle('fast-mode', on);
     }
 
