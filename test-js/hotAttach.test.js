@@ -240,6 +240,27 @@ describe('PTYWebSocket hot-v1 framing', () => {
         expect(pty.liveSeq).toBe(10);
     });
 
+    it('preserves max-safe-integer epochs exactly (server masks to doublesafe)', () => {
+        // Companion to the Go epoch-range gate: the wire carries epochs
+        // as JSON numbers, so the client must not lose low bits on the
+        // way in. MAX_SAFE_INTEGER has every low bit set — the critical
+        // shape. Anything above it is a server bug, not a client one.
+        const data = vi.fn();
+        let seen = null;
+        const pty = new PTYWebSocket('p', data, null, null, null, {
+            onAttachHead: (info) => {
+                seen = info;
+            },
+        });
+        pty.ws.emitAttachHead({
+            epoch: Number.MAX_SAFE_INTEGER,
+            oldest: 0,
+            head: 10,
+        });
+        expect(seen.epoch).toBe(Number.MAX_SAFE_INTEGER);
+        expect(pty.liveSeq).toBe(10);
+    });
+
     it('a malformed ATTACH_HEAD closes so the host reconnects instead of holding forever', () => {
         const data = vi.fn();
         const onClose = vi.fn();
