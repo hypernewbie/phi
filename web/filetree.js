@@ -168,8 +168,7 @@ export class FileTreeManager {
         if (this.expanded.has(rel)) {
             this.expanded.delete(rel);
             let el = row.nextElementSibling;
-            while (el &&
-                el.classList.contains('md-file-row') &&
+            while (el?.classList.contains('md-file-row') &&
                 Number(el.dataset.depth || '0') > depth) {
                 const next = el.nextElementSibling;
                 el.remove();
@@ -213,8 +212,7 @@ export class FileTreeManager {
         // by depth); directly after the folder when it has no children yet.
         let anchor = parentRow;
         let el = parentRow.nextElementSibling;
-        while (el &&
-            el.classList.contains('md-file-row') &&
+        while (el?.classList.contains('md-file-row') &&
             Number(el.dataset.depth || '0') > depth) {
             anchor = el;
             el = el.nextElementSibling;

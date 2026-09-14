@@ -195,8 +195,7 @@ export class FileTreeManager {
             this.expanded.delete(rel);
             let el = row.nextElementSibling;
             while (
-                el &&
-                el.classList.contains('md-file-row') &&
+                el?.classList.contains('md-file-row') &&
                 Number((el as HTMLElement).dataset.depth || '0') > depth
             ) {
                 const next = el.nextElementSibling;
@@ -241,8 +240,7 @@ export class FileTreeManager {
         let anchor: HTMLElement = parentRow;
         let el = parentRow.nextElementSibling as HTMLElement | null;
         while (
-            el &&
-            el.classList.contains('md-file-row') &&
+            el?.classList.contains('md-file-row') &&
             Number(el.dataset.depth || '0') > depth
         ) {
             anchor = el;
