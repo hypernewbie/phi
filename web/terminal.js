@@ -1804,18 +1804,30 @@ export class TabManager {
         // stale delta below newer bytes.
         const gen = (tabInfo._bootstrapGen ?? 0) + 1;
         tabInfo._bootstrapGen = gen;
+        // Release fires after enqueue (ordering) but never waits for
+        // parse; watermarks wait inside _bootstrapDelta instead. Both
+        // callbacks are idempotent, so double-invocation is harmless.
+        const releaseOnce = () => {
+            if (tabInfo._bootstrapGate === boot) {
+                tabInfo._bootstrapGate = null;
+                if (tabInfo.ws === pty) {
+                    try {
+                        pty.release();
+                    } catch (_e) {}
+                }
+            }
+        };
         const boot = (async () => {
             try {
-                await this._bootstrapDelta(tabInfo, from, head, gen);
+                await this._bootstrapDelta(
+                    tabInfo,
+                    from,
+                    head,
+                    gen,
+                    releaseOnce,
+                );
             } finally {
-                if (tabInfo._bootstrapGate === boot) {
-                    tabInfo._bootstrapGate = null;
-                    if (tabInfo.ws === pty) {
-                        try {
-                            pty.release();
-                        } catch (_e) {}
-                    }
-                }
+                releaseOnce();
             }
         })();
         tabInfo._bootstrapGate = boot;
@@ -1840,7 +1852,7 @@ export class TabManager {
             });
     }
 
-    async _bootstrapDelta(tabInfo, from, head, expectGen) {
+    async _bootstrapDelta(tabInfo, from, head, expectGen, onEnqueued) {
         if (tabInfo.isDead) return;
         // Stale when the socket swapped mid-fetch (reconnect during a slow
         // fetch): the old stream's bytes must not land in the new one, and
@@ -1861,8 +1873,22 @@ export class TabManager {
             return;
         }
         this.writeToTerminal(tabInfo, d.text);
-        tabInfo.queuedSeq = head;
-        tabInfo.drainedSeq = head;
+        if (onEnqueued) onEnqueued();
+        // Watermarks advance only on actual queue drain (proving xterm
+        // parsed the delta), never on enqueue. Quiet tabs with nothing
+        // newer set both to head here; busy tabs advance naturally via
+        // the drain path once the gate clears.
+        await this._drainSettled(tabInfo);
+        if (
+            tabInfo.isDead ||
+            tabInfo.ws !== ws ||
+            (expectGen !== undefined && tabInfo._bootstrapGen !== expectGen)
+        )
+            return;
+        if ((tabInfo.queuedSeq ?? 0) <= head) {
+            tabInfo.queuedSeq = head;
+            tabInfo.drainedSeq = head;
+        }
     }
 
     async _onLiveGap(tabInfo, from, to) {
@@ -1878,6 +1904,11 @@ export class TabManager {
             await gate.catch(() => {});
             if (tabInfo.isDead || tabInfo.ws !== pty) return;
         }
+        // The wait may have outlived the hole: a flush-stop re-fire (or
+        // another patch) can advance past `from` while this event waits.
+        // liveSeq only moves forward, so from < liveSeq means this range
+        // is covered — the remainder, if any, re-fires on its own.
+        if (from < pty.liveSeq) return;
         const bootGen = tabInfo._bootstrapGen;
         // One gap fetch per tab at a time. Concurrent onGap events
         // describe overlapping ranges of the same hole; letting two
@@ -2102,9 +2133,50 @@ export class TabManager {
         }
     }
 
+    // Resolves bootstrap watermark waiters. Called wherever the pump
+    // reaches quiescence (callback tail with an empty buffer, early
+    // returns); resolving is always safe because every waiter owner
+    // re-verifies socket, generation, and death before touching state.
+    _runDrainWaiters(tabInfo) {
+        const waiters = tabInfo._drainWaiters;
+        if (!waiters || waiters.length === 0) return;
+        tabInfo._drainWaiters = [];
+        for (const resolve of waiters) {
+            try {
+                resolve();
+            } catch (_e) {}
+        }
+    }
+
+    // Resolves once the write queue drains past everything enqueued so
+    // far — proving xterm parsed it — or immediately when already
+    // quiescent or dead.
+    _drainSettled(tabInfo) {
+        return new Promise((resolve) => {
+            if (
+                tabInfo.isDead ||
+                (!tabInfo.writePending && tabInfo.writeBuffer.length === 0)
+            ) {
+                resolve();
+            } else {
+                (tabInfo._drainWaiters = tabInfo._drainWaiters || []).push(
+                    resolve,
+                );
+            }
+        });
+    }
+
     _flushTerminalWrite(tabInfo) {
-        if (tabInfo.writePending || tabInfo.isDead) return;
-        if (tabInfo.writeBuffer.length === 0) return;
+        if (tabInfo.writePending) return;
+        // Quiescence runs drain waiters (bootstrap watermarks): every
+        // byte enqueued so far is parsed at this point — the pump is
+        // strictly FIFO and a pending batch would still be flagged above.
+        // Owners re-verify state after awaiting, so resolving here is
+        // always safe, including on dead tabs.
+        if (tabInfo.isDead || tabInfo.writeBuffer.length === 0) {
+            this._runDrainWaiters(tabInfo);
+            return;
+        }
 
         // Capture follow state before xterm grows the buffer. This is the same
         // strict predicate used by the scroll-to-bottom button.
@@ -2129,6 +2201,13 @@ export class TabManager {
             tabInfo.term.write(data, () => {
                 termPerfMeasureSince('write-batch', _writeT0);
                 tabInfo.writePending = false;
+                // Quiescence (nothing left unparsed) resolves watermark
+                // waiters: their bytes were enqueued before this point and
+                // the pump is strictly FIFO. Runs before the tail recurse
+                // so waiters observe parsed state even when more output
+                // arrived meanwhile.
+                if (tabInfo.writeBuffer.length === 0)
+                    this._runDrainWaiters(tabInfo);
                 if (tabInfo.isDead) {
                     tabInfo.writeBuffer = '';
                     return;
