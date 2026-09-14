@@ -298,8 +298,11 @@ describe('style.css terminal-first side panels', () => {
         expect(m, 'constrained Sessions media block not found').toBeTruthy();
         const prelude = m[0].slice(0, m[0].indexOf('{'));
         // Portrait-tall windows drawer at any width via the aspect leg.
-        expect(prelude).toContain('(min-width: 1024px)');
-        expect(prelude).toContain('(max-aspect-ratio: 10/11)');
+        // Whitespace-insensitive: the formatter spaces the ratio as
+        // `10 / 11`, which is identical CSS.
+        const flat = prelude.replace(/\s+/g, '');
+        expect(flat).toContain('(min-width:1024px)');
+        expect(flat).toContain('(max-aspect-ratio:10/11)');
         const block = m[0];
         expect(block).toMatch(/#left-resize-handle\s*\{[^}]*display:\s*none/);
         expect(block).toMatch(/\.mobile-only-btn\s*\{[^}]*display:\s*flex/);
