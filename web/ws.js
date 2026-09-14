@@ -27,6 +27,17 @@ export class PTYWebSocket {
     url;
     ws;
     decoder;
+    /** Fire-and-forget host callback: a throwing or rejecting host must
+     * never break the socket pump. (Hosts are async, so the promise is
+     * observed here and nowhere else.) */
+    _notify(fn, ...args) {
+        if (typeof fn !== 'function')
+            return;
+        try {
+            Promise.resolve(fn(...args)).catch(() => { });
+        }
+        catch (_e) { }
+    }
     // hot-v1 state. mode is 'hot' after an 0x08 frame arrives, 'legacy'
     // after any legacy frame (old servers ignore term_proto), and
     // 'unknown' until the first frame decides.
@@ -180,8 +191,7 @@ export class PTYWebSocket {
                 ansi: new TextDecoder().decode(parsed.extra),
             };
         }
-        if (this.onAttachHead)
-            this.onAttachHead({ epoch, oldest, head, ckpt });
+        this._notify(this.onAttachHead, { epoch, oldest, head, ckpt });
     }
     _handleLiveOutput(payload) {
         if (this.mode !== 'hot' || this.liveSeq === undefined)
@@ -202,8 +212,7 @@ export class PTYWebSocket {
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
             this.held.push({ start, bytes });
-            if (this.onGap)
-                this.onGap(this.liveSeq, start);
+            this._notify(this.onGap, this.liveSeq, start);
             return;
         }
         if (this.holding) {
@@ -240,8 +249,7 @@ export class PTYWebSocket {
                 // held, and ask the host to patch the missing range.
                 // Delivering across it would skip bytes silently.
                 this.held = frames.slice(i);
-                if (this.onGap)
-                    this.onGap(this.liveSeq, start);
+                this._notify(this.onGap, this.liveSeq, start);
                 return;
             }
             this._deliver(start, bytes);
@@ -284,15 +292,19 @@ export class PTYWebSocket {
         this.ws.send(buffer);
         return true;
     }
+    // Reports whether the resize actually went out: callers that must
+    // not lose an unsent sizing (first-fit backend sync) gate retries
+    // on this. A not-open socket is a quiet false, never a throw.
     sendResize(cols, rows) {
         if (this.ws.readyState !== WebSocket.OPEN)
-            return;
+            return false;
         const buffer = new ArrayBuffer(5);
         const view = new DataView(buffer);
         view.setUint8(0, 0x02); // 0x02: Resize command
         view.setUint16(1, cols, false); // big-endian
         view.setUint16(3, rows, false); // big-endian
         this.ws.send(buffer);
+        return true;
     }
     close() {
         this.ws.close();
