@@ -135,9 +135,12 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 		}
 	}
 
-	// Inside an ignored dir: non-md files stay filtered, .md shows.
+	// Inside an ignored dir everything lists — the user browsed there
+	// explicitly, so gitignore filtering stops at the door.
 	mustWriteFile(t, filepath.Join(dir, "build", "out.js"), "x")
 	mustWriteFile(t, filepath.Join(dir, "build", "notes.md"), "x")
+	mustWriteFile(t, filepath.Join(dir, "build", "shot.png"), "x")
+	mustWriteFile(t, filepath.Join(dir, "build", "doc.pdf"), "x")
 	w = httptest.NewRecorder()
 	handleFSList(w, fsListRequest(dir, "build"))
 	if w.Code != http.StatusOK {
@@ -148,11 +151,10 @@ func TestHandleFSList_RepoFiltering(t *testing.T) {
 	for _, e := range sub.Entries {
 		subNames[e.Name] = true
 	}
-	if !subNames["notes.md"] {
-		t.Errorf("expected notes.md inside ignored dir, entries=%+v", sub.Entries)
-	}
-	if subNames["out.js"] {
-		t.Errorf("expected out.js filtered inside ignored dir, entries=%+v", sub.Entries)
+	for _, want := range []string{"notes.md", "out.js", "shot.png", "doc.pdf"} {
+		if !subNames[want] {
+			t.Errorf("expected %q inside ignored dir, entries=%+v", want, sub.Entries)
+		}
 	}
 }
 
