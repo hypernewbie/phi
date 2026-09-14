@@ -1578,18 +1578,23 @@ export class App {
     async _doImportConfig(url, btnElement, prefix, onCompleted) {
         try {
             if (btnElement) btnElement.classList.add('loading');
+            // Cmds were split (quick vs terminal) with three accepted
+            // prefixes; every other config has exactly one. Normalize so
+            // the paste gate below accepts whatever the server accepts.
+            const prefixes = Array.isArray(prefix) ? prefix : [prefix];
+            const prefixHint = prefixes.map((p) => `${p}:`).join(' / ');
 
             const openPasteDialog = async () => {
                 if (typeof this.openConfigEditor === 'function') {
                     const values = await this.openConfigEditor({
                         title: 'Paste config',
-                        subtitle: `Paste a config string starting with ${prefix}:`,
+                        subtitle: `Paste a config string starting with ${prefixHint}`,
                         fields: [
                             {
                                 id: 'config',
                                 label: 'Config',
                                 multiline: true,
-                                placeholder: `${prefix}:...`,
+                                placeholder: `${prefixes[0]}:...`,
                             },
                         ],
                         submitLabel: 'Import',
@@ -1598,7 +1603,7 @@ export class App {
                 }
                 return typeof prompt === 'function'
                     ? prompt(
-                          `Paste your config string here (starts with ${prefix}:):`,
+                          `Paste your config string here (starts with ${prefixHint}):`,
                       ) || ''
                     : '';
             };
@@ -1628,7 +1633,7 @@ export class App {
 
             // Fallback for single quick command / array of commands JSON
             if (
-                prefix === 'PHICMDS' &&
+                prefixes.includes('PHICMDS') &&
                 (configText.startsWith('{') || configText.startsWith('['))
             ) {
                 try {
@@ -1710,9 +1715,9 @@ export class App {
                 }
             }
 
-            if (!configText.startsWith(`${prefix}:`)) {
+            if (!prefixes.some((p) => configText.startsWith(`${p}:`))) {
                 throw new Error(
-                    `Invalid format. Config must start with ${prefix}:`,
+                    `Invalid format. Config must start with ${prefixHint}`,
                 );
             }
 
@@ -1830,10 +1835,12 @@ export class App {
     }
 
     async importCmdsConfig(btnElement) {
+        // Mirrors the server's accepted set in handleConfigImportCmds:
+        // fresh exports use the split prefixes, old ones the legacy.
         await this._doImportConfig(
             '/api/config/import-cmds',
             btnElement,
-            'PHICMDS',
+            ['PHIQUICKCMDS', 'PHITERMCMDS', 'PHICMDS'],
             async () => {
                 await this.sessionsManager.loadConfig();
             },
