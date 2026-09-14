@@ -1,5 +1,7 @@
 /* Φ phi — Binary WebSocket Client */
 
+import { resolveServerHost } from './util.js';
+
 // A loose shape for inbound control JSON. The wire schema is small
 // but not formally typed on the server; consumers pattern-match
 // against msg.type to discriminate ('pty-exited', 'server-shutdown',
@@ -64,6 +66,9 @@ export interface AttachHeadInfo {
 
 export interface PTYWebSocketOptions {
     hot?: boolean;
+    // Explicit per-socket hostname override; blank/omitted follows the
+    // module default (setServerHostOverride) or the page host.
+    serverHost?: string;
     onAttachHead?: (info: AttachHeadInfo) => void;
     onGap?: (from: number, to: number) => void;
 }
@@ -148,7 +153,7 @@ export class PTYWebSocket {
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.url = `${protocol}//${window.location.host}/ws/pane/${paneId}?term_proto=hot-v1`;
+        this.url = `${protocol}//${resolveServerHost(opts?.serverHost)}/ws/pane/${paneId}?term_proto=hot-v1`;
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');

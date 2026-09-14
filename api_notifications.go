@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -271,10 +270,7 @@ func handleTestSimplepush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Simplepush Key is required", http.StatusBadRequest)
 		return
 	}
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "localhost"
-	}
+	host := reportedHostname(cfg)
 	emoji := themeEmoji(cfg.ThemeColor)
 	title := fmt.Sprintf("[phi] Test Alert @ %s %s", host, emoji)
 	msg := fmt.Sprintf("🚀 Test notification from Phi!\n🎨 Active Theme: %s %s\n💻 Host: %s", cfg.ThemeColor, emoji, host)

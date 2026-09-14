@@ -1,4 +1,4 @@
-import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, } from './util.js';
+import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 export function normalizePath(p) {
@@ -246,6 +246,13 @@ export class SessionsManager {
                     data.terminal_font_family) || '';
             this.app.terminalFontSize =
                 Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
+            // Alternate socket hostname (blank = page host). Local value
+            // wins, server is the fallback; applied to the shared default
+            // before any socket connects.
+            this.app.hostnameOverride =
+                (ls?.hostname_override ?? data.hostname_override) ||
+                    '';
+            setServerHostOverride(this.app.hostnameOverride);
             this.app.customFontName = ls?.custom_font_name || '';
             this.app.applyUIFont?.();
             await this.app.loadCustomFont?.();

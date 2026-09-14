@@ -56,6 +56,13 @@ type Config struct {
 	TerminalFontFamily string `json:"terminal_font_family,omitempty"`
 	TerminalFontSize   int    `json:"terminal_font_size,omitempty"`
 
+	// HostnameOverride replaces the page host in socket URLs. Blank
+	// (default, backwards compatible) means location.host. Persisted so
+	// devices share it; each browser's localStorage still wins locally.
+	// It is also the machine identity the backend reports (config
+	// payload, status dump, push titles) — see reportedHostname.
+	HostnameOverride string `json:"hostname_override,omitempty"`
+
 	// MobileScrollbackRows shrinks xterm history on mobile ONLY (the
 	// fast-mode gate, forced on for mobile viewports). 0/unset means
 	// full history, same as desktop. Desktop never reads this field.
@@ -165,6 +172,50 @@ func configFilePath() string {
 			"testConfigPath.")
 	}
 	return expandHome("~/.phi/config.json")
+}
+
+// overrideHostPart reduces a sanitized hostname_override value to the
+// bare host for identity reporting (config payload, status dump, push
+// titles). The stored value is host or host:port — validated by
+// sanitizeHostnameOverride — so only a trailing :digits port is cut.
+// Bracketed IPv6 keeps its brackets; unbracketed colons can't occur.
+func overrideHostPart(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "[") {
+		if i := strings.IndexByte(v, ']'); i > 0 {
+			return v[:i+1]
+		}
+		return v
+	}
+	if i := strings.LastIndexByte(v, ':'); i >= 0 {
+		rest := v[i+1:]
+		allDigits := len(rest) > 0
+		for j := 0; j < len(rest); j++ {
+			if rest[j] < '0' || rest[j] > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return v[:i]
+		}
+	}
+	return v
+}
+
+// reportedHostname is the machine identity the backend stamps on
+// everything it emits: the config payload's hostname field, the
+// startup status dump, idle/push notification titles. A set
+// HostnameOverride wins (port stripped); blank falls back to the OS
+// hostname, then localhost. One name everywhere, no drift.
+func reportedHostname(cfg Config) string {
+	if h := overrideHostPart(cfg.HostnameOverride); h != "" {
+		return h
+	}
+	if h, _ := os.Hostname(); h != "" {
+		return h
+	}
+	return "localhost"
 }
 
 func loadConfig() Config {

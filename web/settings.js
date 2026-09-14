@@ -1,4 +1,4 @@
-import { displayHostname } from './util.js';
+import { displayHostname, setServerHostOverride } from './util.js';
 import { setAccessPassword, clearAccessPassword } from './auth.js';
 import { tryNative } from './desktop.js';
 
@@ -215,6 +215,32 @@ export function openSettingsModal(app, accentColors, opts = {}) {
 
     const behGroup = _buildSettingsGroup('Behavior');
     body.appendChild(behGroup);
+    // Alternate server hostname for socket URLs. Blank (default) means
+    // the page host — fully backwards compatible. Applies to sockets
+    // opened after the change; live sockets stay put.
+    const hostRow = document.createElement('div');
+    hostRow.className = 'settings-row';
+    const hostLabel = document.createElement('label');
+    hostLabel.htmlFor = 'settings-hostname-override';
+    hostLabel.textContent = 'Server hostname override (blank = current)';
+    hostLabel.title =
+        'Host[:port] used for terminal socket URLs. Blank means the page host.';
+    hostRow.appendChild(hostLabel);
+    const hostInput = document.createElement('input');
+    hostInput.type = 'text';
+    hostInput.id = 'settings-hostname-override';
+    hostInput.placeholder = window.location.host;
+    hostInput.value = app.hostnameOverride || '';
+    hostInput.autocomplete = 'off';
+    hostInput.spellcheck = false;
+    hostRow.appendChild(hostInput);
+    behGroup.appendChild(hostRow);
+    hostInput.addEventListener('input', () => {
+        app.hostnameOverride = hostInput.value.trim();
+        setServerHostOverride(app.hostnameOverride);
+        app._saveAppearanceLocal();
+        debouncedPersist();
+    });
     const hiddenRow = _buildCheckboxRow(
         'Use separate hidden terminal for commands',
         'settings-use-hidden-terminal',

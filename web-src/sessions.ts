@@ -6,6 +6,7 @@ import {
     worktreeGlyph,
     displayHostname,
     isCompactViewport,
+    setServerHostOverride,
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
@@ -300,6 +301,13 @@ export class SessionsManager {
                     data.terminal_font_family) as string) || '';
             this.app.terminalFontSize =
                 Number(ls?.terminal_font_size ?? data.terminal_font_size) || 0;
+            // Alternate socket hostname (blank = page host). Local value
+            // wins, server is the fallback; applied to the shared default
+            // before any socket connects.
+            this.app.hostnameOverride =
+                ((ls?.hostname_override ?? data.hostname_override) as string) ||
+                '';
+            setServerHostOverride(this.app.hostnameOverride);
             this.app.customFontName = (ls?.custom_font_name as string) || '';
             this.app.applyUIFont?.();
             await this.app.loadCustomFont?.();

@@ -1671,6 +1671,7 @@ export class TabManager {
     _hotOptions(tabInfo) {
         return {
             hot: true,
+            serverHost: this.app?.hostnameOverride,
             onAttachHead: (info) => this._onAttachHead(tabInfo, info),
             onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
         };

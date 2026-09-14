@@ -1,5 +1,43 @@
 /* Φ phi — pure, framework-free helpers (unit-tested in test-js/) */
 
+// Server-host override for WebSocket URLs. Blank (the default) means
+// "same host as the page" — fully backwards compatible. Set once at app
+// boot (and on settings change) via setServerHostOverride; resolveServerHost
+// is the single choke point every socket constructor uses, so an explicit
+// per-socket value always wins and everything else follows the default.
+let defaultServerHostOverride = '';
+
+export function setServerHostOverride(host: string | null | undefined): void {
+    defaultServerHostOverride = host || '';
+}
+
+// Sanitizes a hostname override to `host` or `host:port` (brackets for
+// IPv6 literals). Anything else — scheme leftovers, paths, queries,
+// userinfo, garbage — fails safe to window.location.host, never to ''.
+// Pure over its input except the documented location.host fallback, so
+// it is unit-testable with explicit values.
+export function resolveServerHost(override?: string | null): string {
+    const fallback =
+        typeof window !== 'undefined' && window.location?.host
+            ? window.location.host
+            : '';
+    // Blank (including explicit '') defers: module default, then page.
+    const raw = (override || defaultServerHostOverride || '').trim();
+    if (!raw) return fallback;
+    const noScheme = raw.replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, '');
+    const hostPort = noScheme.split(/[/?#]/, 1)[0].replace(/:+$/, '');
+    if (
+        hostPort.length === 0 ||
+        hostPort.length > 253 ||
+        !/^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)(:\d{1,5})?$/.test(
+            hostPort,
+        )
+    ) {
+        return fallback;
+    }
+    return hostPort;
+}
+
 // A Vikunja kanban bucket shape. The runtime narrows `is_done` with
 // `bucket.is_done === true` rather than a truthy check, so the field
 // can be unknown (string, number, bool at the wire). We type it as

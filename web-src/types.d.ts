@@ -40,6 +40,8 @@ export interface AppLike {
     uiFontSize?: number;
     terminalFontFamily?: string;
     terminalFontSize?: number;
+    // Alternate server hostname for socket URLs (blank = page host).
+    hostnameOverride?: string;
     customFontName?: string;
     loadCustomFont?: () => Promise<void>;
     openConfigEditor?: (...args: any[]) => Promise<any>;
