@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,60 @@ func TestHandleAppearanceUpdate_ClampsTerminalFontSize(t *testing.T) {
 	}
 }
 
+func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
+	// Shared vectors with test-js/hostOverride.test.js: both sides must
+	// accept the same values.
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`example.com:8080`, `example.com:8080`},
+		{`https://example.com:8080/path`, `example.com:8080`},
+		{`[::1]:9000`, `[::1]:9000`},
+		{``, ``}, // blank clears back to page-host default
+	}
+	for _, tc := range cases {
+		t.Run("", func(t *testing.T) {
+			withTempConfig(t)
+			body := `{"hostname_override":` + strconv.Quote(tc.in) + `}`
+			req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
+				strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handleAppearanceUpdate(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+			}
+			if cfg := loadConfig(); cfg.HostnameOverride != tc.want {
+				t.Errorf("in %q: got %q want %q", tc.in, cfg.HostnameOverride, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleAppearanceUpdate_HostnameOverrideRejectsGarbage(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+	cfg.HostnameOverride = "example.com:8080"
+	saveConfig(cfg)
+	for _, bad := range []string{`not a host!`, `user@example.com`, `example.com:abc`, `-leading-dash.com`, `[]`} {
+		body := `{"hostname_override":` + strconv.Quote(bad) + `}`
+		req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
+			strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handleAppearanceUpdate(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("in %q: status %d", bad, w.Code)
+		}
+		// Garbage leaves the stored value unchanged: a typo can never
+		// brick connectivity.
+		if got := loadConfig().HostnameOverride; got != "example.com:8080" {
+			t.Errorf("in %q: stored value changed to %q", bad, got)
+		}
+	}
+}
+
 func TestHandleAppearanceUpdate_ClampsMobileScrollback(t *testing.T) {
 	cases := []struct {
 		in   int
@@ -292,4 +347,56 @@ func itoaSmall(n int) string {
 // readFile is a thin wrapper for test readability.
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func TestReportedHostname(t *testing.T) {
+	// Pure function on the Config value — no disk touch, so no
+	// withTempConfig needed.
+	osHost, _ := os.Hostname()
+	if osHost == "" {
+		osHost = "localhost"
+	}
+	cases := []struct {
+		name     string
+		override string
+		want     string
+	}{
+		{"blank falls back to OS hostname", "", osHost},
+		{"override wins over OS hostname", "example.com", "example.com"},
+		{"override port stripped for identity", "example.com:8080", "example.com"},
+		{"bracketed IPv6 keeps brackets, port stripped", "[::1]:9000", "[::1]"},
+		{"whitespace-only override falls back", "   ", osHost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reportedHostname(Config{HostnameOverride: tc.override}); got != tc.want {
+				t.Errorf("override %q: got %q want %q", tc.override, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleConfig_ReportsOverrideHostname(t *testing.T) {
+	withTempConfig(t)
+	cfg := loadConfig()
+	cfg.HostnameOverride = "example.com:8080"
+	saveConfig(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	handleConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Identity field reports the override (uppercased, like before);
+	// the raw override rides separately for the settings input.
+	if body["hostname"] != "EXAMPLE.COM" {
+		t.Errorf("hostname: got %v want EXAMPLE.COM", body["hostname"])
+	}
+	if body["hostname_override"] != "example.com:8080" {
+		t.Errorf("hostname_override: got %v", body["hostname_override"])
+	}
 }

@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION } from './constants.js';
+import { resolveServerHost } from '../util.js';
 export const ControlCallTimeout = 35_000;
 // Compaction runs a summary LLM call; Pi answers only when it finishes. The
 // client stays awake slightly past the server's CompactOperationTimeout so
@@ -10,7 +11,7 @@ function controlError(message) {
 /** Opens /ws/control, performs the hello handshake, and correlates calls. */
 export function connectControl() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws/control`);
+    const ws = new WebSocket(`${proto}://${resolveServerHost()}/ws/control`);
     const listeners = [];
     const outbox = [];
     const pending = new Map();

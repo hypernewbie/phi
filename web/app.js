@@ -16,6 +16,7 @@ import {
     SIDEBAR_PANEL_CAP,
     DIFF_PANEL_CAP,
     clampPanelWidth,
+    setServerHostOverride,
 } from './util.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
@@ -41,6 +42,10 @@ export class App {
         this.uiFontSize = 0;
         this.terminalFontFamily = '';
         this.terminalFontSize = 0;
+        this.mobileScrollbackRows = 0;
+        // Alternate server hostname for socket URLs. Blank (default)
+        // means the page host — fully backwards compatible.
+        this.hostnameOverride = '';
         this.customFontName = '';
         this.accessAuthEnabled = false;
 
@@ -922,6 +927,7 @@ export class App {
                     terminal_font_family: this.terminalFontFamily || '',
                     terminal_font_size: this.terminalFontSize || 0,
                     mobile_scrollback_rows: this.mobileScrollbackRows || 0,
+                    hostname_override: this.hostnameOverride || '',
                     custom_font_name: this.customFontName || '',
                 }),
             );
@@ -1050,6 +1056,7 @@ export class App {
                     terminal_font_family: this.terminalFontFamily || '',
                     terminal_font_size: this.terminalFontSize || 0,
                     mobile_scrollback_rows: this.mobileScrollbackRows || 0,
+                    hostname_override: this.hostnameOverride || '',
                 }),
             });
         } catch (e) {
@@ -1082,6 +1089,8 @@ export class App {
                     this.terminalFontSize = Number(ls?.terminal_font_size) || 0;
                     this.mobileScrollbackRows =
                         Number(ls?.mobile_scrollback_rows) || 0;
+                    this.hostnameOverride = ls?.hostname_override || '';
+                    setServerHostOverride(this.hostnameOverride);
                     this.customFontName = ls?.custom_font_name || '';
                     this.applyUIFont?.();
                     this.tabManager?.applyFontToAllActiveTerminals?.(

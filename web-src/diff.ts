@@ -1489,6 +1489,8 @@ export class DiffController {
                     // Closed natively on git exit
                     console.log(`[diff] Stream finished for ${this.activeTab}`);
                 },
+                null,
+                { serverHost: this.app?.hostnameOverride },
             );
 
             // Send initial resize structure after socket gets active

@@ -147,10 +147,7 @@ func main() {
 	}
 	ptyManager.StartIdleWatcher(func(info pty.IdleNotification) {
 		cfg := loadConfig()
-		host, _ := os.Hostname()
-		if host == "" {
-			host = "localhost"
-		}
+		host := reportedHostname(cfg)
 
 		projName := filepath.Base(info.Workspace)
 		if projName == "." || projName == "" || projName == "/" || projName == "\\" {
@@ -542,10 +539,7 @@ func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
 	fmt.Printf("%s / ____/ / / // /%s\n", colorEsc, resetEsc)
 	fmt.Printf("%s/_/   /_/ /_//_/%s   %sControl Center for AI Coding%s\n\n", colorEsc, resetEsc, boldEsc, resetEsc)
 
-	host, _ := os.Hostname()
-	if host == "" {
-		host = "localhost"
-	}
+	host := reportedHostname(cfg)
 
 	fmt.Printf("%s── Status Dump ──────────────────────────────────────────%s\n", dimEsc, resetEsc)
 	fmt.Printf("  %sCWD:%s          %s\n", colorEsc, resetEsc, activeCWD)
