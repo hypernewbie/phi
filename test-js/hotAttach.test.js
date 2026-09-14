@@ -228,6 +228,50 @@ describe('PTYWebSocket hot-v1 framing', () => {
         expect(pty.liveSeq).toBe(112);
     });
 
+    it('gap patch seq accounting uses raw byte length, not text length', () => {
+        // Invalid UTF-8 re-encoded would be 6 bytes for 2 raw bytes and
+        // drift liveSeq by 4, misaligning every frame after it.
+        const data = vi.fn();
+        const pty = new PTYWebSocket('p', data, null, null, null, {});
+        pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 100 });
+        pty.release();
+        pty.applyGapPatch(new Uint8Array([0xff, 0xfe]));
+        expect(pty.liveSeq).toBe(102);
+        expect(pty.lastFrameEnd).toBe(102);
+    });
+
+    it('a rejecting gap host cannot break the socket pump', async () => {
+        const data = vi.fn();
+        const onGap = vi.fn(async () => {
+            throw new Error('host boom');
+        });
+        const pty = new PTYWebSocket('p', data, null, null, null, { onGap });
+        pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 });
+        pty.release();
+        pty.ws.emitHot(0, 'a');
+        pty.ws.emitHot(5, 'fghi'); // gap 1..5, host rejects
+        expect(onGap).toHaveBeenCalledWith(1, 5);
+        await new Promise((r) => setTimeout(r, 10));
+        // Rejection observed internally: no unhandled error fails the run,
+        // and the stream is intact for a later healthy patch.
+        expect(data.mock.calls[0]).toEqual(['a']);
+        expect(pty.liveSeq).toBe(1);
+    });
+
+    it('a throwing attach host cannot break the socket pump', () => {
+        const data = vi.fn();
+        const onAttachHead = vi.fn(() => {
+            throw new Error('host boom');
+        });
+        const pty = new PTYWebSocket('p', data, null, null, null, {
+            onAttachHead,
+        });
+        expect(() =>
+            pty.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 0 }),
+        ).not.toThrow();
+        expect(onAttachHead).toHaveBeenCalled();
+    });
+
     it('abandonGap skips the range and keeps live contiguous', () => {
         const data = vi.fn();
         const pty = new PTYWebSocket('p', data, null, null, null, {});

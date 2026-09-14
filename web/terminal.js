@@ -1503,8 +1503,12 @@ export class TabManager {
             for (let round = 0; round < REC_CACHE_ROUNDS; round++) {
                 if (cursor >= through) break;
                 const have = this._recHave(paneId, epoch, cursor, through);
+                // Epoch scopes the read server-side too: a pane rebirth
+                // between our attach and this fetch must 409, never serve
+                // another lifetime's bytes into this stream.
+                const epochParam = epoch !== undefined ? `&epoch=${epoch}` : '';
                 const res = await fetch(
-                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${have ? `&have=${have}` : ''}`,
+                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${have ? `&have=${have}` : ''}${epochParam}`,
                     { cache: 'no-store', signal },
                 );
                 if (res.status === 204) {
@@ -1694,13 +1698,26 @@ export class TabManager {
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
             tabInfo.queuedSeq = info.head;
-            tabInfo.drainedSeq = info.head;
-            this._openTermAndViewport(tabInfo);
+            // drainedSeq is the honestly-rendered frontier: the checkpoint
+            // covers exactly [.., through), so it starts there — not at
+            // head. Claiming head now would let a checkpoint upload vouch
+            // for bytes the delta has not delivered yet.
             const from = info.ckpt
                 ? info.ckpt.through
                 : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+            tabInfo.drainedSeq = from;
+            this._openTermAndViewport(tabInfo);
             if (info.head > from) {
-                this._bootstrappedRelease(tabInfo, pty, from, info.head);
+                if (info.head - from <= HOT_DELTA_LIMIT_BYTES) {
+                    this._bootstrappedRelease(tabInfo, pty, from, info.head);
+                } else {
+                    // Stale checkpoint: the delta is too large to replay
+                    // live, and downloading it just to drop it burns the
+                    // slowest links. Start live at the attach boundary and
+                    // nudge a redraw so the stale screen repaints now.
+                    pty.release();
+                    this._nudgeRedraw(tabInfo);
+                }
             } else {
                 pty.release();
             }
@@ -1749,12 +1766,19 @@ export class TabManager {
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
         tabInfo.queuedSeq = info.head;
-        tabInfo.drainedSeq = info.head;
+        // Honest frontier as in the fresh branch: the checkpoint covers
+        // exactly [.., through), never the whole head.
         const from = info.ckpt
             ? info.ckpt.through
             : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+        tabInfo.drainedSeq = from;
         if (info.head > from) {
-            this._bootstrappedRelease(tabInfo, pty, from, info.head);
+            if (info.head - from <= HOT_DELTA_LIMIT_BYTES) {
+                this._bootstrappedRelease(tabInfo, pty, from, info.head);
+            } else {
+                pty.release();
+                this._nudgeRedraw(tabInfo);
+            }
         } else {
             pty.release();
         }
@@ -1892,10 +1916,12 @@ export class TabManager {
             ) {
                 // Deliver via the patch path so seq accounting and held
                 // frames stay contiguous. The bytes must reach the terminal
-                // through the normal write queue afterwards.
-                const text = d.text;
+                // through the normal write queue afterwards. Raw bytes, not
+                // a text round-trip: re-encoding replaces invalid UTF-8
+                // with U+FFFD, changing both content and length and
+                // drifting every seq that follows.
                 const savedSeq = pty.liveSeq;
-                pty.applyGapPatch(new TextEncoder().encode(text));
+                pty.applyGapPatch(d.bytes);
                 // applyGapPatch delivers through onData → _paneData →
                 // writeToTerminal, which queues in order. Re-assert the
                 // watermark direction in case of ordering races.
@@ -2118,10 +2144,14 @@ export class TabManager {
 
                 // hot-v1: when the queue is fully drained, the xterm
                 // state now reflects every byte up to queuedSeq. That makes
-                // drainedSeq a valid checkpoint watermark.
+                // drainedSeq a valid checkpoint watermark — except while a
+                // bootstrap delta is still pending: advancing now would vouch
+                // for bytes below the live frontier that have not rendered.
+                // The bootstrap sets the watermark explicitly on success.
                 if (
                     tabInfo.writeBuffer.length === 0 &&
                     tabInfo.queuedSeq !== undefined &&
+                    !tabInfo._bootstrapGate &&
                     (!tabInfo.ws || tabInfo.ws.mode === 'hot')
                 ) {
                     if (tabInfo.queuedSeq >= (tabInfo.drainedSeq ?? 0)) {
@@ -7051,13 +7081,23 @@ export class TabManager {
                     // layout read, so they emit their own mark instead of
                     // silently absenting the `fit` measure.
                     termPerfMark('fit-skipped');
+                    // The fall-through path clears these below; skipping
+                    // must clear them too, or coordinates cached during an
+                    // earlier resize survive into a later genuine fit and
+                    // restore a stale viewport position (visible jump).
+                    activeTab.isAtBottom = undefined;
+                    activeTab.lastScrollY = undefined;
                     if (activeTab._sizedWs !== activeTab.ws) {
                         // First fit on a fresh socket: the client reflow is
                         // correctly skipped, but the backend PTY still has
                         // its spawn size (not the grid the user sees).
-                        // Tell it once; later skips stay silent.
-                        activeTab._sizedWs = activeTab.ws;
-                        this.sendResizeToBackend(activeTab);
+                        // Tell it once; later skips stay silent. The mark
+                        // records only a resize that actually went out — a
+                        // send swallowed while CONNECTING must not suppress
+                        // the retry after open.
+                        if (this.sendResizeToBackend(activeTab)) {
+                            activeTab._sizedWs = activeTab.ws;
+                        }
                     }
                     return;
                 }
@@ -7116,8 +7156,10 @@ export class TabManager {
                 activeTab.lastScrollY = undefined;
             }
 
-            this.sendResizeToBackend(activeTab);
-            activeTab._sizedWs = activeTab.ws;
+            // Record only a resize that went out (see the skip path).
+            if (this.sendResizeToBackend(activeTab)) {
+                activeTab._sizedWs = activeTab.ws;
+            }
         } catch (e) {
             console.error('[term] Fit error:', e);
         }
@@ -7181,12 +7223,16 @@ export class TabManager {
         }
     }
 
+    // Reports whether the resize went out so first-fit sync can retry
+    // an unsent sizing later. Fakes returning undefined count as sent
+    // (the historical assumption); only an explicit false means dropped.
     sendResizeToBackend(tab) {
-        if (!tab || tab.isDead) return;
+        if (!tab || tab.isDead) return false;
         const term = tab.term;
-        if (term.cols && term.rows) {
-            tab.ws.sendResize(term.cols, term.rows);
+        if (term && term.cols && term.rows && tab.ws) {
+            return tab.ws.sendResize(term.cols, term.rows) !== false;
         }
+        return false;
     }
 
     _toggleDropup(dropupId, triggerBtn, renderFn) {

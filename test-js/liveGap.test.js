@@ -40,6 +40,7 @@ describe('_onLiveGap', () => {
             end: 105,
             byteLength: 5,
             text: 'hello',
+            bytes: new TextEncoder().encode('hello'),
         }));
         await c._onLiveGap(tab(p), 100, 105);
         expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
@@ -48,6 +49,24 @@ describe('_onLiveGap', () => {
         );
         expect(p.abandonGap).not.toHaveBeenCalled();
         expect(c.writeToTerminal).not.toHaveBeenCalled();
+    });
+
+    it('patches raw bytes untouched, even when invalid as UTF-8', async () => {
+        // A text round-trip would replace 0xFF 0xFE with U+FFFD pairs,
+        // corrupting content and drifting every seq that follows.
+        const raw = new Uint8Array([0xff, 0xfe]);
+        const p = pty();
+        const c = ctx(async () => ({
+            start: 100,
+            end: 102,
+            byteLength: 2,
+            bytes: raw,
+            text: '\uFFFD\uFFFD',
+        }));
+        await c._onLiveGap(tab(p), 100, 102);
+        expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
+        expect(p.applyGapPatch.mock.calls[0][0]).toBe(raw);
+        expect(p.abandonGap).not.toHaveBeenCalled();
     });
 
     it('abandons an oversize gap with an honest banner', async () => {
@@ -70,6 +89,7 @@ describe('_onLiveGap', () => {
             end: 105,
             byteLength: 5,
             text: 'hello',
+            bytes: new TextEncoder().encode('hello'),
         }));
         await c._onLiveGap(tab(p), 100, 105);
         expect(p.applyGapPatch).not.toHaveBeenCalled();
@@ -102,7 +122,13 @@ describe('_onLiveGap', () => {
         const c = ctx(async () => {
             fetchCalls++;
             await gate;
-            return { start: 100, end: 105, byteLength: 5, text: 'hello' };
+            return {
+                start: 100,
+                end: 105,
+                byteLength: 5,
+                text: 'hello',
+                bytes: new TextEncoder().encode('hello'),
+            };
         });
         const t = tab(p);
         const first = c._onLiveGap(t, 100, 105);
@@ -127,7 +153,13 @@ describe('_onLiveGap', () => {
         t._bootstrapGen = 1;
         const call = c._onLiveGap(t, 100, 105);
         t._bootstrapGen = 2;
-        resolveFetch({ start: 100, end: 105, byteLength: 5, text: 'stale' });
+        resolveFetch({
+            start: 100,
+            end: 105,
+            byteLength: 5,
+            text: 'stale',
+            bytes: new TextEncoder().encode('stale'),
+        });
         await call;
         expect(p.applyGapPatch).not.toHaveBeenCalled();
         expect(p.abandonGap).not.toHaveBeenCalled();
@@ -279,6 +311,7 @@ describe('bootstrap gate', () => {
             end: 105,
             byteLength: 5,
             text: 'hello',
+            bytes: new TextEncoder().encode('hello'),
         }));
         const c = ctx(fetchMock);
         const t = tab(p);
@@ -299,6 +332,7 @@ describe('bootstrap gate', () => {
             end: 105,
             byteLength: 5,
             text: 'hello',
+            bytes: new TextEncoder().encode('hello'),
         }));
         const c = ctx(fetchMock);
         const t = tab(p);

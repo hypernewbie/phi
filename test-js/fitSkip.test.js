@@ -9,11 +9,11 @@ import { TabManager } from '../web/terminal.js';
 // (switching tabs never resizes the container), so they must be free.
 setupDomHarness();
 
-function ctx(activeTab) {
+function ctx(activeTab, resizeSent = true) {
     const c = Object.create(TabManager.prototype);
     c.getActiveTab = vi.fn(() => activeTab);
     c.resolveTerminalFontSize = vi.fn(() => 14);
-    c.sendResizeToBackend = vi.fn();
+    c.sendResizeToBackend = vi.fn(() => resizeSent);
     c._spamScroll = vi.fn();
     return c;
 }
@@ -112,6 +112,20 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         expect(c.sendResizeToBackend).toHaveBeenCalledTimes(2);
     });
 
+    it('a skip clears resize-cached scroll coordinates like a real fit', () => {
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        t.ws = { id: 'sock-1' };
+        t._sizedWs = t.ws;
+        // Stale leftovers from an earlier continuous resize.
+        t.isAtBottom = false;
+        t.lastScrollY = 41;
+        const c = ctx(t);
+        c.fitActiveTerminal();
+        expect(t.fitAddon.fit).not.toHaveBeenCalled();
+        expect(t.isAtBottom).toBe(undefined);
+        expect(t.lastScrollY).toBe(undefined);
+    });
+
     it('a genuine fit records the socket for later skips', () => {
         const t = tab(80, 24, { cols: 100, rows: 30 });
         t.ws = { id: 'sock-1' };
@@ -129,6 +143,21 @@ describe('fitActiveTerminal skips same-geometry fits', () => {
         c.fitActiveTerminal();
         expect(t.fitAddon.fit).toHaveBeenCalledTimes(1);
         expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+    });
+
+    it('a swallowed send while CONNECTING does not mark the socket', () => {
+        // sendResizeToBackend reports false when the frame could not go
+        // out: the marker must stay unset so a later fit retries after
+        // open, instead of leaving the backend at spawn size forever.
+        const t = tab(80, 24, { cols: 80, rows: 24 });
+        t.ws = { id: 'sock-1' };
+        const c = ctx(t, false);
+        c.fitActiveTerminal();
+        expect(t.fitAddon.fit).not.toHaveBeenCalled();
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(1);
+        expect(t._sizedWs).toBe(undefined);
+        c.fitActiveTerminal();
+        expect(c.sendResizeToBackend).toHaveBeenCalledTimes(2);
     });
 
     it('ignores dead or missing tabs', () => {
