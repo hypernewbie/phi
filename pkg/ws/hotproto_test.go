@@ -250,3 +250,49 @@ func TestHotDropWarningIsControlNotStream(t *testing.T) {
 		t.Fatalf("legacy client warning must stay inline 0x01 text, got %v", m)
 	}
 }
+
+// Epochs ride the wire as JSON numbers and JS clients round-trip them
+// through doubles. Above 2^53 the low bits do not survive, so every
+// epoch-scoped check (checkpoint store, recording fetch with epoch)
+// would spuriously mismatch in production while tests with small epochs
+// stay green. These pin the double-safe range and the full wire shape.
+func TestRandomEpochStaysDoubleSafe(t *testing.T) {
+	const maxSafe = uint64((1 << 53) - 1)
+	for i := 0; i < 1000; i++ {
+		e := randomEpoch()
+		if e > maxSafe {
+			t.Fatalf("randomEpoch %d exceeds double-safe range", e)
+		}
+		if back := uint64(float64(e)); back != e {
+			t.Fatalf("epoch %d does not survive a double round trip (got %d)", e, back)
+		}
+	}
+}
+
+func TestEpochSurvivesWireRoundTripIntoCheckpoint(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		h := NewHub(1024)
+		ph := h.GetOrCreatePaneHub("p")
+		// Simulate the JS client exactly: JSON number -> double ->
+		// decimal string -> uint64, as ws.js Number() + fetch URL do.
+		wire, err := json.Marshal(map[string]uint64{"epoch": ph.epoch})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var decoded struct {
+			Epoch float64 `json:"epoch"`
+		}
+		if err := json.Unmarshal(wire, &decoded); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		back := uint64(decoded.Epoch)
+		if back != ph.epoch {
+			t.Fatalf("epoch %d came back as %d", ph.epoch, back)
+		}
+		if !h.StoreCheckpoint("p", CheckpointUpload{
+			Epoch: back, Through: 0, Cols: 80, Rows: 24, Ansi: []byte("x"),
+		}) {
+			t.Fatalf("checkpoint with round-tripped epoch %d rejected", back)
+		}
+	}
+}
