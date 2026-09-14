@@ -325,6 +325,51 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         expect(tab.queuedSeq).toBe(100);
         expect(tab.drainedSeq).toBe(100);
     });
+
+    it('a dead tab with buffered data still settles bootstrap waiters', async () => {
+        // Probe case: tab dies mid-parse with newer data buffered. The
+        // callback used to skip waiter resolution, hanging the bootstrap
+        // promise (gate stuck, slot leaked). Owners re-verify death, so
+        // resolving only ends the wait.
+        const c = Object.create(TabManager.prototype);
+        c.updateDocumentTitle = vi.fn();
+        c._scheduleCheckpointUpload = vi.fn();
+        c._fetchRecordingRange = vi.fn(async () => ({
+            start: 90,
+            end: 100,
+            byteLength: 10,
+            bytes: new TextEncoder().encode('0123456789'),
+            text: '0123456789',
+        }));
+        const released = vi.fn();
+        const callbacks = [];
+        const tab = {
+            isDead: false,
+            writeBuffer: '',
+            writePending: false,
+            userFollowBottom: true,
+            term: {
+                buffer: { active: { viewportY: 0, baseY: 0 } },
+                write(d, cb) {
+                    callbacks.push(cb);
+                },
+                scrollToBottom: vi.fn(),
+                _core: { viewport: { syncScrollArea: vi.fn() } },
+            },
+            queuedSeq: 90,
+            drainedSeq: 90,
+            paneId: 'p',
+            ws: { mode: 'hot' },
+        };
+        const p = c._bootstrapDelta(tab, 90, 100, undefined, released);
+        await new Promise((r) => setTimeout(r, 0));
+        c.writeToTerminal(tab, 'live!');
+        tab.isDead = true;
+        callbacks.shift()();
+        await p;
+        expect(tab._drainWaiters ?? []).toEqual([]);
+        expect(tab.drainedSeq).toBe(90);
+    });
 });
 
 describe('write drain advances the checkpoint watermark', () => {

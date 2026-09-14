@@ -2209,6 +2209,10 @@ export class TabManager {
                     this._runDrainWaiters(tabInfo);
                 if (tabInfo.isDead) {
                     tabInfo.writeBuffer = '';
+                    // Unblock watermark waiters even with data buffered:
+                    // owners re-verify death and dissolve, so resolving
+                    // here only ends the wait, never applies state.
+                    this._runDrainWaiters(tabInfo);
                     return;
                 }
 
