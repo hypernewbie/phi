@@ -358,6 +358,39 @@ describe('recording fetch', () => {
     });
 });
 
+describe('_bootstrappedRelease generation', () => {
+    it('a superseded bootstrap writes nothing and releases nothing', async () => {
+        const c = Object.create(TabManager.prototype);
+        c.writeToTerminal = vi.fn();
+        const resolvers = [];
+        c._fetchRecordingRange = vi.fn(
+            () =>
+                new Promise((r) => {
+                    resolvers.push(r);
+                }),
+        );
+        const pty = { mode: 'hot', release: vi.fn() };
+        const tab = {
+            isDead: false,
+            paneId: 'p',
+            paneEpoch: 7,
+            ws: pty,
+            queuedSeq: 100,
+        };
+        c._bootstrappedRelease(tab, pty, 0, 100);
+        c._bootstrappedRelease(tab, pty, 50, 100);
+        resolvers[0]({ start: 0, end: 100, byteLength: 5, text: 'STALE' });
+        await new Promise((r) => setTimeout(r, 0));
+        resolvers[1]({ start: 50, end: 100, byteLength: 5, text: 'FRESH' });
+        await Promise.all(tab._pendingBootstraps || []);
+        await new Promise((r) => setTimeout(r, 0));
+        const texts = c.writeToTerminal.mock.calls.map((call) => call[1]);
+        expect(texts).toEqual(['FRESH']);
+        expect(pty.release).toHaveBeenCalledTimes(1);
+        expect(tab._bootstrapGate).toBe(null);
+    });
+});
+
 describe('_trackBootstrap', () => {
     it('prunes settled entries so reconnects do not leak slots', async () => {
         const c = Object.create(TabManager.prototype);
