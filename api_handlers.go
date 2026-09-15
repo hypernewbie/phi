@@ -92,6 +92,37 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Remote keyboard (web/input.html): write text to a pane's PTY stdin.
+	// Reader-blind by construction — no hub/ring/checkpoint state is
+	// touched, so attached sessions never notice the extra writer. It is
+	// the POST twin of the 0x01 WS frame, minus the socket.
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/input") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
+		id = strings.TrimSuffix(id, "/input")
+
+		var req struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		inst, ok := ptyManager.Get(id)
+		if !ok || inst.Pty == nil {
+			http.Error(w, "Pane not found", http.StatusNotFound)
+			return
+		}
+		// Send behaves like the terminal's own Enter key: the text plus
+		// a newline, so a typed command actually runs.
+		if _, err := inst.Pty.Write([]byte(req.Text + "\n")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/terminals/") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
 		err := ptyManager.Kill(id)

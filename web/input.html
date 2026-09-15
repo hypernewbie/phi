@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        >
+        <title>Φ phi keyboard</title>
+        <script type="module" src="prepaint.js"></script>
+        <link rel="stylesheet" href="vendor/fonts/fonts.css">
+        <link rel="stylesheet" href="style.css">
+        <style>
+        /* Remote keyboard: one pane picker, one native input, one
+               button. Everything else is the shared theme. The native
+               <input>/<select> stay native on purpose — the OS keyboard,
+               picker wheel, and dictation are the whole point. */
+        .kb-page {
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: max(16px, env(safe-area-inset-top))
+                max(16px, env(safe-area-inset-right))
+                max(16px, env(safe-area-inset-bottom))
+                max(16px, env(safe-area-inset-left));
+            max-width: 640px;
+            margin: 0 auto;
+            box-sizing: border-box;
+        }
+        .kb-title {
+            font-size: 15px;
+            color: var(--text-muted);
+            margin: 0;
+        }
+        .kb-title strong {
+            color: var(--text);
+        }
+        .kb-row {
+            display: flex;
+            gap: 8px;
+        }
+        .kb-select,
+        .kb-input {
+            flex: 1;
+            min-width: 0;
+            font: inherit;
+            font-size: 16px; /* >=16px or iOS zooms on focus */
+            color: var(--text);
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+        }
+        .kb-select:focus,
+        .kb-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .kb-send {
+            font: inherit;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--on-accent, #fff);
+            background: var(--accent);
+            border: none;
+            border-radius: 10px;
+            padding: 12px 20px;
+            min-height: 48px;
+        }
+        .kb-send:disabled {
+            opacity: 0.45;
+        }
+        .kb-status {
+            min-height: 20px;
+            font-size: 13px;
+            color: var(--text-muted);
+            margin: 0;
+        }
+        .kb-status.error {
+            color: var(--danger, #f66);
+        }
+        </style>
+    </head>
+    <body>
+        <main class="kb-page">
+            <p class="kb-title"><strong>Φ</strong> remote keyboard</p>
+            <div class="kb-row">
+                <select
+                    id="kb-pane"
+                    class="kb-select"
+                    aria-label="Terminal"
+                ></select>
+                <button
+                    id="kb-refresh"
+                    class="kb-send"
+                    type="button"
+                    title="Refresh terminal list"
+                >
+                    ⟳
+                </button>
+            </div>
+            <div class="kb-row">
+                <input
+                    id="kb-text"
+                    class="kb-input"
+                    type="text"
+                    enterkeyhint="send"
+                    autocomplete="off"
+                    placeholder="Type, Enter to send…"
+                    aria-label="Terminal input"
+                >
+                <button id="kb-send" class="kb-send" type="button">Send</button>
+            </div>
+            <p id="kb-status" class="kb-status" role="status"></p>
+        </main>
+        <script type="module">
+        // Standalone remote keyboard: no app.js, no sockets, no state.
+        // Lists panes via GET /api/terminals, writes via
+        // POST /api/terminals/:id/input. Reader-blind server-side, so
+        // attached sessions never notice this page exists.
+        const paneSel = document.getElementById('kb-pane');
+        const textInput = document.getElementById('kb-text');
+        const sendBtn = document.getElementById('kb-send');
+        const refreshBtn = document.getElementById('kb-refresh');
+        const status = document.getElementById('kb-status');
+        const SAVED_PANE = 'phi_kb_pane';
+
+        function setStatus(msg, isError) {
+            status.textContent = msg || '';
+            status.classList.toggle('error', !!isError);
+        }
+
+        function label(p) {
+            const title = (p.title || '').trim();
+            const name =
+                title || `${p.coder || 'shell'} · ${String(p.id).slice(0, 8)}`;
+            return p.coder && title ? `${title} (${p.coder})` : name;
+        }
+
+        async function loadTheme() {
+            // Fresh devices have no phi_theme_color yet; mirror the
+            // server theme so the page matches the main UI.
+            if (!localStorage.getItem('phi_theme_color')) {
+                try {
+                    const res = await fetch('/api/config');
+                    if (res.ok) {
+                        const cfg = await res.json();
+                        if (cfg.theme_color) {
+                            document.documentElement.setAttribute(
+                                'data-theme-color',
+                                cfg.theme_color,
+                            );
+                        }
+                    }
+                } catch {
+                    // Offline/theme failure never blocks typing.
+                }
+            }
+        }
+
+        async function loadPanes() {
+            let panes = [];
+            try {
+                const res = await fetch('/api/terminals');
+                if (res.status === 401) {
+                    setStatus(
+                        'Locked — open the phi main page and log in first, then come back.',
+                        true,
+                    );
+                    return false;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                panes = await res.json();
+            } catch (e) {
+                setStatus(`Can't reach phi: ${e.message}`, true);
+                return false;
+            }
+            const saved = localStorage.getItem(SAVED_PANE);
+            paneSel.innerHTML = '';
+            if (!panes.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No open terminals';
+                paneSel.appendChild(opt);
+                setStatus('Open a terminal in phi first.');
+                return false;
+            }
+            for (const p of panes) {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = label(p);
+                paneSel.appendChild(opt);
+            }
+            if (saved && [...paneSel.options].some((o) => o.value === saved))
+                paneSel.value = saved;
+            setStatus('');
+            return true;
+        }
+
+        async function send() {
+            const id = paneSel.value;
+            const text = textInput.value;
+            if (!id || !text) return;
+            sendBtn.disabled = true;
+            try {
+                const res = await fetch(
+                    `/api/terminals/${encodeURIComponent(id)}/input`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text }),
+                    },
+                );
+                if (res.status === 404) {
+                    setStatus('That terminal closed — picking another…', true);
+                    localStorage.removeItem(SAVED_PANE);
+                    await loadPanes();
+                    return;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                textInput.value = '';
+                setStatus('');
+            } catch (e) {
+                setStatus(`Send failed: ${e.message}`, true);
+            } finally {
+                sendBtn.disabled = false;
+                textInput.focus();
+            }
+        }
+
+        paneSel.addEventListener('change', () => {
+            localStorage.setItem(SAVED_PANE, paneSel.value);
+        });
+        refreshBtn.addEventListener('click', () => {
+            void loadPanes();
+            textInput.focus();
+        });
+        sendBtn.addEventListener('click', () => void send());
+        textInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                void send();
+            }
+        });
+        document.addEventListener('visibilitychange', () => {
+            // The pane list rots while the phone sleeps; refresh the
+            // picker (not the text) whenever the page comes back.
+            if (!document.hidden) void loadPanes();
+        });
+
+        void loadTheme();
+        loadPanes().then((ok) => {
+            if (ok) textInput.focus();
+        });
+        </script>
+    </body>
+</html>
