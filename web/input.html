@@ -118,7 +118,13 @@
         // Standalone remote keyboard: no app.js, no sockets, no state.
         // Lists panes via GET /api/terminals, writes via
         // POST /api/terminals/:id/input. Reader-blind server-side, so
-        // attached sessions never notice this page exists.
+        // attached sessions never notice this page exists. Auth is the
+        // shared access-password flow from auth.js: the page rides the
+        // same /api gate as the main UI, shows the same sign-in dialog
+        // when locked, and only ever sends a derived challenge proof —
+        // never the password.
+        import { bootstrapAccessAuth } from './auth.js';
+
         const paneSel = document.getElementById('kb-pane');
         const textInput = document.getElementById('kb-text');
         const sendBtn = document.getElementById('kb-send');
@@ -164,10 +170,10 @@
             try {
                 const res = await fetch('/api/terminals');
                 if (res.status === 401) {
-                    setStatus(
-                        'Locked — open the phi main page and log in first, then come back.',
-                        true,
-                    );
+                    // Session expired mid-visit. Reload: bootstrap's
+                    // saved-verifier path signs back in without a prompt,
+                    // or the dialog reappears if it can't.
+                    location.reload();
                     return false;
                 }
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -249,10 +255,16 @@
             if (!document.hidden) void loadPanes();
         });
 
-        void loadTheme();
-        loadPanes().then((ok) => {
+        void (async () => {
+            // Open server: one no-op status fetch. Locked: the shared
+            // sign-in dialog (auto-login from the saved verifier on
+            // return visits). Only after auth do the theme and pane list
+            // load — both are behind the /api gate.
+            await bootstrapAccessAuth();
+            await loadTheme();
+            const ok = await loadPanes();
             if (ok) textInput.focus();
-        });
+        })();
         </script>
     </body>
 </html>

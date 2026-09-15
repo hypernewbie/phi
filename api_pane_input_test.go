@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,6 +30,24 @@ func withPaneManager(t *testing.T) *pty.Manager {
 	return m
 }
 
+func TestPaneInputPayloadBytes(t *testing.T) {
+	// Byte-parity with the main UI's staged Send (sendStagedInput in
+	// web/terminal.js). TUI coders only register Enter on \r — a \n
+	// here is the "typed but never submitted" bug.
+	cases := []struct{ in, want string }{
+		{"yo", "yo\r"},
+		{"  yo  ", "yo\r"}, // trimmed like the staged bar
+		{"seventeen chars ok", "\x1b[200~seventeen chars ok\x1b[201~\r"}, // 18 runes: wrapped
+		{"a reasonably long prompt", "\x1b[200~a reasonably long prompt\x1b[201~\r"},
+		{"line one\nline two", "\x1b[200~line one\nline two\x1b[201~\r"},
+	}
+	for _, c := range cases {
+		if got := paneInputPayload(c.in); got != c.want {
+			t.Errorf("paneInputPayload(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestPaneInput_PaneNotFound(t *testing.T) {
 	withPaneManager(t)
 	req := httptest.NewRequest(
@@ -54,6 +73,67 @@ func TestPaneInput_BadBody(t *testing.T) {
 	handleFallback(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: want 400, got %d — %s", w.Code, w.Body.String())
+	}
+}
+
+// The remote-keyboard endpoint rides the same access-auth gate as every
+// other /api route: with a password set and no session cookie it must 401,
+// and after a real login it must reach the handler.
+func TestPaneInput_RequiresAccessAuth(t *testing.T) {
+	withPaneManager(t)
+	auth := useTestAccessAuth(t)
+	if err := auth.configure(testAccessHash()); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+
+	guarded := accessAuthMiddleware(http.HandlerFunc(handleFallback))
+
+	// No cookie: the gate rejects before the handler runs.
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/terminals/some-pane/input",
+		strings.NewReader(`{"text":"yo"}`),
+	)
+	w := httptest.NewRecorder()
+	guarded.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no-cookie status: want 401, got %d — %s", w.Code, w.Body.String())
+	}
+
+	// Real login (challenge/proof, same dance as auth_test), then the
+	// request passes the gate and reaches the handler (404: pane doesn't
+	// exist, which proves it got past auth).
+	statusW := httptest.NewRecorder()
+	handleAccessAuthStatus(statusW, httptest.NewRequest(http.MethodGet, "/api/auth/status", nil))
+	var status map[string]any
+	if err := json.Unmarshal(statusW.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	record, err := parseAccessPasswordHash(testAccessHash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge := status["challenge"].(string)
+	loginBody := `{"challenge":"` + challenge + `","proof":"` + testAccessProof(t, record.Verifier, challenge) + `"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
+	loginReq.RemoteAddr = "192.0.2.20:12345"
+	loginW := httptest.NewRecorder()
+	handleAccessAuthLogin(loginW, loginReq)
+	if loginW.Code != http.StatusOK {
+		t.Fatalf("login: got %d body=%s", loginW.Code, loginW.Body.String())
+	}
+	cookie := loginW.Result().Cookies()[0]
+
+	req2 := httptest.NewRequest(
+		http.MethodPost,
+		"/api/terminals/some-pane/input",
+		strings.NewReader(`{"text":"yo"}`),
+	)
+	req2.AddCookie(cookie)
+	w2 := httptest.NewRecorder()
+	guarded.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("post-login status: want 404 (past the gate, unknown pane), got %d — %s", w2.Code, w2.Body.String())
 	}
 }
 

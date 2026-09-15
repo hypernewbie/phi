@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
@@ -24,6 +25,25 @@ import (
 	"github.com/hypernewbie/phi/pkg/update"
 	"github.com/hypernewbie/phi/pkg/ws"
 )
+
+// paneInputPayload composes the exact byte sequence the main UI's staged
+// Send produces (sendStagedInput in web/terminal.js): trimmed text,
+// bracketed-paste wrapped when longer than 16 runes or multiline, then a
+// carriage return. Never "\n" — the TUI coders (pi, claude, opencode, agy)
+// only register Enter on CR, while a shell's line discipline maps CR to NL
+// anyway (ICRNL), so CR is correct for both. The bracketed-paste wrap keeps
+// long prompts from trickle-rendering / tripping TUI autocomplete. The
+// trailing CR rides in the same write; pkg/pty's Write splits it onto its
+// own ConPTY pipe write on Windows so conhost registers a distinct Enter.
+func paneInputPayload(text string) string {
+	payload := strings.TrimSpace(text)
+	// Rune count mirrors the JS `payload.length` threshold (UTF-16 units;
+	// rune count is the closest Go equivalent for the "is this big" check).
+	if utf8.RuneCountInString(payload) > 16 || strings.Contains(payload, "\n") {
+		payload = "\x1b[200~" + payload + "\x1b[201~"
+	}
+	return payload + "\r"
+}
 
 func handleFallback(w http.ResponseWriter, r *http.Request) {
 	// Log requests briefly.
@@ -94,8 +114,8 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 
 	// Remote keyboard (web/input.html): write text to a pane's PTY stdin.
 	// Reader-blind by construction — no hub/ring/checkpoint state is
-	// touched, so attached sessions never notice the extra writer. It is
-	// the POST twin of the 0x01 WS frame, minus the socket.
+	// touched, so attached sessions never notice the extra writer.
+	// Auth: same accessAuthMiddleware gate as every /api route.
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/input") {
 		id := strings.TrimPrefix(r.URL.Path, "/api/terminals/")
 		id = strings.TrimSuffix(id, "/input")
@@ -107,15 +127,17 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.Text) == "" {
+			http.Error(w, "empty input", http.StatusBadRequest)
+			return
+		}
 
 		inst, ok := ptyManager.Get(id)
 		if !ok || inst.Pty == nil {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
 		}
-		// Send behaves like the terminal's own Enter key: the text plus
-		// a newline, so a typed command actually runs.
-		if _, err := inst.Pty.Write([]byte(req.Text + "\n")); err != nil {
+		if _, err := inst.Pty.Write([]byte(paneInputPayload(req.Text))); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
