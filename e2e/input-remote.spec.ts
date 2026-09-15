@@ -36,7 +36,9 @@ async function spawnShell(): Promise<string> {
 
 test('input.html sends keystrokes into a live pane', async ({ page }) => {
     const paneId = await spawnShell();
-    const marker = `kb-${Date.now()}`;
+    // >16 runes: crosses the bracketed-paste wrap threshold, so the
+    // round-trip also proves the wrapped payload is fine for shells.
+    const marker = `kb-e2e-${Date.now()}`;
 
     await page.goto(`${phi.url}/input.html`);
     const picker = page.locator('#kb-pane');
