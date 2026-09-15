@@ -18,7 +18,7 @@
     "build:desktop": "pnpm --dir desktop/electron run build",
     "dev:desktop": "pnpm --dir desktop/electron run build && pnpm --dir desktop/electron run dev",
     "watch:web": "tsc -p tsconfig.build.json -w --preserveWatchOutput",
-    "lint:web": "stylelint web/style.css && biome lint web/index.html web/md.html web/config.html web/style.css",
+    "lint:web": "stylelint web/style.css && biome lint web/index.html web/md.html web/config.html web/input.html web/style.css",
     "lint:code": "biome lint .",
     "format:check": "biome format .",
     "format": "biome format --write .",

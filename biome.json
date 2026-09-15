@@ -8,6 +8,8 @@
             "npm/scripts/**/*.js",
             "web-src/**/*.ts",
             "test-js/**/*.js",
+            "e2e/**/*.ts",
+            "playwright.config.ts",
             "web/**/*.js",
             "web/**/*.html",
             "web/**/*.css",
