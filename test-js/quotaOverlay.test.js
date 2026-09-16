@@ -127,7 +127,9 @@ describe('renderQuotaInto', () => {
             (el) => el.style.width,
         );
         expect(fills).toContain('63%');
-        expect(fills).toContain('71%');
+        // GLM reports `percentage` as quota USED; the overlay flips it to
+        // remaining, so the fixture's 71% used renders as 29% remaining.
+        expect(fills).toContain('29%');
         // Codex pre-rendered lines survive verbatim.
         expect(body.querySelector('.quota-pre').textContent).toContain(
             '46% left',
