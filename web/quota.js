@@ -156,13 +156,16 @@ const RENDERERS = {
             'GLM',
             level +
                 limits
-                    .map((l) =>
-                        row(
+                    .map((l) => {
+                        // GLM's `percentage` is quota USED, not remaining;
+                        // flip it so the bar reads like every other provider.
+                        const pct = pctNumber(l?.percentage);
+                        return row(
                             String(l?.type ?? 'limit').replace(/_/g, ' '),
-                            bar(l?.percentage),
+                            bar(pct === null ? null : 100 - pct),
                             `resets ${fmtClock(l?.nextResetTime)}`,
-                        ),
-                    )
+                        );
+                    })
                     .join(''),
         );
     },
