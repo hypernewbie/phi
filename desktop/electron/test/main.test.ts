@@ -1810,6 +1810,8 @@ describe('src/desktop.ts (native window chrome + branding)', () => {
     expect(menuRegion).toContain("label: 'Zoom In'");
     expect(menuRegion).toContain("label: 'Zoom Out'");
     expect(menuRegion).toContain("label: 'Actual Size (100%)'");
+    expect(menuRegion).toContain('...CONTENT_ZOOM_LEVELS.map');
+    expect(menuRegion).toContain("type: 'radio'");
     expect(menuRegion).toContain('rebuildAppMenu()');
     expect(menuRegion).toContain("{ role: 'editMenu' }");
     expect(menuRegion).toContain("{ role: 'windowMenu' }");

@@ -66,6 +66,7 @@ import { parseDeepLink, dispatchDeepLink } from './deeplink.js';
 import { parseMainArgs } from './argv.js';
 import {
   CONTENT_ZOOM_DEFAULT_PERCENT,
+  CONTENT_ZOOM_LEVELS,
   Controller,
   parseEndpoint,
   PET_BASE_VISUAL_WIDTH_DIP,
@@ -899,6 +900,16 @@ export class DesktopHost {
       ctrl.setContentZoomPercent(next);
     } catch (err) {
       console.log(`phi-desktop: content zoom: ${String(err)}`);
+    }
+  }
+
+  private setContentZoomPercent(percent: number): void {
+    const ctrl = this.controller;
+    if (!ctrl) return;
+    try {
+      ctrl.setContentZoomPercent(percent);
+    } catch (err) {
+      console.log(`phi-desktop: set content zoom: ${String(err)}`);
     }
   }
 
@@ -2505,6 +2516,13 @@ export class DesktopHost {
                 enabled: contentZoomPercent !== CONTENT_ZOOM_DEFAULT_PERCENT,
                 click: () => this.requestContentZoom('reset'),
               },
+              { type: 'separator' },
+              ...CONTENT_ZOOM_LEVELS.map((level) => ({
+                label: `${level}%`,
+                type: 'radio' as const,
+                checked: contentZoomPercent === level,
+                click: () => this.setContentZoomPercent(level),
+              })),
             ],
           },
           { type: 'separator' },

@@ -2579,6 +2579,12 @@ export class TabManager {
         );
 
         term.attachCustomKeyEventHandler((e) => {
+            if (
+                e.type === 'keydown' &&
+                this.app?.handlePanelResizeShortcut?.(e)
+            ) {
+                return false;
+            }
             const isMac = isMacPlatform();
             if (e.type === 'keydown') {
                 const isCopy =

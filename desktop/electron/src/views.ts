@@ -257,7 +257,10 @@ export class ProfileViewManager {
     if (!entry) return;
     entry.obscured = obscured;
     if (obscured && entry.loaded) entry.view.setVisible(false);
-    if (!obscured && entry.loaded) entry.view.setVisible(true);
+    if (!obscured && entry.loaded) {
+      entry.view.setVisible(true);
+      applyContentZoom(entry.view.webContents, this.getContentZoomPercent());
+    }
   }
 
   /**
@@ -396,6 +399,7 @@ export class ProfileViewManager {
       // re-shows it once `setObscured(false)` fires.
       if (this.activeId === id && !current.obscured) {
         view.setVisible(true);
+        applyContentZoom(view.webContents, this.getContentZoomPercent());
         // Keyboard/shortcuts route to the newly shown view.
         if (!view.webContents.isDestroyed()) {
           view.webContents.focus();

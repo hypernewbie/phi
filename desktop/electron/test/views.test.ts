@@ -438,12 +438,12 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     const { manager, views } = makeManager({ contentZoomPercent: 150 });
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.setActive('p1');
-    expect(views[0].zoomModes).toEqual(['manual']);
+    expect(views[0].zoomModes).toEqual(['isolated']);
     expect(views[0].zoomFactors).toEqual([1.5]);
     expect(views[0].setVisibleCalls).toEqual([false]);
     views[0].loadHandlers[0]();
-    expect(views[0].zoomModes).toEqual(['manual', 'manual']);
-    expect(views[0].zoomFactors).toEqual([1.5, 1.5]);
+    expect(views[0].zoomModes).toEqual(['isolated', 'isolated', 'isolated']);
+    expect(views[0].zoomFactors).toEqual([1.5, 1.5, 1.5]);
     expect(views[0].setVisibleCalls).toEqual([false, true]);
   });
 
@@ -456,7 +456,7 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     manager.hibernateInactive('p2');
     manager.setActive('p1');
     expect(views).toHaveLength(3);
-    expect(views[2].zoomModes).toEqual(['manual']);
+    expect(views[2].zoomModes).toEqual(['isolated']);
     expect(views[2].zoomFactors).toEqual([1.25]);
   });
 
@@ -472,6 +472,56 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     manager.setActive('p1');
     expect(views[0].zoomFactors.at(-1)).toBe(1);
     expect(views[0].setVisibleCalls.at(-1)).toBe(true);
+  });
+
+  it('ensures low-memory newly materialized view applies isolated zoom on first load and visibility without F5', () => {
+    const { manager, views } = makeManager({
+      contentZoomPercent: 80,
+    });
+    manager.addProfile('server1', 'http://127.0.0.1:7070/');
+    manager.addProfile('server2', 'http://127.0.0.1:8080/');
+
+    // User is on server 1
+    manager.setActive('server1');
+    expect(views[0].zoomModes).toEqual(['isolated']);
+    expect(views[0].zoomFactors).toEqual([0.8]);
+
+    // Low-memory mode: server 2 has no view yet, or was hibernated
+    manager.hibernateInactive('server1');
+
+    // User switches to server 2: creates view anew
+    manager.setActive('server2');
+    expect(views).toHaveLength(2);
+    const s2View = views[1];
+
+    // Initial creation: applied before loadURL while hidden
+    expect(s2View.setVisibleCalls).toEqual([false]);
+    expect(s2View.zoomModes).toContain('isolated');
+    expect(s2View.zoomModes).not.toContain('manual');
+    expect(s2View.zoomFactors[0]).toBe(0.8);
+
+    // Page finishes loading for the first time:
+    s2View.loadHandlers[0]();
+
+    // Must be set visible AND zoom must be reaffirmed upon visibility
+    expect(s2View.setVisibleCalls).toEqual([false, true]);
+    expect(s2View.zoomFactors).toEqual([0.8, 0.8, 0.8]);
+    expect(s2View.zoomModes.every((m) => m === 'isolated')).toBe(true);
+  });
+
+  it('re-applies isolated content zoom when an obscured view becomes visible', () => {
+    const { manager, views } = makeManager({ contentZoomPercent: 80 });
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    manager.setObscured(true);
+    views[0].loadHandlers[0]();
+    expect(views[0].setVisibleCalls).toEqual([false]); // stays hidden while obscured
+
+    // Modal closes / unobscures:
+    manager.setObscured(false);
+    expect(views[0].setVisibleCalls).toEqual([false, true]);
+    expect(views[0].zoomFactors.at(-1)).toBe(0.8);
+    expect(views[0].zoomModes.every((m) => m === 'isolated')).toBe(true);
   });
 
   it('reloadAll reloads every created retained view (Idea E)', () => {

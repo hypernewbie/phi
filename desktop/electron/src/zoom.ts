@@ -91,7 +91,7 @@ export function applyContentZoom(target: WebContents, percent: number): void {
     'function'
   ) {
     (target as { setZoomMode?: (mode: string) => void }).setZoomMode?.(
-      'manual',
+      'isolated',
     );
   }
   target.setZoomFactor(percent / 100);

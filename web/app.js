@@ -49,6 +49,7 @@ export class App {
         this.hostnameOverride = '';
         this.customFontName = '';
         this.accessAuthEnabled = false;
+        this._isDraggingDrawer = false;
 
         // Instantiate controllers
         this.tabManager = new TabManager(this);
@@ -139,6 +140,7 @@ export class App {
 
             // Close drawer when clicking outside it
             document.addEventListener('click', (e) => {
+                if (this._isDraggingDrawer) return;
                 if (
                     sidebar.classList.contains('drawer-open') &&
                     !sidebar.contains(e.target) &&
@@ -640,6 +642,8 @@ export class App {
         document.addEventListener(
             'touchstart',
             (e) => {
+                if (this._isDraggingDrawer) return;
+                if (e.target?.closest?.('.drawer-resize-handle')) return;
                 // Drawer topology is content-first: sessions yields below
                 // 1024px, diff below 1280px, plus the compact layout.
                 if (!isSidebarDrawerViewport() && !isDiffDrawerViewport()) {
@@ -654,6 +658,8 @@ export class App {
         document.addEventListener(
             'touchend',
             (e) => {
+                if (this._isDraggingDrawer) return;
+                if (e.target?.closest?.('.drawer-resize-handle')) return;
                 const sidebarDrawer = isSidebarDrawerViewport();
                 const diffDrawer = isDiffDrawerViewport();
                 if (!sidebarDrawer && !diffDrawer) return;
@@ -723,8 +729,142 @@ export class App {
         }
     }
 
+    adjustLeftPanelWidth(delta) {
+        const sidebar = document.getElementById('sidebar-panel');
+        if (!sidebar) return;
+
+        if (isSidebarDrawerViewport()) {
+            const currentWidth =
+                parseFloat(sidebar.style.width) ||
+                sidebar.getBoundingClientRect().width ||
+                280;
+            const minWidth = 160;
+            const maxWidth = Math.max(
+                minWidth,
+                typeof window !== 'undefined' ? window.innerWidth - 24 : 500,
+            );
+            const clamped = Math.max(
+                minWidth,
+                Math.min(currentWidth + delta, maxWidth),
+            );
+            sidebar.style.setProperty('width', `${clamped}px`, 'important');
+            localStorage.setItem('phi_drawer_left_width', clamped);
+            if (clamped < 120) {
+                sidebar.classList.add('sidebar-narrow');
+            } else {
+                sidebar.classList.remove('sidebar-narrow');
+            }
+            return;
+        }
+
+        const currentWidth =
+            parseFloat(sidebar.style.width) ||
+            sidebar.getBoundingClientRect().width ||
+            260;
+        const targetWidth = currentWidth + delta;
+        const clamped = clampPanelWidth(targetWidth, SIDEBAR_PANEL_CAP);
+
+        sidebar.style.removeProperty('width');
+        sidebar.style.width = `${clamped}px`;
+        localStorage.setItem('phi_panel_left_width', clamped);
+
+        if (clamped < 120) {
+            sidebar.classList.add('sidebar-narrow');
+        } else {
+            sidebar.classList.remove('sidebar-narrow');
+        }
+
+        if (this.tabManager) {
+            this.tabManager.startResize();
+            this.tabManager.fitActiveTerminal();
+            this.tabManager.endResize();
+        }
+    }
+
+    adjustRightPanelWidth(delta) {
+        const diffPanel = document.getElementById('diff-panel');
+        if (!diffPanel) return;
+
+        if (isDiffDrawerViewport()) {
+            const currentWidth =
+                parseFloat(diffPanel.style.width) ||
+                diffPanel.getBoundingClientRect().width ||
+                320;
+            const minWidth = 200;
+            const maxWidth = Math.max(
+                minWidth,
+                typeof window !== 'undefined' ? window.innerWidth - 24 : 600,
+            );
+            const clamped = Math.max(
+                minWidth,
+                Math.min(currentWidth + delta, maxWidth),
+            );
+            diffPanel.style.setProperty('width', `${clamped}px`, 'important');
+            localStorage.setItem('phi_drawer_right_width', clamped);
+            return;
+        }
+
+        const currentWidth =
+            parseFloat(diffPanel.style.width) ||
+            diffPanel.getBoundingClientRect().width ||
+            340;
+        const targetWidth = currentWidth + delta;
+        const clamped = clampPanelWidth(targetWidth, DIFF_PANEL_CAP);
+
+        diffPanel.style.removeProperty('width');
+        diffPanel.style.width = `${clamped}px`;
+        localStorage.setItem('phi_panel_right_width', clamped);
+
+        if (this.tabManager) {
+            this.tabManager.startResize();
+            this.tabManager.fitActiveTerminal();
+            this.tabManager.endResize();
+        }
+        if (this.diffController) {
+            this.diffController.fitTerminal();
+        }
+    }
+
+    handlePanelResizeShortcut(e) {
+        if (e.defaultPrevented) return false;
+        // Require Ctrl+Alt (Option on macOS, Alt on Win/Linux) without Cmd (metaKey),
+        // so it never conflicts with macOS Cmd shortcuts, zoom, or browser tab operations.
+        if (!e.ctrlKey || !e.altKey || e.metaKey) return false;
+
+        const step = 24;
+
+        // Left panel (Sessions): [ narrows, ] widens
+        if (e.key === '[' || e.key === '{' || e.code === 'BracketLeft') {
+            e.preventDefault();
+            this.adjustLeftPanelWidth(-step);
+            return true;
+        }
+        if (e.key === ']' || e.key === '}' || e.code === 'BracketRight') {
+            e.preventDefault();
+            this.adjustLeftPanelWidth(step);
+            return true;
+        }
+
+        // Right panel (Diff/Cmd): - narrows, =/+ widens
+        if (e.key === '-' || e.key === '_' || e.code === 'Minus') {
+            e.preventDefault();
+            this.adjustRightPanelWidth(-step);
+            return true;
+        }
+        if (e.key === '=' || e.key === '+' || e.code === 'Equal') {
+            e.preventDefault();
+            this.adjustRightPanelWidth(step);
+            return true;
+        }
+
+        return false;
+    }
+
     initGlobalShortcuts() {
         document.addEventListener('keydown', (e) => {
+            if (this.handlePanelResizeShortcut(e)) {
+                return;
+            }
             // Ctrl+Shift+D = diag panel. Matches the existing Ctrl+Shift+F
             // search and Ctrl+P pattern (terminal.js handles terminal ones).
             if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
@@ -746,107 +886,410 @@ export class App {
         const diffPanel = document.getElementById('diff-panel');
         const layout = document.querySelector('.main-layout');
 
-        // Load saved sizes from localStorage. The stored preference keeps
-        // the big-monitor value untouched; the APPLIED width is clamped to
-        // the proportional panel caps (see web-src/util.ts) so a width
-        // dragged on a large screen can never claim half of a small one.
-        const savedLeftWidth = localStorage.getItem('phi_panel_left_width');
-        const savedRightWidth = localStorage.getItem('phi_panel_right_width');
-        if (savedLeftWidth) {
-            const widthNum = parseFloat(savedLeftWidth);
-            sidebar.style.width = `${clampPanelWidth(
-                widthNum,
-                SIDEBAR_PANEL_CAP,
-            )}px`;
-            if (widthNum < 120) {
-                sidebar.classList.add('sidebar-narrow');
-            } else {
-                sidebar.classList.remove('sidebar-narrow');
-            }
-        }
-        if (savedRightWidth) {
-            diffPanel.style.width = `${clampPanelWidth(
-                parseFloat(savedRightWidth),
-                DIFF_PANEL_CAP,
-            )}px`;
+        // Inject dedicated drawer touch resizers if not already in DOM
+        let leftDrawerHandle = document.getElementById(
+            'sidebar-drawer-resizer',
+        );
+        if (!leftDrawerHandle && sidebar) {
+            leftDrawerHandle = document.createElement('div');
+            leftDrawerHandle.id = 'sidebar-drawer-resizer';
+            leftDrawerHandle.className =
+                'drawer-resize-handle drawer-resize-left';
+            leftDrawerHandle.setAttribute('aria-hidden', 'true');
+            sidebar.appendChild(leftDrawerHandle);
         }
 
-        // Left resizing handler
-        leftHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            leftHandle.classList.add('dragging');
-            document.body.style.cursor = 'col-resize';
-            this.tabManager.startResize(); // Start layout resize tracking
+        let rightDrawerHandle = document.getElementById('diff-drawer-resizer');
+        if (!rightDrawerHandle && diffPanel) {
+            rightDrawerHandle = document.createElement('div');
+            rightDrawerHandle.id = 'diff-drawer-resizer';
+            rightDrawerHandle.className =
+                'drawer-resize-handle drawer-resize-right';
+            rightDrawerHandle.setAttribute('aria-hidden', 'true');
+            diffPanel.appendChild(rightDrawerHandle);
+        }
 
-            const doDrag = (moveEvent) => {
-                const width =
-                    moveEvent.clientX - layout.getBoundingClientRect().left;
-                const capPx = clampPanelWidth(
-                    SIDEBAR_PANEL_CAP.max,
-                    SIDEBAR_PANEL_CAP,
+        const applyResponsivePanelWidths = () => {
+            if (!sidebar || !diffPanel) return;
+
+            // Left panel: drawer vs docked
+            if (isSidebarDrawerViewport()) {
+                const savedDrawerLeft = localStorage.getItem(
+                    'phi_drawer_left_width',
                 );
-                if (width > SIDEBAR_PANEL_CAP.min && width < capPx) {
-                    sidebar.style.width = `${width}px`;
-                    localStorage.setItem('phi_panel_left_width', width);
-
-                    if (width < 120) {
+                if (savedDrawerLeft) {
+                    const w = parseFloat(savedDrawerLeft);
+                    const maxW = Math.max(160, window.innerWidth - 24);
+                    if (!Number.isNaN(w) && w >= 160) {
+                        sidebar.style.setProperty(
+                            'width',
+                            `${Math.min(w, maxW)}px`,
+                            'important',
+                        );
+                    }
+                }
+            } else {
+                sidebar.style.removeProperty('width');
+                const savedLeftWidth = localStorage.getItem(
+                    'phi_panel_left_width',
+                );
+                if (savedLeftWidth) {
+                    const widthNum = parseFloat(savedLeftWidth);
+                    sidebar.style.width = `${clampPanelWidth(
+                        widthNum,
+                        SIDEBAR_PANEL_CAP,
+                    )}px`;
+                    if (widthNum < 120) {
                         sidebar.classList.add('sidebar-narrow');
                     } else {
                         sidebar.classList.remove('sidebar-narrow');
                     }
-
-                    this.tabManager.fitActiveTerminal();
                 }
-            };
+            }
 
-            const stopDrag = () => {
-                leftHandle.classList.remove('dragging');
-                document.body.style.cursor = '';
-                document.removeEventListener('mousemove', doDrag);
-                document.removeEventListener('mouseup', stopDrag);
-                this.tabManager.fitActiveTerminal();
-                this.tabManager.endResize(); // End layout resize tracking
-            };
-
-            document.addEventListener('mousemove', doDrag);
-            document.addEventListener('mouseup', stopDrag);
-        });
-
-        // Right resizing handler
-        rightHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            rightHandle.classList.add('dragging');
-            document.body.style.cursor = 'col-resize';
-            this.tabManager.startResize(); // Start layout resize tracking
-
-            const doDrag = (moveEvent) => {
-                const width =
-                    layout.getBoundingClientRect().right - moveEvent.clientX;
-                const capPx = clampPanelWidth(
-                    DIFF_PANEL_CAP.max,
-                    DIFF_PANEL_CAP,
+            // Right panel: drawer vs docked
+            if (isDiffDrawerViewport()) {
+                const savedDrawerRight = localStorage.getItem(
+                    'phi_drawer_right_width',
                 );
-                if (width > DIFF_PANEL_CAP.min && width < capPx) {
-                    diffPanel.style.width = `${width}px`;
-                    localStorage.setItem('phi_panel_right_width', width);
-                    this.tabManager.fitActiveTerminal();
-                    this.diffController.fitTerminal();
+                if (savedDrawerRight) {
+                    const w = parseFloat(savedDrawerRight);
+                    const maxW = Math.max(200, window.innerWidth - 24);
+                    if (!Number.isNaN(w) && w >= 200) {
+                        diffPanel.style.setProperty(
+                            'width',
+                            `${Math.min(w, maxW)}px`,
+                            'important',
+                        );
+                    }
                 }
-            };
+            } else {
+                diffPanel.style.removeProperty('width');
+                const savedRightWidth = localStorage.getItem(
+                    'phi_panel_right_width',
+                );
+                if (savedRightWidth) {
+                    diffPanel.style.width = `${clampPanelWidth(
+                        parseFloat(savedRightWidth),
+                        DIFF_PANEL_CAP,
+                    )}px`;
+                }
+            }
+        };
 
-            const stopDrag = () => {
-                rightHandle.classList.remove('dragging');
-                document.body.style.cursor = '';
-                document.removeEventListener('mousemove', doDrag);
-                document.removeEventListener('mouseup', stopDrag);
-                this.tabManager.fitActiveTerminal();
-                this.diffController.fitTerminal();
-                this.tabManager.endResize(); // End layout resize tracking
-            };
+        applyResponsivePanelWidths();
+        window.addEventListener('resize', applyResponsivePanelWidths);
 
-            document.addEventListener('mousemove', doDrag);
-            document.addEventListener('mouseup', stopDrag);
-        });
+        const hasPointer =
+            typeof window !== 'undefined' && 'PointerEvent' in window;
+        const startEvt = hasPointer ? 'pointerdown' : 'mousedown';
+        const moveEvt = hasPointer ? 'pointermove' : 'mousemove';
+        const endEvt = hasPointer ? 'pointerup' : 'mouseup';
+
+        // Desktop Left resizing handler
+        if (leftHandle) {
+            leftHandle.addEventListener(startEvt, (e) => {
+                e.preventDefault();
+                leftHandle.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                if (leftHandle.setPointerCapture && e.pointerId != null) {
+                    try {
+                        leftHandle.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                }
+                this.tabManager?.startResize();
+
+                const doDrag = (moveEvent) => {
+                    if (!layout) return;
+                    const width =
+                        moveEvent.clientX - layout.getBoundingClientRect().left;
+                    const capPx = clampPanelWidth(
+                        SIDEBAR_PANEL_CAP.max,
+                        SIDEBAR_PANEL_CAP,
+                    );
+                    if (width > SIDEBAR_PANEL_CAP.min && width < capPx) {
+                        sidebar.style.removeProperty('width');
+                        sidebar.style.width = `${width}px`;
+                        localStorage.setItem('phi_panel_left_width', width);
+
+                        if (width < 120) {
+                            sidebar.classList.add('sidebar-narrow');
+                        } else {
+                            sidebar.classList.remove('sidebar-narrow');
+                        }
+
+                        this.tabManager?.fitActiveTerminal();
+                    }
+                };
+
+                const stopDrag = (upEvent) => {
+                    leftHandle.classList.remove('dragging');
+                    document.body.style.cursor = '';
+                    if (
+                        leftHandle.releasePointerCapture &&
+                        upEvent?.pointerId != null
+                    ) {
+                        try {
+                            leftHandle.releasePointerCapture(upEvent.pointerId);
+                        } catch (_) {}
+                    }
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, stopDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', stopDrag);
+                    }
+                    this.tabManager?.fitActiveTerminal();
+                    this.tabManager?.endResize();
+                };
+
+                document.addEventListener(moveEvt, doDrag);
+                document.addEventListener(endEvt, stopDrag);
+                if (hasPointer) {
+                    document.addEventListener('pointercancel', stopDrag);
+                }
+            });
+        }
+
+        // Desktop Right resizing handler
+        if (rightHandle) {
+            rightHandle.addEventListener(startEvt, (e) => {
+                e.preventDefault();
+                rightHandle.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                if (rightHandle.setPointerCapture && e.pointerId != null) {
+                    try {
+                        rightHandle.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                }
+                this.tabManager?.startResize();
+
+                const doDrag = (moveEvent) => {
+                    if (!layout) return;
+                    const width =
+                        layout.getBoundingClientRect().right -
+                        moveEvent.clientX;
+                    const capPx = clampPanelWidth(
+                        DIFF_PANEL_CAP.max,
+                        DIFF_PANEL_CAP,
+                    );
+                    if (width > DIFF_PANEL_CAP.min && width < capPx) {
+                        diffPanel.style.removeProperty('width');
+                        diffPanel.style.width = `${width}px`;
+                        localStorage.setItem('phi_panel_right_width', width);
+                        this.tabManager?.fitActiveTerminal();
+                        this.diffController?.fitTerminal();
+                    }
+                };
+
+                const stopDrag = (upEvent) => {
+                    rightHandle.classList.remove('dragging');
+                    document.body.style.cursor = '';
+                    if (
+                        rightHandle.releasePointerCapture &&
+                        upEvent?.pointerId != null
+                    ) {
+                        try {
+                            rightHandle.releasePointerCapture(
+                                upEvent.pointerId,
+                            );
+                        } catch (_) {}
+                    }
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, stopDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', stopDrag);
+                    }
+                    this.tabManager?.fitActiveTerminal();
+                    this.diffController?.fitTerminal();
+                    this.tabManager?.endResize();
+                };
+
+                document.addEventListener(moveEvt, doDrag);
+                document.addEventListener(endEvt, stopDrag);
+                if (hasPointer) {
+                    document.addEventListener('pointercancel', stopDrag);
+                }
+            });
+        }
+
+        // Mobile / Drawer Left resizing handler
+        if (leftDrawerHandle && sidebar) {
+            leftDrawerHandle.addEventListener(startEvt, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._isDraggingDrawer = true;
+                leftDrawerHandle.classList.add('dragging');
+                sidebar.classList.add('resizing');
+
+                if (leftDrawerHandle.setPointerCapture && e.pointerId != null) {
+                    try {
+                        leftDrawerHandle.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                }
+
+                const doDrag = (moveEvent) => {
+                    const clientX = moveEvent.clientX;
+                    const minWidth = 160;
+                    const maxWidth = Math.max(minWidth, window.innerWidth - 24);
+                    if (clientX < 100) {
+                        sidebar.style.setProperty(
+                            'width',
+                            `${minWidth}px`,
+                            'important',
+                        );
+                        sidebar.classList.add('sidebar-narrow');
+                        return;
+                    }
+                    const newWidth = Math.max(
+                        minWidth,
+                        Math.min(clientX, maxWidth),
+                    );
+                    sidebar.style.setProperty(
+                        'width',
+                        `${newWidth}px`,
+                        'important',
+                    );
+                    localStorage.setItem('phi_drawer_left_width', newWidth);
+                    if (newWidth < 120) {
+                        sidebar.classList.add('sidebar-narrow');
+                    } else {
+                        sidebar.classList.remove('sidebar-narrow');
+                    }
+                };
+
+                const stopDrag = (upEvent) => {
+                    leftDrawerHandle.classList.remove('dragging');
+                    sidebar.classList.remove('resizing');
+                    if (
+                        leftDrawerHandle.releasePointerCapture &&
+                        upEvent?.pointerId != null
+                    ) {
+                        try {
+                            leftDrawerHandle.releasePointerCapture(
+                                upEvent.pointerId,
+                            );
+                        } catch (_) {}
+                    }
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, stopDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', stopDrag);
+                    }
+
+                    if (upEvent && upEvent.clientX < 100) {
+                        sidebar.classList.remove('drawer-open');
+                        const saved =
+                            localStorage.getItem('phi_drawer_left_width') ||
+                            280;
+                        sidebar.style.setProperty(
+                            'width',
+                            `${saved}px`,
+                            'important',
+                        );
+                    }
+
+                    setTimeout(() => {
+                        this._isDraggingDrawer = false;
+                    }, 50);
+                };
+
+                document.addEventListener(moveEvt, doDrag);
+                document.addEventListener(endEvt, stopDrag);
+                if (hasPointer) {
+                    document.addEventListener('pointercancel', stopDrag);
+                }
+            });
+        }
+
+        // Mobile / Drawer Right resizing handler
+        if (rightDrawerHandle && diffPanel) {
+            rightDrawerHandle.addEventListener(startEvt, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._isDraggingDrawer = true;
+                rightDrawerHandle.classList.add('dragging');
+                diffPanel.classList.add('resizing');
+
+                if (
+                    rightDrawerHandle.setPointerCapture &&
+                    e.pointerId != null
+                ) {
+                    try {
+                        rightDrawerHandle.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                }
+
+                const doDrag = (moveEvent) => {
+                    const clientX = moveEvent.clientX;
+                    const dragWidth = window.innerWidth - clientX;
+                    const minWidth = 200;
+                    const maxWidth = Math.max(minWidth, window.innerWidth - 24);
+                    if (dragWidth < 120) {
+                        diffPanel.style.setProperty(
+                            'width',
+                            `${minWidth}px`,
+                            'important',
+                        );
+                        return;
+                    }
+                    const newWidth = Math.max(
+                        minWidth,
+                        Math.min(dragWidth, maxWidth),
+                    );
+                    diffPanel.style.setProperty(
+                        'width',
+                        `${newWidth}px`,
+                        'important',
+                    );
+                    localStorage.setItem('phi_drawer_right_width', newWidth);
+                };
+
+                const stopDrag = (upEvent) => {
+                    rightDrawerHandle.classList.remove('dragging');
+                    diffPanel.classList.remove('resizing');
+                    if (
+                        rightDrawerHandle.releasePointerCapture &&
+                        upEvent?.pointerId != null
+                    ) {
+                        try {
+                            rightDrawerHandle.releasePointerCapture(
+                                upEvent.pointerId,
+                            );
+                        } catch (_) {}
+                    }
+                    document.removeEventListener(moveEvt, doDrag);
+                    document.removeEventListener(endEvt, stopDrag);
+                    if (hasPointer) {
+                        document.removeEventListener('pointercancel', stopDrag);
+                    }
+
+                    const finalDragWidth = upEvent
+                        ? window.innerWidth - upEvent.clientX
+                        : 300;
+                    if (finalDragWidth < 120) {
+                        this.diffController?.togglePanel(false);
+                        const saved =
+                            localStorage.getItem('phi_drawer_right_width') ||
+                            320;
+                        diffPanel.style.setProperty(
+                            'width',
+                            `${saved}px`,
+                            'important',
+                        );
+                    }
+
+                    setTimeout(() => {
+                        this._isDraggingDrawer = false;
+                    }, 50);
+                };
+
+                document.addEventListener(moveEvt, doDrag);
+                document.addEventListener(endEvt, stopDrag);
+                if (hasPointer) {
+                    document.addEventListener('pointercancel', stopDrag);
+                }
+            });
+        }
     }
 
     applyAccentTheme(colorKey) {
