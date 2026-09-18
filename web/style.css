@@ -1303,18 +1303,120 @@ html[data-phi-desktop-root] .app-header {
 
 /* DRAGGABLE RESIZE HANDLE */
 .resize-handle {
+    position: relative;
     width: 4px;
     cursor: col-resize;
     background-color: transparent;
     transition: background-color 0.2s;
     flex-shrink: 0;
     z-index: 10;
+    touch-action: none;
+}
+
+.resize-handle::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -8px;
+    right: -8px;
 }
 
 .resize-handle:hover,
 .resize-handle.dragging {
     background-color: var(--accent);
     box-shadow: 0 0 14px var(--accent-glow);
+}
+
+/* DRAWER RESIZE HANDLES (MOBILE & TABLET SLIDE-OUTS) */
+.drawer-resize-handle {
+    display: none;
+}
+
+.sidebar-panel.resizing,
+.diff-panel.resizing {
+    transition: none !important;
+    user-select: none;
+}
+
+@media (max-width: 1023px), (min-width: 1024px) and (max-aspect-ratio: 10 / 11) {
+    .sidebar-panel .drawer-resize-handle {
+        display: block;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: -10px;
+        width: 24px;
+        cursor: col-resize;
+        touch-action: none;
+        z-index: 1005;
+        background: transparent;
+    }
+
+    .sidebar-panel .drawer-resize-handle::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 10px;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 40px;
+        border-radius: 3px;
+        background-color: var(--text-muted);
+        opacity: 0.35;
+        transition:
+            opacity 0.2s,
+            background-color 0.2s,
+            width 0.2s;
+    }
+
+    .sidebar-panel .drawer-resize-handle:hover::after,
+    .sidebar-panel .drawer-resize-handle.dragging::after {
+        opacity: 1;
+        width: 4px;
+        background-color: var(--accent);
+        box-shadow: 0 0 10px var(--accent-glow);
+    }
+}
+
+@media (max-width: 1279px) {
+    .diff-panel .drawer-resize-handle {
+        display: block;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -10px;
+        width: 24px;
+        cursor: col-resize;
+        touch-action: none;
+        z-index: 1205;
+        background: transparent;
+    }
+
+    .diff-panel .drawer-resize-handle::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 40px;
+        border-radius: 3px;
+        background-color: var(--text-muted);
+        opacity: 0.35;
+        transition:
+            opacity 0.2s,
+            background-color 0.2s,
+            width 0.2s;
+    }
+
+    .diff-panel .drawer-resize-handle:hover::after,
+    .diff-panel .drawer-resize-handle.dragging::after {
+        opacity: 1;
+        width: 4px;
+        background-color: var(--accent);
+        box-shadow: 0 0 10px var(--accent-glow);
+    }
 }
 
 /* MIDDLE PANEL: TERMINAL & TAB SECTION */

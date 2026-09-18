@@ -156,15 +156,27 @@ describe('nextContentZoomPercent', () => {
 });
 
 describe('applyContentZoom', () => {
-  it('uses manual mode and converts the persisted percentage to a factor', () => {
+  it('uses isolated mode and converts the persisted percentage to a factor', () => {
     const target = {
       setZoomMode: vi.fn(),
       setZoomFactor: vi.fn(),
       isDestroyed: () => false,
     };
     applyContentZoom(target as never, 125);
-    expect(target.setZoomMode).toHaveBeenCalledWith('manual');
+    expect(target.setZoomMode).toHaveBeenCalledWith('isolated');
     expect(target.setZoomFactor).toHaveBeenCalledWith(1.25);
+  });
+
+  it('never configures manual mode which disables Chromium layout zoom', () => {
+    const target = {
+      setZoomMode: vi.fn(),
+      setZoomFactor: vi.fn(),
+      isDestroyed: () => false,
+    };
+    applyContentZoom(target as never, 80);
+    expect(target.setZoomMode).not.toHaveBeenCalledWith('manual');
+    expect(target.setZoomMode).toHaveBeenCalledWith('isolated');
+    expect(target.setZoomFactor).toHaveBeenCalledWith(0.8);
   });
 
   it('skips a destroyed target safely', () => {
