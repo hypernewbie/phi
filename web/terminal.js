@@ -1038,6 +1038,8 @@ export class TabManager {
 
         // Staged input send on Enter
         this.inputTextArea.addEventListener('keydown', (e) => {
+            if (this.handleInputToggleShortcut?.(e)) return;
+
             // When input is empty, capture arrows, enter, escape and ctrl key
             // shortcuts to control PTY directly. The map lives in
             // _forwardKeyToPty, shared with the terminal-focused and mobile
@@ -1467,6 +1469,38 @@ export class TabManager {
         if (activeTab?.term) {
             activeTab.term.focus();
         }
+    }
+
+    focusInputTextArea() {
+        if (!this.inputTextArea) return;
+        if (this.inputBarContainer?.classList.contains('hidden')) return;
+        this.inputTextArea.focus({ preventScroll: true });
+        const len = this.inputTextArea.value.length;
+        this.inputTextArea.setSelectionRange(len, len);
+    }
+
+    toggleInputFocus() {
+        if (!this.inputTextArea) return;
+        if (this.inputBarContainer?.classList.contains('hidden')) return;
+        if (document.activeElement === this.inputTextArea) {
+            this.inputTextArea.blur();
+            this.focusActiveTerminal();
+        } else {
+            this.focusInputTextArea();
+        }
+    }
+
+    handleInputToggleShortcut(e) {
+        if (e.defaultPrevented) return false;
+        // Require Ctrl without Alt or Meta (Cmd).
+        if (!e.ctrlKey || e.altKey || e.metaKey) return false;
+        if (e.key !== '`' && e.key !== '~' && e.code !== 'Backquote') {
+            return false;
+        }
+
+        e.preventDefault();
+        this.toggleInputFocus();
+        return true;
     }
 
     // ── Hot-v1 attach bootstrap, gap repair, screen checkpoints ──
@@ -2583,6 +2617,9 @@ export class TabManager {
                 e.type === 'keydown' &&
                 this.app?.handlePanelResizeShortcut?.(e)
             ) {
+                return false;
+            }
+            if (e.type === 'keydown' && this.handleInputToggleShortcut?.(e)) {
                 return false;
             }
             const isMac = isMacPlatform();
@@ -6904,6 +6941,10 @@ export class TabManager {
     }
 
     handleGlobalTabShortcuts(e) {
+        if (this.handleInputToggleShortcut?.(e)) {
+            return;
+        }
+
         // Shift+F5 or Ctrl/Cmd+Shift+R: Reconnect / refresh all tabs in current workspace (Idea A)
         if (
             (e.shiftKey &&

@@ -865,6 +865,9 @@ export class App {
             if (this.handlePanelResizeShortcut(e)) {
                 return;
             }
+            if (this.tabManager?.handleInputToggleShortcut?.(e)) {
+                return;
+            }
             // Ctrl+Shift+D = diag panel. Matches the existing Ctrl+Shift+F
             // search and Ctrl+P pattern (terminal.js handles terminal ones).
             if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
