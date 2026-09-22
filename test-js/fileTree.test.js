@@ -9,12 +9,14 @@ import { FileTreeManager } from '../web/filetree.js';
 
 setupDomHarness();
 
-function makeApp({ coder = 'claude' } = {}) {
+function makeApp({ coder = 'claude', markdownManager } = {}) {
     return {
         sessionsManager: { activeCWD: '/ws' },
         tabManager: { getActiveTab: () => ({ coder }), adjustInputHeight() {} },
         diffController: { isPanelOpen: true, activeTab: 'files' },
         showToast() {},
+        // Left-click preview target; tests pass a vi.fn() to spy on it.
+        markdownManager: markdownManager ?? { previewFile() {} },
     };
 }
 
@@ -65,40 +67,50 @@ describe('FileTreeManager', () => {
         expect(firstItem.querySelector('.ft-chevron').textContent).toBe('▸');
     });
 
-    it('clicking a file row inserts @path for the claude coder', async () => {
+    it('clicking a file row previews it and never touches the input', async () => {
         installFetch({
             '': {
                 truncated: false,
                 entries: [{ name: 'main.go', dir: false }],
             },
         });
-        const manager = makeManager(makeApp({ coder: 'claude' }));
+        const md = { previewFile: vi.fn() };
+        const manager = makeManager(makeApp({ markdownManager: md }));
         await manager.refresh();
 
         const fileItem = manager.treeEl.querySelector('.md-file-item');
         fileItem.click();
         await Promise.resolve();
 
+        expect(md.previewFile).toHaveBeenCalledTimes(1);
+        expect(md.previewFile).toHaveBeenCalledWith(
+            { path: 'main.go', name: 'main.go' },
+            '/ws',
+        );
         const textarea = document.getElementById('input-textarea');
-        expect(textarea.value).toBe('@main.go');
+        expect(textarea.value).toBe('');
     });
 
-    it('clicking a file row inserts a raw path for a non-mention coder', async () => {
+    it('click-to-preview is coder-independent: no @path for bash either', async () => {
         installFetch({
             '': {
                 truncated: false,
                 entries: [{ name: 'main.go', dir: false }],
             },
         });
-        const manager = makeManager(makeApp({ coder: 'bash' }));
+        const md = { previewFile: vi.fn() };
+        const manager = makeManager(
+            makeApp({ coder: 'bash', markdownManager: md }),
+        );
         await manager.refresh();
 
         const fileItem = manager.treeEl.querySelector('.md-file-item');
         fileItem.click();
         await Promise.resolve();
 
+        expect(md.previewFile).toHaveBeenCalledTimes(1);
         const textarea = document.getElementById('input-textarea');
-        expect(textarea.value).toBe('main.go');
+        expect(textarea.value).toBe('');
     });
 
     it('clicking a dir row expands it in place: fetches only that dir, existing rows keep their identity', async () => {
