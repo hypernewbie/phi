@@ -145,7 +145,10 @@ export class FileTreeManager {
             item.addEventListener('click', () => this._toggleDir(rel));
         } else {
             item.innerHTML = `${FILE_ICON_SVG}<span class="md-file-name">${escapeHtml(entry.name)}</span>`;
-            item.addEventListener('click', () => this._insertPath(rel));
+            // Left-click previews (user verdict 2026-09-16, replacing the
+            // older single-click-insert review). @-mention lives in the
+            // ⋯ context menu as "Insert @path".
+            item.addEventListener('click', () => this._previewFile(rel));
         }
 
         const actionBtn = document.createElement('button');
@@ -346,8 +349,8 @@ export class FileTreeManager {
 
         // Preview is a file-only action; directories have nothing to
         // preview, and the click-toggle-dir gesture is what they get.
-        // Single-click Insert stays unchanged (architect's review: do
-        // not replace single-click behavior with preview).
+        // Since left-click previews (2026-09-16), this menu is the only
+        // @-mention path for files.
         const actions: Array<{
             icon: string;
             label: string;
