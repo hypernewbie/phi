@@ -77,11 +77,17 @@ export class App {
         // 1. Fetch coder templates & presets from API
         await this.fetchCoderPresets();
 
-        // 2. Restore previously open terminal tabs (reconnects live PTY sessions)
-        await this.tabManager.restoreTabsState();
-
-        // 3. Load workspace selector and configurations
+        // 2. Load workspace selector and configurations FIRST. This
+        // resolves hostname_override before any tab socket opens —
+        // otherwise restored tabs use the page host and only newly
+        // created tabs pick up the override, so a config like
+        // `EUROPA:7070` works for the second tab but the first tab
+        // dials europa:7070 anyway because it was already up. Putting
+        // this ahead of restoreTabsState keeps every socket consistent.
         await this.sessionsManager.loadConfig();
+
+        // 3. Restore tabs (sockets dial the resolved host).
+        await this.tabManager.restoreTabsState();
 
         // 4. Setup panel resize handles
         this.initResizers();

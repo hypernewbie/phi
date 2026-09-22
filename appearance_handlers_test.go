@@ -173,10 +173,14 @@ func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
 		in   string
 		want string
 	}{
+		// hostname_override is a free-form DISPLAY LABEL (it never
+		// touches a socket URL), so anything printable and short is
+		// stored verbatim — including values that are not hostnames.
 		{`example.com:8080`, `example.com:8080`},
-		{`https://example.com:8080/path`, `example.com:8080`},
-		{`[::1]:9000`, `[::1]:9000`},
-		{``, ``}, // blank clears back to page-host default
+		{`dusty_potato`, `dusty_potato`},
+		{`homelab`, `homelab`},
+		{`etraces fugaces`, `etraces fugaces`},
+		{``, ``}, // blank clears back to the OS hostname
 	}
 	for _, tc := range cases {
 		t.Run("", func(t *testing.T) {
@@ -197,12 +201,16 @@ func TestHandleAppearanceUpdate_HostnameOverride(t *testing.T) {
 	}
 }
 
-func TestHandleAppearanceUpdate_HostnameOverrideRejectsGarbage(t *testing.T) {
+func TestHandleAppearanceUpdate_HostnameOverrideRejects(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
 	cfg.HostnameOverride = "example.com:8080"
 	saveConfig(cfg)
-	for _, bad := range []string{`not a host!`, `user@example.com`, `example.com:abc`, `-leading-dash.com`, `[]`} {
+	// Only things that break the label's role as a DISPLAY string are
+	// rejected: too long, control characters. Hostname-shaped garbage
+	// is fine — the label never dials anything.
+	long := strings.Repeat("a", 65)
+	for _, bad := range []string{long, "line1\nline2", "tab\there"} {
 		body := `{"hostname_override":` + strconv.Quote(bad) + `}`
 		req := httptest.NewRequest(http.MethodPost, "/api/config/appearance",
 			strings.NewReader(body))
@@ -212,8 +220,7 @@ func TestHandleAppearanceUpdate_HostnameOverrideRejectsGarbage(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("in %q: status %d", bad, w.Code)
 		}
-		// Garbage leaves the stored value unchanged: a typo can never
-		// brick connectivity.
+		// Rejected input leaves the stored value unchanged.
 		if got := loadConfig().HostnameOverride; got != "example.com:8080" {
 			t.Errorf("in %q: stored value changed to %q", bad, got)
 		}
@@ -363,8 +370,9 @@ func TestReportedHostname(t *testing.T) {
 	}{
 		{"blank falls back to OS hostname", "", osHost},
 		{"override wins over OS hostname", "example.com", "example.com"},
-		{"override port stripped for identity", "example.com:8080", "example.com"},
-		{"bracketed IPv6 keeps brackets, port stripped", "[::1]:9000", "[::1]"},
+		{"label reported verbatim, no port stripping", "example.com:8080", "example.com:8080"},
+		{"free-form label reported verbatim", "dusty_potato", "dusty_potato"},
+		{"codename with colon reported verbatim", "homelab:gw", "homelab:gw"},
 		{"whitespace-only override falls back", "   ", osHost},
 	}
 	for _, tc := range cases {
@@ -379,7 +387,7 @@ func TestReportedHostname(t *testing.T) {
 func TestHandleConfig_ReportsOverrideHostname(t *testing.T) {
 	withTempConfig(t)
 	cfg := loadConfig()
-	cfg.HostnameOverride = "example.com:8080"
+	cfg.HostnameOverride = "dusty_potato"
 	saveConfig(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
@@ -391,12 +399,14 @@ func TestHandleConfig_ReportsOverrideHostname(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// Identity field reports the override (uppercased, like before);
-	// the raw override rides separately for the settings input.
-	if body["hostname"] != "EXAMPLE.COM" {
-		t.Errorf("hostname: got %v want EXAMPLE.COM", body["hostname"])
+	// Identity field reports the label verbatim, uppercased for the
+	// display style; the raw label rides separately for the settings
+	// input. The label is free-form — "dusty_potato" on a corp PC
+	// named CORP01 is the whole point.
+	if body["hostname"] != "DUSTY_POTATO" {
+		t.Errorf("hostname: got %v want DUSTY_POTATO", body["hostname"])
 	}
-	if body["hostname_override"] != "example.com:8080" {
+	if body["hostname_override"] != "dusty_potato" {
 		t.Errorf("hostname_override: got %v", body["hostname_override"])
 	}
 }

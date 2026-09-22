@@ -4,7 +4,7 @@
    Imports only pure helpers — no app singletons. Importing this module
    has no side effects; md.html calls initMdView() explicitly. */
 import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './md-render.js';
-import { escapeHtml, getLastFolderName, resolveServerHost } from './util.js';
+import { escapeHtml, getLastFolderName } from './util.js';
 // --- pure helpers (exported for tests) ---
 // decodeEventFrame splits a binary hub frame into its 1-byte type tag and
 // UTF-8 payload (the wire format of BroadcastAll: [type, ...json]).
@@ -109,8 +109,7 @@ export function initMdView() {
         }
     }
     function connect() {
-        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${proto}://${resolveServerHost()}/ws/md-events`);
+        const ws = new WebSocket(new URL('/ws/md-events', window.location.origin).href);
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.
         ws.onopen = () => {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 )
 
@@ -346,37 +345,26 @@ func handleThemeUpdate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// hostnameOverrideRe validates `host` or `host:port` (brackets for IPv6
-// literals). It mirrors the client's resolveServerHost contract so both
-// sides accept exactly the same values — pinned by shared vectors in
-// Go tests and test-js/hostOverride.test.js.
-var hostnameOverrideRe = regexp.MustCompile(`^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)(:\d{1,5})?$`)
-
-// sanitizeHostnameOverride reduces a user-supplied socket hostname to
-// host[:port]. It mirrors the client's resolveServerHost contract: blank
-// clears, garbage is rejected with ok=false so the stored value is left
-// unchanged.
+// sanitizeHostnameOverride validates the hostname_override DISPLAY
+// LABEL. It is not a hostname — it never touches a socket URL, so any
+// short printable text is fine: a machine nickname ("dusty_potato"),
+// a codename ("europa"), even a Japanese haiku. Only length and
+// control characters are checked: it rides in JSON payloads, HTML
+// escapes, and notification titles, so newlines/control bytes would
+// be at best rendered oddly and at worst injection surface. Blank
+// clears back to the OS hostname.
 func sanitizeHostnameOverride(v string) (string, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return "", true
 	}
-	lower := strings.ToLower(v)
-	for _, scheme := range []string{"ws://", "wss://", "http://", "https://"} {
-		if strings.HasPrefix(lower, scheme) {
-			v = v[len(scheme):]
-			break
+	if len(v) > 64 {
+		return "", false
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return "", false
 		}
-	}
-	if i := strings.IndexAny(v, "/?#"); i >= 0 {
-		v = v[:i]
-	}
-	v = strings.TrimRight(v, ":")
-	if len(v) == 0 || len(v) > 253 {
-		return "", false
-	}
-	if !hostnameOverrideRe.MatchString(v) {
-		return "", false
 	}
 	return v, true
 }
