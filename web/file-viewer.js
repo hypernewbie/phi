@@ -2,7 +2,7 @@
 
    Routes a file-tree entry to the right inline preview viewer. The
    heavy lifting is done by vendored libraries — Viewer.js for images,
-   Plyr for video/audio, Chromium's built-in iframe for PDF,
+   Plyr for video/audio, the vendored PDF.js wrapper for PDF,
    @alenaksu/json-viewer for JSON, and phi's existing marked/DOMPurify/
    hljs for markdown and code. This module is the thin shell that
    picks which library to mount and the lifecycle for disposing it.
@@ -145,10 +145,10 @@ export async function mountFileView(opts) {
     }
 }
 async function mountImage(url, container) {
-    await ensureVendorScript(
-        'vendor/viewerjs/viewer.min.js',
-        () => window.Viewer !== undefined,
-    );
+    await ensureVendorScript('vendor/viewerjs/viewer.min.js', () => {
+        // SAFETY: Viewer.js registers this global through the local vendor script above.
+        return window.Viewer !== undefined;
+    });
     const img = document.createElement('img');
     img.className = 'file-viewer-image';
     img.src = url;
@@ -178,10 +178,10 @@ async function mountImage(url, container) {
     };
 }
 async function mountMedia(url, container, isVideo) {
-    await ensureVendorScript(
-        'vendor/plyr/plyr.polyfilled.js',
-        () => window.Plyr !== undefined,
-    );
+    await ensureVendorScript('vendor/plyr/plyr.polyfilled.js', () => {
+        // SAFETY: Plyr registers this global through the local vendor script above.
+        return window.Plyr !== undefined;
+    });
     const el = document.createElement(isVideo ? 'video' : 'audio');
     el.className = isVideo ? 'file-viewer-video' : 'file-viewer-audio';
     el.src = url;
@@ -242,7 +242,15 @@ async function mountMarkdown(url, container, signal) {
     if (!res.ok)
         throw new Error(`Failed to load (${res.status} ${res.statusText})`);
     const text = await res.text();
-    container.innerHTML = `<div class="md-rendered">${renderMarkdownSafe(text)}</div>`;
+    const rendered = document.createElement('div');
+    rendered.className = 'md-rendered';
+    // SAFETY: renderMarkdownSafe applies Phi's DOMPurify policy before this HTML is parsed.
+    rendered.append(
+        document
+            .createRange()
+            .createContextualFragment(renderMarkdownSafe(text)),
+    );
+    container.replaceChildren(rendered);
     return {
         dispose: () => {
             container.innerHTML = '';
@@ -296,6 +304,7 @@ async function mountJson(url, container, signal) {
         // .data setter is the documented API; assigning parsed values
         // circumvents innerHTML and any prototype-pollution surface
         // from a crafted JSON key like `__proto__`.
+        // SAFETY: json-viewer documents its `data` property as the supported input API.
         el.data = parsed;
     } else {
         // Invalid JSON: render the raw text as a code block.
@@ -313,21 +322,22 @@ function mountDownload(url, path, container) {
     const name = path.slice(
         Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
     );
-    container.innerHTML =
-        `<div class="file-viewer-download">` +
-        `<p>Can't preview <code>${escapeHtml(name)}</code>.</p>` +
-        `<a class="file-viewer-download-btn" href="${escapeHtml(url)}" download="${escapeHtml(name)}">Download</a>` +
-        `</div>`;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'file-viewer-download';
+    const message = document.createElement('p');
+    const code = document.createElement('code');
+    code.textContent = name;
+    message.append("Can't preview ", code, '.');
+    const download = document.createElement('a');
+    download.className = 'file-viewer-download-btn';
+    download.href = url;
+    download.download = name;
+    download.textContent = 'Download';
+    wrapper.append(message, download);
+    container.replaceChildren(wrapper);
     return {
         dispose: () => {
             container.innerHTML = '';
         },
     };
-}
-function escapeHtml(s) {
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }

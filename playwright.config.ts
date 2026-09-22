@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { defineConfig } from '@playwright/test';
 
 // Spot-checks only (e2e/). The suites in test-js/ remain the default
@@ -7,8 +9,13 @@ export default defineConfig({
     testDir: './e2e',
     timeout: 120_000,
     retries: 0,
-    reporter: 'line',
+    reporter: [
+        ['line'],
+        ['html', { outputFolder: 'playwright-report', open: 'never' }],
+    ],
     use: {
+        trace: 'retain-on-failure',
+        screenshot: 'only-on-failure',
         // Local runs reuse the machine's Edge instead of downloading
         // Chromium (CI has no Edge: set PW_CHANNEL=chromium there, or
         // leave unset and `npx playwright install chromium` in the job).

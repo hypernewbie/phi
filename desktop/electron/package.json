@@ -7,7 +7,7 @@
   "author": "hypernewbie",
   "type": "module",
   "main": "dist/main.js",
-  "packageManager": "pnpm@11.18.0",
+  "packageManager": "pnpm@11.27.1+sha512.a81d4c21b9b09a4b0aebf90ef5e527d4262bdda322d26082978cb549023ac6d9cafc98b19fffaa5c71db438a65f70224edb78d7311187861ff96480d1cdca23c",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
@@ -22,16 +22,16 @@
     "smoke": "vitest run test/smoke.test.ts"
   },
   "dependencies": {
-    "commander": "^15.0.0"
+    "commander": "catalog:"
   },
   "devDependencies": {
-    "@types/jsdom": "^30.0.0",
-    "@types/node": "^24.13.3",
-    "electron": "44.1.1",
-    "electron-builder": "^26.15.3",
-    "jsdom": "^30.0.1",
-    "typescript": "7.0.2",
-    "vitest": "4.1.11",
-    "wawoff2": "^2.0.1"
+    "@types/jsdom": "catalog:",
+    "@types/node": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wawoff2": "catalog:"
   }
 }

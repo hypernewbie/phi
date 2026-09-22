@@ -1,12 +1,12 @@
 # phi-desktop-electron
 
 The Electron desktop shell for Phi — the migration target for the current
-Wails v2.13 shell (`desktop/`). This package is a **sibling** of the Wails
-desktop module: it has its own `package.json`, its own lockfile, and its
-own TypeScript build. It is not a member of the repo-root pnpm workspace,
-and the Wails module (`desktop/go.mod`, `desktop/main.go`,
-`desktop/internal/*`) stays untouched until the migration's final step
-(see `docs/ELECTRON_MIGRATION.md` for the full 10-step plan and status).
+Wails v2.13 shell (`desktop/`). This package has its own `package.json` and
+TypeScript build and is a member of the repo-root pnpm workspace. The shared
+catalog and root lockfile keep its frontend tooling aligned with the optional
+pet package. The Wails module (`desktop/go.mod`, `desktop/main.go`,
+`desktop/internal/*`) stays untouched until the migration's final step (see
+`docs/ELECTRON_MIGRATION.md` for the full 10-step plan and status).
 
 ## Phase 2 scope (this slice)
 
@@ -252,20 +252,17 @@ isolation.
 ## Install / build / run
 
 ```sh
-cd desktop/electron
-pnpm install        # downloads the pinned Electron binary (approved via
-                    # pnpm-workspace.yaml allowBuilds)
-pnpm run build      # tsc -> dist/main.js + copies shell.html/shell.css to dist/
-pnpm run typecheck  # strict type check of src/ and test/
-pnpm run dev        # electron . — opens the phase-1 shell window
-pnpm test           # vitest run (unit tests; the e2e smoke test spawns the
-                    # real Electron binary and skips on documented
-                    # no-display/not-built preconditions — never fails on
-                    # those)
-pnpm run smoke      # vitest run test/smoke.test.ts — the same e2e harness
-pnpm run package    # electron-builder placeholder (real packaging is a
-                    # later slice; out/ is gitignored)
+pnpm install --filter phi-desktop-electron
+pnpm --filter phi-desktop-electron run build
+pnpm --filter phi-desktop-electron run typecheck
+pnpm --filter phi-desktop-electron test
+pnpm --filter phi-desktop-electron run smoke
+pnpm --filter phi-desktop-electron run package
 ```
+
+The package commands also work from `desktop/electron` for local iteration.
+The install downloads the pinned Electron binary; its postinstall is approved
+in the root `pnpm-workspace.yaml`.
 
 Order matters for the e2e smoke test: it spawns the built bundle, so run
 `pnpm run build` before `pnpm test` / `pnpm run smoke` (CI does the same).
@@ -314,7 +311,7 @@ which only the production CLI path uses.
 
 ```
 package.json          manifest (type: module, main: dist/main.js)
-pnpm-workspace.yaml   own workspace root + electron postinstall approval
+../../pnpm-workspace.yaml  shared workspace catalog + build approvals
 tsconfig.json         strict typecheck config (noEmit)
 tsconfig.build.json   build config -> dist/ (ESM main + modules)
 tsconfig.preload.json build config for the CJS preload -> dist/preload.js

@@ -101,6 +101,7 @@ The directory you launch Phi from becomes the default workspace; switch between 
 - If editing `web-src/*.ts`, also run `pnpm run watch:web` (tsc rewrites `web/*.js`; Vite reloads on the output).
 - If phi runs on a non-default port, set the env var for both: `PHI_PORT=8080 ./phi` + `PHI_PORT=8080 pnpm run dev` (the flag `-port` alone won't retarget the proxy).
 - Note: :5173 is dev-only; :7070 always serves the embedded (build-time) UI; prod is unchanged.
+- Browser vendor bundles are synchronized only from the pinned root catalog with `pnpm run sync:vendors -- --group <xterm|content|preview|kanban|auth>`; `pnpm run check:vendors` verifies checked-in bytes without writing. Fonts, logos, media, and the local PDF wrapper remain repository-owned assets.
 
 **Enable the pre-commit hook** (once per clone) so frontend checks run before you commit:
 

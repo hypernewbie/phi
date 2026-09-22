@@ -13,6 +13,7 @@
 // invariants (gate before window, smoke before tray) are restated as
 // intra-file invariants anchored within one source.
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +28,7 @@ import {
 } from '../src/shortcuts.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const mainSource = readFileSync(
   path.join(here, '..', 'src', 'main.ts'),
   'utf8',
@@ -1887,7 +1889,7 @@ describe('electron-builder.json (native branding)', () => {
     expect(builder.asarUnpack).toContain('assets/**');
   });
 
-  it('aligns electronVersion with devDependencies.electron in package.json', () => {
+  it('resolves Electron from the catalog dependency instead of builder configuration', () => {
     const builder = JSON.parse(
       readFileSync(path.join(here, '..', 'electron-builder.json'), 'utf8'),
     ) as {
@@ -1898,7 +1900,22 @@ describe('electron-builder.json (native branding)', () => {
     ) as {
       devDependencies?: { electron?: string };
     };
-    expect(builder.electronVersion).toBe(pkg.devDependencies?.electron);
+    const installed = JSON.parse(
+      readFileSync(
+        path.join(path.dirname(require.resolve('electron')), 'package.json'),
+        'utf8',
+      ),
+    ) as { version?: string };
+    const workspace = readFileSync(
+      path.join(here, '..', '..', '..', 'pnpm-workspace.yaml'),
+      'utf8',
+    );
+    const catalogElectron = workspace.match(/^  electron:\s*(\S+)\s*$/m)?.[1];
+    if (!catalogElectron) throw new Error('Electron catalog entry is missing');
+
+    expect(builder.electronVersion).toBeUndefined();
+    expect(pkg.devDependencies?.electron).toBe('catalog:');
+    expect(installed.version).toBe(catalogElectron);
   });
 });
 

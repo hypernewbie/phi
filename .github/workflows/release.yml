@@ -47,7 +47,7 @@ jobs:
 
       - name: Build web assets
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --filter phi-dev
           pnpm run build:web
           go run ./tools/webdist
 
@@ -79,19 +79,19 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-          cache-dependency-path: desktop/pet/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install pet dependencies
-        run: pnpm --dir desktop/pet install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --filter @phi-desktop/pet
 
       - name: Typecheck pet
-        run: pnpm --dir desktop/pet typecheck
+        run: pnpm --filter @phi-desktop/pet run typecheck
 
       - name: Test pet
-        run: pnpm --dir desktop/pet test
+        run: pnpm --filter @phi-desktop/pet test
 
       - name: Build pet
-        run: pnpm --dir desktop/pet build
+        run: pnpm --filter @phi-desktop/pet run build
 
       - name: Package and compare pet archive members
         shell: bash
@@ -165,11 +165,10 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-          cache-dependency-path: desktop/electron/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Electron dependencies
-        working-directory: desktop/electron
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --filter phi-desktop-electron
 
       # Packaging is intentionally the only desktop validation here. The
       # hosted runners produce the native installers, but cannot replace the
