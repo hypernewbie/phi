@@ -27,8 +27,28 @@ const SHA256_K = /* @__PURE__ */ Uint32Array.from([
 const SHA256_W = /* @__PURE__ */ new Uint32Array(64);
 /** Internal SHA-224 / SHA-256 compression engine from RFC 6234 §6.2. */
 class SHA2_32B extends HashMD {
-    constructor(outputLen) {
+    // We cannot use array here since array allows indexing by variable
+    // which means optimizer/compiler cannot use registers.
+    // Numeric initializers matter: starting the fields as `undefined` changes
+    // V8's field representation and makes sha256 3x slower (measured).
+    A = 0;
+    B = 0;
+    C = 0;
+    D = 0;
+    E = 0;
+    F = 0;
+    G = 0;
+    H = 0;
+    constructor(outputLen, IV) {
         super(64, outputLen, 8, false);
+        this.A = IV[0] | 0;
+        this.B = IV[1] | 0;
+        this.C = IV[2] | 0;
+        this.D = IV[3] | 0;
+        this.E = IV[4] | 0;
+        this.F = IV[5] | 0;
+        this.G = IV[6] | 0;
+        this.H = IV[7] | 0;
     }
     get() {
         const { A, B, C, D, E, F, G, H } = this;
@@ -44,6 +64,10 @@ class SHA2_32B extends HashMD {
         this.F = F | 0;
         this.G = G | 0;
         this.H = H | 0;
+    }
+    _cloneInto(to) {
+        (to ||= new this.constructor()).set(...this.get());
+        return this._cloneIntoMeta(to);
     }
     process(view, offset) {
         // Extend the first 16 words into the remaining 48 words w[16..63] of the message schedule array
@@ -96,32 +120,14 @@ class SHA2_32B extends HashMD {
 }
 /** Internal SHA-256 hash class grounded in RFC 6234 §6.2. */
 export class _SHA256 extends SHA2_32B {
-    // We cannot use array here since array allows indexing by variable
-    // which means optimizer/compiler cannot use registers.
-    A = SHA256_IV[0] | 0;
-    B = SHA256_IV[1] | 0;
-    C = SHA256_IV[2] | 0;
-    D = SHA256_IV[3] | 0;
-    E = SHA256_IV[4] | 0;
-    F = SHA256_IV[5] | 0;
-    G = SHA256_IV[6] | 0;
-    H = SHA256_IV[7] | 0;
     constructor() {
-        super(32);
+        super(32, SHA256_IV);
     }
 }
 /** Internal SHA-224 hash class grounded in RFC 6234 §6.2 and §8.5. */
 export class _SHA224 extends SHA2_32B {
-    A = SHA224_IV[0] | 0;
-    B = SHA224_IV[1] | 0;
-    C = SHA224_IV[2] | 0;
-    D = SHA224_IV[3] | 0;
-    E = SHA224_IV[4] | 0;
-    F = SHA224_IV[5] | 0;
-    G = SHA224_IV[6] | 0;
-    H = SHA224_IV[7] | 0;
     constructor() {
-        super(28);
+        super(28, SHA224_IV);
     }
 }
 // SHA2-512 is slower than sha256 in js because u64 operations are slow.
@@ -158,8 +164,45 @@ const SHA512_W_H = /* @__PURE__ */ new Uint32Array(80);
 const SHA512_W_L = /* @__PURE__ */ new Uint32Array(80);
 /** Internal SHA-384 / SHA-512 compression engine from RFC 6234 §6.4. */
 class SHA2_64B extends HashMD {
-    constructor(outputLen) {
+    // We cannot use array here since array allows indexing by variable
+    // which means optimizer/compiler cannot use registers.
+    // h -- high 32 bits, l -- low 32 bits
+    // Numeric initializers matter: starting the fields as `undefined` changes
+    // V8's field representation and slows hashing down (measured on sha256).
+    Ah = 0;
+    Al = 0;
+    Bh = 0;
+    Bl = 0;
+    Ch = 0;
+    Cl = 0;
+    Dh = 0;
+    Dl = 0;
+    Eh = 0;
+    El = 0;
+    Fh = 0;
+    Fl = 0;
+    Gh = 0;
+    Gl = 0;
+    Hh = 0;
+    Hl = 0;
+    constructor(outputLen, IV) {
         super(128, outputLen, 16, false);
+        this.Ah = IV[0] | 0;
+        this.Al = IV[1] | 0;
+        this.Bh = IV[2] | 0;
+        this.Bl = IV[3] | 0;
+        this.Ch = IV[4] | 0;
+        this.Cl = IV[5] | 0;
+        this.Dh = IV[6] | 0;
+        this.Dl = IV[7] | 0;
+        this.Eh = IV[8] | 0;
+        this.El = IV[9] | 0;
+        this.Fh = IV[10] | 0;
+        this.Fl = IV[11] | 0;
+        this.Gh = IV[12] | 0;
+        this.Gl = IV[13] | 0;
+        this.Hh = IV[14] | 0;
+        this.Hl = IV[15] | 0;
     }
     // prettier-ignore
     get() {
@@ -184,6 +227,10 @@ class SHA2_64B extends HashMD {
         this.Gl = Gl | 0;
         this.Hh = Hh | 0;
         this.Hl = Hl | 0;
+    }
+    _cloneInto(to) {
+        (to ||= new this.constructor()).set(...this.get());
+        return this._cloneIntoMeta(to);
     }
     process(view, offset) {
         // Extend the first 16 words into the remaining 64 words w[16..79] of the message schedule array
@@ -268,46 +315,14 @@ class SHA2_64B extends HashMD {
 }
 /** Internal SHA-512 hash class grounded in RFC 6234 §6.3 and §6.4. */
 export class _SHA512 extends SHA2_64B {
-    Ah = SHA512_IV[0] | 0;
-    Al = SHA512_IV[1] | 0;
-    Bh = SHA512_IV[2] | 0;
-    Bl = SHA512_IV[3] | 0;
-    Ch = SHA512_IV[4] | 0;
-    Cl = SHA512_IV[5] | 0;
-    Dh = SHA512_IV[6] | 0;
-    Dl = SHA512_IV[7] | 0;
-    Eh = SHA512_IV[8] | 0;
-    El = SHA512_IV[9] | 0;
-    Fh = SHA512_IV[10] | 0;
-    Fl = SHA512_IV[11] | 0;
-    Gh = SHA512_IV[12] | 0;
-    Gl = SHA512_IV[13] | 0;
-    Hh = SHA512_IV[14] | 0;
-    Hl = SHA512_IV[15] | 0;
     constructor() {
-        super(64);
+        super(64, SHA512_IV);
     }
 }
 /** Internal SHA-384 hash class grounded in RFC 6234 §6.3 and §6.4. */
 export class _SHA384 extends SHA2_64B {
-    Ah = SHA384_IV[0] | 0;
-    Al = SHA384_IV[1] | 0;
-    Bh = SHA384_IV[2] | 0;
-    Bl = SHA384_IV[3] | 0;
-    Ch = SHA384_IV[4] | 0;
-    Cl = SHA384_IV[5] | 0;
-    Dh = SHA384_IV[6] | 0;
-    Dl = SHA384_IV[7] | 0;
-    Eh = SHA384_IV[8] | 0;
-    El = SHA384_IV[9] | 0;
-    Fh = SHA384_IV[10] | 0;
-    Fl = SHA384_IV[11] | 0;
-    Gh = SHA384_IV[12] | 0;
-    Gl = SHA384_IV[13] | 0;
-    Hh = SHA384_IV[14] | 0;
-    Hl = SHA384_IV[15] | 0;
     constructor() {
-        super(48);
+        super(48, SHA384_IV);
     }
 }
 /**
@@ -333,47 +348,15 @@ const T256_IV = /* @__PURE__ */ Uint32Array.from([
 /** Internal SHA-512/224 hash class using the derived `T224_IV` and the shared
  * RFC 6234 §6.4 compression engine. */
 export class _SHA512_224 extends SHA2_64B {
-    Ah = T224_IV[0] | 0;
-    Al = T224_IV[1] | 0;
-    Bh = T224_IV[2] | 0;
-    Bl = T224_IV[3] | 0;
-    Ch = T224_IV[4] | 0;
-    Cl = T224_IV[5] | 0;
-    Dh = T224_IV[6] | 0;
-    Dl = T224_IV[7] | 0;
-    Eh = T224_IV[8] | 0;
-    El = T224_IV[9] | 0;
-    Fh = T224_IV[10] | 0;
-    Fl = T224_IV[11] | 0;
-    Gh = T224_IV[12] | 0;
-    Gl = T224_IV[13] | 0;
-    Hh = T224_IV[14] | 0;
-    Hl = T224_IV[15] | 0;
     constructor() {
-        super(28);
+        super(28, T224_IV);
     }
 }
 /** Internal SHA-512/256 hash class using the derived `T256_IV` and the shared
  * RFC 6234 §6.4 compression engine. */
 export class _SHA512_256 extends SHA2_64B {
-    Ah = T256_IV[0] | 0;
-    Al = T256_IV[1] | 0;
-    Bh = T256_IV[2] | 0;
-    Bl = T256_IV[3] | 0;
-    Ch = T256_IV[4] | 0;
-    Cl = T256_IV[5] | 0;
-    Dh = T256_IV[6] | 0;
-    Dl = T256_IV[7] | 0;
-    Eh = T256_IV[8] | 0;
-    El = T256_IV[9] | 0;
-    Fh = T256_IV[10] | 0;
-    Fl = T256_IV[11] | 0;
-    Gh = T256_IV[12] | 0;
-    Gl = T256_IV[13] | 0;
-    Hh = T256_IV[14] | 0;
-    Hl = T256_IV[15] | 0;
     constructor() {
-        super(32);
+        super(32, T256_IV);
     }
 }
 /**
@@ -384,6 +367,7 @@ export class _SHA512_256 extends SHA2_64B {
  * - Each sha256 hash is executing 2^18 bit operations.
  * - Good 2024 ASICs can do 200Th/sec with 3500 watts of power, corresponding to 2^36 hashes/joule.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-256.
@@ -391,11 +375,12 @@ export class _SHA512_256 extends SHA2_64B {
  * sha256(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha256 = /* @__PURE__ */ createHasher(() => new _SHA256(),
+export const sha256 = /* @__PURE__ */ createHasher(() => new _SHA256(), 
 /* @__PURE__ */ oidNist(0x01));
 /**
  * SHA2-224 hash function from RFC 4634.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-224.
@@ -403,11 +388,12 @@ export const sha256 = /* @__PURE__ */ createHasher(() => new _SHA256(),
  * sha224(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha224 = /* @__PURE__ */ createHasher(() => new _SHA224(),
+export const sha224 = /* @__PURE__ */ createHasher(() => new _SHA224(), 
 /* @__PURE__ */ oidNist(0x04));
 /**
  * SHA2-512 hash function from RFC 4634.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-512.
@@ -415,11 +401,12 @@ export const sha224 = /* @__PURE__ */ createHasher(() => new _SHA224(),
  * sha512(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha512 = /* @__PURE__ */ createHasher(() => new _SHA512(),
+export const sha512 = /* @__PURE__ */ createHasher(() => new _SHA512(), 
 /* @__PURE__ */ oidNist(0x03));
 /**
  * SHA2-384 hash function from RFC 4634.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-384.
@@ -427,12 +414,13 @@ export const sha512 = /* @__PURE__ */ createHasher(() => new _SHA512(),
  * sha384(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha384 = /* @__PURE__ */ createHasher(() => new _SHA384(),
+export const sha384 = /* @__PURE__ */ createHasher(() => new _SHA384(), 
 /* @__PURE__ */ oidNist(0x02));
 /**
  * SHA2-512/256 "truncated" hash function, with improved resistance to length extension attacks.
  * See the paper on {@link https://eprint.iacr.org/2010/548.pdf | truncated SHA512}.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-512/256.
@@ -440,12 +428,13 @@ export const sha384 = /* @__PURE__ */ createHasher(() => new _SHA384(),
  * sha512_256(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha512_256 = /* @__PURE__ */ createHasher(() => new _SHA512_256(),
+export const sha512_256 = /* @__PURE__ */ createHasher(() => new _SHA512_256(), 
 /* @__PURE__ */ oidNist(0x06));
 /**
  * SHA2-512/224 "truncated" hash function, with improved resistance to length extension attacks.
  * See the paper on {@link https://eprint.iacr.org/2010/548.pdf | truncated SHA512}.
  * @param msg - message bytes to hash
+ * @param opts - Reserved hash options.
  * @returns Digest bytes.
  * @example
  * Hash a message with SHA2-512/224.
@@ -453,5 +442,5 @@ export const sha512_256 = /* @__PURE__ */ createHasher(() => new _SHA512_256(),
  * sha512_224(new Uint8Array([97, 98, 99]));
  * ```
  */
-export const sha512_224 = /* @__PURE__ */ createHasher(() => new _SHA512_224(),
+export const sha512_224 = /* @__PURE__ */ createHasher(() => new _SHA512_224(), 
 /* @__PURE__ */ oidNist(0x05));

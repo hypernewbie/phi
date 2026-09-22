@@ -10,6 +10,7 @@
     "noEmit": true,
     "isolatedModules": true,
     "skipLibCheck": true,
+    "types": [],
     "newLine": "lf"
   },
   "include": ["web-src/**/*"],

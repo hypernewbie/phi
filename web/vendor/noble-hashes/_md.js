@@ -2,7 +2,8 @@
  * Internal Merkle-Damgard hash utils.
  * @module
  */
-import { abytes, aexists, aoutput, clean, createView, } from "./utils.js";
+import { setU64FromNum } from "./_u64.js";
+import { abytes, aexists, aoutput, createView } from "./utils.js";
 /**
  * Shared 32-bit conditional boolean primitive reused by SHA-256, SHA-1, and MD5 `F`.
  * Returns bits from `b` when `a` is set, otherwise from `c`.
@@ -81,6 +82,7 @@ export class HashMD {
         abytes(data);
         const { view, buffer, blockLen } = this;
         const len = data.length;
+        let processed = false;
         for (let pos = 0; pos < len;) {
             const take = Math.min(blockLen - this.pos, len - pos);
             // Fast path only when there is no buffered partial block: `take === blockLen` implies
@@ -89,18 +91,25 @@ export class HashMD {
                 const dataView = createView(data);
                 for (; blockLen <= len - pos; pos += blockLen)
                     this.process(dataView, pos);
+                processed = true;
                 continue;
             }
-            buffer.set(data.subarray(pos, pos + take), this.pos);
+            // When the whole input is buffered in one go (common for short messages), passing `data`
+            // directly avoids allocating a subarray view.
+            buffer.set(pos === 0 && take === len ? data : data.subarray(pos, pos + take), this.pos);
             this.pos += take;
             pos += take;
             if (this.pos === blockLen) {
                 this.process(view, 0);
                 this.pos = 0;
+                processed = true;
             }
         }
         this.length += data.length;
-        this.roundClean();
+        // Shared schedule buffers only pick up input-derived words inside process(); if everything
+        // was buffered without processing, there is nothing to zero.
+        if (processed)
+            this.roundClean();
         return this;
     }
     digestInto(out) {
@@ -112,32 +121,33 @@ export class HashMD {
         // was previously not allocated here. But it won't change performance.
         const { buffer, view, blockLen, isLE } = this;
         let { pos } = this;
-        // append the bit '1' to the message
+        // append the bit '1' to the message, then zero-pad the rest of the block
         buffer[pos++] = 0b10000000;
-        clean(this.buffer.subarray(pos));
+        buffer.fill(0, pos);
         // we have less than padOffset left in buffer, so we cannot put length in
         // current block, need process it and pad again
         if (this.padOffset > blockLen - pos) {
             this.process(view, 0);
-            pos = 0;
+            buffer.fill(0);
         }
-        // Pad until full block byte with zeros
-        for (let i = pos; i < blockLen; i++)
-            buffer[i] = 0;
         // `padOffset` reserves the whole length field. For SHA-384/512 the high 64 bits stay zero from
         // the padding fill above, and JS will overflow before user input can make that half non-zero.
-        // So we only need to write the low 64 bits here.
-        view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+        // So we only need to write the low 64 bits here (`length * 8` only scales the exponent of an
+        // integer below 2**53, so the split inside the helper stays exact).
+        setU64FromNum(view, blockLen - 8, this.length * 8, isLE);
         this.process(view, 0);
-        const oview = createView(out);
+        // The final block above is processed outside update(), so the shared message-schedule
+        // buffers (e.g. SHA256_W) would otherwise retain input-derived words after digest().
+        this.roundClean();
+        // digest() passes our own `buffer` as `out`; reuse its cached view instead of allocating one.
+        const oview = out === buffer ? view : createView(out);
         const len = this.outputLen;
         // NOTE: we do division by 4 later, which must be fused in single op with modulo by JIT
-        if (len % 4)
-            throw new Error('_sha2: outputLen must be aligned to 32bit');
         const outLen = len / 4;
         const state = this.get();
-        if (outLen > state.length)
-            throw new Error('_sha2: outputLen bigger than state');
+        // Subclass-misconfiguration invariant: outputLen must be 32-bit aligned and fit the state.
+        if (len % 4 || outLen > state.length)
+            throw new Error('invalid outputLen');
         for (let i = 0; i < outLen; i++)
             oview.setUint32(4 * i, state[i], isLE);
     }
@@ -150,18 +160,16 @@ export class HashMD {
         this.destroy();
         return res;
     }
-    _cloneInto(to) {
-        to ||= new this.constructor();
-        to.set(...this.get());
-        const { blockLen, buffer, length, finished, destroyed, pos } = this;
+    _cloneIntoMeta(to) {
+        const { buffer, length, finished, destroyed, pos } = this;
         to.destroyed = destroyed;
         to.finished = finished;
         to.length = length;
         to.pos = pos;
         // Only partial-block bytes need copying: when `length % blockLen === 0`, `pos === 0` and
         // later `update()` / `digestInto()` overwrite `to.buffer` from the start before reading it.
-        if (length % blockLen)
-            to.buffer.set(buffer);
+        if (pos)
+            to.buffer.set(buffer); // Avoid a hot modulo guard.
         return to;
     }
     clone() {

@@ -67,6 +67,7 @@ export function createHeadlessSandbox() {
         },
     });
     sandbox.devicePixelRatio = 1;
+    sandbox.performance = { now: () => Date.now() };
     sandbox.requestAnimationFrame = (cb) => {
         queueMicrotask(() => cb(performance.now()));
         return 1;

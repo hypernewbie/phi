@@ -27,8 +27,10 @@ config, port the values by hand. Tests prove the port; see below.
 3. Run the phi gates (from the phi repo root):
 
    ```sh
-   pnpm --dir desktop/pet run typecheck && pnpm --dir desktop/pet run build \
-     && pnpm --dir desktop/pet run test && pnpm --dir desktop/pet run verify
+   pnpm --filter @phi-desktop/pet run typecheck && \
+     pnpm --filter @phi-desktop/pet run build && \
+     pnpm --filter @phi-desktop/pet test && \
+     pnpm --filter @phi-desktop/pet run verify
    ```
 
 4. Fix what the tests report. Do not weaken a test to make it pass.

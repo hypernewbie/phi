@@ -25,12 +25,9 @@
         <!-- File-tree viewer libraries (vendored; see web-src/vendor.d.ts).
              Viewer.js: image viewer (zoom/pan/touch/destroy). Plyr: video
              and audio. @alenaksu/json-viewer: collapsible JSON tree.
-             PDF preview reuses Chromium's built-in viewer via iframe —
-             pdfjs-dist 4.x dropped the prebuilt viewer.html from the npm
-             package and the GitHub source is ~3.5MB, neither matches
-             "almost no code" — Chromium's viewer is excellent in Electron
-             and Chrome. Add pdfjs later only if text extraction or form
-             scripting becomes a requirement. -->
+             PDF preview uses the local PDF.js 6.3.289 wrapper, worker,
+             CMaps, standard fonts, and image decoders under vendor/pdfjs/.
+             Keep this tree local so PDF rendering never depends on a CDN. -->
         <!-- Preview vendor JS (Viewer.js, Plyr, json-viewer) is NOT here:
              file-viewer.js injects each bundle on first use so page load
              doesn't pay for viewers nobody opens. Their small CSS stays

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // REGRESSION: On 2026-07-11, two vendor addons in web/vendor/ were
@@ -312,9 +312,9 @@ describe('xterm addons contain the expected namespace assignment', () => {
         '$file assigns to $namespace',
         ({ file, namespace }) => {
             const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
-            // Match either `e.<Namespace>=t()` or `.exports.<Namespace>=t()` -
-            // both shapes show up across UMD bundles.
-            const pattern = new RegExp(`\\.${namespace}\\s*=\\s*t\\(\\)`);
+            // Match the legacy `e.<Namespace>=t()` shape and the xterm 6
+            // `t.<Namespace>=e()` shape; both are completed UMD exports.
+            const pattern = new RegExp(`\\.${namespace}\\s*=\\s*(?:t|e)\\(\\)`);
             expect(
                 pattern.test(src),
                 `${file} does not contain an assignment of '${namespace}'. The UMD wrapper is broken.`,
@@ -495,6 +495,23 @@ describe('file-tree viewer vendor libraries load', () => {
                 src.includes('standardFontDataUrl'),
             'wrapper.html does not configure standardFontDataUrl',
         ).toBe(true);
+    });
+
+    it('pdfjs/images/ contains every icon referenced by viewer CSS', () => {
+        const css = readFileSync(
+            join(VENDOR_DIR, 'pdfjs', 'pdf_viewer.css'),
+            'utf8',
+        );
+        const imageNames = [
+            ...css.matchAll(/url\((["']?)images\/([^()"']+)\1\)/g),
+        ].map((match) => match[2]);
+        expect(imageNames.length).toBeGreaterThan(0);
+        for (const imageName of imageNames) {
+            expect(
+                existsSync(join(VENDOR_DIR, 'pdfjs', 'images', imageName)),
+                `pdfjs/images/${imageName} is missing but referenced by pdf_viewer.css`,
+            ).toBe(true);
+        }
     });
 
     it('pdfjs/cmaps/ has the Adobe character map files', () => {

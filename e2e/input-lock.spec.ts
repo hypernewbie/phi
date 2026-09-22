@@ -46,7 +46,9 @@ test('input.html shows the shared sign-in dialog when cookie is missing', async 
     await page.goto(`${phi.url}/input.html`);
     await page.evaluate(
         async ([pw, url]) => {
-            const { setAccessPassword } = await import('./auth.js');
+            const { setAccessPassword } = await import(
+                new URL('./auth.js', location.href).href
+            );
             await setAccessPassword(pw);
             // Warm the fetch base for cross-origin-less evaluate imports.
             void url;
