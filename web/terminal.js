@@ -1668,10 +1668,11 @@ export class TabManager {
 
     // Attaches the hot protocol's data/gap callbacks onto a pane's socket
     // options. Returns the PTYWebSocketOptions object for the ctor.
+    // hostname_override is a display label only — it never rides a
+    // socket option; the socket dials the real page origin.
     _hotOptions(tabInfo) {
         return {
             hot: true,
-            serverHost: this.app?.hostnameOverride,
             onAttachHead: (info) => this._onAttachHead(tabInfo, info),
             onGap: (from, to) => this._onLiveGap(tabInfo, from, to),
         };

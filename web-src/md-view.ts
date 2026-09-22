@@ -9,7 +9,7 @@ import {
     rewriteRelativeImages,
     highlightCodeIn,
 } from './md-render.js';
-import { escapeHtml, getLastFolderName, resolveServerHost } from './util.js';
+import { escapeHtml, getLastFolderName } from './util.js';
 
 // --- pure helpers (exported for tests) ---
 
@@ -131,9 +131,8 @@ export function initMdView(): void {
     }
 
     function connect(): void {
-        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
         const ws = new WebSocket(
-            `${proto}://${resolveServerHost()}/ws/md-events`,
+            new URL('/ws/md-events', window.location.origin).href,
         );
         ws.binaryType = 'arraybuffer';
         // Refresh on open too: content may have changed while disconnected.

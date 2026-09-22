@@ -1,41 +1,17 @@
 /* Φ phi — pure, framework-free helpers (unit-tested in test-js/) */
 
-// Server-host override for WebSocket URLs. Blank (the default) means
-// "same host as the page" — fully backwards compatible. Set once at app
-// boot (and on settings change) via setServerHostOverride; resolveServerHost
-// is the single choke point every socket constructor uses, so an explicit
-// per-socket value always wins and everything else follows the default.
+// Server-host override — a DISPLAY LABEL only. It is what phi reports
+// itself as in the UI, the config payload, push notification titles,
+// status dumps, and the like. It does NOT influence socket dialing —
+// every WebSocket dials the real page origin. This decoupling exists
+// so a user on a corp-managed PC named `CORP01` can display `phi on
+// dusty_potato` in their own browser without asking IT to rename the
+// machine. The label is intentionally free-form: a haiku, a codename,
+// whatever reads well to the user.
 let defaultServerHostOverride = '';
 
-export function setServerHostOverride(host: string | null | undefined): void {
-    defaultServerHostOverride = host || '';
-}
-
-// Sanitizes a hostname override to `host` or `host:port` (brackets for
-// IPv6 literals). Anything else — scheme leftovers, paths, queries,
-// userinfo, garbage — fails safe to window.location.host, never to ''.
-// Pure over its input except the documented location.host fallback, so
-// it is unit-testable with explicit values.
-export function resolveServerHost(override?: string | null): string {
-    const fallback =
-        typeof window !== 'undefined' && window.location?.host
-            ? window.location.host
-            : '';
-    // Blank (including explicit '') defers: module default, then page.
-    const raw = (override || defaultServerHostOverride || '').trim();
-    if (!raw) return fallback;
-    const noScheme = raw.replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, '');
-    const hostPort = noScheme.split(/[/?#]/, 1)[0].replace(/:+$/, '');
-    if (
-        hostPort.length === 0 ||
-        hostPort.length > 253 ||
-        !/^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?)(:\d{1,5})?$/.test(
-            hostPort,
-        )
-    ) {
-        return fallback;
-    }
-    return hostPort;
+export function setServerHostOverride(label: string | null | undefined): void {
+    defaultServerHostOverride = label || '';
 }
 
 // A Vikunja kanban bucket shape. The runtime narrows `is_done` with

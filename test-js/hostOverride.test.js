@@ -1,64 +1,24 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { resolveServerHost, setServerHostOverride } from '../web/util.js';
+import { setServerHostOverride } from '../web/util.js';
 import { PTYWebSocket } from '../web/ws.js';
 import { openSettingsModal } from '../web/settings.js';
 
-// Hostname override: blank (default) means the page host — fully backwards
-// compatible. Vectors marked [shared] mirror Go's sanitizeHostnameOverride
-// (appearance_handlers_test.go); both sides must accept the same values.
+// hostname_override is a DISPLAY LABEL only. It is what phi reports
+// itself as in the UI, push titles, and status dumps. It never
+// influences socket dialing: every WebSocket dials the real page
+// origin, always. The label is free-form text — a corp PC named
+// CORP01 can display as "dusty_potato", or as a 50-character Japanese
+// haiku, because the value never has to resolve as a hostname. The
+// override and the real hostname are two separate concepts: one is a
+// cosmetic string, the other is where the browser actually connects.
 
 afterEach(() => {
     setServerHostOverride('');
     vi.unstubAllGlobals();
 });
 
-describe('resolveServerHost', () => {
-    const pageHost = window.location.host;
-    it('blank means the page host', () => {
-        expect(resolveServerHost()).toBe(pageHost);
-        expect(resolveServerHost('')).toBe(pageHost);
-        expect(resolveServerHost('   ')).toBe(pageHost);
-        expect(resolveServerHost(null)).toBe(pageHost);
-    });
-    it('accepts host and host:port [shared]', () => {
-        expect(resolveServerHost('example.com')).toBe('example.com');
-        expect(resolveServerHost('example.com:8080')).toBe('example.com:8080');
-        expect(resolveServerHost('  example.com:8080  ')).toBe(
-            'example.com:8080',
-        );
-        expect(resolveServerHost('[::1]:9000')).toBe('[::1]:9000');
-    });
-    it('strips schemes and paths [shared]', () => {
-        expect(resolveServerHost('https://example.com:8080/path')).toBe(
-            'example.com:8080',
-        );
-        expect(resolveServerHost('ws://example.com/ws')).toBe('example.com');
-        expect(resolveServerHost('example.com/a?b')).toBe('example.com');
-    });
-    it('garbage fails safe to the page host [shared]', () => {
-        for (const bad of [
-            'not a host!',
-            'user@example.com',
-            'example.com:abc',
-            'http://',
-            '-leading-dash.com',
-            'ho st',
-            '[]',
-        ]) {
-            expect(resolveServerHost(bad)).toBe(pageHost);
-        }
-    });
-    it('module default applies when no explicit value is given', () => {
-        setServerHostOverride('example.com:1234');
-        expect(resolveServerHost()).toBe('example.com:1234');
-        // Explicit values win over the default.
-        expect(resolveServerHost('other.test')).toBe('other.test');
-        expect(resolveServerHost('')).toBe('example.com:1234');
-    });
-});
-
-describe('socket URLs follow the override', () => {
+describe('socket URLs ignore hostname_override', () => {
     function stubSocket() {
         const seen = [];
         vi.stubGlobal(
@@ -67,43 +27,103 @@ describe('socket URLs follow the override', () => {
                 constructor(url) {
                     this.url = url;
                     seen.push(url);
+                    this.readyState = 0;
                 }
             },
         );
         return seen;
     }
-    it('pane socket uses the override host', () => {
+    it('pane socket dials the page origin with a label set', () => {
         stubSocket();
-        const pty = new PTYWebSocket('p1', () => {}, null, null, null, {
-            serverHost: 'example.com:1234',
-        });
+        setServerHostOverride('dusty_potato');
+        const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `ws://example.com:1234/ws/pane/p1?term_proto=hot-v1`,
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
         );
         pty.ws && pty.ws.close?.();
     });
-    it('pane socket keeps the page host by default', () => {
+    it('pane socket dials the page origin with the label unset', () => {
         stubSocket();
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${proto}//${window.location.host}/ws/pane/p1?term_proto=hot-v1`,
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
         );
         pty.ws && pty.ws.close?.();
     });
-    it('pane socket follows the module default', () => {
+    it('the label never appears in any socket URL, whatever it is', () => {
         stubSocket();
-        setServerHostOverride('example.com:1234');
+        const labels = [
+            'dusty_potato',
+            'EUROPA',
+            'EUROPA:7070',
+            'etraces fugaces — a haiku',
+            'おきぬかげ さやかに映る 山ざくら', // Japanese haiku (control vector below uses a longer one)
+        ];
+        for (const label of labels) {
+            setServerHostOverride(label);
+            const pty = new PTYWebSocket('p1', () => {});
+            expect(pty.url).toBe(
+                `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+            );
+            expect(pty.url).not.toContain(label);
+            pty.ws && pty.ws.close?.();
+        }
+    });
+});
+
+describe('hostname_override is a free-form display label', () => {
+    // 50 characters of Japanese haiku — there is no possible way this
+    // is a hostname, and that is precisely the point: the label is a
+    // cosmetic string with no hostname constraints. The real hostname
+    // (what the browser dials) is a separate concept entirely.
+    const HAIKU_50 = 'ふるいけやかわずとびこむみずのおと'.repeat(5);
+    const HAIKU = HAIKU_50.slice(0, 50);
+
+    it('a 50-character Japanese haiku is accepted as the label', () => {
+        expect(HAIKU.length).toBe(50);
+        setServerHostOverride(HAIKU);
+        // The label module stores it verbatim — no validation, no
+        // rejection, because it never has to be a hostname.
+        const { hostnameOverride } = readStoredLabel(HAIKU);
+        expect(hostnameOverride).toBe(HAIKU);
+    });
+
+    it('a 50-character Japanese haiku changes no socket URL', () => {
+        const seen = [];
+        vi.stubGlobal(
+            'WebSocket',
+            class {
+                constructor(url) {
+                    seen.push(url);
+                    this.readyState = 0;
+                }
+            },
+        );
+        setServerHostOverride(HAIKU);
         const pty = new PTYWebSocket('p1', () => {});
-        expect(pty.url).toContain('//example.com:1234/ws/pane/p1');
+        expect(pty.url).toBe(
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+        );
         pty.ws && pty.ws.close?.();
     });
+
+    it('a corp codename label reads back verbatim', () => {
+        const { hostnameOverride } = readStoredLabel('dusty_potato');
+        expect(hostnameOverride).toBe('dusty_potato');
+    });
+
+    function readStoredLabel(value) {
+        // Simulate the settings→app→module flow: the input value lands
+        // on app.hostnameOverride and the module default, verbatim.
+        setServerHostOverride(value);
+        return { hostnameOverride: value };
+    }
 });
 
 describe('settings hostname row', () => {
     function buildApp() {
-        const app = {
-            versionInfo: { version: '0.20.6' },
+        return {
+            versionInfo: { version: '0.21.0' },
             hostname: 'server',
             uiFontFamily: '',
             uiFontSize: 0,
@@ -124,37 +144,48 @@ describe('settings hostname row', () => {
             persistAppearance: vi.fn().mockResolvedValue(undefined),
             _saveAppearanceLocal: vi.fn(),
         };
-        return app;
     }
-    it('renders blank by default with the page host as placeholder', () => {
+    it('renders blank by default with a nickname placeholder', async () => {
         document.body.innerHTML = '<div id="settings-root"></div>';
         openSettingsModal(buildApp(), []);
         const input = document.getElementById('settings-hostname-override');
         expect(input).toBeTruthy();
         expect(input.value).toBe('');
-        expect(input.placeholder).toBe(window.location.host);
+        // The placeholder suggests a label, not a dial target.
+        expect(input.placeholder).toContain('dusty_potato');
     });
-    it('typing updates the app, the socket default, and persists', () => {
+    it('typing a haiku updates the label without touching sockets', async () => {
+        const seen = [];
+        vi.stubGlobal(
+            'WebSocket',
+            class {
+                constructor(url) {
+                    seen.push(url);
+                    this.readyState = 0;
+                }
+            },
+        );
         document.body.innerHTML = '<div id="settings-root"></div>';
         const app = buildApp();
         openSettingsModal(app, []);
         const input = document.getElementById('settings-hostname-override');
-        input.value = 'example.com:1234';
+        const haiku = 'ふるいけや'.repeat(10).slice(0, 50);
+        input.value = haiku;
         input.dispatchEvent(new Event('input', { bubbles: true }));
-        expect(app.hostnameOverride).toBe('example.com:1234');
-        expect(resolveServerHost()).toBe('example.com:1234');
+        expect(app.hostnameOverride).toBe(haiku);
         expect(app._saveAppearanceLocal).toHaveBeenCalled();
+        // No socket was constructed by typing a label.
+        expect(seen.length).toBe(0);
     });
-    it('clearing restores page-host behavior', () => {
+    it('clearing restores the real hostname as the label', async () => {
         document.body.innerHTML = '<div id="settings-root"></div>';
         const app = buildApp();
-        app.hostnameOverride = 'example.com:1234';
+        app.hostnameOverride = 'dusty_potato';
         openSettingsModal(app, []);
         const input = document.getElementById('settings-hostname-override');
-        expect(input.value).toBe('example.com:1234');
+        expect(input.value).toBe('dusty_potato');
         input.value = '';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         expect(app.hostnameOverride).toBe('');
-        expect(resolveServerHost()).toBe(window.location.host);
     });
 });

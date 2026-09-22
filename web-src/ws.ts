@@ -1,7 +1,5 @@
 /* Φ phi — Binary WebSocket Client */
 
-import { resolveServerHost } from './util.js';
-
 // A loose shape for inbound control JSON. The wire schema is small
 // but not formally typed on the server; consumers pattern-match
 // against msg.type to discriminate ('pty-exited', 'server-shutdown',
@@ -67,8 +65,12 @@ export interface AttachHeadInfo {
 export interface PTYWebSocketOptions {
     hot?: boolean;
     // Explicit per-socket hostname override; blank/omitted follows the
-    // module default (setServerHostOverride) or the page host.
-    serverHost?: string;
+    // module default (unused — kept for back-compat reads) or the
+    // page host. hostname_override is a DISPLAY LABEL only and never
+    // influences this URL: every socket dials the real page origin so
+    // the browser's same-origin guarantees apply and the user sees
+    // their chosen label in the UI rather than getting it baked into
+    // a socket URL they can never connect to.
     onAttachHead?: (info: AttachHeadInfo) => void;
     onGap?: (from: number, to: number) => void;
 }
@@ -152,8 +154,11 @@ export class PTYWebSocket {
             this.holding = false;
         }
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.url = `${protocol}//${resolveServerHost(opts?.serverHost)}/ws/pane/${paneId}?term_proto=hot-v1`;
+        const origin =
+            typeof window !== 'undefined' && window.location?.origin
+                ? window.location.origin
+                : '';
+        this.url = new URL(`/ws/pane/${paneId}?term_proto=hot-v1`, origin).href;
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');

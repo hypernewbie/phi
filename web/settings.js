@@ -222,14 +222,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     hostRow.className = 'settings-row';
     const hostLabel = document.createElement('label');
     hostLabel.htmlFor = 'settings-hostname-override';
-    hostLabel.textContent = 'Server hostname override (blank = current)';
+    hostLabel.textContent = 'Hostname label (blank = real hostname)';
     hostLabel.title =
-        'Host[:port] used for terminal socket URLs. Blank means the page host.';
+        "A display label for this machine in phi's UI, push titles, and status dumps. Purely cosmetic: it never affects how sockets connect, so it does not need to be a real hostname (any short text works).";
     hostRow.appendChild(hostLabel);
     const hostInput = document.createElement('input');
     hostInput.type = 'text';
     hostInput.id = 'settings-hostname-override';
-    hostInput.placeholder = window.location.host;
+    hostInput.placeholder = 'e.g. dusty_potato, europa, homelab';
     hostInput.value = app.hostnameOverride || '';
     hostInput.autocomplete = 'off';
     hostInput.spellcheck = false;

@@ -174,42 +174,26 @@ func configFilePath() string {
 	return expandHome("~/.phi/config.json")
 }
 
-// overrideHostPart reduces a sanitized hostname_override value to the
-// bare host for identity reporting (config payload, status dump, push
-// titles). The stored value is host or host:port — validated by
-// sanitizeHostnameOverride — so only a trailing :digits port is cut.
-// Bracketed IPv6 keeps its brackets; unbracketed colons can't occur.
-func overrideHostPart(v string) string {
-	v = strings.TrimSpace(v)
-	if strings.HasPrefix(v, "[") {
-		if i := strings.IndexByte(v, ']'); i > 0 {
-			return v[:i+1]
-		}
-		return v
-	}
-	if i := strings.LastIndexByte(v, ':'); i >= 0 {
-		rest := v[i+1:]
-		allDigits := len(rest) > 0
-		for j := 0; j < len(rest); j++ {
-			if rest[j] < '0' || rest[j] > '9' {
-				allDigits = false
-				break
-			}
-		}
-		if allDigits {
-			return v[:i]
-		}
-	}
-	return v
+// overrideDisplayName returns the hostname_override label for identity
+// reporting (config payload, status dump, push titles). The stored
+// value is a free-form display label — validated by
+// sanitizeHostnameOverride (length + printable-only) — and is reported
+// verbatim: the whole point of the override is that it can be a
+// nickname or codename that ISN'T a real hostname ("dusty_potato" on
+// a corp PC named CORP01), so there is nothing to strip or reduce.
+func overrideDisplayName(v string) string {
+	return strings.TrimSpace(v)
 }
 
 // reportedHostname is the machine identity the backend stamps on
 // everything it emits: the config payload's hostname field, the
 // startup status dump, idle/push notification titles. A set
-// HostnameOverride wins (port stripped); blank falls back to the OS
-// hostname, then localhost. One name everywhere, no drift.
+// HostnameOverride (the display label) wins; blank falls back to the
+// OS hostname, then localhost. This is a COSMETIC identity only —
+// socket dialing always uses the real page origin and never sees
+// this value. One name everywhere, no drift.
 func reportedHostname(cfg Config) string {
-	if h := overrideHostPart(cfg.HostnameOverride); h != "" {
+	if h := overrideDisplayName(cfg.HostnameOverride); h != "" {
 		return h
 	}
 	if h, _ := os.Hostname(); h != "" {
