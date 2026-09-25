@@ -3296,6 +3296,105 @@ html[data-phi-desktop-root] .app-header {
     color: var(--text-primary);
 }
 
+.preset-btn.keys-trigger-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 7px;
+}
+
+#keys-presets-dropup {
+    width: 300px;
+}
+
+.kb-dropup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.kb-dropup-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+}
+
+.kb-dropup-close-btn:hover {
+    background: var(--accent-trace);
+    color: var(--text-primary);
+}
+
+.kb-dropup-body {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.kb-group-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.kb-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+}
+
+.kb-key-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    height: 30px;
+    padding: 0 4px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition:
+        background-color 0.1s,
+        transform 0.05s,
+        border-color 0.1s;
+}
+
+.kb-key-btn:hover {
+    background: var(--accent-trace);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+}
+
+.kb-key-btn:active,
+.kb-key-btn.key-pressed {
+    background: var(--accent-wash);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+    transform: translateY(1px);
+    box-shadow: none;
+}
+
+.kb-key-btn.span-2 {
+    grid-column: span 2;
+}
+
 /* RIGHT PANEL: DIFF / LOG VIEW */
 .diff-panel {
     background-color: var(--bg-panel);
@@ -4880,6 +4979,7 @@ html[data-phi-config-page] .settings-modal {
 
     #model-presets-dropup,
     #quick-commands-dropup,
+    #keys-presets-dropup,
     #slash-presets-dropup,
     #pi-rpc-model-dropup,
     #pi-rpc-thinking-dropup {
@@ -4892,6 +4992,7 @@ html[data-phi-config-page] .settings-modal {
 
     #model-presets-dropup .dropup-header,
     #quick-commands-dropup .dropup-header,
+    #keys-presets-dropup .dropup-header,
     #slash-presets-dropup .dropup-header,
     #pi-rpc-thinking-dropup .dropup-header {
         position: sticky;

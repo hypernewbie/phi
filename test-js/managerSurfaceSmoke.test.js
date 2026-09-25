@@ -62,6 +62,7 @@ function stubDom() {
         'input-textarea',
         'presets-container',
         'quick-commands-dropup',
+        'keys-presets-dropup',
         'model-presets-dropup',
         'slash-presets-dropup',
         'disconnect-banner',
