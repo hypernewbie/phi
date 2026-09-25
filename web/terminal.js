@@ -6269,6 +6269,13 @@ export class TabManager {
             if (this.app.markdownManager) {
                 this.app.markdownManager.onExternalChange(control);
             }
+        } else if (control.type === 'sync-changed') {
+            // Real-time Sync Board push: a message was upserted or deleted.
+            // Every open pane WS receives the broadcast; SyncManager
+            // debounces client-side.
+            if (this.app.syncManager?.onSyncChanged) {
+                this.app.syncManager.onSyncChanged(control);
+            }
         }
     }
 

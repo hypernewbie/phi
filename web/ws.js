@@ -132,6 +132,12 @@ export class PTYWebSocket {
                 case 0x09: // LIVE_OUTPUT (hot-v1)
                     this._handleLiveOutput(payload);
                     break;
+                case 0x0a: // sync-changed
+                    this._handleJsonPayload(payload, (data) => {
+                        if (this.onControl)
+                            this.onControl({ type: 'sync-changed', ...data });
+                    });
+                    break;
             }
         };
         this.ws.onclose = () => {
