@@ -1319,6 +1319,16 @@ export class TabManager {
                 }
             }
 
+            const keysDropup = document.getElementById('keys-presets-dropup');
+            if (keysDropup && !keysDropup.classList.contains('hidden')) {
+                if (
+                    !e.target.closest('#keys-presets-dropup') &&
+                    !e.target.closest('.keys-trigger-btn')
+                ) {
+                    keysDropup.classList.add('hidden');
+                }
+            }
+
             const slashDropup = document.getElementById('slash-presets-dropup');
             if (slashDropup && !slashDropup.classList.contains('hidden')) {
                 if (
@@ -7340,7 +7350,9 @@ export class TabManager {
                   ? 420
                   : dropupId === 'pi-rpc-thinking-dropup'
                     ? 280
-                    : 320;
+                    : dropupId === 'keys-presets-dropup'
+                      ? 300
+                      : 320;
             left = Math.max(
                 12,
                 Math.min(left, containerRect.width - dropupWidth - 12),
@@ -7501,6 +7513,24 @@ export class TabManager {
         }
         this.presetsContainer.appendChild(modelsTriggerBtn);
 
+        // 4b. Render Keys trigger button (keyboard icon only)
+        const keysTriggerBtn = document.createElement('button');
+        keysTriggerBtn.className =
+            'preset-btn model-trigger-btn keys-trigger-btn';
+        keysTriggerBtn.title = 'Virtual Keyboard & Shortcuts';
+        keysTriggerBtn.setAttribute(
+            'aria-label',
+            'Virtual Keyboard and Shortcuts',
+        );
+        keysTriggerBtn.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect><line x1="6" y1="8" x2="6" y2="8"></line><line x1="10" y1="8" x2="10" y2="8"></line><line x1="14" y1="8" x2="14" y2="8"></line><line x1="18" y1="8" x2="18" y2="8"></line><line x1="6" y1="12" x2="6" y2="12"></line><line x1="10" y1="12" x2="10" y2="12"></line><line x1="14" y1="12" x2="14" y2="12"></line><line x1="18" y1="12" x2="18" y2="12"></line><line x1="7" y1="16" x2="17" y2="16"></line></svg>`;
+        keysTriggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleDropup('keys-presets-dropup', keysTriggerBtn, () =>
+                this.renderKeysDropup(),
+            );
+        });
+        this.presetsContainer.appendChild(keysTriggerBtn);
+
         // Auto-refresh dropup content if currently open
         const dropup = document.getElementById('model-presets-dropup');
         if (dropup && !dropup.classList.contains('hidden')) {
@@ -7509,6 +7539,10 @@ export class TabManager {
         const qcDropup = document.getElementById('quick-commands-dropup');
         if (qcDropup && !qcDropup.classList.contains('hidden')) {
             this.renderQuickCmdsDropup();
+        }
+        const keysDropup = document.getElementById('keys-presets-dropup');
+        if (keysDropup && !keysDropup.classList.contains('hidden')) {
+            this.renderKeysDropup();
         }
         const slashDropup = document.getElementById('slash-presets-dropup');
         if (slashDropup && !slashDropup.classList.contains('hidden')) {
@@ -8142,6 +8176,147 @@ export class TabManager {
 
         // Config Copy/Paste Footer
         this._appendConfigFooter(dropup, 'cmds');
+    }
+
+    renderKeysDropup() {
+        const dropup = document.getElementById('keys-presets-dropup');
+        if (!dropup) return;
+        dropup.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.className = 'dropup-header kb-dropup-header';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.innerText = 'Virtual Keys';
+        header.appendChild(titleSpan);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'kb-dropup-close-btn';
+        closeBtn.innerText = '✕';
+        closeBtn.title = 'Close';
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropup.classList.add('hidden');
+        });
+        header.appendChild(closeBtn);
+        dropup.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'kb-dropup-body';
+
+        const groups = [
+            {
+                title: 'Navigation',
+                keys: [
+                    {
+                        label: 'Home',
+                        title: 'Home (Line Start)',
+                        value: '\x1b[H',
+                    },
+                    { label: '▲', title: 'Up Arrow', value: '\x1b[A' },
+                    { label: 'End', title: 'End (Line End)', value: '\x1b[F' },
+                    { label: 'PgUp', title: 'Page Up', value: '\x1b[5~' },
+                    { label: '◀', title: 'Left Arrow', value: '\x1b[D' },
+                    { label: '▼', title: 'Down Arrow', value: '\x1b[B' },
+                    { label: '▶', title: 'Right Arrow', value: '\x1b[C' },
+                    { label: 'PgDn', title: 'Page Down', value: '\x1b[6~' },
+                ],
+            },
+            {
+                title: 'Keys & Modifiers',
+                keys: [
+                    {
+                        label: 'Shift+Tab',
+                        title: 'Backtab (Shift+Tab)',
+                        value: '\x1b[Z',
+                        span: 2,
+                    },
+                    { label: 'Tab', title: 'Tab', value: '\t' },
+                    { label: 'Esc', title: 'Escape', value: '\x1b' },
+                    {
+                        label: 'Del',
+                        title: 'Forward Delete',
+                        value: '\x1b[3~',
+                        span: 2,
+                    },
+                    {
+                        label: 'Enter ↵',
+                        title: 'Enter (Carriage Return)',
+                        value: '\r',
+                        span: 2,
+                    },
+                ],
+            },
+            {
+                title: 'Control Shortcuts',
+                keys: [
+                    {
+                        label: 'Ctrl+C',
+                        title: 'Interrupt (SIGINT)',
+                        value: '\x03',
+                    },
+                    {
+                        label: 'Ctrl+D',
+                        title: 'EOF / Exit Shell',
+                        value: '\x04',
+                    },
+                    {
+                        label: 'Ctrl+Z',
+                        title: 'Suspend Process (SIGTSTP)',
+                        value: '\x1a',
+                    },
+                    { label: 'Ctrl+L', title: 'Clear Screen', value: '\x0c' },
+                    {
+                        label: 'Ctrl+R',
+                        title: 'Reverse History Search',
+                        value: '\x12',
+                    },
+                    { label: 'Ctrl+A', title: 'Start of Line', value: '\x01' },
+                    { label: 'Ctrl+E', title: 'End of Line', value: '\x05' },
+                    {
+                        label: 'Ctrl+U',
+                        title: 'Clear Line to Cursor',
+                        value: '\x15',
+                    },
+                ],
+            },
+        ];
+
+        groups.forEach((group) => {
+            const groupEl = document.createElement('div');
+            groupEl.className = 'kb-group';
+
+            const groupTitle = document.createElement('div');
+            groupTitle.className = 'kb-group-title';
+            groupTitle.innerText = group.title;
+            groupEl.appendChild(groupTitle);
+
+            const grid = document.createElement('div');
+            grid.className = 'kb-grid';
+
+            group.keys.forEach((k) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `kb-key-btn${k.span ? ` span-${k.span}` : ''}`;
+                btn.innerText = k.label;
+                btn.title = k.title || k.label;
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const activeTab = this.getActiveTab();
+                    if (!activeTab || activeTab.coder === 'pi-rpc') return;
+                    this.sendRawInput(k.value);
+                    btn.classList.add('key-pressed');
+                    setTimeout(() => btn.classList.remove('key-pressed'), 120);
+                });
+                grid.appendChild(btn);
+            });
+
+            groupEl.appendChild(grid);
+            body.appendChild(groupEl);
+        });
+
+        dropup.appendChild(body);
     }
 
     _appendConfigFooter(dropup, mode = 'models') {
