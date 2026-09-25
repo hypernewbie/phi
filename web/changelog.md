@@ -2,6 +2,18 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.1 — 2026-09-25
+
+### Added
+- **Mobile virtual keyboard & shortcuts dropup** (`244d97b`). Dedicated keyboard icon dropup in the terminal footer matching Cmds and Models, providing essential keys and shortcuts (Esc, Tab, Shift+Tab, Ctrl+C, Ctrl+D, Ctrl+Z, arrow keys, Home, End, PageUp, PageDown) for mobile and touchscreen terminal sessions.
+- **Syncboard rich action cards & instant agent control** (`9bc7c63`). Real-time broadcast and rendering of interactive structured messages (`[card:...]` format for action buttons, links, bash commands, tab navigation, markdown review, and file previews), instant WebSocket push on syncboard append/clear, and agent control endpoint.
+- **File tree left-click preview** (`1ae396b`). Left-clicking a file in the file explorer opens its preview directly instead of inserting `@path`.
+
+### Fixed
+- **Touchscreen terminal scrollback restored** (`52184c4`). Upgraded `@xterm/xterm` to upstream build with native gesture engine (PR #5563), restoring fluid 1-to-1 "Apple touch" pixel tracking and momentum inertia without row-quantized jumping or synthetic key injection. Resolves touch scrolling failures on mobile devices and touchscreen laptops (Razer Blade) across all coder backends (`agy`, `pi`, `bash`, `claude`), while preserving OpenCode's alternate-screen TUI scrolling.
+- **GLM quota percentage display** (`4d51de6`). Inverted GLM usage quota bar calculation so it accurately reflects used quota rather than remaining quota.
+- **Hostname override isolation** (`55bf852`). Server hostname override is strictly a display label; network sockets and connections dial the real host.
+
 ## v0.21.0 — 2026-09-15
 
 ### Added
