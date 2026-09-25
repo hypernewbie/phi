@@ -105,6 +105,9 @@ export function createHeadlessSandbox() {
         unobserve() {}
     };
     sandbox.CSS = { escape: (s) => String(s) };
+    sandbox.structuredClone =
+        globalThis.structuredClone ||
+        ((val) => JSON.parse(JSON.stringify(val)));
     const ctx = vm.createContext(sandbox, { name: 'xterm-headless' });
     // The bundle is `(()=>{...})()`: pure side-effect IIFE, no return.
     vm.runInContext(bundle, ctx, { filename: 'xterm-headless.js' });

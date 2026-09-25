@@ -12,6 +12,11 @@ function stubXtermGlobals() {
         },
     });
     vi.stubGlobal('SearchAddon', { SearchAddon: class {} });
+    vi.stubGlobal('Unicode11Addon', {
+        Unicode11Addon: class {
+            activate() {}
+        },
+    });
     vi.stubGlobal('Terminal', function () {
         const viewportEl = document.createElement('div');
         viewportEl.className = 'xterm-viewport';
@@ -66,69 +71,85 @@ function dispatchTouch(target, type, touches) {
 }
 
 describe('touchscreen terminal scrollback', () => {
-    it('scrolls UP into history when swiping down on a standard terminal (bash)', () => {
+    it('does not hijack touch on standard terminals (delegating to xterm native gesture engine)', () => {
         const tab = mountTab({ coder: 'bash' });
 
         // Touch start at Y=200
         dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
 
-        // Swipe down to Y=248 (+48px = 3 lines at 16px/line)
+        // Swipe down to Y=248 (+48px)
         const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
             { clientY: 248 },
         ]);
 
-        // Must scroll up into history (negative lines) and prevent default
-        expect(tab.term.scrollLines).toHaveBeenCalledTimes(1);
-        expect(tab.term.scrollLines).toHaveBeenCalledWith(-3);
-        expect(moveEv.defaultPrevented).toBe(true);
-    });
-
-    it('scrolls DOWN towards bottom when swiping up on a standard terminal (claude)', () => {
-        const tab = mountTab({ coder: 'claude' });
-
-        // Touch start at Y=200
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-
-        // Swipe up to Y=152 (-48px = -3 lines at 16px/line)
-        const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
-            { clientY: 152 },
-        ]);
-
-        // Must scroll down towards bottom (positive lines) and prevent default
-        expect(tab.term.scrollLines).toHaveBeenCalledTimes(1);
-        expect(tab.term.scrollLines).toHaveBeenCalledWith(3);
-        expect(moveEv.defaultPrevented).toBe(true);
-    });
-
-    it('accumulates sub-line swipe deltas across touchmove events', () => {
-        const tab = mountTab({ coder: 'bash' });
-
-        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
-
-        // First move: +10px (less than 16px cellHeight) -> no scroll yet
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 210 }]);
+        // Standard terminals must NOT be intercepted with artificial scrollLines
+        // or preventDefault on container; xterm's native Gesture engine handles 1:1 touch.
         expect(tab.term.scrollLines).not.toHaveBeenCalled();
-
-        // Second move: another +10px (total +20px >= 16px) -> 1 line scrolled
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 220 }]);
-        expect(tab.term.scrollLines).toHaveBeenCalledTimes(1);
-        expect(tab.term.scrollLines).toHaveBeenCalledWith(-1);
+        expect(moveEv.defaultPrevented).toBe(false);
     });
 
-    it('preserves OpenCode TUI alternate escape sequence dispatch', () => {
+    it('does not hijack touch on agy and pi terminals', () => {
+        for (const coder of ['agy', 'pi', 'claude']) {
+            const tab = mountTab({ coder });
+            dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
+            const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
+                { clientY: 150 },
+            ]);
+            expect(tab.term.scrollLines).not.toHaveBeenCalled();
+            expect(moveEv.defaultPrevented).toBe(false);
+        }
+    });
+
+    it('preserves OpenCode TUI alternate escape sequence dispatch on swipe down', () => {
         const tab = mountTab({ coder: 'opencode' });
         tab.ws.sendInput = vi.fn();
 
         dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
 
         // Swipe down (+32px = 2 lines) -> sends Ctrl+Y (\x1b\x19)
-        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 232 }]);
+        const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
+            { clientY: 232 },
+        ]);
         expect(tab.ws.sendInput).toHaveBeenCalledWith('\x1b\x19\x1b\x19');
         expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        expect(moveEv.defaultPrevented).toBe(true);
+    });
+
+    it('preserves OpenCode TUI alternate escape sequence dispatch on swipe up', () => {
+        const tab = mountTab({ coder: 'opencode' });
+        tab.ws.sendInput = vi.fn();
+
+        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
+
+        // Swipe up (-48px = 3 lines) -> sends Ctrl+E (\x1b\x05)
+        const moveEv = dispatchTouch(tab.termContainer, 'touchmove', [
+            { clientY: 152 },
+        ]);
+        expect(tab.ws.sendInput).toHaveBeenCalledWith(
+            '\x1b\x05\x1b\x05\x1b\x05',
+        );
+        expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        expect(moveEv.defaultPrevented).toBe(true);
+    });
+
+    it('accumulates sub-line swipe deltas across touchmove events for opencode', () => {
+        const tab = mountTab({ coder: 'opencode' });
+        tab.ws.sendInput = vi.fn();
+
+        dispatchTouch(tab.termContainer, 'touchstart', [{ clientY: 200 }]);
+
+        // First move: +10px (less than 16px cellHeight) -> no sendInput yet
+        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 210 }]);
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
+
+        // Second move: another +10px (total +20px >= 16px) -> 1 line scrolled
+        dispatchTouch(tab.termContainer, 'touchmove', [{ clientY: 220 }]);
+        expect(tab.ws.sendInput).toHaveBeenCalledWith('\x1b\x19');
     });
 
     it('ignores multi-touch gestures (e.g. pinch to zoom) without preventing default', () => {
-        const tab = mountTab({ coder: 'bash' });
+        const tab = mountTab({ coder: 'opencode' });
+        tab.ws.sendInput = vi.fn();
 
         // Two-finger touchstart
         dispatchTouch(tab.termContainer, 'touchstart', [
@@ -142,7 +163,21 @@ describe('touchscreen terminal scrollback', () => {
             { clientY: 300 },
         ]);
 
-        expect(tab.term.scrollLines).not.toHaveBeenCalled();
+        expect(tab.ws.sendInput).not.toHaveBeenCalled();
         expect(moveEv.defaultPrevented).toBe(false);
+    });
+});
+
+describe('vendored xterm native touch capabilities', () => {
+    it('xterm bundle contains native 1:1 touch scroll methods (PR #5563)', async () => {
+        const { readFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const xtermSrc = readFileSync(
+            join(process.cwd(), 'web', 'vendor', 'xterm.js'),
+            'utf8',
+        );
+        expect(xtermSrc).toContain('handleTouchScroll');
+        expect(xtermSrc).toContain('handleTouchScrollAsWheel');
+        expect(xtermSrc).toContain('handleTouchScrollAsKeys');
     });
 });

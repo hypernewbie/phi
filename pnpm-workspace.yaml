@@ -11,13 +11,13 @@ catalog:
   '@types/jsdom': 30.0.0
   '@types/node': 24.13.6
   '@vitest/coverage-v8': 5.0.1
-  '@xterm/addon-fit': 0.11.0
-  '@xterm/addon-search': 0.16.0
-  '@xterm/addon-serialize': 0.14.0
-  '@xterm/addon-unicode11': 0.9.0
-  '@xterm/addon-webgl': 0.19.0
-  '@xterm/headless': 6.0.0
-  '@xterm/xterm': 6.0.0
+  '@xterm/addon-fit': 0.12.0-beta.301
+  '@xterm/addon-search': 0.17.0-beta.301
+  '@xterm/addon-serialize': 0.15.0-beta.301
+  '@xterm/addon-unicode11': 0.10.0-beta.301
+  '@xterm/addon-webgl': 0.20.0-beta.300
+  '@xterm/headless': 6.1.0-beta.303
+  '@xterm/xterm': 6.1.0-beta.304
   chart.js: 4.5.1
   commander: 15.0.0
   diff: 9.0.0
