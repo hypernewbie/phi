@@ -2250,6 +2250,12 @@ html[data-phi-desktop-root] .app-header {
     left: 0;
     overflow: hidden;
     display: none;
+    touch-action: none;
+}
+
+.term-container.review-panel,
+.term-container.kanban-panel {
+    touch-action: auto;
 }
 
 .term-container.active {
