@@ -313,8 +313,10 @@ describe('xterm addons contain the expected namespace assignment', () => {
         ({ file, namespace }) => {
             const src = readFileSync(join(VENDOR_DIR, file), 'utf8');
             // Match the legacy `e.<Namespace>=t()` shape and the xterm 6
-            // `t.<Namespace>=e()` shape; both are completed UMD exports.
-            const pattern = new RegExp(`\\.${namespace}\\s*=\\s*(?:t|e)\\(\\)`);
+            // `t.<Namespace>=e()` / `e.<Namespace>=s()` shapes; all are completed UMD exports.
+            const pattern = new RegExp(
+                `\\.${namespace}\\s*=\\s*(?:t|e|s)\\(\\)`,
+            );
             expect(
                 pattern.test(src),
                 `${file} does not contain an assignment of '${namespace}'. The UMD wrapper is broken.`,

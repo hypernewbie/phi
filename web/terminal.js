@@ -2699,14 +2699,13 @@ export class TabManager {
             { capture: true, passive: false },
         );
 
-        // Touch scrolling for touchscreen devices:
-        // - OpenCode: dispatches Ctrl+Y / Ctrl+E to TUI
-        // - Standard terminals (claude, agy, pi, bash, etc.): scrolls xterm buffer scrollback
-        let termTouchStartY = null;
+        // Touch scrolling for OpenCode alt screen (TUI) on mobile viewports
+        let termTouchStartY = 0;
         let termTouchRemainder = 0;
         termContainer.addEventListener(
             'touchstart',
             (e) => {
+                if (tabInfo.coder !== 'opencode') return;
                 if (e.touches.length === 1) {
                     termTouchStartY = e.touches[0].clientY;
                     termTouchRemainder = 0;
@@ -2718,13 +2717,12 @@ export class TabManager {
         termContainer.addEventListener(
             'touchmove',
             (e) => {
+                if (tabInfo.coder !== 'opencode') return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
                     const currentY = e.touches[0].clientY;
                     const rawDelta = currentY - termTouchStartY;
                     const totalDelta = rawDelta + termTouchRemainder;
-                    const cellHeight =
-                        tabInfo.term?._core?._renderService?.dimensions?.css
-                            ?.cell?.height || 16;
+                    const cellHeight = 16;
 
                     const lines = Math.floor(Math.abs(totalDelta) / cellHeight);
                     if (lines > 0) {
@@ -2732,15 +2730,11 @@ export class TabManager {
                         e.stopPropagation();
 
                         const isUp = totalDelta > 0; // swipe down -> scroll up
-                        if (tabInfo.coder === 'opencode') {
-                            const seq = isUp ? '\x1b\x19' : '\x1b\x05';
-                            const payload = seq.repeat(lines);
+                        const seq = isUp ? '\x1b\x19' : '\x1b\x05';
+                        const payload = seq.repeat(lines);
 
-                            if (tabInfo.ws && !tabInfo.isDead) {
-                                tabInfo.ws.sendInput(payload);
-                            }
-                        } else if (tabInfo.term) {
-                            tabInfo.term.scrollLines(isUp ? -lines : lines);
+                        if (tabInfo.ws && !tabInfo.isDead) {
+                            tabInfo.ws.sendInput(payload);
                         }
 
                         const consumed =
@@ -2752,19 +2746,6 @@ export class TabManager {
             },
             { capture: true, passive: false },
         );
-
-        const resetTermTouch = () => {
-            termTouchStartY = null;
-            termTouchRemainder = 0;
-        };
-        termContainer.addEventListener('touchend', resetTermTouch, {
-            capture: true,
-            passive: true,
-        });
-        termContainer.addEventListener('touchcancel', resetTermTouch, {
-            capture: true,
-            passive: true,
-        });
 
         // Setup terminal bell notification sound.
         const bellAudio = new Audio('vendor/bell.wav');
