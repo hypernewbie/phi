@@ -153,8 +153,8 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req struct {
-			Key   string `json:"key"`
-			Value string `json:"value"`
+			Key   string          `json:"key"`
+			Value json.RawMessage `json:"value"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -167,15 +167,25 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		var valStr string
+		if len(req.Value) > 0 {
+			var s string
+			if err := json.Unmarshal(req.Value, &s); err == nil {
+				valStr = s
+			} else {
+				valStr = string(req.Value)
+			}
+		}
+
 		syncMu.Lock()
 		now := time.Now()
 		if existing, exists := syncStore[req.Key]; exists {
-			existing.Value = req.Value
+			existing.Value = valStr
 			existing.UpdatedAt = now
 		} else {
 			syncStore[req.Key] = &SyncMessage{
 				Key:       req.Key,
-				Value:     req.Value,
+				Value:     valStr,
 				CreatedAt: now,
 				UpdatedAt: now,
 			}
@@ -183,6 +193,15 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		msg := *syncStore[req.Key]
 		syncMu.Unlock()
 		TriggerSaveSyncStore()
+
+		if wsHub != nil {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"action": "upsert",
+				"key":    msg.Key,
+				"msg":    msg,
+			})
+			wsHub.BroadcastAll(0x0a, payload)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(msg)
@@ -201,6 +220,13 @@ func handleSyncMessages(w http.ResponseWriter, r *http.Request) {
 		syncMu.Unlock()
 		if exists {
 			TriggerSaveSyncStore()
+			if wsHub != nil {
+				payload, _ := json.Marshal(map[string]interface{}{
+					"action": "delete",
+					"key":    key,
+				})
+				wsHub.BroadcastAll(0x0a, payload)
+			}
 		}
 
 		if !exists {

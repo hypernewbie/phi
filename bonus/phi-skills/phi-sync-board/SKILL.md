@@ -1,6 +1,6 @@
 ---
 name: phi-sync-board
-description: Read, write, and delete key/value messages on a Phi Sync Board coordinator, used to pass state/messages between machines or agents on the same tailnet/LAN. Use when the user asks to "sync", "post to the board", "check the coordinator", "read/write a sync key", or mentions the Phi server / sync board. If PHI_COORDINATOR is unset, ask the user for the address and offer to set it up before running any commands.
+description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board. If PHI_COORDINATOR is unset, ask the user for the address and offer to set it up before running any commands.
 allowed-tools: Bash, Read
 ---
 
@@ -73,9 +73,10 @@ Each entry is a JSON object:
 - `POST /api/sync/messages` → upsert, returns the resulting entry.
 - `DELETE /api/sync/messages/<key>` → 200 on success, whether or not the key existed.
 
-`value` is stored as a plain string — if you need structured data, JSON-encode
-it into the string yourself (e.g. `-d '{"key":"foo","value":"{\"status\":\"done\"}"}'`)
-and decode with `jq -r '.value' | jq .` on read.
+`value` accepts raw JSON objects, JSON arrays, numbers, or plain strings.
+When sending structured JSON (such as the action schema below), you can pass
+`"value": { ... }` directly without manual string-escaping. Plain strings are
+also fully supported.
 
 ## Desktop alerts: PHI_NOTIF (notify) and PHI_ALARM (error)
 
@@ -99,6 +100,43 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 ```
 
 Shorthand: think `synboard notify` → add `PHI_NOTIF`, `syncboard error` → add `PHI_ALARM`.
+
+## Interactive Action Cards & Agent Control
+
+The Sync Board natively renders structured JSON action payloads as interactive cards in the web UI, complete with instant WebSocket push (`0x0a` frame) so updates appear with zero latency:
+
+```bash
+curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: application/json" \
+  -d '{
+    "key": "feature:auth-mockup PHI_NOTIF",
+    "value": {
+      "title": "Auth Page Redesign",
+      "description": "Generated login UI mockup and started Vite dev server.",
+      "preview": "screenshots/login_mockup.png",
+      "url": "http://localhost:5173/login",
+      "actions": [
+        { "label": "Run E2E Tests", "command": "pnpm test:e2e\r", "style": "primary" },
+        { "label": "Git Status", "command": "git status\r" }
+      ],
+      "toast": "Mockup ready for review!",
+      "auto_open": true
+    }
+  }'
+```
+
+### Schema Properties
+
+- `title` *(string)*: Card title displayed in bold.
+- `description` / `desc` *(string)*: Optional text or markdown explanation.
+- `preview` / `image` / `file` *(string)*: Relative path to a file or image in the workspace. Renders a clickable **Preview [filename]** button that opens Phi's preview modal (ViewerJS for images, Plyr for media, PDF viewer, code highlighting).
+- `url` / `link` *(string)*: External or local web URL (`http://` or `https://`). Renders a styled clickable chip opening the link in a new browser tab.
+- `actions` *(array of objects)*: List of buttons that send inputs to the terminal:
+  - `label` *(string)*: Button text.
+  - `command` *(string)*: Input string to send (automatically appends `\r` to execute if omitted).
+  - `style` *(string, optional)*: `"primary"`, `"success"`, or `"danger"`.
+  - `stage` *(boolean, optional)*: If `true`, stages command into the prompt input bar instead of executing immediately.
+- `toast` *(string)*: Displays a transient toast notification in the browser UI immediately upon message arrival.
+- `auto_open` *(boolean)*: If `true`, automatically opens the file preview modal or web link the instant the message arrives over WebSocket.
 
 ## Notes
 

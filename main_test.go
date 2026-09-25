@@ -2260,6 +2260,23 @@ func TestSyncMessagesCRUD(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status 404 on delete nonexistent, got %d", w.Code)
 	}
+
+	// Rich action JSON payload support: value sent as raw JSON object
+	richPayload := `{"key":"rich-card","value":{"title":"Mockup","preview":"img.png","auto_open":true}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/sync/messages", strings.NewReader(richPayload))
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/sync/messages with raw JSON object failed: status %d", w.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/sync/messages/rich-card", nil)
+	w = httptest.NewRecorder()
+	handleSyncMessages(w, req)
+	var richFetched SyncMessage
+	json.NewDecoder(w.Body).Decode(&richFetched)
+	if !strings.Contains(richFetched.Value, `"title":"Mockup"`) {
+		t.Errorf("expected rich value to preserve JSON object, got %q", richFetched.Value)
+	}
 }
 
 func TestSyncCoordinatorConfig(t *testing.T) {

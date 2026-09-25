@@ -12,6 +12,7 @@ export interface WSControlMessage {
         | 'server-shutdown'
         | 'replay-complete'
         | 'md-changed'
+        | 'sync-changed'
         | string;
     [key: string]: unknown;
 }
@@ -31,7 +32,8 @@ export type WSMessageType =
     | 0x06 // replay-complete (s→c)
     | 0x07 // md-changed (s→c)
     | 0x08 // attach-head, hot-v1 (s→c)
-    | 0x09; // live-output, hot-v1 (s→c)
+    | 0x09 // live-output, hot-v1 (s→c)
+    | 0x0a; // sync-changed (s→c)
 
 // Callbacks the host registers on construction. All are optional;
 // if omitted, the corresponding WS event becomes a no-op.
@@ -222,6 +224,12 @@ export class PTYWebSocket {
                     break;
                 case 0x09: // LIVE_OUTPUT (hot-v1)
                     this._handleLiveOutput(payload);
+                    break;
+                case 0x0a: // sync-changed
+                    this._handleJsonPayload(payload, (data) => {
+                        if (this.onControl)
+                            this.onControl({ type: 'sync-changed', ...data });
+                    });
                     break;
             }
         };

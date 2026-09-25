@@ -10,6 +10,68 @@ const SYNC_NOTIF_MARKER = 'PHI_NOTIF';
 const SYNC_ALARM_MARKER = 'PHI_ALARM';
 const SYNC_TITLE_MAX = 120;
 
+export interface SyncActionItem {
+    label?: string;
+    name?: string;
+    command?: string;
+    cmd?: string;
+    input?: string;
+    style?: 'primary' | 'danger' | 'success' | string;
+    stage?: boolean;
+}
+
+export interface SyncActionPayload {
+    title?: string;
+    description?: string;
+    desc?: string;
+    text?: string;
+    preview?: string;
+    image?: string;
+    file?: string;
+    url?: string;
+    link?: string;
+    actions?: SyncActionItem[];
+    toast?: string;
+    auto_open?: boolean;
+    autoOpen?: boolean;
+}
+
+export function parseActionPayload(val: unknown): SyncActionPayload | null {
+    let obj: any = null;
+    if (typeof val === 'object' && val !== null) {
+        obj = val;
+    } else if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+                obj = JSON.parse(trimmed);
+            } catch {
+                return null;
+            }
+        }
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+
+    const hasRichKeys =
+        'preview' in obj ||
+        'image' in obj ||
+        'file' in obj ||
+        'url' in obj ||
+        'link' in obj ||
+        'actions' in obj ||
+        'title' in obj ||
+        'description' in obj ||
+        'desc' in obj ||
+        'toast' in obj ||
+        'auto_open' in obj ||
+        'autoOpen' in obj;
+
+    if (hasRichKeys) {
+        return obj as SyncActionPayload;
+    }
+    return null;
+}
+
 export class SyncManager {
     app: AppLike;
     panelEl: HTMLElement | null;
@@ -23,6 +85,10 @@ export class SyncManager {
     formCancel!: HTMLElement;
     formSubmit!: HTMLElement;
     messagesList!: HTMLElement;
+
+    private _handledAutoOpenKeys = new Set<string>();
+    private _handledToastKeys = new Set<string>();
+    private _syncDebounce: ReturnType<typeof setTimeout> | null = null;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -186,6 +252,32 @@ export class SyncManager {
         }
     }
 
+    onSyncChanged(_control?: any): void {
+        if (this._syncDebounce) clearTimeout(this._syncDebounce);
+        this._syncDebounce = setTimeout(() => {
+            this._syncDebounce = null;
+            void this.refreshMessages();
+        }, 60);
+    }
+
+    openFilePreview(relPath: string): void {
+        const cleanPath = relPath.trim();
+        const name = cleanPath.split('/').pop() || cleanPath;
+        const activeTab = this.app.tabManager?.getActiveTab();
+        const cwd = activeTab?.cwd || this.app.sessionsManager?.activeCWD || '';
+        if (this.app.markdownManager?.previewFile) {
+            void this.app.markdownManager.previewFile(
+                { path: cleanPath, name },
+                cwd,
+            );
+        } else {
+            this.app.showToast(
+                `Cannot preview ${name}: file preview not available`,
+                { type: 'error' },
+            );
+        }
+    }
+
     renderMessages(messages: any[]): void {
         if (!messages || messages.length === 0) {
             this.messagesList.innerHTML =
@@ -205,8 +297,60 @@ export class SyncManager {
             card.className = 'sync-card';
 
             const localTime = new Date(msg.updated_at).toLocaleTimeString();
+            const actionData = parseActionPayload(msg.value);
 
-            card.innerHTML = `
+            // Handle auto_open & toast for recent action messages (< 15 seconds)
+            if (actionData) {
+                const msgTime = new Date(
+                    msg.updated_at || msg.created_at,
+                ).getTime();
+                const isRecent =
+                    !isNaN(msgTime) && Date.now() - msgTime < 15000;
+                const updateKey = `${msg.key}:${msg.updated_at || msg.created_at}`;
+
+                if (this._handledToastKeys.size > 200)
+                    this._handledToastKeys.clear();
+                if (this._handledAutoOpenKeys.size > 200)
+                    this._handledAutoOpenKeys.clear();
+
+                if (
+                    actionData.toast &&
+                    isRecent &&
+                    !this._handledToastKeys.has(updateKey)
+                ) {
+                    this._handledToastKeys.add(updateKey);
+                    this.app.showToast(actionData.toast, { type: 'info' });
+                }
+
+                const shouldAutoOpen =
+                    actionData.auto_open === true ||
+                    actionData.autoOpen === true;
+                if (
+                    shouldAutoOpen &&
+                    isRecent &&
+                    !this._handledAutoOpenKeys.has(updateKey)
+                ) {
+                    this._handledAutoOpenKeys.add(updateKey);
+                    const previewTarget =
+                        actionData.preview ||
+                        actionData.image ||
+                        actionData.file;
+                    if (previewTarget) {
+                        this.openFilePreview(previewTarget);
+                    } else if (actionData.url || actionData.link) {
+                        const rawUrl = actionData.url || actionData.link;
+                        if (rawUrl && /^https?:\/\//i.test(rawUrl)) {
+                            window.open(
+                                rawUrl,
+                                '_blank',
+                                'noopener,noreferrer',
+                            );
+                        }
+                    }
+                }
+            }
+
+            const headerHtml = `
                 <div class="sync-card-header">
                     <span class="sync-card-key" title="${this.escapeHtml(msg.key)}">${this.escapeHtml(msg.key)}</span>
                     <div class="sync-card-actions">
@@ -218,14 +362,168 @@ export class SyncManager {
                         </button>
                     </div>
                 </div>
-                <div class="sync-card-value collapsed">${this.escapeHtml(msg.value)}</div>
+            `;
+
+            let bodyHtml = '';
+            if (actionData) {
+                const desc =
+                    actionData.description ||
+                    actionData.desc ||
+                    actionData.text ||
+                    '';
+                const previewTarget =
+                    actionData.preview || actionData.image || actionData.file;
+                const rawUrl = actionData.url || actionData.link;
+                const safeUrl =
+                    rawUrl && /^https?:\/\//i.test(rawUrl) ? rawUrl : null;
+                const previewName = previewTarget
+                    ? previewTarget.split('/').pop() || previewTarget
+                    : '';
+                const rawJsonStr =
+                    typeof msg.value === 'string'
+                        ? msg.value
+                        : JSON.stringify(msg.value, null, 2);
+
+                const chipsHtml =
+                    previewTarget || safeUrl
+                        ? `
+                    <div class="sync-action-chips">
+                        ${
+                            previewTarget
+                                ? `<button type="button" class="sync-chip-btn sync-preview-btn" title="Preview ${this.escapeHtml(previewTarget)}">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                    <span>Preview ${this.escapeHtml(previewName)}</span>
+                                </button>`
+                                : ''
+                        }
+                        ${
+                            safeUrl
+                                ? `<a href="${this.escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="sync-chip-btn sync-link-btn" title="Open ${this.escapeHtml(safeUrl)}">
+                                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                    <span>Open Link</span>
+                                </a>`
+                                : ''
+                        }
+                    </div>`
+                        : '';
+
+                const actionsList = Array.isArray(actionData.actions)
+                    ? actionData.actions
+                    : [];
+                const actionsHtml =
+                    actionsList.length > 0
+                        ? `
+                    <div class="sync-action-btns">
+                        ${actionsList
+                            .map((act, idx) => {
+                                const styleClass = act.style
+                                    ? ` style-${this.escapeHtml(act.style)}`
+                                    : '';
+                                const label =
+                                    act.label || act.name || 'Execute';
+                                const cmd =
+                                    act.command || act.cmd || act.input || '';
+                                return `<button type="button" class="sync-action-cmd-btn${styleClass}" data-idx="${idx}" title="${this.escapeHtml(cmd)}">${this.escapeHtml(label)}</button>`;
+                            })
+                            .join('')}
+                    </div>`
+                        : '';
+
+                bodyHtml = `
+                    <div class="sync-action-card">
+                        ${actionData.title ? `<div class="sync-action-title">${this.escapeHtml(actionData.title)}</div>` : ''}
+                        ${desc ? `<div class="sync-action-desc">${this.escapeHtml(desc)}</div>` : ''}
+                        ${chipsHtml}
+                        ${actionsHtml}
+                        <div class="sync-raw-toggle" title="Toggle raw JSON value">
+                            <span class="sync-raw-toggle-arrow">▸</span> <span>Raw JSON</span>
+                        </div>
+                        <div class="sync-card-value sync-action-raw hidden">${this.escapeHtml(rawJsonStr)}</div>
+                    </div>
+                `;
+            } else {
+                bodyHtml = `<div class="sync-card-value collapsed">${this.escapeHtml(msg.value)}</div>`;
+            }
+
+            card.innerHTML = `
+                ${headerHtml}
+                ${bodyHtml}
                 <div class="sync-card-footer">${localTime}</div>
             `;
 
-            const valEl = card.querySelector('.sync-card-value')!;
-            valEl.addEventListener('click', () => {
-                valEl.classList.toggle('collapsed');
-            });
+            // Wire standard value click if collapsed
+            const standardValEl = card.querySelector(
+                '.sync-card-value:not(.sync-action-raw)',
+            );
+            if (standardValEl) {
+                standardValEl.addEventListener('click', () => {
+                    standardValEl.classList.toggle('collapsed');
+                });
+            }
+
+            // Wire action card listeners
+            if (actionData) {
+                const previewTarget =
+                    actionData.preview || actionData.image || actionData.file;
+                if (previewTarget) {
+                    card.querySelector('.sync-preview-btn')?.addEventListener(
+                        'click',
+                        (e) => {
+                            e.stopPropagation();
+                            this.openFilePreview(previewTarget);
+                        },
+                    );
+                }
+
+                const rawToggle = card.querySelector('.sync-raw-toggle');
+                const rawEl = card.querySelector('.sync-action-raw');
+                const arrow = card.querySelector('.sync-raw-toggle-arrow');
+                rawToggle?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (rawEl) {
+                        const isHidden = rawEl.classList.toggle('hidden');
+                        if (arrow) arrow.textContent = isHidden ? '▸' : '▾';
+                    }
+                });
+
+                const actionBtns = card.querySelectorAll<HTMLButtonElement>(
+                    '.sync-action-cmd-btn',
+                );
+                actionBtns.forEach((btn) => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const idx = Number(btn.dataset.idx);
+                        const act = actionData.actions?.[idx];
+                        if (!act) return;
+                        const cmd = act.command || act.cmd || act.input || '';
+                        if (!cmd) return;
+                        if (act.stage) {
+                            if (this.app.tabManager?.inputTextArea) {
+                                this.app.tabManager.inputTextArea.value = cmd;
+                                this.app.tabManager.inputTextArea.focus({
+                                    preventScroll: true,
+                                });
+                                this.app.showToast(
+                                    `Staged: ${act.label || cmd}`,
+                                    { type: 'info' },
+                                );
+                            }
+                        } else {
+                            if (this.app.tabManager?.sendRawInput) {
+                                const payload =
+                                    cmd.endsWith('\r') || cmd.endsWith('\n')
+                                        ? cmd
+                                        : `${cmd}\r`;
+                                this.app.tabManager.sendRawInput(payload);
+                                this.app.showToast(
+                                    `Sent: ${act.label || cmd.trim()}`,
+                                    { type: 'info' },
+                                );
+                            }
+                        }
+                    });
+                });
+            }
 
             card.querySelector('.sync-edit-btn')?.addEventListener(
                 'click',
@@ -234,7 +532,10 @@ export class SyncManager {
                     this.formContainer.classList.remove('hidden');
                     this.formKey.value = msg.key;
                     this.formKey.disabled = true;
-                    this.formValue.value = msg.value;
+                    this.formValue.value =
+                        typeof msg.value === 'string'
+                            ? msg.value
+                            : JSON.stringify(msg.value, null, 2);
                     this.formValue.focus({ preventScroll: true });
                 },
             );
