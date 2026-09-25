@@ -155,7 +155,7 @@ describe('terminal-safety evidence guard (the mandatory gate)', () => {
     expect(evRegion).toContain(
       'e.keyCode>=51&&e.keyCode<=55?o.key=String.fromCharCode(e.keyCode-51+27)',
     );
-    expect(evRegion).toContain('56===e.keyCode?o.key=s.C0.DEL');
+    expect(evRegion).toMatch(/56===e\.keyCode\?o\.key=(?:s\.C0\.DEL|"\x7f")/);
     for (const digit of ['3', '4', '5', '6', '7', '8']) {
       expect(ALWAYS_SAFE_RAIL_CHORDS.has(digit)).toBe(false);
       expect(CONDITIONAL_RAIL_CHORDS.has(digit)).toBe(true);
