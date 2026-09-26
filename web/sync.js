@@ -1,5 +1,5 @@
 /* Φ phi — AI Sync Board Manager */
-import { escapeHtml as escapeHtmlUtil, buildProxyUrl, openExternalLink, } from './util.js';
+import { escapeHtml as escapeHtmlUtil, buildProxyUrl, } from './util.js';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
 // (see signalDesktopAlert). Display data only — never a remote action.
@@ -33,9 +33,7 @@ export function parseActionPayload(val) {
         'title' in obj ||
         'description' in obj ||
         'desc' in obj ||
-        'toast' in obj ||
-        'auto_open' in obj ||
-        'autoOpen' in obj;
+        'toast' in obj;
     if (hasRichKeys) {
         return obj;
     }
@@ -54,7 +52,7 @@ export class SyncManager {
     formCancel;
     formSubmit;
     messagesList;
-    _handledAutoOpenKeys = new Set();
+    _fileExistCache = new Map();
     _handledToastKeys = new Set();
     _syncDebounce = null;
     constructor(app) {
@@ -187,11 +185,50 @@ export class SyncManager {
             void this.refreshMessages();
         }, 60);
     }
-    openFilePreview(relPath) {
+    isFileTargetValid(relPath) {
+        if (!relPath || typeof relPath !== 'string')
+            return false;
+        const clean = relPath.trim();
+        if (!clean)
+            return false;
+        if (clean.startsWith('/') ||
+            clean.startsWith('\\') ||
+            /^[a-zA-Z]:[/\\]/.test(clean) ||
+            clean.split(/[/\\]/).includes('..')) {
+            return false;
+        }
+        return true;
+    }
+    async checkFileExists(relPath, cwd) {
+        if (!this.isFileTargetValid(relPath)) {
+            return false;
+        }
+        const clean = relPath.trim();
+        const cacheKey = `${cwd}:${clean}`;
+        let pending = this._fileExistCache.get(cacheKey);
+        if (!pending) {
+            const url = `/api/file/asset?path=${encodeURIComponent(clean)}&cwd=${encodeURIComponent(cwd)}`;
+            pending = fetch(url, { method: 'HEAD' })
+                .then((res) => res.ok)
+                .catch(() => false);
+            this._fileExistCache.set(cacheKey, pending);
+        }
+        return pending;
+    }
+    async openFilePreview(relPath) {
         const cleanPath = relPath.trim();
-        const name = cleanPath.split('/').pop() || cleanPath;
+        const name = cleanPath.split(/[/\\]/).pop() || cleanPath;
         const activeTab = this.app.tabManager?.getActiveTab();
         const cwd = activeTab?.cwd || this.app.sessionsManager?.activeCWD || '';
+        if (!this.isFileTargetValid(cleanPath)) {
+            this.app.showToast(`Cannot preview ${name}: path is invalid or outside the workspace`, { type: 'error' });
+            return;
+        }
+        const exists = await this.checkFileExists(cleanPath, cwd);
+        if (!exists) {
+            this.app.showToast(`Cannot preview ${name}: file does not exist on this machine`, { type: 'error' });
+            return;
+        }
         if (this.app.markdownManager?.previewFile) {
             void this.app.markdownManager.previewFile({ path: cleanPath, name }, cwd);
         }
@@ -213,39 +250,18 @@ export class SyncManager {
             card.className = 'sync-card';
             const localTime = new Date(msg.updated_at).toLocaleTimeString();
             const actionData = parseActionPayload(msg.value);
-            // Handle auto_open & toast for recent action messages (< 15 seconds)
+            // Handle toast for recent action messages (< 15 seconds)
             if (actionData) {
                 const msgTime = new Date(msg.updated_at || msg.created_at).getTime();
                 const isRecent = !isNaN(msgTime) && Date.now() - msgTime < 15000;
                 const updateKey = `${msg.key}:${msg.updated_at || msg.created_at}`;
                 if (this._handledToastKeys.size > 200)
                     this._handledToastKeys.clear();
-                if (this._handledAutoOpenKeys.size > 200)
-                    this._handledAutoOpenKeys.clear();
                 if (actionData.toast &&
                     isRecent &&
                     !this._handledToastKeys.has(updateKey)) {
                     this._handledToastKeys.add(updateKey);
                     this.app.showToast(actionData.toast, { type: 'info' });
-                }
-                const shouldAutoOpen = actionData.auto_open === true ||
-                    actionData.autoOpen === true;
-                if (shouldAutoOpen &&
-                    isRecent &&
-                    !this._handledAutoOpenKeys.has(updateKey)) {
-                    this._handledAutoOpenKeys.add(updateKey);
-                    const previewTarget = actionData.preview ||
-                        actionData.image ||
-                        actionData.file;
-                    if (previewTarget) {
-                        this.openFilePreview(previewTarget);
-                    }
-                    else if (actionData.url || actionData.link) {
-                        const rawUrl = actionData.url || actionData.link;
-                        if (rawUrl && /^https?:\/\//i.test(rawUrl)) {
-                            openExternalLink(rawUrl);
-                        }
-                    }
                 }
             }
             const headerHtml = `
@@ -271,7 +287,7 @@ export class SyncManager {
                 const rawUrl = actionData.url || actionData.link;
                 const safeUrl = rawUrl && /^https?:\/\//i.test(rawUrl) ? rawUrl : null;
                 const previewName = previewTarget
-                    ? previewTarget.split('/').pop() || previewTarget
+                    ? previewTarget.split(/[/\\]/).pop() || previewTarget
                     : '';
                 const rawJsonStr = typeof msg.value === 'string'
                     ? msg.value
@@ -279,12 +295,7 @@ export class SyncManager {
                 const chipsHtml = previewTarget || safeUrl
                     ? `
                     <div class="sync-action-chips">
-                        ${previewTarget
-                        ? `<button type="button" class="sync-chip-btn sync-preview-btn" title="Preview ${this.escapeHtml(previewTarget)}">
-                                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                                    <span>Preview ${this.escapeHtml(previewName)}</span>
-                                </button>`
-                        : ''}
+                        ${previewTarget ? `<span class="sync-preview-slot"></span>` : ''}
                         ${safeUrl
                         ? `<a href="${this.escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="sync-chip-btn sync-link-btn" title="Open ${this.escapeHtml(safeUrl)}">
                                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -315,6 +326,7 @@ export class SyncManager {
                     <div class="sync-action-card">
                         ${actionData.title ? `<div class="sync-action-title">${this.escapeHtml(actionData.title)}</div>` : ''}
                         ${desc ? `<div class="sync-action-desc">${this.escapeHtml(desc)}</div>` : ''}
+                        ${previewTarget ? `<div class="sync-image-preview-slot"></div>` : ''}
                         ${chipsHtml}
                         ${actionsHtml}
                         <div class="sync-raw-toggle" title="Toggle raw JSON value">
@@ -342,10 +354,48 @@ export class SyncManager {
             // Wire action card listeners
             if (actionData) {
                 const previewTarget = actionData.preview || actionData.image || actionData.file;
+                const previewName = previewTarget
+                    ? previewTarget.split(/[/\\]/).pop() || previewTarget
+                    : '';
                 if (previewTarget) {
-                    card.querySelector('.sync-preview-btn')?.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.openFilePreview(previewTarget);
+                    const previewSlot = card.querySelector('.sync-preview-slot');
+                    const imgSlot = card.querySelector('.sync-image-preview-slot');
+                    const isImage = /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(previewTarget);
+                    const activeTab = this.app.tabManager?.getActiveTab();
+                    const cwd = activeTab?.cwd ||
+                        this.app.sessionsManager?.activeCWD ||
+                        '';
+                    void this.checkFileExists(previewTarget, cwd).then((exists) => {
+                        if (!exists)
+                            return;
+                        if (previewSlot) {
+                            previewSlot.innerHTML = `
+                                    <button type="button" class="sync-chip-btn sync-preview-btn" title="Preview ${this.escapeHtml(previewTarget)}">
+                                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                        <span>Preview ${this.escapeHtml(previewName)}</span>
+                                    </button>
+                                `;
+                            previewSlot
+                                .querySelector('.sync-preview-btn')
+                                ?.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                void this.openFilePreview(previewTarget);
+                            });
+                        }
+                        if (isImage && imgSlot) {
+                            const assetUrl = `/api/file/asset?path=${encodeURIComponent(previewTarget.trim())}&cwd=${encodeURIComponent(cwd)}`;
+                            imgSlot.innerHTML = `
+                                    <div class="sync-image-card-preview" title="Click to preview ${this.escapeHtml(previewName)}">
+                                        <img src="${this.escapeHtml(assetUrl)}" class="sync-image-thumb" alt="${this.escapeHtml(previewName)}" loading="lazy" />
+                                    </div>
+                                `;
+                            imgSlot
+                                .querySelector('.sync-image-thumb')
+                                ?.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                void this.openFilePreview(previewTarget);
+                            });
+                        }
                     });
                 }
                 const rawToggle = card.querySelector('.sync-raw-toggle');

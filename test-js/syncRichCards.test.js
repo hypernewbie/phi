@@ -81,9 +81,12 @@ describe('SyncManager rich action cards rendering and interaction', () => {
     beforeEach(() => {
         bootstrapDom();
         mockFetch(() => []);
+        vi.spyOn(SyncManager.prototype, 'refreshMessages').mockImplementation(
+            () => Promise.resolve(),
+        );
     });
 
-    it('renders rich action card elements (title, desc, preview button, link, command buttons)', () => {
+    it('renders rich action card elements (title, desc, preview button, link, command buttons)', async () => {
         const app = buildAppStub();
         const mgr = new SyncManager(app);
 
@@ -115,6 +118,7 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         ];
 
         mgr.renderMessages(messages);
+        await new Promise((r) => setTimeout(r, 0));
 
         const card = mgr.messagesList.querySelector('.sync-card');
         expect(card).not.toBeNull();
@@ -126,10 +130,13 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         const descEl = card?.querySelector('.sync-action-desc');
         expect(descEl?.textContent).toBe('Dashboard preview and dev server');
 
-        // Check Preview button
+        // Check Preview button and image thumbnail
         const previewBtn = card?.querySelector('.sync-preview-btn');
         expect(previewBtn).not.toBeNull();
         expect(previewBtn?.textContent).toContain('Preview dashboard.png');
+
+        const imgThumb = card?.querySelector('.sync-image-thumb');
+        expect(imgThumb).not.toBeNull();
 
         // Check Link chip
         const linkBtn = card?.querySelector('.sync-link-btn');
@@ -147,7 +154,7 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         expect(actionBtns?.[1].textContent).toBe('Stage Git');
     });
 
-    it('clicks preview button to trigger MarkdownManager.previewFile', () => {
+    it('clicks preview button to trigger MarkdownManager.previewFile', async () => {
         const app = buildAppStub();
         const mgr = new SyncManager(app);
 
@@ -162,9 +169,11 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         ];
 
         mgr.renderMessages(messages);
+        await new Promise((r) => setTimeout(r, 0));
 
         const previewBtn = mgr.messagesList.querySelector('.sync-preview-btn');
         previewBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
 
         expect(app.markdownManager.previewFile).toHaveBeenCalledTimes(1);
         expect(app.markdownManager.previewFile).toHaveBeenCalledWith(
@@ -239,7 +248,7 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         expect(app.tabManager.inputTextArea.value).toBe('rm -rf /tmp/test');
     });
 
-    it('automatically triggers previewFile when auto_open is true on fresh messages', () => {
+    it('does NOT automatically pop open preview or links even when auto_open is present', async () => {
         const app = buildAppStub();
         const mgr = new SyncManager(app);
 
@@ -258,16 +267,82 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         ];
 
         mgr.renderMessages(messages);
+        await new Promise((r) => setTimeout(r, 0));
 
-        expect(app.markdownManager.previewFile).toHaveBeenCalledTimes(1);
-        expect(app.markdownManager.previewFile).toHaveBeenCalledWith(
-            { path: 'output/result.png', name: 'result.png' },
-            '/home/user/project',
-        );
+        // Auto-open is intentionally disabled to avoid hijacking the user's workspace
+        expect(app.markdownManager.previewFile).not.toHaveBeenCalled();
+    });
 
-        // Rendering again does not re-trigger preview (deduped)
+    it('does NOT render preview button or thumbnail if file does not exist on the machine', async () => {
+        const app = buildAppStub();
+        mockFetch((url) => {
+            if (url.includes('/api/file/asset')) {
+                return { ok: false, status: 404 };
+            }
+            return [];
+        });
+        const mgr = new SyncManager(app);
+
+        const messages = [
+            {
+                key: 'missing:file',
+                value: JSON.stringify({
+                    title: 'Missing Asset',
+                    preview: 'missing/file.png',
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
         mgr.renderMessages(messages);
-        expect(app.markdownManager.previewFile).toHaveBeenCalledTimes(1);
+        await new Promise((r) => setTimeout(r, 0));
+
+        const previewBtn = mgr.messagesList.querySelector('.sync-preview-btn');
+        const imgThumb = mgr.messagesList.querySelector('.sync-image-thumb');
+        expect(previewBtn).toBeNull();
+        expect(imgThumb).toBeNull();
+    });
+
+    it('rejects client-local Windows paths (c:\\...) and does NOT render preview or thumbnail', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+
+        const messages = [
+            {
+                key: 'alien:windows:path',
+                value: JSON.stringify({
+                    title: 'Alien Path',
+                    preview: 'C:\\show_user.png',
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
+        mgr.renderMessages(messages);
+        await new Promise((r) => setTimeout(r, 0));
+
+        const previewBtn = mgr.messagesList.querySelector('.sync-preview-btn');
+        const imgThumb = mgr.messagesList.querySelector('.sync-image-thumb');
+        expect(previewBtn).toBeNull();
+        expect(imgThumb).toBeNull();
+    });
+
+    it('openFilePreview shows error toast when file does not exist', async () => {
+        const app = buildAppStub();
+        mockFetch((url) => {
+            if (url.includes('/api/file/asset')) {
+                return { ok: false, status: 404 };
+            }
+            return [];
+        });
+        const mgr = new SyncManager(app);
+
+        await mgr.openFilePreview('nonexistent.txt');
+        expect(app.showToast).toHaveBeenCalledWith(
+            expect.stringContaining('file does not exist on this machine'),
+            { type: 'error' },
+        );
+        expect(app.markdownManager.previewFile).not.toHaveBeenCalled();
     });
 
     it('automatically shows toast when toast field is present on fresh messages', () => {
@@ -303,12 +378,12 @@ describe('SyncManager rich action cards rendering and interaction', () => {
             {
                 key: 'plain:text',
                 value: 'Simple note to another agent',
-                updated_at: new Date().toISOString(),
+                updated_at: '2026-09-26T12:00:02.000Z',
             },
             {
                 key: 'plain:json',
                 value: '{"just": "data", "num": 10}',
-                updated_at: new Date().toISOString(),
+                updated_at: '2026-09-26T12:00:01.000Z',
             },
         ];
 

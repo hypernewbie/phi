@@ -8974,6 +8974,34 @@ html[data-phi-config-page] .settings-modal {
     border: 1px solid var(--border);
 }
 
+.sync-preview-slot {
+    display: contents;
+}
+
+.sync-image-card-preview {
+    margin-top: 4px;
+    margin-bottom: 2px;
+}
+
+.sync-image-thumb {
+    max-height: 140px;
+    max-width: 100%;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    object-fit: contain;
+    background-color: var(--bg-base);
+    display: block;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
+}
+
+.sync-image-thumb:hover {
+    border-color: var(--accent-glow, #3b82f6);
+    box-shadow: 0 0 10px var(--accent-trace);
+}
+
 /* White theme: force dark text on accent-coloured buttons (white bg + white text = invisible) */
 [data-theme-color="white"] .btn-accent,
 [data-theme-color="white"] .btn-accent:hover,
