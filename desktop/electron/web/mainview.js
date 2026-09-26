@@ -217,15 +217,20 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   };
   const openAuthModal = (info) => {
     if (!authModal || !authOriginEl || !authInputEl || !authErrorEl || !authSubmitBtn || !authCancelBtn) return;
+    const isSameRequest = (authRequestId === info.requestId && !authModal.hidden);
     authRequestId = info.requestId;
     authProfileId = info.profileId;
     authOriginEl.textContent = info.label ?? info.origin;
-    authErrorEl.textContent = '';
-    authInputEl.value = '';
+    if (!isSameRequest) {
+      authErrorEl.textContent = '';
+      authInputEl.value = '';
+    }
     authSubmitBtn.disabled = false;
     authCancelBtn.disabled = false;
     authModal.hidden = false;
-    requestAnimationFrame(() => authInputEl.focus());
+    if (!isSameRequest) {
+      requestAnimationFrame(() => authInputEl.focus());
+    }
   };
   const acceptAuthPrompt = (info) => {
     // Accept the prompt if we have no current request, OR if the
@@ -292,6 +297,20 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
       return;
     }
     openAuthModal(info);
+  });
+  window.electron.onAuthResolved?.((info) => {
+    if (!info) {
+      closeAuthModal();
+      return;
+    }
+    if (
+      (info.requestId && info.requestId === authRequestId) ||
+      (info.profileId && info.profileId === authProfileId) ||
+      (!info.requestId && !info.profileId)
+    ) {
+      closeAuthModal();
+      void refreshConfig();
+    }
   });
   // Cancel an open modal if the active server switches to a profile
   // OTHER than the one this modal is for. The controller fires

@@ -185,6 +185,14 @@ contextBridge.exposeInMainWorld('electron', {
   // the moment it finishes the handshake.
   onAuthRequired: (cb: (info: AuthRequired) => void): (() => void) =>
     subscribe('phi:auth-required', cb),
+  onAuthResolved: (
+    cb: (info: {
+      requestId?: string;
+      profileId?: string;
+      origin?: string;
+      generation?: number;
+    }) => void,
+  ): (() => void) => subscribe('phi:auth-resolved', cb),
   onBodyObscuring: (cb: (obscured: boolean) => void): (() => void) =>
     subscribe('phi:body-obscuring', cb),
   submitAccessPassword: (

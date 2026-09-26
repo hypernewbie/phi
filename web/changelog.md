@@ -2,6 +2,12 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.2 — 2026-09-25
+
+### Fixed
+- **Desktop access-auth and TBAR recovery**. Resolved auth race condition where servers with trailing slashes or subpaths could encounter mismatched origin keys between auth state and stored access credentials. Added cookie check on initial probe 401 to prevent delayed probe responses from clobbering active sessions. Decoupled auth modal prompt presentation from stored credential recovery, preserving typed credentials across modal re-renders and broadcasting `phi:auth-resolved` to immediately unlock the desktop shell and notify embedded webviews upon successful unlock.
+- **Syncboard coordinator auto-resolution**. Removed requirement forcing `$PHI_COORDINATOR` environment variable and halting prompts in the `phi-sync-board` skill. The skill now resolves the coordinator automatically from `$PHI_COORDINATOR`, `~/.phi/config.json` (`sync_coordinator`), or defaults to `http://127.0.0.1:7070` across all platforms without platform-specific commands.
+
 ## v0.21.1 — 2026-09-25
 
 ### Added

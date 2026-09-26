@@ -1,6 +1,6 @@
 ---
 name: phi-sync-board
-description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board. If PHI_COORDINATOR is unset, ask the user for the address and offer to set it up before running any commands.
+description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board.
 allowed-tools: Bash, Read
 ---
 
@@ -10,46 +10,14 @@ Stateless key/value REST API exposed by a Phi server, used as a shared
 coordination board between machines/agents on the same tailnet or LAN.
 Every write is an upsert (no need to check existence first).
 
-## Setup: the PHI_COORDINATOR env var
+## Coordinator Address Resolution
 
-All commands below use `$PHI_COORDINATOR`. If it isn't set when this skill
-fires, **stop and ask the user before running any command**. The right
-opening is roughly:
+Resolve the coordinator URL using the first available source:
+1. `$PHI_COORDINATOR` environment variable (if set).
+2. The `sync_coordinator` field from `~/.phi/config.json` (or `%USERPROFILE%\.phi\config.json` on Windows).
+3. Fallback: `http://127.0.0.1:7070`.
 
-> I don't see a Phi coordinator address in your environment. Do you have a
-> phi server running somewhere? If yes — what's its address? If no — start
-> one with `phi` on the machine you want to use, and I'll grab the URL
-> from the welcome banner or `~/.phi/config.json` for you.
-
-Then once you have the address, offer to set it for this session and
-persist it. Three options, in order of helpfulness:
-
-1. **Set it for this session** (simplest, gone after the shell exits):
-
-       export PHI_COORDINATOR="http://<address>:<port>"
-
-2. **Read it from an existing phi install on this machine** — if a phi has
-   been run here before, the address is already saved. Run this and use
-   the result as $PHI_COORDINATOR:
-
-       jq -r '.sync_coordinator // empty' ~/.phi/config.json
-
-3. **Persist it across sessions** by adding the export line to the user's
-   shell rc (`~/.bashrc`, `~/.zshrc`, or PowerShell `$PROFILE`).
-
-If the user gives you an address, echo it back so they can confirm before
-you set anything: "Setting PHI_COORDINATOR=http://192.168.1.42:7070 — OK?"
-
-## Sanity check
-
-Once the var is set, hit the list endpoint before the first real command
-to confirm reachability. If it fails with "connection refused" the address
-is wrong (or phi isn't running). If it fails with "could not resolve
-host" the address is malformed.
-
-    curl -sS "$PHI_COORDINATOR/api/sync/messages" && echo
-
-A `[]` response (and exit 0) means you're good.
+Do not halt or prompt the user for an address — use the configured coordinator or default directly. In the commands below, `$PHI_COORDINATOR` refers to this resolved address.
 
 ## API
 
@@ -150,17 +118,8 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 - No auth on this API — treat the board as trusted-network-only, don't put
   secrets in it.
 
-## Finding the address (full reference)
+## Coordinator Address Reference
 
-If the user asks "where do I find my coordinator address?" or you need it
-yourself, two stable sources:
-
-1. **Welcome banner** when phi starts — looks like
-   `Coordinator:  http://100.70.164.85:7070`. The example uses a Tailscale
-   IP; yours will differ.
-2. **`~/.phi/config.json`** — the `sync_coordinator` field, read with:
-
-       jq -r '.sync_coordinator // empty' ~/.phi/config.json
-
-If phi is running on the same machine as `claude`, `http://127.0.0.1:<port>`
-(default port 7070) usually works without further setup.
+- **`~/.phi/config.json`** — `sync_coordinator` field (configured coordinator address).
+- **Welcome banner** — printed when `phi` starts.
+- **Local default** — `http://127.0.0.1:7070` when running locally.
