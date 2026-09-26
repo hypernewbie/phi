@@ -258,17 +258,10 @@ export class App {
             });
         }
 
-        document
-            .querySelectorAll('#empty-state .empty-launch-btn')
-            .forEach((btn) => {
-                btn.addEventListener('click', () => {
-                    const coder = btn.dataset.coder;
-                    if (coder) {
-                        this.sessionsManager.switchCoder(coder);
-                        this.sessionsManager.spawnNewSession();
-                    }
-                });
-            });
+        // The legacy static quick-launch listener was bound here, after
+        // initial config and tab restoration. Delegation is installed
+        // earlier, but clicks become active at the same point as before.
+        this.sessionsManager.quickLaunchReady = true;
 
         const ntfyBtn = document.getElementById('header-ntfy-btn');
         const pushoverModal = document.getElementById('pushover-modal');

@@ -41,6 +41,7 @@ import {
     logoFor,
     inputMode,
     hasModelSwitch,
+    getCoder,
 } from './coders.js';
 import {
     mountRpcChat,
@@ -2854,9 +2855,8 @@ export class TabManager {
             // default because that's the whole phi workflow: queue
             // prompts, attach files, Ctrl+Shift+X chip. DirectMode is
             // not persisted — restored tabs pick this up via createTab()
-            // on each load. Custom profiles with is_shell: true spawn
-            // in direct mode too; the registry is the source of truth.
-            directMode: inputMode(coder) === 'direct' || title === 'btop',
+            // on each load. Custom profiles can opt into direct mode.
+            directMode: inputMode(coder) === 'direct',
             isDead: false,
             isAtBottom: true,
             isBtop: title === 'btop',
@@ -7607,19 +7607,30 @@ export class TabManager {
         });
         this.presetsContainer.appendChild(quickCmdsTriggerBtn);
 
-        // 4. Render Models trigger button. Disabled when the active
-        // coder has no model-switch recipe (R7: never a /model
-        // fallback). Capability reads from the registry; the
-        // hardcoded `agy` check is gone.
+        // Built-in shells and restored unknown tabs keep the original
+        // Models control. New custom backends without a recipe remain
+        // disabled rather than guessing a command they might not support.
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
 
-        if (activeTab && !hasModelSwitch(activeTab.coder)) {
+        const modelCoder = activeTab?.coder;
+        const isCustomModelCoder =
+            modelCoder &&
+            getCoder(modelCoder) &&
+            !['opencode', 'claude', 'pi', 'agy', 'bash', 'pwsh'].includes(
+                modelCoder,
+            );
+        if (
+            modelCoder === 'agy' ||
+            (isCustomModelCoder && !hasModelSwitch(modelCoder))
+        ) {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
             modelsTriggerBtn.title =
-                'Model selection not supported for this coder';
+                modelCoder === 'agy'
+                    ? 'Model selection not supported for Antigravity'
+                    : 'Model selection not supported for this coder';
         } else {
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -8175,13 +8186,15 @@ export class TabManager {
                     setTimeout(() => {
                         this.sendToTab(activeTab, '\r');
                     }, 500);
+                } else if (
+                    backend === 'bash' ||
+                    backend === 'pwsh' ||
+                    !getCoder(backend)
+                ) {
+                    // Preserve the legacy shell/unknown-tab behavior;
+                    // never guess a command for a registered custom backend.
+                    this.sendRawInput(`/model ${model}\r`);
                 }
-                // No fallback for unknown coders — R7 banned /model
-                // guesses. The Models button is hidden for coders
-                // outside the supported set, so this branch is
-                // unreachable; if a custom profile gains model
-                // switching it must declare a model_switch recipe,
-                // not fall through here.
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);

@@ -354,7 +354,7 @@ import { isShell } from './coders.js';
 // isTerminalActivityEligible returns false for shell/btop tabs whose PTY
 // output is user-driven or constant (btop redraws forever). Only coding-agent
 // tabs should drive the global "working" signal. UI-only tabs (review,
-// kanban, pi-rpc) are not PTY-backed and never carry isBusy.
+// kanban) are not PTY-backed and never carry isBusy.
 function isTerminalActivityEligible(tab: TerminalActivityTabLike): boolean {
     if (tab.isBtop) return false;
     const coder = tab.coder;
@@ -365,8 +365,7 @@ function isTerminalActivityEligible(tab: TerminalActivityTabLike): boolean {
     // is what existing tests rely on.
     if (!coder) return true;
     if (isShell(coder)) return false;
-    if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc')
-        return false;
+    if (coder === 'review' || coder === 'kanban') return false;
     return true;
 }
 

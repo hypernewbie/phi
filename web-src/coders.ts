@@ -354,10 +354,9 @@ export function modelSwitchDisabled(id: string): boolean {
 }
 
 // hasModelSwitch reports whether the registry has any model-switch
-// recipe for the supplied coder. R7: a profile with no recipe must
-// not get a guessed /model fallback; the UI hides the Models button
-// when this returns false (and the click handler in terminal.js
-// refuses to send anything for those coders).
+// recipe for the supplied coder. New custom profiles with no recipe
+// do not get a guessed /model fallback. Built-in shells keep their
+// pre-registry Models control for UI parity.
 //
 // v1 returns true for the three built-ins. Custom profiles that
 // declare a model_switch recipe via a future patch field would
@@ -391,17 +390,19 @@ export function logoFor(id: string): string {
 // the Φ fallback. Uses textContent so no string in the descriptor
 // can be interpreted as markup.
 export function renderLogo(coder: CoderDescriptor): HTMLElement {
-    const wrap = document.createElement('span');
-    wrap.className = 'coder-logo';
     const logo = coder.logo || '';
     if (logo.startsWith('vendor/') && !logo.includes('..')) {
+        // Match the static sidebar DOM: CSS sizes .coder-logo on the img
+        // itself. A span wrapper leaves the 64px source image unscaled and
+        // hides it with the mobile .coder-tab span rule.
         const img = document.createElement('img');
-        img.className = 'coder-logo-img';
+        img.className = 'coder-logo';
         img.src = logo;
-        img.alt = coder.name;
-        wrap.appendChild(img);
-        return wrap;
+        img.alt = coder.short_label || coder.name;
+        return img;
     }
+    const wrap = document.createElement('span');
+    wrap.className = 'coder-logo';
     if (logo.startsWith('emoji:')) {
         wrap.classList.add('emoji');
         wrap.textContent = logo.slice('emoji:'.length);

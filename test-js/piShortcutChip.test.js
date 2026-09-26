@@ -87,6 +87,31 @@ describe('pi shortcut chip placement', () => {
         expect(findCtrlShiftXChip(tm.presetsContainer)).toBeNull();
     });
 
+    it('keeps the legacy Models button state for shells, Agy, and restored unknown tabs', () => {
+        const tm = makeTm();
+        for (const [coder, disabled, title] of [
+            ['bash', false, ''],
+            ['pwsh', false, ''],
+            ['agy', true, 'Model selection not supported for Antigravity'],
+            ['old-coder', false, ''],
+        ]) {
+            tm.activePaneId = 'pane';
+            tm.tabs.set('pane', { coder });
+            tm.renderPresets(coder);
+            const modelButton = tm.presetsContainer.querySelector(
+                '.model-trigger-btn:not(.keys-trigger-btn)',
+            );
+            // Cmds and Models share this class; Models is the second one.
+            const models = [
+                ...tm.presetsContainer.querySelectorAll('.model-trigger-btn'),
+            ].find((button) => button.innerText === '🤖 Models ▾');
+            expect(models, coder).toBeTruthy();
+            expect(models.disabled, coder).toBe(disabled);
+            expect(models.title, coder).toBe(title);
+            expect(modelButton).toBeTruthy();
+        }
+    });
+
     it('leaves Send ↵ visible and untouched when the chip appears or disappears', () => {
         const tm = makeTm();
         const sendBtn = document.getElementById('send-input-btn');

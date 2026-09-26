@@ -11,10 +11,28 @@ export function normalizePath(p) {
     }
     return normalized.toLowerCase();
 }
+// Built-in sidebar labels and launch order are a UI contract, not the
+// registry's storage order. Custom profiles follow the built-ins.
+const BUILTIN_TAB_TITLES = new Map([
+    ['opencode', 'OpenCode'],
+    ['claude', 'Claude Code'],
+    ['agy', 'Antigravity / Agy'],
+    ['pi', 'Pi (term)'],
+    ['bash', 'Shell Prompt'],
+]);
+const QUICK_LAUNCH_ORDER = ['opencode', 'claude', 'pi', 'agy', 'bash'];
+const BUILTIN_SESSION_TITLES = new Map([
+    ['opencode', 'OpenCode'],
+    ['claude', 'Claude'],
+    ['pi', 'Pi'],
+    ['agy', 'Agy'],
+    ['bash', 'Shell'],
+    ['pwsh', 'Shell'],
+]);
 export class SessionsManager {
     app;
     activeCoder;
-    coderTabsInitialized;
+    quickLaunchReady;
     activeWorkspace;
     activeCWD;
     config;
@@ -38,7 +56,9 @@ export class SessionsManager {
     constructor(app) {
         this.app = app;
         this.activeCoder = 'opencode';
-        this.coderTabsInitialized = false;
+        // The old App wired quick-launch clicks only after its initial
+        // config and tab restore. Keep the same enablement point.
+        this.quickLaunchReady = false;
         this.activeWorkspace = '';
         this.activeCWD = '';
         this.sessionList = document.getElementById('session-list');
@@ -81,7 +101,6 @@ export class SessionsManager {
                     ?.classList.remove('active');
                 target.classList.add('active');
                 this.activeCoder = id;
-                localStorage.setItem('phi_active_coder', id);
                 this.loadSessions();
             });
         }
@@ -95,7 +114,7 @@ export class SessionsManager {
                 if (!target)
                     return;
                 const coder = target.getAttribute('data-coder');
-                if (!coder)
+                if (!coder || !this.quickLaunchReady)
                     return;
                 this.switchCoder(coder);
                 this.spawnNewSession();
@@ -792,13 +811,13 @@ export class SessionsManager {
     }
     async spawnNewSession() {
         try {
-            // Title uses the registry's display name (R9) so custom
-            // backends don't read "+ Agent". The fallback handles
-            // the pre-registry-load race where activeCoder points at
-            // a coder that hasn't been registered yet (e.g. when the
-            // page loaded before the registry fetch resolved).
+            // Preserve built-in session titles; use the descriptor's
+            // display name only for custom backends.
             const coder = getCoder(this.activeCoder);
-            const coderName = coder?.short_label ?? coder?.name ?? 'Shell';
+            const coderName = BUILTIN_SESSION_TITLES.get(this.activeCoder) ??
+                coder?.short_label ??
+                coder?.name ??
+                'Shell';
             const title = `+ ${coderName}`;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
@@ -1070,32 +1089,28 @@ export class SessionsManager {
         });
     }
     async openReviewTab(sess) {
-        // Review-tab pane key format (R5): encode the coder, the
-        // workspace scope, and the external session ID so two
-        // backends with overlapping IDs never collide on the same
-        // tab. URL components are percent-encoded via
-        // encodeURIComponent so the key remains a safe map key and
-        // a safe URL fragment.
+        // Existing coders keep their original tab IDs, including the
+        // behavior of reopening a review by its session ID. Custom
+        // backends use a scoped key to avoid collisions. Recognize
+        // either key when reopening a tab created by an earlier build.
         const scope = sess.coder || this.activeCoder || 'unknown';
         const ws = sess.workspace || this.activeWorkspace || '';
-        const newPaneId = `review:${encodeURIComponent(scope)}:${encodeURIComponent(ws)}:${encodeURIComponent(sess.id)}`;
-        // Legacy `review-<id>` keys from earlier sessions are
-        // re-keyed on first interaction. Look up by the legacy
-        // format; if found, switch to it and let the user reopen
-        // (we do not silently rewrite tabs.json entries — that's a
-        // restoration-time concern).
+        const scopedKey = `review:${encodeURIComponent(scope)}:${encodeURIComponent(ws)}:${encodeURIComponent(sess.id)}`;
         const legacyKey = `review-${sess.id}`;
-        if (this.app.tabManager.tabs.has(legacyKey) &&
-            !this.app.tabManager.tabs.has(newPaneId)) {
-            this.app.tabManager.switchTab(legacyKey);
+        const paneId = getCoder(scope) && !BUILTIN_SESSION_TITLES.has(scope)
+            ? scopedKey
+            : legacyKey;
+        const previousKey = paneId === legacyKey ? scopedKey : legacyKey;
+        if (this.app.tabManager.tabs.has(paneId)) {
+            this.app.tabManager.switchTab(paneId);
             return;
         }
-        if (this.app.tabManager.tabs.has(newPaneId)) {
-            this.app.tabManager.switchTab(newPaneId);
+        if (this.app.tabManager.tabs.has(previousKey)) {
+            this.app.tabManager.switchTab(previousKey);
             return;
         }
-        this.app.tabManager.createTab(newPaneId, sess.id, `Review: ${sess.title}`, 'review', this.activeWorkspace, sess.cwd);
-        const activeTab = this.app.tabManager.tabs.get(newPaneId);
+        this.app.tabManager.createTab(paneId, sess.id, `Review: ${sess.title}`, 'review', this.activeWorkspace, sess.cwd);
+        const activeTab = this.app.tabManager.tabs.get(paneId);
         if (!activeTab)
             return;
         const view = createReviewTranscriptView(activeTab.termContainer, {
@@ -1153,37 +1168,29 @@ export class SessionsManager {
     // the server declared. The click handler is delegated (see
     // setupEventListeners); this method only builds DOM nodes.
     //
-    // On first render, restore the saved choice before the constructor's
-    // initial 'opencode' value. Later renders keep the current choice so
-    // unrelated config updates do not switch the sidebar.
+    // Keep the current in-memory selection; the pre-registry sidebar
+    // always started on OpenCode after a page reload.
     renderCoderTabs() {
         const container = document.getElementById('coder-selector');
         if (!container)
             return;
         const coders = visibleCoders();
         if (coders.length === 0) {
-            // Registry hasn't loaded yet; leave the static fallback
-            // (rendered by the legacy path in app.js) untouched.
+            // Registry hasn't loaded yet; keep the HTML fallback.
             return;
         }
         container.replaceChildren();
         const visibleIds = new Set(coders.map((c) => c.id));
-        const stored = localStorage.getItem('phi_active_coder');
-        const current = visibleIds.has(this.activeCoder)
+        const activeId = visibleIds.has(this.activeCoder)
             ? this.activeCoder
-            : null;
-        const saved = stored && visibleIds.has(stored) ? stored : null;
-        const activeId = this.coderTabsInitialized
-            ? (current ?? saved ?? coders[0].id)
-            : (saved ?? current ?? coders[0].id);
-        this.coderTabsInitialized = true;
+            : coders[0].id;
         for (const c of coders) {
             const btn = document.createElement('button');
             btn.className = 'coder-tab';
             if (c.id === activeId)
                 btn.classList.add('active');
             btn.setAttribute('data-coder', c.id);
-            btn.setAttribute('title', c.name);
+            btn.setAttribute('title', BUILTIN_TAB_TITLES.get(c.id) ?? c.name);
             btn.appendChild(renderLogo(c));
             const label = document.createElement('span');
             label.textContent = c.short_label || c.name;
@@ -1197,15 +1204,20 @@ export class SessionsManager {
         if (this.activeCoder !== activeId) {
             this.activeCoder = activeId;
         }
-        this.loadSessions();
+        // loadConfig already calls loadSessions after rendering. Do not
+        // make a second request or redraw the sidebar on every config load.
     }
     // renderQuickLaunchButtons populates the empty-state quick
-    // launch row from the same visible-coder list.
+    // launch row. Its built-in order differs from sidebar tab order.
     renderQuickLaunchButtons() {
         const container = document.getElementById('empty-quick-launch');
         if (!container)
             return;
-        const coders = visibleCoders();
+        const rank = (id) => {
+            const index = QUICK_LAUNCH_ORDER.indexOf(id);
+            return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+        };
+        const coders = visibleCoders().sort((a, b) => rank(a.id) - rank(b.id));
         if (coders.length === 0)
             return;
         container.replaceChildren();
