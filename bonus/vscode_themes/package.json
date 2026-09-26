@@ -2,7 +2,7 @@
   "name": "phi-themes",
   "displayName": "Phi Themes",
   "description": "Official Phi dark color themes for VS Code matching all 22 Phi accent palettes.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "hypernewbie",
   "engines": {
     "vscode": "^1.60.0"

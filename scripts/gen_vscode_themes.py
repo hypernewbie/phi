@@ -26,9 +26,6 @@ THEMES = [
     ('white', 'Phi White', '#ffffff', '#ffffff', '#94a3b8', '#e2e8f0'),
 ]
 
-out_dir = os.path.join('bonus', 'vscode_themes')
-themes_dir = os.path.join(out_dir, 'themes')
-os.makedirs(themes_dir, exist_ok=True)
 
 def make_theme(id_name, display_name, accent, accent_bright, accent_dim, accent_pale):
     return {
@@ -175,13 +172,33 @@ def make_theme(id_name, display_name, accent, accent_bright, accent_dim, accent_
             "badge.foreground": "#ffffff",
 
             # Git / Diff
+            "diffEditor.insertedLineBackground": "rgba(52, 211, 153, 0.08)",
+            "diffEditor.insertedTextBackground": "rgba(52, 211, 153, 0.20)",
+            "diffEditor.removedLineBackground": "rgba(248, 113, 113, 0.08)",
+            "diffEditor.removedTextBackground": "rgba(248, 113, 113, 0.20)",
+            "diffEditor.diagonalFill": "rgba(255, 255, 255, 0.04)",
+            "diffEditor.border": "#1f1f26",
+            "diffEditorGutter.insertedLineBackground": "rgba(52, 211, 153, 0.18)",
+            "diffEditorGutter.removedLineBackground": "rgba(248, 113, 113, 0.18)",
+            "diffEditorOverview.insertedForeground": "rgba(52, 211, 153, 0.50)",
+            "diffEditorOverview.removedForeground": "rgba(248, 113, 113, 0.50)",
+            "diffEditor.unchangedRegionBackground": "#0d0d10",
+            "diffEditor.unchangedRegionForeground": "#78768a",
+            "diffEditor.unchangedCodeBackground": "#08080a",
+            "multiDiffEditor.background": "#08080a",
+            "multiDiffEditor.border": "#1f1f26",
+            "multiDiffEditor.headerBackground": "#0d0d10",
+            "editorGutter.modifiedBackground": "#fbbf24",
+            "editorGutter.addedBackground": "#34d399",
+            "editorGutter.deletedBackground": "#f87171",
+            "gitDecoration.addedResourceForeground": "#34d399",
             "gitDecoration.modifiedResourceForeground": "#fbbf24",
             "gitDecoration.deletedResourceForeground": "#f87171",
-            "gitDecoration.untrackedResourceForeground": "#10b981",
-            "gitDecoration.ignoredResourceForeground": "#505060",
+            "gitDecoration.untrackedResourceForeground": "#34d399",
+            "gitDecoration.ignoredResourceForeground": "#78768a",
             "gitDecoration.conflictingResourceForeground": "#ec4899",
-            "diffEditor.insertedTextBackground": "#10b98122",
-            "diffEditor.removedTextBackground": "#f8717122",
+            "gitDecoration.stageModifiedResourceForeground": "#fbbf24",
+            "gitDecoration.stageDeletedResourceForeground": "#f87171",
 
             # Breadcrumbs & Quick Pick
             "breadcrumb.foreground": "#78768a",
@@ -375,74 +392,27 @@ def make_theme(id_name, display_name, accent, accent_bright, accent_dim, accent_
         ]
     }
 
-themes_contrib = []
-for id_name, display_name, accent, accent_bright, accent_dim, accent_pale in THEMES:
-    theme_obj = make_theme(id_name, display_name, accent, accent_bright, accent_dim, accent_pale)
-    filename = f"phi_{id_name}-color-theme.json"
-    filepath = os.path.join(themes_dir, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(theme_obj, f, indent=2)
-    themes_contrib.append({
-        "label": display_name,
-        "uiTheme": "vs-dark",
-        "path": f"./themes/{filename}"
-    })
+def generate_themes(out_dir=None):
+    if out_dir is None:
+        out_dir = os.path.join('bonus', 'vscode_themes')
+    themes_dir = os.path.join(out_dir, 'themes')
+    os.makedirs(themes_dir, exist_ok=True)
 
-pkg_json = {
-    "name": "phi-themes",
-    "displayName": "Phi Themes",
-    "description": "22 Greek & Egyptian inspired Phi dark themes with high-contrast accent glow",
-    "version": "0.19.2",
-    "publisher": "hypernewbie",
-    "engines": {
-        "vscode": "^1.60.0"
-    },
-    "categories": [
-        "Themes"
-    ],
-    "contributes": {
-        "themes": themes_contrib
-    }
-}
+    themes_contrib = []
+    for id_name, display_name, accent, accent_bright, accent_dim, accent_pale in THEMES:
+        theme_obj = make_theme(id_name, display_name, accent, accent_bright, accent_dim, accent_pale)
+        filename = f"phi_{id_name}.json"
+        filepath = os.path.join(themes_dir, filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(theme_obj, f, indent=2)
+            f.write("\n")
+        themes_contrib.append({
+            "label": display_name,
+            "uiTheme": "vs-dark",
+            "path": f"./themes/{filename}"
+        })
 
-with open(os.path.join(out_dir, "package.json"), "w", encoding="utf-8") as f:
-    json.dump(pkg_json, f, indent=2)
+    print(f"Generated {len(THEMES)} VS Code themes in {themes_dir}")
 
-readme_content = """# Phi VS Code Themes
-
-Collection of 22 dark themes for VS Code matching the Phi palette:
-
-- **Phi Amber**
-- **Phi Blue**
-- **Phi Canary**
-- **Phi Copper**
-- **Phi Coral**
-- **Phi Cyan**
-- **Phi Emerald**
-- **Phi Fuchsia**
-- **Phi Gold**
-- **Phi Green**
-- **Phi Indigo**
-- **Phi Lime**
-- **Phi Mint**
-- **Phi Neon**
-- **Phi Orange**
-- **Phi Pink**
-- **Phi Purple**
-- **Phi Red**
-- **Phi Rose**
-- **Phi Teal**
-- **Phi Violet**
-- **Phi White**
-
-## Installation
-
-Copy the `bonus/vscode_themes` directory to your VS Code extensions folder:
-- **Windows**: `%USERPROFILE%\\.vscode\\extensions\\phi-themes`
-- **macOS / Linux**: `~/.vscode/extensions/phi-themes`
-"""
-
-with open(os.path.join(out_dir, "README.md"), "w", encoding="utf-8") as f:
-    f.write(readme_content)
-
-print(f"Generated {len(THEMES)} VS Code themes in {out_dir}")
+if __name__ == '__main__':
+    generate_themes()

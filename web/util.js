@@ -639,3 +639,128 @@ export function visibleViewportHeight() {
         return visualHeight;
     return validLayout ? layoutHeight : 0;
 }
+// Regex for matching URLs and mailto links in terminal lines.
+// Excludes trailing sentence punctuation (. , ; : ! ? " ' ) while preserving
+// balanced parentheses for Wikipedia-style links.
+export const TERMINAL_LINK_REGEX = /(?:(?:https?:\/\/|mailto:)[^\s()<>]+|www\.[^\s()<>]+\.[^\s()<>]+)(?:\([\w\d]+\)|(?:[^\s`!()[\]{};:'".,<>?«»“”‘’]|(?:\b|\/)))/gi;
+// openExternalLink opens a URL safely in an external context.
+// In the browser, this opens a new tab via window.open(url, '_blank').
+// In Electron, setWindowOpenHandler intercepts this and dispatches to
+// the OS default browser via shell.openExternal(url).
+export function openExternalLink(url) {
+    if (!url || typeof url !== 'string')
+        return;
+    let target = url.trim();
+    if (!target)
+        return;
+    if (/^www\./i.test(target)) {
+        target = 'https://' + target;
+    }
+    try {
+        const parsed = new URL(target);
+        if (parsed.protocol === 'http:' ||
+            parsed.protocol === 'https:' ||
+            parsed.protocol === 'mailto:') {
+            window.open(target, '_blank', 'noopener,noreferrer');
+        }
+    }
+    catch {
+        /* malformed URL */
+    }
+}
+// findTerminalLineLinks parses plain-text URLs across terminal lines,
+// resolving wrapped lines seamlessly backward and forward.
+export function findTerminalLineLinks(buffer, bufferLineNumber) {
+    if (!buffer || typeof buffer.getLine !== 'function')
+        return [];
+    const y = bufferLineNumber;
+    if (!Number.isFinite(y) || y < 1 || y > buffer.length)
+        return [];
+    let startY = y;
+    while (startY > 1) {
+        const line = buffer.getLine(startY - 1);
+        if (!line || !line.isWrapped)
+            break;
+        startY--;
+    }
+    let endY = y;
+    while (endY < buffer.length) {
+        const nextLine = buffer.getLine(endY);
+        if (!nextLine || !nextLine.isWrapped)
+            break;
+        endY++;
+    }
+    let combinedText = '';
+    const mapping = [];
+    for (let currY = startY; currY <= endY; currY++) {
+        const line = buffer.getLine(currY - 1);
+        if (!line)
+            continue;
+        const text = line.translateToString(true);
+        let col = 0;
+        let textIdx = 0;
+        while (textIdx < text.length && col < line.length) {
+            const cell = line.getCell(col);
+            if (!cell)
+                break;
+            const w = cell.getWidth();
+            if (w === 0) {
+                col++;
+                continue;
+            }
+            const chars = cell.getChars() || ' ';
+            for (let k = 0; k < chars.length; k++) {
+                mapping.push({ y: currY, startCol: col + 1, endCol: col + w });
+            }
+            textIdx += chars.length;
+            col += Math.max(1, w);
+        }
+        combinedText += text;
+    }
+    TERMINAL_LINK_REGEX.lastIndex = 0;
+    const links = [];
+    let match = TERMINAL_LINK_REGEX.exec(combinedText);
+    while (match !== null) {
+        const startIndex = match.index;
+        const matchText = match[0];
+        const endIndex = startIndex + matchText.length - 1;
+        if (startIndex < mapping.length && endIndex < mapping.length) {
+            const startPos = mapping[startIndex];
+            const endPos = mapping[endIndex];
+            if (startPos.y <= y && y <= endPos.y) {
+                links.push({
+                    range: {
+                        start: { x: startPos.startCol, y: startPos.y },
+                        end: { x: endPos.endCol, y: endPos.y },
+                    },
+                    text: matchText,
+                });
+            }
+        }
+        match = TERMINAL_LINK_REGEX.exec(combinedText);
+    }
+    return links;
+}
+// installTerminalLinkProvider registers a link provider on an xterm instance
+// for detecting and opening plain text URLs in terminal output.
+export function installTerminalLinkProvider(term, onActivate) {
+    if (!term || typeof term.registerLinkProvider !== 'function')
+        return;
+    return term.registerLinkProvider({
+        provideLinks: (bufferLineNumber, callback) => {
+            const links = findTerminalLineLinks(term.buffer?.active, bufferLineNumber);
+            callback(links.map((link) => ({
+                range: link.range,
+                text: link.text,
+                activate: (_event, text) => {
+                    if (onActivate) {
+                        onActivate(text);
+                    }
+                    else {
+                        openExternalLink(text);
+                    }
+                },
+            })));
+        },
+    });
+}
