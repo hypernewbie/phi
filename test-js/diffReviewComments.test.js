@@ -198,6 +198,25 @@ describe('DiffController._rowLineNumbers / _rowLineType', () => {
         const del = makeRow({ oldLine: '13', newLine: '', kind: 'del' });
         expect(Proto._rowLineType.call(makeCtx(Proto), del.tr)).toBe('delete');
     });
+
+    it('ignores the appended + when reading a side-by-side line again', async () => {
+        const Proto = await loadDiffControllerProto();
+        const { tr, wrapper } = makeRow({
+            side: 'side-by-side',
+            oldLine: '',
+            newLine: '42',
+            kind: 'ins',
+        });
+        const { modalBody } = mountModalBody(wrapper);
+        const ctx = makeCtx(Proto, { diffModalBody: modalBody });
+        Proto._attachDiffReviewListeners.call(ctx);
+        expect(tr.querySelector('.diff-add-comment-btn')).toBeTruthy();
+        expect(Proto._rowLineNumbers.call(ctx, tr)).toEqual({
+            oldLineNumber: null,
+            newLineNumber: 42,
+        });
+        expect(Proto._extractLineInfo.call(ctx, tr)?.newLineNumber).toBe(42);
+    });
 });
 
 describe('DiffController._extractLineInfo', () => {
@@ -422,6 +441,45 @@ describe('DiffController._sortedReviewComments', () => {
 
 // ─── DOM integration ───────────────────────────────────────────────
 
+describe('DiffController.toggleRichDiffSize', () => {
+    it('toggles an icon-only modal size control without changing the diff content', async () => {
+        const Proto = await loadDiffControllerProto();
+        document.body.innerHTML = `
+            <div id="diff-modal">
+                <div class="md-modal-content wide-modal">
+                    <div id="diff-modal-body">unchanged diff</div>
+                </div>
+                <button id="diff-modal-size-btn" aria-pressed="false" aria-label="Maximize diff viewer"></button>
+            </div>`;
+        const modal = document.getElementById('diff-modal');
+        const button = document.getElementById('diff-modal-size-btn');
+        const body = document.getElementById('diff-modal-body');
+        const ctx = makeCtx(Proto, {
+            diffModal: modal,
+            modalSizeToggleBtn: button,
+        });
+        Proto.toggleRichDiffSize.call(ctx);
+        expect(
+            modal
+                .querySelector('.md-modal-content')
+                .classList.contains('diff-modal-maximized'),
+        ).toBe(true);
+        expect(button.getAttribute('aria-pressed')).toBe('true');
+        expect(button.getAttribute('aria-label')).toBe(
+            'Restore diff viewer size',
+        );
+        Proto.toggleRichDiffSize.call(ctx);
+        expect(
+            modal
+                .querySelector('.md-modal-content')
+                .classList.contains('diff-modal-maximized'),
+        ).toBe(false);
+        expect(button.getAttribute('aria-pressed')).toBe('false');
+        expect(button.getAttribute('aria-label')).toBe('Maximize diff viewer');
+        expect(document.getElementById('diff-modal-body')).toBe(body);
+    });
+});
+
 describe('DiffController._attachDiffReviewListeners', () => {
     it('adds a + button to every commentable row, never twice', async () => {
         const Proto = await loadDiffControllerProto();
@@ -483,6 +541,58 @@ describe('DiffController._attachDiffReviewListeners', () => {
         expect(badge.textContent).toBe('foo.ts:5');
         const textarea = editor.querySelector('textarea');
         expect(textarea.placeholder).toMatch(/Explain/);
+    });
+});
+
+describe('side-by-side draft compatibility', () => {
+    it('rehydrates an old new-only deletion draft onto its old-line key', async () => {
+        const Proto = await loadDiffControllerProto();
+        const { wrapper, tbody } = makeRow({
+            side: 'side-by-side',
+            file: 'foo.ts',
+            oldLine: '7',
+            kind: 'del',
+        });
+        const panes = document.createElement('div');
+        panes.className = 'd2h-files-diff';
+        const oldPane = document.createElement('div');
+        oldPane.className = 'd2h-file-side-diff';
+        oldPane.append(tbody);
+        const newPane = document.createElement('div');
+        newPane.className = 'd2h-file-side-diff';
+        const newBody = document.createElement('tbody');
+        newBody.className = 'd2h-diff-tbody';
+        newPane.append(newBody);
+        panes.append(oldPane, newPane);
+        wrapper.append(panes);
+        const { modalBody } = mountModalBody(wrapper);
+        const oldDraft = {
+            id: 'legacy',
+            filePath: 'foo.ts',
+            oldLineNumber: null,
+            newLineNumber: 7,
+            lineType: 'delete',
+            codeSnippet: '-old',
+            commentText: 'Keep this note',
+            createdAt: 1,
+        };
+        const ctx = makeCtx(Proto, {
+            diffModalBody: modalBody,
+            reviewComments: new Map([['foo.ts::7', oldDraft]]),
+            _saveReviewDraft: vi.fn(),
+        });
+        Proto._rehydrateReviewOverlays.call(ctx);
+        expect(ctx.reviewComments.has('foo.ts::7')).toBe(false);
+        expect(ctx.reviewComments.get('foo.ts:7:')).toMatchObject({
+            commentText: 'Keep this note',
+            oldLineNumber: 7,
+            newLineNumber: null,
+            displaySide: 'old',
+        });
+        expect(
+            modalBody.querySelector('.diff-comment-card-body').textContent,
+        ).toBe('Keep this note');
+        expect(ctx._saveReviewDraft).toHaveBeenCalledOnce();
     });
 });
 
