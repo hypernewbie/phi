@@ -388,8 +388,9 @@ func TestResolveLaunch_WindowsPSWrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.ToLower(plan.Command), "powershell") {
-		t.Fatalf("expected powershell wrapper on Windows, got command %q", plan.Command)
+	cmdLower := strings.ToLower(plan.Command)
+	if !strings.Contains(cmdLower, "powershell") && !strings.Contains(cmdLower, "pwsh") {
+		t.Fatalf("expected powershell or pwsh wrapper on Windows, got command %q", plan.Command)
 	}
 	if !containsArg(plan.Args, "-Command") {
 		t.Fatalf("expected -Command argument, got %v", plan.Args)
