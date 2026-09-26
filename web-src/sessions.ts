@@ -1397,6 +1397,14 @@ export class SessionsManager {
     // filtering to sidebar-visible coders and preserving the order
     // the server declared. The click handler is delegated (see
     // setupEventListeners); this method only builds DOM nodes.
+    //
+    // Selection precedence (R9 follow-up):
+    //   1. The current activeCoder if it's still visible.
+    //   2. The localStorage-persisted choice if it's still visible.
+    //   3. The first visible coder.
+    // This avoids clobbering an in-progress selection when a
+    // unrelated config mutation (model preset edit, etc.) calls
+    // loadConfig again.
     renderCoderTabs(): void {
         const container = document.getElementById('coder-selector');
         if (!container) return;
@@ -1407,17 +1415,19 @@ export class SessionsManager {
             return;
         }
         container.replaceChildren();
-        // Default selection: persisted localStorage choice if it's
-        // still visible; otherwise the first visible coder.
+        const visibleIds = new Set(coders.map((c) => c.id));
         const stored = localStorage.getItem('phi_active_coder');
-        const defaultId =
-            (stored && coders.some((c) => c.id === stored) && stored) ||
+        const activeId =
+            (this.activeCoder && visibleIds.has(this.activeCoder)
+                ? this.activeCoder
+                : null) ??
+            (stored && visibleIds.has(stored) ? stored : null) ??
             coders[0].id;
 
         for (const c of coders) {
             const btn = document.createElement('button');
             btn.className = 'coder-tab';
-            if (c.id === defaultId) btn.classList.add('active');
+            if (c.id === activeId) btn.classList.add('active');
             btn.setAttribute('data-coder', c.id);
             btn.setAttribute('title', c.name);
             btn.appendChild(renderLogo(c));
@@ -1427,14 +1437,13 @@ export class SessionsManager {
             container.appendChild(btn);
         }
 
-        // Sync the SessionsManager's active coder with the new
-        // default so subsequent loads point at the right backend.
-        if (this.activeCoder !== defaultId) {
-            this.activeCoder = defaultId;
+        // Sync the SessionsManager's active coder with the resolved
+        // selection only when it actually changed; preserving the
+        // user's pick across re-renders is what avoids the
+        // jump-back regression the follow-up flagged.
+        if (this.activeCoder !== activeId) {
+            this.activeCoder = activeId;
         }
-        // Always trigger a loadSessions after the registry is
-        // wired so the sidebar reflects the visible coder's data
-        // without an extra click.
         this.loadSessions();
     }
 

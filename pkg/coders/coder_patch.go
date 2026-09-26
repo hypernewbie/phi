@@ -34,7 +34,6 @@ type CoderPatch struct {
 	DefaultCwd            *string             `json:"default_cwd,omitempty"`
 	SessionSource         *string             `json:"session_source,omitempty"`
 	SidecarClaude         *ClaudeSidecar      `json:"claude,omitempty"`
-	SidecarPi             *PiSidecar          `json:"pi,omitempty"`
 	Presets               *[]Preset           `json:"presets,omitempty"`
 	Logo                  *string             `json:"logo,omitempty"`
 	SidebarVisible        *bool               `json:"sidebar_visible,omitempty"`
@@ -42,6 +41,7 @@ type CoderPatch struct {
 	WindowsPowerShellWrap *bool               `json:"windows_powershell_wrap,omitempty"`
 	InputMode             *string             `json:"input_mode,omitempty"`
 	ModelSwitchDisabled   *bool               `json:"model_switch_disabled,omitempty"`
+	Capabilities          *Capabilities       `json:"capabilities,omitempty"`
 }
 
 // Apply merges p onto a copy of base and returns the result. The base
@@ -108,10 +108,6 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 		sc := *p.SidecarClaude
 		out.SidecarClaude = &sc
 	}
-	if p.SidecarPi != nil {
-		sp := *p.SidecarPi
-		out.SidecarPi = &sp
-	}
 	if p.Presets != nil {
 		out.Presets = append([]Preset(nil), *p.Presets...)
 	}
@@ -133,6 +129,9 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 	}
 	if p.ModelSwitchDisabled != nil {
 		out.ModelSwitchDisabled = *p.ModelSwitchDisabled
+	}
+	if p.Capabilities != nil {
+		out.Capabilities = *p.Capabilities
 	}
 
 	// Required-field validation on the final shape. A patch that

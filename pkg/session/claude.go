@@ -166,7 +166,18 @@ func resolveClaudeTitle(sessionID string, renames map[string]AgyMeta, reg claude
 }
 
 func ListClaudeSessions(cwd string) ([]Session, error) {
-	projectsPath := filepath.Join(claudeConfigDir(), "projects")
+	return listClaudeSessions(cwd, "")
+}
+
+// listClaudeSessions is the internal entry point that accepts a
+// per-profile CLAUDE_CONFIG_DIR. Passing "" falls back to the
+// process env (the default path).
+func listClaudeSessions(cwd, configDir string) ([]Session, error) {
+	dir := configDir
+	if dir == "" {
+		dir = claudeConfigDir()
+	}
+	projectsPath := filepath.Join(dir, "projects")
 	fi, err := os.Stat(projectsPath)
 	if os.IsNotExist(err) || (err == nil && !fi.IsDir()) {
 		return []Session{}, nil

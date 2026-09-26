@@ -4,6 +4,7 @@ import {
     executeRecipe,
     formatAttachment,
     getCoder,
+    hasModelSwitch,
     hasPiRpc,
     hasRename,
     hasSessions,
@@ -11,6 +12,7 @@ import {
     inputMode,
     isShell,
     listCoders,
+    logoFor,
     modelSwitchDisabled,
     opencodeRecipe,
     piRecipe,
@@ -92,10 +94,12 @@ describe('formatAttachment', () => {
         expect(formatAttachment('unknown-agent', '/tmp/x')).toBe('/tmp/x');
     });
 
-    it('returns @path for the four mention-syntax agents', () => {
+    it('returns @path for the three mention-syntax agents', () => {
+        // Three built-in agents use @<path>; pi gets the raw path.
         expect(formatAttachment('claude', '/tmp/x')).toBe('@/tmp/x');
         expect(formatAttachment('opencode', '/tmp/x')).toBe('@/tmp/x');
         expect(formatAttachment('agy', '/tmp/x')).toBe('@/tmp/x');
+        expect(formatAttachment('pi', '/tmp/x')).toBe('/tmp/x');
     });
 
     it('never interprets $& from string replacement', () => {
@@ -441,6 +445,33 @@ describe('executeRecipe', () => {
         expect(recipeFor('claude')).toBeUndefined();
         expect(recipeFor('bash')).toBeUndefined();
         expect(recipeFor('agy')).toBeUndefined();
+    });
+
+    it('hasModelSwitch returns true only for the three built-ins', () => {
+        // R7: coders without a model-switch recipe must not get a
+        // guessed /model fallback. The Models button is hidden when
+        // hasModelSwitch returns false.
+        expect(hasModelSwitch('opencode')).toBe(true);
+        expect(hasModelSwitch('pi')).toBe(true);
+        expect(hasModelSwitch('claude')).toBe(true);
+        expect(hasModelSwitch('agy')).toBe(false);
+        expect(hasModelSwitch('bash')).toBe(false);
+        expect(hasModelSwitch('pwsh')).toBe(false);
+        expect(hasModelSwitch('custom-agent')).toBe(false);
+    });
+
+    it('logoFor returns the vendor path for registered coders', () => {
+        // Regression: prior to this commit terminal.js indexed
+        // this.app.coderRegistry (which was never assigned) and
+        // every coder tab rendered bash.jpg. logoFor must return
+        // the registry's vendor/* path directly.
+        expect(logoFor('opencode')).toBe('vendor/logos/opencode.png');
+        expect(logoFor('claude')).toBe('vendor/logos/claude.png');
+        expect(logoFor('agy')).toBe('vendor/logos/agy.png');
+        expect(logoFor('pi')).toBe('vendor/logos/pi.png');
+        expect(logoFor('bash')).toBe('vendor/logos/bash.jpg');
+        expect(logoFor('pwsh')).toBe('vendor/logos/bash.jpg');
+        expect(logoFor('unknown')).toBe('');
     });
 });
 
