@@ -2,6 +2,20 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.3 — 2026-09-26
+
+### Added
+- **Declarative coder registry and custom backend support** (`669bee2`, `fffcf42`, `3d91f87`, `995f868`). Replaced hardcoded coder definitions with an extensible backend registry loaded from `~/.phi/backends/`. Added safe browser descriptors exposing backend capabilities, logos, and model switch recipes while keeping environment variables and secrets server-side. Dynamic coder selector, quick-launch buttons, and model dropups adapt seamlessly to custom backends.
+- **Inline diff review comments staged into terminal prompt** (`56d2be8`). Gutter `+` buttons on rows in both unified and side-by-side Rich Diff views allow attaching inline code review comments. A floating action bar provides one-click staging of review comments into the active terminal's prompt bar formatted with git commit and branch context.
+
+### Performance
+- **Diff HEAD and branch lookup caching** (`25bd276`). Added a 5-second TTL cache for `git rev-parse` HEAD and branch queries on `/api/git/raw-diff`, eliminating redundant subprocess calls during diff panel polling.
+
+### Fixed
+- **Desktop focus and wake auto-reconnect** (`9ade4d3`, `08fc164`). In desktop mode, system wake (`powerMonitor.on('resume')`) and window focus now automatically revive all dead background tabs rather than only the active tab. Actively auto-reconnecting tabs are excluded from the disconnect tally, preventing the red "Reconnect all" banner from appearing when the desktop app is focused.
+- **Desktop external link handling** (`3ac55af`). Links clicked in desktop terminal sessions now open directly in the user's default browser (Chrome, Firefox, Safari) rather than opening a child Electron window.
+- **VS Code diff theme contrast sanitization** (`3ac55af`). Softened excessive red background tinting in imported VS Code themes when in diff viewer mode.
+
 ## v0.21.2 — 2026-09-25
 
 ### Fixed
