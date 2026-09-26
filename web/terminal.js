@@ -35,6 +35,7 @@ import {
     uploadClipboardImage,
     formatChipName,
 } from './attachments.js';
+import { executeRecipe, recipeFor } from './coders.js';
 import {
     mountRpcChat,
     rpcChatSend,
@@ -154,13 +155,14 @@ function thinkingLevelClass(level) {
 // re-fetches bell.wav; one object per page is enough.
 let doneChimeAudio = null;
 
+// CODER_FAVICONS is now a *fallback-only* map for UI pseudo-tabs
+// (review, kanban) that are not in the registry. Built-in coder
+// favicons (opencode, claude, agy, pi, bash, pwsh) come from the
+// descriptor registry via the App's getCoderLogoForCoder /
+// renderLogo paths. Keep this map only for the entries the
+// registry does not advertise.
 const CODER_FAVICONS = {
-    opencode: 'vendor/logos/opencode.png',
-    claude: 'vendor/logos/claude.png',
-    agy: 'vendor/logos/agy.png',
-    pi: 'vendor/logos/pi.png',
     'pi-rpc': 'vendor/logos/pi.png',
-    bash: 'vendor/logos/bash.jpg',
     review: 'vendor/logos/review.png',
     kanban: 'vendor/logos/kanban.png',
 };
@@ -2352,7 +2354,27 @@ export class TabManager {
             return;
         }
 
-        const faviconUrl = CODER_FAVICONS[coder] || 'vendor/logos/bash.jpg';
+        // Resolve the coder favicon: registry first (covers built-
+        // ins and custom backends), then the legacy fallback map
+        // for UI pseudo-tabs the registry doesn't advertise.
+        let faviconUrl = CODER_FAVICONS[coder];
+        if (!faviconUrl) {
+            try {
+                const regCoder = this.app?.coderRegistry?.get
+                    ? this.app.coderRegistry.get(coder)
+                    : null;
+                if (
+                    regCoder &&
+                    regCoder.logo &&
+                    regCoder.logo.startsWith('vendor/')
+                ) {
+                    faviconUrl = regCoder.logo;
+                }
+            } catch (_e) {
+                /* registry not yet loaded; fall through to default */
+            }
+        }
+        if (!faviconUrl) faviconUrl = 'vendor/logos/bash.jpg';
 
         // Create elements
         const tabEl = document.createElement('div');
@@ -8067,6 +8089,40 @@ export class TabManager {
             btn.className = 'dropup-model-btn';
             btn.innerText = model;
             btn.addEventListener('click', () => {
+                // Model-switch sequences are pinned to the click-time
+                // tab (activeTab captured at render) so a tab switch
+                // mid-chain cannot redirect the puppet sequence.
+                //
+                // The opencode / pi / claude paths match the historical
+                // timings from the original dropup exactly — they
+                // remain on setTimeout chains so test-js coverage of
+                // the byte-by-byte timings stays green. Custom
+                // profiles that declare a model_switch recipe go
+                // through the bounded executor in web-src/coders.ts
+                // (R7's seven invariants).
+                const recipe = recipeFor(backend);
+                if (recipe) {
+                    const paneId =
+                        activeTab.paneId || activeTab.tabId || activeTab.id;
+                    executeRecipe({
+                        paneId,
+                        recipe,
+                        model,
+                        sendFn: (id, payload) => {
+                            const tab = this.app.tabManager?.tabs?.get?.(id);
+                            return tab ? this.sendToTab(tab, payload) : false;
+                        },
+                        isAliveFn: (id) => {
+                            const tab = this.app.tabManager?.tabs?.get?.(id);
+                            if (!tab || !tab.term) return false;
+                            return !tab.isDead;
+                        },
+                    }).catch((err) => {
+                        console.error('[model-switch] recipe aborted:', err);
+                    });
+                    dropup.classList.add('hidden');
+                    return;
+                }
                 if (backend === 'opencode') {
                     // Pinned to the click-time tab (captured at render, line 4376)
                     // so the puppet sequence can't be redirected by a tab switch

@@ -93,7 +93,11 @@ func handleRunCommand(w http.ResponseWriter, r *http.Request) {
 			var args []string
 
 			if runtime.GOOS == "windows" {
-				shellCmd = getPreferredPowerShell()
+				if _, err := exec.LookPath("pwsh"); err == nil {
+					shellCmd = "pwsh.exe"
+				} else {
+					shellCmd = "powershell.exe"
+				}
 				args = []string{"-NoProfile", "-NonInteractive", "-Command", req.Command}
 			} else {
 				shellCmd = os.Getenv("SHELL")

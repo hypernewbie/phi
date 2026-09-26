@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -271,37 +270,33 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetCoders(w http.ResponseWriter, r *http.Request) {
+	ensureCoderManager()
+	list := coderManager.List()
+	descriptors := coders.DescriptorsFor(list)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(coders.Registry)
+	_ = json.NewEncoder(w).Encode(descriptors)
 }
 
 func handleGetSessions(w http.ResponseWriter, r *http.Request) {
-	coder := r.URL.Query().Get("coder")
+	ensureCoderManager()
+	coderID := r.URL.Query().Get("coder")
 	cwd := r.URL.Query().Get("cwd")
 	if cwd == "" {
 		cwd = activeCWD
 	}
 
-	var sessions []session.Session
-	var err error
-
-	switch coder {
-	case "opencode":
-		sessions, err = session.ListOpenCodeSessions(r.Context(), cwd)
-	case "claude":
-		sessions, err = session.ListClaudeSessions(cwd)
-	case "pi":
-		sessions, err = session.ListPiSessions(cwd)
-	case "agy":
-		sessions, err = session.ListAgySessions(cwd)
-	case "bash":
-		sessions = []session.Session{}
-	default:
+	c, ok := coderManager.Get(coderID)
+	if !ok {
 		http.Error(w, "Invalid coder", http.StatusBadRequest)
 		return
 	}
 
+	sessions, err := session.ListSessions(r.Context(), c, cwd)
 	if err != nil {
+		if errors.Is(err, session.ErrAdapterUnknown) {
+			http.Error(w, "Unsupported session_source: "+c.SessionSource, http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -319,11 +314,15 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(sessions)
 }
 
-func getPreferredPowerShell() string {
-	if _, err := exec.LookPath("pwsh"); err == nil {
-		return "pwsh.exe"
+// ensureCoderManager lazily initializes the global coder manager so
+// handler-level unit tests that drive handleGetCoders / handleSpawnTerminal
+// without going through main() still have a usable registry. Production
+// always sets coderManager in main.go; this fallback only fires in
+// tests that drive a single handler.
+func ensureCoderManager() {
+	if coderManager == nil {
+		coderManager = coders.NewManager()
 	}
-	return "powershell.exe"
 }
 
 type SpawnRequest struct {
@@ -347,6 +346,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ensureCoderManager()
 
 	var req SpawnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -368,65 +368,33 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	c, ok := coders.Registry[req.Coder]
+	c, ok := coderManager.Get(req.Coder)
 	if !ok {
 		http.Error(w, "Unknown coder type", http.StatusBadRequest)
 		return
 	}
 
-	command := c.Command
-	args := buildCoderArgs(req.Coder, c, req.SessionID, req.ExtraArgs, loadConfig().PiOffline, loadConfig().ClaudeDangerouslySkipPermissions)
-
-	// On Unix, prefer the user's login shell ($SHELL) over hardcoded bash so that PATH
-	// and aliases from the user's shell config (e.g. ~/.zshrc on macOS) are available.
-	if req.Coder == "bash" && runtime.GOOS != "windows" {
-		if shell := os.Getenv("SHELL"); shell != "" {
-			if _, err := exec.LookPath(shell); err == nil {
-				command = shell
-			}
-		}
+	cfg := loadConfig()
+	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{
+		Coder:     req.Coder,
+		Cwd:       req.Cwd,
+		SessionID: req.SessionID,
+		ExtraArgs: req.ExtraArgs,
+	}, coders.LaunchOptions{
+		Config: coders.ConfigView{
+			PiOffline:                        cfg.PiOffline,
+			ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions,
+		},
+		DefaultCwd: activeCWD,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	// On Windows, if the requested shell is "bash", fall back to PowerShell
-	// since "bash" is typically either absent or points to the WSL launcher in C:\Windows\System32
-	// (which fails if Hyper-V or Virtual Machine Platform is disabled in BIOS).
-	if req.Coder == "bash" && runtime.GOOS == "windows" {
-		usePowerShell := true
-		if lp, err := exec.LookPath("bash"); err == nil {
-			// Git Bash or MSYS2 is safe, but System32/bash.exe is the WSL launcher.
-			if !strings.Contains(strings.ToLower(lp), "system32") {
-				usePowerShell = false
-			}
-		}
-		if usePowerShell {
-			command = getPreferredPowerShell()
-			args = []string{"-NoLogo"}
-		}
-	}
+	spawnDir := plan.Cwd
 
-	// On Windows, wrap all coder executions in PowerShell/pwsh to resolve npm/script path wrappers cleanly
-	if req.Coder != "bash" && req.Coder != "pwsh" && runtime.GOOS == "windows" {
-		shellCmd := getPreferredPowerShell()
-
-		// Use PowerShell's call operator (&) with individually single-quoted arguments.
-		// Single quotes in PowerShell are literal (no variable expansion or backtick escaping).
-		// Any embedded single quotes are escaped by doubling them (' -> '').
-		var parts []string
-		parts = append(parts, fmt.Sprintf("& '%s'", strings.ReplaceAll(command, "'", "''")))
-		for _, a := range args {
-			parts = append(parts, fmt.Sprintf("'%s'", strings.ReplaceAll(a, "'", "''")))
-		}
-
-		command = shellCmd
-		args = []string{"-NoLogo", "-Command", strings.Join(parts, " ")}
-	}
-
-	spawnDir := req.Cwd
-	if spawnDir == "" {
-		spawnDir = activeCWD
-	}
-
-	inst, err := ptyManager.Spawn(r.Context(), spawnDir, command, args, req.Coder, req.SessionID)
+	inst, err := ptyManager.Spawn(r.Context(), spawnDir, plan.Command, plan.Args, req.Coder, req.SessionID, plan.Env)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -434,9 +402,10 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	inst.Title = req.Title
 	inst.Workspace = req.Workspace
 
-	if req.Coder == "agy" && req.SessionID != "" {
-		_ = session.SaveAgySessionCwd(req.SessionID, spawnDir)
-	}
+	// Provider-specific post-spawn side effects (agy sidecar cwd
+	// update, future per-coder hooks) live in session.AfterSpawn
+	// rather than being baked into the spawn handler (R5).
+	session.AfterSpawn(c, req.SessionID, spawnDir)
 
 	// A new pane may be the first live one in this cwd/worktree, so it
 	// can widen the markdown watch set.
@@ -704,24 +673,31 @@ func clipboardSource(shimPath string) string {
 }
 
 func handleGetSessionTranscript(w http.ResponseWriter, r *http.Request) {
+	ensureCoderManager()
 	coder := r.URL.Query().Get("coder")
 	id := r.URL.Query().Get("id")
 	cwd := r.URL.Query().Get("cwd")
 
-	var messages []session.Message
-	var err error
-
-	switch coder {
-	case "opencode":
-		messages, err = session.GetOpenCodeSessionTranscript(r.Context(), id)
-	case "pi":
-		messages, err = session.GetPiSessionTranscript(cwd, id)
-	default:
+	c, ok := coderManager.Get(coder)
+	if !ok {
+		http.Error(w, "Invalid coder", http.StatusBadRequest)
+		return
+	}
+	if !c.Capabilities.Transcript {
 		http.Error(w, "Unsupported coder type", http.StatusBadRequest)
 		return
 	}
 
+	messages, err := session.GetTranscript(r.Context(), c, cwd, id)
 	if err != nil {
+		if errors.Is(err, session.ErrAdapterUnknown) {
+			http.Error(w, "Unsupported coder type", http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, session.ErrTranscriptUnsupported) {
+			http.Error(w, "Unsupported coder type", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, fmt.Sprintf("Failed to fetch session transcript: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -784,40 +760,7 @@ func handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// buildCoderArgs assembles the argv for a coder spawn: the registry's base
-// args, an optional session resume, coder-specific opt-in flags
-// (pi --offline, claude --dangerously-skip-permissions), then any
-// caller-supplied extras.
-//
-// Split out of handleCreateTerminal so it is reachable from tests without
-// spawning a real PTY. Keep it that way -- a test that re-implements this
-// logic instead of calling it would pass while the handler was broken.
-func buildCoderArgs(coderID string, c coders.Coder, sessionID string, extra []string, piOffline, claudeSkipPerms bool) []string {
-	// Copy rather than append onto the registry's slice: coders.Registry is
-	// process-wide shared state, and appending to c.Args could write into a
-	// backing array other spawns read. It is len 0 today so append always
-	// reallocates, but that is a property of the registry literal, not a
-	// guarantee it will keep.
-	args := append([]string(nil), c.Args...)
-
-	if sessionID != "" && c.ResumeArg != "" {
-		args = append(args, c.ResumeArg, sessionID)
-	}
-
-	// pi's --offline skips its startup network calls. Opt-in via config so an
-	// airgapped or metered host can avoid them. Scoped to pi: the flag is
-	// pi's own and other coders would reject it.
-	if coderID == "pi" && piOffline {
-		args = append(args, "--offline")
-	}
-
-	// claude's --dangerously-skip-permissions bypasses every tool-use
-	// confirmation prompt (file edits, bash, etc.). Opt-in via config
-	// because the flag's name is honest about what it disables. Scoped to
-	// claude; other coders would reject the flag.
-	if coderID == "claude" && claudeSkipPerms {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-
-	return append(args, extra...)
-}
+// buildCoderArgs was removed when handleSpawnTerminal started routing
+// through coders.ResolveLaunch. The launch-resolver tests at
+// pkg/coders/coders_test.go exercise the same argv-assembly logic
+// without needing a PTY to spawn.

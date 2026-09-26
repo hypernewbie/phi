@@ -1,32 +1,58 @@
 /* Φ phi — staged-input attachments (drag-drop + clipboard image paste) */
-// ATTACHMENT_SYNTAX maps each coding-agent / shell coder to a function
-// that formats an attachment path the way that coder expects to receive it.
+// formatAttachment is a thin wrapper kept for backwards compatibility
+// with the static call sites in markdown.ts, filetree.ts, and
+// terminal.js. The actual coder-aware lookup now lives in
+// web-src/coders.ts so that:
 //
-// Today the agents that read images natively are Claude Code, OpenCode,
-// Antigravity, and Pi; they all use the `@<path>` mention syntax. Plain
-// shells (bash/pwsh) just want the path. Unknown coders fall back to the
-// raw path so the user can still reference it in their prompt.
+//   - the registry stays the single source of truth
+//   - control-character validation can happen at the registry
+//     boundary instead of every call site
+//   - tests can drive the format function against an in-memory
+//     registry rather than the static map below
 //
-// Pseudo-coders (review, kanban) have no PTY to send to and are excluded
-// from the send integration. sendStagedInput early-returns on those tabs.
-//
-// If a particular coder doesn't actually accept `@path`, edit this map —
-// it's the only place that needs to change.
-export const ATTACHMENT_SYNTAX = {
+// Callers should pass only `(coder, attachment.path)`; the legacy
+// `(coder, attachment)` shape is preserved because terminal.js still
+// threads Attachment values through its staged-input helpers.
+export function formatAttachment(coder, attachment) {
+    const path = typeof attachment === 'string' ? attachment : attachment.path;
+    // Lazy import to avoid a circular dep at module load.
+    // coders.ts owns the registry and the descriptor lookup.
+    return importCoderFormat(coder, path);
+}
+// Synchronous variant: kept here so existing callers that haven't been
+// migrated to async import resolution still work. We use a synchronous
+// dynamic-import replacement by relying on the fact that
+// web-src/coders.ts has no top-level await and is bundled alongside
+// this file. Direct require/import is impossible from TypeScript at
+// runtime; we expose a synchronous proxy through a global that the
+// loader in web/app.js fills in.
+let _formatFromRegistry = null;
+export function setRegistryFormatter(fn) {
+    _formatFromRegistry = fn;
+}
+function importCoderFormat(coder, path) {
+    if (_formatFromRegistry)
+        return _formatFromRegistry(coder, path);
+    // Fallback matches the legacy ATTACHMENT_SYNTAX map so the very
+    // first frame of the app (before loadCoderRegistry resolves)
+    // still does something reasonable.
+    if (coder === 'claude' || coder === 'opencode' || coder === 'agy') {
+        return `@${path}`;
+    }
+    return path;
+}
+// Legacy ATTACHMENT_SYNTAX is kept as a frozen reference map for any
+// code that still indexes it (test-js/attachments.test.js reads this).
+// New code should call formatAttachment. The values mirror the
+// registry fallback above.
+export const ATTACHMENT_SYNTAX = Object.freeze({
     claude: (a) => `@${a.path}`,
     pi: (a) => a.path,
     opencode: (a) => `@${a.path}`,
     agy: (a) => `@${a.path}`,
     bash: (a) => a.path,
     pwsh: (a) => a.path,
-};
-// formatAttachment returns the coder-specific mention token for an
-// attachment. Unknown coders get the raw path (safer than guessing a
-// mention syntax the agent doesn't recognize).
-export function formatAttachment(coder, attachment) {
-    const fn = ATTACHMENT_SYNTAX[coder];
-    return fn ? fn(attachment) : attachment.path;
-}
+});
 // extractImageItems returns the image-bearing file items from a DataTransfer
 // shape. Pure — no DOM mutation, no event reading. The drop/paste listeners
 // pass `e.dataTransfer` / `e.clipboardData` in directly; tests pass plain

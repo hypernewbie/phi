@@ -1,10 +1,15 @@
 package session
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/hypernewbie/phi/pkg/coders"
 )
 
 type Session struct {
@@ -19,6 +24,154 @@ type Session struct {
 type Message struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
+}
+
+// Adapter is the contract every session-history backend implements
+// (R5). List returns the conversations visible to the supplied CWD.
+// Transcript returns the messages for one session ID, or
+// ErrTranscriptUnsupported when the source has no transcript. Both
+// honour ctx cancellation.
+type Adapter interface {
+	List(ctx context.Context, cwd string) ([]Session, error)
+	Transcript(ctx context.Context, cwd, id string) ([]Message, error)
+}
+
+// ErrTranscriptUnsupported signals a session source that lists
+// conversations but does not store a transcript the UI can render
+// (e.g. claude_files today: history.jsonl is a session metadata log,
+// not a transcript). Callers map this to a 400 with "unsupported".
+var ErrTranscriptUnsupported = errors.New("session source has no transcript")
+
+// ErrAdapterUnknown is returned by ListSessions/GetTranscript when
+// the resolved coder declares an unknown session_source.
+var ErrAdapterUnknown = errors.New("unknown session_source")
+
+// AdapterFactory builds an Adapter from a resolved Coder, picking
+// up typed sidecar options (ClaudeConfigDir, PiRoot, etc.) without
+// touching global environment (R5).
+type AdapterFactory func(c coders.Coder) Adapter
+
+// adapterFactories is the closed set of named adapters. Adding a
+// new adapter requires a code change here; the CoderPatch side only
+// references the name.
+var adapterFactories = map[string]AdapterFactory{
+	"":                noneAdapter,
+	"none":            noneAdapter,
+	"opencode_sqlite": opencodeAdapter,
+	"claude_files":    claudeAdapter,
+	"pi_files":        piAdapter,
+	"agy_files":       agyAdapter,
+}
+
+func noneAdapter(c coders.Coder) Adapter { return noneAdapterImpl{c: c} }
+
+type noneAdapterImpl struct{ c coders.Coder }
+
+func (noneAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
+	return []Session{}, nil
+}
+func (noneAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
+	return nil, ErrTranscriptUnsupported
+}
+
+func opencodeAdapter(c coders.Coder) Adapter { return opencodeAdapterImpl{} }
+
+type opencodeAdapterImpl struct{}
+
+func (opencodeAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
+	return ListOpenCodeSessions(ctx, cwd)
+}
+func (opencodeAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
+	return GetOpenCodeSessionTranscript(ctx, id)
+}
+
+func claudeAdapter(c coders.Coder) Adapter {
+	return claudeAdapterImpl{c: c}
+}
+
+type claudeAdapterImpl struct{ c coders.Coder }
+
+// List honours a per-profile CLAUDE_CONFIG_DIR via SidecarClaude
+// (R5). It does NOT modify the global process environment; it sets
+// the variable on a short-lived copy used only inside the adapter.
+func (a claudeAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
+	prev, hadPrev := os.LookupEnv("CLAUDE_CONFIG_DIR")
+	if a.c.SidecarClaude != nil && a.c.SidecarClaude.ConfigDir != "" {
+		_ = os.Setenv("CLAUDE_CONFIG_DIR", a.c.SidecarClaude.ConfigDir)
+		defer func() {
+			if hadPrev {
+				_ = os.Setenv("CLAUDE_CONFIG_DIR", prev)
+			} else {
+				_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
+			}
+		}()
+	}
+	return ListClaudeSessions(cwd)
+}
+
+func (claudeAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
+	return nil, ErrTranscriptUnsupported
+}
+
+func piAdapter(c coders.Coder) Adapter { return piAdapterImpl{c: c} }
+
+type piAdapterImpl struct{ c coders.Coder }
+
+func (a piAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
+	return ListPiSessions(cwd)
+}
+
+func (a piAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
+	if id == "" {
+		return nil, ErrTranscriptUnsupported
+	}
+	return GetPiSessionTranscript(cwd, id)
+}
+
+func agyAdapter(c coders.Coder) Adapter { return agyAdapterImpl{} }
+
+type agyAdapterImpl struct{}
+
+func (agyAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
+	return ListAgySessions(cwd)
+}
+func (agyAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {
+	return nil, ErrTranscriptUnsupported
+}
+
+// AdapterFor returns the registered adapter for a coder's
+// SessionSource. Empty / "none" returns the no-op adapter.
+func AdapterFor(c coders.Coder) (Adapter, error) {
+	factory, ok := adapterFactories[c.SessionSource]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrAdapterUnknown, c.SessionSource)
+	}
+	return factory(c), nil
+}
+
+// ListSessions routes a request through the adapter registry (R5).
+// The caller must pass the resolved coder (Manager.Get result), not
+// a coder ID — list semantics depend on the coder's typed options.
+func ListSessions(ctx context.Context, c coders.Coder, cwd string) ([]Session, error) {
+	a, err := AdapterFor(c)
+	if err != nil {
+		return nil, err
+	}
+	return a.List(ctx, cwd)
+}
+
+// GetTranscript routes through the adapter registry and converts
+// ErrTranscriptUnsupported into a 400-mappable error.
+func GetTranscript(ctx context.Context, c coders.Coder, cwd, id string) ([]Message, error) {
+	a, err := AdapterFor(c)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := a.Transcript(ctx, cwd, id)
+	if errors.Is(err, ErrTranscriptUnsupported) {
+		return nil, err
+	}
+	return msgs, err
 }
 
 func expandHome(path string) string {

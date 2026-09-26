@@ -6,8 +6,8 @@ import (
 	"github.com/hypernewbie/phi/pkg/coders"
 )
 
-// Mirrors api_pi_offline_test.go shape: buildCoderArgs is the real entry
-// point handleCreateTerminal calls, so these tests exercise the actual
+// Mirrors api_pi_offline_test.go shape: ResolveLaunch is the real entry
+// point handleSpawnTerminal calls, so these tests exercise the actual
 // flag-placement code rather than a test-local copy. Same scope discipline
 // as pi -- the flag is claude's own, and other coders would reject it.
 func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
@@ -17,13 +17,21 @@ func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 		if cfg.ClaudeDangerouslySkipPermissions {
 			t.Fatal("ClaudeDangerouslySkipPermissions should default to false so existing configs are unaffected")
 		}
-		if contains(buildSpawnArgs("claude", "", nil, false, cfg.ClaudeDangerouslySkipPermissions), "--dangerously-skip-permissions") {
+		plan, err := buildSpawnArgs("claude", "", nil, false, cfg.ClaudeDangerouslySkipPermissions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contains(plan.Args, "--dangerously-skip-permissions") {
 			t.Fatal("spawned claude with --dangerously-skip-permissions while the setting was off")
 		}
 	})
 
 	t.Run("adds the flag when enabled", func(t *testing.T) {
-		if !contains(buildSpawnArgs("claude", "", nil, false, true), "--dangerously-skip-permissions") {
+		plan, err := buildSpawnArgs("claude", "", nil, false, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(plan.Args, "--dangerously-skip-permissions") {
 			t.Fatal("expected --dangerously-skip-permissions when the setting is on")
 		}
 	})
@@ -31,23 +39,30 @@ func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 	t.Run("scoped to claude", func(t *testing.T) {
 		// The flag is claude's own; other coders would reject it.
 		for _, coder := range []string{"opencode", "pi", "bash"} {
-			if contains(buildSpawnArgs(coder, "", nil, false, true), "--dangerously-skip-permissions") {
+			plan, err := buildSpawnArgs(coder, "", nil, false, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if contains(plan.Args, "--dangerously-skip-permissions") {
 				t.Fatalf("%s must not receive claude's --dangerously-skip-permissions", coder)
 			}
 		}
 	})
 
 	t.Run("coexists with session resume", func(t *testing.T) {
-		args := buildSpawnArgs("claude", "sess-1", nil, false, true)
-		if !contains(args, "--dangerously-skip-permissions") || !contains(args, "--resume") || !contains(args, "sess-1") {
-			t.Fatalf("resume and skip-permissions should both apply, got %v", args)
+		plan, err := buildSpawnArgs("claude", "sess-1", nil, false, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(plan.Args, "--dangerously-skip-permissions") || !contains(plan.Args, "--resume") || !contains(plan.Args, "sess-1") {
+			t.Fatalf("resume and skip-permissions should both apply, got %v", plan.Args)
 		}
 		// --resume must not lose its value: the flag we add must not
 		// land between --resume and its session id.
-		for i, a := range args {
+		for i, a := range plan.Args {
 			if a == "--resume" {
-				if i+1 >= len(args) || args[i+1] != "sess-1" {
-					t.Fatalf("--resume lost its value: %v", args)
+				if i+1 >= len(plan.Args) || plan.Args[i+1] != "sess-1" {
+					t.Fatalf("--resume lost its value: %v", plan.Args)
 				}
 			}
 		}
@@ -64,15 +79,20 @@ func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 	})
 
 	t.Run("does not mutate the shared coder registry", func(t *testing.T) {
-		// Same defense as pi: Registry is process-wide. Appending onto
-		// c.Args instead of a copy could leak flags into later spawns.
-		before := len(coders.Registry["claude"].Args)
-		buildSpawnArgs("claude", "sess-1", []string{"--extra"}, false, true)
-		buildSpawnArgs("claude", "sess-2", nil, false, true)
-		if got := len(coders.Registry["claude"].Args); got != before {
-			t.Fatalf("registry Args grew from %d to %d", before, got)
+		mgr := coders.NewManager()
+		before, _ := mgr.Get("claude")
+		beforeLen := len(before.Args)
+		_, _ = buildSpawnArgs("claude", "sess-1", []string{"--extra"}, false, true)
+		_, _ = buildSpawnArgs("claude", "sess-2", nil, false, true)
+		after, _ := mgr.Get("claude")
+		if got := len(after.Args); got != beforeLen {
+			t.Fatalf("registry Args grew from %d to %d", beforeLen, got)
 		}
-		if contains(buildSpawnArgs("claude", "", nil, false, false), "--dangerously-skip-permissions") {
+		plan, err := buildSpawnArgs("claude", "", nil, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contains(plan.Args, "--dangerously-skip-permissions") {
 			t.Fatal("a previous spawn leaked --dangerously-skip-permissions into the registry")
 		}
 	})
@@ -81,16 +101,22 @@ func TestClaudeDangerouslySkipPermissionsFlag(t *testing.T) {
 		// Turning the claude flag on must not leak --offline onto a
 		// claude spawn, and turning the pi flag on must not leak the
 		// claude flag onto a pi spawn.
-		claudeArgs := buildSpawnArgs("claude", "", nil, false, true)
-		if contains(claudeArgs, "--offline") {
-			t.Fatalf("claude spawned with pi's --offline: %v", claudeArgs)
+		claudePlan, err := buildSpawnArgs("claude", "", nil, false, true)
+		if err != nil {
+			t.Fatal(err)
 		}
-		piArgs := buildSpawnArgs("pi", "", nil, true, false)
-		if contains(piArgs, "--dangerously-skip-permissions") {
-			t.Fatalf("pi spawned with claude's --dangerously-skip-permissions: %v", piArgs)
+		if contains(claudePlan.Args, "--offline") {
+			t.Fatalf("claude spawned with pi's --offline: %v", claudePlan.Args)
+		}
+		piPlan, err := buildSpawnArgs("pi", "", nil, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contains(piPlan.Args, "--dangerously-skip-permissions") {
+			t.Fatalf("pi spawned with claude's --dangerously-skip-permissions: %v", piPlan.Args)
 		}
 	})
 }
 
-// codersGetArgs shim removed -- the test now uses coders.Registry
-// directly, mirroring api_pi_offline_test.go's pattern.
+// codersGetArgs shim removed -- the test now uses Manager directly,
+// mirroring api_pi_offline_test.go's pattern.

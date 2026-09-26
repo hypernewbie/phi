@@ -10,6 +10,17 @@ import {
 } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
+import {
+    loadCoderRegistry,
+    visibleCoders,
+    getCoder,
+    hasTranscript,
+    hasPiRpc,
+    hasRename,
+    hasSessions,
+    renderLogo,
+    RESERVED_CODER_IDS,
+} from './coders.js';
 
 export function normalizePath(p: string): string {
     if (!p) return '';
@@ -83,17 +94,46 @@ export class SessionsManager {
     }
 
     setupEventListeners(): void {
-        // Coder Selector Tabs
-        document.querySelectorAll('.coder-tab').forEach((tab) => {
-            tab.addEventListener('click', (_e) => {
-                document
+        // Coder Selector Tabs: delegated handler on the stable
+        // #coder-selector container. The previous code bound a click
+        // listener to each static .coder-tab in the constructor —
+        // that broke once we made the container dynamic. The
+        // delegated listener survives re-renders. (R9)
+        const coderContainer = document.getElementById('coder-selector');
+        if (coderContainer) {
+            coderContainer.addEventListener('click', (e) => {
+                const target = (e.target as Element | null)?.closest(
+                    '.coder-tab',
+                ) as HTMLElement | null;
+                if (!target) return;
+                const id = target.getAttribute('data-coder');
+                if (!id) return;
+                coderContainer
                     .querySelector('.coder-tab.active')
                     ?.classList.remove('active');
-                tab.classList.add('active');
-                this.activeCoder = tab.getAttribute('data-coder') as string;
+                target.classList.add('active');
+                this.activeCoder = id;
+                localStorage.setItem('phi_active_coder', id);
                 this.loadSessions();
             });
-        });
+        }
+
+        // Empty-state quick launch buttons: same delegated pattern
+        // for the same re-render reason. The previous code bound a
+        // listener to each button in app.js, which only ran once.
+        const emptyQuickLaunch = document.getElementById('empty-quick-launch');
+        if (emptyQuickLaunch) {
+            emptyQuickLaunch.addEventListener('click', (e) => {
+                const target = (e.target as Element | null)?.closest(
+                    '.empty-launch-btn',
+                ) as HTMLElement | null;
+                if (!target) return;
+                const coder = target.getAttribute('data-coder');
+                if (!coder) return;
+                this.switchCoder(coder);
+                this.spawnNewSession();
+            });
+        }
 
         // New Session Trigger
         this.newSessionBtn.addEventListener('click', () => {
@@ -238,6 +278,11 @@ export class SessionsManager {
 
     async loadConfig(): Promise<void> {
         try {
+            // Load the coder registry first so renderCoderTabs /
+            // renderQuickLaunchButtons have data to work with. App.init
+            // already calls loadCoderRegistry; calling it again is a
+            // no-op via the deduped promise.
+            await loadCoderRegistry();
             const res = await fetch('/api/config');
             const data = await res.json();
             this.config = data;
@@ -311,6 +356,14 @@ export class SessionsManager {
             this.app.customFontName = (ls?.custom_font_name as string) || '';
             this.app.applyUIFont?.();
             await this.app.loadCustomFont?.();
+
+            // Render the coder tabs / quick-launch buttons from the
+            // registry now that the workspace selector is in place.
+            // Idempotent — calling again after a registry rebuild is
+            // safe.
+            this.renderCoderTabs();
+            this.renderQuickLaunchButtons();
+
             const activeTab = this.app.tabManager.getActiveTab();
             if (activeTab) {
                 this.app.tabManager.renderPresets(activeTab.coder);
@@ -383,14 +436,12 @@ export class SessionsManager {
     }
 
     switchCoder(coderId: string, skipReload: boolean = false): void {
-        // pi-rpc is a chat tab (eye icon) — never hijack the left Pi tab's
-        // terminal view. The Pi coder stays as 'pi'.
-        if (
-            coderId === 'review' ||
-            coderId === 'kanban' ||
-            coderId === 'pi-rpc'
-        )
-            return;
+        // Pseudo-coders / reserved IDs cannot become the sidebar's
+        // active coder — they don't own a sessions list. The same
+        // guard existed before the registry refactor; the names now
+        // come from the reserved-ID set so a future reserved ID
+        // (e.g. an internal future coder) inherits the same rule.
+        if (RESERVED_CODER_IDS.has(coderId)) return;
         if (this.activeCoder === coderId) return;
         this.activeCoder = coderId;
 
@@ -758,24 +809,23 @@ export class SessionsManager {
 
                 item.innerHTML = `
                     <div class="session-meta-top">
-                        <span class="session-title">${sess.title}</span>
-                        ${statusGlyph ? `<span class="session-dot ${statusClass}">${statusGlyph}</span>` : ''}
+                        <span class="session-title"></span>
+                        ${statusGlyph ? `<span class="session-dot ${statusClass}"></span>` : ''}
                     </div>
                     <span class="session-time">${timeStr}</span>
                     <div class="session-actions">
                         ${
-                            this.activeCoder === 'opencode' ||
-                            this.activeCoder === 'pi'
+                            hasTranscript(this.activeCoder) ||
+                            hasPiRpc(this.activeCoder)
                                 ? `
-                        <button class="session-action-btn review-btn" title="${this.activeCoder === 'pi' ? 'Open Pi RPC' : 'Review Transcript'}" aria-label="${this.activeCoder === 'pi' ? 'Open Pi RPC' : 'Review Transcript'}">
+                        <button class="session-action-btn review-btn" title="${hasPiRpc(this.activeCoder) ? 'Open Pi RPC' : 'Review Transcript'}" aria-label="${hasPiRpc(this.activeCoder) ? 'Open Pi RPC' : 'Review Transcript'}">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                         </button>
                         `
                                 : ''
                         }
                         ${
-                            this.activeCoder === 'agy' ||
-                            this.activeCoder === 'claude'
+                            hasRename(this.activeCoder)
                                 ? `
                         <button class="session-action-btn rename-btn" title="Rename Session">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
@@ -785,6 +835,14 @@ export class SessionsManager {
                         }
                     </div>
                 `;
+                // Safe rendering for the title (R9): the server
+                // returns arbitrary session titles that include
+                // user-supplied text. textContent escapes HTML
+                // automatically; innerHTML would not.
+                const titleEl = item.querySelector('.session-title');
+                if (titleEl) titleEl.textContent = sess.title;
+                const dotEl = item.querySelector('.session-dot');
+                if (dotEl && statusGlyph) dotEl.textContent = statusGlyph;
 
                 if (sess.coder === 'pi' && this.activeCoder !== 'pi') {
                     const link = document.createElement('a');
@@ -822,14 +880,19 @@ export class SessionsManager {
                 });
 
                 if (
-                    this.activeCoder === 'opencode' ||
-                    this.activeCoder === 'pi'
+                    hasTranscript(this.activeCoder) ||
+                    hasPiRpc(this.activeCoder)
                 ) {
                     const reviewBtn = item.querySelector('.review-btn');
                     if (reviewBtn) {
                         reviewBtn.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            if (this.activeCoder === 'pi') {
+                            // PiRpc capability wins when both are
+                            // advertised — Pi has both today (the
+                            // chat surface is preferred over the
+                            // legacy transcript view). Future
+                            // backends with both can flip the order.
+                            if (hasPiRpc(this.activeCoder)) {
                                 openPiRpcChatTab(
                                     this.app.tabManager,
                                     sess.cwd ?? wtPath,
@@ -848,10 +911,7 @@ export class SessionsManager {
                     }
                 }
 
-                if (
-                    this.activeCoder === 'agy' ||
-                    this.activeCoder === 'claude'
-                ) {
+                if (hasRename(this.activeCoder)) {
                     const renameBtn = item.querySelector('.rename-btn');
                     if (renameBtn) {
                         renameBtn.addEventListener('click', (e) => {
@@ -907,11 +967,13 @@ export class SessionsManager {
 
     async spawnNewSession(): Promise<void> {
         try {
-            let coderName = 'Shell';
-            if (this.activeCoder === 'opencode') coderName = 'OpenCode';
-            else if (this.activeCoder === 'claude') coderName = 'Claude';
-            else if (this.activeCoder === 'pi') coderName = 'Pi';
-            else if (this.activeCoder === 'agy') coderName = 'Agy';
+            // Title uses the registry's display name (R9) so custom
+            // backends don't read "+ Agent". The fallback handles
+            // the pre-registry-load race where activeCoder points at
+            // a coder that hasn't been registered yet (e.g. when the
+            // page loaded before the registry fetch resolved).
+            const coder = getCoder(this.activeCoder);
+            const coderName = coder?.short_label ?? coder?.name ?? 'Shell';
             const title = `+ ${coderName}`;
 
             const res = await fetch('/api/terminals', {
@@ -1013,7 +1075,7 @@ export class SessionsManager {
             this._openArgsInput(item, sess);
         });
 
-        if (this.activeCoder === 'agy' || this.activeCoder === 'claude') {
+        if (hasRename(this.activeCoder)) {
             mkItem('✏ Rename', () => {
                 this.openInlineRenamer(item, sess.id, sess.title);
             });
@@ -1235,22 +1297,44 @@ export class SessionsManager {
     }
 
     async openReviewTab(sess: any): Promise<void> {
-        const paneId = `review-${sess.id}`;
+        // Review-tab pane key format (R5): encode the coder, the
+        // workspace scope, and the external session ID so two
+        // backends with overlapping IDs never collide on the same
+        // tab. URL components are percent-encoded via
+        // encodeURIComponent so the key remains a safe map key and
+        // a safe URL fragment.
+        const scope = sess.coder || this.activeCoder || 'unknown';
+        const ws = sess.workspace || this.activeWorkspace || '';
+        const newPaneId = `review:${encodeURIComponent(scope)}:${encodeURIComponent(ws)}:${encodeURIComponent(sess.id)}`;
 
-        if (this.app.tabManager.tabs.has(paneId)) {
-            this.app.tabManager.switchTab(paneId);
+        // Legacy `review-<id>` keys from earlier sessions are
+        // re-keyed on first interaction. Look up by the legacy
+        // format; if found, switch to it and let the user reopen
+        // (we do not silently rewrite tabs.json entries — that's a
+        // restoration-time concern).
+        const legacyKey = `review-${sess.id}`;
+        if (
+            this.app.tabManager.tabs.has(legacyKey) &&
+            !this.app.tabManager.tabs.has(newPaneId)
+        ) {
+            this.app.tabManager.switchTab(legacyKey);
+            return;
+        }
+
+        if (this.app.tabManager.tabs.has(newPaneId)) {
+            this.app.tabManager.switchTab(newPaneId);
             return;
         }
 
         this.app.tabManager.createTab(
-            paneId,
+            newPaneId,
             sess.id,
             `Review: ${sess.title}`,
             'review',
             this.activeWorkspace,
             sess.cwd,
         );
-        const activeTab = this.app.tabManager.tabs.get(paneId);
+        const activeTab = this.app.tabManager.tabs.get(newPaneId);
         if (!activeTab) return;
         const view = createReviewTranscriptView(activeTab.termContainer, {
             title: `Review: ${sess.title}`,
@@ -1268,8 +1352,15 @@ export class SessionsManager {
                 </div>
             `;
             try {
+                // URLSearchParams encodes every value (R9); a session
+                // id with `?` or `&` no longer corrupts the query.
+                const params = new URLSearchParams({
+                    coder: sess.coder || '',
+                    id: sess.id || '',
+                    cwd: sess.cwd || '',
+                });
                 const res = await fetch(
-                    `/api/session-transcript?coder=${sess.coder}&id=${sess.id}&cwd=${encodeURIComponent(sess.cwd || '')}`,
+                    `/api/session-transcript?${params.toString()}`,
                 );
                 if (!res.ok) throw new Error('Failed to load transcript');
                 const messages = await res.json();
@@ -1298,5 +1389,69 @@ export class SessionsManager {
 
         view.refreshButton?.addEventListener('click', loadData);
         await loadData();
+    }
+
+    // ─── Dynamic sidebar rendering (R9) ────────────────────────────────
+
+    // renderCoderTabs populates #coder-selector from the registry,
+    // filtering to sidebar-visible coders and preserving the order
+    // the server declared. The click handler is delegated (see
+    // setupEventListeners); this method only builds DOM nodes.
+    renderCoderTabs(): void {
+        const container = document.getElementById('coder-selector');
+        if (!container) return;
+        const coders = visibleCoders();
+        if (coders.length === 0) {
+            // Registry hasn't loaded yet; leave the static fallback
+            // (rendered by the legacy path in app.js) untouched.
+            return;
+        }
+        container.replaceChildren();
+        // Default selection: persisted localStorage choice if it's
+        // still visible; otherwise the first visible coder.
+        const stored = localStorage.getItem('phi_active_coder');
+        const defaultId =
+            (stored && coders.some((c) => c.id === stored) && stored) ||
+            coders[0].id;
+
+        for (const c of coders) {
+            const btn = document.createElement('button');
+            btn.className = 'coder-tab';
+            if (c.id === defaultId) btn.classList.add('active');
+            btn.setAttribute('data-coder', c.id);
+            btn.setAttribute('title', c.name);
+            btn.appendChild(renderLogo(c));
+            const label = document.createElement('span');
+            label.textContent = c.short_label || c.name;
+            btn.appendChild(label);
+            container.appendChild(btn);
+        }
+
+        // Sync the SessionsManager's active coder with the new
+        // default so subsequent loads point at the right backend.
+        if (this.activeCoder !== defaultId) {
+            this.activeCoder = defaultId;
+        }
+        // Always trigger a loadSessions after the registry is
+        // wired so the sidebar reflects the visible coder's data
+        // without an extra click.
+        this.loadSessions();
+    }
+
+    // renderQuickLaunchButtons populates the empty-state quick
+    // launch row from the same visible-coder list.
+    renderQuickLaunchButtons(): void {
+        const container = document.getElementById('empty-quick-launch');
+        if (!container) return;
+        const coders = visibleCoders();
+        if (coders.length === 0) return;
+        container.replaceChildren();
+        for (const c of coders) {
+            const btn = document.createElement('button');
+            btn.className = 'empty-launch-btn';
+            btn.setAttribute('data-coder', c.id);
+            btn.textContent = c.short_label || c.name;
+            container.appendChild(btn);
+        }
     }
 }

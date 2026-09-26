@@ -104,7 +104,15 @@ func validateWorkingDir(dir string) error {
 // so tying it to a request-scoped ctx would kill every terminal the
 // instant its spawn request returns. cmd.Start()/cmd.Wait() below are
 // deliberately left on their own non-cancellable lifetime.
-func Start(ctx context.Context, dir string, command string, args []string) (*Pty, error) {
+//
+// envOverrides (optional) lets the caller inject per-child environment
+// values from a resolved coder profile. The map is merged into the
+// os.Environ-derived construction with case-insensitive key matching
+// on Windows. Phi-owned shim variables (PATH with the shim dir
+// prepended, PHI_CLIPBOARD_FILE) always win; envOverrides cannot
+// override them. On Windows the SHELL-strip is bypassed when the
+// override map explicitly carries a SHELL key.
+func Start(ctx context.Context, dir string, command string, args []string, envOverrides ...map[string]string) (*Pty, error) {
 	resolvedCmd := ResolveCommand(command)
 
 	// Resolve the full path before creating the command — go-pty's Windows
@@ -165,16 +173,39 @@ func Start(ctx context.Context, dir string, command string, args []string) (*Pty
 	cmd.Env = append(cmd.Env, newPath)
 	cmd.Env = append(cmd.Env, fmt.Sprintf("PHI_CLIPBOARD_FILE=%s", clipFile))
 
+	// Merge per-coder env overrides on top of the inherited environment.
+	// Case-insensitive on Windows; PHI_CLIPBOARD_FILE and PATH-with-shim
+	// win over any override that targets the same key (R4).
+	merged := mergeEnvOverrides(cmd.Env, envOverrides, runtime.GOOS == "windows")
+	cmd.Env = merged
+
 	// On Windows, strip any stray UNIX-like SHELL environment variable to prevent
 	// cross-platform tools (like Pi Coder) from trying to run commands via a broken/WSL bash.
+	// Skip the strip when the caller explicitly set SHELL in envOverrides — a
+	// custom profile that says "I want SHELL" wins over the cross-platform
+	// safety net.
 	if runtime.GOOS == "windows" {
-		var cleanEnv []string
-		for _, env := range cmd.Env {
-			if !strings.HasPrefix(strings.ToUpper(env), "SHELL=") {
-				cleanEnv = append(cleanEnv, env)
+		shellOverridden := false
+		for _, ov := range envOverrides {
+			for k := range ov {
+				if strings.EqualFold(k, "SHELL") {
+					shellOverridden = true
+					break
+				}
+			}
+			if shellOverridden {
+				break
 			}
 		}
-		cmd.Env = cleanEnv
+		if !shellOverridden {
+			var cleanEnv []string
+			for _, env := range cmd.Env {
+				if !strings.HasPrefix(strings.ToUpper(env), "SHELL=") {
+					cleanEnv = append(cleanEnv, env)
+				}
+			}
+			cmd.Env = cleanEnv
+		}
 	}
 
 	hasTerm := false
@@ -226,6 +257,77 @@ func Start(ctx context.Context, dir string, command string, args []string) (*Pty
 	}()
 
 	return p, nil
+}
+
+// mergeEnvOverrides layers envOverrides on top of base. Reserved keys
+// (PATH, PHI_CLIPBOARD_FILE) cannot be overridden by callers; their
+// managed values from Start are preserved verbatim. All other keys
+// are replaced when present in the override maps. The last override
+// map wins when multiple carry the same key, so the optional
+// variadic shape keeps the common no-overrides path zero-cost.
+//
+// Windows is case-insensitive for env-var keys, so PATH, Path, and
+// path all collide. The first base occurrence is replaced; later
+// case-different entries are dropped to keep the environment free
+// of duplicates the kernel would silently merge anyway.
+func mergeEnvOverrides(base []string, overrides []map[string]string, windowsCI bool) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	// Reserved keys must keep their Start-managed values: PATH is
+	// rewritten by Start to prepend the shim dir, and PHI_CLIPBOARD_FILE
+	// is the session-isolated clipboard sink. A custom profile must
+	// not be able to either inject a fake clipboard sink or strip the
+	// shim directory.
+	reserved := func(k string) bool {
+		return strings.EqualFold(k, "PATH") || strings.EqualFold(k, "PHI_CLIPBOARD_FILE")
+	}
+
+	// Index base by key for fast lookup.
+	out := make([]string, 0, len(base))
+	index := make(map[string]int, len(base))
+	for _, e := range base {
+		k := strings.SplitN(e, "=", 2)[0]
+		if _, exists := findKey(index, k, windowsCI); exists {
+			// Drop duplicate entries (rare; can happen with both
+			// "Path" and "PATH" in os.Environ on Windows).
+			continue
+		}
+		index[k] = len(out)
+		out = append(out, e)
+	}
+
+	// Apply each override map in order. Last write wins.
+	for _, ov := range overrides {
+		for k, v := range ov {
+			if reserved(k) {
+				continue
+			}
+			entry := k + "=" + v
+			if idx, exists := findKey(index, k, windowsCI); exists {
+				out[idx] = entry
+			} else {
+				index[k] = len(out)
+				out = append(out, entry)
+			}
+		}
+	}
+	return out
+}
+
+func findKey(index map[string]int, key string, windowsCI bool) (int, bool) {
+	if idx, ok := index[key]; ok {
+		return idx, true
+	}
+	if !windowsCI {
+		return 0, false
+	}
+	for k, idx := range index {
+		if strings.EqualFold(k, key) {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 func (p *Pty) Read(b []byte) (int, error) {

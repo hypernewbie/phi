@@ -210,7 +210,11 @@ func GenerateID() string {
 // pty.spawn span (see Start's doc comment) — the underlying process is
 // never cancelled by it, since the terminal must survive well past the
 // HTTP request that spawned it.
-func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string) (*PTYInstance, error) {
+//
+// envOverrides (optional) is forwarded to pty.Start for per-child
+// environment merging. Reserved keys (PATH, PHI_CLIPBOARD_FILE) cannot
+// be overridden.
+func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string, envOverrides ...map[string]string) (*PTYInstance, error) {
 	// Refuse new spawns during the drain window (signal received). Tests
 	// can flip the flag directly via BeginDrain to assert this path.
 	if m.IsDraining() {
@@ -220,7 +224,7 @@ func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string,
 	// accepts but never uses to cancel the process (see Start's doc
 	// comment) — the span ends here; the terminal's own lifetime runs on.
 	spanCtx, end := obs.Span(ctx, "pty.spawn", "coder", coder, "command", command, "cwd", dir)
-	p, err := Start(spanCtx, dir, command, args)
+	p, err := Start(spanCtx, dir, command, args, envOverrides...)
 	end(err)
 	if err != nil {
 		return nil, err

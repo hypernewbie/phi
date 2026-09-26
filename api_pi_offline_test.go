@@ -6,11 +6,28 @@ import (
 	"github.com/hypernewbie/phi/pkg/coders"
 )
 
-// Calls the real buildCoderArgs that handleCreateTerminal uses, rather than
-// re-implementing it -- a mirrored copy would keep passing while the handler
-// itself was broken.
-func buildSpawnArgs(coder, sessionID string, extra []string, piOffline, claudeSkipPerms bool) []string {
-	return buildCoderArgs(coder, coders.Registry[coder], sessionID, extra, piOffline, claudeSkipPerms)
+// buildSpawnArgs shim that calls the real ResolveLaunch the handler
+// uses. Tests that previously re-implemented buildCoderArgs now drive
+// the production entry point, so a refactor that broke the handler
+// without breaking this shim would still be caught (api_claude_skip_permissions_test.go
+// and api_pi_offline_test.go used to mirror buildCoderArgs directly;
+// the resolver version is shorter but exercises the same code path).
+func buildSpawnArgs(coderID, sessionID string, extra []string, piOffline, claudeSkipPerms bool) (coders.LaunchPlan, error) {
+	mgr := coders.NewManager()
+	c, ok := mgr.Get(coderID)
+	if !ok {
+		return coders.LaunchPlan{}, nil
+	}
+	return coders.ResolveLaunch(c, coders.SpawnRequest{
+		Coder:     coderID,
+		SessionID: sessionID,
+		ExtraArgs: extra,
+	}, coders.LaunchOptions{
+		Config: coders.ConfigView{
+			PiOffline:                        piOffline,
+			ClaudeDangerouslySkipPermissions: claudeSkipPerms,
+		},
+	})
 }
 
 func contains(hay []string, needle string) bool {
@@ -29,13 +46,21 @@ func TestPiOfflineFlag(t *testing.T) {
 		if cfg.PiOffline {
 			t.Fatal("PiOffline should default to false so existing configs are unaffected")
 		}
-		if contains(buildSpawnArgs("pi", "", nil, cfg.PiOffline, false), "--offline") {
+		plan, err := buildSpawnArgs("pi", "", nil, cfg.PiOffline, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contains(plan.Args, "--offline") {
 			t.Fatal("spawned pi with --offline while the setting was off")
 		}
 	})
 
 	t.Run("adds the flag when enabled", func(t *testing.T) {
-		if !contains(buildSpawnArgs("pi", "", nil, true, false), "--offline") {
+		plan, err := buildSpawnArgs("pi", "", nil, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(plan.Args, "--offline") {
 			t.Fatal("expected --offline when the setting is on")
 		}
 	})
@@ -43,22 +68,29 @@ func TestPiOfflineFlag(t *testing.T) {
 	t.Run("scoped to pi", func(t *testing.T) {
 		// The flag is pi's own; other coders would reject it.
 		for _, coder := range []string{"opencode", "claude", "bash"} {
-			if contains(buildSpawnArgs(coder, "", nil, true, false), "--offline") {
+			plan, err := buildSpawnArgs(coder, "", nil, true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if contains(plan.Args, "--offline") {
 				t.Fatalf("%s must not receive pi's --offline", coder)
 			}
 		}
 	})
 
 	t.Run("coexists with session resume", func(t *testing.T) {
-		args := buildSpawnArgs("pi", "sess-1", nil, true, false)
-		if !contains(args, "--offline") || !contains(args, "--session") || !contains(args, "sess-1") {
-			t.Fatalf("resume and offline should both apply, got %v", args)
+		plan, err := buildSpawnArgs("pi", "sess-1", nil, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(plan.Args, "--offline") || !contains(plan.Args, "--session") || !contains(plan.Args, "sess-1") {
+			t.Fatalf("resume and offline should both apply, got %v", plan.Args)
 		}
 		// --offline must not land between --session and its value.
-		for i, a := range args {
+		for i, a := range plan.Args {
 			if a == "--session" {
-				if i+1 >= len(args) || args[i+1] != "sess-1" {
-					t.Fatalf("--session lost its value: %v", args)
+				if i+1 >= len(plan.Args) || plan.Args[i+1] != "sess-1" {
+					t.Fatalf("--session lost its value: %v", plan.Args)
 				}
 			}
 		}
@@ -75,15 +107,20 @@ func TestPiOfflineFlag(t *testing.T) {
 	})
 
 	t.Run("does not mutate the shared coder registry", func(t *testing.T) {
-		// Registry is process-wide. Appending onto c.Args instead of a copy
-		// could leak flags into later spawns of the same coder.
-		before := len(coders.Registry["pi"].Args)
-		buildSpawnArgs("pi", "sess-1", []string{"--extra"}, true, false)
-		buildSpawnArgs("pi", "sess-2", nil, true, false)
-		if got := len(coders.Registry["pi"].Args); got != before {
-			t.Fatalf("registry Args grew from %d to %d", before, got)
+		mgr := coders.NewManager()
+		before, _ := mgr.Get("pi")
+		beforeLen := len(before.Args)
+		_, _ = buildSpawnArgs("pi", "sess-1", []string{"--extra"}, true, false)
+		_, _ = buildSpawnArgs("pi", "sess-2", nil, true, false)
+		after, _ := mgr.Get("pi")
+		if got := len(after.Args); got != beforeLen {
+			t.Fatalf("registry Args grew from %d to %d", beforeLen, got)
 		}
-		if contains(buildSpawnArgs("pi", "", nil, false, false), "--offline") {
+		plan, err := buildSpawnArgs("pi", "", nil, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if contains(plan.Args, "--offline") {
 			t.Fatal("a previous spawn leaked --offline into the registry")
 		}
 	})

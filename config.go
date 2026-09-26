@@ -155,6 +155,13 @@ func expandHome(path string) string {
 // ~/.phi/config.json. Anything else will trigger the guard below.
 var testConfigPath string
 
+// testCustomBackendsDir points customBackendsDir() at a temp dir
+// during tests. Same isolation contract as testConfigPath: an unset
+// value under `go test` panics so a test that forgets withTempBackends
+// cannot silently scan the user's real ~/.phi/backends directory
+// (R3). Production code always goes through customBackendsDir.
+var testCustomBackendsDir string
+
 // configFilePath returns the active config path. Tests MUST override
 // testConfigPath to point at a temp file — otherwise the guard in
 // this function refuses to return the live ~/.phi/config.json path.
@@ -172,6 +179,29 @@ func configFilePath() string {
 			"testConfigPath.")
 	}
 	return expandHome("~/.phi/config.json")
+}
+
+// customBackendsDir returns the directory phi scans for custom
+// backend JSON files at startup. Each `*.json` file is parsed as a
+// sparse CoderPatch and merged onto the matching built-in (or
+// inserted as a new coder if the ID is novel). Production path is
+// `~/.phi/backends/`; tests override via testCustomBackendsDir.
+//
+// The panic-under-`go test` guard mirrors configFilePath's. A test
+// that reads the live backends dir without isolating itself would
+// either pick up the developer's local profiles (surprising) or
+// silently shadow them (worse).
+func customBackendsDir() string {
+	if testCustomBackendsDir != "" {
+		return testCustomBackendsDir
+	}
+	if testing.Testing() {
+		panic("customBackendsDir() called under `go test` without testCustomBackendsDir set. " +
+			"Use withTempBackends(t) (or set testCustomBackendsDir directly) to " +
+			"isolate this test from ~/.phi/backends/ — see the doc comment on " +
+			"testCustomBackendsDir.")
+	}
+	return expandHome("~/.phi/backends/")
 }
 
 // overrideDisplayName returns the hostname_override label for identity
