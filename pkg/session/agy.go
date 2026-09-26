@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/system"
 )
 
@@ -161,6 +162,19 @@ func SaveSessionCwd(id string, cwd string) error {
 
 func SaveAgySessionCwd(id string, cwd string) error {
 	return SaveSessionCwd(id, cwd)
+}
+
+// AfterSpawn lets providers record per-spawn side effects (agy's
+// CWD sidecar, future per-coder hooks). Currently a no-op except
+// for the agy case: agy's CLI doesn't reliably record the cwd at
+// resume time, so we persist it in our sidecar so the next list
+// scan can group the session correctly. Centralising this hook in
+// the session package keeps the spawn handler free of provider-
+// specific branches (R5).
+func AfterSpawn(c coders.Coder, sessionID, cwd string) {
+	if c.ID == "agy" && sessionID != "" && cwd != "" {
+		_ = SaveAgySessionCwd(sessionID, cwd)
+	}
 }
 
 func syncSessionCwdMappings(m map[string]SessionMeta) {

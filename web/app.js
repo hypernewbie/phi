@@ -711,13 +711,20 @@ export class App {
     }
 
     async fetchCoderPresets() {
+        // The frontend-side loadCoderRegistry in web-src/coders.ts is
+        // the canonical registry client; this method now mirrors its
+        // payload into the legacy `codersPresetRegistry` map that
+        // terminal.js still indexes by id. We log only the keys (R2)
+        // so the registry body — which never contains private fields
+        // today, but might in a future revision — never reaches the
+        // browser console unredacted.
         try {
+            await loadCoderRegistry();
             const res = await fetch('/api/coders');
+            if (!res.ok) throw new Error(`status ${res.status}`);
             this.codersPresetRegistry = await res.json();
-            console.log(
-                '[app] Loaded coder registries:',
-                this.codersPresetRegistry,
-            );
+            const ids = Object.keys(this.codersPresetRegistry);
+            console.log(`[app] Loaded coder registries (${ids.length}):`, ids);
         } catch (e) {
             console.error('[app] Failed to fetch coder presets:', e);
         }

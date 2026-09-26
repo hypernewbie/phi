@@ -38,6 +38,19 @@ func withTempConfig(t *testing.T) string {
 	return f.Name()
 }
 
+// withTempBackends points customBackendsDir() at a fresh temp dir
+// for the duration of the test, then restores the original override.
+// Mirrors withTempConfig so tests can drop *.json files into the dir
+// without touching the developer's real ~/.phi/backends (R3).
+func withTempBackends(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	orig := testCustomBackendsDir
+	testCustomBackendsDir = dir
+	t.Cleanup(func() { testCustomBackendsDir = orig })
+	return dir
+}
+
 // ─── Config defaults ──────────────────────────────────────────────────────────
 
 func TestLoadConfig_DefaultsOnEmptyFile(t *testing.T) {

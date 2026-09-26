@@ -344,15 +344,29 @@ export interface TerminalActivityState {
     hasAttention: boolean;
 }
 
+// isShellCoder returns true for coder IDs that the registry flags as
+// shells. Replaces the hardcoded `coder === 'bash' || coder === 'pwsh'`
+// check that the activity-eligibility helper used to inline. The
+// registry is the source of truth (R9); a custom profile declaring
+// is_shell gets the same treatment as the built-in shells.
+import { isShell } from './coders.js';
+
 // isTerminalActivityEligible returns false for shell/btop tabs whose PTY
 // output is user-driven or constant (btop redraws forever). Only coding-agent
-// tabs (pi, claude, agy, opencode) should drive the global "working" signal.
-// UI-only tabs (review, kanban) are not PTY-backed and never carry isBusy.
+// tabs should drive the global "working" signal. UI-only tabs (review,
+// kanban, pi-rpc) are not PTY-backed and never carry isBusy.
 function isTerminalActivityEligible(tab: TerminalActivityTabLike): boolean {
     if (tab.isBtop) return false;
     const coder = tab.coder;
-    if (coder === 'bash' || coder === 'pwsh') return false;
-    if (coder === 'review' || coder === 'kanban') return false;
+    // Unknown / missing coder IDs default to eligible — the registry
+    // seed covers every coder the UI can spawn in practice, so a
+    // missing value typically means a test stub. Matching the
+    // pre-registry "eligible unless shell/review/kanban" behaviour
+    // is what existing tests rely on.
+    if (!coder) return true;
+    if (isShell(coder)) return false;
+    if (coder === 'review' || coder === 'kanban' || coder === 'pi-rpc')
+        return false;
     return true;
 }
 

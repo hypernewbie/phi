@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hypernewbie/phi/pkg/bindaddr"
+	"github.com/hypernewbie/phi/pkg/coders"
 	"github.com/hypernewbie/phi/pkg/fleet"
 	"github.com/hypernewbie/phi/pkg/fswatch"
 	"github.com/hypernewbie/phi/pkg/obs"
@@ -34,13 +35,14 @@ import (
 )
 
 var (
-	ptyManager  *pty.Manager
-	wsHub       *ws.Hub
-	mdWatcher   *fswatch.Watcher
-	cpuSampler  = system.NewSampler()
-	activeCWD   string
-	webRoot     fs.FS
-	fleetPoller = fleet.NewPoller()
+	ptyManager   *pty.Manager
+	coderManager *coders.Manager
+	wsHub        *ws.Hub
+	mdWatcher    *fswatch.Watcher
+	cpuSampler   = system.NewSampler()
+	activeCWD    string
+	webRoot      fs.FS
+	fleetPoller  = fleet.NewPoller()
 
 	Version     = "dev"
 	Commit      = "none"
@@ -130,6 +132,14 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
+	coderManager = coders.NewManager()
+	// Load custom backend files from ~/.phi/backends/*.json. Built-ins
+	// are already seeded by NewManager; custom profiles patch / add.
+	// Per-file failures are logged inside LoadFromDir and skipped so a
+	// single malformed file never breaks startup (R3).
+	if err := coderManager.LoadFromDir(customBackendsDir(), func(s string) { log.Print(s) }); err != nil {
+		log.Printf("[backends] failed to load custom backends: %v", err)
+	}
 	rpcMgr := rpc.NewManager()
 	// Do NOT call LoadState() here. tabs.json holds PTYInstance
 	// metadata for tabs the server was managing in its previous life,
