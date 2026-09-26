@@ -115,6 +115,8 @@ export class DiffController {
     diffModalBody: HTMLElement | null;
     contextToggleBtn: HTMLElement | null;
     layoutToggleBtn: HTMLElement | null;
+    syntaxToggleBtn: HTMLElement | null;
+    syntaxHighlightEnabled: boolean;
     currentContextLines: number;
     currentLayout: string;
     lastRawDiffText: string;
@@ -167,6 +169,15 @@ export class DiffController {
         this.layoutToggleBtn = document.getElementById(
             'diff-layout-toggle-btn',
         );
+        this.syntaxToggleBtn = document.getElementById(
+            'diff-syntax-toggle-btn',
+        );
+        try {
+            this.syntaxHighlightEnabled =
+                localStorage.getItem('phi_diff_syntax_highlight') === 'true';
+        } catch {
+            this.syntaxHighlightEnabled = false;
+        }
         this.currentContextLines = 3;
         this.currentLayout = 'line-by-line'; // Default unified
         this.lastRawDiffText = '';
@@ -253,6 +264,10 @@ export class DiffController {
             }
         });
         if (this.contextToggleBtn) {
+            this.contextToggleBtn.textContent =
+                this.currentContextLines === 3
+                    ? 'More context'
+                    : 'Less context';
             this.contextToggleBtn.addEventListener('click', () =>
                 this.toggleRichDiffContext(),
             );
@@ -261,6 +276,12 @@ export class DiffController {
             this.layoutToggleBtn.addEventListener('click', () =>
                 this.toggleRichDiffLayout(),
             );
+        }
+        if (this.syntaxToggleBtn) {
+            this.syntaxToggleBtn.addEventListener('click', () =>
+                this.toggleRichDiffSyntax(),
+            );
+            this._updateSyntaxToggleBtn();
         }
 
         // Manual Refresh trigger
@@ -1580,6 +1601,13 @@ export class DiffController {
     async openRichDiffModal(): Promise<void> {
         if (this.diffModal) {
             this.diffModal.classList.remove('hidden');
+            if (this.contextToggleBtn) {
+                this.contextToggleBtn.textContent =
+                    this.currentContextLines === 3
+                        ? 'More context'
+                        : 'Less context';
+            }
+            this._updateSyntaxToggleBtn();
             await this.loadRichDiff();
         }
     }
@@ -1593,10 +1621,10 @@ export class DiffController {
     async toggleRichDiffContext(): Promise<void> {
         this.currentContextLines = this.currentContextLines === 3 ? 30 : 3;
         if (this.contextToggleBtn) {
-            this.contextToggleBtn.innerText =
+            this.contextToggleBtn.textContent =
                 this.currentContextLines === 3
-                    ? 'Show 30 lines of context'
-                    : 'Show 3 lines of context';
+                    ? 'More context'
+                    : 'Less context';
         }
         await this.loadRichDiff();
     }
@@ -1608,12 +1636,140 @@ export class DiffController {
                 ? 'side-by-side'
                 : 'line-by-line';
         if (this.layoutToggleBtn) {
-            this.layoutToggleBtn.innerText =
+            this.layoutToggleBtn.textContent =
                 this.currentLayout === 'line-by-line'
                     ? 'Side-by-Side'
                     : 'Unified';
         }
         this.renderRichDiff(this.lastRawDiffText);
+    }
+
+    toggleRichDiffSyntax(): void {
+        this.syntaxHighlightEnabled = !this.syntaxHighlightEnabled;
+        try {
+            localStorage.setItem(
+                'phi_diff_syntax_highlight',
+                String(this.syntaxHighlightEnabled),
+            );
+        } catch {
+            /* quota / private-mode failures are non-fatal */
+        }
+        this._updateSyntaxToggleBtn();
+        if (this.syntaxHighlightEnabled) {
+            this._applySyntaxHighlighting();
+        } else {
+            this.renderRichDiff(this.lastRawDiffText);
+        }
+    }
+
+    _updateSyntaxToggleBtn(): void {
+        if (!this.syntaxToggleBtn) return;
+        if (this.syntaxHighlightEnabled) {
+            this.syntaxToggleBtn.textContent = 'Syntax Off';
+            this.syntaxToggleBtn.classList.add('active');
+            this.syntaxToggleBtn.title = 'Turn off syntax highlighting';
+        } else {
+            this.syntaxToggleBtn.textContent = 'Syntax On';
+            this.syntaxToggleBtn.classList.remove('active');
+            this.syntaxToggleBtn.title = 'Turn on syntax highlighting';
+        }
+    }
+
+    _applySyntaxHighlighting(): void {
+        const hljs = window.hljs;
+        if (!hljs || !this.diffModalBody) return;
+
+        const allCodeLines =
+            this.diffModalBody.querySelectorAll<HTMLElement>(
+                '.d2h-code-line-ctn',
+            );
+        if (allCodeLines.length === 0) return;
+
+        // Cap at 10,000 lines max to prevent locking the browser thread
+        if (allCodeLines.length > 10000) {
+            this.app.showToast(
+                `Diff has ${allCodeLines.length.toLocaleString()} lines (max 10,000 for syntax highlighting); highlighting skipped.`,
+                { type: 'info' },
+            );
+            this.syntaxHighlightEnabled = false;
+            this._updateSyntaxToggleBtn();
+            return;
+        }
+
+        const fileWrappers =
+            this.diffModalBody.querySelectorAll<HTMLElement>(
+                '.d2h-file-wrapper',
+            );
+
+        fileWrappers.forEach((file) => {
+            const rawLang = (
+                file.getAttribute('data-lang') || ''
+            ).toLowerCase();
+            const fileName =
+                file.querySelector('.d2h-file-name')?.textContent?.trim() || '';
+
+            // Skip known lockfiles and minified assets
+            if (
+                /(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|go\.sum|cargo\.lock|\.min\.js|\.min\.css)$/i.test(
+                    fileName,
+                )
+            ) {
+                return;
+            }
+
+            const extMatch = fileName.match(/\.([a-zA-Z0-9_-]+)$/);
+            const ext = extMatch ? extMatch[1].toLowerCase() : rawLang;
+
+            const resolvedLang =
+                DIFF_EXT_TO_HLJS[ext] ||
+                DIFF_EXT_TO_HLJS[rawLang] ||
+                rawLang ||
+                'plaintext';
+
+            if (!hljs.getLanguage(resolvedLang)) {
+                return;
+            }
+
+            const codeLines =
+                file.querySelectorAll<HTMLElement>('.d2h-code-line-ctn');
+
+            codeLines.forEach((line) => {
+                if (line.classList.contains('hljs')) return;
+
+                const text = line.textContent;
+                if (!text || text.length > 1000) return;
+
+                let hlValue = '';
+                try {
+                    const res = hljs.highlight(text, {
+                        language: resolvedLang,
+                        ignoreIllegals: true,
+                    });
+                    hlValue = res.value;
+                } catch {
+                    return;
+                }
+
+                if (line.children.length === 0) {
+                    line.innerHTML = hlValue;
+                } else {
+                    try {
+                        const origStream = nodeStream(line);
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = hlValue;
+                        const hlStream = nodeStream(tempDiv);
+                        line.innerHTML = mergeStreams(
+                            origStream,
+                            hlStream,
+                            text,
+                        );
+                    } catch {
+                        return;
+                    }
+                }
+                line.classList.add('hljs');
+            });
+        });
     }
 
     renderRichDiff(rawDiffText: string): void {
@@ -1659,6 +1815,10 @@ export class DiffController {
         this.diffModalBody?.replaceChildren(
             ...Array.from(parsed.body.childNodes),
         );
+
+        if (this.syntaxHighlightEnabled) {
+            this._applySyntaxHighlighting();
+        }
 
         // After DOM is in place: wire up the per-row + buttons and
         // rehydrate any saved comments. Re-runs on layout toggle so
@@ -2451,3 +2611,155 @@ export class DiffController {
         }
     }
 }
+
+export interface DiffStreamNodeEvent {
+    event: 'start' | 'stop';
+    offset: number;
+    node: Node;
+}
+
+export function escapeDiffHtml(value: string): string {
+    return value
+        .replace(/&/gm, '&amp;')
+        .replace(/</gm, '&lt;')
+        .replace(/>/gm, '&gt;');
+}
+
+function tag(node: Node): string {
+    return node.nodeName.toLowerCase();
+}
+
+export function nodeStream(node: Node): DiffStreamNodeEvent[] {
+    const result: DiffStreamNodeEvent[] = [];
+    const walk = (n: Node, offset: number): number => {
+        for (let child = n.firstChild; child; child = child.nextSibling) {
+            if (child.nodeType === 3 && child.nodeValue !== null) {
+                offset += child.nodeValue.length;
+            } else if (child.nodeType === 1) {
+                result.push({ event: 'start', offset, node: child });
+                offset = walk(child, offset);
+                if (!tag(child).match(/br|hr|img|input/)) {
+                    result.push({ event: 'stop', offset, node: child });
+                }
+            }
+        }
+        return offset;
+    };
+    walk(node, 0);
+    return result;
+}
+
+export function mergeStreams(
+    original: DiffStreamNodeEvent[],
+    highlighted: DiffStreamNodeEvent[],
+    value: string,
+): string {
+    let processed = 0;
+    let result = '';
+    const nodeStack: Node[] = [];
+
+    function selectStream(): DiffStreamNodeEvent[] {
+        if (!original.length || !highlighted.length) {
+            return original.length ? original : highlighted;
+        }
+        if (original[0].offset !== highlighted[0].offset) {
+            return original[0].offset < highlighted[0].offset
+                ? original
+                : highlighted;
+        }
+        return highlighted[0].event === 'start' ? original : highlighted;
+    }
+
+    function open(node: Node): void {
+        const el = node as Element;
+        const attrs = Array.from(el.attributes || [])
+            .map((a) => `${a.name}="${escapeDiffHtml(a.value)}"`)
+            .join(' ');
+        result += `<${tag(node)}${attrs ? ' ' + attrs : ''}>`;
+    }
+
+    function close(node: Node): void {
+        result += '</' + tag(node) + '>';
+    }
+
+    while (original.length || highlighted.length) {
+        const stream = selectStream();
+        result += escapeDiffHtml(value.substring(processed, stream[0].offset));
+        processed = stream[0].offset;
+        if (stream === original) {
+            nodeStack.reverse().forEach(close);
+            do {
+                const item = stream.splice(0, 1)[0];
+                (item.event === 'start' ? open : close)(item.node);
+            } while (
+                stream === original &&
+                stream.length &&
+                stream[0].offset === processed
+            );
+            nodeStack.reverse().forEach(open);
+        } else {
+            const item = stream.splice(0, 1)[0];
+            if (item.event === 'start') {
+                nodeStack.push(item.node);
+            } else {
+                nodeStack.pop();
+            }
+            (item.event === 'start' ? open : close)(item.node);
+        }
+    }
+    return result + escapeDiffHtml(value.slice(processed));
+}
+
+export const DIFF_EXT_TO_HLJS: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'typescript',
+    js: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    jsx: 'javascript',
+    py: 'python',
+    rb: 'ruby',
+    rs: 'rust',
+    go: 'go',
+    java: 'java',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    hpp: 'cpp',
+    cc: 'cpp',
+    cs: 'csharp',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    fish: 'shell',
+    ps1: 'bash',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'ini',
+    ini: 'ini',
+    conf: 'ini',
+    sql: 'sql',
+    graphql: 'graphql',
+    gql: 'graphql',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    html: 'xml',
+    htm: 'xml',
+    xml: 'xml',
+    svg: 'xml',
+    diff: 'diff',
+    patch: 'diff',
+    json: 'json',
+    jsonc: 'json',
+    md: 'markdown',
+    markdown: 'markdown',
+    lua: 'lua',
+    php: 'php',
+    r: 'r',
+    swift: 'swift',
+    kt: 'kotlin',
+    kts: 'kotlin',
+    makefile: 'makefile',
+    mk: 'makefile',
+};
