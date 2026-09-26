@@ -2,6 +2,16 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.4 — 2026-09-26
+
+### Added
+- **Diff viewer opt-in syntax highlighting** (`73a1163`). Added an opt-in "Syntax On" / "Syntax Off" toggle button in the Rich Diff viewer toolbar (defaulting to off, persisted in `localStorage`). Integrates highlight.js tokens with DOM stream merging (`nodeStream` / `mergeStreams`) to preserve inline word-level `<ins>` and `<del>` diff highlights without token corruption. Strict typography and spacing metric locks guarantee pixel-identical font dimensions, line-height, letter-spacing, and padding between states. Automatically guards browser performance with a 10,000-line safety cap and skips lockfiles (`pnpm-lock.yaml`, `go.sum`).
+- **Diff context toggle clarity** (`73a1163`). Renamed the diff context expansion button to "More context" / "Less context" to explicitly convey action state.
+
+### Fixed
+- **Syncboard auto-open removal and file existence gating** (`efe5609`). Removed automatic modal and link popups when incoming syncboard messages arrive, preventing unexpected focus disruptions and cross-environment path mismatches. Gated preview chips and inline image thumbnails on remote host file existence, cleanly suppressing non-existent files and alien client-local roots (e.g. `C:\...`).
+- **Built-in coder presentation and interaction parity** (`1cc6c03`). Restored pre-registry tab titles, tab order, and quick-launch ordering across sessions and the sidebar. Scoped narrow-sidebar label hiding to `.coder-tab > span:not(.coder-logo)` to preserve logo visibility, maintained legacy model switch fallback for shells and restored tabs while disabling guessing for custom profiles, and eliminated duplicate session loading on config fetch.
+
 ## v0.21.3 — 2026-09-26
 
 ### Added
