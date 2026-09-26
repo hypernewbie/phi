@@ -950,7 +950,9 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
       expect(toCanonicalAuthOrigin('file:///tmp/phi')).toBeNull();
       expect(toCanonicalAuthOrigin('javascript:alert(1)')).toBeNull();
       expect(toCanonicalAuthOrigin('data:text/plain,foo')).toBeNull();
-      expect(toCanonicalAuthOrigin('http://user:pass@example.com:7070')).toBeNull();
+      expect(
+        toCanonicalAuthOrigin('http://user:pass@example.com:7070'),
+      ).toBeNull();
       expect(toCanonicalAuthOrigin('not a url')).toBeNull();
       expect(toCanonicalAuthOrigin('')).toBeNull();
     });
@@ -1114,13 +1116,19 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
       const verifierB = Buffer.alloc(32, 0x22);
 
       // Start login A (which will pause during post-login config fetch with S1)
-      const loginAPromise = auth.tryUnlockWithVerifier('https://minerva.example.test', verifierA);
+      const loginAPromise = auth.tryUnlockWithVerifier(
+        'https://minerva.example.test',
+        verifierA,
+      );
 
       // Wait until login A definitely reached fetchConfig with S1
       await loginAReachedConfigPromise;
 
       // Start and complete login B (which installs S2 and succeeds)
-      const loginB = await auth.tryUnlockWithVerifier('https://minerva.example.test', verifierB);
+      const loginB = await auth.tryUnlockWithVerifier(
+        'https://minerva.example.test',
+        verifierB,
+      );
       expect(loginB.kind).toBe('ok');
 
       // Now release login A's config validation with 401

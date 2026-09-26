@@ -194,7 +194,10 @@ export class AccessAuth {
   cancel(origin: string): void {
     const canonical = toCanonicalAuthOrigin(origin);
     if (canonical) {
-      this.attemptTokens.set(canonical, (this.attemptTokens.get(canonical) ?? 0) + 1);
+      this.attemptTokens.set(
+        canonical,
+        (this.attemptTokens.get(canonical) ?? 0) + 1,
+      );
       this.cookies.delete(canonical);
       this.cookies.delete(`${canonical}/`);
       this.lastVerifier.delete(canonical);
@@ -213,7 +216,11 @@ export class AccessAuth {
    *  after `tryUnlock` to persist the verifier across restarts. */
   getLastVerifier(origin: string): Buffer | null {
     const canonical = toCanonicalAuthOrigin(origin);
-    return (canonical ? this.lastVerifier.get(canonical) : null) ?? this.lastVerifier.get(origin) ?? null;
+    return (
+      (canonical ? this.lastVerifier.get(canonical) : null) ??
+      this.lastVerifier.get(origin) ??
+      null
+    );
   }
 
   /** Returns the full validated credential (verifier, salt, iterations)
@@ -222,7 +229,11 @@ export class AccessAuth {
     origin: string,
   ): { verifier: Buffer; salt: Buffer; iterations: number } | null {
     const canonical = toCanonicalAuthOrigin(origin);
-    return (canonical ? this.lastCredential.get(canonical) : null) ?? this.lastCredential.get(origin) ?? null;
+    return (
+      (canonical ? this.lastCredential.get(canonical) : null) ??
+      this.lastCredential.get(origin) ??
+      null
+    );
   }
 
   /** Re-authenticate using a previously-derived verifier (typically
@@ -273,14 +284,26 @@ export class AccessAuth {
     const verifierCopy = Buffer.from(verifier);
     let res: UnlockResult;
     try {
-      res = await this.completeUnlock(canonical, verifierCopy, status, signal, origin);
+      res = await this.completeUnlock(
+        canonical,
+        verifierCopy,
+        status,
+        signal,
+        origin,
+      );
       // If login returned invalid-password, the challenge may have expired or been consumed
       // (e.g. server restart). Allow at most one retry with a fresh status and challenge.
       if (res.kind === 'invalid-password' && !signal?.aborted) {
         const freshStatus = await this.fetchStatus(canonical, signal);
         if (freshStatus.kind === 'trusted') {
           const retryCopy = Buffer.from(verifier);
-          res = await this.completeUnlock(canonical, retryCopy, freshStatus, signal, origin);
+          res = await this.completeUnlock(
+            canonical,
+            retryCopy,
+            freshStatus,
+            signal,
+            origin,
+          );
         }
       }
     } finally {
@@ -341,7 +364,9 @@ export class AccessAuth {
   ): Promise<FetchConfigResult> {
     const canonical = toCanonicalAuthOrigin(origin);
     if (!canonical) return { kind: 'unavailable', reason: 'invalid origin' };
-    let cookie = this.cookies.get(canonical) ?? (origin !== canonical ? this.cookies.get(origin) : undefined);
+    let cookie =
+      this.cookies.get(canonical) ??
+      (origin !== canonical ? this.cookies.get(origin) : undefined);
     if (!cookie && this._cookieProvider) {
       try {
         let fromProvider = await this._cookieProvider(origin);
@@ -443,7 +468,13 @@ export class AccessAuth {
       status.iterations,
     );
     try {
-      return await this.completeUnlock(canonical, verifier, status, signal, origin);
+      return await this.completeUnlock(
+        canonical,
+        verifier,
+        status,
+        signal,
+        origin,
+      );
     } finally {
       verifier.fill(0);
     }
@@ -480,7 +511,12 @@ export class AccessAuth {
       return { kind: 'stale', message: 'Aborted' };
     }
     const proof = makeProof(verifier, status.challenge);
-    const login = await this.postLogin(canonical, status.challenge, proof, signal);
+    const login = await this.postLogin(
+      canonical,
+      status.challenge,
+      proof,
+      signal,
+    );
     if (signal?.aborted || !isCurrent()) {
       return { kind: 'stale', message: 'Aborted' };
     }
@@ -533,7 +569,9 @@ export class AccessAuth {
       // Server did not accept the session on /api/config.
       // Invalidate only the specific cookie installed by this login if it is still present.
       // Crucially, DO NOT call this.cancel(canonical) which would destroy a newer login's state!
-      const current = this.cookies.get(canonical) ?? (callerOrigin ? this.cookies.get(callerOrigin) : undefined);
+      const current =
+        this.cookies.get(canonical) ??
+        (callerOrigin ? this.cookies.get(callerOrigin) : undefined);
       if (!current || current.cookieValue === login.cookie.cookieValue) {
         this.cookies.delete(canonical);
         if (callerOrigin) this.cookies.delete(callerOrigin);
