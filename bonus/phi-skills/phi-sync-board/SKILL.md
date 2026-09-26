@@ -86,8 +86,7 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
         { "label": "Run E2E Tests", "command": "pnpm test:e2e\r", "style": "primary" },
         { "label": "Git Status", "command": "git status\r" }
       ],
-      "toast": "Mockup ready for review!",
-      "auto_open": true
+      "toast": "Mockup ready for review!"
     }
   }'
 ```
@@ -96,7 +95,7 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 
 - `title` *(string)*: Card title displayed in bold.
 - `description` / `desc` *(string)*: Optional text or markdown explanation.
-- `preview` / `image` / `file` *(string)*: Relative path to a file or image in the workspace. Renders a clickable **Preview [filename]** button that opens Phi's preview modal (ViewerJS for images, Plyr for media, PDF viewer, code highlighting).
+- `preview` / `image` / `file` *(string)*: Workspace-relative path to a file or image on the Phi server (e.g. `screenshots/login_mockup.png`). If the file exists in the workspace on the Phi server, renders a clickable **Preview [filename]** button and inline thumbnail. If the file does not exist on the host machine (or if an agent passes client-local absolute paths like `C:\...`), no preview is shown to avoid broken UI. Never pass host-specific local absolute paths.
 - `url` / `link` *(string)*: External or local web URL (`http://` or `https://`). Renders a styled clickable chip opening the link in a new browser tab.
 - `actions` *(array of objects)*: List of buttons that send inputs to the terminal:
   - `label` *(string)*: Button text.
@@ -104,7 +103,6 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
   - `style` *(string, optional)*: `"primary"`, `"success"`, or `"danger"`.
   - `stage` *(boolean, optional)*: If `true`, stages command into the prompt input bar instead of executing immediately.
 - `toast` *(string)*: Displays a transient toast notification in the browser UI immediately upon message arrival.
-- `auto_open` *(boolean)*: If `true`, automatically opens the file preview modal or web link the instant the message arrives over WebSocket.
 
 ## Notes
 
