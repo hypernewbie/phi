@@ -1,6 +1,6 @@
 /* Φ phi — Git Diff & Git Log Controller */
 import { PTYWebSocket } from './ws.js';
-import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, } from './util.js';
+import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, } from './util.js';
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
 //   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
@@ -214,9 +214,15 @@ export class DiffController {
                 cyan: '#06b6d4',
                 white: '#e4e3e9',
             },
+            linkHandler: {
+                activate: (_e, text) => {
+                    openExternalLink(text);
+                },
+            },
         });
         this.fitAddon = new window.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
+        installTerminalLinkProvider(this.term);
         this.term.open(this.diffTermContainer);
         // Graceful WebGL load
         try {

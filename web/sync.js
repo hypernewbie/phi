@@ -1,5 +1,5 @@
 /* Φ phi — AI Sync Board Manager */
-import { escapeHtml as escapeHtmlUtil, buildProxyUrl } from './util.js';
+import { escapeHtml as escapeHtmlUtil, buildProxyUrl, openExternalLink, } from './util.js';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
 // (see signalDesktopAlert). Display data only — never a remote action.
@@ -243,7 +243,7 @@ export class SyncManager {
                     else if (actionData.url || actionData.link) {
                         const rawUrl = actionData.url || actionData.link;
                         if (rawUrl && /^https?:\/\//i.test(rawUrl)) {
-                            window.open(rawUrl, '_blank', 'noopener,noreferrer');
+                            openExternalLink(rawUrl);
                         }
                     }
                 }

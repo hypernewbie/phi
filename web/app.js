@@ -16,6 +16,7 @@ import {
     DIFF_PANEL_CAP,
     clampPanelWidth,
     setServerHostOverride,
+    openExternalLink,
 } from './util.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
@@ -146,6 +147,38 @@ export class App {
                 }
             });
         }
+
+        // Intercept external links clicked in markdown modals, chat, diffs, etc.
+        // In browser: opens in new tab; in Electron: opens in default OS browser.
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!target || typeof target.closest !== 'function') return;
+            const a = target.closest('a[href]');
+            if (!a) return;
+            const href = a.getAttribute('href');
+            if (
+                !href ||
+                href.startsWith('#') ||
+                href.startsWith('javascript:')
+            ) {
+                return;
+            }
+            try {
+                const parsed = new URL(a.href);
+                const isExternal =
+                    parsed.origin !== window.location.origin ||
+                    a.getAttribute('target') === '_blank';
+                if (
+                    isExternal &&
+                    (parsed.protocol === 'http:' ||
+                        parsed.protocol === 'https:' ||
+                        parsed.protocol === 'mailto:')
+                ) {
+                    e.preventDefault();
+                    openExternalLink(a.href);
+                }
+            } catch {}
+        });
 
         // 8. Setup header action listeners
         const btopBtn = document.getElementById('header-btop-btn');

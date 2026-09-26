@@ -10,6 +10,8 @@ import {
     terminalPreferredFontSize,
     responsiveTerminalFontSize,
     DIFF_TERMINAL_TARGET_COLUMNS,
+    openExternalLink,
+    installTerminalLinkProvider,
 } from './util.js';
 
 // Normalize a CWD path for equality comparison between the active
@@ -268,10 +270,17 @@ export class DiffController {
                 cyan: '#06b6d4',
                 white: '#e4e3e9',
             },
+            linkHandler: {
+                activate: (_e: MouseEvent, text: string) => {
+                    openExternalLink(text);
+                },
+            },
         });
 
         this.fitAddon = new window.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
+
+        installTerminalLinkProvider(this.term);
 
         this.term.open(this.diffTermContainer);
 
