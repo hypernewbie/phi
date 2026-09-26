@@ -69,6 +69,20 @@ export class DiffController {
     lastRawDiffText;
     activeBatchResults = null;
     commandContextMenuAbort;
+    // Diff review comment state. The map keys are the row's logical
+    // identity (file + both line numbers) so switching between unified
+    // and side-by-side panes preserves the user's notes; localStorage
+    // gives us the same across modal open/close.
+    reviewComments;
+    reviewActionBar;
+    reviewStorageKey;
+    activeGitHead;
+    activeGitBranch;
+    // Optional overrides used by unit tests + the fallback path in
+    // _reviewStorageKeyForCwd. Production always reads through
+    // this.app.sessionsManager; tests sometimes pass it directly for
+    // terseness.
+    sessionsManager;
     constructor(app) {
         this.app = app;
         this.activeTab = 'markdown'; // 'diff' | 'log'
@@ -94,6 +108,14 @@ export class DiffController {
         this.currentLayout = 'line-by-line'; // Default unified
         this.lastRawDiffText = '';
         this.commandContextMenuAbort = null;
+        this.reviewComments = new Map();
+        this.reviewActionBar = null;
+        // localStorage key namespaces drafts by CWD so switching
+        // worktrees doesn't bleed comments across projects.
+        this.reviewStorageKey = 'phi_diff_review_draft';
+        this.activeGitHead = '';
+        this.activeGitBranch = '';
+        this._loadReviewDraft();
         this.setupEventListeners();
     }
     setupEventListeners() {
@@ -139,6 +161,20 @@ export class DiffController {
                 this.diffModal &&
                 !this.diffModal.classList.contains('hidden')) {
                 this.closeRichDiffModal();
+                return;
+            }
+            // Cmd/Ctrl+Shift+Enter: stage pending review comments into
+            // the terminal prompt. Only fires when the modal is open
+            // AND we actually have something to apply, so the chord
+            // stays inert in unrelated modals.
+            if (e.key === 'Enter' &&
+                e.shiftKey &&
+                (e.metaKey || e.ctrlKey) &&
+                this.diffModal &&
+                !this.diffModal.classList.contains('hidden') &&
+                this.reviewComments.size > 0) {
+                e.preventDefault();
+                this.applyReviewToTerminalPrompt();
             }
         });
         if (this.contextToggleBtn) {
@@ -1327,6 +1363,14 @@ export class DiffController {
             : diffHtml;
         const parsed = new DOMParser().parseFromString(safeDiffHtml, 'text/html');
         this.diffModalBody?.replaceChildren(...Array.from(parsed.body.childNodes));
+        // After DOM is in place: wire up the per-row + buttons and
+        // rehydrate any saved comments. Re-runs on layout toggle so
+        // reviewers don't lose their notes when they flip between
+        // unified and side-by-side.
+        this._ensureReviewActionBar();
+        this._attachDiffReviewListeners();
+        this._rehydrateReviewOverlays();
+        this._updateReviewActionBar();
     }
     async loadRichDiff() {
         if (!this.diffModalBody)
@@ -1343,6 +1387,11 @@ export class DiffController {
                 const errText = await res.text();
                 throw new Error(errText || 'Failed to fetch raw diff');
             }
+            // X-Phi-Git-Head / X-Phi-Git-Branch anchor the staged
+            // review prompt to a concrete commit. Absent on non-git
+            // repos / detached HEADs — treat empty as unknown.
+            this.activeGitHead = res.headers.get('X-Phi-Git-Head') || '';
+            this.activeGitBranch = res.headers.get('X-Phi-Git-Branch') || '';
             const rawDiffText = await res.text();
             this.lastRawDiffText = rawDiffText;
             this.renderRichDiff(rawDiffText);
@@ -1355,6 +1404,653 @@ export class DiffController {
             errDiv.style.fontSize = '13px';
             errDiv.textContent = `Error: ${e.message}`;
             this.diffModalBody.replaceChildren(errDiv);
+        }
+    }
+    // ─── Diff review comments ───────────────────────────────────────────
+    // The following block lets reviewers attach inline notes to specific
+    // diff lines, then compile those notes into a prompt-engineered
+    // Markdown summary that lands directly in the active terminal's
+    // input bar. Comments persist across layout toggles (unified ↔
+    // side-by-side) and survive modal close/reopen via localStorage.
+    // Unique key for a (file, line) pair. Including BOTH old and new
+    // line numbers disambiguates side-by-side rows (a single change
+    // produces two rows: one with old=, one with new=) from the
+    // identical-line context rows.
+    _reviewKey(info) {
+        return `${info.filePath}:${info.oldLineNumber ?? ''}:${info.newLineNumber ?? ''}`;
+    }
+    // Walk up from a row to the nearest .d2h-file-wrapper, read its
+    // .d2h-file-name text. Empty string on the unlikely chance diff2html
+    // renames the class.
+    _rowFilePath(row) {
+        const wrapper = row.closest('.d2h-file-wrapper');
+        const name = wrapper?.querySelector('.d2h-file-name');
+        return name?.textContent?.trim() || '';
+    }
+    // Read the line number cell. Unified rows have a `.line-num1` +
+    // `.line-num2` pair; side-by-side rows have just a single text
+    // node. Empty cells (`.d2h-emptyplaceholder`) → null.
+    _rowLineNumbers(row) {
+        const ln = row.querySelector('.d2h-code-linenumber, .d2h-code-side-linenumber');
+        if (!ln || ln.classList.contains('d2h-emptyplaceholder')) {
+            return { oldLineNumber: null, newLineNumber: null };
+        }
+        const n1 = row.querySelector('.line-num1');
+        const n2 = row.querySelector('.line-num2');
+        const parse = (el) => {
+            if (!el)
+                return null;
+            const txt = el.textContent?.trim() || '';
+            return txt ? Number(txt) : null;
+        };
+        // Side-by-side rows only carry one number; fall back to
+        // the cell's textContent so we still surface it.
+        if (!n1 && !n2) {
+            const txt = ln.textContent?.trim() || '';
+            const n = txt ? Number(txt) : null;
+            // Side-by-side left row is the OLD side, right is NEW.
+            // Without a parent-side marker we don't know which; default
+            // to "new" because that's what most reviewers comment on.
+            return { oldLineNumber: null, newLineNumber: n };
+        }
+        return {
+            oldLineNumber: parse(n1),
+            newLineNumber: parse(n2),
+        };
+    }
+    _rowLineType(row) {
+        // diff2html tags each row with d2h-ins / d2h-del / d2h-cntx /
+        // d2h-info. We only care about the first three.
+        for (const cls of ['d2h-ins', 'd2h-del', 'd2h-cntx']) {
+            // Match on the row or any descendant (line-number cell +
+            // code cell both carry the type class).
+            if (row.querySelector(`.${cls}`)) {
+                return cls === 'd2h-ins'
+                    ? 'insert'
+                    : cls === 'd2h-del'
+                        ? 'delete'
+                        : 'context';
+            }
+        }
+        return null;
+    }
+    _extractLineInfo(row) {
+        const lineType = this._rowLineType(row);
+        if (!lineType)
+            return null;
+        const filePath = this._rowFilePath(row);
+        if (!filePath)
+            return null;
+        const { oldLineNumber, newLineNumber } = this._rowLineNumbers(row);
+        if (oldLineNumber === null && newLineNumber === null)
+            return null;
+        return { filePath, oldLineNumber, newLineNumber, lineType };
+    }
+    // Build the 3-line context snippet shown next to a review comment.
+    // Walks siblings inside the same tbody to grab up to N rows above
+    // and below. The diff2html .d2h-code-line already carries its
+    // +/-/space prefix inside .d2h-code-line-prefix, so we read it
+    // verbatim rather than prepending another character.
+    _rowCodeSnippet(row, radius = 2) {
+        const tbody = row.parentElement;
+        if (!tbody)
+            return '';
+        const siblings = Array.from(tbody.children);
+        const idx = siblings.indexOf(row);
+        if (idx === -1)
+            return '';
+        const start = Math.max(0, idx - radius);
+        const end = Math.min(siblings.length, idx + radius + 1);
+        const lines = [];
+        for (let i = start; i < end; i++) {
+            const sib = siblings[i];
+            const lineType = this._rowLineType(sib);
+            if (!lineType)
+                continue; // skip hunk headers / placeholders
+            const code = sib.querySelector('.d2h-code-line, .d2h-code-side-line');
+            const txt = (code?.textContent || '').replace(/\s+$/, '');
+            lines.push(txt);
+        }
+        return lines.join('\n');
+    }
+    _reviewActionBarParent() {
+        return this.diffModal?.querySelector('.md-modal-content') || null;
+    }
+    // Build the floating "X Comments | Clear | Copy | Apply" bar once.
+    // Reused on every render — only its counter + visibility update.
+    _ensureReviewActionBar() {
+        if (this.reviewActionBar)
+            return;
+        const parent = this._reviewActionBarParent();
+        if (!parent)
+            return;
+        if (!parent.style.position) {
+            // Floating overlay needs a positioned ancestor; the modal
+            // content is flex-column but not explicitly positioned.
+            parent.style.position = 'relative';
+        }
+        const bar = document.createElement('div');
+        bar.className = 'diff-review-action-bar hidden';
+        bar.id = 'diff-review-action-bar';
+        const counter = document.createElement('div');
+        counter.className = 'diff-review-counter';
+        const badge = document.createElement('span');
+        badge.className = 'diff-review-count-badge';
+        badge.textContent = '0';
+        const label = document.createElement('span');
+        label.className = 'diff-review-count-label';
+        label.textContent = 'Comments';
+        counter.append(badge, label);
+        bar.appendChild(counter);
+        const buttons = document.createElement('div');
+        buttons.className = 'diff-review-buttons';
+        const clearBtn = document.createElement('button');
+        clearBtn.id = 'diff-review-clear-btn';
+        clearBtn.className = 'diff-review-btn secondary';
+        clearBtn.type = 'button';
+        clearBtn.title = 'Discard all comments';
+        clearBtn.textContent = 'Clear';
+        clearBtn.addEventListener('click', () => this._clearReviewComments());
+        const copyBtn = document.createElement('button');
+        copyBtn.id = 'diff-review-copy-btn';
+        copyBtn.className = 'diff-review-btn secondary';
+        copyBtn.type = 'button';
+        copyBtn.title = 'Copy review markdown to clipboard';
+        copyBtn.textContent = 'Copy Prompt';
+        copyBtn.addEventListener('click', () => this._copyReviewPrompt());
+        const applyBtn = document.createElement('button');
+        applyBtn.id = 'diff-review-apply-btn';
+        applyBtn.className = 'diff-review-btn primary';
+        applyBtn.type = 'button';
+        applyBtn.title =
+            'Stage formatted review into terminal prompt (⌘+Shift+Enter)';
+        applyBtn.textContent = 'Apply to Prompt';
+        applyBtn.addEventListener('click', () => this.applyReviewToTerminalPrompt());
+        buttons.append(clearBtn, copyBtn, applyBtn);
+        bar.appendChild(buttons);
+        parent.appendChild(bar);
+        this.reviewActionBar = bar;
+    }
+    _updateReviewActionBar() {
+        if (!this.reviewActionBar)
+            return;
+        const count = this.reviewComments.size;
+        const badge = this.reviewActionBar.querySelector('.diff-review-count-badge');
+        if (badge)
+            badge.textContent = String(count);
+        this.reviewActionBar.classList.toggle('hidden', count === 0);
+    }
+    // Stamp a `+` hover button into the line-number cell of every
+    // commentable row. Skips hunk headers and empty placeholders.
+    _attachDiffReviewListeners() {
+        if (!this.diffModalBody)
+            return;
+        const rows = this.diffModalBody.querySelectorAll('.d2h-diff-tbody tr');
+        rows.forEach((row) => {
+            // Don't double-attach after re-renders (rehydrate path).
+            if (row.dataset.reviewWired === '1')
+                return;
+            const info = this._extractLineInfo(row);
+            if (!info)
+                return;
+            row.dataset.reviewWired = '1';
+            const lnCell = row.querySelector('.d2h-code-linenumber, .d2h-code-side-linenumber');
+            if (!lnCell)
+                return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'diff-add-comment-btn';
+            btn.title = 'Add review comment';
+            btn.textContent = '+';
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._openCommentEditor(row, info);
+            });
+            lnCell.appendChild(btn);
+        });
+    }
+    // Re-render the display row + persistent highlight for every
+    // saved comment whose row is in the current DOM. Called after
+    // each renderRichDiff so layout toggles don't drop notes.
+    _rehydrateReviewOverlays() {
+        if (!this.diffModalBody)
+            return;
+        const rows = Array.from(this.diffModalBody.querySelectorAll('.d2h-diff-tbody tr'));
+        rows.forEach((row) => {
+            const info = this._extractLineInfo(row);
+            if (!info)
+                return;
+            const key = this._reviewKey(info);
+            const comment = this.reviewComments.get(key);
+            if (!comment)
+                return;
+            row.classList.add('d2h-has-comment');
+            // Skip if a display row is already attached for this key
+            // (the sibling row in the other pane uses the same key).
+            const next = row.nextElementSibling;
+            if (next?.dataset?.reviewDisplayFor === key)
+                return;
+            this._renderCommentDisplayRow(row, comment);
+        });
+    }
+    _openCommentEditor(row, info, existing) {
+        // If a display row already sits below, replace it with an
+        // editor instead of stacking a new one.
+        const next = row.nextElementSibling;
+        if (next?.dataset?.reviewDisplayFor === this._reviewKey(info)) {
+            next.remove();
+        }
+        // Drop any in-progress editor so opening twice doesn't stack.
+        if (next?.dataset?.reviewEditingFor === this._reviewKey(info)) {
+            next.remove();
+        }
+        const snippet = existing?.codeSnippet || this._rowCodeSnippet(row);
+        const editorRow = document.createElement('tr');
+        editorRow.className = 'diff-comment-editor-row';
+        editorRow.dataset.reviewEditingFor = this._reviewKey(info);
+        const cell = document.createElement('td');
+        cell.colSpan = 100;
+        cell.className = 'diff-comment-editor-cell';
+        const box = document.createElement('div');
+        box.className = 'diff-comment-editor-box';
+        const header = document.createElement('div');
+        header.className = 'diff-comment-editor-header';
+        const badge = document.createElement('span');
+        badge.className = 'diff-comment-target-badge';
+        const lineRef = info.newLineNumber ?? info.oldLineNumber ?? '?';
+        badge.textContent = `${info.filePath}:${lineRef}`;
+        const hint = document.createElement('span');
+        hint.className = 'diff-comment-hint';
+        hint.textContent = existing
+            ? 'Editing comment · ⌘+Enter to save · Esc to cancel'
+            : 'New comment · ⌘+Enter to save · Esc to cancel';
+        header.append(badge, hint);
+        const textarea = document.createElement('textarea');
+        textarea.className = 'diff-comment-textarea';
+        textarea.placeholder =
+            'Explain what to fix or change here (Markdown supported)…';
+        textarea.value = existing?.commentText || '';
+        textarea.rows = 3;
+        textarea.spellcheck = false;
+        const actions = document.createElement('div');
+        actions.className = 'diff-comment-editor-actions';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'diff-comment-cancel-btn';
+        cancelBtn.textContent = 'Cancel';
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'diff-comment-save-btn primary';
+        saveBtn.textContent = existing ? 'Save Changes' : 'Save Comment';
+        cancelBtn.addEventListener('click', () => editorRow.remove());
+        saveBtn.addEventListener('click', () => {
+            const text = textarea.value.trim();
+            if (!text) {
+                this.app.showToast?.('Comment cannot be empty', {
+                    type: 'error',
+                });
+                return;
+            }
+            this._saveComment(info, snippet, text, existing);
+        });
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                editorRow.remove();
+            }
+            else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                saveBtn.click();
+            }
+        });
+        actions.append(cancelBtn, saveBtn);
+        box.append(header, textarea, actions);
+        cell.appendChild(box);
+        editorRow.appendChild(cell);
+        row.insertAdjacentElement('afterend', editorRow);
+        // Defer focus until after the row is in the DOM so the
+        // browser scrolls/positions correctly.
+        setTimeout(() => {
+            textarea.focus({ preventScroll: false });
+            textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        }, 0);
+    }
+    _saveComment(info, snippet, text, existing) {
+        const key = this._reviewKey(info);
+        const comment = {
+            id: existing?.id ||
+                `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            filePath: info.filePath,
+            oldLineNumber: info.oldLineNumber,
+            newLineNumber: info.newLineNumber,
+            lineType: info.lineType,
+            codeSnippet: snippet,
+            commentText: text,
+            createdAt: existing?.createdAt || Date.now(),
+        };
+        this.reviewComments.set(key, comment);
+        // Find the original row(s) and refresh display rows / highlights.
+        const rows = this.diffModalBody
+            ? Array.from(this.diffModalBody.querySelectorAll('.d2h-diff-tbody tr'))
+            : [];
+        rows.forEach((row) => {
+            const rowInfo = this._extractLineInfo(row);
+            if (!rowInfo || this._reviewKey(rowInfo) !== key)
+                return;
+            row.classList.add('d2h-has-comment');
+            // Strip any in-flight editor row.
+            const next = row.nextElementSibling;
+            if (next?.dataset?.reviewEditingFor === key) {
+                next.remove();
+            }
+            // Replace any prior display row for this key with the
+            // freshest content (handles edits as well as inserts).
+            const old = row.nextElementSibling;
+            if (old?.dataset?.reviewDisplayFor === key) {
+                old.remove();
+            }
+            this._renderCommentDisplayRow(row, comment);
+        });
+        this._saveReviewDraft();
+        this._updateReviewActionBar();
+    }
+    _renderCommentDisplayRow(row, comment) {
+        const key = this._reviewKey({
+            filePath: comment.filePath,
+            oldLineNumber: comment.oldLineNumber,
+            newLineNumber: comment.newLineNumber,
+            lineType: comment.lineType,
+        });
+        const displayRow = document.createElement('tr');
+        displayRow.className = 'diff-comment-display-row';
+        displayRow.dataset.reviewDisplayFor = key;
+        const cell = document.createElement('td');
+        cell.colSpan = 100;
+        cell.className = 'diff-comment-display-cell';
+        const card = document.createElement('div');
+        card.className = `diff-comment-card diff-comment-${comment.lineType}`;
+        const head = document.createElement('div');
+        head.className = 'diff-comment-card-head';
+        const badge = document.createElement('span');
+        badge.className = 'diff-comment-target-badge';
+        const lineRef = comment.newLineNumber ?? comment.oldLineNumber ?? '?';
+        badge.textContent = `${comment.filePath}:${lineRef}`;
+        const typeLabel = document.createElement('span');
+        typeLabel.className = 'diff-comment-type-label';
+        typeLabel.textContent =
+            comment.lineType === 'insert'
+                ? 'addition'
+                : comment.lineType === 'delete'
+                    ? 'deletion'
+                    : 'context';
+        head.append(badge, typeLabel);
+        const body = document.createElement('div');
+        body.className = 'diff-comment-card-body';
+        body.textContent = comment.commentText;
+        const actions = document.createElement('div');
+        actions.className = 'diff-comment-card-actions';
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'diff-comment-card-btn';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => this._editComment(comment));
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'diff-comment-card-btn danger';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => this._deleteComment(comment.id));
+        actions.append(editBtn, delBtn);
+        card.append(head, body, actions);
+        cell.appendChild(card);
+        displayRow.appendChild(cell);
+        row.insertAdjacentElement('afterend', displayRow);
+    }
+    _editComment(comment) {
+        const info = {
+            filePath: comment.filePath,
+            oldLineNumber: comment.oldLineNumber,
+            newLineNumber: comment.newLineNumber,
+            lineType: comment.lineType,
+        };
+        const rows = this.diffModalBody
+            ? Array.from(this.diffModalBody.querySelectorAll('.d2h-diff-tbody tr'))
+            : [];
+        for (const row of rows) {
+            const rowInfo = this._extractLineInfo(row);
+            if (rowInfo && this._reviewKey(rowInfo) === this._reviewKey(info)) {
+                this._openCommentEditor(row, info, comment);
+                return;
+            }
+        }
+    }
+    _deleteComment(id) {
+        let removedKey = null;
+        for (const [k, v] of this.reviewComments) {
+            if (v.id === id) {
+                removedKey = k;
+                this.reviewComments.delete(k);
+                break;
+            }
+        }
+        if (!removedKey)
+            return;
+        // Strip display rows + highlight class on every row with this key.
+        const rows = this.diffModalBody
+            ? Array.from(this.diffModalBody.querySelectorAll('.d2h-diff-tbody tr'))
+            : [];
+        rows.forEach((row) => {
+            const info = this._extractLineInfo(row);
+            if (!info)
+                return;
+            if (this._reviewKey(info) !== removedKey)
+                return;
+            row.classList.remove('d2h-has-comment');
+            const next = row.nextElementSibling;
+            if (next?.dataset?.reviewDisplayFor === removedKey) {
+                next.remove();
+            }
+        });
+        this._saveReviewDraft();
+        this._updateReviewActionBar();
+    }
+    _clearReviewComments() {
+        if (this.reviewComments.size === 0)
+            return;
+        if (!confirm(`Discard all ${this.reviewComments.size} review comment(s)?`)) {
+            return;
+        }
+        this.reviewComments.clear();
+        // Strip display rows + highlight class on every row.
+        for (const el of this.diffModalBody?.querySelectorAll('.diff-comment-display-row') ?? []) {
+            el.remove();
+        }
+        for (const el of this.diffModalBody?.querySelectorAll('.d2h-has-comment') ?? []) {
+            el.classList.remove('d2h-has-comment');
+        }
+        this._saveReviewDraft();
+        this._updateReviewActionBar();
+        this.app.showToast?.('Review comments cleared', { type: 'info' });
+    }
+    // Stable, deterministic ordering so the staged prompt reads
+    // top-to-bottom in the same order the reviewer saw them.
+    _sortedReviewComments() {
+        return Array.from(this.reviewComments.values()).sort((a, b) => {
+            if (a.filePath !== b.filePath)
+                return a.filePath < b.filePath ? -1 : 1;
+            const aLine = a.newLineNumber ?? a.oldLineNumber ?? 0;
+            const bLine = b.newLineNumber ?? b.oldLineNumber ?? 0;
+            if (aLine !== bLine)
+                return aLine - bLine;
+            return a.createdAt - b.createdAt;
+        });
+    }
+    _reviewContextHeader() {
+        const commitVal = this.commitSelect?.value || 'unstaged';
+        const workspace = getLastFolderName(this.app.sessionsManager?.activeCWD || '') ||
+            'workspace';
+        if (commitVal === 'unstaged' || commitVal === 'staged') {
+            const head = this.activeGitHead || 'unknown';
+            const label = commitVal === 'staged'
+                ? 'staged changes'
+                : 'unstaged working tree changes';
+            return `Please address the following code review feedback on ${label} relative to HEAD \`${head}\` in workspace \`${workspace}\`:`;
+        }
+        return `Please address the following code review feedback on git revision \`${commitVal}\` in workspace \`${workspace}\`:`;
+    }
+    _buildPromptEngineeredReview() {
+        const comments = this._sortedReviewComments();
+        const header = this._reviewContextHeader();
+        const blocks = [];
+        comments.forEach((c, i) => {
+            const lineRef = c.newLineNumber ?? c.oldLineNumber ?? '?';
+            const lang = c.filePath.split('.').pop() || '';
+            const snippet = c.codeSnippet
+                .split('\n')
+                .map((l) => `> ${l}`)
+                .join('\n');
+            blocks.push([
+                `#### ${i + 1}. \`${c.filePath}:${lineRef}\``,
+                `> \`\`\`${lang}`,
+                snippet,
+                `> \`\`\``,
+                `**Requested Change:**`,
+                c.commentText,
+            ].join('\n'));
+        });
+        const tail = [
+            '---',
+            '### Instructions for Assistant:',
+            '1. Locate the exact code locations referenced above in the current workspace.',
+            "2. Implement all requested changes surgically, maintaining the codebase's existing architecture, style, and comments.",
+            '3. Verify your changes (build, tests, or linters) before finishing.',
+        ].join('\n');
+        return [
+            header,
+            '',
+            `### Code Review Feedback (${comments.length} item${comments.length === 1 ? '' : 's'})`,
+            '',
+            blocks.join('\n\n'),
+            '',
+            tail,
+            '',
+        ].join('\n');
+    }
+    _copyReviewPrompt() {
+        if (this.reviewComments.size === 0)
+            return;
+        const md = this._buildPromptEngineeredReview();
+        const tm = this.app.tabManager;
+        tm?.copyTextRobustly?.(md);
+    }
+    applyReviewToTerminalPrompt() {
+        if (this.reviewComments.size === 0)
+            return;
+        const md = this._buildPromptEngineeredReview();
+        const tm = this.app.tabManager;
+        const inputTextArea = tm?.inputTextArea;
+        if (inputTextArea) {
+            const existing = inputTextArea.value.trim();
+            inputTextArea.value = existing ? `${existing}\n\n${md}` : md;
+            // Match terminal.js adjustInputHeight contract (auto +
+            // bounded scrollHeight), but cap a bit higher to make room
+            // for multi-line review prompts.
+            inputTextArea.style.height = 'auto';
+            const target = Math.min(inputTextArea.scrollHeight, 360);
+            inputTextArea.style.height = `${target}px`;
+            // Direct mode hides the prompt bar; flip it off so the
+            // user actually sees the staged text.
+            const activeTab = tm?.getActiveTab?.();
+            if (activeTab && activeTab.directMode && tm.toggleDirectMode) {
+                tm.toggleDirectMode();
+            }
+            inputTextArea.focus({ preventScroll: true });
+            inputTextArea.setSelectionRange(inputTextArea.value.length, inputTextArea.value.length);
+        }
+        const count = this.reviewComments.size;
+        this._clearReviewCommentsInternal();
+        this.closeRichDiffModal();
+        this.app.showToast?.(`Review staged into terminal prompt (${count} comment${count === 1 ? '' : 's'}) — press Enter to send.`, { type: 'success', title: 'Diff Review' });
+    }
+    // Internal: drop everything without the confirm dialog. Used by
+    // applyReviewToTerminalPrompt after a successful stage.
+    _clearReviewCommentsInternal() {
+        this.reviewComments.clear();
+        for (const el of this.diffModalBody?.querySelectorAll('.diff-comment-display-row') ?? []) {
+            el.remove();
+        }
+        for (const el of this.diffModalBody?.querySelectorAll('.d2h-has-comment') ?? []) {
+            el.classList.remove('d2h-has-comment');
+        }
+        try {
+            localStorage.removeItem(this.reviewStorageKey);
+        }
+        catch {
+            /* localStorage unavailable; nothing to clear */
+        }
+        this._updateReviewActionBar();
+    }
+    // localStorage helpers. Namespace by CWD so per-worktree drafts
+    // don't bleed across projects. Falls back to a top-level
+    // sessionsManager so the helper works in tests that wire either
+    // shape (the production app exposes sessionsManager under `app`,
+    // but in unit tests we often pass it directly for terseness).
+    _reviewStorageKeyForCwd() {
+        const cwd = this.app?.sessionsManager?.activeCWD ||
+            this.sessionsManager?.activeCWD ||
+            '';
+        return `${this.reviewStorageKey}_${cwd}`;
+    }
+    _saveReviewDraft() {
+        const key = this._reviewStorageKeyForCwd();
+        try {
+            if (this.reviewComments.size === 0) {
+                localStorage.removeItem(key);
+                return;
+            }
+            const payload = JSON.stringify(Array.from(this.reviewComments.values()));
+            localStorage.setItem(key, payload);
+        }
+        catch {
+            /* quota / private-mode failures are non-fatal */
+        }
+    }
+    _loadReviewDraft() {
+        const key = this._reviewStorageKeyForCwd();
+        let raw = null;
+        try {
+            raw = localStorage.getItem(key);
+        }
+        catch {
+            return;
+        }
+        if (!raw)
+            return;
+        try {
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed))
+                return;
+            this.reviewComments.clear();
+            for (const c of parsed) {
+                if (c &&
+                    typeof c.id === 'string' &&
+                    typeof c.filePath === 'string' &&
+                    typeof c.codeSnippet === 'string' &&
+                    typeof c.commentText === 'string') {
+                    const cc = c;
+                    const key2 = this._reviewKey(cc);
+                    this.reviewComments.set(key2, cc);
+                }
+            }
+        }
+        catch {
+            /* corrupted JSON — drop it */
+            try {
+                localStorage.removeItem(key);
+            }
+            catch {
+                /* ignore */
+            }
         }
     }
 }

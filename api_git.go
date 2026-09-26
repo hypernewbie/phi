@@ -182,6 +182,22 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Head + branch headers let the frontend anchor review comments to a
+	// concrete commit. Best-effort: a detached HEAD or unborn branch yields
+	// an empty header, which the UI treats as "unknown".
+	if headCmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD"); true {
+		headCmd.Dir = cwd
+		if headOut, err := headCmd.Output(); err == nil {
+			w.Header().Set("X-Phi-Git-Head", strings.TrimSpace(string(headOut)))
+		}
+	}
+	if branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD"); true {
+		branchCmd.Dir = cwd
+		if branchOut, err := branchCmd.Output(); err == nil {
+			w.Header().Set("X-Phi-Git-Branch", strings.TrimSpace(string(branchOut)))
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(out)
 }
