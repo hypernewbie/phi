@@ -986,7 +986,9 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     bodyView.webContents.executeJavaScript = async () => null; // Simulate view unable to run recovery again
     const config2 = await fetchConfigHandler?.({ sender: win.webContents });
     expect(config2).not.toBeNull();
-    expect((config2 as { hostname: string }).hostname).toBe('minerva');
+    expect((config2 as unknown as { hostname: string }).hostname).toBe(
+      'minerva',
+    );
 
     win.finishClose();
   });
