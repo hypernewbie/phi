@@ -40,6 +40,7 @@ const WEB_JS_MODULES = [
   'sessions.js',
   'util.js',
   'attachments.js',
+  'coders.js',
   'md-render.js',
   'review-transcript.js',
   'diff.js',
