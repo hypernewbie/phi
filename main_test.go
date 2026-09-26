@@ -1361,6 +1361,16 @@ func TestHandleRawDiff(t *testing.T) {
 		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
 
+	// X-Phi-Git-Head / X-Phi-Git-Branch let the diff review UI anchor
+	// comments to a concrete commit hash. Initial-commit repos still
+	// have HEAD, so these must be non-empty.
+	if head := w.Header().Get("X-Phi-Git-Head"); head == "" {
+		t.Errorf("Expected X-Phi-Git-Head to be set, got empty header")
+	}
+	if branch := w.Header().Get("X-Phi-Git-Branch"); branch == "" {
+		t.Errorf("Expected X-Phi-Git-Branch to be set, got empty header")
+	}
+
 	body := w.Body.String()
 	if !strings.Contains(body, "-line 5") || !strings.Contains(body, "+line 5 modified") {
 		t.Errorf("Diff body does not contain expected changes: %s", body)

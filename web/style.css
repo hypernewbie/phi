@@ -6217,6 +6217,313 @@ html[data-phi-config-page] .settings-modal {
     text-decoration: none !important;
 }
 
+/* ─── Inline diff review comments ──────────────────────────────────────
+   A reviewer hovers any line in the diff and sees a faint "+" in the
+   line-number gutter; clicking it drops a sticky-note editor directly
+   under that row. Saved comments render as cards with Edit / Delete.
+   The .d2h-has-comment class tints the line that owns a comment so the
+   reader can scan the diff for what's already been called out. */
+
+/* Persistent row highlight: lines that have at least one saved note. */
+.diff-modal-body tr.d2h-has-comment > td {
+    box-shadow: inset 3px 0 0 var(--accent) !important;
+}
+
+/* Hover-revealed "+" button on the line-number gutter. Stays hidden
+   until the row is hovered so the gutter stays clean by default. */
+.diff-modal-body .diff-add-comment-btn {
+    display: none;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--accent-bright);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0 2px 0 0;
+    cursor: pointer;
+    border-radius: 3px;
+    vertical-align: middle;
+}
+.diff-modal-body tr:hover > .d2h-code-linenumber .diff-add-comment-btn,
+.diff-modal-body tr:hover > .d2h-code-side-linenumber .diff-add-comment-btn,
+.diff-modal-body .diff-add-comment-btn:focus {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-color: var(--bg-border);
+    background-color: var(--bg-elevated);
+}
+.diff-modal-body .diff-add-comment-btn:hover {
+    background-color: var(--accent);
+    color: var(--bg-base);
+    border-color: var(--accent);
+}
+
+/* Editor row that sits directly under a line being commented on. */
+.diff-modal-body .diff-comment-editor-row > td {
+    padding: 0 !important;
+    background-color: var(--bg-elevated) !important;
+    border-top: 1px dashed var(--accent) !important;
+    border-bottom: 1px dashed var(--accent) !important;
+}
+.diff-comment-editor-box {
+    padding: 10px 14px 12px;
+    font-family: var(--font-ui);
+}
+.diff-comment-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.diff-comment-target-badge {
+    font-family: var(--font-mono);
+    background-color: var(--bg-base);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    color: var(--accent-bright);
+    font-size: 10px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+.diff-comment-hint {
+    font-style: italic;
+}
+.diff-comment-textarea {
+    width: 100%;
+    min-height: 64px;
+    max-height: 240px;
+    resize: vertical;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    outline: none;
+    box-sizing: border-box;
+}
+.diff-comment-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-edge);
+}
+.diff-comment-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+.diff-comment-cancel-btn,
+.diff-comment-save-btn {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--bg-border);
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.diff-comment-cancel-btn:hover {
+    background-color: var(--bg-border);
+}
+.diff-comment-save-btn.primary {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-base);
+}
+.diff-comment-save-btn.primary:hover {
+    background-color: var(--accent-bright);
+}
+
+/* Display row: shows a saved comment as a card with Edit / Delete. */
+.diff-modal-body .diff-comment-display-row > td {
+    padding: 0 !important;
+    background-color: transparent !important;
+    border-top: 1px solid transparent !important;
+    border-bottom: 1px solid transparent !important;
+}
+.diff-comment-card {
+    margin: 4px 12px 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--accent-edge);
+    border-left-width: 3px;
+    border-radius: 5px;
+    background-color: rgba(124, 106, 247, 0.06);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+.diff-comment-card.diff-comment-insert {
+    border-left-color: #38bdf8;
+    background-color: rgba(56, 189, 248, 0.07);
+}
+.diff-comment-card.diff-comment-delete {
+    border-left-color: #ef4444;
+    background-color: rgba(239, 68, 68, 0.06);
+}
+.diff-comment-card.diff-comment-context {
+    border-left-color: var(--accent);
+}
+.diff-comment-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.diff-comment-type-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.diff-comment-card-body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.diff-comment-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 6px;
+}
+.diff-comment-card-btn {
+    background: transparent;
+    border: 1px solid var(--bg-border);
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.diff-comment-card-btn:hover {
+    background-color: var(--bg-elevated);
+    color: var(--text-primary);
+}
+.diff-comment-card-btn.danger:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+/* Floating "X Comments | Clear | Copy | Apply" bar pinned to the
+   bottom-right of the diff modal. Hidden when no comments. */
+#diff-modal .md-modal-content {
+    position: relative; /* anchor for .diff-review-action-bar */
+}
+
+#diff-modal .diff-review-action-bar {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background-color: rgba(13, 13, 16, 0.92);
+    backdrop-filter: blur(14px) saturate(180%);
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+    border: 1px solid var(--accent-edge);
+    border-radius: 8px;
+    box-shadow:
+        0 12px 32px rgba(0, 0, 0, 0.5),
+        inset 0 0 0 1px var(--accent-trace);
+    z-index: 5;
+    font-family: var(--font-ui);
+}
+.diff-review-action-bar.hidden {
+    display: none !important;
+}
+.diff-review-counter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.diff-review-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 11px;
+    background-color: var(--accent);
+    color: var(--bg-base);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+.diff-review-buttons {
+    display: inline-flex;
+    gap: 6px;
+}
+.diff-review-btn {
+    background: transparent;
+    border: 1px solid var(--bg-border);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.diff-review-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-bright);
+}
+.diff-review-btn.primary {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-base);
+}
+.diff-review-btn.primary:hover {
+    background-color: var(--accent-bright);
+    color: var(--bg-base);
+}
+
+/* Mobile: bar becomes full-width at the bottom of the modal so the
+   thumb can reach it. */
+@media (max-width: 768px),
+    (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+    #diff-modal .diff-review-action-bar {
+        right: 8px;
+        left: 8px;
+        bottom: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        padding: 6px 8px;
+    }
+    .diff-review-btn {
+        padding: 4px 8px;
+        font-size: 10px;
+    }
+    .diff-comment-card {
+        margin: 4px 6px 8px;
+        padding: 6px 8px;
+        font-size: 11px;
+    }
+}
+
 /* Header Config Pill Styling */
 .header-config-pill {
     display: flex;
