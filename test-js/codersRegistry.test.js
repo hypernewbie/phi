@@ -222,9 +222,16 @@ describe('renderLogo', () => {
             },
             model_switch_disabled: false,
         });
-        expect(r.tag).toBe('SPAN');
-        expect(r.innerHTML).toContain('<img');
-        expect(r.innerHTML).toContain('src="vendor/logos/x.png"');
+        expect(r.tag).toBe('IMG');
+        expect(r.classes).toContain('coder-logo');
+        const img = renderLogo({
+            id: 'x',
+            name: 'X',
+            short_label: 'Short X',
+            logo: 'vendor/logos/x.png',
+        });
+        expect(img.getAttribute('src')).toBe('vendor/logos/x.png');
+        expect(img.getAttribute('alt')).toBe('Short X');
     });
 
     it('escapes XSS-style logo values as text', () => {

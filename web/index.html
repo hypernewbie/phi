@@ -399,7 +399,66 @@ eager to avoid a first-open unstyled flash. -->
                     </div>
 
                     <div class="coder-selector" id="coder-selector">
-                        <!-- populated dynamically from /api/coders by web-src/sessions.ts -->
+                        <button
+                            class="coder-tab active"
+                            data-coder="opencode"
+                            title="OpenCode"
+                        >
+                            <img
+                                class="coder-logo"
+                                src="vendor/logos/opencode.png"
+                                alt="OpenCode"
+                            >
+                            <span>OpenCode</span>
+                        </button>
+                        <button
+                            class="coder-tab"
+                            data-coder="claude"
+                            title="Claude Code"
+                        >
+                            <img
+                                class="coder-logo"
+                                src="vendor/logos/claude.png"
+                                alt="Claude"
+                            >
+                            <span>Claude</span>
+                        </button>
+                        <button
+                            class="coder-tab"
+                            data-coder="agy"
+                            title="Antigravity / Agy"
+                        >
+                            <img
+                                class="coder-logo"
+                                src="vendor/logos/agy.png"
+                                alt="Agy"
+                            >
+                            <span>Agy</span>
+                        </button>
+                        <button
+                            class="coder-tab"
+                            data-coder="pi"
+                            title="Pi (term)"
+                        >
+                            <img
+                                class="coder-logo"
+                                src="vendor/logos/pi.png"
+                                alt="Pi"
+                            >
+                            <span>Pi</span>
+                        </button>
+                        <button
+                            class="coder-tab"
+                            data-coder="bash"
+                            title="Shell Prompt"
+                        >
+                            <img
+                                class="coder-logo"
+                                src="vendor/logos/bash.jpg"
+                                alt="Shell"
+                            >
+                            <span>Shell</span>
+                        </button>
                     </div>
 
                     <div class="new-session-container">
@@ -639,7 +698,36 @@ eager to avoid a first-open unstyled flash. -->
                                         class="empty-quick-launch"
                                         id="empty-quick-launch"
                                     >
-                                        <!-- populated dynamically from /api/coders by web-src/sessions.ts -->
+                                        <button
+                                            class="empty-launch-btn"
+                                            data-coder="opencode"
+                                        >
+                                            OpenCode
+                                        </button>
+                                        <button
+                                            class="empty-launch-btn"
+                                            data-coder="claude"
+                                        >
+                                            Claude
+                                        </button>
+                                        <button
+                                            class="empty-launch-btn"
+                                            data-coder="pi"
+                                        >
+                                            Pi
+                                        </button>
+                                        <button
+                                            class="empty-launch-btn"
+                                            data-coder="agy"
+                                        >
+                                            Agy
+                                        </button>
+                                        <button
+                                            class="empty-launch-btn"
+                                            data-coder="bash"
+                                        >
+                                            Shell
+                                        </button>
                                     </div>
                                     <div class="empty-meta">
                                         <div class="empty-hostname-badge">

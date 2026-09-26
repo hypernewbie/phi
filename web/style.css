@@ -4541,7 +4541,7 @@ html[data-phi-config-page] .settings-modal {
         display: none; /* Hide label to save space, icon is enough on mobile */
     }
 
-    .coder-tab span {
+    .coder-tab > span:not(.coder-logo) {
         display: none;
     }
 
@@ -6063,7 +6063,7 @@ html[data-phi-config-page] .settings-modal {
     border-radius: 6px;
 }
 
-.sidebar-narrow .coder-tab span {
+.sidebar-narrow .coder-tab > span:not(.coder-logo) {
     display: none;
 }
 
