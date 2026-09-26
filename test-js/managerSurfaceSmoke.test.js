@@ -96,6 +96,7 @@ function stubDom() {
         'diff-modal-body',
         'diff-context-toggle-btn',
         'diff-layout-toggle-btn',
+        'diff-syntax-toggle-btn',
         'diff-commit-select',
         // Markdown / help / changelog / restart
         'markdown-file-list',

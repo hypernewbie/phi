@@ -6217,6 +6217,99 @@ html[data-phi-config-page] .settings-modal {
     text-decoration: none !important;
 }
 
+/* diff2html syntax highlighting */
+.d2h-wrapper .d2h-code-line-ctn.hljs {
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    font-family: inherit !important;
+    font-size: inherit !important;
+    line-height: inherit !important;
+    letter-spacing: inherit !important;
+    display: inline-block !important;
+    vertical-align: middle !important;
+    white-space: pre !important;
+}
+
+.d2h-wrapper .d2h-code-line-ctn.hljs * {
+    font-family: inherit !important;
+    font-size: inherit !important;
+    line-height: inherit !important;
+    letter-spacing: inherit !important;
+    font-style: inherit !important;
+    font-weight: inherit !important;
+}
+
+/* stylelint-disable selector-class-pattern, custom-property-pattern */
+.d2h-wrapper .hljs-keyword,
+.d2h-wrapper .hljs-selector-tag {
+    color: var(--syntaxKeyword, #ff7b72);
+}
+
+.d2h-wrapper .hljs-title,
+.d2h-wrapper .hljs-function,
+.d2h-wrapper .hljs-section {
+    color: var(--syntaxFunction, #d2a8ff);
+}
+
+.d2h-wrapper .hljs-type,
+.d2h-wrapper .hljs-built_in {
+    color: var(--syntaxType, #ffa657);
+}
+
+.d2h-wrapper .hljs-string,
+.d2h-wrapper .hljs-regexp {
+    color: var(--syntaxString, #a5d6ff);
+}
+
+.d2h-wrapper .hljs-number,
+.d2h-wrapper .hljs-literal {
+    color: var(--syntaxNumber, #79c0ff);
+}
+
+.d2h-wrapper .hljs-comment,
+.d2h-wrapper .hljs-doctag {
+    color: var(--syntaxComment, #8b949e);
+}
+
+.d2h-wrapper .hljs-attr,
+.d2h-wrapper .hljs-variable,
+.d2h-wrapper .hljs-params,
+.d2h-wrapper .hljs-property {
+    color: var(--syntaxVariable, #79c0ff);
+}
+
+.d2h-wrapper .hljs-operator {
+    color: var(--syntaxOperator, #79c0ff);
+}
+
+.d2h-wrapper .hljs-punctuation,
+.d2h-wrapper .hljs-meta {
+    color: var(--syntaxPunctuation, #8b949e);
+}
+
+.d2h-wrapper .hljs-subst {
+    color: var(--text-primary);
+}
+
+.d2h-del .hljs-keyword,
+.d2h-del .hljs-title,
+.d2h-del .hljs-type,
+.d2h-del .hljs-string,
+.d2h-del .hljs-number,
+.d2h-del .hljs-variable,
+.d2h-del .hljs-params {
+    opacity: 0.85;
+}
+
+.diff-modal-header-actions .header-btn.active {
+    background-color: var(--accent-glow) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent-bright) !important;
+}
+/* stylelint-enable selector-class-pattern, custom-property-pattern */
+
 /* ─── Inline diff review comments ──────────────────────────────────────
    A reviewer hovers any line in the diff and sees a faint "+" in the
    line-number gutter; clicking it drops a sticky-note editor directly
