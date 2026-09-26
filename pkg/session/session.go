@@ -91,22 +91,19 @@ func claudeAdapter(c coders.Coder) Adapter {
 
 type claudeAdapterImpl struct{ c coders.Coder }
 
-// List honours a per-profile CLAUDE_CONFIG_DIR via SidecarClaude
-// (R5). It does NOT modify the global process environment; it sets
-// the variable on a short-lived copy used only inside the adapter.
+// List threads a per-profile CLAUDE_CONFIG_DIR through to the
+// internal listClaudeSessions helper. The public ListClaudeSessions
+// (empty configDir) reads $CLAUDE_CONFIG_DIR at call time; we do
+// NOT mutate os.Setenv — concurrent requests for two different
+// profiles would race on the global env, and a panic in the
+// adapter would leak the override. configDir is plumbed through
+// the call chain instead. R5.
 func (a claudeAdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {
-	prev, hadPrev := os.LookupEnv("CLAUDE_CONFIG_DIR")
-	if a.c.SidecarClaude != nil && a.c.SidecarClaude.ConfigDir != "" {
-		_ = os.Setenv("CLAUDE_CONFIG_DIR", a.c.SidecarClaude.ConfigDir)
-		defer func() {
-			if hadPrev {
-				_ = os.Setenv("CLAUDE_CONFIG_DIR", prev)
-			} else {
-				_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
-			}
-		}()
+	var configDir string
+	if a.c.SidecarClaude != nil {
+		configDir = a.c.SidecarClaude.ConfigDir
 	}
-	return ListClaudeSessions(cwd)
+	return listClaudeSessions(cwd, configDir)
 }
 
 func (claudeAdapterImpl) Transcript(ctx context.Context, cwd, id string) ([]Message, error) {

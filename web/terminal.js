@@ -35,7 +35,13 @@ import {
     uploadClipboardImage,
     formatChipName,
 } from './attachments.js';
-import { executeRecipe, recipeFor } from './coders.js';
+import {
+    executeRecipe,
+    recipeFor,
+    logoFor,
+    inputMode,
+    hasModelSwitch,
+} from './coders.js';
 import {
     mountRpcChat,
     rpcChatSend,
@@ -155,12 +161,11 @@ function thinkingLevelClass(level) {
 // re-fetches bell.wav; one object per page is enough.
 let doneChimeAudio = null;
 
-// CODER_FAVICONS is now a *fallback-only* map for UI pseudo-tabs
-// (review, kanban) that are not in the registry. Built-in coder
-// favicons (opencode, claude, agy, pi, bash, pwsh) come from the
-// descriptor registry via the App's getCoderLogoForCoder /
-// renderLogo paths. Keep this map only for the entries the
-// registry does not advertise.
+// CODER_FAVICONS is a *fallback-only* map for UI pseudo-tabs
+// (review, kanban, pi-rpc) that the registry does not advertise.
+// Built-in coder favicons (opencode, claude, agy, pi, bash, pwsh)
+// come from the registry via logoFor(id) — exported by coders.js.
+// Keep this map only for entries the registry does not advertise.
 const CODER_FAVICONS = {
     'pi-rpc': 'vendor/logos/pi.png',
     review: 'vendor/logos/review.png',
@@ -2358,22 +2363,10 @@ export class TabManager {
         // ins and custom backends), then the legacy fallback map
         // for UI pseudo-tabs the registry doesn't advertise.
         let faviconUrl = CODER_FAVICONS[coder];
-        if (!faviconUrl) {
-            try {
-                const regCoder = this.app?.coderRegistry?.get
-                    ? this.app.coderRegistry.get(coder)
-                    : null;
-                if (
-                    regCoder &&
-                    regCoder.logo &&
-                    regCoder.logo.startsWith('vendor/')
-                ) {
-                    faviconUrl = regCoder.logo;
-                }
-            } catch (_e) {
-                /* registry not yet loaded; fall through to default */
-            }
-        }
+        // Resolve the coder favicon: registry first (covers built-
+        // ins and custom backends), then the legacy fallback map
+        // for UI pseudo-tabs the registry doesn't advertise.
+        faviconUrl = logoFor(coder) || CODER_FAVICONS[coder];
         if (!faviconUrl) faviconUrl = 'vendor/logos/bash.jpg';
 
         // Create elements
@@ -2854,14 +2847,16 @@ export class TabManager {
             searchAddon,
             tabEl,
             termContainer,
-            // Per-coder default focus mode. Shell tabs (bash, pwsh) and btop
-            // open in focused/direct mode — keyboard goes straight to the
-            // terminal, no input bar visible. AI-coder tabs (pi, claude,
-            // agy, opencode) keep the staged-input flow as default because
-            // that's the whole phi workflow: queue prompts, attach files,
-            // Ctrl+Shift+X chip. DirectMode is not persisted — restored
-            // tabs pick this up via createTab() on each load.
-            directMode: coder === 'bash' || coder === 'pwsh',
+            // Per-coder default focus mode. Shell tabs (is_shell: true
+            // in the registry) and btop open in focused/direct mode —
+            // keyboard goes straight to the terminal, no input bar
+            // visible. AI-coder tabs keep the staged-input flow as
+            // default because that's the whole phi workflow: queue
+            // prompts, attach files, Ctrl+Shift+X chip. DirectMode is
+            // not persisted — restored tabs pick this up via createTab()
+            // on each load. Custom profiles with is_shell: true spawn
+            // in direct mode too; the registry is the source of truth.
+            directMode: inputMode(coder) === 'direct' || title === 'btop',
             isDead: false,
             isAtBottom: true,
             isBtop: title === 'btop',
@@ -7612,16 +7607,19 @@ export class TabManager {
         });
         this.presetsContainer.appendChild(quickCmdsTriggerBtn);
 
-        // 4. Render Models trigger button
+        // 4. Render Models trigger button. Disabled when the active
+        // coder has no model-switch recipe (R7: never a /model
+        // fallback). Capability reads from the registry; the
+        // hardcoded `agy` check is gone.
         const modelsTriggerBtn = document.createElement('button');
         modelsTriggerBtn.className = 'preset-btn model-trigger-btn';
         modelsTriggerBtn.innerText = '🤖 Models ▾';
 
-        if (activeTab && activeTab.coder === 'agy') {
+        if (activeTab && !hasModelSwitch(activeTab.coder)) {
             modelsTriggerBtn.disabled = true;
             modelsTriggerBtn.classList.add('disabled');
             modelsTriggerBtn.title =
-                'Model selection not supported for Antigravity';
+                'Model selection not supported for this coder';
         } else {
             modelsTriggerBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -7787,7 +7785,9 @@ export class TabManager {
             const faviconImg = document.createElement('img');
             faviconImg.className = 'hostname-dropdown-favicon';
             faviconImg.src =
-                CODER_FAVICONS[tabInfo.coder] || CODER_FAVICONS.bash;
+                logoFor(tabInfo.coder) ||
+                CODER_FAVICONS[tabInfo.coder] ||
+                'vendor/logos/bash.jpg';
             faviconImg.alt = tabInfo.coder;
 
             // Worktree hieroglyph — same glyph shown on the tab itself.
@@ -8175,9 +8175,13 @@ export class TabManager {
                     setTimeout(() => {
                         this.sendToTab(activeTab, '\r');
                     }, 500);
-                } else {
-                    this.sendRawInput(`/model ${model}\r`);
                 }
+                // No fallback for unknown coders — R7 banned /model
+                // guesses. The Models button is hidden for coders
+                // outside the supported set, so this branch is
+                // unreachable; if a custom profile gains model
+                // switching it must declare a model_switch recipe,
+                // not fall through here.
                 dropup.classList.add('hidden');
             });
             row.appendChild(btn);

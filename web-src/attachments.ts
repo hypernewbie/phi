@@ -12,59 +12,26 @@ export interface Attachment {
     source: 'drop' | 'paste';
 }
 
-// formatAttachment is a thin wrapper kept for backwards compatibility
-// with the static call sites in markdown.ts, filetree.ts, and
-// terminal.js. The actual coder-aware lookup now lives in
-// web-src/coders.ts so that:
-//
-//   - the registry stays the single source of truth
-//   - control-character validation can happen at the registry
-//     boundary instead of every call site
-//   - tests can drive the format function against an in-memory
-//     registry rather than the static map below
-//
-// Callers should pass only `(coder, attachment.path)`; the legacy
-// `(coder, attachment)` shape is preserved because terminal.js still
-// threads Attachment values through its staged-input helpers.
+// formatAttachment is the single source of truth for coder-specific
+// path formatting. Delegates to the registry-aware implementation in
+// web-src/coders.ts so every call site (markdown.ts, filetree.ts,
+// terminal.js) gets the same answer. R8: the registry-backed path
+// uses callback replacement to avoid String.replace $& interpretation.
 export function formatAttachment(
     coder: string,
     attachment: Attachment | string,
 ): string {
     const path = typeof attachment === 'string' ? attachment : attachment.path;
-    // Lazy import to avoid a circular dep at module load.
-    // coders.ts owns the registry and the descriptor lookup.
-    return importCoderFormat(coder, path);
+    return registryFormatAttachment(coder, path);
 }
 
-// Synchronous variant: kept here so existing callers that haven't been
-// migrated to async import resolution still work. We use a synchronous
-// dynamic-import replacement by relying on the fact that
-// web-src/coders.ts has no top-level await and is bundled alongside
-// this file. Direct require/import is impossible from TypeScript at
-// runtime; we expose a synchronous proxy through a global that the
-// loader in web/app.js fills in.
-let _formatFromRegistry: ((coder: string, path: string) => string) | null =
-    null;
-export function setRegistryFormatter(
-    fn: (coder: string, path: string) => string,
-): void {
-    _formatFromRegistry = fn;
-}
-function importCoderFormat(coder: string, path: string): string {
-    if (_formatFromRegistry) return _formatFromRegistry(coder, path);
-    // Fallback matches the legacy ATTACHMENT_SYNTAX map so the very
-    // first frame of the app (before loadCoderRegistry resolves)
-    // still does something reasonable.
-    if (coder === 'claude' || coder === 'opencode' || coder === 'agy') {
-        return `@${path}`;
-    }
-    return path;
-}
+// Registry lookup is implemented as a plain function call. coders.ts
+// is bundled alongside this file, so the import resolves synchronously
+// at module load — no circular dep, no dynamic-import shim.
+import { formatAttachment as registryFormatAttachment } from './coders.js';
 
-// Legacy ATTACHMENT_SYNTAX is kept as a frozen reference map for any
-// code that still indexes it (test-js/attachments.test.js reads this).
-// New code should call formatAttachment. The values mirror the
-// registry fallback above.
+// ATTACHMENT_SYNTAX stays as a frozen reference map for any test that
+// indexes it directly. Values mirror the registry fallback.
 export const ATTACHMENT_SYNTAX: Record<string, (a: Attachment) => string> =
     Object.freeze({
         claude: (a) => `@${a.path}`,

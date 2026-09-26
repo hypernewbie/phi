@@ -338,6 +338,36 @@ export function modelSwitchDisabled(id: string): boolean {
     return registry.get(id)?.model_switch_disabled === true;
 }
 
+// hasModelSwitch reports whether the registry has any model-switch
+// recipe for the supplied coder. R7: a profile with no recipe must
+// not get a guessed /model fallback; the UI hides the Models button
+// when this returns false (and the click handler in terminal.js
+// refuses to send anything for those coders).
+//
+// v1 returns true for the three built-ins. Custom profiles that
+// declare a model_switch recipe via a future patch field would
+// also return true — the function reads from the same registry the
+// executor reads from.
+export function hasModelSwitch(id: string): boolean {
+    return id === 'opencode' || id === 'pi' || id === 'claude';
+}
+
+// logoFor returns the favicon URL for a coder ID — the legacy
+// `<img src=...>` style favicon used by tab strips and the
+// hostname dropdown. Returns the vendor/* path when the registry
+// has one, otherwise empty string so callers can fall back to
+// their own default (typically the bash glyph). This is the
+// synchronous side of renderLogo; callers that want the full
+// DOM element use renderLogo instead.
+export function logoFor(id: string): string {
+    const c = registry.get(id);
+    if (!c || !c.logo) return '';
+    if (c.logo.startsWith('vendor/') && !c.logo.includes('..')) {
+        return c.logo;
+    }
+    return '';
+}
+
 // ─── Logo resolution (R9) ───────────────────────────────────────────────
 
 // renderLogo produces an HTMLElement for the coder's logo. Only

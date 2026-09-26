@@ -30,11 +30,6 @@ type ClaudeSidecar struct {
 	ConfigDir string `json:"config_dir,omitempty"`
 }
 
-// PiSidecar holds typed options for the pi_files adapter.
-type PiSidecar struct {
-	Root string `json:"root,omitempty"`
-}
-
 // Coder is the fully resolved server definition. It is created once at
 // startup by NewManager and consumed (read-only) by the launch resolver,
 // the session adapter factories, and the descriptor serializer. Mutating
@@ -57,9 +52,7 @@ type Coder struct {
 	DefaultCwd            string            `json:"default_cwd,omitempty"`
 	SessionSource         string            `json:"session_source,omitempty"`
 	SidecarClaude         *ClaudeSidecar    `json:"claude,omitempty"`
-	SidecarPi             *PiSidecar        `json:"pi,omitempty"`
 	Presets               []Preset          `json:"presets,omitempty"`
-	Recipe                *Recipe           `json:"-"` // server-side only; never JSON-serialized in public descriptor
 	Logo                  string            `json:"logo,omitempty"`
 	SidebarVisible        bool              `json:"sidebar_visible"`
 	IsShell               bool              `json:"is_shell"`
@@ -67,22 +60,6 @@ type Coder struct {
 	InputMode             string            `json:"input_mode"` // "staged" | "direct"
 	ModelSwitchDisabled   bool              `json:"model_switch_disabled"`
 	Capabilities          Capabilities      `json:"capabilities"`
-}
-
-// Recipe is a bounded sequence of send+delay steps for switching models
-// in a TUI/CLI. The executor lives in web-src/coders.ts; this struct
-// only carries the data.
-//
-// Server-side only — `json:"-"` keeps it out of any client-facing
-// serialization. Each step's `send` is operator-authored and may
-// contain intentional control bytes; substituted model IDs are not.
-type Recipe struct {
-	Steps []RecipeStep `json:"steps"`
-}
-
-type RecipeStep struct {
-	Send    string `json:"send"`
-	DelayMs int    `json:"delay_ms,omitempty"`
 }
 
 // Reserved IDs cannot appear in custom backend files. They name
@@ -133,7 +110,6 @@ func DefaultRegistry() map[string]Coder {
 				{Name: "esc", Value: "\x1b"},
 				{Name: "/clear", Value: "/clear\r"},
 			},
-			Recipe: opencodeRecipe(),
 		},
 		"claude": {
 			ID:             "claude",
@@ -162,7 +138,6 @@ func DefaultRegistry() map[string]Coder {
 				{Name: "esc", Value: "\x1b"},
 				{Name: "/clear", Value: "/clear\r"},
 			},
-			Recipe: claudeRecipe(),
 		},
 		"agy": {
 			ID:             "agy",
@@ -225,7 +200,6 @@ func DefaultRegistry() map[string]Coder {
 				{Name: "esc", Value: "\x1b"},
 				{Name: "/clear", Value: "/clear\r"},
 			},
-			Recipe: piRecipe(),
 		},
 		"bash": {
 			ID:             "bash",
@@ -268,30 +242,6 @@ func DefaultRegistry() map[string]Coder {
 	}
 }
 
-func opencodeRecipe() *Recipe {
-	return &Recipe{Steps: []RecipeStep{
-		{Send: "/models"},
-		{Send: "\r", DelayMs: 350},
-		{Send: "{model}", DelayMs: 350},
-		{Send: "\r", DelayMs: 350},
-	}}
-}
-
-func piRecipe() *Recipe {
-	return &Recipe{Steps: []RecipeStep{
-		{Send: "/model {model}"},
-		{Send: "\x1b", DelayMs: 200},
-		{Send: "\r", DelayMs: 200},
-	}}
-}
-
-func claudeRecipe() *Recipe {
-	return &Recipe{Steps: []RecipeStep{
-		{Send: "/model {model}\r"},
-		{Send: "\r", DelayMs: 500},
-	}}
-}
-
 // OrderedBuiltinIDs returns the built-in coders in their canonical
 // sidebar order. Order is meaningful: the frontend renders tabs and
 // quick-launch buttons in this order, and the default active coder
@@ -303,11 +253,7 @@ func OrderedBuiltinIDs() []string {
 // frozenCoder is a deep copy of a Coder, safe to hand to consumers
 // without aliasing the Manager's internal state. All slices and maps
 // are independent; pointer-typed fields are deep-copied where they
-// could share memory (SidecarConfig, Recipe).
-//
-// Recipe is server-side only and never reaches the browser, but the
-// snapshot still needs its own copy so two callers cannot race on
-// the same []*RecipeStep slice.
+// could share memory (SidecarConfig).
 func frozenCoder(in Coder) Coder {
 	out := Coder{
 		ID:                  in.ID,
@@ -339,20 +285,12 @@ func frozenCoder(in Coder) Coder {
 		sc := *in.SidecarClaude
 		out.SidecarClaude = &sc
 	}
-	if in.SidecarPi != nil {
-		sp := *in.SidecarPi
-		out.SidecarPi = &sp
-	}
 	if in.Presets != nil {
 		out.Presets = append([]Preset(nil), in.Presets...)
 	}
 	if in.WindowsPowerShellWrap != nil {
 		b := *in.WindowsPowerShellWrap
 		out.WindowsPowerShellWrap = &b
-	}
-	if in.Recipe != nil {
-		r := Recipe{Steps: append([]RecipeStep(nil), in.Recipe.Steps...)}
-		out.Recipe = &r
 	}
 	return out
 }
