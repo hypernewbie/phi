@@ -24,6 +24,9 @@ export interface DiffReviewComment {
     oldLineNumber: number | null;
     newLineNumber: number | null;
     lineType: 'insert' | 'delete' | 'context';
+    // Which pane owns a context note in side-by-side view. Unified notes
+    // default to the new/right pane; older drafts have no value here.
+    displaySide?: 'old' | 'new';
     codeSnippet: string;
     commentText: string;
     createdAt: number;
@@ -116,6 +119,7 @@ export class DiffController {
     contextToggleBtn: HTMLElement | null;
     layoutToggleBtn: HTMLElement | null;
     syntaxToggleBtn: HTMLElement | null;
+    modalSizeToggleBtn: HTMLElement | null;
     syntaxHighlightEnabled: boolean;
     currentContextLines: number;
     currentLayout: string;
@@ -171,6 +175,9 @@ export class DiffController {
         );
         this.syntaxToggleBtn = document.getElementById(
             'diff-syntax-toggle-btn',
+        );
+        this.modalSizeToggleBtn = document.getElementById(
+            'diff-modal-size-btn',
         );
         try {
             this.syntaxHighlightEnabled =
@@ -283,6 +290,9 @@ export class DiffController {
             );
             this._updateSyntaxToggleBtn();
         }
+        this.modalSizeToggleBtn?.addEventListener('click', () =>
+            this.toggleRichDiffSize(),
+        );
 
         // Manual Refresh trigger
         this.refreshDiffBtn.addEventListener('click', () => this.refreshDiff());
@@ -1618,6 +1628,18 @@ export class DiffController {
         }
     }
 
+    toggleRichDiffSize(): void {
+        const content = this.diffModal?.querySelector('.md-modal-content');
+        if (!content || !this.modalSizeToggleBtn) return;
+        const maximized = content.classList.toggle('diff-modal-maximized');
+        this.modalSizeToggleBtn.setAttribute('aria-pressed', String(maximized));
+        const label = maximized
+            ? 'Restore diff viewer size'
+            : 'Maximize diff viewer';
+        this.modalSizeToggleBtn.title = label;
+        this.modalSizeToggleBtn.setAttribute('aria-label', label);
+    }
+
     async toggleRichDiffContext(): Promise<void> {
         this.currentContextLines = this.currentContextLines === 3 ? 30 : 3;
         if (this.contextToggleBtn) {
@@ -1884,6 +1906,56 @@ export class DiffController {
         return `${info.filePath}:${info.oldLineNumber ?? ''}:${info.newLineNumber ?? ''}`;
     }
 
+    _reviewRowSide(row: HTMLElement): 'old' | 'new' | null {
+        const pane = row.closest('.d2h-file-side-diff');
+        const panes = pane?.parentElement?.querySelectorAll(
+            ':scope > .d2h-file-side-diff',
+        );
+        if (panes?.length !== 2) return null;
+        return pane === panes[0] ? 'old' : 'new';
+    }
+
+    _showCommentOnRow(row: HTMLElement, comment: DiffReviewComment): boolean {
+        const side = this._reviewRowSide(row);
+        return (
+            comment.lineType !== 'context' ||
+            side === null ||
+            side === (comment.displaySide ?? 'new')
+        );
+    }
+
+    // Older side-by-side drafts stored every line as new-only. Move one
+    // onto its actual old/new key when we see that pane again, so a saved
+    // deletion or context note isn't lost after this identity fix.
+    _migrateLegacySideComment(
+        row: HTMLElement,
+        info: DiffLineInfo,
+    ): DiffReviewComment | undefined {
+        const side = this._reviewRowSide(row);
+        const line = side === 'old' ? info.oldLineNumber : info.newLineNumber;
+        if (!side || line === null) return undefined;
+        const oldKey = `${info.filePath}::${line}`;
+        const previous = this.reviewComments.get(oldKey);
+        if (
+            !previous ||
+            previous.oldLineNumber !== null ||
+            previous.newLineNumber !== line ||
+            previous.lineType !== info.lineType
+        ) {
+            return undefined;
+        }
+        const comment = {
+            ...previous,
+            oldLineNumber: info.oldLineNumber,
+            newLineNumber: info.newLineNumber,
+            displaySide: side,
+        };
+        this.reviewComments.delete(oldKey);
+        this.reviewComments.set(this._reviewKey(info), comment);
+        this._saveReviewDraft();
+        return comment;
+    }
+
     // Walk up from a row to the nearest .d2h-file-wrapper, read its
     // .d2h-file-name text. Empty string on the unlikely chance diff2html
     // renames the class.
@@ -1913,15 +1985,58 @@ export class DiffController {
             const txt = el.textContent?.trim() || '';
             return txt ? Number(txt) : null;
         };
-        // Side-by-side rows only carry one number; fall back to
-        // the cell's textContent so we still surface it.
+        // Side-by-side numbers are direct text nodes. Do not include the
+        // appended + button's text (or other controls) when re-reading a
+        // wired row for comment save / rehydration.
         if (!n1 && !n2) {
-            const txt = ln.textContent?.trim() || '';
-            const n = txt ? Number(txt) : null;
-            // Side-by-side left row is the OLD side, right is NEW.
-            // Without a parent-side marker we don't know which; default
-            // to "new" because that's what most reviewers comment on.
-            return { oldLineNumber: null, newLineNumber: n };
+            const readSideNumber = (cell: Element | null): number | null => {
+                if (!cell) return null;
+                const txt = Array.from(cell.childNodes)
+                    .filter((node) => node.nodeType === Node.TEXT_NODE)
+                    .map((node) => node.textContent || '')
+                    .join('')
+                    .trim();
+                const n = txt ? Number(txt) : null;
+                return n !== null && Number.isFinite(n) ? n : null;
+            };
+            const n = readSideNumber(ln);
+            const pane = row.closest('.d2h-file-side-diff');
+            const panes = pane?.parentElement?.querySelectorAll(
+                ':scope > .d2h-file-side-diff',
+            );
+            // Standalone rows (e.g. test fixtures) retain the old fallback.
+            if (panes?.length !== 2) {
+                return { oldLineNumber: null, newLineNumber: n };
+            }
+            const isOldPane = pane === panes[0];
+            if (this._rowLineType(row) === 'context') {
+                // Diff2html aligns both tables row-for-row. Ignore our
+                // injected editor/card rows when locating the peer line.
+                const codeRows = (body: Element | null) =>
+                    Array.from(body?.children || []).filter(
+                        (el) =>
+                            !el.classList.contains('diff-comment-editor-row') &&
+                            !el.classList.contains('diff-comment-display-row'),
+                    );
+                const index = codeRows(row.parentElement).indexOf(row);
+                const peerBody =
+                    panes[isOldPane ? 1 : 0].querySelector('.d2h-diff-tbody');
+                const peerRow = codeRows(peerBody)[index];
+                if (
+                    peerRow &&
+                    this._rowLineType(peerRow as HTMLElement) === 'context'
+                ) {
+                    const peer = readSideNumber(
+                        peerRow.querySelector('.d2h-code-side-linenumber'),
+                    );
+                    return isOldPane
+                        ? { oldLineNumber: n, newLineNumber: peer }
+                        : { oldLineNumber: peer, newLineNumber: n };
+                }
+            }
+            return isOldPane
+                ? { oldLineNumber: n, newLineNumber: null }
+                : { oldLineNumber: null, newLineNumber: n };
         }
         return {
             oldLineNumber: parse(n1),
@@ -2107,11 +2222,12 @@ export class DiffController {
             const info = this._extractLineInfo(row);
             if (!info) return;
             const key = this._reviewKey(info);
-            const comment = this.reviewComments.get(key);
-            if (!comment) return;
+            const comment =
+                this.reviewComments.get(key) ||
+                this._migrateLegacySideComment(row, info);
+            if (!comment || comment.lineType !== info.lineType) return;
             row.classList.add('d2h-has-comment');
-            // Skip if a display row is already attached for this key
-            // (the sibling row in the other pane uses the same key).
+            if (!this._showCommentOnRow(row, comment)) return;
             const next = row.nextElementSibling as HTMLElement | null;
             if (next?.dataset?.reviewDisplayFor === key) return;
             this._renderCommentDisplayRow(row, comment);
@@ -2188,7 +2304,7 @@ export class DiffController {
                 });
                 return;
             }
-            this._saveComment(info, snippet, text, existing);
+            this._saveComment(info, snippet, text, existing, row);
         });
         textarea.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
@@ -2222,6 +2338,7 @@ export class DiffController {
         snippet: string,
         text: string,
         existing?: DiffReviewComment,
+        sourceRow?: HTMLElement,
     ): void {
         const key = this._reviewKey(info);
         const comment: DiffReviewComment = {
@@ -2232,6 +2349,11 @@ export class DiffController {
             oldLineNumber: info.oldLineNumber,
             newLineNumber: info.newLineNumber,
             lineType: info.lineType,
+            displaySide:
+                existing?.displaySide ??
+                (sourceRow
+                    ? (this._reviewRowSide(sourceRow) ?? undefined)
+                    : undefined),
             codeSnippet: snippet,
             commentText: text,
             createdAt: existing?.createdAt || Date.now(),
@@ -2259,7 +2381,9 @@ export class DiffController {
             if (old?.dataset?.reviewDisplayFor === key) {
                 old.remove();
             }
-            this._renderCommentDisplayRow(row, comment);
+            if (this._showCommentOnRow(row, comment)) {
+                this._renderCommentDisplayRow(row, comment);
+            }
         });
 
         this._saveReviewDraft();
@@ -2343,7 +2467,11 @@ export class DiffController {
             : [];
         for (const row of rows) {
             const rowInfo = this._extractLineInfo(row);
-            if (rowInfo && this._reviewKey(rowInfo) === this._reviewKey(info)) {
+            if (
+                rowInfo &&
+                this._reviewKey(rowInfo) === this._reviewKey(info) &&
+                this._showCommentOnRow(row, comment)
+            ) {
                 this._openCommentEditor(row, info, comment);
                 return;
             }

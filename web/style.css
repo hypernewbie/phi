@@ -6115,6 +6115,45 @@ html[data-phi-config-page] .settings-modal {
     max-height: 92vh;
 }
 
+/* Near-viewport modal mode, not the browser Fullscreen API. Keep a small
+   border/overlay visible and let the existing body remain the scroller. */
+#diff-modal .md-modal-content.diff-modal-maximized {
+    width: calc(100vw - 24px) !important;
+    max-width: none !important;
+    height: calc(var(--vv-height, 100vh) - 24px) !important;
+    max-height: calc(var(--vv-height, 100vh) - 24px) !important;
+    border-radius: 12px !important;
+}
+
+#diff-modal .diff-modal-size-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+    margin-right: 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+#diff-modal .diff-modal-size-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-border);
+}
+#diff-modal .diff-modal-icon-restore,
+#diff-modal
+    .diff-modal-size-btn[aria-pressed="true"]
+    .diff-modal-icon-maximize {
+    display: none;
+}
+#diff-modal .diff-modal-size-btn[aria-pressed="true"] .diff-modal-icon-restore {
+    display: block;
+}
+
 .md-modal-body.diff-modal-body {
     padding: 0;
     overflow-y: auto;
@@ -6322,10 +6361,20 @@ html[data-phi-config-page] .settings-modal {
     box-shadow: inset 3px 0 0 var(--accent) !important;
 }
 
-/* Hover-revealed "+" button on the line-number gutter. Stays hidden
-   until the row is hovered so the gutter stays clean by default. */
+/* Keep the + out of the fixed-width diff2html number cells' flow.
+   Showing an inline button on hover wraps unified old/new numbers and
+   shifts every following line. Position it over the gutter instead. */
 .diff-modal-body .diff-add-comment-btn {
-    display: none;
+    position: absolute;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
     background: transparent;
     border: 1px solid transparent;
     color: var(--accent-bright);
@@ -6338,14 +6387,12 @@ html[data-phi-config-page] .settings-modal {
     margin: 0 2px 0 0;
     cursor: pointer;
     border-radius: 3px;
-    vertical-align: middle;
 }
 .diff-modal-body tr:hover > .d2h-code-linenumber .diff-add-comment-btn,
 .diff-modal-body tr:hover > .d2h-code-side-linenumber .diff-add-comment-btn,
-.diff-modal-body .diff-add-comment-btn:focus {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+.diff-modal-body .diff-add-comment-btn:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
     border-color: var(--bg-border);
     background-color: var(--bg-elevated);
 }
