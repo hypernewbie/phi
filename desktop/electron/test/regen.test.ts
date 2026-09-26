@@ -300,6 +300,17 @@ describe('TBAR pipeline: regen + diff', () => {
     );
   });
 
+  it('vendors the coder registry imported by the desktop header modules', () => {
+    const browserCoders = path.join(webRoot, 'coders.js');
+    const desktopCoders = path.join(desktopWeb, 'vendor', 'coders.js');
+    expect(
+      readFileSync(path.join(desktopWeb, 'vendor', 'sessions.js'), 'utf8'),
+    ).toContain("from './coders.js'");
+    expect(readFileSync(desktopCoders, 'utf8')).toBe(
+      readFileSync(browserCoders, 'utf8'),
+    );
+  });
+
   it('vendor-web.mjs produces the same bytes when invoked as a real subprocess', () => {
     // Run the actual `node scripts/vendor-web.mjs` against the
     // browser source via a wrapper that redirects its output to a
