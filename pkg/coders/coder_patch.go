@@ -24,24 +24,24 @@ package coders
 // resolved Coder is what the launch resolver and adapter factories
 // see.
 type CoderPatch struct {
-	ID                    *string             `json:"id,omitempty"`
-	Name                  *string             `json:"name,omitempty"`
-	ShortLabel            *string             `json:"short_label,omitempty"`
-	Command               *string             `json:"command,omitempty"`
-	Args                  *[]string           `json:"args,omitempty"`
-	ResumeArgs            *[]string           `json:"resume_args,omitempty"`
-	Env                   *map[string]string  `json:"env,omitempty"`
-	DefaultCwd            *string             `json:"default_cwd,omitempty"`
-	SessionSource         *string             `json:"session_source,omitempty"`
-	SidecarClaude         *ClaudeSidecar      `json:"claude,omitempty"`
-	Presets               *[]Preset           `json:"presets,omitempty"`
-	Logo                  *string             `json:"logo,omitempty"`
-	SidebarVisible        *bool               `json:"sidebar_visible,omitempty"`
-	IsShell               *bool               `json:"is_shell,omitempty"`
-	WindowsPowerShellWrap *bool               `json:"windows_powershell_wrap,omitempty"`
-	InputMode             *string             `json:"input_mode,omitempty"`
-	ModelSwitchDisabled   *bool               `json:"model_switch_disabled,omitempty"`
-	Capabilities          *Capabilities       `json:"capabilities,omitempty"`
+	ID                    *string            `json:"id,omitempty"`
+	Name                  *string            `json:"name,omitempty"`
+	ShortLabel            *string            `json:"short_label,omitempty"`
+	Command               *string            `json:"command,omitempty"`
+	Args                  *[]string          `json:"args,omitempty"`
+	ResumeArgs            *[]string          `json:"resume_args,omitempty"`
+	Env                   *map[string]string `json:"env,omitempty"`
+	DefaultCwd            *string            `json:"default_cwd,omitempty"`
+	SessionSource         *string            `json:"session_source,omitempty"`
+	SidecarClaude         *ClaudeSidecar     `json:"claude,omitempty"`
+	Presets               *[]Preset          `json:"presets,omitempty"`
+	Logo                  *string            `json:"logo,omitempty"`
+	SidebarVisible        *bool              `json:"sidebar_visible,omitempty"`
+	IsShell               *bool              `json:"is_shell,omitempty"`
+	WindowsPowerShellWrap *bool              `json:"windows_powershell_wrap,omitempty"`
+	InputMode             *string            `json:"input_mode,omitempty"`
+	ModelSwitchDisabled   *bool              `json:"model_switch_disabled,omitempty"`
+	Capabilities          *Capabilities      `json:"capabilities,omitempty"`
 }
 
 // Apply merges p onto a copy of base and returns the result. The base

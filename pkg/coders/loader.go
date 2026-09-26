@@ -94,9 +94,9 @@ func (m *Manager) loadOne(path string, warn func(string)) error {
 			base = existing
 		} else if !ReservedIDs[*patch.ID] {
 			base = Coder{
-				ID:           *patch.ID,
+				ID:             *patch.ID,
 				SidebarVisible: true,
-				InputMode:    "staged",
+				InputMode:      "staged",
 			}
 		} else {
 			warn(fmt.Sprintf("[backends] %s: reserved id %q rejected", path, *patch.ID))
