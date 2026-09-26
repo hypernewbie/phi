@@ -29,6 +29,7 @@ import {
   ipcMain,
   Menu,
   Notification,
+  powerMonitor,
   safeStorage,
   screen,
   session,
@@ -101,6 +102,7 @@ import {
   setWorkspaceScript,
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
+  WAKE_PAGE_SCRIPT,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
@@ -638,6 +640,22 @@ export class DesktopHost {
       win.focus();
       this.drainLaunchPayloads();
     });
+  }
+
+  /** Dispatches an explicit wake and focus event to the active profile view. */
+  wakeActiveProfileView(): void {
+    const activeId = this.profileViews?.getActive() ?? null;
+    if (activeId !== null) {
+      const view = this.profileViews?.getView(activeId) ?? null;
+      if (view?.webContents && !view.webContents.isDestroyed()) {
+        view.webContents.focus();
+        if (typeof view.webContents.executeJavaScript === 'function') {
+          void view.webContents
+            .executeJavaScript(WAKE_PAGE_SCRIPT)
+            .catch(() => {});
+        }
+      }
+    }
   }
 
   /**
@@ -2583,6 +2601,11 @@ export class DesktopHost {
         const view = this.profileViews?.getView(activeId) ?? null;
         if (view?.webContents && !view.webContents.isDestroyed()) {
           view.webContents.focus();
+          if (typeof view.webContents.executeJavaScript === 'function') {
+            void view.webContents
+              .executeJavaScript(WAKE_PAGE_SCRIPT)
+              .catch(() => {});
+          }
         }
       }
     });
@@ -2962,10 +2985,18 @@ export class DesktopHost {
           if (!isCurrent()) return { action: 'deny' };
           try {
             const target = new URL(url);
-            if (
+            const isSameOrigin =
               target.origin === allowedOrigin ||
-              isSameServerOrigin(target, allowedOrigin)
-            ) {
+              isSameServerOrigin(target, allowedOrigin);
+            const isInternalPopout =
+              isSameOrigin &&
+              (target.pathname === '/md.html' ||
+                target.pathname === '/config.html') &&
+              Boolean(
+                features &&
+                  (features.includes('width=') || features.includes('phi-')),
+              );
+            if (isInternalPopout) {
               const size = popupSize(features);
               return {
                 action: 'allow',
@@ -2988,6 +3019,21 @@ export class DesktopHost {
                     if (isCurrent() && !child.isDestroyed()) child.show();
                   });
                   attachNavGuard(child.webContents);
+                  child.webContents.setWindowOpenHandler(
+                    ({ url: childUrl }) => {
+                      try {
+                        const childTarget = new URL(childUrl);
+                        if (
+                          childTarget.protocol === 'http:' ||
+                          childTarget.protocol === 'https:' ||
+                          childTarget.protocol === 'mailto:'
+                        ) {
+                          void shell.openExternal(childUrl);
+                        }
+                      } catch {}
+                      return { action: 'deny' };
+                    },
+                  );
                   installFullscreenToggle(child.webContents, child);
                   installReloadShortcut(child.webContents);
                   applyContentZoom(
@@ -3008,8 +3054,13 @@ export class DesktopHost {
                 },
               };
             }
-            if (target.protocol === 'http:' || target.protocol === 'https:')
+            if (
+              target.protocol === 'http:' ||
+              target.protocol === 'https:' ||
+              target.protocol === 'mailto:'
+            ) {
               void shell.openExternal(url);
+            }
           } catch {
             /* deny malformed URLs */
           }
@@ -3026,12 +3077,21 @@ export class DesktopHost {
           contents.on('will-navigate', (event, url) => {
             try {
               const target = new URL(url);
-              if (
+              const isSameOrigin =
                 target.origin === allowedOrigin ||
-                isSameServerOrigin(target, allowedOrigin)
-              )
-                return; // same-origin: allow
-              if (target.protocol === 'http:' || target.protocol === 'https:') {
+                isSameServerOrigin(target, allowedOrigin);
+              const isInternalRoute =
+                target.pathname === '/' ||
+                target.pathname === '/index.html' ||
+                target.pathname === '/md.html' ||
+                target.pathname === '/config.html' ||
+                target.pathname === '/input.html';
+              if (isSameOrigin && isInternalRoute) return; // same-origin internal app route: allow
+              if (
+                target.protocol === 'http:' ||
+                target.protocol === 'https:' ||
+                target.protocol === 'mailto:'
+              ) {
                 void shell.openExternal(url);
               }
             } catch {
@@ -4435,6 +4495,9 @@ export class DesktopHost {
     app.on('activate', () => {
       // Picker/popup windows do not count as a live main session.
       this.foreground();
+    });
+    powerMonitor?.on('resume', () => {
+      this.wakeActiveProfileView();
     });
   }
 }

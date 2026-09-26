@@ -48,6 +48,7 @@ import {
   installZoomShortcuts,
   type ZoomAction,
 } from './zoom.js';
+import { WAKE_PAGE_SCRIPT } from './injected.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -185,9 +186,17 @@ export class ProfileViewManager {
       applyContentZoom(existing.view.webContents, this.getContentZoomPercent());
       existing.view.setVisible(true);
       // Keyboard/shortcuts route to the newly shown view (the outgoing
-      // view kept focus until now).
-      if (existing.view.webContents && !existing.view.webContents.isDestroyed())
+      if (
+        existing.view.webContents &&
+        !existing.view.webContents.isDestroyed()
+      ) {
         existing.view.webContents.focus();
+        if (typeof existing.view.webContents.executeJavaScript === 'function') {
+          void existing.view.webContents
+            .executeJavaScript(WAKE_PAGE_SCRIPT)
+            .catch(() => {});
+        }
+      }
     } else {
       // First activation: created hidden; shown after did-finish-load.
       this.ensureView(target, profile.origin);
@@ -388,7 +397,14 @@ export class ProfileViewManager {
       if (this.activeId === id && !current.obscured) {
         view.setVisible(true);
         // Keyboard/shortcuts route to the newly shown view.
-        if (!view.webContents.isDestroyed()) view.webContents.focus();
+        if (!view.webContents.isDestroyed()) {
+          view.webContents.focus();
+          if (typeof view.webContents.executeJavaScript === 'function') {
+            void view.webContents
+              .executeJavaScript(WAKE_PAGE_SCRIPT)
+              .catch(() => {});
+          }
+        }
       }
     });
     // Plain F11 toggles fullscreen on the BrowserWindow from any retained

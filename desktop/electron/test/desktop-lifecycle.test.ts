@@ -250,6 +250,7 @@ vi.mock('electron', () => ({
   },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
   globalShortcut: { register: () => true, unregister: () => {} },
+  powerMonitor: { on: vi.fn(), emit: vi.fn() },
 }));
 
 import { DesktopHost } from '../src/desktop.js';

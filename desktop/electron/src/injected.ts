@@ -277,3 +277,15 @@ export function setWorkspaceScript(value: string): string {
   })()
 `;
 }
+
+/**
+ * Fixed script that dispatches a wake/reconnect signal into a retained profile
+ * view. Used on window focus, system wake/resume, and rail profile activation
+ * so dead tabs revive without waiting or showing a manual "Reconnect all" banner.
+ */
+export const WAKE_PAGE_SCRIPT = `(() => {
+  try {
+    window.dispatchEvent(new CustomEvent('phi:desktop-wake'));
+    window.dispatchEvent(new Event('focus'));
+  } catch {}
+})()`;
