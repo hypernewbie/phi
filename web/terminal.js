@@ -21,6 +21,8 @@ import {
     terminalPreferredFontSize,
     responsiveTerminalFontSize,
     TERMINAL_TARGET_COLUMNS,
+    openExternalLink,
+    installTerminalLinkProvider,
 } from './util.js';
 import {
     applyBrandCpuTier,
@@ -388,6 +390,9 @@ export class TabManager {
             this._reviveActiveTabIfDead(),
         );
         window.addEventListener('focus', () => this._reviveActiveTabIfDead());
+        window.addEventListener('phi:desktop-wake', () =>
+            this._reviveActiveTabIfDead(),
+        );
 
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
@@ -2488,6 +2493,11 @@ export class TabManager {
             // desktop always keeps LIVE_SCROLLBACK_ROWS.
             scrollback: this._liveScrollbackRows(),
             theme: this.getTerminalTheme(coder),
+            linkHandler: {
+                activate: (_event, text) => {
+                    openExternalLink(text);
+                },
+            },
         });
 
         const fitAddon = new window.FitAddon.FitAddon();
@@ -2495,6 +2505,8 @@ export class TabManager {
 
         const searchAddon = new window.SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
+
+        this._installTerminalLinkProvider(term);
 
         // Screen-checkpoint serializer; loaded when the vendor
         // addon is present; its absence only disables client checkpoints
@@ -3161,8 +3173,8 @@ export class TabManager {
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
         this._showReconnectOverlay(tabInfo);
-        this.updateDisconnectBanner();
         this.maybeAutoReconnect(tabInfo);
+        this.updateDisconnectBanner();
         // Toast so the user notices the drop even when they're focused on
         // a different tab. The on-terminal reconnect overlay stays for the
         // local UX; this toast covers the peripheral case.
@@ -6309,6 +6321,7 @@ export class TabManager {
     reconnectTab(tabInfo, { auto = false } = {}) {
         if (tabInfo.coder === 'pi-rpc' || tabInfo.reconnectInFlight) return;
         tabInfo.reconnectInFlight = true;
+        tabInfo.autoReconnectPending = false;
         tabInfo.exitCode = null;
 
         const overlay =
@@ -6354,8 +6367,8 @@ export class TabManager {
                         tabInfo.tabEl.classList.add('dead');
                         this.updateDocumentTitle();
                         this._showReconnectOverlay(tabInfo);
-                        this.updateDisconnectBanner();
                         this.maybeAutoReconnect(tabInfo);
+                        this.updateDisconnectBanner();
                     } else {
                         if (msgEl)
                             msgEl.innerText = 'Session expired (PTY gone)';
@@ -6364,8 +6377,8 @@ export class TabManager {
                             btnEl.innerText = '⟳ Retry';
                         }
                         if (restartBtn) restartBtn.disabled = false;
-                        this.updateDisconnectBanner();
                         this.maybeAutoReconnect(tabInfo);
+                        this.updateDisconnectBanner();
                     }
                 },
                 () => {
@@ -6547,9 +6560,32 @@ export class TabManager {
             });
     }
 
+    _isDesktop() {
+        return Boolean(
+            this.app?.isDesktop ||
+                (typeof document !== 'undefined' &&
+                    document.documentElement?.hasAttribute(
+                        'data-phi-desktop',
+                    )) ||
+                (typeof window !== 'undefined' &&
+                    (window.__phiDesktop ||
+                        new URLSearchParams(window.location?.search || '').get(
+                            'desktop',
+                        ) === '1')),
+        );
+    }
+
     updateDisconnectBanner() {
         const banner = document.getElementById('disconnect-banner');
         if (!banner) return;
+
+        const isDesktop = this._isDesktop();
+        const autoReconnectConfig = this.app?.config?.auto_reconnect;
+        const autoReconnectActive =
+            isDesktop &&
+            autoReconnectConfig === 'visible' &&
+            (typeof document === 'undefined' ||
+                document.visibilityState === 'visible');
 
         const deadTabs = [];
         for (const tabInfo of this.tabs.values()) {
@@ -6560,6 +6596,12 @@ export class TabManager {
                 tabInfo.coder !== 'kanban' &&
                 tabInfo.coder !== 'pi-rpc'
             ) {
+                if (
+                    autoReconnectActive &&
+                    (tabInfo.autoReconnectPending || tabInfo.reconnectInFlight)
+                ) {
+                    continue;
+                }
                 deadTabs.push(tabInfo);
             }
         }
@@ -6654,9 +6696,45 @@ export class TabManager {
     // window), but resets the attempt budget: a wake is a fresh start, not a
     // continuation of an exhausted backoff run.
     _reviveActiveTabIfDead() {
-        const autoReconnect = this.app.config?.auto_reconnect;
+        const autoReconnect = this.app?.config?.auto_reconnect;
         if (autoReconnect !== 'visible') return;
-        if (document.visibilityState !== 'visible') return;
+        if (
+            typeof document !== 'undefined' &&
+            document.visibilityState !== 'visible'
+        )
+            return;
+
+        if (this._isDesktop()) {
+            let revived = 0;
+            for (const tabInfo of this.tabs.values()) {
+                if (
+                    tabInfo.isDead &&
+                    !tabInfo.reconnectInFlight &&
+                    (tabInfo.exitCode === undefined ||
+                        tabInfo.exitCode === null) &&
+                    tabInfo.coder !== 'review' &&
+                    tabInfo.coder !== 'kanban' &&
+                    tabInfo.coder !== 'pi-rpc'
+                ) {
+                    tabInfo.reconnectAttempts = 0;
+                    tabInfo.autoReconnectPending = false;
+                    this.reconnectTab(tabInfo, { auto: true });
+                    revived++;
+                }
+            }
+            if (revived > 0) {
+                const activeTab = this.getActiveTab();
+                if (activeTab) {
+                    this.activateTabViewport(activeTab, {
+                        scrollToBottom: true,
+                        autoReconnect: false,
+                    });
+                }
+            }
+            this.updateDisconnectBanner();
+            return;
+        }
+
         const tabInfo = this.getActiveTab();
         if (!tabInfo?.isDead || tabInfo.reconnectInFlight) return;
         if (
@@ -6672,21 +6750,28 @@ export class TabManager {
 
     maybeAutoReconnect(tabInfo) {
         if (tabInfo.coder === 'pi-rpc') return false;
-        const autoReconnect = this.app.config?.auto_reconnect;
+        const autoReconnect = this.app?.config?.auto_reconnect;
         if (autoReconnect !== 'visible') return false;
 
-        if (document.visibilityState !== 'visible') return false;
-        if (tabInfo.paneId !== this.activePaneId) return false;
+        if (
+            typeof document !== 'undefined' &&
+            document.visibilityState !== 'visible'
+        )
+            return false;
+        const isDesktop = this._isDesktop();
+        if (!isDesktop && tabInfo.paneId !== this.activePaneId) return false;
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null)
             return false;
 
         if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
             tabInfo.reconnectAttempts = 0;
+            tabInfo.autoReconnectPending = false;
             return false;
         }
 
         tabInfo.reconnectAttempts++;
+        tabInfo.autoReconnectPending = true;
         const backoff = Math.min(
             AUTO_RECONNECT_MAX_DELAY_MS,
             2 ** (tabInfo.reconnectAttempts - 1) * 1000,
@@ -6704,9 +6789,10 @@ export class TabManager {
             msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
 
         setTimeout(() => {
+            tabInfo.autoReconnectPending = false;
             if (
                 tabInfo.isDead &&
-                tabInfo.paneId === this.activePaneId &&
+                (isDesktop || tabInfo.paneId === this.activePaneId) &&
                 (tabInfo.exitCode === undefined || tabInfo.exitCode === null)
             ) {
                 this.reconnectTab(tabInfo, { auto: true });
@@ -7037,6 +7123,12 @@ export class TabManager {
         }
         document.body.removeChild(ta);
         return ok;
+    }
+
+    _installTerminalLinkProvider(term) {
+        return installTerminalLinkProvider(term, (url) => {
+            openExternalLink(url);
+        });
     }
 
     // Copy text the agent emitted via OSC 52. phi is commonly served over plain
