@@ -55,6 +55,14 @@ interface FakeBridge {
       label?: string;
     }) => void,
   ) => void;
+  onAuthResolved?: (
+    cb: (info: {
+      requestId?: string;
+      profileId?: string;
+      origin?: string;
+      generation?: number;
+    }) => void,
+  ) => void;
   onBodyObscuring: (cb: (obscured: boolean) => void) => void;
   onActiveServer: (
     cb: (info: { id: string; origin: string; accent: string }) => void,
@@ -79,6 +87,14 @@ let recordedAuthRequired:
       label?: string;
     }) => void)
   | null = null;
+let recordedAuthResolved:
+  | ((info: {
+      requestId?: string;
+      profileId?: string;
+      origin?: string;
+      generation?: number;
+    }) => void)
+  | null = null;
 let recordedBodyObscuring: ((obscured: boolean) => void) | null = null;
 let recordedActiveServer:
   | ((info: { id: string; origin: string; accent: string }) => void)
@@ -90,6 +106,7 @@ let fakeBridge: FakeBridge;
 
 beforeEach(() => {
   recordedAuthRequired = null;
+  recordedAuthResolved = null;
   recordedBodyObscuring = null;
   recordedActiveServer = null;
 
@@ -109,6 +126,9 @@ beforeEach(() => {
     postHeaderAction: () => undefined,
     onAuthRequired: (cb) => {
       recordedAuthRequired = cb;
+    },
+    onAuthResolved: (cb) => {
+      recordedAuthResolved = cb;
     },
     onBodyObscuring: (cb) => {
       recordedBodyObscuring = cb;
@@ -594,5 +614,57 @@ describe('desktop auth modal (mainview.js)', () => {
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(true);
     recordedBodyObscuring?.(false);
     expect(doc.body.classList.contains('desktop-body-obscured')).toBe(false);
+  });
+
+  it('re-push for the same requestId does not wipe ongoing typed password', async (ctx) => {
+    if (!hasGenerated) {
+      ctx.skip('web/index.html missing — run `pnpm run build` first');
+      return;
+    }
+    const doc = await loadMainView();
+    recordedAuthRequired?.({
+      requestId: 'r-typing',
+      profileId: 'p-typing',
+      origin: 'http://a/',
+      label: 'A',
+    });
+    const input = doc.getElementById('desktop-auth-input') as HTMLInputElement;
+    input.value = 'secret-in-progress';
+
+    // Repeated poll pushes the same requestId again:
+    recordedAuthRequired?.({
+      requestId: 'r-typing',
+      profileId: 'p-typing',
+      origin: 'http://a/',
+      label: 'A',
+    });
+    // The user's typed password must be preserved, not wiped!
+    expect(input.value).toBe('secret-in-progress');
+  });
+
+  it('onAuthResolved closes an open modal and refreshes config', async (ctx) => {
+    if (!hasGenerated) {
+      ctx.skip('web/index.html missing — run `pnpm run build` first');
+      return;
+    }
+    const doc = await loadMainView();
+    recordedAuthRequired?.({
+      requestId: 'r-resolve',
+      profileId: 'p-resolve',
+      origin: 'http://a/',
+      label: 'A',
+    });
+    const modal = doc.getElementById('desktop-auth-modal');
+    expect(modal?.hasAttribute('hidden')).toBe(false);
+
+    // Silent background recovery resolves the auth requirement
+    recordedAuthResolved?.({
+      requestId: 'r-resolve',
+      profileId: 'p-resolve',
+      origin: 'http://a',
+    });
+
+    expect(modal?.hasAttribute('hidden')).toBe(true);
+    expect(fakeBridge.fetchServerConfig).toHaveBeenCalled();
   });
 });

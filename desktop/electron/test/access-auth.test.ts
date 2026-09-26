@@ -14,6 +14,7 @@ import {
   MIN_ITERATIONS,
   parseSessionCookie,
   readSetCookieHeaders,
+  toCanonicalAuthOrigin,
   validateStatus,
 } from '../src/access-auth.js';
 
@@ -336,7 +337,7 @@ describe('AccessAuth.tryUnlock', () => {
     expect(result.kind).toBe('invalid-password');
   });
 
-  it('keeps the modal open (invalid-password) when /api/config still 401s after login', async () => {
+  it('reports unavailable (session not accepted) when /api/config still 401s after login without inferring bad password', async () => {
     const doFetch = (async (url: URL) => {
       const path = url.toString();
       if (path.endsWith('/api/auth/status')) {
@@ -358,7 +359,7 @@ describe('AccessAuth.tryUnlock', () => {
     }) as unknown as typeof fetch;
     const auth = new AccessAuth(doFetch);
     const result = await auth.tryUnlock(origin, 'whatever-password');
-    expect(result.kind).toBe('invalid-password');
+    expect(result.kind).toBe('unavailable');
     expect(auth.hasCookie(origin)).toBe(false);
   });
 
@@ -924,5 +925,215 @@ describe('AccessAuth: invariants the DesktopHost silent re-auth fix relies on', 
     expect(result.kind).toBe('ok');
     expect(notifiedOrigin).toBe(origin);
     expect(notifiedCookie).toBe('captured-session');
+  });
+
+  describe('canonical origin normalization and validation', () => {
+    it('normalizes valid origins to WHATWG origin without trailing slash', () => {
+      expect(toCanonicalAuthOrigin('https://minerva.example.test/')).toBe(
+        'https://minerva.example.test',
+      );
+      expect(toCanonicalAuthOrigin('https://minerva.example.test')).toBe(
+        'https://minerva.example.test',
+      );
+      expect(toCanonicalAuthOrigin('HTTP://Minerva.Example.Test:80/path')).toBe(
+        'http://minerva.example.test',
+      );
+      expect(toCanonicalAuthOrigin('https://phi.example:443/')).toBe(
+        'https://phi.example',
+      );
+      expect(toCanonicalAuthOrigin('http://127.0.0.1:7070/api/config')).toBe(
+        'http://127.0.0.1:7070',
+      );
+    });
+
+    it('rejects non-http/https, userinfo, and malformed origins', () => {
+      expect(toCanonicalAuthOrigin('file:///tmp/phi')).toBeNull();
+      expect(toCanonicalAuthOrigin('javascript:alert(1)')).toBeNull();
+      expect(toCanonicalAuthOrigin('data:text/plain,foo')).toBeNull();
+      expect(toCanonicalAuthOrigin('http://user:pass@example.com:7070')).toBeNull();
+      expect(toCanonicalAuthOrigin('not a url')).toBeNull();
+      expect(toCanonicalAuthOrigin('')).toBeNull();
+    });
+
+    it('shares session cookies between trailing slash and non-trailing slash access', async () => {
+      let cookieReceived = '';
+      const doFetch = (async (url: URL, init?: RequestInit) => {
+        const path = url.toString();
+        if (path.endsWith('/api/auth/status')) {
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              version: 'v1',
+              algorithm: 'pbkdf2-sha256',
+              iterations: 600_000,
+              salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+              challenge: 'test-challenge',
+            }),
+            { status: 200 },
+          );
+        }
+        if (path.endsWith('/api/auth/login')) {
+          return new Response('{"ok":true}', {
+            status: 200,
+            headers: {
+              'set-cookie':
+                'phi_access_session=shared-session-token; Path=/; HttpOnly',
+            },
+          });
+        }
+        if (path.endsWith('/api/config')) {
+          const headers = (init?.headers ?? {}) as Record<string, string>;
+          cookieReceived = headers.Cookie ?? '';
+          return new Response('{"hostname":"minerva"}', { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${path}`);
+      }) as unknown as typeof fetch;
+
+      const auth = new AccessAuth(doFetch);
+      // Unlock with trailing slash
+      const unlock = await auth.tryUnlock(
+        'https://minerva.example.test/',
+        'whatever-password',
+      );
+      expect(unlock.kind).toBe('ok');
+
+      // Query hasCookie without trailing slash
+      expect(auth.hasCookie('https://minerva.example.test')).toBe(true);
+
+      // fetchConfig without trailing slash sends the cookie
+      const cfg = await auth.fetchConfig('https://minerva.example.test');
+      expect(cfg.kind).toBe('ok');
+      expect(cookieReceived).toBe('phi_access_session=shared-session-token');
+
+      // cancel with no slash clears cookie for with-slash as well
+      auth.cancel('https://minerva.example.test');
+      expect(auth.hasCookie('https://minerva.example.test/')).toBe(false);
+      expect(auth.hasCookie('https://minerva.example.test')).toBe(false);
+    });
+
+    it('preserves newer session cookie S1 when an older unauthenticated probe returns 401', async () => {
+      let probeResolve!: (res: Response) => void;
+      const probePromise = new Promise<Response>((r) => {
+        probeResolve = r;
+      });
+
+      const doFetch = (async (url: URL, init?: RequestInit) => {
+        const path = url.toString();
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        if (path.endsWith('/api/config')) {
+          if (!headers.Cookie) {
+            // Delayed unauthenticated probe
+            return probePromise;
+          }
+          // Authenticated probe with S1
+          return new Response('{"hostname":"fresh"}', { status: 200 });
+        }
+        throw new Error(`unexpected: ${path}`);
+      }) as unknown as typeof fetch;
+
+      const auth = new AccessAuth(doFetch);
+      // 1. Start delayed unauthenticated probe
+      const unauthProbe = auth.fetchConfig('https://minerva.example.test');
+
+      // 2. Fresh login installs S1 in jar
+      (auth as unknown as { cookies: Map<string, unknown> }).cookies.set(
+        'https://minerva.example.test',
+        {
+          cookieName: 'phi_access_session',
+          cookieValue: 'S1-token',
+          path: '/',
+          httpOnly: true,
+          origin: 'https://minerva.example.test',
+        },
+      );
+
+      // 3. Release unauthenticated probe with 401
+      probeResolve(new Response('', { status: 401 }));
+      const unauthRes = await unauthProbe;
+      expect(unauthRes.kind).toBe('unauthorized');
+
+      // 4. S1 must NOT have been deleted by the unauthenticated 401
+      expect(auth.hasCookie('https://minerva.example.test')).toBe(true);
+      const authProbe = await auth.fetchConfig('https://minerva.example.test');
+      expect(authProbe.kind).toBe('ok');
+    });
+
+    it('does not allow older login validation failure to clobber newer login state', async () => {
+      let configResolveA!: (res: Response) => void;
+      const configPromiseA = new Promise<Response>((r) => {
+        configResolveA = r;
+      });
+
+      let loginAReachedConfigResolve!: () => void;
+      const loginAReachedConfigPromise = new Promise<void>((r) => {
+        loginAReachedConfigResolve = r;
+      });
+
+      const goodStatus = {
+        enabled: true,
+        version: 'v1' as const,
+        algorithm: 'pbkdf2-sha256' as const,
+        iterations: 600_000,
+        salt: Buffer.from('AQID', 'base64url').toString('base64url'),
+        challenge: 'test-challenge',
+      };
+
+      let loginCall = 0;
+      const doFetch = (async (url: URL, init?: RequestInit) => {
+        const path = url.toString();
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        if (path.endsWith('/api/auth/status')) {
+          return new Response(JSON.stringify(goodStatus), { status: 200 });
+        }
+        if (path.endsWith('/api/auth/login')) {
+          loginCall++;
+          const token = loginCall === 1 ? 'S1-cookie' : 'S2-cookie';
+          return new Response('{"ok":true}', {
+            status: 200,
+            headers: {
+              'set-cookie': `phi_access_session=${token}; Path=/; HttpOnly`,
+            },
+          });
+        }
+        if (path.endsWith('/api/config')) {
+          const cookieHdr = headers.Cookie || headers.cookie || '';
+          if (cookieHdr.includes('S1-cookie')) {
+            loginAReachedConfigResolve();
+            return configPromiseA;
+          }
+          if (cookieHdr.includes('S2-cookie')) {
+            return new Response('{"hostname":"from-S2"}', { status: 200 });
+          }
+        }
+        throw new Error(`unexpected fetch: ${path}`);
+      }) as unknown as typeof fetch;
+
+      const auth = new AccessAuth(doFetch);
+
+      const verifierA = Buffer.alloc(32, 0x11);
+      const verifierB = Buffer.alloc(32, 0x22);
+
+      // Start login A (which will pause during post-login config fetch with S1)
+      const loginAPromise = auth.tryUnlockWithVerifier('https://minerva.example.test', verifierA);
+
+      // Wait until login A definitely reached fetchConfig with S1
+      await loginAReachedConfigPromise;
+
+      // Start and complete login B (which installs S2 and succeeds)
+      const loginB = await auth.tryUnlockWithVerifier('https://minerva.example.test', verifierB);
+      expect(loginB.kind).toBe('ok');
+
+      // Now release login A's config validation with 401
+      configResolveA(new Response('', { status: 401 }));
+      await loginAPromise;
+
+      // Login B's S2 cookie and verifier must NOT have been cancelled or deleted!
+      expect(auth.hasCookie('https://minerva.example.test')).toBe(true);
+      const postCheck = await auth.fetchConfig('https://minerva.example.test');
+      expect(postCheck.kind).toBe('ok');
+      if (postCheck.kind === 'ok') {
+        expect(postCheck.config).toEqual({ hostname: 'from-S2' });
+      }
+    });
   });
 });

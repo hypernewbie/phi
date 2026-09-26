@@ -47,6 +47,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ProfileViewManager } from './views.js';
 import { AccessAuth } from './access-auth.js';
+import { toCanonicalAuthOrigin } from './access-auth.js';
 import type {
   ActiveServer,
   HeaderAction,
@@ -1530,8 +1531,10 @@ export class DesktopHost {
     const entries = (parsed as { origins?: Record<string, unknown> }).origins;
     if (!entries || typeof entries !== 'object') return;
     for (const [origin, raw] of Object.entries(entries)) {
+      const canonical = toCanonicalAuthOrigin(origin);
+      if (!canonical) continue;
       const c = this.parseStoredCredential(raw);
-      if (c) this.storedCredentials.set(origin, c);
+      if (c) this.storedCredentials.set(canonical, c);
     }
   }
 
@@ -1636,7 +1639,8 @@ export class DesktopHost {
     if (!safeStorage.isEncryptionAvailable()) return;
     const origins: Record<string, unknown> = {};
     for (const [origin, c] of this.storedCredentials) {
-      origins[origin] = {
+      const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+      origins[canonical] = {
         version: c.version,
         algorithm: c.algorithm,
         iterations: c.iterations,
@@ -1673,7 +1677,9 @@ export class DesktopHost {
     algorithm: 'pbkdf2-sha256';
   } | null {
     try {
-      const url = new URL(origin);
+      const canonical = toCanonicalAuthOrigin(origin);
+      if (!canonical) return null;
+      const url = new URL(canonical);
       const host = url.hostname.toLowerCase();
       const isLocal =
         host === 'localhost' ||
@@ -1715,7 +1721,7 @@ export class DesktopHost {
         salt,
         verifier,
       };
-      this.storedCredentials.set(origin, cred);
+      this.storedCredentials.set(canonical, cred);
       this.saveStoredCredentials();
       return cred;
     } catch {
@@ -1724,14 +1730,16 @@ export class DesktopHost {
   }
 
   /**
-   * Recovers a saved access credential from the body view's localStorage.
+   * Recovers a saved access credential candidate from the body view's localStorage.
    * If the user previously logged into this origin in the browser or body view,
    * localStorage holds the PBKDF2 verifier and trust params, which can be
    * reused by the desktop host to authenticate without prompting.
+   * Note: This is a read-only candidate lookup; it is only committed to disk
+   * after verification succeeds.
    */
   async recoverFromViewLocalStorage(
     view: WebContentsView | null | undefined,
-    origin: string,
+    _origin?: string,
   ): Promise<{
     verifier: Buffer;
     salt: Buffer;
@@ -1764,17 +1772,13 @@ export class DesktopHost {
       const salt = Buffer.from(parsed.salt, 'base64url');
       const verifier = Buffer.from(parsed.verifier, 'base64url');
       if (salt.length === 0 || verifier.length !== 32) return null;
-      const cred = {
+      return {
         version: 'v1' as const,
         algorithm: 'pbkdf2-sha256' as const,
         iterations: parsed.iterations,
         salt,
         verifier,
       };
-      const canonicalOrigin = new URL(origin).origin;
-      this.storedCredentials.set(canonicalOrigin, cred);
-      this.saveStoredCredentials();
-      return cred;
     } catch {
       return null;
     }
@@ -1788,13 +1792,17 @@ export class DesktopHost {
     version: 'v1';
     algorithm: 'pbkdf2-sha256';
   } | null {
-    let cred = this.storedCredentials.get(origin);
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    let cred = this.storedCredentials.get(canonical) ?? this.storedCredentials.get(origin);
     if (!cred) {
       this.loadStoredCredentials();
-      cred = this.storedCredentials.get(origin);
+      cred = this.storedCredentials.get(canonical) ?? this.storedCredentials.get(origin);
     }
     if (!cred) {
-      cred = this.tryRecoverLocalCredential(origin) ?? undefined;
+      cred =
+        this.tryRecoverLocalCredential(canonical) ??
+        this.tryRecoverLocalCredential(origin) ??
+        undefined;
     }
     return cred ?? null;
   }
@@ -1808,9 +1816,10 @@ export class DesktopHost {
     generation: number,
   ): void {
     if (generation !== this.sessionGeneration) return;
-    const cred = accessAuth.getLastCredential(origin);
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const cred = accessAuth.getLastCredential(canonical) ?? accessAuth.getLastCredential(origin);
     if (cred) {
-      this.storedCredentials.set(origin, {
+      this.storedCredentials.set(canonical, {
         version: 'v1',
         algorithm: 'pbkdf2-sha256',
         iterations: cred.iterations,
@@ -1820,11 +1829,11 @@ export class DesktopHost {
       this.saveStoredCredentials();
       return;
     }
-    const verifier = accessAuth.getLastVerifier(origin);
+    const verifier = accessAuth.getLastVerifier(canonical) ?? accessAuth.getLastVerifier(origin);
     if (!verifier) return;
-    void this.fetchAuthStatusForPersistence(origin).then((status) => {
+    void this.fetchAuthStatusForPersistence(canonical).then((status) => {
       if (!status || generation !== this.sessionGeneration) return;
-      this.storedCredentials.set(origin, {
+      this.storedCredentials.set(canonical, {
         version: 'v1',
         algorithm: 'pbkdf2-sha256',
         iterations: status.iterations,
@@ -1870,7 +1879,10 @@ export class DesktopHost {
    *  rotated the salt). Writes the file so the entry is gone on
    *  disk, not just in memory. */
   clearStoredCredential(origin: string): void {
-    if (this.storedCredentials.delete(origin)) this.saveStoredCredentials();
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const del1 = this.storedCredentials.delete(canonical);
+    const del2 = this.storedCredentials.delete(origin);
+    if (del1 || del2) this.saveStoredCredentials();
   }
 
   /** Re-authenticates an origin from a persisted verifier. Returns
@@ -1883,9 +1895,10 @@ export class DesktopHost {
     generation: number,
   ): Promise<boolean> {
     if (generation !== this.sessionGeneration) return false;
-    const cred = this.getOrRecoverCredential(origin);
+    const canonical = toCanonicalAuthOrigin(origin) ?? origin;
+    const cred = this.getOrRecoverCredential(canonical);
     if (!cred) return false;
-    const status = await this.fetchAuthStatusForPersistence(origin);
+    const status = await this.fetchAuthStatusForPersistence(canonical);
     if (generation !== this.sessionGeneration) return false;
     if (!status) {
       // Server is offline, starting up, or transient network hiccup.
@@ -1896,18 +1909,18 @@ export class DesktopHost {
       status.iterations !== cred.iterations ||
       !status.salt.equals(cred.salt)
     ) {
-      this.clearStoredCredential(origin);
+      this.clearStoredCredential(canonical);
       return false;
     }
     const verifierCopy = Buffer.from(cred.verifier);
     try {
       const result = await accessAuth.tryUnlockWithVerifier(
-        origin,
+        canonical,
         verifierCopy,
       );
       if (generation !== this.sessionGeneration) return false;
       if (result.kind === 'invalid-password') {
-        this.clearStoredCredential(origin);
+        this.clearStoredCredential(canonical);
         return false;
       }
       return result.kind === 'ok';
@@ -1929,8 +1942,8 @@ export class DesktopHost {
     const profiles = this.controller?.state().profiles ?? [];
     for (const p of profiles) {
       try {
-        const canonicalOrigin = new URL(p.origin).origin;
-        if (!this.storedCredentials.has(canonicalOrigin)) {
+        const canonicalOrigin = toCanonicalAuthOrigin(p.origin);
+        if (canonicalOrigin && !this.storedCredentials.has(canonicalOrigin)) {
           this.tryRecoverLocalCredential(canonicalOrigin);
         }
       } catch {
@@ -3100,23 +3113,49 @@ export class DesktopHost {
           void view.webContents
             .executeJavaScript(INSTALL_FILE_ACTION_SCRIPT)
             .catch(() => {});
-          void this.recoverFromViewLocalStorage(view, origin).then((cred) => {
-            if (cred && isCurrent()) {
-              if (pendingUnlock && pendingUnlock.origin === origin) {
-                pendingUnlock.abort.abort();
-                pendingUnlock = null;
-                sendBodyObscuring(false);
-              }
-              const verifierCopy = Buffer.from(cred.verifier);
-              void accessAuth
-                .tryUnlockWithVerifier(origin, verifierCopy)
-                .then((res) => {
+          const canonicalOrigin = toCanonicalAuthOrigin(origin) ?? origin;
+          void this.recoverFromViewLocalStorage(view, canonicalOrigin).then(
+            async (cred) => {
+              if (cred && isCurrent()) {
+                const verifierCopy = Buffer.from(cred.verifier);
+                try {
+                  const res = await accessAuth.tryUnlockWithVerifier(
+                    canonicalOrigin,
+                    verifierCopy,
+                  );
                   if (res.kind === 'ok' && isCurrent()) {
+                    this.storedCredentials.set(canonicalOrigin, {
+                      version: cred.version,
+                      algorithm: cred.algorithm,
+                      iterations: cred.iterations,
+                      salt: Buffer.from(cred.salt),
+                      verifier: Buffer.from(cred.verifier),
+                    });
+                    this.saveStoredCredentials();
+                    if (
+                      pendingUnlock &&
+                      (pendingUnlock.origin === canonicalOrigin ||
+                        toCanonicalAuthOrigin(pendingUnlock.origin) ===
+                          canonicalOrigin)
+                    ) {
+                      const resolvedInfo = {
+                        requestId: pendingUnlock.requestId,
+                        origin: pendingUnlock.origin,
+                        profileId: pendingUnlock.profileId,
+                      };
+                      pendingUnlock.abort.abort();
+                      pendingUnlock = null;
+                      sendBodyObscuring(false);
+                      sendAuthResolved(resolvedInfo);
+                    }
                     this.pushActiveServer();
                   }
-                });
-            }
-          });
+                } finally {
+                  verifierCopy.fill(0);
+                }
+              }
+            },
+          );
           // A first activation can request header config before this body has
           // populated its workspace selector. Re-push the active server after
           // load so the main header reads this server's actual selected project.
@@ -3124,7 +3163,12 @@ export class DesktopHost {
           const active = state?.profiles.find(
             (profile) => profile.id === state.activeId,
           );
-          if (active?.origin === origin) this.pushActiveServer();
+          if (
+            active?.origin === origin ||
+            (active && toCanonicalAuthOrigin(active.origin) === canonicalOrigin)
+          ) {
+            this.pushActiveServer();
+          }
         });
         return view;
       };
@@ -3567,6 +3611,21 @@ export class DesktopHost {
       current.webContents.send('phi:body-obscuring', obscured);
       this.profileViews?.setObscured(obscured);
     };
+    const sendAuthResolved = (
+      info: { requestId: string; origin: string; profileId?: string },
+      generation = this.sessionGeneration,
+    ): void => {
+      const current = this.liveMainWindow();
+      if (
+        generation !== this.sessionGeneration ||
+        !current ||
+        current.isDestroyed() ||
+        !current.webContents ||
+        current.webContents.isDestroyed()
+      )
+        return;
+      current.webContents.send('phi:auth-resolved', info);
+    };
     /** Waits for one main-frame load without exposing a timer or callback to
      *  the remote page. Used both before the one-time login and after reload. */
     const waitForBodyLoad = (
@@ -3831,7 +3890,24 @@ export class DesktopHost {
         // A config response for the outgoing server must never repaint the
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
-        if (result.kind === 'ok') return result.config;
+        if (result.kind === 'ok') {
+          if (
+            pendingUnlock &&
+            (pendingUnlock.origin === origin ||
+              toCanonicalAuthOrigin(pendingUnlock.origin) === origin)
+          ) {
+            const resolvedInfo = {
+              requestId: pendingUnlock.requestId,
+              origin: pendingUnlock.origin,
+              profileId: pendingUnlock.profileId,
+            };
+            pendingUnlock.abort.abort();
+            pendingUnlock = null;
+            sendBodyObscuring(false);
+            sendAuthResolved(resolvedInfo);
+          }
+          return result.config;
+        }
         if (result.kind === 'unavailable') return null;
         // result.kind === 'unauthorized': the server requires access.
         // If the active body view is already loaded and authenticated (e.g. via browser session/localStorage),
@@ -3848,20 +3924,42 @@ export class DesktopHost {
             );
             if (recovered) {
               const verifierCopy = Buffer.from(recovered.verifier);
-              const unlock = await auth.tryUnlockWithVerifier(
-                origin,
-                verifierCopy,
-              );
+              let unlock: Awaited<
+                ReturnType<typeof auth.tryUnlockWithVerifier>
+              > | null = null;
+              try {
+                unlock = await auth.tryUnlockWithVerifier(origin, verifierCopy);
+              } finally {
+                verifierCopy.fill(0);
+              }
               if (
                 capture.generation === this.sessionGeneration &&
                 ctrl.state().activeId === capture.profileId &&
-                unlock.kind === 'ok' &&
+                unlock?.kind === 'ok' &&
                 unlock.config
               ) {
-                if (pendingUnlock && pendingUnlock.origin === origin) {
+                this.storedCredentials.set(origin, {
+                  version: recovered.version,
+                  algorithm: recovered.algorithm,
+                  iterations: recovered.iterations,
+                  salt: Buffer.from(recovered.salt),
+                  verifier: Buffer.from(recovered.verifier),
+                });
+                this.saveStoredCredentials();
+                if (
+                  pendingUnlock &&
+                  (pendingUnlock.origin === origin ||
+                    toCanonicalAuthOrigin(pendingUnlock.origin) === origin)
+                ) {
+                  const resolvedInfo = {
+                    requestId: pendingUnlock.requestId,
+                    origin: pendingUnlock.origin,
+                    profileId: pendingUnlock.profileId,
+                  };
                   pendingUnlock.abort.abort();
                   pendingUnlock = null;
                   sendBodyObscuring(false);
+                  sendAuthResolved(resolvedInfo);
                 }
                 return unlock.config;
               }
@@ -3885,10 +3983,20 @@ export class DesktopHost {
               Array.isArray(remoteConfig.workspaces) &&
               remoteConfig.workspaces.length > 0
             ) {
-              if (pendingUnlock && pendingUnlock.origin === origin) {
+              if (
+                pendingUnlock &&
+                (pendingUnlock.origin === origin ||
+                  toCanonicalAuthOrigin(pendingUnlock.origin) === origin)
+              ) {
+                const resolvedInfo = {
+                  requestId: pendingUnlock.requestId,
+                  origin: pendingUnlock.origin,
+                  profileId: pendingUnlock.profileId,
+                };
                 pendingUnlock.abort.abort();
                 pendingUnlock = null;
                 sendBodyObscuring(false);
+                sendAuthResolved(resolvedInfo);
               }
               return remoteConfig;
             }
@@ -3919,7 +4027,25 @@ export class DesktopHost {
             ctrl.state().activeId !== capture.profileId
           )
             return null;
-          return cfg?.kind === 'ok' ? cfg.config : null;
+          if (cfg?.kind === 'ok') {
+            if (
+              pendingUnlock &&
+              (pendingUnlock.origin === origin ||
+                toCanonicalAuthOrigin(pendingUnlock.origin) === origin)
+            ) {
+              const resolvedInfo = {
+                requestId: pendingUnlock.requestId,
+                origin: pendingUnlock.origin,
+                profileId: pendingUnlock.profileId,
+              };
+              pendingUnlock.abort.abort();
+              pendingUnlock = null;
+              sendBodyObscuring(false);
+              sendAuthResolved(resolvedInfo);
+            }
+            return cfg.config;
+          }
+          return null;
         }
         if (status.kind === 'unavailable') return null;
         // status.kind === 'trusted': server asks for a password. Attempt a
@@ -3930,26 +4056,10 @@ export class DesktopHost {
         // that lets us do that without a prompt. Only when no valid
         // credential exists (or the server rotated the salt) do we fall
         // through to the modal below.
-        if (pendingUnlock !== null) {
-          if (
-            pendingUnlock.origin === origin &&
-            pendingUnlock.profileId === active.id
-          ) {
-            sendBodyObscuring(true, pendingUnlock.generation);
-            sendAuthRequired({
-              requestId: pendingUnlock.requestId,
-              profileId: pendingUnlock.profileId,
-              origin: pendingUnlock.origin,
-              label: active.name !== '' ? active.name : pendingUnlock.origin,
-              generation: pendingUnlock.generation,
-            });
-          }
-          return null; // one prompt at a time
-        }
-        if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
-        if (unlockInFlight) return null;
-        const cred = this.getOrRecoverCredential(origin);
-        if (cred !== null) {
+        const cred = this.storedCredentials.has(origin)
+          ? this.getOrRecoverCredential(origin)
+          : this.getOrRecoverCredential(origin);
+        if (cred !== null && !unlockInFlight && promptSuppressedFor !== origin) {
           // Conservative: compare the server's CURRENT salt/iterations
           // against the stored credential so a confirmed rotation
           // clears it, but a transient network blip (status fetch
@@ -4004,15 +4114,27 @@ export class DesktopHost {
               capture.generation === this.sessionGeneration &&
               ctrl.state().activeId === active.id
             ) {
-              if (retry.kind === 'ok') return retry.config;
-              if (retry.kind === 'unauthorized') {
-                // Re-auth said ok but the server still rejects — the
-                // stored credential is bad. Clear so the prompt that
-                // follows re-seeds with a fresh verifier.
-                this.clearStoredCredential(origin);
-              } else {
-                return null; // unavailable
+              if (retry.kind === 'ok') {
+                if (
+                  pendingUnlock &&
+                  (pendingUnlock.origin === origin ||
+                    toCanonicalAuthOrigin(pendingUnlock.origin) === origin)
+                ) {
+                  const resolvedInfo = {
+                    requestId: pendingUnlock.requestId,
+                    origin: pendingUnlock.origin,
+                    profileId: pendingUnlock.profileId,
+                  };
+                  pendingUnlock.abort.abort();
+                  pendingUnlock = null;
+                  sendBodyObscuring(false);
+                  sendAuthResolved(resolvedInfo);
+                }
+                return retry.config;
               }
+              // Do NOT clear stored credential on session-level 401 retry:
+              // Session validation failure is not proof that the verifier is invalid.
+              return null;
             } else {
               return null;
             }
@@ -4039,6 +4161,31 @@ export class DesktopHost {
           // never paints as a real prompt.
         }
         if (capture.generation !== this.sessionGeneration) return null;
+        if (pendingUnlock !== null) {
+          if (
+            (pendingUnlock.origin === origin ||
+              toCanonicalAuthOrigin(pendingUnlock.origin) === origin) &&
+            pendingUnlock.profileId === active.id
+          ) {
+            sendBodyObscuring(true, pendingUnlock.generation);
+            sendAuthRequired({
+              requestId: pendingUnlock.requestId,
+              profileId: pendingUnlock.profileId,
+              origin: pendingUnlock.origin,
+              label: active.name !== '' ? active.name : pendingUnlock.origin,
+              generation: pendingUnlock.generation,
+            });
+          }
+          return null; // one prompt at a time
+        }
+        if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
+        if (unlockInFlight) return null;
+        if (
+          capture.generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== active.id
+        ) {
+          return null;
+        }
         pendingUnlock = {
           requestId: randomRequestId(),
           profileId: capture.profileId,
@@ -4132,8 +4279,14 @@ export class DesktopHost {
         if (result.kind === 'ok') {
           const bodyResult = await authenticateBodyView(pending);
           if (!bodyResult.ok) return bodyResult;
+          const resolvedInfo = {
+            requestId: pending.requestId,
+            origin: pending.origin,
+            profileId: pending.profileId,
+          };
           pendingUnlock = null;
           sendBodyObscuring(false);
+          sendAuthResolved(resolvedInfo);
           // Persist the verifier for next launch's auto-reauth (the
           // password is never stored — only the PBKDF2 verifier, which
           // the browser itself stores in `localStorage` under the same

@@ -857,4 +857,138 @@ describe('DesktopHost fake-Electron lifecycle', () => {
 
     win.finishClose();
   });
+
+  it('successfully resolves TBAR auth for server with trailing slash when config is polled before and after body view load', async () => {
+    const salt = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    const verifier = Buffer.alloc(32, 0x42);
+    const saltB64 = salt.toString('base64url');
+    const verifierB64 = verifier.toString('base64url');
+
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      if (u.includes('/api/auth/status')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            version: 'v1',
+            algorithm: 'pbkdf2-sha256',
+            iterations: 600_000,
+            salt: saltB64,
+            challenge: 'test-challenge',
+          }),
+        } as Response;
+      }
+      if (u.includes('/api/auth/login')) {
+        return {
+          status: 200,
+          ok: true,
+          headers: new Headers({
+            'set-cookie':
+              'phi_access_session=mock-session-cookie; Path=/; HttpOnly',
+          }),
+          json: async () => ({ ok: true }),
+        } as unknown as Response;
+      }
+      if (u.includes('/api/config')) {
+        const headers = (init?.headers as Record<string, string>) ?? {};
+        const cookie = headers.Cookie || headers.cookie || '';
+        if (cookie.includes('phi_access_session')) {
+          return {
+            status: 200,
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                hostname: 'minerva',
+                workspaces: ['/Users/minerva/project'],
+                active_cwd: '/Users/minerva/project',
+                theme_color: 'cyan',
+              }),
+            json: async () => ({
+              hostname: 'minerva',
+              workspaces: ['/Users/minerva/project'],
+              active_cwd: '/Users/minerva/project',
+              theme_color: 'cyan',
+            }),
+          } as Response;
+        }
+        return {
+          status: 401,
+          ok: false,
+          text: async () => 'access authentication required',
+        } as Response;
+      }
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ enabled: true }),
+      } as Response;
+    });
+
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    host.handleLaunch([
+      { kind: 'server', value: 'https://minerva.example.test/' },
+    ]);
+    await flush();
+
+    const fetchConfigHandler = fake.ipcHandlers.get('phi:server-config');
+    expect(fetchConfigHandler).toBeDefined();
+
+    // 1. Initial poll while bodyView is loading
+    const config1 = await fetchConfigHandler?.({ sender: win.webContents });
+    expect(config1).toBeNull(); // Expected: 401 prompt triggered pendingUnlock
+
+    const bodyViews = fake.FakeWebContentsView.instances;
+    const bodyView = bodyViews[bodyViews.length - 1];
+
+    bodyView.webContents.executeJavaScript = async (script: string) => {
+      if (script.includes('phi_access_credential_v1')) {
+        return JSON.stringify({
+          version: 'v1',
+          algorithm: 'pbkdf2-sha256',
+          iterations: 600_000,
+          salt: saltB64,
+          verifier: verifierB64,
+        });
+      }
+      return null;
+    };
+
+    // 2. Body view finishes loading and triggers auto-recover
+    bodyView.webContents.emit('did-finish-load');
+    await flush();
+    await flush();
+
+    // With the canonical origin and prompt resolution fix:
+    // makeView's did-finish-load matches canonical origins, unlocks with verifier,
+    // clears pendingUnlock, sends sendBodyObscuring(false), and sends phi:auth-resolved.
+    const obscuringEvents = win.webContents.sent.filter(
+      ([channel]) => channel === 'phi:body-obscuring',
+    );
+    expect(obscuringEvents).toEqual([
+      ['phi:body-obscuring', true],
+      ['phi:body-obscuring', false],
+    ]);
+
+    const resolvedEvents = win.webContents.sent.filter(
+      ([channel]) => channel === 'phi:auth-resolved',
+    );
+    expect(resolvedEvents.length).toBeGreaterThan(0);
+
+    // Furthermore, did-finish-load called accessAuth.tryUnlockWithVerifier with the canonical origin,
+    // storing the session cookie under 'https://minerva.example.test' and persisting the verifier.
+    // The subsequent TBAR poll (phi:server-config) looks up 'https://minerva.example.test',
+    // finds the session cookie (or stored credential) and returns the real server config!
+    bodyView.webContents.executeJavaScript = async () => null; // Simulate view unable to run recovery again
+    const config2 = await fetchConfigHandler?.({ sender: win.webContents });
+    expect(config2).not.toBeNull();
+    expect((config2 as { hostname: string }).hostname).toBe('minerva');
+
+    win.finishClose();
+  });
 });
+

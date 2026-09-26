@@ -179,6 +179,9 @@ export interface ElectronApi {
    *  the main view page shows a modal and calls submitAccessPassword
    *  when the user types a password. Returns an unsubscribe function. */
   onAuthRequired(cb: (info: AuthRequired) => void): () => void;
+  /** Subscribe to access-auth prompt resolutions (channel 'phi:auth-resolved');
+   *  the main view page closes any matching modal. Returns an unsubscribe function. */
+  onAuthResolved?(cb: (info: { requestId?: string; profileId?: string; origin?: string; generation?: number }) => void): () => void;
   /** Subscribe to body-view obscuring toggles (channel 'phi:body-obscuring');
    *  the main view page dims the body's pane while a modal is open and
    *  re-shows it on dismiss/unlock. Returns an unsubscribe function. */

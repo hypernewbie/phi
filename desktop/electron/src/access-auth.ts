@@ -109,6 +109,29 @@ const AUTH_PATH_STATUS = '/api/auth/status';
 const AUTH_PATH_LOGIN = '/api/auth/login';
 const CONFIG_PATH = '/api/config';
 
+/**
+ * Canonicalizes and validates an origin string for access-auth identity.
+ * Validates protocol (http: or https: only), authority (non-empty hostname,
+ * no userinfo), and returns standard WHATWG url.origin (lowercase hostname,
+ * default ports stripped, no trailing slash).
+ * Returns null if the origin is invalid or untrusted.
+ */
+export function toCanonicalAuthOrigin(origin: string): string | null {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    if (!url.hostname || url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function withTimeout(signal?: AbortSignal, ms = FETCH_TIMEOUT_MS): AbortSignal {
+  const timeoutSig = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
+}
+
 /** Validated `/api/auth/status` shape — only returned when fully trusted. */
 interface TrustedAuthStatus {
   readonly version: 'v1';
@@ -130,6 +153,7 @@ export class AccessAuth {
     string,
     { verifier: Buffer; salt: Buffer; iterations: number }
   >();
+  private readonly attemptTokens = new Map<string, number>();
   private readonly _doFetch: FetchLike;
   private _cookieProvider: CookieProvider | null = null;
   private _onCookieCaptured: CookieCapturedListener | null = null;
@@ -168,6 +192,16 @@ export class AccessAuth {
    *  cookies are intentionally NOT dropped on rail switch so a return
    *  trip doesn't re-prompt. */
   cancel(origin: string): void {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (canonical) {
+      this.attemptTokens.set(canonical, (this.attemptTokens.get(canonical) ?? 0) + 1);
+      this.cookies.delete(canonical);
+      this.cookies.delete(`${canonical}/`);
+      this.lastVerifier.delete(canonical);
+      this.lastVerifier.delete(`${canonical}/`);
+      this.lastCredential.delete(canonical);
+      this.lastCredential.delete(`${canonical}/`);
+    }
     this.cookies.delete(origin);
     this.lastVerifier.delete(origin);
     this.lastCredential.delete(origin);
@@ -178,7 +212,8 @@ export class AccessAuth {
    *  for this origin in the current process. The host reads this
    *  after `tryUnlock` to persist the verifier across restarts. */
   getLastVerifier(origin: string): Buffer | null {
-    return this.lastVerifier.get(origin) ?? null;
+    const canonical = toCanonicalAuthOrigin(origin);
+    return (canonical ? this.lastVerifier.get(canonical) : null) ?? this.lastVerifier.get(origin) ?? null;
   }
 
   /** Returns the full validated credential (verifier, salt, iterations)
@@ -186,7 +221,8 @@ export class AccessAuth {
   getLastCredential(
     origin: string,
   ): { verifier: Buffer; salt: Buffer; iterations: number } | null {
-    return this.lastCredential.get(origin) ?? null;
+    const canonical = toCanonicalAuthOrigin(origin);
+    return (canonical ? this.lastCredential.get(canonical) : null) ?? this.lastCredential.get(origin) ?? null;
   }
 
   /** Re-authenticate using a previously-derived verifier (typically
@@ -206,13 +242,19 @@ export class AccessAuth {
     verifier: Buffer,
     signal?: AbortSignal,
   ): Promise<UnlockResult> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) {
+      verifier.fill(0);
+      return { kind: 'unavailable', message: 'invalid origin' };
+    }
     if (verifier.length !== 32) {
+      verifier.fill(0);
       return {
         kind: 'invalid-password',
         message: 'Stored credential is corrupted.',
       };
     }
-    const status = await this.fetchStatus(origin, signal);
+    const status = await this.fetchStatus(canonical, signal);
     if (status.kind === 'unavailable') {
       verifier.fill(0);
       return { kind: 'unavailable', message: status.message };
@@ -220,7 +262,7 @@ export class AccessAuth {
     if (status.kind === 'no-auth') {
       verifier.fill(0);
       this.cancel(origin);
-      const cfg = await this.fetchConfig(origin);
+      const cfg = await this.fetchConfig(canonical, signal);
       return cfg.kind === 'ok'
         ? { kind: 'ok', config: cfg.config }
         : {
@@ -228,12 +270,30 @@ export class AccessAuth {
             message: 'auth disabled but config still failed',
           };
     }
-    return this.completeUnlock(origin, verifier, status, signal);
+    const verifierCopy = Buffer.from(verifier);
+    let res: UnlockResult;
+    try {
+      res = await this.completeUnlock(canonical, verifierCopy, status, signal, origin);
+      // If login returned invalid-password, the challenge may have expired or been consumed
+      // (e.g. server restart). Allow at most one retry with a fresh status and challenge.
+      if (res.kind === 'invalid-password' && !signal?.aborted) {
+        const freshStatus = await this.fetchStatus(canonical, signal);
+        if (freshStatus.kind === 'trusted') {
+          const retryCopy = Buffer.from(verifier);
+          res = await this.completeUnlock(canonical, retryCopy, freshStatus, signal, origin);
+        }
+      }
+    } finally {
+      verifier.fill(0);
+    }
+    return res;
   }
 
   /** Test/introspect helper: does `origin` currently hold a session cookie? */
   hasCookie(origin: string): boolean {
-    return this.cookies.has(origin);
+    if (this.cookies.has(origin)) return true;
+    const canonical = toCanonicalAuthOrigin(origin);
+    return canonical !== null && this.cookies.has(canonical);
   }
 
   /** Creates a fresh one-time login proof from the verifier retained after
@@ -249,13 +309,15 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
     | { kind: 'stale'; message: string }
   > {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
     if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
-    const status = await this.fetchStatus(origin, signal);
+    const status = await this.fetchStatus(canonical, signal);
     if (signal?.aborted) return { kind: 'stale', message: 'Aborted' };
     if (status.kind === 'unavailable') return status;
     if (status.kind === 'no-auth') return status;
-    const cred = this.lastCredential.get(origin);
-    const verifier = cred ? cred.verifier : this.lastVerifier.get(origin);
+    const cred = this.lastCredential.get(canonical);
+    const verifier = cred ? cred.verifier : this.lastVerifier.get(canonical);
     if (!verifier)
       return {
         kind: 'unavailable',
@@ -267,21 +329,30 @@ export class AccessAuth {
       proof: makeProof(verifier, status.challenge),
     };
   }
-
   /**
    * Fetches `/api/config` for `origin` with the captured session cookie
    * (if any). 401 is a discriminated `unauthorized` (the caller decides
    * whether to prompt for the password). Anything else (5xx, timeout,
    * CORS, malformed JSON) is `unavailable` — NOT promptable.
    */
-  async fetchConfig(origin: string): Promise<FetchConfigResult> {
-    let cookie = this.cookies.get(origin);
+  async fetchConfig(
+    origin: string,
+    signal?: AbortSignal,
+  ): Promise<FetchConfigResult> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return { kind: 'unavailable', reason: 'invalid origin' };
+    let cookie = this.cookies.get(canonical) ?? (origin !== canonical ? this.cookies.get(origin) : undefined);
     if (!cookie && this._cookieProvider) {
       try {
-        const fromProvider = await this._cookieProvider(origin);
+        let fromProvider = await this._cookieProvider(origin);
+        if (!fromProvider && origin !== canonical) {
+          fromProvider = await this._cookieProvider(canonical);
+        }
         if (fromProvider) {
-          this.cookies.set(origin, fromProvider);
-          cookie = fromProvider;
+          const providerEntry = { ...fromProvider, origin: canonical };
+          this.cookies.set(canonical, providerEntry);
+          if (origin !== canonical) this.cookies.set(origin, providerEntry);
+          cookie = providerEntry;
         }
       } catch {
         /* ignore provider lookup error */
@@ -289,14 +360,23 @@ export class AccessAuth {
     }
     const headers: Record<string, string> = {};
     if (cookie) headers.Cookie = `${cookie.cookieName}=${cookie.cookieValue}`;
+    const sentCookie = cookie;
     try {
-      const res = await this.safeFetch(new URL(CONFIG_PATH, origin), {
+      const res = await this.safeFetch(new URL(CONFIG_PATH, canonical), {
         headers,
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
       if (res.status === 401) {
-        this.cookies.delete(origin);
+        const current = this.cookies.get(canonical) ?? this.cookies.get(origin);
+        if (
+          sentCookie &&
+          current &&
+          current.cookieValue === sentCookie.cookieValue
+        ) {
+          this.cookies.delete(canonical);
+          this.cookies.delete(origin);
+        }
         return { kind: 'unauthorized' };
       }
       if (!res.ok) return { kind: 'unavailable', reason: `http ${res.status}` };
@@ -329,6 +409,10 @@ export class AccessAuth {
     password: string,
     signal?: AbortSignal,
   ): Promise<UnlockResult> {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) {
+      return { kind: 'unavailable', message: 'invalid origin' };
+    }
     if (
       password.length < MIN_PASSWORD_LEN ||
       password.length > MAX_PASSWORD_LEN
@@ -338,13 +422,13 @@ export class AccessAuth {
         message: 'Password length is out of range.',
       };
     }
-    const status = await this.fetchStatus(origin, signal);
+    const status = await this.fetchStatus(canonical, signal);
     if (status.kind === 'unavailable') {
       return { kind: 'unavailable', message: status.message };
     }
     if (status.kind === 'no-auth') {
       this.cancel(origin);
-      const cfg = await this.fetchConfig(origin);
+      const cfg = await this.fetchConfig(canonical, signal);
       return cfg.kind === 'ok'
         ? { kind: 'ok', config: cfg.config }
         : {
@@ -358,7 +442,11 @@ export class AccessAuth {
       status.salt,
       status.iterations,
     );
-    return this.completeUnlock(origin, verifier, status, signal);
+    try {
+      return await this.completeUnlock(canonical, verifier, status, signal, origin);
+    } finally {
+      verifier.fill(0);
+    }
   }
 
   /** Shared post-status-fetch login path: computes the proof, posts
@@ -371,7 +459,7 @@ export class AccessAuth {
    *  The caller is responsible for zeroing `verifier` after this
    *  returns. */
   private async completeUnlock(
-    origin: string,
+    canonical: string,
     verifier: Buffer,
     status: {
       kind: 'trusted';
@@ -381,56 +469,78 @@ export class AccessAuth {
       authenticated: boolean;
     },
     signal: AbortSignal | undefined,
+    callerOrigin?: string,
   ): Promise<UnlockResult> {
-    const proof = makeProof(verifier, status.challenge);
-    if (signal?.aborted) {
-      verifier.fill(0);
+    const attempt = (this.attemptTokens.get(canonical) ?? 0) + 1;
+    this.attemptTokens.set(canonical, attempt);
+    const isCurrent = (): boolean =>
+      this.attemptTokens.get(canonical) === attempt;
+
+    if (signal?.aborted || !isCurrent()) {
       return { kind: 'stale', message: 'Aborted' };
     }
-    const login = await this.postLogin(origin, status.challenge, proof, signal);
+    const proof = makeProof(verifier, status.challenge);
+    const login = await this.postLogin(canonical, status.challenge, proof, signal);
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
     if (login.kind === 'rate-limited') {
-      verifier.fill(0);
       return { kind: 'rate-limited', message: login.message };
     }
     if (login.kind === 'unavailable') {
-      verifier.fill(0);
       return login;
     }
     if (login.kind !== 'ok') {
-      verifier.fill(0);
       return login;
     }
-    this.cookies.set(origin, login.cookie);
+
+    // Install cookie and cache verifier only if this attempt is still current
+    this.cookies.set(canonical, login.cookie);
+    if (callerOrigin && callerOrigin !== canonical) {
+      this.cookies.set(callerOrigin, login.cookie);
+    }
     if (this._onCookieCaptured) {
       try {
-        void this._onCookieCaptured(origin, login.cookie);
+        void this._onCookieCaptured(callerOrigin ?? canonical, login.cookie);
       } catch {
         /* ignore */
       }
     }
-    // Cache the verifier and trust settings so the host can persist it across restarts.
-    // The host reads via `getLastCredential` after a successful unlock
-    // and stores to disk encrypted via `safeStorage`.
     const cached = Buffer.alloc(verifier.length);
     cached.set(verifier);
-    this.lastVerifier.set(origin, cached);
-    this.lastCredential.set(origin, {
+    this.lastVerifier.set(canonical, cached);
+    this.lastCredential.set(canonical, {
       verifier: Buffer.from(cached),
       salt: Buffer.from(status.salt),
       iterations: status.iterations,
     });
-    // Re-fetch config with the captured cookie. A 401 here means the
-    // server accepted login but didn't issue a usable session — drop the
-    // cookie and report so the modal stays open with a clear message.
-    const cfg = await this.fetchConfig(origin);
-    verifier.fill(0);
+    if (callerOrigin && callerOrigin !== canonical) {
+      this.lastVerifier.set(callerOrigin, cached);
+      this.lastCredential.set(callerOrigin, {
+        verifier: Buffer.from(cached),
+        salt: Buffer.from(status.salt),
+        iterations: status.iterations,
+      });
+    }
+
+    // Re-fetch config with the captured cookie.
+    const cfg = await this.fetchConfig(canonical, signal);
+    if (signal?.aborted || !isCurrent()) {
+      return { kind: 'stale', message: 'Aborted' };
+    }
     if (cfg.kind === 'ok') return { kind: 'ok', config: cfg.config };
     if (cfg.kind === 'unauthorized') {
-      this.cancel(origin);
-      return { kind: 'invalid-password', message: 'Session was not accepted.' };
+      // Server did not accept the session on /api/config.
+      // Invalidate only the specific cookie installed by this login if it is still present.
+      // Crucially, DO NOT call this.cancel(canonical) which would destroy a newer login's state!
+      const current = this.cookies.get(canonical) ?? (callerOrigin ? this.cookies.get(callerOrigin) : undefined);
+      if (!current || current.cookieValue === login.cookie.cookieValue) {
+        this.cookies.delete(canonical);
+        if (callerOrigin) this.cookies.delete(callerOrigin);
+      }
+      return { kind: 'unavailable', message: 'Session was not accepted.' };
     }
-    // 5xx/timeout after a successful login: keep the cookie so the next
-    // 10s poll can recover, but don't paint the wrong config.
+    // 5xx/timeout after a successful login: keep the cookie so the next poll can recover
     return { kind: 'ok', config: null };
   }
 
@@ -453,9 +563,11 @@ export class AccessAuth {
       }
     | { kind: 'unavailable'; message: string }
   > {
+    const canonical = toCanonicalAuthOrigin(origin);
+    if (!canonical) return { kind: 'unavailable', message: 'invalid origin' };
     try {
-      const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, origin), {
-        signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      const res = await this.safeFetch(new URL(AUTH_PATH_STATUS, canonical), {
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
       if (!res.ok)
@@ -484,7 +596,7 @@ export class AccessAuth {
   }
 
   private async postLogin(
-    origin: string,
+    canonical: string,
     challenge: string,
     proof: string,
     signal?: AbortSignal,
@@ -495,11 +607,11 @@ export class AccessAuth {
     | { kind: 'unavailable'; message: string }
   > {
     try {
-      const res = await this.safeFetch(new URL(AUTH_PATH_LOGIN, origin), {
+      const res = await this.safeFetch(new URL(AUTH_PATH_LOGIN, canonical), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challenge, proof }),
-        signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
         redirect: 'error',
       });
       if (res.status === 429) {
@@ -523,7 +635,7 @@ export class AccessAuth {
           kind: 'unavailable',
           message: 'missing or insecure session cookie',
         };
-      return { kind: 'ok', cookie: { origin, ...cookie } };
+      return { kind: 'ok', cookie: { origin: canonical, ...cookie } };
     } catch (err) {
       return {
         kind: 'unavailable',
