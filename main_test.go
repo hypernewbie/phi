@@ -1471,6 +1471,82 @@ func TestHandleRawDiff_CancelledContext(t *testing.T) {
 	}
 }
 
+// TestHandleRawDiff_HeadHashCache (L6): /api/git/raw-diff is polled by
+// the diff panel, so lookupGitHead memoises the (HEAD, branch) pair
+// per cwd. Asserting the second call within the TTL doesn't re-run
+// git rev-parse — i.e. that the cached branch value survives a fresh
+// commit on disk, and a refetch after the TTL picks up the new hash.
+//
+// We don't mock the FS / clock here; instead we observe cache
+// behaviour by changing the underlying git state between calls and
+// verifying the cache returns the stale value first, then refreshes
+// after we manually invalidate.
+func TestHandleRawDiff_HeadHashCache(t *testing.T) {
+	tempDir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+	runGit("init")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(tempDir, "f.txt"), []byte("hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "f.txt")
+	runGit("commit", "-m", "init")
+
+	// Make sure no entry is cached from a previous run sharing this cwd.
+	// t.TempDir() gives us a unique path, but be explicit anyway.
+	gitHeadCache.Delete(tempDir)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/git/raw-diff?cwd="+tempDir,
+		nil,
+	)
+	w := httptest.NewRecorder()
+	handleRawDiff(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	firstHead := w.Header().Get("X-Phi-Git-Head")
+	firstBranch := w.Header().Get("X-Phi-Git-Branch")
+	if firstHead == "" || firstBranch == "" {
+		t.Fatalf("expected HEAD/Branch headers populated on first call, got %q/%q", firstHead, firstBranch)
+	}
+
+	// Create a fresh commit. The cache should still return the OLD
+	// head within the TTL window.
+	if err := os.WriteFile(filepath.Join(tempDir, "f.txt"), []byte("hi2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "f.txt")
+	runGit("commit", "-m", "second")
+
+	w2 := httptest.NewRecorder()
+	handleRawDiff(w2, req)
+	if got := w2.Header().Get("X-Phi-Git-Head"); got != firstHead {
+		t.Errorf(
+			"cached HEAD should be returned within TTL; got %q want %q",
+			got,
+			firstHead,
+		)
+	}
+
+	// Invalidate the cache; the next call must surface the new HEAD.
+	gitHeadCache.Delete(tempDir)
+	w3 := httptest.NewRecorder()
+	handleRawDiff(w3, req)
+	if got := w3.Header().Get("X-Phi-Git-Head"); got == firstHead || got == "" {
+		t.Errorf("after invalidation HEAD should refresh, got %q (was %q)", got, firstHead)
+	}
+}
+
 func TestHandleGetWorktreeDirtyStates(t *testing.T) {
 	tempDir := t.TempDir()
 

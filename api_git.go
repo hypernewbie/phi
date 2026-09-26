@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/hypernewbie/phi/pkg/diff"
 	"github.com/hypernewbie/phi/pkg/gitutil"
@@ -22,6 +25,56 @@ import (
 // feeding the raw `fatal: not a git repository ...` stderr into the
 // terminal as a giant red message.
 const notGitRepoBody = "NOT_GIT_REPO"
+
+// gitHeadCache memoises the (HEAD, branch) pair per cwd so the
+// diff-review headers don't cost two extra git subprocesses on every
+// poll of /api/git/raw-diff (the diff panel refetches this endpoint
+// frequently). TTL is short enough that a fresh commit lands within
+// one polling cycle, long enough to absorb rapid-fire refetches.
+type gitHeadCacheEntry struct {
+	head     string
+	branch   string
+	cachedAt time.Time
+}
+
+var gitHeadCache sync.Map // map[string]gitHeadCacheEntry
+
+const gitHeadCacheTTL = 5 * time.Second
+
+// lookupGitHead returns the cached HEAD/branch pair for cwd, or
+// fetches them with two `git rev-parse` calls on cache miss. Empty
+// strings indicate a detached HEAD, unborn branch, or non-git cwd —
+// callers treat those as "unknown" rather than as errors.
+func lookupGitHead(ctx context.Context, cwd string) (string, string) {
+	if cwd == "" {
+		return "", ""
+	}
+	if v, ok := gitHeadCache.Load(cwd); ok {
+		entry := v.(gitHeadCacheEntry)
+		if time.Since(entry.cachedAt) < gitHeadCacheTTL {
+			return entry.head, entry.branch
+		}
+	}
+	head, branch := "", ""
+	if out, err := runGitRevParse(ctx, cwd, "--short", "HEAD"); err == nil {
+		head = strings.TrimSpace(string(out))
+	}
+	if out, err := runGitRevParse(ctx, cwd, "--abbrev-ref", "HEAD"); err == nil {
+		branch = strings.TrimSpace(string(out))
+	}
+	gitHeadCache.Store(cwd, gitHeadCacheEntry{
+		head:     head,
+		branch:   branch,
+		cachedAt: time.Now(),
+	})
+	return head, branch
+}
+
+func runGitRevParse(ctx context.Context, cwd string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"rev-parse"}, args...)...)
+	cmd.Dir = cwd
+	return cmd.Output()
+}
 
 func handleGetDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
@@ -183,19 +236,16 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Head + branch headers let the frontend anchor review comments to a
-	// concrete commit. Best-effort: a detached HEAD or unborn branch yields
-	// an empty header, which the UI treats as "unknown".
-	if headCmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD"); true {
-		headCmd.Dir = cwd
-		if headOut, err := headCmd.Output(); err == nil {
-			w.Header().Set("X-Phi-Git-Head", strings.TrimSpace(string(headOut)))
-		}
+	// concrete commit. Cached per-cwd so the diff panel's polling on
+	// /api/git/raw-diff doesn't spawn two git subprocesses each tick.
+	// Best-effort: a detached HEAD or unborn branch yields empty headers,
+	// which the UI treats as "unknown".
+	head, branch := lookupGitHead(ctx, cwd)
+	if head != "" {
+		w.Header().Set("X-Phi-Git-Head", head)
 	}
-	if branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD"); true {
-		branchCmd.Dir = cwd
-		if branchOut, err := branchCmd.Output(); err == nil {
-			w.Header().Set("X-Phi-Git-Branch", strings.TrimSpace(string(branchOut)))
-		}
+	if branch != "" {
+		w.Header().Set("X-Phi-Git-Branch", branch)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
