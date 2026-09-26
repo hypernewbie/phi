@@ -1,6 +1,7 @@
 package coders
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -589,6 +590,23 @@ func TestLoadFromDir_RejectsInvalidLogo(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────
 // Descriptor
 // ─────────────────────────────────────────────────────────────────────────
+
+func TestDescriptorsForPreservesServerOrder(t *testing.T) {
+	coders := NewManager().List()
+	wire, err := json.Marshal(DescriptorsFor(coders))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]CoderDescriptor
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for i, coder := range coders {
+		if got := decoded[coder.ID].Order; got != i {
+			t.Errorf("%s: order = %d, want %d", coder.ID, got, i)
+		}
+	}
+}
 
 func TestDescriptorExcludesPrivateFields(t *testing.T) {
 	m := NewManager()

@@ -1,5 +1,6 @@
 import { TabManager } from './terminal.js';
 import { SessionsManager } from './sessions.js';
+import { loadCoderRegistry, listCoders } from './coders.js';
 import { DiffController } from './diff.js';
 import { MarkdownManager } from './markdown.js';
 import { FileTreeManager } from './filetree.js';
@@ -711,20 +712,19 @@ export class App {
     }
 
     async fetchCoderPresets() {
-        // The frontend-side loadCoderRegistry in web-src/coders.ts is
-        // the canonical registry client; this method now mirrors its
-        // payload into the legacy `codersPresetRegistry` map that
-        // terminal.js still indexes by id. We log only the keys (R2)
-        // so the registry body — which never contains private fields
-        // today, but might in a future revision — never reaches the
-        // browser console unredacted.
+        // Share one validated registry load with SessionsManager rather
+        // than fetching /api/coders twice. The terminal's preset row still
+        // expects an object keyed by coder ID; never log private profile data.
         try {
             await loadCoderRegistry();
-            const res = await fetch('/api/coders');
-            if (!res.ok) throw new Error(`status ${res.status}`);
-            this.codersPresetRegistry = await res.json();
-            const ids = Object.keys(this.codersPresetRegistry);
-            console.log(`[app] Loaded coder registries (${ids.length}):`, ids);
+            const coders = listCoders();
+            this.codersPresetRegistry = Object.fromEntries(
+                coders.map((coder) => [coder.id, coder]),
+            );
+            console.log(
+                `[app] Loaded coder registries (${coders.length}):`,
+                coders.map((coder) => coder.id),
+            );
         } catch (e) {
             console.error('[app] Failed to fetch coder presets:', e);
         }

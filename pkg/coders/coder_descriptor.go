@@ -13,7 +13,9 @@ package coders
 // See R2 / R5: env fields with API keys must never appear in any
 // browser-visible response or log line.
 type CoderDescriptor struct {
-	ID                  string       `json:"id"`
+	ID string `json:"id"`
+	// Order preserves Manager.List's order through the ID-keyed JSON object.
+	Order               int          `json:"order"`
 	Name                string       `json:"name"`
 	ShortLabel          string       `json:"short_label"`
 	Logo                string       `json:"logo,omitempty"`
@@ -62,12 +64,14 @@ func shortLabel(c Coder) string {
 	return c.Name
 }
 
-// DescriptorsFor returns the public DTOs for a slice of Coders, in
-// input order. Used by handleGetCoders.
+// DescriptorsFor returns the public DTOs keyed by ID, with their input
+// order encoded explicitly (JSON object keys are sorted by encoding/json).
 func DescriptorsFor(cs []Coder) map[string]CoderDescriptor {
 	out := make(map[string]CoderDescriptor, len(cs))
-	for _, c := range cs {
-		out[c.ID] = c.Descriptor()
+	for i, c := range cs {
+		d := c.Descriptor()
+		d.Order = i
+		out[c.ID] = d
 	}
 	return out
 }

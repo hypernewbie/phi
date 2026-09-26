@@ -14,6 +14,7 @@ export function normalizePath(p) {
 export class SessionsManager {
     app;
     activeCoder;
+    coderTabsInitialized;
     activeWorkspace;
     activeCWD;
     config;
@@ -37,6 +38,7 @@ export class SessionsManager {
     constructor(app) {
         this.app = app;
         this.activeCoder = 'opencode';
+        this.coderTabsInitialized = false;
         this.activeWorkspace = '';
         this.activeCWD = '';
         this.sessionList = document.getElementById('session-list');
@@ -1151,13 +1153,9 @@ export class SessionsManager {
     // the server declared. The click handler is delegated (see
     // setupEventListeners); this method only builds DOM nodes.
     //
-    // Selection precedence (R9 follow-up):
-    //   1. The current activeCoder if it's still visible.
-    //   2. The localStorage-persisted choice if it's still visible.
-    //   3. The first visible coder.
-    // This avoids clobbering an in-progress selection when a
-    // unrelated config mutation (model preset edit, etc.) calls
-    // loadConfig again.
+    // On first render, restore the saved choice before the constructor's
+    // initial 'opencode' value. Later renders keep the current choice so
+    // unrelated config updates do not switch the sidebar.
     renderCoderTabs() {
         const container = document.getElementById('coder-selector');
         if (!container)
@@ -1171,11 +1169,14 @@ export class SessionsManager {
         container.replaceChildren();
         const visibleIds = new Set(coders.map((c) => c.id));
         const stored = localStorage.getItem('phi_active_coder');
-        const activeId = (this.activeCoder && visibleIds.has(this.activeCoder)
+        const current = visibleIds.has(this.activeCoder)
             ? this.activeCoder
-            : null) ??
-            (stored && visibleIds.has(stored) ? stored : null) ??
-            coders[0].id;
+            : null;
+        const saved = stored && visibleIds.has(stored) ? stored : null;
+        const activeId = this.coderTabsInitialized
+            ? (current ?? saved ?? coders[0].id)
+            : (saved ?? current ?? coders[0].id);
+        this.coderTabsInitialized = true;
         for (const c of coders) {
             const btn = document.createElement('button');
             btn.className = 'coder-tab';

@@ -204,6 +204,12 @@ function coerceDescriptor(id, raw) {
     if (typeof r.name !== 'string' || r.name === '') return null;
     return {
         id,
+        order:
+            typeof r.order === 'number' &&
+            Number.isSafeInteger(r.order) &&
+            r.order >= 0
+                ? r.order
+                : undefined,
         name: r.name,
         short_label:
             typeof r.short_label === 'string'
@@ -250,7 +256,14 @@ export function getCoder(id) {
     return registry.get(id);
 }
 export function listCoders() {
-    return Array.from(registry.values());
+    // A JSON object cannot preserve Manager.List's insertion order:
+    // encoding/json sorts its keys. Entries from older servers without
+    // an order field keep their arrival order (stable Array.sort).
+    return Array.from(registry.values()).sort(
+        (a, b) =>
+            (a.order ?? Number.MAX_SAFE_INTEGER) -
+            (b.order ?? Number.MAX_SAFE_INTEGER),
+    );
 }
 export function visibleCoders() {
     return listCoders().filter((c) => c.sidebar_visible);

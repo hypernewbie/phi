@@ -24,6 +24,8 @@ export interface CoderCapabilities {
 
 export interface CoderDescriptor {
     id: string;
+    /** Server registry position; the /api/coders JSON object is keyed by ID. */
+    order?: number;
     name: string;
     short_label: string;
     logo?: string;
@@ -248,6 +250,12 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
     if (typeof r.name !== 'string' || r.name === '') return null;
     return {
         id,
+        order:
+            typeof r.order === 'number' &&
+            Number.isSafeInteger(r.order) &&
+            r.order >= 0
+                ? r.order
+                : undefined,
         name: r.name as string,
         short_label:
             typeof r.short_label === 'string'
@@ -298,7 +306,14 @@ export function getCoder(id: string): CoderDescriptor | undefined {
 }
 
 export function listCoders(): CoderDescriptor[] {
-    return Array.from(registry.values());
+    // A JSON object cannot preserve Manager.List's insertion order:
+    // encoding/json sorts its keys. Entries from older servers without
+    // an order field keep their arrival order (stable Array.sort).
+    return Array.from(registry.values()).sort(
+        (a, b) =>
+            (a.order ?? Number.MAX_SAFE_INTEGER) -
+            (b.order ?? Number.MAX_SAFE_INTEGER),
+    );
 }
 
 export function visibleCoders(): CoderDescriptor[] {
