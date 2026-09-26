@@ -1793,10 +1793,14 @@ export class DesktopHost {
     algorithm: 'pbkdf2-sha256';
   } | null {
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
-    let cred = this.storedCredentials.get(canonical) ?? this.storedCredentials.get(origin);
+    let cred =
+      this.storedCredentials.get(canonical) ??
+      this.storedCredentials.get(origin);
     if (!cred) {
       this.loadStoredCredentials();
-      cred = this.storedCredentials.get(canonical) ?? this.storedCredentials.get(origin);
+      cred =
+        this.storedCredentials.get(canonical) ??
+        this.storedCredentials.get(origin);
     }
     if (!cred) {
       cred =
@@ -1817,7 +1821,9 @@ export class DesktopHost {
   ): void {
     if (generation !== this.sessionGeneration) return;
     const canonical = toCanonicalAuthOrigin(origin) ?? origin;
-    const cred = accessAuth.getLastCredential(canonical) ?? accessAuth.getLastCredential(origin);
+    const cred =
+      accessAuth.getLastCredential(canonical) ??
+      accessAuth.getLastCredential(origin);
     if (cred) {
       this.storedCredentials.set(canonical, {
         version: 'v1',
@@ -1829,7 +1835,9 @@ export class DesktopHost {
       this.saveStoredCredentials();
       return;
     }
-    const verifier = accessAuth.getLastVerifier(canonical) ?? accessAuth.getLastVerifier(origin);
+    const verifier =
+      accessAuth.getLastVerifier(canonical) ??
+      accessAuth.getLastVerifier(origin);
     if (!verifier) return;
     void this.fetchAuthStatusForPersistence(canonical).then((status) => {
       if (!status || generation !== this.sessionGeneration) return;
@@ -4059,7 +4067,11 @@ export class DesktopHost {
         const cred = this.storedCredentials.has(origin)
           ? this.getOrRecoverCredential(origin)
           : this.getOrRecoverCredential(origin);
-        if (cred !== null && !unlockInFlight && promptSuppressedFor !== origin) {
+        if (
+          cred !== null &&
+          !unlockInFlight &&
+          promptSuppressedFor !== origin
+        ) {
           // Conservative: compare the server's CURRENT salt/iterations
           // against the stored credential so a confirmed rotation
           // clears it, but a transient network blip (status fetch

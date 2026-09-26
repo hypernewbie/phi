@@ -991,4 +991,3 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     win.finishClose();
   });
 });
-
