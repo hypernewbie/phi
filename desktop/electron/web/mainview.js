@@ -62,6 +62,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
 
   let activeServerId = null;
   let refreshSerial = 0;
+  let appliedConfigSerial = 0;
+  let appliedWorkspaceSerial = 0;
   let workspaceChangeSerial = 0;
 
   /** Populate the header from the ACTIVE server's /api/config. */
@@ -75,28 +77,36 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
       return; // server unreachable; keep the last rendered state
     }
     if (
-      serial !== refreshSerial ||
+      serial < appliedConfigSerial ||
       requestedServerId !== activeServerId ||
       !config ||
       typeof config !== 'object'
     ) return;
-    const revision = workspaceChangeSerial;
-    let bodyWorkspace = null;
+    appliedConfigSerial = serial;
+
+    // Immediately repaint server identity from config; never wait for workspace read.
+    if (hostnameDisplay && typeof config.hostname === 'string') {
+      hostnameDisplay.innerText = displayHostname(config.hostname);
+    }
+    if (typeof config.theme_color === 'string') {
+      applyAccentTheme(config.theme_color);
+    }
+
     if (workspaceSelect && Array.isArray(config.workspaces)) {
+      const revision = workspaceChangeSerial;
+      let bodyWorkspace = null;
       try {
-        bodyWorkspace = await window.electron.fetchActiveWorkspace?.() ?? null;
+        const workspacePromise = window.electron.fetchActiveWorkspace?.();
+        if (workspacePromise) {
+          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1000));
+          bodyWorkspace = (await Promise.race([workspacePromise, timeoutPromise])) ?? null;
+        }
       } catch {
         // The body may still be loading; use the server config fallback.
       }
-    }
-    // Apply the config atomically only after both reads still belong to
-    // the selected server. An outgoing response never partially repaints
-    // hostname, theme, or project while the incoming read is in flight.
-    if (serial !== refreshSerial || requestedServerId !== activeServerId) return;
-    if (hostnameDisplay) {
-      hostnameDisplay.innerText = displayHostname(config.hostname);
-    }
-    if (workspaceSelect && Array.isArray(config.workspaces)) {
+      if (serial < appliedWorkspaceSerial || requestedServerId !== activeServerId) return;
+      appliedWorkspaceSerial = serial;
+
       const userSelection = workspaceSelect.value;
       workspaceSelect.textContent = '';
       for (const ws of config.workspaces) {
@@ -116,7 +126,6 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
             : config.workspaces[0] ?? '';
       updateWorkspaceSelectWidth();
     }
-    if (typeof config.theme_color === 'string') applyAccentTheme(config.theme_color);
   }
 
   // --- Window controls (local; the main process validates the sender) ---
@@ -187,6 +196,12 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   // --- (the server exposes no push channel for config) ---
   window.electron.onActiveServer((info) => {
     activeServerId = info?.id ?? null;
+    if (info && typeof info.hostname === 'string' && info.hostname !== '' && hostnameDisplay) {
+      hostnameDisplay.innerText = displayHostname(info.hostname);
+    }
+    if (info && typeof info.accent === 'string' && info.accent !== '') {
+      applyAccentTheme(info.accent);
+    }
     void refreshConfig();
   });
   void refreshConfig();
