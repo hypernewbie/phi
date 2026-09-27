@@ -123,26 +123,37 @@ export async function mountFileView(opts) {
     const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
     const kind = kindFor(ext);
     container.innerHTML = '';
+    let handle;
     switch (kind) {
         case 'image':
-            return mountImage(url, container);
+            handle = await mountImage(url, container);
+            break;
         case 'video':
-            return mountMedia(url, container, true);
+            handle = await mountMedia(url, container, true);
+            break;
         case 'audio':
-            return mountMedia(url, container, false);
+            handle = await mountMedia(url, container, false);
+            break;
         case 'pdf':
-            return mountPdf(url, container);
+            handle = mountPdf(url, container);
+            break;
         case 'markdown':
-            return mountMarkdown(url, container, signal);
+            handle = await mountMarkdown(url, container, signal);
+            break;
         case 'code':
-            return mountCode(url, ext, container, signal);
+            handle = await mountCode(url, ext, container, signal);
+            break;
         case 'json':
-            return mountJson(url, container, signal);
+            handle = await mountJson(url, container, signal);
+            break;
         case 'download':
-            return mountDownload(url, path, container);
         default:
-            return mountDownload(url, path, container);
+            handle = mountDownload(url, path, container);
+            break;
     }
+    handle.kind = kind;
+    handle.url = url;
+    return handle;
 }
 async function mountImage(url, container) {
     await ensureVendorScript('vendor/viewerjs/viewer.min.js', () => {
@@ -175,6 +186,7 @@ async function mountImage(url, container) {
             }
             container.innerHTML = '';
         },
+        imageElement: img,
     };
 }
 async function mountMedia(url, container, isVideo) {
@@ -255,6 +267,7 @@ async function mountMarkdown(url, container, signal) {
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 async function mountCode(url, ext, container, signal) {
@@ -278,6 +291,7 @@ async function mountCode(url, ext, container, signal) {
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 async function mountJson(url, container, signal) {
@@ -316,6 +330,7 @@ async function mountJson(url, container, signal) {
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 function mountDownload(url, path, container) {

@@ -4,6 +4,7 @@ import { renderMarkdownSafe, rewriteRelativeImages, highlightCodeIn, } from './m
 import { normalizePath } from './sessions.js';
 import { formatAttachment } from './attachments.js';
 import { tryNative } from './desktop.js';
+import { kindFor } from './file-viewer.js';
 export class MarkdownManager {
     app;
     fileListEl;
@@ -11,7 +12,11 @@ export class MarkdownManager {
     modalTitle;
     modalBody;
     modalClose;
+    modalActions;
+    modalBtnGroup;
     modalCopyBtn;
+    modalDropdownBtn;
+    _currentModalContext;
     restartModal;
     restartModalClose;
     restartModalCancel;
@@ -51,7 +56,11 @@ export class MarkdownManager {
         this.modalTitle = document.getElementById('md-modal-title');
         this.modalBody = document.getElementById('md-modal-body');
         this.modalClose = document.getElementById('md-modal-close');
+        this.modalActions = document.getElementById('md-modal-actions');
+        this.modalBtnGroup = document.getElementById('md-modal-btn-group');
         this.modalCopyBtn = document.getElementById('md-modal-copy-btn');
+        this.modalDropdownBtn = document.getElementById('md-modal-dropdown-btn');
+        this._currentModalContext = null;
         this.pasteModal = document.getElementById('md-paste-modal');
         this.pasteModalForm = document.getElementById('md-paste-modal-form');
         this.pasteModalTitle = document.getElementById('md-paste-modal-title');
@@ -92,11 +101,48 @@ export class MarkdownManager {
         }
         if (this.modalCopyBtn) {
             this.modalCopyBtn.addEventListener('click', () => {
-                if (this.currentRawContent) {
-                    this._copyToClipboard(this.currentRawContent, 'Copied markdown content to clipboard');
+                void this._onModalPrimaryAction();
+            });
+        }
+        if (this.modalDropdownBtn) {
+            this.modalDropdownBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.contextMenuEl &&
+                    !this.contextMenuEl.classList.contains('hidden')) {
+                    this._hideContextMenu();
                 }
                 else {
-                    this.app.showToast('No content to copy', { type: 'error' });
+                    this._openModalDropdown(this.modalDropdownBtn || undefined);
+                }
+            });
+        }
+        if (this.modalBody) {
+            this.modalBody.addEventListener('contextmenu', (e) => {
+                const target = e.target;
+                const img = target?.closest('img');
+                if (this._currentModalContext?.kind === 'image') {
+                    e.preventDefault();
+                    this._openModalDropdown(undefined, {
+                        x: e.clientX,
+                        y: e.clientY,
+                    });
+                }
+                else if (img) {
+                    e.preventDefault();
+                    this._renderContextMenuActions([
+                        {
+                            icon: '📋',
+                            label: 'Copy Image',
+                            className: 'copy-image',
+                            handler: () => this._copyImageToClipboard(img.src, 'Copied image to clipboard'),
+                        },
+                        {
+                            icon: '⬇',
+                            label: 'Download Image',
+                            className: 'download-image',
+                            handler: () => this._downloadFile(img.src, img.alt || 'image'),
+                        },
+                    ], undefined, { x: e.clientX, y: e.clientY });
                 }
             });
         }
@@ -179,6 +225,11 @@ export class MarkdownManager {
         }
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (this.contextMenuEl &&
+                    !this.contextMenuEl.classList.contains('hidden')) {
+                    this._hideContextMenu();
+                    return;
+                }
                 if (!this.modal.classList.contains('hidden')) {
                     this.closeModal();
                 }
@@ -196,7 +247,8 @@ export class MarkdownManager {
         document.addEventListener('click', (e) => {
             if (this.contextMenuEl &&
                 !e.target.closest('.md-context-menu') &&
-                !e.target.closest('.md-file-action-btn')) {
+                !e.target.closest('.md-file-action-btn') &&
+                !e.target.closest('#md-modal-dropdown-btn')) {
                 this._hideContextMenu();
             }
         });
@@ -412,12 +464,21 @@ export class MarkdownManager {
             '<div class="md-rendering">Rendering...</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
+        this._currentModalContext = {
+            kind: 'markdown',
+            path: f.path,
+            name: f.name,
+            cwd,
+            url: `/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`,
+        };
+        this._updateModalActions();
         try {
             const res = await fetch(`/api/markdown/file?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`);
             if (!res.ok)
                 throw new Error(await res.text());
             const raw = await res.text();
             this.currentRawContent = raw;
+            this._updateModalActions();
             const html = renderMarkdownSafe(raw);
             this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
             rewriteRelativeImages(this.modalBody, f.path, cwd);
@@ -449,6 +510,17 @@ export class MarkdownManager {
         this.modalBody.innerHTML = '<div class="md-rendering">Loading…</div>';
         this.modal.classList.remove('hidden');
         this.currentRawContent = '';
+        const ext = f.path.slice(f.path.lastIndexOf('.')).toLowerCase();
+        const initialKind = kindFor(ext);
+        const assetUrl = `/api/file/asset?path=${encodeURIComponent(f.path)}&cwd=${encodeURIComponent(cwd)}`;
+        this._currentModalContext = {
+            kind: initialKind,
+            path: f.path,
+            name: f.name,
+            cwd,
+            url: assetUrl,
+        };
+        this._updateModalActions();
         const { mountFileView } = await import('./file-viewer.js');
         const handle = await mountFileView({
             path: f.path,
@@ -461,11 +533,25 @@ export class MarkdownManager {
         // handle once it resolves; a teardown race there is acceptable
         // because the libraries tolerate double-destroy.
         this._currentFileView = handle;
+        if (handle.rawText) {
+            this.currentRawContent = handle.rawText;
+        }
+        this._currentModalContext = {
+            kind: handle.kind || initialKind,
+            path: f.path,
+            name: f.name,
+            cwd,
+            url: handle.url || assetUrl,
+        };
+        this._updateModalActions();
     }
     closeModal() {
         this.modal.classList.add('hidden');
         this.modalBody.innerHTML = '';
         this.currentRawContent = '';
+        this._currentModalContext = null;
+        this._hideContextMenu();
+        this._updateModalActions();
         // Release any active file-viewer handle so Plyr/Viewer.js stop
         // audio playback and remove their event listeners. innerHTML=''
         // alone leaves the <video> element's audio context alive in
@@ -521,6 +607,11 @@ export class MarkdownManager {
     openRawMarkdown(title, rawMarkdown) {
         this.modalTitle.innerText = title;
         this.currentRawContent = rawMarkdown;
+        this._currentModalContext = {
+            kind: 'markdown',
+            name: title,
+        };
+        this._updateModalActions();
         const html = renderMarkdownSafe(rawMarkdown);
         this.modalBody.innerHTML = `<div class="md-rendered">${html}</div>`;
         highlightCodeIn(this.modalBody);
@@ -531,6 +622,12 @@ export class MarkdownManager {
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading help...</div>';
         this.currentRawContent = '';
+        this._currentModalContext = {
+            kind: 'markdown',
+            name: 'Phi Documentation',
+            url: 'help.md',
+        };
+        this._updateModalActions();
         this.modal.classList.remove('hidden');
         try {
             const res = await fetch('help.md');
@@ -557,6 +654,11 @@ export class MarkdownManager {
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading diagnostics…</div>';
         this.currentRawContent = '';
+        this._currentModalContext = {
+            kind: 'diag',
+            name: 'Phi Diagnostics',
+        };
+        this._updateModalActions();
         this.modal.classList.remove('hidden');
         const render = (d) => {
             if (!d) {
@@ -636,6 +738,12 @@ export class MarkdownManager {
         this.modalBody.innerHTML =
             '<div class="md-rendering">Loading changelog...</div>';
         this.currentRawContent = '';
+        this._currentModalContext = {
+            kind: 'markdown',
+            name: title,
+            url: 'changelog.md',
+        };
+        this._updateModalActions();
         this.modal.classList.remove('hidden');
         // Build the update banner up front so it can render alongside
         // the changelog body. We do this synchronously (cheap DOM ops) and
@@ -953,6 +1061,12 @@ export class MarkdownManager {
                 handler: () => this._deleteMarkdownFile(file),
             },
         ];
+        this._renderContextMenuActions(actions, anchorEl);
+    }
+    _renderContextMenuActions(actions, anchorEl, coords) {
+        if (!this.contextMenuEl)
+            return;
+        this.contextMenuEl.innerHTML = '';
         actions.forEach((action) => {
             const btn = document.createElement('button');
             btn.className = `md-context-action ${action.className}`;
@@ -964,11 +1078,19 @@ export class MarkdownManager {
             });
             this.contextMenuEl.appendChild(btn);
         });
-        const rect = anchorEl.getBoundingClientRect();
         this.contextMenuEl.classList.remove('hidden');
         const menuRect = this.contextMenuEl.getBoundingClientRect();
-        const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
-        const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8));
+        let left = 8;
+        let top = 8;
+        if (anchorEl) {
+            const rect = anchorEl.getBoundingClientRect();
+            left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+            top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8));
+        }
+        else if (coords) {
+            left = Math.max(8, Math.min(coords.x, window.innerWidth - menuRect.width - 8));
+            top = Math.max(8, Math.min(coords.y, window.innerHeight - menuRect.height - 8));
+        }
         this.contextMenuEl.style.left = `${left}px`;
         this.contextMenuEl.style.top = `${top}px`;
     }
@@ -976,6 +1098,313 @@ export class MarkdownManager {
         if (!this.contextMenuEl)
             return;
         this.contextMenuEl.classList.add('hidden');
+    }
+    _updateModalActions() {
+        if (!this.modalCopyBtn)
+            return;
+        const ctx = this._currentModalContext;
+        if (!ctx) {
+            if (this.modalActions)
+                this.modalActions.style.display = '';
+            this.modalCopyBtn.textContent = 'Copy Markdown';
+            this.modalCopyBtn.title = 'Copy Raw Markdown Content';
+            if (this.modalDropdownBtn)
+                this.modalDropdownBtn.style.display = '';
+            return;
+        }
+        if (ctx.kind === 'diag') {
+            if (this.modalActions)
+                this.modalActions.style.display = 'none';
+            return;
+        }
+        if (this.modalActions)
+            this.modalActions.style.display = '';
+        if (ctx.kind === 'image') {
+            this.modalCopyBtn.textContent = 'Copy Image';
+            this.modalCopyBtn.title = 'Copy image to clipboard';
+            if (this.modalDropdownBtn)
+                this.modalDropdownBtn.style.display = '';
+        }
+        else if (ctx.kind === 'code') {
+            this.modalCopyBtn.textContent = 'Copy Code';
+            this.modalCopyBtn.title = 'Copy code to clipboard';
+            if (this.modalDropdownBtn)
+                this.modalDropdownBtn.style.display = '';
+        }
+        else if (ctx.kind === 'json') {
+            this.modalCopyBtn.textContent = 'Copy JSON';
+            this.modalCopyBtn.title = 'Copy JSON to clipboard';
+            if (this.modalDropdownBtn)
+                this.modalDropdownBtn.style.display = '';
+        }
+        else if (ctx.kind === 'video' ||
+            ctx.kind === 'audio' ||
+            ctx.kind === 'pdf' ||
+            ctx.kind === 'download') {
+            this.modalCopyBtn.textContent = 'Download';
+            this.modalCopyBtn.title = 'Download file';
+            if (this.modalDropdownBtn) {
+                this.modalDropdownBtn.style.display = ctx.path ? '' : 'none';
+            }
+        }
+        else {
+            // markdown or default
+            this.modalCopyBtn.textContent = 'Copy Markdown';
+            this.modalCopyBtn.title = 'Copy Raw Markdown Content';
+            if (this.modalDropdownBtn)
+                this.modalDropdownBtn.style.display = '';
+        }
+    }
+    async _onModalPrimaryAction() {
+        const ctx = this._currentModalContext;
+        if (!ctx) {
+            if (this.currentRawContent) {
+                await this._copyToClipboard(this.currentRawContent, 'Copied markdown content to clipboard');
+            }
+            else {
+                this.app.showToast('No content to copy', { type: 'error' });
+            }
+            return;
+        }
+        if (ctx.kind === 'image') {
+            const url = ctx.url || this._currentFileView?.imageElement?.src;
+            await this._copyImageToClipboard(url, 'Copied image to clipboard');
+        }
+        else if (ctx.kind === 'video' ||
+            ctx.kind === 'audio' ||
+            ctx.kind === 'pdf' ||
+            ctx.kind === 'download') {
+            this._downloadFile(ctx.url, ctx.name);
+        }
+        else {
+            if (this.currentRawContent) {
+                const label = ctx.kind === 'code'
+                    ? 'Copied code to clipboard'
+                    : ctx.kind === 'json'
+                        ? 'Copied JSON to clipboard'
+                        : 'Copied markdown content to clipboard';
+                await this._copyToClipboard(this.currentRawContent, label);
+            }
+            else {
+                this.app.showToast('No content to copy', { type: 'error' });
+            }
+        }
+    }
+    _openModalDropdown(anchorEl, coords) {
+        const ctx = this._currentModalContext;
+        if (!ctx)
+            return;
+        const actions = [];
+        const relPath = ctx.path && ctx.cwd
+            ? relativeToCwd(ctx.path, ctx.cwd) || ctx.name || ctx.path
+            : ctx.name || '';
+        if (ctx.kind === 'image') {
+            const imgUrl = ctx.url || this._currentFileView?.imageElement?.src;
+            actions.push({
+                icon: '📋',
+                label: 'Copy Image',
+                className: 'copy-image',
+                handler: () => this._copyImageToClipboard(imgUrl, 'Copied image to clipboard'),
+            });
+            if (relPath) {
+                actions.push({
+                    icon: '📝',
+                    label: 'Copy Markdown Embed',
+                    className: 'copy-embed',
+                    handler: () => this._copyToClipboard(`![${ctx.name || 'image'}](${relPath})`, 'Copied markdown embed snippet'),
+                });
+                actions.push({
+                    icon: '🔗',
+                    label: 'Copy Relative Path',
+                    className: 'copy-relpath',
+                    handler: () => this._copyToClipboard(relPath, 'Copied path to clipboard'),
+                });
+            }
+            if (ctx.url) {
+                actions.push({
+                    icon: '⬇',
+                    label: 'Download Image',
+                    className: 'download-image',
+                    handler: () => this._downloadFile(ctx.url, ctx.name),
+                });
+            }
+        }
+        else if (ctx.kind === 'markdown' ||
+            ctx.kind === 'code' ||
+            ctx.kind === 'json') {
+            const label = ctx.kind === 'code'
+                ? 'Copy Code'
+                : ctx.kind === 'json'
+                    ? 'Copy JSON'
+                    : 'Copy Markdown';
+            actions.push({
+                icon: '📋',
+                label,
+                className: 'copy-content',
+                handler: () => {
+                    if (this.currentRawContent) {
+                        this._copyToClipboard(this.currentRawContent, `Copied ${label.toLowerCase()} to clipboard`);
+                    }
+                    else {
+                        this.app.showToast('No content to copy', {
+                            type: 'error',
+                        });
+                    }
+                },
+            });
+            if (relPath) {
+                actions.push({
+                    icon: '🔗',
+                    label: 'Copy Relative Path',
+                    className: 'copy-relpath',
+                    handler: () => this._copyToClipboard(relPath, 'Copied path to clipboard'),
+                });
+            }
+            if (ctx.url) {
+                actions.push({
+                    icon: '⬇',
+                    label: 'Download File',
+                    className: 'download-file',
+                    handler: () => this._downloadFile(ctx.url, ctx.name),
+                });
+            }
+        }
+        else if (ctx.kind === 'video' ||
+            ctx.kind === 'audio' ||
+            ctx.kind === 'pdf' ||
+            ctx.kind === 'download') {
+            if (ctx.url) {
+                actions.push({
+                    icon: '⬇',
+                    label: 'Download File',
+                    className: 'download-file',
+                    handler: () => this._downloadFile(ctx.url, ctx.name),
+                });
+            }
+            if (relPath) {
+                actions.push({
+                    icon: '🔗',
+                    label: 'Copy Relative Path',
+                    className: 'copy-relpath',
+                    handler: () => this._copyToClipboard(relPath, 'Copied path to clipboard'),
+                });
+            }
+        }
+        if (actions.length > 0) {
+            this._renderContextMenuActions(actions, anchorEl, coords);
+        }
+    }
+    async _copyImageToClipboard(imageUrl, msg = 'Copied image to clipboard') {
+        if (!imageUrl) {
+            this.app.showToast('No image to copy', { type: 'error' });
+            return;
+        }
+        try {
+            let originalBlob = null;
+            try {
+                const res = await fetch(imageUrl);
+                if (res.ok) {
+                    originalBlob = await res.blob();
+                }
+            }
+            catch {
+                // Ignore fetch error, attempt canvas from DOM element if present
+            }
+            let pngBlob = null;
+            if (!originalBlob && this._currentFileView?.imageElement) {
+                pngBlob = await this._canvasToPngBlob(this._currentFileView.imageElement);
+            }
+            else if (originalBlob) {
+                const isPng = originalBlob.type === 'image/png' ||
+                    (!originalBlob.type &&
+                        imageUrl.toLowerCase().endsWith('.png'));
+                if (isPng) {
+                    pngBlob =
+                        originalBlob.type === 'image/png'
+                            ? originalBlob
+                            : originalBlob.slice(0, originalBlob.size, 'image/png');
+                }
+                else {
+                    pngBlob = await this._convertBlobToPng(originalBlob);
+                }
+            }
+            if (!pngBlob) {
+                throw new Error('Failed to load image data');
+            }
+            if (navigator.clipboard?.write &&
+                typeof window.ClipboardItem !== 'undefined') {
+                const item = new window.ClipboardItem({ 'image/png': pngBlob });
+                await navigator.clipboard.write([item]);
+                this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
+            }
+            else {
+                throw new Error('Image clipboard copying is not supported in this environment');
+            }
+        }
+        catch (err) {
+            console.error('Failed to copy image to clipboard:', err);
+            this.app.showToast(`Failed to copy image: ${err.message}`, { type: 'error' });
+        }
+    }
+    async _canvasToPngBlob(img) {
+        return new Promise((resolve, reject) => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth || img.width || 1;
+                canvas.height = img.naturalHeight || img.height || 1;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    reject(new Error('Canvas 2D context not available'));
+                    return;
+                }
+                ctx.drawImage(img, 0, 0);
+                if (typeof canvas.toBlob !== 'function') {
+                    reject(new Error('canvas.toBlob is not supported'));
+                    return;
+                }
+                canvas.toBlob((b) => {
+                    if (b)
+                        resolve(b);
+                    else
+                        reject(new Error('Failed to create PNG blob from canvas'));
+                }, 'image/png');
+            }
+            catch (e) {
+                reject(e);
+            }
+        });
+    }
+    async _convertBlobToPng(blob) {
+        return new Promise((resolve, reject) => {
+            if (typeof Image === 'undefined') {
+                reject(new Error('Image constructor not available'));
+                return;
+            }
+            const img = new Image();
+            const url = URL.createObjectURL(blob);
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                this._canvasToPngBlob(img).then(resolve, reject);
+            };
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error('Failed to load image for PNG conversion'));
+            };
+            img.src = url;
+        });
+    }
+    _downloadFile(url, filename) {
+        if (!url) {
+            this.app.showToast('No file to download', { type: 'error' });
+            return;
+        }
+        const a = document.createElement('a');
+        a.href = url;
+        if (filename)
+            a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
     }
     _openInNewWindow(f) {
         const cwd = this.app.sessionsManager.activeCWD || '';
