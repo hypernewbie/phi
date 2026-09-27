@@ -1364,13 +1364,17 @@ export class DesktopHost {
     )
       return null;
     try {
-      const observed = (await view.webContents.executeJavaScript(
-        REMOTE_IDENTITY_SCRIPT,
-      )) as {
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 1000),
+      );
+      const observed = (await Promise.race([
+        view.webContents.executeJavaScript(REMOTE_IDENTITY_SCRIPT),
+        timeoutPromise,
+      ])) as {
         hostname?: unknown;
         accent?: unknown;
-      };
-      if (generation !== this.sessionGeneration) return null;
+      } | null;
+      if (!observed || generation !== this.sessionGeneration) return null;
       const profile =
         ctrl.state().profiles.find((p) => p.origin === origin) ?? null;
       if (!profile) return null;
@@ -1778,9 +1782,15 @@ export class DesktopHost {
   } | null> {
     if (!view?.webContents || view.webContents.isDestroyed()) return null;
     try {
-      const raw = (await view.webContents.executeJavaScript(
-        "localStorage.getItem('phi_access_credential_v1')",
-      )) as string | null;
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 1000),
+      );
+      const raw = (await Promise.race([
+        view.webContents.executeJavaScript(
+          "localStorage.getItem('phi_access_credential_v1')",
+        ),
+        timeoutPromise,
+      ])) as string | null;
       if (typeof raw !== 'string' || raw === '') return null;
       const parsed = JSON.parse(raw) as {
         version?: unknown;
@@ -2297,6 +2307,7 @@ export class DesktopHost {
       id: active.id,
       origin: active.origin,
       accent: identity?.accent ?? '',
+      hostname: identity?.hostname || active.name || '',
     };
     // The window icon follows the active server's accent (same Φ
     // silhouette, accent glyph color); unobserved servers keep the white
@@ -4312,10 +4323,20 @@ export class DesktopHost {
         this.viewByOrigin.get(active.origin) ??
         this.viewByOrigin.get(new URL(active.origin).origin);
       if (!view?.webContents || view.webContents.isDestroyed()) return null;
+      if (
+        typeof view.webContents.isLoading === 'function' &&
+        view.webContents.isLoading()
+      ) {
+        return null;
+      }
       try {
-        const raw = await view.webContents.executeJavaScript(
-          READ_WORKSPACE_SCRIPT,
+        const timeoutPromise = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), 1000),
         );
+        const raw = await Promise.race([
+          view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT),
+          timeoutPromise,
+        ]);
         if (ctrl.state().activeId !== active.id) return null;
         return typeof raw === 'string' && raw !== '' ? raw : null;
       } catch {

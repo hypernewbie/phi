@@ -76,6 +76,8 @@ export interface ActiveServer {
   origin: string;
   /** The body's observed --accent token ('' until observed). */
   accent: string;
+  /** Canonical hostname or fallback label for immediate display in the header. */
+  hostname?: string;
 }
 
 /** The dynamic brand-state snapshot pushed to the main view page on
