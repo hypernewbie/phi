@@ -23,6 +23,10 @@ import { renderMarkdownSafe } from './md-render.js';
 
 export interface FileViewHandle {
     dispose(): void;
+    kind?: string;
+    url?: string;
+    rawText?: string;
+    imageElement?: HTMLImageElement;
 }
 
 // Preview vendor bundles (Viewer.js, Plyr, json-viewer) are NOT in
@@ -140,26 +144,37 @@ export async function mountFileView(opts: {
     const kind = kindFor(ext);
 
     container.innerHTML = '';
+    let handle: FileViewHandle;
     switch (kind) {
         case 'image':
-            return mountImage(url, container);
+            handle = await mountImage(url, container);
+            break;
         case 'video':
-            return mountMedia(url, container, true);
+            handle = await mountMedia(url, container, true);
+            break;
         case 'audio':
-            return mountMedia(url, container, false);
+            handle = await mountMedia(url, container, false);
+            break;
         case 'pdf':
-            return mountPdf(url, container);
+            handle = mountPdf(url, container);
+            break;
         case 'markdown':
-            return mountMarkdown(url, container, signal);
+            handle = await mountMarkdown(url, container, signal);
+            break;
         case 'code':
-            return mountCode(url, ext, container, signal);
+            handle = await mountCode(url, ext, container, signal);
+            break;
         case 'json':
-            return mountJson(url, container, signal);
+            handle = await mountJson(url, container, signal);
+            break;
         case 'download':
-            return mountDownload(url, path, container);
         default:
-            return mountDownload(url, path, container);
+            handle = mountDownload(url, path, container);
+            break;
     }
+    handle.kind = kind;
+    handle.url = url;
+    return handle;
 }
 
 async function mountImage(
@@ -198,6 +213,7 @@ async function mountImage(
             }
             container.innerHTML = '';
         },
+        imageElement: img,
     };
 }
 
@@ -291,6 +307,7 @@ async function mountMarkdown(
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 
@@ -320,6 +337,7 @@ async function mountCode(
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 
@@ -363,6 +381,7 @@ async function mountJson(
         dispose: () => {
             container.innerHTML = '';
         },
+        rawText: text,
     };
 }
 
