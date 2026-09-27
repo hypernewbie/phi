@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { JSDOM } from 'jsdom';
@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.join(here, '..', 'web');
 const generatedIndex = path.join(webDir, 'index.html');
-const hasGenerated = existsSync(generatedIndex);
 
 interface FakeBridge {
   fetchServerConfig: (id?: string) => Promise<unknown>;
@@ -123,7 +122,9 @@ describe('TBAR wedge and race condition prevention', () => {
       theme_color: 'cyan',
     }));
     // Hanging promise that never resolves!
-    fakeBridge.fetchActiveWorkspace = vi.fn(() => new Promise(() => {}));
+    fakeBridge.fetchActiveWorkspace = vi.fn(
+      () => new Promise<string | null>(() => {}),
+    );
 
     recordedActiveServer?.({
       id: 'jupiter',
@@ -167,7 +168,7 @@ describe('TBAR wedge and race condition prevention', () => {
     expect(hostnameEl.innerText).toBe('CHARON');
 
     // Rapid switches: Charon -> Jupiter -> Charon -> Jupiter
-    let resolveJupiterWorkspace: ((ws: string) => void) | null = null;
+    let resolveJupiterWorkspace: ((ws: string | null) => void) | undefined;
     let callCount = 0;
 
     fakeBridge.fetchServerConfig = vi.fn(async () => {
@@ -180,7 +181,7 @@ describe('TBAR wedge and race condition prevention', () => {
     });
 
     fakeBridge.fetchActiveWorkspace = vi.fn(() => {
-      return new Promise<string>((resolve) => {
+      return new Promise<string | null>((resolve) => {
         resolveJupiterWorkspace = resolve;
       });
     });
@@ -195,7 +196,9 @@ describe('TBAR wedge and race condition prevention', () => {
     await Promise.resolve();
 
     // Now resolve the first workspace call:
-    resolveJupiterWorkspace?.('/jupiter');
+    if (resolveJupiterWorkspace) {
+      (resolveJupiterWorkspace as (ws: string | null) => void)('/jupiter');
+    }
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
     expect(hostnameEl.innerText).toBe('JUPITER');
