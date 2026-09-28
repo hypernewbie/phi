@@ -48,6 +48,10 @@ export class App {
         // means the page host — fully backwards compatible.
         this.hostnameOverride = '';
         this.customFontName = '';
+        this.terminalBgName = '';
+        this.terminalBgDarkness = 98;
+        this.terminalBgBlur = 0;
+        this._terminalBgObjectUrl = null;
         this.accessAuthEnabled = false;
         this._isDraggingDrawer = false;
 
@@ -1420,6 +1424,15 @@ export class App {
                     mobile_scrollback_rows: this.mobileScrollbackRows || 0,
                     hostname_override: this.hostnameOverride || '',
                     custom_font_name: this.customFontName || '',
+                    terminal_bg_name: this.terminalBgName || '',
+                    terminal_bg_darkness:
+                        typeof this.terminalBgDarkness === 'number'
+                            ? this.terminalBgDarkness
+                            : 98,
+                    terminal_bg_blur:
+                        typeof this.terminalBgBlur === 'number'
+                            ? this.terminalBgBlur
+                            : 0,
                 }),
             );
         } catch (e) {
@@ -1427,21 +1440,41 @@ export class App {
         }
     }
 
-    // _fontDB / _putCustomFont / _getCustomFont / _deleteCustomFont —
-    // a tiny IndexedDB helper for the one active custom font. IndexedDB
-    // (not localStorage) because font bytes can exceed localStorage's
-    // ~5MB synchronous string quota; Blobs store natively with no
-    // base64 inflation. Local-only: never sent to the server.
-    _fontDB() {
+    // _db / _putCustomFont / _getCustomFont / _deleteCustomFont —
+    // a tiny IndexedDB helper for fonts and terminal background images.
+    // IndexedDB (not localStorage) because file bytes can exceed
+    // localStorage's ~5MB synchronous string quota; Blobs store natively
+    // with no base64 inflation. Local-only: never sent to the server.
+    _db() {
         return new Promise((resolve, reject) => {
-            const req = indexedDB.open('phi', 1);
-            req.onupgradeneeded = () => req.result.createObjectStore('fonts');
-            req.onsuccess = () => resolve(req.result);
+            const req = indexedDB.open('phi', 2);
+            req.onupgradeneeded = () => {
+                const db = req.result;
+                if (!db.objectStoreNames.contains('fonts')) {
+                    db.createObjectStore('fonts');
+                }
+                if (!db.objectStoreNames.contains('backgrounds')) {
+                    db.createObjectStore('backgrounds');
+                }
+            };
+            req.onsuccess = () => {
+                const db = req.result;
+                db.onversionchange = () => db.close();
+                resolve(db);
+            };
+            req.onblocked = () => {
+                console.warn(
+                    '[db] IndexedDB upgrade blocked by another open connection',
+                );
+            };
             req.onerror = () => reject(req.error);
         });
     }
+    _fontDB() {
+        return this._db();
+    }
     async _putCustomFont(displayName, blob) {
-        const db = await this._fontDB();
+        const db = await this._db();
         await new Promise((res, rej) => {
             const tx = db.transaction('fonts', 'readwrite');
             tx.objectStore('fonts').put({ displayName, blob }, 'custom');
@@ -1450,7 +1483,7 @@ export class App {
         });
     }
     async _getCustomFont() {
-        const db = await this._fontDB();
+        const db = await this._db();
         return new Promise((res, rej) => {
             const tx = db.transaction('fonts', 'readonly');
             const g = tx.objectStore('fonts').get('custom');
@@ -1459,13 +1492,135 @@ export class App {
         });
     }
     async _deleteCustomFont() {
-        const db = await this._fontDB();
+        const db = await this._db();
         await new Promise((res, rej) => {
             const tx = db.transaction('fonts', 'readwrite');
             tx.objectStore('fonts').delete('custom');
             tx.oncomplete = res;
             tx.onerror = () => rej(tx.error);
         });
+    }
+
+    async _putCustomBg(displayName, blob) {
+        const db = await this._db();
+        await new Promise((res, rej) => {
+            const tx = db.transaction('backgrounds', 'readwrite');
+            tx.objectStore('backgrounds').put(
+                { displayName, blob },
+                'custom_bg',
+            );
+            tx.oncomplete = res;
+            tx.onerror = () => rej(tx.error);
+        });
+    }
+    async _getCustomBg() {
+        const db = await this._db();
+        return new Promise((res, rej) => {
+            const tx = db.transaction('backgrounds', 'readonly');
+            const g = tx.objectStore('backgrounds').get('custom_bg');
+            g.onsuccess = () => res(g.result || null);
+            g.onerror = () => rej(g.error);
+        });
+    }
+    async _deleteCustomBg() {
+        const db = await this._db();
+        await new Promise((res, rej) => {
+            const tx = db.transaction('backgrounds', 'readwrite');
+            tx.objectStore('backgrounds').delete('custom_bg');
+            tx.oncomplete = res;
+            tx.onerror = () => rej(tx.error);
+        });
+    }
+
+    // applyTerminalBg mounts the chosen background image blob into the DOM
+    // via an object URL and updates xterm viewports to transparent.
+    applyTerminalBg(blobOrFile) {
+        if (!blobOrFile) return;
+        if (this._terminalBgObjectUrl) {
+            URL.revokeObjectURL(this._terminalBgObjectUrl);
+        }
+        this._terminalBgObjectUrl = URL.createObjectURL(blobOrFile);
+        document.body?.classList.add('has-terminal-bg');
+        const bgLayer = document.getElementById('terminal-bg-layer');
+        if (bgLayer) {
+            bgLayer.style.backgroundImage = `url("${this._terminalBgObjectUrl}")`;
+        }
+        this.applyTerminalBgStyles();
+        this.tabManager?.applyThemeToAllActiveTerminals();
+    }
+
+    // applyTerminalBgStyles dynamically adjusts blur and darkness overlay opacity.
+    applyTerminalBgStyles() {
+        if (
+            !this.terminalBgName &&
+            !document.body?.classList.contains('has-terminal-bg')
+        ) {
+            return;
+        }
+        const bgLayer = document.getElementById('terminal-bg-layer');
+        if (bgLayer) {
+            const blur =
+                typeof this.terminalBgBlur === 'number'
+                    ? this.terminalBgBlur
+                    : 0;
+            bgLayer.style.filter = blur > 0 ? `blur(${blur}px)` : 'none';
+        }
+        const bgOverlay = document.getElementById('terminal-bg-overlay');
+        if (bgOverlay) {
+            const darkness =
+                (typeof this.terminalBgDarkness === 'number'
+                    ? this.terminalBgDarkness
+                    : 98) / 100;
+            bgOverlay.style.opacity = `${darkness}`;
+        }
+    }
+
+    // clearCustomBgDOM cleans up background elements, object URLs, and restores xterm themes.
+    clearCustomBgDOM() {
+        if (this._terminalBgObjectUrl) {
+            URL.revokeObjectURL(this._terminalBgObjectUrl);
+            this._terminalBgObjectUrl = null;
+        }
+        document.body?.classList.remove('has-terminal-bg');
+        const bgLayer = document.getElementById('terminal-bg-layer');
+        if (bgLayer) {
+            bgLayer.style.removeProperty('background-image');
+            bgLayer.style.removeProperty('filter');
+        }
+        const bgOverlay = document.getElementById('terminal-bg-overlay');
+        if (bgOverlay) {
+            bgOverlay.style.removeProperty('opacity');
+        }
+        this.tabManager?.applyThemeToAllActiveTerminals();
+    }
+
+    // loadCustomBg reloads the stored background from IndexedDB on startup.
+    async loadCustomBg() {
+        if (!this.terminalBgName) {
+            this.clearCustomBgDOM();
+            return;
+        }
+        try {
+            const rec = await this._getCustomBg();
+            if (rec?.blob) {
+                this.applyTerminalBg(rec.blob);
+            } else {
+                this.clearCustomBgDOM();
+            }
+        } catch (e) {
+            console.warn('[bg] load custom failed', e);
+            this.clearCustomBgDOM();
+        }
+    }
+
+    // clearCustomBg removes the stored background image and resets state.
+    async clearCustomBg() {
+        try {
+            await this._deleteCustomBg();
+        } catch {}
+        this.terminalBgName = '';
+        this.clearCustomBgDOM();
+        this._saveAppearanceLocal();
     }
 
     // _injectCustomFontFace registers the uploaded font as the constant
@@ -1583,7 +1738,17 @@ export class App {
                     this.hostnameOverride = ls?.hostname_override || '';
                     setServerHostOverride(this.hostnameOverride);
                     this.customFontName = ls?.custom_font_name || '';
+                    this.terminalBgName = ls?.terminal_bg_name || '';
+                    this.terminalBgDarkness =
+                        typeof ls?.terminal_bg_darkness === 'number'
+                            ? ls.terminal_bg_darkness
+                            : 98;
+                    this.terminalBgBlur =
+                        typeof ls?.terminal_bg_blur === 'number'
+                            ? ls.terminal_bg_blur
+                            : 0;
                     this.applyUIFont?.();
+                    this.loadCustomBg?.();
                     this.tabManager?.applyFontToAllActiveTerminals?.(
                         this.terminalFontFamily || 'JetBrains Mono, monospace',
                     );

@@ -42,8 +42,16 @@ export interface AppLike {
     terminalFontSize?: number;
     // Alternate server hostname for socket URLs (blank = page host).
     hostnameOverride?: string;
+    custom_font_name?: string;
     customFontName?: string;
     loadCustomFont?: () => Promise<void>;
+    terminalBgName?: string;
+    terminalBgDarkness?: number;
+    terminalBgBlur?: number;
+    loadCustomBg?: () => Promise<void>;
+    applyTerminalBg?: (blob: any) => void;
+    applyTerminalBgStyles?: () => void;
+    clearCustomBg?: () => Promise<void>;
     openConfigEditor?: (...args: any[]) => Promise<any>;
     importCmdsConfig?: (...args: any[]) => void;
     exportTerminalCommandsConfig?: (...args: any[]) => void;

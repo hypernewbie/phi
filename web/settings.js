@@ -204,6 +204,58 @@ export function openSettingsModal(app, accentColors, opts = {}) {
     uploadRow.appendChild(fileInput);
     appGroup.appendChild(uploadRow);
 
+    const bgRow = document.createElement('div');
+    bgRow.className = 'settings-row';
+    const bgLabel = document.createElement('label');
+    bgLabel.htmlFor = 'settings-bg-upload';
+    bgLabel.textContent = app.terminalBgName
+        ? `Terminal background (${app.terminalBgName})`
+        : 'Terminal background…';
+    bgRow.appendChild(bgLabel);
+
+    const bgControls = document.createElement('div');
+    bgControls.className = 'settings-row-controls';
+    bgControls.style.display = 'flex';
+    bgControls.style.gap = '8px';
+    bgControls.style.alignItems = 'center';
+
+    const bgFileInput = document.createElement('input');
+    bgFileInput.type = 'file';
+    bgFileInput.id = 'settings-bg-upload';
+    bgFileInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
+    bgControls.appendChild(bgFileInput);
+
+    if (app.terminalBgName) {
+        const removeBgBtn = document.createElement('button');
+        removeBgBtn.className = 'btn';
+        removeBgBtn.type = 'button';
+        removeBgBtn.id = 'settings-bg-remove';
+        removeBgBtn.textContent = 'Remove';
+        bgControls.appendChild(removeBgBtn);
+    }
+    bgRow.appendChild(bgControls);
+    appGroup.appendChild(bgRow);
+
+    const bgDarknessRow = _buildNumberRow(
+        'Background dimming % (darkened)',
+        'settings-bg-darkness',
+        typeof app.terminalBgDarkness === 'number'
+            ? app.terminalBgDarkness
+            : 98,
+        50,
+        99,
+    );
+    appGroup.appendChild(bgDarknessRow);
+
+    const bgBlurRow = _buildNumberRow(
+        'Background blur (px)',
+        'settings-bg-blur',
+        typeof app.terminalBgBlur === 'number' ? app.terminalBgBlur : 0,
+        0,
+        40,
+    );
+    appGroup.appendChild(bgBlurRow);
+
     const resetRow = document.createElement('div');
     resetRow.className = 'settings-row';
     const resetBtn = document.createElement('button');
@@ -497,17 +549,104 @@ export function openSettingsModal(app, accentColors, opts = {}) {
             });
         }
     });
+    function wireRemoveBgBtn(btn) {
+        btn.addEventListener('click', async () => {
+            await app.clearCustomBg?.();
+            bgFileInput.value = '';
+            bgLabel.textContent = 'Terminal background…';
+            btn.remove();
+            broadcastConfigSync('appearance');
+            app.showToast('Terminal background removed.', { type: 'info' });
+        });
+    }
+
+    const existingRemoveBtn = bgControls.querySelector('#settings-bg-remove');
+    if (existingRemoveBtn) {
+        wireRemoveBgBtn(existingRemoveBtn);
+    }
+
+    bgFileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const MAX = 16 * 1024 * 1024;
+        if (file.size > MAX) {
+            app.showToast('Background image too large (max 16MB)', {
+                type: 'error',
+            });
+            return;
+        }
+        try {
+            await app._putCustomBg(file.name, file);
+            app.terminalBgName = file.name;
+            app.applyTerminalBg(file);
+            app._saveAppearanceLocal();
+            broadcastConfigSync('appearance');
+            bgLabel.textContent = `Terminal background (${file.name})`;
+            let removeBtn = bgControls.querySelector('#settings-bg-remove');
+            if (!removeBtn) {
+                removeBtn = document.createElement('button');
+                removeBtn.className = 'btn';
+                removeBtn.type = 'button';
+                removeBtn.id = 'settings-bg-remove';
+                removeBtn.textContent = 'Remove';
+                bgControls.appendChild(removeBtn);
+                wireRemoveBgBtn(removeBtn);
+            }
+            app.showToast(`Loaded background ${file.name}.`, {
+                type: 'success',
+            });
+        } catch (err) {
+            app.showToast(`Background upload failed: ${err.message}`, {
+                type: 'error',
+            });
+        }
+    });
+
+    const bgDarknessInput = bgDarknessRow.querySelector('input');
+    bgDarknessInput?.addEventListener('input', (e) => {
+        let val = Number(e.target.value);
+        if (Number.isNaN(val)) return;
+        val = Math.max(50, Math.min(99, val));
+        app.terminalBgDarkness = val;
+        app.applyTerminalBgStyles?.();
+        app._saveAppearanceLocal();
+        broadcastConfigSync('appearance');
+    });
+
+    const bgBlurInput = bgBlurRow.querySelector('input');
+    bgBlurInput?.addEventListener('input', (e) => {
+        let val = Number(e.target.value);
+        if (Number.isNaN(val)) return;
+        val = Math.max(0, Math.min(40, val));
+        app.terminalBgBlur = val;
+        app.applyTerminalBgStyles?.();
+        app._saveAppearanceLocal();
+        broadcastConfigSync('appearance');
+    });
+
     resetBtn.addEventListener('click', async () => {
         try {
             localStorage.removeItem('phi_appearance');
         } catch {}
         document.getElementById('phi-prepaint-appearance')?.remove();
         await app.clearCustomFont?.();
+        await app.clearCustomBg?.();
         app.uiFontFamily = '';
         app.uiFontSize = 0;
         app.terminalFontFamily = '';
         app.terminalFontSize = 0;
         app.customFontName = '';
+        app.terminalBgName = '';
+        app.terminalBgDarkness = 98;
+        app.terminalBgBlur = 0;
+        const removeBgBtn = bgControls.querySelector('#settings-bg-remove');
+        if (removeBgBtn) removeBgBtn.remove();
+        bgFileInput.value = '';
+        bgLabel.textContent = 'Terminal background…';
+        const darknessEl = document.getElementById('settings-bg-darkness');
+        if (darknessEl) darknessEl.value = '98';
+        const blurEl = document.getElementById('settings-bg-blur');
+        if (blurEl) blurEl.value = '0';
         app.applyUIFont();
         app.tabManager?.applyFontToAllActiveTerminals(
             'JetBrains Mono, monospace',

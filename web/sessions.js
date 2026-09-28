@@ -309,8 +309,18 @@ export class SessionsManager {
                     '';
             setServerHostOverride(this.app.hostnameOverride);
             this.app.customFontName = ls?.custom_font_name || '';
+            this.app.terminalBgName = ls?.terminal_bg_name || '';
+            this.app.terminalBgDarkness =
+                typeof ls?.terminal_bg_darkness === 'number'
+                    ? ls.terminal_bg_darkness
+                    : 98;
+            this.app.terminalBgBlur =
+                typeof ls?.terminal_bg_blur === 'number'
+                    ? ls.terminal_bg_blur
+                    : 0;
             this.app.applyUIFont?.();
             await this.app.loadCustomFont?.();
+            await this.app.loadCustomBg?.();
             // Render the coder tabs / quick-launch buttons from the
             // registry now that the workspace selector is in place.
             // Idempotent — calling again after a registry rebuild is
