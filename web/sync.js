@@ -1,5 +1,6 @@
 /* Φ phi — AI Sync Board Manager */
 import { escapeHtml as escapeHtmlUtil, buildProxyUrl, } from './util.js';
+import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
 // Sync Board desktop-alert markers: a message whose key or value carries
 // one of these signals the desktop shell via a transient page title
 // (see signalDesktopAlert). Display data only — never a remote action.
@@ -29,6 +30,8 @@ export function parseActionPayload(val) {
         'file' in obj ||
         'url' in obj ||
         'link' in obj ||
+        'diff' in obj ||
+        'checklist' in obj ||
         'actions' in obj ||
         'title' in obj ||
         'description' in obj ||
@@ -236,6 +239,30 @@ export class SyncManager {
             this.app.showToast(`Cannot preview ${name}: file preview not available`, { type: 'error' });
         }
     }
+    openDiffView(diffTarget) {
+        const diffCtrl = this.app.diffController;
+        if (!diffCtrl)
+            return;
+        const prefersModal = diffTarget === 'modal' ||
+            (typeof diffTarget === 'object' &&
+                diffTarget !== null &&
+                diffTarget.modal === true);
+        if (prefersModal && typeof diffCtrl.openRichDiffModal === 'function') {
+            void diffCtrl.openRichDiffModal();
+            return;
+        }
+        if (typeof diffCtrl.togglePanel === 'function') {
+            diffCtrl.togglePanel(true);
+        }
+        const diffTabBtn = document.querySelector('.diff-tab-btn[data-tab="diff"]');
+        if (diffTabBtn) {
+            diffTabBtn.click();
+        }
+        else if (typeof diffCtrl.refreshDiff === 'function') {
+            diffCtrl.activeTab = 'diff';
+            diffCtrl.refreshDiff(false);
+        }
+    }
     renderMessages(messages) {
         if (!messages || messages.length === 0) {
             this.messagesList.innerHTML =
@@ -278,11 +305,13 @@ export class SyncManager {
                 </div>
             `;
             let bodyHtml = '';
+            let descHtml = '';
             if (actionData) {
                 const desc = actionData.description ||
                     actionData.desc ||
                     actionData.text ||
                     '';
+                descHtml = desc ? renderMarkdownSafe(desc) : '';
                 const previewTarget = actionData.preview || actionData.image || actionData.file;
                 const rawUrl = actionData.url || actionData.link;
                 const safeUrl = rawUrl && /^https?:\/\//i.test(rawUrl) ? rawUrl : null;
@@ -292,10 +321,57 @@ export class SyncManager {
                 const rawJsonStr = typeof msg.value === 'string'
                     ? msg.value
                     : JSON.stringify(msg.value, null, 2);
-                const chipsHtml = previewTarget || safeUrl
+                const diffTarget = actionData.diff;
+                let diffChipHtml = '';
+                if (diffTarget) {
+                    let fileCount = 0;
+                    if (typeof diffTarget === 'object' &&
+                        diffTarget !== null &&
+                        Array.isArray(diffTarget.files)) {
+                        fileCount = diffTarget.files.length;
+                    }
+                    const label = fileCount > 0
+                        ? `Review Diff (${fileCount} files)`
+                        : 'Review Diff';
+                    diffChipHtml = `
+                        <button type="button" class="sync-chip-btn sync-diff-btn" title="Review Git Diff">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+                            <span>${this.escapeHtml(label)}</span>
+                        </button>
+                    `;
+                }
+                const checklist = Array.isArray(actionData.checklist)
+                    ? actionData.checklist
+                    : [];
+                const checklistHtml = checklist.length > 0
+                    ? `
+                    <div class="sync-checklist-group">
+                        ${checklist
+                        .map((item) => {
+                        const label = typeof item === 'string'
+                            ? item
+                            : item.label ||
+                                item.text ||
+                                item.name ||
+                                '';
+                        const isDone = typeof item === 'object' && item !== null
+                            ? Boolean(item.done || item.checked)
+                            : false;
+                        return `
+                                    <div class="sync-checklist-item${isDone ? ' is-done' : ''}">
+                                        <input type="checkbox" class="sync-checklist-check" ${isDone ? 'checked' : ''} disabled />
+                                        <span class="sync-checklist-label">${this.escapeHtml(label)}</span>
+                                    </div>
+                                `;
+                    })
+                        .join('')}
+                    </div>`
+                    : '';
+                const chipsHtml = previewTarget || safeUrl || diffTarget
                     ? `
                     <div class="sync-action-chips">
                         ${previewTarget ? `<span class="sync-preview-slot"></span>` : ''}
+                        ${diffChipHtml}
                         ${safeUrl
                         ? `<a href="${this.escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="sync-chip-btn sync-link-btn" title="Open ${this.escapeHtml(safeUrl)}">
                                     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -325,7 +401,8 @@ export class SyncManager {
                 bodyHtml = `
                     <div class="sync-action-card">
                         ${actionData.title ? `<div class="sync-action-title">${this.escapeHtml(actionData.title)}</div>` : ''}
-                        ${desc ? `<div class="sync-action-desc">${this.escapeHtml(desc)}</div>` : ''}
+                        ${descHtml ? `<div class="sync-action-desc md-rendered">${descHtml}</div>` : ''}
+                        ${checklistHtml}
                         ${previewTarget ? `<div class="sync-image-preview-slot"></div>` : ''}
                         ${chipsHtml}
                         ${actionsHtml}
@@ -440,6 +517,16 @@ export class SyncManager {
                         }
                     });
                 });
+                if (descHtml) {
+                    highlightCodeIn(card);
+                }
+                if (actionData.diff) {
+                    const diffBtn = card.querySelector('.sync-diff-btn');
+                    diffBtn?.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.openDiffView(actionData.diff);
+                    });
+                }
             }
             card.querySelector('.sync-edit-btn')?.addEventListener('click', (e) => {
                 e.stopPropagation();
