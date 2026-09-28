@@ -104,6 +104,8 @@ contextBridge.exposeInMainWorld('electron', {
     subscribe('phi:single-instance-forward', cb),
   onRailState: (cb: (state: RailState) => void): (() => void) =>
     subscribe('phi:rail-state', cb),
+  onRailShortcuts: (cb: (show: boolean) => void): (() => void) =>
+    subscribe('phi:rail-shortcuts', cb),
   onRailMenuState: (cb: (state: RailMenuState) => void): (() => void) =>
     subscribe('phi:rail-menu-state', cb),
   onAddServerResult: (cb: (result: AddServerResult) => void): (() => void) =>

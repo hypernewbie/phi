@@ -42,6 +42,7 @@ import {
     inputMode,
     hasModelSwitch,
     getCoder,
+    isShell,
 } from './coders.js';
 import {
     mountRpcChat,
@@ -273,6 +274,101 @@ function termPerfMeasureSince(name, startTime) {
     }
 }
 
+/**
+ * Inspects the terminal buffer around the cursor line to distinguish
+ * between an actively running process (e.g. spinning animated spinners,
+ * thinking indicators) vs a completed task resting at an interactive prompt.
+ *
+ * @param {import('@xterm/xterm').Terminal} term
+ * @returns {{ hasSpinner: boolean, hasPrompt: boolean, promptLine: string }}
+ */
+export function detectTerminalBufferState(term) {
+    if (!term?.buffer?.active) {
+        return { hasSpinner: false, hasPrompt: false, promptLine: '' };
+    }
+
+    const buffer = term.buffer.active;
+    const cursorY = buffer.cursorY ?? 0;
+    const baseY = buffer.baseY ?? 0;
+    const currentLineIdx = baseY + cursorY;
+
+    // Scan lines in the vicinity of the cursor (where spinners and prompts live)
+    const startLine = Math.max(0, currentLineIdx - 4);
+    const endLine = Math.min((buffer.length || 1) - 1, currentLineIdx + 2);
+
+    let hasSpinner = false;
+    let hasPrompt = false;
+    let promptLine = '';
+
+    // Braille patterns: universal CLI spinners (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, ⣾⣽⣻⢿⡿⣟⣯⣷, ⠁⠂⠄⡀⢀⠠⠐⠈)
+    // Geometric / circle / arrow spinners: ◐◓◑◒◜◝◞◟←↖↑↗→↘↓↙▖▘▝▗
+    // Progress blocks: ▓▒░
+    const SPINNER_CHARS_RE = /[\u2800-\u28FF◐◓◑◒◜◝◞◟▖▘▝▗←↖↑↗→↘↓↙▓▒░]/;
+
+    // Active status keywords indicating work in flight
+    const ACTIVE_STATUS_RE =
+        /\b(?:thinking|running|executing|working|generating|searching|compiling|building|fetching|loading|installing|waiting|processing)\b/i;
+
+    // Trailing word with ellipsis indicating continuous action: e.g. "Thinking…", "Running bash…"
+    const ELLIPSIS_ACTION_RE = /\b[a-zA-Z]{3,}(?:…|\.{3})\b/;
+
+    // Interrupt / cancel hints indicating the process is currently running
+    const RUNNING_HINT_RE =
+        /(?:esc to (?:interrupt|cancel)|ctrl\+c to (?:interrupt|cancel)|\([0-9.]+s\b)/i;
+
+    // Interactive prompt regex (matches prompts waiting for user input):
+    // e.g. ">", "> ", "│ > │", "$ ", "user@host:~$ ", "repo (main) ❯ ", "pi> ", "agy> ", "opencode> "
+    const PROMPT_RE =
+        /^\s*(?:[│|]\s*)?(?:[\w\s().@:~/-]+?[$#%❯>]|agy>|opencode>|pi>|claude>|[>❯$#%])\s*[│|]?\s*$/;
+
+    // First, scan lines in the window for any active spinner or in-progress indicators
+    for (let idx = startLine; idx <= endLine; idx++) {
+        const lineObj = buffer.getLine?.(idx);
+        if (!lineObj) continue;
+        const lineText =
+            typeof lineObj.translateToString === 'function'
+                ? lineObj.translateToString(true)
+                : String(lineObj);
+        if (!lineText) continue;
+
+        if (
+            SPINNER_CHARS_RE.test(lineText) ||
+            ACTIVE_STATUS_RE.test(lineText) ||
+            ELLIPSIS_ACTION_RE.test(lineText) ||
+            RUNNING_HINT_RE.test(lineText)
+        ) {
+            hasSpinner = true;
+            break;
+        }
+    }
+
+    // If an active spinner or in-progress indicator is found, the process is definitively spinning/running!
+    if (hasSpinner) {
+        return { hasSpinner: true, hasPrompt: false, promptLine: '' };
+    }
+
+    // Otherwise, check if the cursor line or the immediately preceding non-empty line is a prompt
+    const candidateIndices = [currentLineIdx, currentLineIdx - 1];
+    for (const idx of candidateIndices) {
+        if (idx < 0 || idx >= (buffer.length || 0)) continue;
+        const lineObj = buffer.getLine?.(idx);
+        if (!lineObj) continue;
+        const lineText =
+            typeof lineObj.translateToString === 'function'
+                ? lineObj.translateToString(true)
+                : String(lineObj);
+        if (!lineText) continue;
+
+        if (PROMPT_RE.test(lineText)) {
+            hasPrompt = true;
+            promptLine = lineText;
+            break;
+        }
+    }
+
+    return { hasSpinner: false, hasPrompt, promptLine };
+}
+
 export class TabManager {
     constructor(app) {
         this.app = app;
@@ -386,7 +482,12 @@ export class TabManager {
         // it from the replay buffer.
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
-                this.clearAttentionIndicators();
+                const activeTab = this.getActiveTab();
+                if (activeTab?.isAttention) {
+                    activeTab.isAttention = false;
+                    activeTab.tabEl?.classList.remove('has-attention');
+                    this.updateDocumentTitle();
+                }
                 this._reviveActiveTabIfDead();
             }
         });
@@ -645,6 +746,9 @@ export class TabManager {
             if (tabEl) this.tabsContainer.appendChild(tabEl);
         }
         if (persist) this.saveTabOrder();
+        if (document.body.classList.contains('show-tab-shortcuts')) {
+            this.updateTabShortcutHints(true);
+        }
     }
 
     // Splice `sourceId` into the order immediately before or after
@@ -979,6 +1083,24 @@ export class TabManager {
         document.addEventListener('keydown', (e) =>
             this.handleGlobalTabShortcuts(e),
         );
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Alt') {
+                this.updateTabShortcutHints(true);
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'Alt') {
+                this.updateTabShortcutHints(false);
+            }
+        });
+        window.addEventListener('blur', () => {
+            this.updateTabShortcutHints(false);
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                this.updateTabShortcutHints(false);
+            }
+        });
 
         // Hover preview card (glassmorphism, big hieroglyph). Shows on
         // mouseover of a tab so users can identify the worktree at a
@@ -2440,6 +2562,7 @@ export class TabManager {
             <button class="tab-pin" title="Pin session (Keep alive overnight)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 12px; height: 12px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg></button>
             <img class="tab-favicon" src="${faviconUrl}" alt="${coder}">
             <span class="tab-worktree-icon" aria-hidden="true">${glyph}</span>
+            <span class="tab-shortcut-badge" aria-hidden="true"></span>
             <span class="tab-title ${marked ? 'marked' : ''}">${escapeHtml(title)}</span>
             <button class="tab-close">×</button>
         `;
@@ -2691,6 +2814,9 @@ export class TabManager {
                 }
                 return false;
             }
+            if (e.key === 'Alt') {
+                this.updateTabShortcutHints(e.type === 'keydown');
+            }
             // In non-direct mode: forward control keys (Enter, arrows, Esc,
             // ...) straight to the PTY — the same map the empty staged-input
             // bar uses, but with no emptiness gate: a draft in the input bar
@@ -2917,6 +3043,9 @@ export class TabManager {
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
+            userTaskActive: false,
+            userTaskStartTime: null,
+            busyStartTime: null,
             // Keep one xterm parse in flight; later output accumulates here.
             writeBuffer: '',
             writePending: false,
@@ -3223,6 +3352,9 @@ export class TabManager {
         // Switch to the newly created tab
         this.switchTab(paneId);
         this.saveTabsState();
+        if (document.body.classList.contains('show-tab-shortcuts')) {
+            this.updateTabShortcutHints(true);
+        }
 
         // Initial fit delay to let rendering engine draw
         setTimeout(() => {
@@ -4433,6 +4565,11 @@ export class TabManager {
 
         newTab.tabEl.classList.add('active');
         newTab.termContainer.classList.add('active');
+        if (newTab.isAttention) {
+            newTab.isAttention = false;
+            newTab.tabEl.classList.remove('has-attention');
+            this.updateDocumentTitle();
+        }
         this.renderPiRpcStatusBar();
         // Fleet strip follows the active tab: replay the pi-rpc pane's
         // last snapshot, or hide the strip for tabs without a chat pane.
@@ -5025,6 +5162,9 @@ export class TabManager {
         // Refresh the tab-list selector to reflect the removal.
         this.updateTabOverflow();
         this._refreshOverflowDropdown?.();
+        if (document.body.classList.contains('show-tab-shortcuts')) {
+            this.updateTabShortcutHints(true);
+        }
 
         // If we just finalized the last tab, show the empty state now
         if (this.tabs.size === 0) {
@@ -5543,6 +5683,18 @@ export class TabManager {
             if (tabInfo) this._showReconnectOverlay(tabInfo);
             return false;
         }
+
+        // Track user-initiated commands and cancellation
+        if (typeof payload === 'string') {
+            if (payload === '\x03' || payload === '\x14') {
+                tabInfo.userTaskActive = false;
+                tabInfo.busyStartTime = null;
+            } else if (payload.includes('\r') || payload.includes('\n')) {
+                tabInfo.userTaskActive = true;
+                tabInfo.userTaskStartTime = Date.now();
+            }
+        }
+
         const ok = tabInfo.ws.sendInput(payload);
         if (!ok) {
             this.app.showToast('Tab is disconnected — input not sent', {
@@ -6488,6 +6640,9 @@ export class TabManager {
                     // before it had emitted any new output.
                     tabInfo.isBusy = false;
                     tabInfo.lastOutputAt = undefined;
+                    tabInfo.busyStartTime = null;
+                    tabInfo.userTaskActive = false;
+                    tabInfo.userTaskStartTime = null;
                     tabInfo.tabEl.classList.remove('dead');
                     this.updateDocumentTitle();
                     if (overlay) overlay.remove();
@@ -6615,6 +6770,9 @@ export class TabManager {
                         tabInfo.isDead = false;
                         tabInfo.isBusy = false;
                         tabInfo.lastOutputAt = undefined;
+                        tabInfo.busyStartTime = null;
+                        tabInfo.userTaskActive = false;
+                        tabInfo.userTaskStartTime = null;
                         tabInfo.tabEl.classList.remove('dead');
                         this.updateDocumentTitle();
                         if (overlay) overlay.remove();
@@ -6963,6 +7121,44 @@ export class TabManager {
 
         tabInfo.termContainer.appendChild(bar);
         input.focus({ preventScroll: true });
+    }
+
+    /**
+     * Toggles visual tab shortcut badges (1..8, and 9 for last tab)
+     * replacing the worktree hieroglyph when Alt/Option is held.
+     */
+    updateTabShortcutHints(show) {
+        if (typeof document === 'undefined') return;
+        if (!show) {
+            document.body?.classList.remove('show-tab-shortcuts');
+            return;
+        }
+        const paneIds = Array.from(this.tabs.keys());
+        if (paneIds.length === 0) {
+            document.body?.classList.remove('show-tab-shortcuts');
+            return;
+        }
+        const total = paneIds.length;
+        for (let i = 0; i < total; i++) {
+            const tabInfo = this.tabs.get(paneIds[i]);
+            if (!tabInfo?.tabEl) continue;
+            const badge = tabInfo.tabEl.querySelector('.tab-shortcut-badge');
+            let hint = '';
+            if (i < 8) {
+                hint = String(i + 1);
+            } else if (i === total - 1) {
+                hint = '9';
+            }
+            if (badge) {
+                badge.textContent = hint;
+            }
+            if (hint) {
+                tabInfo.tabEl.classList.add('has-shortcut');
+            } else {
+                tabInfo.tabEl.classList.remove('has-shortcut');
+            }
+        }
+        document.body?.classList.add('show-tab-shortcuts');
     }
 
     handleGlobalTabShortcuts(e) {
@@ -8205,7 +8401,7 @@ export class TabManager {
                         },
                         isAliveFn: (id) => {
                             const tab = this.app.tabManager?.tabs?.get?.(id);
-                            if (!tab || !tab.term) return false;
+                            if (!tab?.term) return false;
                             return !tab.isDead;
                         },
                     }).catch((err) => {
@@ -8730,10 +8926,20 @@ export class TabManager {
                 tab.paneId === this.activePaneId && isTabVisible;
 
             // If the tab is currently focused and visible, clear attention states immediately.
-            if (isActiveAndVisible && tab.isAttention) {
-                tab.isAttention = false;
-                tab.tabEl.classList.remove('has-attention');
-                statusChanged = true;
+            if (isActiveAndVisible) {
+                if (tab.isAttention) {
+                    tab.isAttention = false;
+                    tab.tabEl?.classList.remove('has-attention');
+                    statusChanged = true;
+                }
+                // When actively focused on this tab, user sees it live: clear active task state once quiet/prompt
+                if (tab.userTaskActive) {
+                    const bufferState = detectTerminalBufferState(tab.term);
+                    if (bufferState.hasPrompt || !tab.isBusy) {
+                        tab.userTaskActive = false;
+                        tab.busyStartTime = null;
+                    }
+                }
             }
 
             // Track busy-to-idle transition for active terminal connections.
@@ -8751,33 +8957,63 @@ export class TabManager {
 
                     // Calculate total execution duration
                     const totalDuration =
-                        Date.now() - (tab.busyStartTime || Date.now());
-                    const isLongTask = totalDuration > 8000;
+                        Date.now() -
+                        (tab.busyStartTime ||
+                            tab.userTaskStartTime ||
+                            Date.now());
+                    const isLongTask = totalDuration > 4000;
 
-                    // Only notify if this tab is NOT currently active and focused, was a long-running task, and is NOT a shell/terminal tab.
+                    // Only notify if this tab is NOT currently active and focused, was a running task, and is NOT a shell tab.
                     const isShellTab =
-                        tab.coder === 'bash' || tab.coder === 'pwsh';
-                    if (!isActiveAndVisible && isLongTask && !isShellTab) {
-                        let promptDetected = false;
-                        if (tab.term?.buffer?.active) {
-                            const buffer = tab.term.buffer.active;
-                            const line = buffer.getLine(
-                                buffer.cursorY + buffer.baseY,
+                        isShell(tab.coder) ||
+                        tab.coder === 'bash' ||
+                        tab.coder === 'pwsh';
+
+                    if (!isActiveAndVisible && !isShellTab) {
+                        const taskWasRunning =
+                            tab.userTaskActive === true ||
+                            (tab.userTaskActive === undefined && isLongTask);
+
+                        if (taskWasRunning) {
+                            const bufferState = detectTerminalBufferState(
+                                tab.term,
                             );
-                            const text = line
-                                ? line.translateToString(true)
-                                : '';
-                            const promptRe = /[$>❯…╰─]|agy>|opencode>/;
-                            promptDetected = promptRe.test(text);
+
+                            if (bufferState.hasSpinner) {
+                                // Coding agent is still spinning / actively working despite output pause!
+                                // Do not mark as done. Keep userTaskActive = true so completion can be
+                                // caught once the spinner disappears and prompt arrives.
+                            } else {
+                                const promptDetected = bufferState.hasPrompt;
+                                const processExited =
+                                    tab.exitCode !== undefined &&
+                                    tab.exitCode !== null;
+                                const isTestMockWithoutTerm =
+                                    !tab.term?.buffer?.active;
+
+                                if (
+                                    promptDetected ||
+                                    processExited ||
+                                    (isTestMockWithoutTerm && isLongTask)
+                                ) {
+                                    tab.isAttention = true;
+                                    tab.userTaskActive = false;
+                                    tab.busyStartTime = null;
+                                    statusChanged = true;
+                                    tab.tabEl?.classList.add('has-attention');
+
+                                    this.triggerAttentionNotification(
+                                        tab,
+                                        promptDetected,
+                                    );
+                                }
+                            }
                         }
+                    }
 
-                        // Trigger attention indicator.
-                        tab.isAttention = true;
-                        statusChanged = true;
-                        tab.tabEl.classList.add('has-attention');
-
-                        // Escalate with notification chimes and browser popups.
-                        this.triggerAttentionNotification(tab, promptDetected);
+                    // Reset busyStartTime once quiescent if not retained by an active spinner task
+                    if (!tab.userTaskActive) {
+                        tab.busyStartTime = null;
                     }
                 }
             }

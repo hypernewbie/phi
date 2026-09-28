@@ -135,6 +135,8 @@ export interface ElectronApi {
   onForwardPayload(cb: (payload: ForwardPayload) => void): () => void;
   /** Subscribe to rail state snapshots (channel 'phi:rail-state'); returns an unsubscribe function. */
   onRailState(cb: (state: RailState) => void): () => void;
+  /** Subscribe to rail keyboard shortcut hint visibility (channel 'phi:rail-shortcuts'); returns an unsubscribe function. */
+  onRailShortcuts?(cb: (show: boolean) => void): () => void;
   /** Subscribe to the selected profile's popup state (channel 'phi:rail-menu-state'). */
   onRailMenuState(cb: (state: RailMenuState) => void): () => void;
   /** Subscribe to add-server results (channel 'phi:add-server-result'); returns an unsubscribe function. */

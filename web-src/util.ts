@@ -337,6 +337,9 @@ export interface TerminalActivityTabLike {
     isAttention?: boolean;
     coder?: string;
     isBtop?: boolean;
+    userTaskActive?: boolean;
+    userTaskStartTime?: number | null;
+    busyStartTime?: number | null;
 }
 
 export interface TerminalActivityState {

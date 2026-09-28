@@ -128,6 +128,7 @@ export function render(
   // case-different letter or a numeral-marked variant rather than
   // repeating a glyph.
   const usedGlyphs = new Set<string>();
+  let index = 0;
   for (const profile of state.profiles) {
     const item = document.createElement('li');
     item.className = 'rail-item';
@@ -159,6 +160,16 @@ export function render(
     usedGlyphs.add(glyph);
     mono.textContent = glyph;
     item.appendChild(mono);
+
+    if (index < 9) {
+      item.classList.add('has-shortcut');
+      const hint = document.createElement('span');
+      hint.className = 'shortcut-hint';
+      hint.setAttribute('aria-hidden', 'true');
+      hint.textContent = String(index + 1);
+      item.appendChild(hint);
+    }
+    index++;
 
     // Health is diegetic: an unreachable server's entry reads as a
     // disabled tile (muted, no accent glow) instead of a status block.
@@ -293,6 +304,11 @@ function setupDragAndDrop(list: HTMLElement): void {
   });
 }
 
+/** Toggles the visual shortcut hints in the rail sidebar. */
+export function setShortcutHints(show: boolean): void {
+  document.body.classList.toggle('show-ctrl-shortcuts', show);
+}
+
 /** Wires the rail page: the + button opens the add-server picker
  * (window.electron.postOpenPicker); every phi:rail-state snapshot
  * re-renders the list. */
@@ -304,6 +320,18 @@ export function boot(): void {
     addButton.addEventListener('click', () => window.electron.postOpenPicker());
   }
   window.electron.onRailState(render);
+  if (typeof window.electron.onRailShortcuts === 'function') {
+    window.electron.onRailShortcuts(setShortcutHints);
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Control') setShortcutHints(true);
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Control') setShortcutHints(false);
+  });
+  window.addEventListener('blur', () => {
+    setShortcutHints(false);
+  });
 }
 
 // Auto-boot when loaded as the rail page module — only when the preload

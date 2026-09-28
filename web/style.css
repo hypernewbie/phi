@@ -1851,6 +1851,41 @@ html[data-phi-desktop-root] .app-header {
         0 0 18px var(--accent-glow);
 }
 
+/* Tab shortcut badge shown when holding Alt/Option (Alt+1..9). Replaces
+   the worktree hieroglyph with zero layout shift (exact 16px slot). */
+.tab-shortcut-badge {
+    display: none;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin-right: 1px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 14px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--bg-border);
+    border-radius: 3px;
+    user-select: none;
+    font-family: var(--font-mono);
+    box-sizing: border-box;
+}
+
+.tab.active .tab-shortcut-badge {
+    color: var(--accent-bright);
+    border-color: var(--accent);
+    box-shadow: 0 0 6px var(--accent-glow);
+}
+
+body.show-tab-shortcuts .tab.has-shortcut .tab-worktree-icon {
+    display: none;
+}
+
+body.show-tab-shortcuts .tab.has-shortcut .tab-shortcut-badge {
+    display: inline-block;
+}
+
 .tab-title.marked {
     color: var(--accent-bright);
     text-shadow:

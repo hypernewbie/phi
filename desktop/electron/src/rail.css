@@ -100,6 +100,27 @@ body {
     0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
 }
 
+/* Number shortcut hint shown when holding Control (Ctrl+1..9). Replaces
+   the Greek glyph with zero layout shift. */
+.rail-item .shortcut-hint {
+  display: none;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+
+body.show-ctrl-shortcuts .rail-item.has-shortcut .mono {
+  display: none;
+}
+
+body.show-ctrl-shortcuts .rail-item.has-shortcut .shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Hover previews the entry's own known accent (--entry-accent), the
    browser button hover treatment; an unreachable chip stays muted
    (shadowed by `.rail-item.offline` further down). The rule lives

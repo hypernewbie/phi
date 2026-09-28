@@ -35,6 +35,7 @@ import {
   greekGlyphForHostname,
   identityLabel,
   render,
+  setShortcutHints,
 } from '../src/renderer.js';
 import type { RailState } from '../src/electron.js';
 
@@ -686,5 +687,68 @@ describe('rail IPC contract (channel strings)', () => {
     expect(preloadSource).toContain('postReloadServer');
     expect(preloadSource).toContain("'phi:reload-all-servers'");
     expect(preloadSource).toContain('postReloadAllServers');
+    expect(preloadSource).toContain("'phi:rail-shortcuts'");
+    expect(preloadSource).toContain('onRailShortcuts');
+  });
+});
+
+describe('rail keyboard shortcut hints (Ctrl)', () => {
+  it('renders .shortcut-hint for profiles 1 to 9 and adds .has-shortcut', () => {
+    withPage('<ul id="rail-list"></ul>', (doc) => {
+      const list = doc.getElementById('rail-list')!;
+      render(SNAPSHOT, list);
+      const items = list.querySelectorAll('li.rail-item');
+      expect(items[0].classList.contains('has-shortcut')).toBe(true);
+      expect(items[1].classList.contains('has-shortcut')).toBe(true);
+      expect(items[0].querySelector('.shortcut-hint')?.textContent).toBe('1');
+      expect(items[1].querySelector('.shortcut-hint')?.textContent).toBe('2');
+    });
+  });
+
+  it('omits .has-shortcut and .shortcut-hint for profiles past index 8', () => {
+    withPage('<ul id="rail-list"></ul>', (doc) => {
+      const list = doc.getElementById('rail-list')!;
+      const tenProfiles: RailState = {
+        profiles: Array.from({ length: 11 }, (_, i) => ({
+          id: `p${i}`,
+          name: `P${i}`,
+          origin: `http://p${i}/`,
+          hostname: `p${i}`,
+          accent: '',
+          cpu: null,
+        })),
+        activeId: 'p0',
+        health: {},
+        unread: {},
+      };
+      render(tenProfiles, list);
+      const items = list.querySelectorAll('li.rail-item');
+      expect(items).toHaveLength(11);
+      expect(items[8].classList.contains('has-shortcut')).toBe(true);
+      expect(items[8].querySelector('.shortcut-hint')?.textContent).toBe('9');
+      expect(items[9].classList.contains('has-shortcut')).toBe(false);
+      expect(items[9].querySelector('.shortcut-hint')).toBeNull();
+      expect(items[10].classList.contains('has-shortcut')).toBe(false);
+      expect(items[10].querySelector('.shortcut-hint')).toBeNull();
+    });
+  });
+
+  it('setShortcutHints toggles body class show-ctrl-shortcuts', () => {
+    withPage(htmlSource, (doc) => {
+      expect(doc.body.classList.contains('show-ctrl-shortcuts')).toBe(false);
+      setShortcutHints(true);
+      expect(doc.body.classList.contains('show-ctrl-shortcuts')).toBe(true);
+      setShortcutHints(false);
+      expect(doc.body.classList.contains('show-ctrl-shortcuts')).toBe(false);
+    });
+  });
+
+  it('css hides .mono and reveals .shortcut-hint under show-ctrl-shortcuts', () => {
+    expect(cssSource).toMatch(
+      /body\.show-ctrl-shortcuts\s+\.rail-item\.has-shortcut\s+\.mono\s*\{[^}]*display:\s*none/s,
+    );
+    expect(cssSource).toMatch(
+      /body\.show-ctrl-shortcuts\s+\.rail-item\.has-shortcut\s+\.shortcut-hint\s*\{[^}]*display:\s*inline-flex/s,
+    );
   });
 });
