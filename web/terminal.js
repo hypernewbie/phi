@@ -192,10 +192,10 @@ const AUTO_RECONNECT_STABLE_MS = 5000;
 // Configuration for performance marks and the bounded screen-checkpoint
 // pipeline: hot live stream plus cold recording fetch.
 const PERF_SLOW_MS = 16;
-// Bounded delta ever written into the live terminal on attach/reconnect
-// (checkpoint itself is separately capped server-side at 128 KiB). Together
-// they bound the first live payload regardless of session age.
-const HOT_DELTA_LIMIT_BYTES = 64 * 1024;
+// Max delta and checkpoint limits: 2 MiB bounds live payloads while
+// ensuring terminal history is never dropped or truncated on attach.
+const MAX_DELTA_BYTES = 2 * 1024 * 1024;
+const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
@@ -1761,22 +1761,18 @@ export class TabManager {
             // covers exactly [.., through), so it starts there — not at
             // head. Claiming head now would let a checkpoint upload vouch
             // for bytes the delta has not delivered yet.
-            const from = info.ckpt
-                ? info.ckpt.through
-                : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+            // Fresh tab without checkpoint: bootstrap from info.oldest so all
+            // scrollback history is preserved for normal scroll-up. With checkpoint:
+            // bootstrap from through (the checkpoint itself restored scrollback).
+            const from = info.ckpt ? info.ckpt.through : info.oldest;
             tabInfo.drainedSeq = from;
             this._openTermAndViewport(tabInfo);
             if (info.head > from) {
-                if (info.head - from <= HOT_DELTA_LIMIT_BYTES) {
-                    this._bootstrappedRelease(tabInfo, pty, from, info.head);
-                } else {
-                    // Stale checkpoint: the delta is too large to replay
-                    // live, and downloading it just to drop it burns the
-                    // slowest links. Start live at the attach boundary and
-                    // nudge a redraw so the stale screen repaints now.
-                    pty.release();
-                    this._nudgeRedraw(tabInfo);
-                }
+                const reqFrom =
+                    info.head - from <= MAX_DELTA_BYTES
+                        ? from
+                        : Math.max(from, info.head - MAX_DELTA_BYTES);
+                this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
             } else {
                 pty.release();
             }
@@ -1784,24 +1780,20 @@ export class TabManager {
         }
 
         if (samePane) {
-            // Reconnect to the same pane: resume from our watermark. Apply a
-            // small retained delta; never reset, never 1 MiB replay (§6).
+            // Reconnect to the same pane: resume from our watermark. Apply the
+            // retained delta; never reset, never drop output unnecessarily.
             const from = tabInfo.drainedSeq ?? info.head;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
-            if (
-                info.head > from &&
-                from >= info.oldest &&
-                info.head - from <= HOT_DELTA_LIMIT_BYTES
-            ) {
-                this._bootstrappedRelease(tabInfo, pty, from, info.head);
+            if (info.head > from && from >= info.oldest) {
+                const reqFrom =
+                    info.head - from <= MAX_DELTA_BYTES
+                        ? from
+                        : Math.max(from, info.head - MAX_DELTA_BYTES);
+                this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
             } else {
                 pty.release();
                 if (info.head > from) {
-                    // Gap too old/large to replay live: continue live, nudge a
-                    // redraw, and leave the interval behind. The bytes stay in
-                    // the server ring until evicted, but the live screen moves
-                    // on without them.
                     this._nudgeRedraw(tabInfo);
                 }
             }
@@ -1825,19 +1817,14 @@ export class TabManager {
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
         tabInfo.queuedSeq = info.head;
-        // Honest frontier as in the fresh branch: the checkpoint covers
-        // exactly [.., through), never the whole head.
-        const from = info.ckpt
-            ? info.ckpt.through
-            : Math.max(info.oldest, info.head - HOT_DELTA_LIMIT_BYTES);
+        const from = info.ckpt ? info.ckpt.through : info.oldest;
         tabInfo.drainedSeq = from;
         if (info.head > from) {
-            if (info.head - from <= HOT_DELTA_LIMIT_BYTES) {
-                this._bootstrappedRelease(tabInfo, pty, from, info.head);
-            } else {
-                pty.release();
-                this._nudgeRedraw(tabInfo);
-            }
+            const reqFrom =
+                info.head - from <= MAX_DELTA_BYTES
+                    ? from
+                    : Math.max(from, info.head - MAX_DELTA_BYTES);
+            this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
         } else {
             pty.release();
         }
@@ -1928,7 +1915,7 @@ export class TabManager {
         if (tabInfo.isDead || tabInfo.ws !== ws) return;
         if (expectGen !== undefined && tabInfo._bootstrapGen !== expectGen)
             return;
-        if (!d || d.start !== from || d.byteLength > HOT_DELTA_LIMIT_BYTES) {
+        if (!d || d.start !== from || d.byteLength > MAX_DELTA_BYTES) {
             return;
         }
         this.writeToTerminal(tabInfo, d.text);
@@ -1976,7 +1963,7 @@ export class TabManager {
         // onGap if a gap remains, so dropping concurrent events converges
         // instead of stalling.
         if (tabInfo._gapInFlight) return;
-        if (to - from <= HOT_DELTA_LIMIT_BYTES) {
+        if (to - from <= MAX_DELTA_BYTES) {
             tabInfo._gapInFlight = true;
             let d = null;
             try {
@@ -2002,7 +1989,7 @@ export class TabManager {
                 d &&
                 d.start === from &&
                 d.byteLength > 0 &&
-                d.byteLength <= HOT_DELTA_LIMIT_BYTES
+                d.byteLength <= MAX_DELTA_BYTES
             ) {
                 // Deliver via the patch path so seq accounting and held
                 // frames stay contiguous. The bytes must reach the terminal
@@ -2061,7 +2048,24 @@ export class TabManager {
             return;
         let ansi = '';
         try {
-            ansi = tabInfo.serializeAddon.serialize({ scrollback: 0 });
+            ansi = tabInfo.serializeAddon.serialize({
+                scrollback: LIVE_SCROLLBACK_ROWS,
+            });
+            if (ansi && ansi.length > MAX_CHECKPOINT_BYTES) {
+                const totalLines =
+                    (tabInfo.term.buffer?.active?.baseY ?? 0) +
+                    tabInfo.term.rows;
+                const bytesPerLine = ansi.length / Math.max(1, totalLines);
+                const targetLines = Math.max(
+                    tabInfo.term.rows,
+                    Math.floor(
+                        MAX_CHECKPOINT_BYTES / Math.max(1, bytesPerLine),
+                    ),
+                );
+                ansi = tabInfo.serializeAddon.serialize({
+                    scrollback: Math.max(0, targetLines - tabInfo.term.rows),
+                });
+            }
         } catch (e) {
             console.error('[term] serialize failed:', e);
             return;
@@ -3147,10 +3151,23 @@ export class TabManager {
                     viewportScrollRafPending = false;
                     updateScrollBtn();
                     const b = tabInfo.term?.buffer?.active;
-                    if (b && b.viewportY >= b.baseY) {
-                        tabInfo.userFollowBottom = true;
+                    if (b) {
+                        if (b.viewportY >= b.baseY) {
+                            tabInfo.userFollowBottom = true;
+                        } else {
+                            this._cancelScrollFollowForUserScroll(tabInfo);
+                        }
                     }
                 });
+            },
+            { capture: true, passive: true },
+        );
+        termContainer.addEventListener(
+            'keydown',
+            (e) => {
+                if (['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) {
+                    this._cancelScrollFollowForUserScroll(tabInfo);
+                }
             },
             { capture: true, passive: true },
         );
@@ -4457,10 +4474,18 @@ export class TabManager {
         // bar may contain sessions from other projects, but closing the active
         // tab must not silently change the sidebar's project/worktree. A
         // genuine user selection uses the normal sync path below.
+        // Preserve scroll position if user had scrolled up in newTab; only snap to
+        // bottom if newTab is following bottom or already at bottom.
+        const shouldScrollToBottom = newTab.term
+            ? newTab.userFollowBottom !== false &&
+              (newTab.term.buffer?.active?.viewportY ?? 0) >=
+                  (newTab.term.buffer?.active?.baseY ?? 0)
+            : true;
+
         if (preserveProject) {
             this._projectSyncPendingPaneId = newTab.paneId;
             this.activateTabViewport(newTab, {
-                scrollToBottom: true,
+                scrollToBottom: shouldScrollToBottom,
                 autoReconnect: true,
                 force: userInitiated,
             });
@@ -4470,7 +4495,7 @@ export class TabManager {
 
         if (this._syncProjectForTab(newTab)) {
             this.activateTabViewport(newTab, {
-                scrollToBottom: true,
+                scrollToBottom: shouldScrollToBottom,
                 autoReconnect: true,
                 force: userInitiated,
             });
@@ -4478,7 +4503,7 @@ export class TabManager {
         }
 
         this.activateTabViewport(newTab, {
-            scrollToBottom: true,
+            scrollToBottom: shouldScrollToBottom,
             autoReconnect: true,
             force: userInitiated,
         });
@@ -7095,8 +7120,16 @@ export class TabManager {
 
         tabInfo.spamInterval = setInterval(() => {
             if (isAtBottom) {
+                if (tabInfo.userFollowBottom === false) {
+                    this._cancelScrollFollowForUserScroll(tabInfo);
+                    return;
+                }
                 tabInfo.term.scrollToBottom();
             } else if (scrollY !== null) {
+                if (tabInfo.userFollowBottom === false) {
+                    this._cancelScrollFollowForUserScroll(tabInfo);
+                    return;
+                }
                 tabInfo.term.scrollToLine(scrollY);
             }
         }, 10);
@@ -7107,9 +7140,9 @@ export class TabManager {
             tabInfo.stopSpamTimeout = null;
             tabInfo.isSpammingBottom = undefined;
             tabInfo.spamScrollY = undefined;
-            if (isAtBottom) {
+            if (isAtBottom && tabInfo.userFollowBottom !== false) {
                 tabInfo.term.scrollToBottom();
-            } else if (scrollY !== null) {
+            } else if (scrollY !== null && tabInfo.userFollowBottom !== false) {
                 tabInfo.term.scrollToLine(scrollY);
             }
         }, 300);

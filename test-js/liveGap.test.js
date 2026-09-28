@@ -597,11 +597,12 @@ describe('_trackBootstrap', () => {
 
 describe('_bootstrapDelta', () => {
     it('drops an oversize delta without touching the buffer or watermarks', async () => {
+        const oversize = 3 * 1024 * 1024;
         const c = ctx(async () => ({
             start: 0,
-            end: 70000,
-            byteLength: 70000,
-            text: 'x'.repeat(70000),
+            end: oversize,
+            byteLength: oversize,
+            text: 'x'.repeat(oversize),
         }));
         const t = {
             isDead: false,
@@ -609,7 +610,7 @@ describe('_bootstrapDelta', () => {
             queuedSeq: 0,
             drainedSeq: 0,
         };
-        await c._bootstrapDelta(t, 0, 70000);
+        await c._bootstrapDelta(t, 0, oversize);
         expect(c.writeToTerminal).not.toHaveBeenCalled();
         expect(t.queuedSeq).toBe(0);
         expect(t.drainedSeq).toBe(0);
