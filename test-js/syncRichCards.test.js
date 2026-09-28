@@ -30,7 +30,13 @@ function buildAppStub() {
         markdownManager: {
             previewFile: vi.fn().mockResolvedValue(undefined),
         },
-        diffController: { isPanelOpen: true, activeTab: 'sync' },
+        diffController: {
+            isPanelOpen: true,
+            activeTab: 'sync',
+            togglePanel: vi.fn(),
+            openRichDiffModal: vi.fn().mockResolvedValue(undefined),
+            refreshDiff: vi.fn(),
+        },
     };
 }
 
@@ -74,6 +80,21 @@ describe('parseActionPayload helper', () => {
     it('returns null for generic JSON objects without rich action keys', () => {
         expect(parseActionPayload('{"status": "ok", "code": 200}')).toBeNull();
         expect(parseActionPayload('["item1", "item2"]')).toBeNull();
+    });
+
+    it('parses JSON containing diff and checklist keys', () => {
+        const payload = JSON.stringify({
+            title: 'Refactor PR',
+            diff: { files: ['server.ts', 'client.ts'] },
+            checklist: [
+                { label: 'Run migrations', done: true },
+                { label: 'Flush redis', done: false },
+            ],
+        });
+        const parsed = parseActionPayload(payload);
+        expect(parsed).not.toBeNull();
+        expect(parsed?.diff).toEqual({ files: ['server.ts', 'client.ts'] });
+        expect(parsed?.checklist).toHaveLength(2);
     });
 });
 
@@ -453,5 +474,132 @@ describe('SyncManager rich action cards rendering and interaction', () => {
 
         // Coalesced into a single refresh
         expect(mgr.refreshMessages).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders safe markdown in action card descriptions', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+
+        const messages = [
+            {
+                key: 'md:desc',
+                value: JSON.stringify({
+                    title: 'Release Notes',
+                    description:
+                        '**Bold text** and `inline code` with [link](https://example.com)',
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
+        mgr.renderMessages(messages);
+
+        const card = mgr.messagesList.querySelector('.sync-card');
+        const descEl = card?.querySelector('.sync-action-desc');
+        expect(descEl).not.toBeNull();
+        expect(descEl?.classList.contains('md-rendered')).toBe(true);
+        expect(descEl?.innerHTML).toMatch(/<strong>|<b>|<code>|<pre>/);
+    });
+
+    it('renders read-only checklist items with done state and labels', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+
+        const messages = [
+            {
+                key: 'task:list',
+                value: JSON.stringify({
+                    title: 'Deployment Steps',
+                    checklist: [
+                        { label: 'Step 1: Build image', done: true },
+                        { label: 'Step 2: Deploy to cluster', done: false },
+                    ],
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
+        mgr.renderMessages(messages);
+
+        const card = mgr.messagesList.querySelector('.sync-card');
+        const items = card?.querySelectorAll('.sync-checklist-item');
+        expect(items).toHaveLength(2);
+
+        expect(items?.[0].classList.contains('is-done')).toBe(true);
+        expect(items?.[0].textContent).toContain('Step 1: Build image');
+        const check1 = items?.[0].querySelector('input[type="checkbox"]');
+        expect(check1.checked).toBe(true);
+        expect(check1.disabled).toBe(true);
+
+        expect(items?.[1].classList.contains('is-done')).toBe(false);
+        expect(items?.[1].textContent).toContain('Step 2: Deploy to cluster');
+        const check2 = items?.[1].querySelector('input[type="checkbox"]');
+        expect(check2.checked).toBe(false);
+        expect(check2.disabled).toBe(true);
+    });
+
+    it('renders diff chip and triggers diffController.togglePanel and tab selection on click', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+
+        // Put a diff tab button in DOM to test click delegation
+        const diffTabBtn = document.createElement('button');
+        diffTabBtn.className = 'diff-tab-btn';
+        diffTabBtn.setAttribute('data-tab', 'diff');
+        const clickSpy = vi.fn();
+        diffTabBtn.addEventListener('click', clickSpy);
+        document.body.appendChild(diffTabBtn);
+
+        const messages = [
+            {
+                key: 'git:diff-review',
+                value: JSON.stringify({
+                    title: 'Patch Ready',
+                    diff: { files: ['src/index.ts', 'src/util.ts'] },
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
+        mgr.renderMessages(messages);
+
+        const card = mgr.messagesList.querySelector('.sync-card');
+        const diffBtn = card?.querySelector('.sync-diff-btn');
+        expect(diffBtn).not.toBeNull();
+        expect(diffBtn?.textContent).toContain('Review Diff (2 files)');
+
+        diffBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        expect(app.diffController.togglePanel).toHaveBeenCalledWith(true);
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+
+        diffTabBtn.remove();
+    });
+
+    it('opens rich diff modal when diff.modal is true or diff is "modal"', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+
+        const messages = [
+            {
+                key: 'git:modal-diff',
+                value: JSON.stringify({
+                    title: 'Interactive Review',
+                    diff: { modal: true },
+                }),
+                updated_at: new Date().toISOString(),
+            },
+        ];
+
+        mgr.renderMessages(messages);
+
+        const card = mgr.messagesList.querySelector('.sync-card');
+        const diffBtn = card?.querySelector('.sync-diff-btn');
+        expect(diffBtn).not.toBeNull();
+        expect(diffBtn?.textContent).toContain('Review Diff');
+
+        diffBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        expect(app.diffController.openRichDiffModal).toHaveBeenCalledTimes(1);
     });
 });
