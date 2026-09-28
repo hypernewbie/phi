@@ -78,6 +78,8 @@ export interface ActiveServer {
   accent: string;
   /** Canonical hostname or fallback label for immediate display in the header. */
   hostname?: string;
+  /** Observed theme color key (e.g. 'amber', 'cyan') if available. */
+  themeColor?: string;
 }
 
 /** The dynamic brand-state snapshot pushed to the main view page on

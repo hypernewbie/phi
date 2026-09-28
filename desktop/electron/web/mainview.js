@@ -48,16 +48,59 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     });
   }
 
+  /** Resolve any theme name or hex color string to a known ACCENT_COLORS theme key,
+   *  or null if it is not in the palette. */
+  function resolveThemeKey(val) {
+    if (!val || typeof val !== 'string') return null;
+    const clean = val.trim().toLowerCase();
+    if (ACCENT_COLORS && ACCENT_COLORS[clean]) return clean;
+    if (ACCENT_COLORS) {
+      for (const [key, theme] of Object.entries(ACCENT_COLORS)) {
+        if (theme?.accent && theme.accent.toLowerCase() === clean) {
+          return key;
+        }
+      }
+    }
+    return null;
+  }
+
   /** Apply the active server's theme via the browser's own method
-   *  (web/app.js App.applyAccentTheme): it sets --accent/--accent-glow/
-   *  --accent-dim/--accent-bright from the vendored ACCENT_COLORS map
-   *  (all 22 themes), marks data-theme-color, and persists the choice.
-   *  The shim carries no TabManager (the header has no terminals) and
-   *  stubs updateFavicon (the window icon is host-owned). */
-  function applyAccentTheme(colorKey) {
-    const shim = Object.create(App.prototype);
-    shim.updateFavicon = () => {};
-    App.prototype.applyAccentTheme.call(shim, colorKey);
+   *  (web/app.js App.applyAccentTheme) or raw CSS variables.
+   *  Never falls back to purple when color is unresolvable or empty. */
+  function applyAccentTheme(colorOrKey) {
+    if (!colorOrKey || typeof colorOrKey !== 'string') return;
+    const trimmed = colorOrKey.trim();
+    if (!trimmed) return;
+
+    const themeKey = resolveThemeKey(trimmed);
+    if (themeKey) {
+      const shim = Object.create(App.prototype);
+      shim.updateFavicon = () => {};
+      App.prototype.applyAccentTheme.call(shim, themeKey);
+      return;
+    }
+
+    if (
+      trimmed.startsWith('#') ||
+      trimmed.startsWith('rgb') ||
+      trimmed.startsWith('hsl')
+    ) {
+      const root = document.documentElement;
+      root.style.setProperty('--accent', trimmed);
+      root.style.setProperty(
+        '--accent-glow',
+        `color-mix(in srgb, ${trimmed} 15%, transparent)`,
+      );
+      root.style.setProperty(
+        '--accent-dim',
+        `color-mix(in srgb, ${trimmed} 70%, black)`,
+      );
+      root.style.setProperty(
+        '--accent-bright',
+        `color-mix(in srgb, ${trimmed} 80%, white)`,
+      );
+      root.removeAttribute('data-theme-color');
+    }
   }
 
   let activeServerId = null;
@@ -199,8 +242,9 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     if (info && typeof info.hostname === 'string' && info.hostname !== '' && hostnameDisplay) {
       hostnameDisplay.innerText = displayHostname(info.hostname);
     }
-    if (info && typeof info.accent === 'string' && info.accent !== '') {
-      applyAccentTheme(info.accent);
+    const themeToApply = info?.themeColor || info?.accent;
+    if (typeof themeToApply === 'string' && themeToApply !== '') {
+      applyAccentTheme(themeToApply);
     }
     void refreshConfig();
   });
