@@ -512,15 +512,13 @@ describe('TabManager hot attach bootstrap', () => {
         expect(tab.queuedSeq).toBe(105);
     });
 
-    it('without checkpoint applies only a bounded tail delta', async () => {
+    it('without checkpoint applies history from oldest up to cap', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
-        const tail = 'x'.repeat(64 * 1024 - 10);
+        const history = 'x'.repeat(64 * 1024 - 10);
         const fetchMock = vi
             .fn()
-            .mockResolvedValue(
-                recordingResponse(tail, 1_000_000 - 64 * 1024, 1_000_000),
-            );
+            .mockResolvedValue(recordingResponse(history, 0, 1_000_000));
         vi.stubGlobal('fetch', fetchMock);
 
         tm.createTab('p2', 's2', 'T', 'bash', '', '', false);
@@ -533,17 +531,17 @@ describe('TabManager hot attach bootstrap', () => {
         await new Promise((r) => setTimeout(r, 0));
 
         expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining(`from=${1_000_000 - 64 * 1024}`),
+            expect.stringContaining('from=0'),
             expect.anything(),
         );
-        expect(tab.term.writes).toEqual([tail]);
+        expect(tab.term.writes).toEqual([history]);
         expect(tab.term.opened).toBe(true);
     });
 
     it('never queues a delta larger than the cap', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
-        const huge = 'y'.repeat(200 * 1024);
+        const huge = 'y'.repeat(3 * 1024 * 1024);
         vi.stubGlobal(
             'fetch',
             vi.fn().mockResolvedValue(recordingResponse(huge, 0, huge.length)),
@@ -624,7 +622,7 @@ describe('TabManager hot attach bootstrap', () => {
 });
 
 describe('checkpoint upload', () => {
-    it('uploads a scrollback:0 snapshot with the drain watermark', async () => {
+    it('uploads a scrollback snapshot preserving history with the drain watermark', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
         let serializeOpts;
@@ -649,7 +647,7 @@ describe('checkpoint upload', () => {
         tm._uploadCheckpoint(tab);
         await new Promise((r) => setTimeout(r, 0));
 
-        expect(serializeOpts).toEqual({ scrollback: 0 });
+        expect(serializeOpts).toEqual({ scrollback: 10000 });
         const [url, init] =
             fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
         expect(url).toContain('/api/terminals/p7/checkpoint');

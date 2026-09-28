@@ -338,7 +338,7 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 }
 
 // MaxCheckpointBytes bounds client-uploaded screen snapshots.
-const MaxCheckpointBytes = 128 * 1024
+const MaxCheckpointBytes = 2 * 1024 * 1024
 
 // StoreCheckpoint validates and stores the newest client screen snapshot.
 // Rules (plan §3): epoch must match the live pane, Through must not exceed
