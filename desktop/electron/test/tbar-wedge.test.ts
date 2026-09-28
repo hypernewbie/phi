@@ -203,4 +203,81 @@ describe('TBAR wedge and race condition prevention', () => {
 
     expect(hostnameEl.innerText).toBe('JUPITER');
   });
+
+  it('TBAR updates theme immediately on onActiveServer with hex accent without flashing purple', async () => {
+    // Initial server is CHARON with amber theme
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'CHARON',
+      workspaces: ['/charon'],
+      active_cwd: '/charon',
+      theme_color: 'amber',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/charon');
+
+    const doc = await loadMainView();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    expect(doc.documentElement.getAttribute('data-theme-color')).toBe('amber');
+    expect(doc.documentElement.style.getPropertyValue('--accent')).toBe(
+      '#fbbf24',
+    );
+
+    // Track every theme change to verify purple is never applied
+    const seenAccents: string[] = [];
+    const observer = new (
+      doc.defaultView as unknown as {
+        MutationObserver: typeof MutationObserver;
+      }
+    ).MutationObserver(() => {
+      seenAccents.push(doc.documentElement.style.getPropertyValue('--accent'));
+    });
+    observer.observe(doc.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'data-theme-color'],
+    });
+
+    // Server push for Jupiter with cyan hex accent
+    recordedActiveServer?.({
+      id: 'jupiter',
+      origin: 'http://jupiter:7070/',
+      hostname: 'JUPITER',
+      accent: '#06b6d4',
+    });
+
+    // Theme should be immediately cyan without wait
+    expect(doc.documentElement.getAttribute('data-theme-color')).toBe('cyan');
+    expect(doc.documentElement.style.getPropertyValue('--accent')).toBe(
+      '#06b6d4',
+    );
+    expect(seenAccents).not.toContain('#7c6af7'); // Never purple!
+  });
+
+  it('TBAR does not reset to purple when onActiveServer has empty or unobserved accent', async () => {
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'CHARON',
+      workspaces: ['/charon'],
+      active_cwd: '/charon',
+      theme_color: 'amber',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/charon');
+
+    const doc = await loadMainView();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    expect(doc.documentElement.getAttribute('data-theme-color')).toBe('amber');
+
+    // Push server with unobserved / empty accent
+    recordedActiveServer?.({
+      id: 'jupiter',
+      origin: 'http://jupiter:7070/',
+      hostname: 'JUPITER',
+      accent: '',
+    });
+
+    // Amber remains, never forced to purple fallback
+    expect(doc.documentElement.getAttribute('data-theme-color')).toBe('amber');
+    expect(doc.documentElement.style.getPropertyValue('--accent')).toBe(
+      '#fbbf24',
+    );
+  });
 });

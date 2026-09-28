@@ -292,6 +292,7 @@ const REMOTE_IDENTITY_SCRIPT = `(() => {
   return {
     hostname: host ? (host.textContent || '').trim() : '',
     accent: root.getPropertyValue('--accent').trim(),
+    themeColor: document.documentElement.dataset.themeColor || '',
   };
 })()`;
 
@@ -452,7 +453,10 @@ export class DesktopHost {
   /** In-memory per-profile observed remote document title (never persisted). */
   observedTitle = new Map<string, string>();
   /** In-memory per-profile remote identity (never persisted). */
-  observedIdentity = new Map<string, { hostname: string; accent: string }>();
+  observedIdentity = new Map<
+    string,
+    { hostname: string; accent: string; themeColor?: string }
+  >();
   /** Retained per-origin view lookup for the CPU poll (never persisted). */
   viewByOrigin = new Map<string, WebContentsView>();
   /** In-memory per-profile CPU percent from the remote page (never persisted). */
@@ -1382,6 +1386,10 @@ export class DesktopHost {
         hostname:
           typeof observed.hostname === 'string' ? observed.hostname : '',
         accent: typeof observed.accent === 'string' ? observed.accent : '',
+        themeColor:
+          typeof (observed as { themeColor?: unknown }).themeColor === 'string'
+            ? (observed as { themeColor?: string }).themeColor
+            : '',
       };
       if (identity.hostname === '' && identity.accent === '') return null;
       this.observedIdentity.set(profile.id, identity);
@@ -2308,6 +2316,7 @@ export class DesktopHost {
       origin: active.origin,
       accent: identity?.accent ?? '',
       hostname: identity?.hostname || active.name || '',
+      themeColor: identity?.themeColor || '',
     };
     // The window icon follows the active server's accent (same Φ
     // silhouette, accent glyph color); unobserved servers keep the white
