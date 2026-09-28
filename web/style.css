@@ -2051,6 +2051,52 @@ body.show-tab-shortcuts .tab.has-shortcut .tab-shortcut-badge {
     position: relative;
 }
 
+/* Terminal custom background image layer and dimming overlay.
+   Hidden by default; body.has-terminal-bg activates both layers and
+   clears xterm's opaque viewport so the dimmed, blurred artwork shines
+   through cleanly behind the foreground glyphs. */
+.terminal-bg-layer {
+    position: absolute;
+    inset: -24px;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    pointer-events: none;
+    z-index: 0;
+    display: none;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+}
+
+.terminal-bg-overlay {
+    position: absolute;
+    inset: 0;
+    background-color: var(--bg-base);
+    pointer-events: none;
+    z-index: 1;
+    display: none;
+}
+
+body.has-terminal-bg .terminal-bg-layer,
+body.has-terminal-bg .terminal-bg-overlay {
+    display: block;
+}
+
+body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel),
+body.has-terminal-bg .term-container:not(.review-panel, .kanban-panel) .xterm,
+body.has-terminal-bg
+    .term-container:not(.review-panel, .kanban-panel)
+    .xterm-viewport,
+body.has-terminal-bg
+    .term-container:not(.review-panel, .kanban-panel)
+    .xterm-screen {
+    background-color: transparent !important;
+}
+
+.term-container {
+    z-index: 2;
+}
+
 .initial-loader {
     display: flex;
     flex-direction: column;

@@ -99,6 +99,7 @@ export function getTerminalTheme(
     accentColorKeyOrHex,
     config,
     activeThemeKey,
+    hasCustomBg,
 ) {
     const isAgyThemed = coder === 'agy' && !!config?.agy_theme_ansi;
     const themeKey =
@@ -118,15 +119,26 @@ export function getTerminalTheme(
             document.documentElement?.style?.getPropertyValue('--accent')) ||
         tokens.accent;
 
+    const bgActive =
+        hasCustomBg !== undefined
+            ? !!hasCustomBg
+            : typeof document !== 'undefined' &&
+              !!document.body?.classList?.contains('has-terminal-bg');
+    const background = bgActive
+        ? 'rgba(0, 0, 0, 0)'
+        : DEFAULT_ANSI_THEME.background;
+
     if (!isAgyThemed) {
         return {
             ...DEFAULT_ANSI_THEME,
+            background,
             cursor: cursorColor,
         };
     }
 
     return {
         ...DEFAULT_ANSI_THEME,
+        background,
         cursor: cursorColor,
         blue: tokens.accentDim,
         brightBlue: tokens.accentBright,
@@ -2655,6 +2667,7 @@ export class TabManager {
         // Initialize xterm.js instance. The preferred size is resolved
         // against FitAddon's measured grid on the first fit below.
         const term = new window.Terminal({
+            allowTransparency: true,
             cursorBlink: true,
             cursorStyle: 'bar',
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
