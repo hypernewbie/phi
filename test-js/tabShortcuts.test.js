@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TabManager } from '../web/terminal.js';
 import { tabShortcutDigit, isMacPlatform } from '../web/util.js';
@@ -197,5 +198,101 @@ describe('TabManager.handleGlobalTabShortcuts tab switching', () => {
         const e = makeEvent({ altKey: true, key: '4', code: 'Digit4' });
         run(ctx, e);
         expect(ctx.switchTab).not.toHaveBeenCalled();
+    });
+});
+
+describe('TabManager.updateTabShortcutHints (Alt/Option visual overlay)', () => {
+    function makeTabEl() {
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab';
+        const hiero = document.createElement('span');
+        hiero.className = 'tab-worktree-icon';
+        hiero.textContent = '𓉐';
+        const badge = document.createElement('span');
+        badge.className = 'tab-shortcut-badge';
+        tabEl.appendChild(hiero);
+        tabEl.appendChild(badge);
+        return { tabEl, hiero, badge };
+    }
+
+    function makeTabs(count) {
+        const tabs = new Map();
+        for (let i = 1; i <= count; i++) {
+            const { tabEl, hiero, badge } = makeTabEl();
+            tabs.set(`pane-${i}`, {
+                paneId: `pane-${i}`,
+                tabEl,
+            });
+        }
+        return tabs;
+    }
+
+    afterEach(() => {
+        document.body.classList.remove('show-tab-shortcuts');
+    });
+
+    it('populates shortcut numbers 1 to 4 and toggles show-tab-shortcuts on body', () => {
+        const tabs = makeTabs(4);
+        const ctx = { tabs };
+        TabManager.prototype.updateTabShortcutHints.call(ctx, true);
+
+        expect(document.body.classList.contains('show-tab-shortcuts')).toBe(
+            true,
+        );
+
+        const tab1 = tabs.get('pane-1');
+        const tab4 = tabs.get('pane-4');
+        expect(tab1.tabEl.classList.contains('has-shortcut')).toBe(true);
+        expect(
+            tab1.tabEl.querySelector('.tab-shortcut-badge').textContent,
+        ).toBe('1');
+        expect(tab4.tabEl.classList.contains('has-shortcut')).toBe(true);
+        expect(
+            tab4.tabEl.querySelector('.tab-shortcut-badge').textContent,
+        ).toBe('4');
+
+        TabManager.prototype.updateTabShortcutHints.call(ctx, false);
+        expect(document.body.classList.contains('show-tab-shortcuts')).toBe(
+            false,
+        );
+    });
+
+    it('handles >8 tabs by assigning 1..8, empty for intermediate tabs, and 9 for the last tab', () => {
+        const tabs = makeTabs(12);
+        const ctx = { tabs };
+        TabManager.prototype.updateTabShortcutHints.call(ctx, true);
+
+        // 1 to 8
+        for (let i = 1; i <= 8; i++) {
+            const tab = tabs.get(`pane-${i}`);
+            expect(tab.tabEl.classList.contains('has-shortcut')).toBe(true);
+            expect(
+                tab.tabEl.querySelector('.tab-shortcut-badge').textContent,
+            ).toBe(String(i));
+        }
+
+        // Intermediate tabs (9, 10, 11)
+        for (let i = 9; i <= 11; i++) {
+            const tab = tabs.get(`pane-${i}`);
+            expect(tab.tabEl.classList.contains('has-shortcut')).toBe(false);
+            expect(
+                tab.tabEl.querySelector('.tab-shortcut-badge').textContent,
+            ).toBe('');
+        }
+
+        // Last tab (12) gets badge '9' (Alt+9 jumps to last tab)
+        const lastTab = tabs.get('pane-12');
+        expect(lastTab.tabEl.classList.contains('has-shortcut')).toBe(true);
+        expect(
+            lastTab.tabEl.querySelector('.tab-shortcut-badge').textContent,
+        ).toBe('9');
+    });
+
+    it('handles empty tabs cleanly without error', () => {
+        const ctx = { tabs: new Map() };
+        TabManager.prototype.updateTabShortcutHints.call(ctx, true);
+        expect(document.body.classList.contains('show-tab-shortcuts')).toBe(
+            false,
+        );
     });
 });

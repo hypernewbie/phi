@@ -1349,6 +1349,14 @@ export class DesktopHost {
     }
   }
 
+  /** Pushes shortcut visibility to the rail view's webContents. */
+  pushRailShortcuts(show: boolean): void {
+    const rail = this.railView;
+    if (rail && !rail.webContents.isDestroyed()) {
+      rail.webContents.send('phi:rail-shortcuts', show);
+    }
+  }
+
   /**
    * Caches the observed hostname/accent for the profile at origin; null
    * while the remote page has reported neither or on failure.
@@ -2647,7 +2655,15 @@ export class DesktopHost {
         }
       }
     });
-    win.on('blur', () => this.pushWindowState());
+    win.on('blur', () => {
+      this.pushWindowState();
+      this.pushRailShortcuts(false);
+    });
+    win.webContents.on('before-input-event', (_event, input) => {
+      if (input.key === 'Control') {
+        this.pushRailShortcuts(input.type === 'keyDown');
+      }
+    });
     // The session builder installs its did-finish-load handler before this
     // local page starts loading, so launch payloads cannot race the preload.
     win.on('closed', () => {
@@ -3147,7 +3163,11 @@ export class DesktopHost {
         // focus probe runs after the dispatch and switches only when the
         // page is not focused in a terminal.
         view.webContents.on('before-input-event', (event, input) => {
-          if (!isCurrent() || input.type !== 'keyDown') return;
+          if (!isCurrent()) return;
+          if (input.key === 'Control') {
+            this.pushRailShortcuts(input.type === 'keyDown');
+          }
+          if (input.type !== 'keyDown') return;
           if (!input.control || input.alt || input.meta) return;
           const ctrl = this.controller;
           if (!ctrl) return;
@@ -3391,6 +3411,12 @@ export class DesktopHost {
       installZoomShortcuts(rail.webContents, (action) =>
         this.requestContentZoom(action),
       );
+      rail.webContents.on('before-input-event', (_event, input) => {
+        if (!isCurrent()) return;
+        if (input.key === 'Control') {
+          this.pushRailShortcuts(input.type === 'keyDown');
+        }
+      });
       // Re-apply the bounds once the page loads, then push a fresh rail
       // snapshot.
       rail.webContents.on('did-finish-load', () => {
