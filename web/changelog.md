@@ -2,6 +2,17 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.21.5 — 2026-09-28
+
+### Added
+- **Custom darkened blurred terminal background image** (`0c5f496`). Upload and store native image blobs in IndexedDB (`'backgrounds'` store) to serve as a custom wallpaper behind the center terminal. Layered with an aspect-cover artwork plane and an overlay dimmed to a configurable percent (default 98% darkness) plus configurable CSS blur (default 0px). Toggles xterm viewport transparency cleanly while keeping kanban and review cards solid. Configurable in Settings -> Appearance with live preview, remove button, and reset support.
+- **Dynamic keyboard shortcut visual overlays** (`ff42e15`). Holding `Control` displays numeric badge hints on server rail icons (`Ctrl+1..N`), and holding `Alt` / `Option` displays numeric badge hints on tab headers (`Alt+1..N`) to improve key navigation discoverability without permanently cluttering the UI.
+
+### Fixed
+- **Terminal done vs. inactive heuristics** (`ff42e15`). Eliminated false-positive "done" state transitions on inactive tabs where spinner animations or background subagent executions are still pending.
+- **Desktop server switch strobe** (`8d86db0`). Removed purple background flashes during server switches or accent theme updates in the desktop Electron shell.
+- **Scrollback history & scroll-follow stability** (`8d251a9`). Preserved live terminal history and stabilized auto-scroll stickiness during high-throughput bursts.
+
 ## v0.21.4 — 2026-09-26
 
 ### Added
