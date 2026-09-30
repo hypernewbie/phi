@@ -335,7 +335,7 @@ describe('vendored browser JS (web/vendor/*)', () => {
     }
   });
 
-  it('ships every ACCENT_COLORS theme (22) in the vendored theme.js', (ctx) => {
+  it('ships every ACCENT_COLORS theme (29) in the vendored theme.js', (ctx) => {
     const vendored = path.join(webDir, 'vendor', 'theme.js');
     if (!existsSync(vendored)) {
       ctx.skip('web/vendor missing — run `pnpm run build` first');
@@ -346,7 +346,7 @@ describe('vendored browser JS (web/vendor/*)', () => {
         /^\s{4}([a-z]+):\s*\{\s*accent: '/gm,
       ),
     ].map((m) => m[1]);
-    expect(keys.length).toBe(22);
+    expect(keys.length).toBe(29);
     for (const k of [
       'purple',
       'blue',
@@ -370,6 +370,13 @@ describe('vendored browser JS (web/vendor/*)', () => {
       'canary',
       'copper',
       'mint',
+      'arc',
+      'ember',
+      'fog',
+      'ash',
+      'dusk',
+      'pine',
+      'fern',
     ]) {
       expect(keys).toContain(k);
     }
@@ -385,7 +392,7 @@ describe('vendored browser JS (web/vendor/*)', () => {
     // booting the app: importing app.js only defines classes and the
     // palette (no App instantiation at module scope).
     const mod = await import(pathToFileURL(vendored).href);
-    expect(Object.keys(mod.ACCENT_COLORS).length).toBe(22);
+    expect(Object.keys(mod.ACCENT_COLORS).length).toBe(29);
   });
 
   it('loads the vendored module entry in the main view page (no sidecar script)', () => {
