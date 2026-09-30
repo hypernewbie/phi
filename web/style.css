@@ -5850,6 +5850,145 @@ html[data-phi-config-page] .settings-modal {
     gap: 2px;
 }
 
+/* Files-tab toolbar: stacked, full-width VS Code launch buttons above
+   the file tree. Sits inside #diff-content but above #file-tree-list
+   so refresh() / folder expansion never replaces it. The buttons stay
+   one per row so both remain wide in narrow panels. */
+.file-tree-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 8px 4px;
+    flex-shrink: 0;
+}
+
+.ft-vscode-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+        background 0.1s,
+        color 0.1s,
+        border-color 0.1s;
+}
+
+.ft-vscode-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-bright);
+    border-color: var(--accent);
+}
+
+.ft-vscode-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.ft-vscode-btn[aria-disabled='true'] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.ft-vscode-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--accent);
+}
+
+.ft-vscode-btn:hover .ft-vscode-icon {
+    color: var(--accent-bright);
+}
+
+/* Compact variant for the diff action bar (sits inline with the
+   commit selector; no full-width padding). Inherits hover + focus
+   from .ft-vscode-btn. */
+.ft-vscode-btn-compact {
+    width: auto;
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+/* Per-row VS Code actions, sized like the existing ⋯ menu button so
+   hover does not change row geometry. Two icons (local + remote) sit
+   before the ⋯ control. */
+.ft-vscode-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.ft-vscode-row-btn {
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+        background 0.1s,
+        color 0.1s;
+}
+
+.ft-vscode-row-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--accent-bright);
+}
+
+.ft-vscode-row-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.ft-vscode-row-btn[aria-disabled='true'] {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.ft-vscode-row-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+/* Rich-diff file actions: live alongside the existing
+   .d2h-file-name so they don't push filename text around. The
+   header is flex; slot the action in via absolute positioning so
+   long file names keep their layout. */
+.d2h-file-header .ft-vscode-row-actions,
+.d2h-files-list .ft-vscode-row-actions {
+    margin-left: auto;
+    position: relative;
+    z-index: 2;
+}
+
+.d2h-file-header {
+    position: relative;
+}
+
+/* When the file list is hidden, the diff action bar still shows —
+   the VS Code project buttons slot in via flex and wrap on
+   narrow viewports without overlapping the commit selector. */
+.diff-action-bar {
+    flex-wrap: wrap;
+}
+
 .ft-chevron {
     width: 14px;
     flex-shrink: 0;

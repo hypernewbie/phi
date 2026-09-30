@@ -1130,6 +1130,69 @@ eager to avoid a first-open unstyled flash. -->
                                 <line x1="12" y1="3" x2="12" y2="21"></line>
                             </svg>
                         </button>
+                        <a
+                            id="diff-vscode-local-btn"
+                            class="ft-vscode-btn ft-vscode-btn-compact hidden"
+                            href="#"
+                            role="button"
+                            title="Open project in VS Code"
+                            aria-label="Open project in VS Code"
+                        >
+                            <svg
+                                class="ft-vscode-icon"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <rect
+                                    x="3"
+                                    y="3"
+                                    width="18"
+                                    height="18"
+                                    rx="2"
+                                    ry="2"
+                                ></rect>
+                                <path d="M9 8l-4 4 4 4"></path>
+                                <path d="M15 8l4 4-4 4"></path>
+                            </svg>
+                            <span>VS Code</span>
+                        </a>
+                        <a
+                            id="diff-vscode-remote-btn"
+                            class="ft-vscode-btn ft-vscode-btn-compact hidden"
+                            href="#"
+                            role="button"
+                            title="Open project in VS Code through SSH"
+                            aria-label="Open project in VS Code through SSH"
+                        >
+                            <svg
+                                class="ft-vscode-icon"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <rect
+                                    x="3"
+                                    y="3"
+                                    width="18"
+                                    height="18"
+                                    rx="2"
+                                    ry="2"
+                                ></rect>
+                                <path d="M5 12h14"></path>
+                                <path d="M9 8l-4 4 4 4"></path>
+                                <path d="M15 8l4 4-4 4"></path>
+                            </svg>
+                            <span>VS Code Remote</span>
+                        </a>
                     </div>
 
                     <div class="diff-content">
@@ -1141,6 +1204,78 @@ eager to avoid a first-open unstyled flash. -->
                             id="markdown-file-list"
                             class="markdown-file-list hidden"
                         ></div>
+                        <!-- Files toolbar: VS Code launch actions for the
+                             active project root. Sits above #file-tree-list
+                             inside #diff-content so it stays visible even
+                             when the tree is empty. Hidden in other tabs
+                             and on surfaces that cannot dispatch vscode:
+                             URIs (desktop main view, embedded Electron). -->
+                        <div
+                            id="file-tree-toolbar"
+                            class="file-tree-toolbar hidden"
+                        >
+                            <a
+                                id="ft-vscode-local-btn"
+                                class="ft-vscode-btn ft-vscode-local-btn"
+                                href="#"
+                                role="button"
+                                title="Open project in VS Code"
+                            >
+                                <svg
+                                    class="ft-vscode-icon"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <rect
+                                        x="3"
+                                        y="3"
+                                        width="18"
+                                        height="18"
+                                        rx="2"
+                                        ry="2"
+                                    ></rect>
+                                    <path d="M9 8l-4 4 4 4"></path>
+                                    <path d="M15 8l4 4-4 4"></path>
+                                </svg>
+                                <span>Open project in VS Code</span>
+                            </a>
+                            <a
+                                id="ft-vscode-remote-btn"
+                                class="ft-vscode-btn ft-vscode-remote-btn"
+                                href="#"
+                                role="button"
+                                title="Open project in VS Code through SSH"
+                            >
+                                <svg
+                                    class="ft-vscode-icon"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <rect
+                                        x="3"
+                                        y="3"
+                                        width="18"
+                                        height="18"
+                                        rx="2"
+                                        ry="2"
+                                    ></rect>
+                                    <path d="M5 12h14"></path>
+                                    <path d="M9 8l-4 4 4 4"></path>
+                                    <path d="M15 8l4 4-4 4"></path>
+                                </svg>
+                                <span>Open project in VS Code Remote</span>
+                            </a>
+                        </div>
                         <div
                             id="file-tree-list"
                             class="file-tree-list hidden"

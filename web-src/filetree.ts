@@ -3,6 +3,12 @@
 import type { AppLike } from './types.js';
 import { formatAttachment, type Attachment } from './attachments.js';
 import { escapeHtml } from './util.js';
+import {
+    buildVSCodeURI,
+    buildVSCodeRemoteURI,
+    normalizeHostname,
+    isVSCodeLaunchUnsupported,
+} from './vscode.js';
 
 interface FSEntry {
     name: string;
@@ -15,12 +21,21 @@ interface FSListResponse {
 
 const FILE_ICON_SVG = `<svg class="md-file-icon md-file-icon-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>`;
 
+// Compact inline SVG glyphs for the per-row VS Code actions. Explicit
+// dimensions + stroke mirrors the markdown file-icon style.
+const VSCODE_LOCAL_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M9 8l-4 4 4 4"></path><path d="M15 8l4 4-4 4"></path></svg>`;
+const VSCODE_REMOTE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M5 12h14"></path><path d="M9 8l-4 4 4 4"></path><path d="M15 8l4 4-4 4"></path></svg>`;
+
 export class FileTreeManager {
     app: AppLike;
     treeEl: HTMLElement;
     contextMenuEl: HTMLElement;
     expanded: Set<string>;
     refreshRequestId: number;
+    toolbarEl: HTMLElement | null;
+    localBtn: HTMLAnchorElement | null;
+    remoteBtn: HTMLAnchorElement | null;
+    vscodeUnsupported: boolean;
 
     constructor(app: AppLike) {
         this.app = app;
@@ -28,6 +43,24 @@ export class FileTreeManager {
         this.expanded = new Set();
         this.refreshRequestId = 0;
         this.contextMenuEl = this._createContextMenu();
+        this.toolbarEl = document.getElementById('file-tree-toolbar');
+        this.localBtn = document.getElementById(
+            'ft-vscode-local-btn',
+        ) as HTMLAnchorElement | null;
+        this.remoteBtn = document.getElementById(
+            'ft-vscode-remote-btn',
+        ) as HTMLAnchorElement | null;
+        // Hidden on surfaces that cannot dispatch vscode: (the desktop
+        // main view + any embedded Electron view). The launch
+        // helpers below still resolve URIs for tests, but the
+        // buttons stay out of the DOM in that case.
+        this.vscodeUnsupported = isVSCodeLaunchUnsupported();
+        if (this.vscodeUnsupported) {
+            this.toolbarEl?.remove();
+            this.toolbarEl = null;
+            this.localBtn = null;
+            this.remoteBtn = null;
+        }
         this._setupEventListeners();
     }
 
@@ -61,6 +94,11 @@ export class FileTreeManager {
             this.treeEl.innerHTML =
                 '<div class="md-list-loading">Loading...</div>';
         }
+        // The toolbar buttons reflect the active CWD snapshot at fetch
+        // start. Late responses don't reach here (the request counter
+        // guards them), so we update the toolbar synchronously with
+        // the same CWD we passed to the fetch.
+        this._renderToolbar(this.app.sessionsManager?.activeCWD || '');
         try {
             const frag = await this._renderDir('', 0, requestId);
             if (requestId !== this.refreshRequestId || !frag) return;
@@ -68,6 +106,52 @@ export class FileTreeManager {
         } catch (e) {
             if (requestId !== this.refreshRequestId) return;
             this.treeEl.innerHTML = `<div class="md-list-error">Failed to load: ${escapeHtml((e as Error).message)}</div>`;
+        }
+    }
+
+    /** Update the project-bar buttons to reflect the given root. Disabled
+     *  state is set when the root is empty or non-absolute, or when the
+     *  remote hostname is missing/invalid (local still works). Called
+     *  with the CWD snapshot from refresh(); also exposed so callers
+     *  can re-render after a server switch without a full refresh. */
+    _renderToolbar(root: string): void {
+        if (!this.toolbarEl || !this.localBtn || !this.remoteBtn) return;
+        const localURI = buildVSCodeURI(root);
+        const hostname = normalizeHostname(this.app.hostname);
+        const remoteURI = buildVSCodeRemoteURI(hostname, {
+            root,
+            kind: 'folder',
+        });
+        this._applyEditorLink(this.localBtn, localURI, root, '');
+        this._applyEditorLink(
+            this.remoteBtn,
+            remoteURI,
+            root,
+            hostname ? ` through SSH to ${hostname}` : '',
+        );
+    }
+
+    _applyEditorLink(
+        el: HTMLAnchorElement,
+        uri: string | null,
+        root: string,
+        remoteSuffix: string,
+    ): void {
+        const baseTitle = el.id.includes('local')
+            ? 'Open project in VS Code'
+            : 'Open project in VS Code through SSH';
+        if (!root || !uri) {
+            el.setAttribute('aria-disabled', 'true');
+            el.removeAttribute('href');
+            el.title = root
+                ? `${baseTitle} (unavailable for this path)`
+                : `${baseTitle} (no active project)`;
+        } else {
+            el.removeAttribute('aria-disabled');
+            el.setAttribute('href', uri);
+            el.title = root
+                ? `Open ${root} in VS Code${remoteSuffix}`
+                : baseTitle;
         }
     }
 
@@ -151,6 +235,11 @@ export class FileTreeManager {
             item.addEventListener('click', () => this._previewFile(rel));
         }
 
+        // VS Code row actions (local + remote). Built before the
+        // existing ⋯ menu so the existing fixed-width layout stays
+        // intact: a row gets [item] [VSCode-local] [VSCode-remote] [⋯].
+        const rowActions = this._buildVSCodeRowActions(entry, rel);
+
         const actionBtn = document.createElement('button');
         actionBtn.className = 'md-file-action-btn';
         actionBtn.innerHTML = '⋯';
@@ -170,8 +259,118 @@ export class FileTreeManager {
         row.addEventListener('contextmenu', onContextMenu);
 
         row.appendChild(item);
+        if (rowActions) row.appendChild(rowActions);
         row.appendChild(actionBtn);
         return row;
+    }
+
+    /** Build the per-row local + remote VS Code anchor cluster. Returns
+     *  null when vscode: launch is unsupported on this surface (the
+     *  toolbar already removed itself, and we keep row geometry
+     *  consistent by skipping these entirely). */
+    _buildVSCodeRowActions(
+        entry: FSEntry,
+        rel: string,
+    ): HTMLElement | null {
+        if (this.vscodeUnsupported) return null;
+        const cluster = document.createElement('span');
+        cluster.className = 'ft-vscode-row-actions';
+
+        const localAnchor = document.createElement('a');
+        localAnchor.className = 'ft-vscode-row-btn ft-vscode-row-local-btn';
+        localAnchor.innerHTML = VSCODE_LOCAL_SVG;
+        localAnchor.title = 'Open in VS Code';
+        localAnchor.setAttribute('aria-label', 'Open in VS Code');
+        localAnchor.tabIndex = 0;
+        localAnchor.addEventListener('click', (e) =>
+            this._handleVSCodeRowClick(e, entry, rel, 'local'),
+        );
+
+        const remoteAnchor = document.createElement('a');
+        remoteAnchor.className = 'ft-vscode-row-btn ft-vscode-row-remote-btn';
+        remoteAnchor.innerHTML = VSCODE_REMOTE_SVG;
+        remoteAnchor.title = 'Open in VS Code Remote';
+        remoteAnchor.setAttribute('aria-label', 'Open in VS Code Remote');
+        remoteAnchor.tabIndex = 0;
+        remoteAnchor.addEventListener('click', (e) =>
+            this._handleVSCodeRowClick(e, entry, rel, 'remote'),
+        );
+
+        cluster.appendChild(localAnchor);
+        cluster.appendChild(remoteAnchor);
+        // Resolve URIs synchronously now so stale-context guards
+        // (next refresh may change the active CWD) kill the link
+        // before the user clicks.
+        this._refreshRowVSCodeURIs(cluster, entry, rel);
+        return cluster;
+    }
+
+    /** Recompute the URIs on a row's VS Code anchors. Called after every
+     *  row build and exposed so tests can verify the snapshot binding
+     *  is honored when the active CWD changes. */
+    _refreshRowVSCodeURIs(
+        cluster: HTMLElement,
+        entry: FSEntry,
+        rel: string,
+    ): void {
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        const localURI = buildVSCodeURI(cwd, rel);
+        const hostname = normalizeHostname(this.app.hostname);
+        const remoteURI = buildVSCodeRemoteURI(hostname, {
+            root: cwd,
+            relativePath: rel,
+            kind: entry.dir ? 'folder' : 'file',
+        });
+        const localBtn = cluster.querySelector(
+            '.ft-vscode-row-local-btn',
+        ) as HTMLAnchorElement | null;
+        const remoteBtn = cluster.querySelector(
+            '.ft-vscode-row-remote-btn',
+        ) as HTMLAnchorElement | null;
+        if (localBtn) {
+            this._applyEditorLink(localBtn, localURI, cwd, '');
+            localBtn.title = localURI
+                ? `Open ${rel} in VS Code`
+                : 'Open in VS Code (unavailable for this path)';
+        }
+        if (remoteBtn) {
+            this._applyEditorLink(remoteBtn, remoteURI, cwd, '');
+            remoteBtn.title = remoteURI
+                ? `Open ${rel} in VS Code through SSH to ${hostname}`
+                : hostname
+                  ? `Open in VS Code through SSH to ${hostname}`
+                  : 'Open in VS Code Remote (no Phi hostname available)';
+        }
+    }
+
+    /** Activate a row's VS Code link. We let the browser navigate via
+     *  the anchor's href (synchronous, no fetch, no blank tab), but
+     *  always stopPropagation first so the click does not also toggle
+     *  the folder or open the file preview. Stale rows (URI is null
+     *  because the active CWD changed mid-render) get their activation
+     *  vetoed. */
+    _handleVSCodeRowClick(
+        e: MouseEvent,
+        entry: FSEntry,
+        rel: string,
+        mode: 'local' | 'remote',
+    ): void {
+        e.stopPropagation();
+        e.preventDefault();
+        const cwd = this.app.sessionsManager?.activeCWD || '';
+        const uri =
+            mode === 'local'
+                ? buildVSCodeURI(cwd, rel)
+                : buildVSCodeRemoteURI(normalizeHostname(this.app.hostname), {
+                      root: cwd,
+                      relativePath: rel,
+                      kind: entry.dir ? 'folder' : 'file',
+                  });
+        if (!uri) return;
+        // Native-link dispatch: clicking an anchor with href but no
+        // target opens the registered protocol handler without leaving
+        // the current tab or creating a blank one.
+        window.location.href = uri;
     }
 
     // Expand/collapse mutates the rendered tree in place. A collapse is
@@ -378,6 +577,40 @@ export class FileTreeManager {
             className: 'open-explorer',
             handler: () => this._openInExplorer(rel),
         });
+
+        // VS Code actions: local first, remote second. Skipped entirely
+        // on surfaces that can't dispatch vscode: (the desktop main view
+        // would just hang on a denied navigation).
+        if (!this.vscodeUnsupported) {
+            const cwd = this.app.sessionsManager?.activeCWD || '';
+            const hostname = normalizeHostname(this.app.hostname);
+            const localURI = buildVSCodeURI(cwd, rel);
+            if (localURI) {
+                actions.push({
+                    icon: VSCODE_LOCAL_SVG,
+                    label: 'Open in VS Code',
+                    className: 'open-vscode-local',
+                    handler: () => {
+                        if (localURI) window.location.href = localURI;
+                    },
+                });
+            }
+            const remoteURI = buildVSCodeRemoteURI(hostname, {
+                root: cwd,
+                relativePath: rel,
+                kind: entry.dir ? 'folder' : 'file',
+            });
+            if (remoteURI) {
+                actions.push({
+                    icon: VSCODE_REMOTE_SVG,
+                    label: 'Open in VS Code Remote',
+                    className: 'open-vscode-remote',
+                    handler: () => {
+                        if (remoteURI) window.location.href = remoteURI;
+                    },
+                });
+            }
+        }
 
         actions.forEach((action) => {
             const btn = document.createElement('button');
