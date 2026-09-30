@@ -311,6 +311,22 @@ describe('TBAR pipeline: regen + diff', () => {
     );
   });
 
+  it('vendors the VS Code launch helpers (vscode.js) byte-identical', () => {
+    // Plan 1 + Plan 2: the Files tab and the rich diff both reach
+    // for the URI builders. Vendoring keeps the desktop main view's
+    // module graph self-contained — the header would crash on import
+    // without this copy. Pin it so any future module rename or
+    // removal surfaces here before it lands in a commit.
+    const vendorScript = path.join(electronRoot, 'scripts', 'vendor-web.mjs');
+    const script = readFileSync(vendorScript, 'utf8');
+    expect(script).toMatch(/['"]vscode\.js['"]/);
+    const browserVSCode = path.join(webRoot, 'vscode.js');
+    const desktopVSCode = path.join(desktopWeb, 'vendor', 'vscode.js');
+    expect(readFileSync(desktopVSCode, 'utf8')).toBe(
+      readFileSync(browserVSCode, 'utf8'),
+    );
+  });
+
   it('vendor-web.mjs produces the same bytes when invoked as a real subprocess', () => {
     // Run the actual `node scripts/vendor-web.mjs` against the
     // browser source via a wrapper that redirects its output to a
