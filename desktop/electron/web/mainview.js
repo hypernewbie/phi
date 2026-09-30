@@ -235,6 +235,15 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     });
   }
 
+  // --- Right-click on TBAR: open the server menu for the active machine ---
+  header.addEventListener('contextmenu', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+    e.preventDefault();
+    if (activeServerId && typeof window.electron?.postOpenRailMenu === 'function') {
+      window.electron.postOpenRailMenu(activeServerId, e.screenX, e.screenY);
+    }
+  });
+
   // --- Server sync: refresh on profile activation and on a light cadence
   // --- (the server exposes no push channel for config) ---
   window.electron.onActiveServer((info) => {

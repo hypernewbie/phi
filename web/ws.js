@@ -315,6 +315,21 @@ export class PTYWebSocket {
         return true;
     }
     close() {
-        this.ws.close();
+        this.onClose = undefined;
+        this.onOpen = undefined;
+        this.onData = () => { };
+        this.onControl = undefined;
+        this.onAttachHead = undefined;
+        this.onGap = undefined;
+        if (this.ws) {
+            this.ws.onclose = null;
+            this.ws.onerror = null;
+            this.ws.onmessage = null;
+            this.ws.onopen = null;
+            try {
+                this.ws.close();
+            }
+            catch (_e) { }
+        }
     }
 }

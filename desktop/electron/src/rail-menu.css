@@ -4,7 +4,7 @@
   --menu-border: #30303a;
   --menu-text: #e4e3e9;
   --menu-dim: #9795a7;
-  --menu-accent: #9b8cff;
+  --menu-accent: var(--accent, #e4e3e9);
   --menu-accent-soft: color-mix(in srgb, var(--menu-accent) 14%, transparent);
   --menu-danger: #ff8f9a;
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

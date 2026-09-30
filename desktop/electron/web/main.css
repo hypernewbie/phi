@@ -23,6 +23,8 @@ html, body {
    identically but the window cannot be moved by dragging it. */
 .app-header {
   -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Interactive children of the header must NOT swallow drag gestures. */

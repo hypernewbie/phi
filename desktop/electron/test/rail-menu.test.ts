@@ -176,4 +176,19 @@ describe('desktop rail context popup', () => {
       /\.rail-menu-action\s*\{[^}]*min-height:\s*38px/s,
     );
   });
+
+  it('applies the machine accent color and never falls back to purple', () => {
+    setup();
+    // In MENU_STATE, accent is '#e76f51'
+    expect(
+      document.documentElement.style.getPropertyValue('--menu-accent'),
+    ).toBe('#e76f51');
+    expect(
+      document.documentElement.style.getPropertyValue('--menu-accent-soft'),
+    ).toBe('color-mix(in srgb, #e76f51 14%, transparent)');
+
+    // CSS file must NOT hardcode purple (#9b8cff or #7c6af7)
+    expect(cssSource).not.toContain('#9b8cff');
+    expect(cssSource).not.toContain('#7c6af7');
+  });
 });

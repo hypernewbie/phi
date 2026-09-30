@@ -24,6 +24,7 @@ interface FakeBridge {
     id?: string;
     value?: string;
   }) => void;
+  postOpenRailMenu?: (id: string, screenX: number, screenY: number) => void;
   onAuthRequired: (cb: (info: any) => void) => void;
   onAuthResolved?: (cb: (info: any) => void) => void;
   onBodyObscuring: (cb: (obscured: boolean) => void) => void;
@@ -46,6 +47,7 @@ beforeEach(() => {
     postWindowToggleMaximize: vi.fn(),
     postWindowClose: vi.fn(),
     postHeaderAction: vi.fn(),
+    postOpenRailMenu: vi.fn(),
     onAuthRequired: () => undefined,
     onAuthResolved: () => undefined,
     onBodyObscuring: () => undefined,
@@ -279,5 +281,41 @@ describe('TBAR wedge and race condition prevention', () => {
     expect(doc.documentElement.style.getPropertyValue('--accent')).toBe(
       '#fbbf24',
     );
+  });
+
+  it('right clicking on TBAR opens the rail menu for the active server', async () => {
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'CHARON',
+      workspaces: ['/charon'],
+      active_cwd: '/charon',
+      theme_color: 'amber',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/charon');
+
+    const doc = await loadMainView();
+    recordedActiveServer?.({
+      id: 'charon',
+      origin: 'http://charon:7070/',
+      hostname: 'CHARON',
+      accent: '#fbbf24',
+    });
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    const header = doc.querySelector('.app-header') as HTMLElement;
+    expect(header).not.toBeNull();
+
+    const contextEvent = new (doc.defaultView as any).MouseEvent(
+      'contextmenu',
+      {
+        bubbles: true,
+        cancelable: true,
+        screenX: 250,
+        screenY: 30,
+      },
+    );
+    header.dispatchEvent(contextEvent);
+
+    expect(contextEvent.defaultPrevented).toBe(true);
+    expect(fakeBridge.postOpenRailMenu).toHaveBeenCalledWith('charon', 250, 30);
   });
 });
