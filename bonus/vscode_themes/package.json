@@ -1,7 +1,7 @@
 {
   "name": "phi-themes",
   "displayName": "Phi Themes",
-  "description": "Official Phi dark color themes for VS Code matching all 22 Phi accent palettes.",
+  "description": "Official Phi dark color themes for VS Code matching all 29 Phi accent palettes.",
   "version": "1.0.1",
   "publisher": "hypernewbie",
   "engines": {
@@ -29,6 +29,16 @@
         "path": "./themes/phi_amber.json"
       },
       {
+        "label": "Phi Arc",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_arc.json"
+      },
+      {
+        "label": "Phi Ash",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_ash.json"
+      },
+      {
         "label": "Phi Blue",
         "uiTheme": "vs-dark",
         "path": "./themes/phi_blue.json"
@@ -54,9 +64,29 @@
         "path": "./themes/phi_cyan.json"
       },
       {
+        "label": "Phi Dusk",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_dusk.json"
+      },
+      {
+        "label": "Phi Ember",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_ember.json"
+      },
+      {
         "label": "Phi Emerald",
         "uiTheme": "vs-dark",
         "path": "./themes/phi_emerald.json"
+      },
+      {
+        "label": "Phi Fern",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_fern.json"
+      },
+      {
+        "label": "Phi Fog",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_fog.json"
       },
       {
         "label": "Phi Fuchsia",
@@ -97,6 +127,11 @@
         "label": "Phi Orange",
         "uiTheme": "vs-dark",
         "path": "./themes/phi_orange.json"
+      },
+      {
+        "label": "Phi Pine",
+        "uiTheme": "vs-dark",
+        "path": "./themes/phi_pine.json"
       },
       {
         "label": "Phi Pink",

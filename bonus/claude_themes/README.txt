@@ -1,7 +1,7 @@
 Phi Themes for Claude Code CLI
 ==============================
 
-Official Phi colour themes for Anthropic's Claude Code CLI, matching all 22 Phi workspace accent palettes.
+Official Phi colour themes for Anthropic's Claude Code CLI, matching all 29 Phi workspace accent palettes.
 
 Installation:
 - Copy the `phi_*.json` files into `~/.claude/themes/`:

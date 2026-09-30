@@ -1,7 +1,7 @@
 Phi Themes for VS Code & Cursor
 ==============================
 
-Official Phi color themes for Visual Studio Code and Cursor, matching all 22 Phi workspace accent palettes.
+Official Phi color themes for Visual Studio Code and Cursor, matching all 29 Phi workspace accent palettes.
 
 Installation:
 - Copy the entire `vscode_themes` folder to your VS Code extensions directory:
