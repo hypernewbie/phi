@@ -17,31 +17,21 @@ export function openPiRpcChatTab(tabManager, cwd, sessionPath, sessionTitle) {
         tabManager.switchTab(paneId);
         return;
     }
-    const title =
-        sessionPath && sessionTitle
-            ? sessionTitle
-            : `Pi RPC · ${getLastFolderName(cwd) || cwd}`;
+    const title = sessionPath && sessionTitle
+        ? sessionTitle
+        : `Pi RPC · ${getLastFolderName(cwd) || cwd}`;
     const workspace = tabManager.app?.sessionsManager?.activeWorkspace ?? '';
     // The final argument carries the durable resume path: the exact
     // session path for a resumed tab, null for a fresh tab.
-    tabManager.createTab(
-        paneId,
-        '',
-        title,
-        'pi-rpc',
-        workspace,
-        cwd,
-        true,
-        false,
-        '',
-        sessionPath || null,
-    );
+    tabManager.createTab(paneId, '', title, 'pi-rpc', workspace, cwd, true, false, '', sessionPath || null);
     const tab = tabManager.tabs.get(paneId);
-    if (!tab) return;
+    if (!tab)
+        return;
     applyTerminalFont(tab.termContainer, tabManager.app);
     if (sessionPath) {
         mountRpcChat(paneId, tab.termContainer, cwd, sessionPath);
-    } else {
+    }
+    else {
         mountRpcChat(paneId, tab.termContainer, cwd);
     }
 }

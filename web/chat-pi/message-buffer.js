@@ -53,10 +53,9 @@ export class MessageBuffer {
                 const hadPartial = this.partial !== '';
                 // SAFETY: pi's wire envelope is a free-form JSON object;
                 // narrow to a record view so individual field reads type-check.
-                const startMsg =
-                    d?.message && typeof d.message === 'object'
-                        ? d.message
-                        : null;
+                const startMsg = d?.message && typeof d.message === 'object'
+                    ? d.message
+                    : null;
                 this.role =
                     typeof startMsg?.role === 'string'
                         ? startMsg.role
@@ -70,11 +69,11 @@ export class MessageBuffer {
                 const a = d?.assistantMessageEvent;
                 // SAFETY: pi's wire envelope is a free-form JSON object;
                 // narrow to a record view so individual field reads type-check.
-                const aRecord = a && typeof a === 'object' ? a : null;
-                if (
-                    aRecord?.type === 'text_delta' &&
-                    typeof aRecord.delta === 'string'
-                ) {
+                const aRecord = a && typeof a === 'object'
+                    ? a
+                    : null;
+                if (aRecord?.type === 'text_delta' &&
+                    typeof aRecord.delta === 'string') {
                     this.partial += aRecord.delta;
                     disposition = 'partial';
                 }
@@ -87,31 +86,28 @@ export class MessageBuffer {
                 const m = d?.message;
                 // SAFETY: pi's wire envelope is a free-form JSON object;
                 // narrow to a record view so individual field reads type-check.
-                const mRecord = m && typeof m === 'object' ? m : null;
+                const mRecord = m && typeof m === 'object'
+                    ? m
+                    : null;
                 this.partial = '';
                 const settled = {
                     role: mRecord?.role ?? this.role,
                     content: mRecord?.content ?? '',
                 };
-                if (
-                    typeof mRecord?.toolCallId === 'string' &&
-                    mRecord.toolCallId
-                )
+                if (typeof mRecord?.toolCallId === 'string' &&
+                    mRecord.toolCallId)
                     settled.toolCallId = mRecord.toolCallId;
                 if (typeof mRecord?.toolName === 'string' && mRecord.toolName)
                     settled.toolName = mRecord.toolName;
-                if (mRecord?.isError === true) settled.isError = true;
+                if (mRecord?.isError === true)
+                    settled.isError = true;
                 if (mRecord && Object.hasOwn(mRecord, 'details'))
                     settled.details = mRecord.details;
-                if (
-                    typeof mRecord?.stopReason === 'string' &&
-                    mRecord.stopReason
-                )
+                if (typeof mRecord?.stopReason === 'string' &&
+                    mRecord.stopReason)
                     settled.stopReason = mRecord.stopReason;
-                if (
-                    typeof mRecord?.errorMessage === 'string' &&
-                    mRecord.errorMessage
-                )
+                if (typeof mRecord?.errorMessage === 'string' &&
+                    mRecord.errorMessage)
                     settled.errorMessage = mRecord.errorMessage;
                 this.messages.push(settled);
                 if (settled.role === 'toolResult') {
@@ -191,7 +187,8 @@ export class MessageBuffer {
     rebuildToolResultIndex() {
         const next = new Map();
         for (const message of this.messages) {
-            if (message.role !== 'toolResult') continue;
+            if (message.role !== 'toolResult')
+                continue;
             const id = extractToolCallId(message);
             if (typeof id === 'string' && id) {
                 next.set(id, {
@@ -209,23 +206,28 @@ export function extractToolCallId(message) {
     if (typeof message.toolCallId === 'string' && message.toolCallId)
         return message.toolCallId;
     const content = message.content;
-    if (!content) return undefined;
+    if (!content)
+        return undefined;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const id = item.toolCallId;
-                if (typeof id === 'string') return id;
+                if (typeof id === 'string')
+                    return id;
                 const idSnake = item.tool_call_id;
-                if (typeof idSnake === 'string') return idSnake;
+                if (typeof idSnake === 'string')
+                    return idSnake;
             }
         }
         return undefined;
     }
     if (typeof content === 'object') {
         const id = content.toolCallId;
-        if (typeof id === 'string') return id;
+        if (typeof id === 'string')
+            return id;
         const idSnake = content.tool_call_id;
-        if (typeof idSnake === 'string') return idSnake;
+        if (typeof idSnake === 'string')
+            return idSnake;
     }
     return undefined;
 }
@@ -239,18 +241,22 @@ function extractIsError(message) {
     // are read by name above; this cast widens the structural view only
     // for the optional `isError` envelope probe.
     const envelope = message;
-    if (envelope.isError === true) return true;
+    if (envelope.isError === true)
+        return true;
     const content = message.content;
     if (Array.isArray(content)) {
         for (const item of content) {
             if (item && typeof item === 'object') {
                 const flag = item.isError;
-                if (flag === true) return true;
+                if (flag === true)
+                    return true;
             }
         }
-    } else if (content && typeof content === 'object') {
+    }
+    else if (content && typeof content === 'object') {
         const flag = content.isError;
-        if (flag === true) return true;
+        if (flag === true)
+            return true;
     }
     return false;
 }

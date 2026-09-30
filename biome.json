@@ -10,9 +10,6 @@
             "test-js/**/*.js",
             "e2e/**/*.ts",
             "playwright.config.ts",
-            "web/**/*.js",
-            "web/**/*.html",
-            "web/**/*.css",
             "desktop/electron/src/**/*.ts",
             "desktop/electron/test/**/*.ts",
             "desktop/electron/scripts/**/*.mjs",
@@ -21,30 +18,9 @@
             "desktop/pet/test/**/*.ts",
             "desktop/pet/scripts/**/*.mjs",
             "desktop/pet/vitest.config.ts",
-            "!web/vendor",
-            "!web/attachments.js",
-            "!web/desktop.js",
-            "!web/diff.js",
-            "!web/filetree.js",
-            "!web/kanban-features.js",
-            "!web/kanban.js",
-            "!web/markdown.js",
-            "!web/md-render.js",
-            "!web/md-view.js",
-            "!web/sessions.js",
-            "!web/sync.js",
-            "!web/util.js",
-            "!web/ws.js",
+            "!web",
             "!desktop/pet/**/*.js.map"
         ]
-    },
-    "html": {
-        "experimentalFullSupportEnabled": true,
-        "formatter": {
-            "enabled": true,
-            "selfCloseVoidElements": "never",
-            "whitespaceSensitivity": "css"
-        }
     },
     "formatter": {
         "enabled": true,
@@ -59,30 +35,13 @@
     "linter": {
         "enabled": true,
         "rules": {
-            "recommended": true,
-            "complexity": {
-                "noImportantStyles": "off"
-            },
-            "style": {
-                "noDescendingSpecificity": "off"
-            }
+            "recommended": true
         }
     },
     "assist": {
         "enabled": false
     },
     "overrides": [
-        {
-            "includes": ["web/*.html"],
-            "linter": {
-                "rules": {
-                    "a11y": {
-                        "useButtonType": "off",
-                        "noSvgWithoutTitle": "warn"
-                    }
-                }
-            }
-        },
         {
             "includes": ["desktop/electron/test/injected.test.ts"],
             "formatter": {

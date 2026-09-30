@@ -21,34 +21,28 @@ function notifyPiRpcStatus(paneId) {
         listener(paneId, status ? cloneStatus(status) : null);
 }
 function setPiRpcStatus(paneId, status) {
-    if (status === null) statuses.delete(paneId);
-    else statuses.set(paneId, cloneStatus(status));
+    if (status === null)
+        statuses.delete(paneId);
+    else
+        statuses.set(paneId, cloneStatus(status));
     notifyPiRpcStatus(paneId);
 }
 function setPiRpcControls(paneId, state) {
-    if (state === null) controls.delete(paneId);
-    else controls.set(paneId, cloneControls(state));
+    if (state === null)
+        controls.delete(paneId);
+    else
+        controls.set(paneId, cloneControls(state));
     // Readiness, busy/queue state, transcript changes, and teardown share the
     // existing status subscription so terminal controls repaint without a
     // second browser-wide listener contract.
     notifyPiRpcStatus(paneId);
 }
 function missingPane(paneId) {
-    return Promise.reject(
-        new Error(`unknown or destroyed Pi RPC pane: ${paneId}`),
-    );
+    return Promise.reject(new Error(`unknown or destroyed Pi RPC pane: ${paneId}`));
 }
 export function mountRpcChat(paneId, container, cwd, sessionPath) {
     destroyRpcChat(paneId);
-    const chat = mountChatPi(
-        container,
-        cwd,
-        connectControl(),
-        sessionPath,
-        (status) => setPiRpcStatus(paneId, status),
-        (state) => setPiRpcControls(paneId, state),
-        (snapshot) => lastFleetSnapshots.set(paneId, snapshot),
-    );
+    const chat = mountChatPi(container, cwd, connectControl(), sessionPath, (status) => setPiRpcStatus(paneId, status), (state) => setPiRpcControls(paneId, state), (snapshot) => lastFleetSnapshots.set(paneId, snapshot));
     chats.set(paneId, chat);
 }
 /** Repaint the shared subagent strip for the active tab: replay the
@@ -56,8 +50,10 @@ export function mountRpcChat(paneId, container, cwd, sessionPath) {
  * tab has no chat handle (plain terminal/review tabs). */
 export function syncPiSubagentStrip(paneId) {
     const chat = chats.get(paneId);
-    if (chat) chat.refreshFleet();
-    else hideSubagentStrip();
+    if (chat)
+        chat.refreshFleet();
+    else
+        hideSubagentStrip();
 }
 export function rpcChatSend(paneId, payload) {
     return chats.get(paneId)?.send(payload) ?? false;
@@ -69,9 +65,7 @@ export function rpcChatThinkingLevels(paneId) {
     return chats.get(paneId)?.getThinkingLevels() ?? missingPane(paneId);
 }
 export function rpcChatSetModel(paneId, provider, modelId) {
-    return (
-        chats.get(paneId)?.setModel(provider, modelId) ?? missingPane(paneId)
-    );
+    return (chats.get(paneId)?.setModel(provider, modelId) ?? missingPane(paneId));
 }
 export function rpcChatSetThinking(paneId, level) {
     return chats.get(paneId)?.setThinking(level) ?? missingPane(paneId);

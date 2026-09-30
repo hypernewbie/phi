@@ -28,7 +28,8 @@ import { renderMarkdownSafe } from './md-render.js';
 // (jsdom tests) skip the fetch entirely.
 const vendorLoads = new Map();
 function ensureVendorScript(src, ready) {
-    if (ready()) return Promise.resolve();
+    if (ready())
+        return Promise.resolve();
     let pending = vendorLoads.get(src);
     if (!pending) {
         pending = new Promise((resolve, reject) => {
@@ -107,12 +108,18 @@ const CODE_LANG = {
 };
 export function kindFor(ext) {
     const e = ext.toLowerCase();
-    if (IMG_EXT.test(e)) return 'image';
-    if (VID_EXT.test(e)) return 'video';
-    if (AUD_EXT.test(e)) return 'audio';
-    if (e === '.pdf') return 'pdf';
-    if (MD_EXT.test(e)) return 'markdown';
-    if (e === '.json' || JSON_EXT.test(e)) return 'json';
+    if (IMG_EXT.test(e))
+        return 'image';
+    if (VID_EXT.test(e))
+        return 'video';
+    if (AUD_EXT.test(e))
+        return 'audio';
+    if (e === '.pdf')
+        return 'pdf';
+    if (MD_EXT.test(e))
+        return 'markdown';
+    if (e === '.json' || JSON_EXT.test(e))
+        return 'json';
     if (Object.prototype.hasOwnProperty.call(CODE_LANG, e.slice(1)))
         return 'code';
     return 'download';
@@ -158,7 +165,7 @@ export async function mountFileView(opts) {
 async function mountImage(url, container) {
     await ensureVendorScript('vendor/viewerjs/viewer.min.js', () => {
         // SAFETY: Viewer.js registers this global through the local vendor script above.
-        return window.Viewer !== undefined;
+        return (window.Viewer !== undefined);
     });
     const img = document.createElement('img');
     img.className = 'file-viewer-image';
@@ -181,7 +188,8 @@ async function mountImage(url, container) {
         dispose() {
             try {
                 viewer.destroy();
-            } catch {
+            }
+            catch {
                 // Viewer.destroy throws if called twice; that's fine.
             }
             container.innerHTML = '';
@@ -192,7 +200,7 @@ async function mountImage(url, container) {
 async function mountMedia(url, container, isVideo) {
     await ensureVendorScript('vendor/plyr/plyr.polyfilled.js', () => {
         // SAFETY: Plyr registers this global through the local vendor script above.
-        return window.Plyr !== undefined;
+        return (window.Plyr !== undefined);
     });
     const el = document.createElement(isVideo ? 'video' : 'audio');
     el.className = isVideo ? 'file-viewer-video' : 'file-viewer-audio';
@@ -210,7 +218,8 @@ async function mountMedia(url, container, isVideo) {
         dispose() {
             try {
                 player.destroy();
-            } catch {
+            }
+            catch {
                 // Player may already be destroyed if the user navigates
                 // away mid-playback; that's fine.
             }
@@ -257,11 +266,9 @@ async function mountMarkdown(url, container, signal) {
     const rendered = document.createElement('div');
     rendered.className = 'md-rendered';
     // SAFETY: renderMarkdownSafe applies Phi's DOMPurify policy before this HTML is parsed.
-    rendered.append(
-        document
-            .createRange()
-            .createContextualFragment(renderMarkdownSafe(text)),
-    );
+    rendered.append(document
+        .createRange()
+        .createContextualFragment(renderMarkdownSafe(text)));
     container.replaceChildren(rendered);
     return {
         dispose: () => {
@@ -286,7 +293,8 @@ async function mountCode(url, ext, container, signal) {
     pre.appendChild(code);
     container.innerHTML = '';
     container.appendChild(pre);
-    if (window.hljs) window.hljs.highlightElement(code);
+    if (window.hljs)
+        window.hljs.highlightElement(code);
     return {
         dispose: () => {
             container.innerHTML = '';
@@ -300,16 +308,14 @@ async function mountJson(url, container, signal) {
     if (!res.ok)
         throw new Error(`Failed to load (${res.status} ${res.statusText})`);
     const text = await res.text();
-    await ensureVendorScript(
-        'vendor/json-viewer/json-viewer.bundle.js',
-        () => customElements.get('json-viewer') !== undefined,
-    );
+    await ensureVendorScript('vendor/json-viewer/json-viewer.bundle.js', () => customElements.get('json-viewer') !== undefined);
     // Try strict JSON first; json5/jsonc fall through to a raw text
     // view since alenaksu/json-viewer expects valid JSON.
     let parsed;
     try {
         parsed = JSON.parse(text);
-    } catch {
+    }
+    catch {
         parsed = undefined;
     }
     const el = document.createElement('json-viewer');
@@ -320,7 +326,8 @@ async function mountJson(url, container, signal) {
         // from a crafted JSON key like `__proto__`.
         // SAFETY: json-viewer documents its `data` property as the supported input API.
         el.data = parsed;
-    } else {
+    }
+    else {
         // Invalid JSON: render the raw text as a code block.
         el.textContent = text;
     }
@@ -334,9 +341,7 @@ async function mountJson(url, container, signal) {
     };
 }
 function mountDownload(url, path, container) {
-    const name = path.slice(
-        Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
-    );
+    const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
     const wrapper = document.createElement('div');
     wrapper.className = 'file-viewer-download';
     const message = document.createElement('p');

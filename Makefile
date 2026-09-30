@@ -4,7 +4,8 @@
 .PHONY: dev-web-full
 
 run-server:
-	go run . -1p 127.0.0.1
+	pnpm exec tsc -p tsconfig.build.json
+	go run . -ip 127.0.0.1
 
 # Full from-source desktop run: compile web-src -> web, build the
 # optional pet package, build + vendor the Electron shell, launch it.

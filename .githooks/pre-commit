@@ -51,7 +51,7 @@ if [ -n "$FRONT_TS" ]; then
     fi
 fi
 
-# 3. Lint CSS/HTML (stylelint + html-validate) against the real web/ files.
+# 3. Lint CSS (stylelint) against the real web/ files.
 if [ -n "$CSS_HTML" ]; then
     if [ ! -d node_modules ]; then
         echo "pre-commit: node_modules missing — run 'pnpm install' first (or --no-verify)." >&2

@@ -152,7 +152,8 @@ export function seedBuiltins() {
         },
     };
     const m = new Map();
-    for (const [id, d] of Object.entries(defaults)) m.set(id, d);
+    for (const [id, d] of Object.entries(defaults))
+        m.set(id, d);
     registry = m;
 }
 // Seed at module load so the very first call to isShell() etc.
@@ -163,23 +164,23 @@ export function seedBuiltins() {
 seedBuiltins();
 // ─── Loading ────────────────────────────────────────────────────────────
 export async function loadCoderRegistry() {
-    if (loadPromise) return loadPromise;
+    if (loadPromise)
+        return loadPromise;
     loadPromise = (async () => {
         try {
             const res = await fetch('/api/coders');
-            if (!res.ok) throw new Error(`status ${res.status}`);
+            if (!res.ok)
+                throw new Error(`status ${res.status}`);
             const data = await res.json();
             rebuildRegistry(data);
-        } catch (err) {
+        }
+        catch (err) {
             // The seedBuiltins call above already populated the
             // built-ins, so capability checks keep working when the
             // fetch fails. The console line intentionally redacts
             // the descriptor body to avoid leaking future env
             // fields (R2).
-            console.warn(
-                '[coders] registry load failed; using built-in seed:',
-                err,
-            );
+            console.warn('[coders] registry load failed; using built-in seed:', err);
         }
     })();
     return loadPromise;
@@ -189,7 +190,8 @@ function rebuildRegistry(data) {
     if (data && typeof data === 'object' && !Array.isArray(data)) {
         for (const [id, raw] of Object.entries(data)) {
             const d = coerceDescriptor(id, raw);
-            if (d) out.set(id, d);
+            if (d)
+                out.set(id, d);
         }
     }
     registry = out;
@@ -198,42 +200,39 @@ function rebuildRegistry(data) {
 // a normalized CoderDescriptor. Unknown fields are dropped silently;
 // missing required fields return null so the entry is skipped.
 function coerceDescriptor(id, raw) {
-    if (!raw || typeof raw !== 'object') return null;
+    if (!raw || typeof raw !== 'object')
+        return null;
     const r = raw;
-    if (RESERVED_CODER_IDS.has(id)) return null;
-    if (typeof r.name !== 'string' || r.name === '') return null;
+    if (RESERVED_CODER_IDS.has(id))
+        return null;
+    if (typeof r.name !== 'string' || r.name === '')
+        return null;
     return {
         id,
-        order:
-            typeof r.order === 'number' &&
+        order: typeof r.order === 'number' &&
             Number.isSafeInteger(r.order) &&
             r.order >= 0
-                ? r.order
-                : undefined,
+            ? r.order
+            : undefined,
         name: r.name,
-        short_label:
-            typeof r.short_label === 'string'
-                ? r.short_label
-                : r.name.split(/\s+/)[0],
+        short_label: typeof r.short_label === 'string'
+            ? r.short_label
+            : r.name.split(/\s+/)[0],
         logo: typeof r.logo === 'string' && r.logo ? r.logo : '',
         sidebar_visible: r.sidebar_visible === true,
         is_shell: r.is_shell === true,
-        input_mode:
-            r.input_mode === 'staged' || r.input_mode === 'direct'
-                ? r.input_mode
-                : 'staged',
+        input_mode: r.input_mode === 'staged' || r.input_mode === 'direct'
+            ? r.input_mode
+            : 'staged',
         presets: Array.isArray(r.presets)
             ? r.presets
-                  .filter(
-                      (p) =>
-                          p &&
-                          typeof p.name === 'string' &&
-                          typeof p.value === 'string',
-                  )
-                  .map((p) => ({
-                      name: p.name,
-                      value: p.value,
-                  }))
+                .filter((p) => p &&
+                typeof p.name === 'string' &&
+                typeof p.value === 'string')
+                .map((p) => ({
+                name: p.name,
+                value: p.value,
+            }))
             : [],
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
@@ -259,11 +258,8 @@ export function listCoders() {
     // A JSON object cannot preserve Manager.List's insertion order:
     // encoding/json sorts its keys. Entries from older servers without
     // an order field keep their arrival order (stable Array.sort).
-    return Array.from(registry.values()).sort(
-        (a, b) =>
-            (a.order ?? Number.MAX_SAFE_INTEGER) -
-            (b.order ?? Number.MAX_SAFE_INTEGER),
-    );
+    return Array.from(registry.values()).sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) -
+        (b.order ?? Number.MAX_SAFE_INTEGER));
 }
 export function visibleCoders() {
     return listCoders().filter((c) => c.sidebar_visible);
@@ -314,7 +310,8 @@ export function hasModelSwitch(id) {
 // DOM element use renderLogo instead.
 export function logoFor(id) {
     const c = registry.get(id);
-    if (!c || !c.logo) return '';
+    if (!c || !c.logo)
+        return '';
     if (c.logo.startsWith('vendor/') && !c.logo.includes('..')) {
         return c.logo;
     }
@@ -396,25 +393,19 @@ export async function executeRecipe(opts) {
         throw new Error('executeRecipe: recipe has no steps');
     }
     if (recipe.steps.length > MAX_RECIPE_STEPS) {
-        throw new Error(
-            `executeRecipe: recipe exceeds ${MAX_RECIPE_STEPS} steps`,
-        );
+        throw new Error(`executeRecipe: recipe exceeds ${MAX_RECIPE_STEPS} steps`);
     }
     // Reject control characters in the substituted model identifier.
     // The recipe's operator-authored `send` strings may legitimately
     // contain control bytes (\r, \x1b, \x03); only the user-supplied
     // model is filtered.
     if (containsControlChar(model)) {
-        throw new Error(
-            'executeRecipe: model identifier contains control characters',
-        );
+        throw new Error('executeRecipe: model identifier contains control characters');
     }
     // Compute total duration before we start so we can reject up front.
     const totalMs = recipe.steps.reduce((acc, s) => acc + (s.delay_ms ?? 0), 0);
     if (totalMs > MAX_RECIPE_TOTAL_MS) {
-        throw new Error(
-            `executeRecipe: total duration ${totalMs}ms exceeds ${MAX_RECIPE_TOTAL_MS}ms`,
-        );
+        throw new Error(`executeRecipe: total duration ${totalMs}ms exceeds ${MAX_RECIPE_TOTAL_MS}ms`);
     }
     // Per-pane busy guard: refuse to start a second recipe while one
     // is in flight. R7.
@@ -430,9 +421,7 @@ export async function executeRecipe(opts) {
             }
             const step = recipe.steps[i];
             if (step.send.length > MAX_STEP_BYTES) {
-                throw new Error(
-                    `executeRecipe: step ${i} payload exceeds ${MAX_STEP_BYTES} bytes`,
-                );
+                throw new Error(`executeRecipe: step ${i} payload exceeds ${MAX_STEP_BYTES} bytes`);
             }
             // Callback-based replacement — never let String.replace
             // interpret $& or other metasequences. R8 (same root
@@ -452,7 +441,8 @@ export async function executeRecipe(opts) {
     inFlight.set(paneId, runner);
     try {
         await runner;
-    } finally {
+    }
+    finally {
         inFlight.delete(paneId);
     }
 }
@@ -465,7 +455,8 @@ function containsControlChar(s) {
         // Allow printable ASCII, multi-byte UTF-8 (continuation bytes
         // are >= 0x80), and standard whitespace. Block C0 controls
         // (0x00-0x1F) and DEL (0x7F).
-        if (c < 0x20 || c === 0x7f) return true;
+        if (c < 0x20 || c === 0x7f)
+            return true;
     }
     return false;
 }
