@@ -1656,7 +1656,9 @@ export class DiffController {
         wrappers.forEach((wrapper, idx) => {
             // Drop any prior wiring so re-renders (layout toggle,
             // context change) don't stack controls.
-            wrapper.querySelectorAll('.ft-vscode-row-actions').forEach((n) => n.remove());
+            wrapper.querySelectorAll('.ft-vscode-row-actions').forEach((n) => {
+                n.remove();
+            });
             const target = targets[idx];
             if (!target)
                 return;
@@ -1679,7 +1681,11 @@ export class DiffController {
             // The visible file-list (when present) mirrors parsedFiles
             // in order — use the same indexing scheme.
             entries.forEach((entry, idx) => {
-                entry.querySelectorAll('.ft-vscode-row-actions').forEach((n) => n.remove());
+                entry
+                    .querySelectorAll('.ft-vscode-row-actions')
+                    .forEach((n) => {
+                    n.remove();
+                });
                 const target = targets[idx];
                 if (!target)
                     return;

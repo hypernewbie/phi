@@ -2020,15 +2020,16 @@ export class DiffController {
             return { index: i, rel, name, isDeleted, file };
         });
 
-        const wrappers = this.diffModalBody.querySelectorAll<HTMLElement>(
-            '.d2h-file-wrapper',
-        );
+        const wrappers =
+            this.diffModalBody.querySelectorAll<HTMLElement>(
+                '.d2h-file-wrapper',
+            );
         wrappers.forEach((wrapper, idx) => {
             // Drop any prior wiring so re-renders (layout toggle,
             // context change) don't stack controls.
-            wrapper.querySelectorAll('.ft-vscode-row-actions').forEach((n) =>
-                n.remove(),
-            );
+            wrapper.querySelectorAll('.ft-vscode-row-actions').forEach((n) => {
+                n.remove();
+            });
             const target = targets[idx];
             if (!target) return;
             const cluster = this._buildDiffVSCodeCluster(
@@ -2050,9 +2051,8 @@ export class DiffController {
             }
         });
 
-        const fileList = this.diffModalBody.querySelector<HTMLElement>(
-            '.d2h-files-list',
-        );
+        const fileList =
+            this.diffModalBody.querySelector<HTMLElement>('.d2h-files-list');
         if (fileList) {
             const entries = fileList.querySelectorAll<HTMLElement>(
                 '.d2h-file-list-file',
@@ -2060,9 +2060,11 @@ export class DiffController {
             // The visible file-list (when present) mirrors parsedFiles
             // in order — use the same indexing scheme.
             entries.forEach((entry, idx) => {
-                entry.querySelectorAll('.ft-vscode-row-actions').forEach((n) =>
-                    n.remove(),
-                );
+                entry
+                    .querySelectorAll('.ft-vscode-row-actions')
+                    .forEach((n) => {
+                        n.remove();
+                    });
                 const target = targets[idx];
                 if (!target) return;
                 const cluster = this._buildDiffVSCodeCluster(

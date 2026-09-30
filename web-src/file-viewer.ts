@@ -127,8 +127,7 @@ export function kindFor(ext: string): string {
     if (e === '.pdf') return 'pdf';
     if (MD_EXT.test(e)) return 'markdown';
     if (e === '.json' || JSON_EXT.test(e)) return 'json';
-    if (Object.prototype.hasOwnProperty.call(CODE_LANG, e.slice(1)))
-        return 'code';
+    if (Object.hasOwn(CODE_LANG, e.slice(1))) return 'code';
     return 'download';
 }
 

@@ -87,12 +87,12 @@ describe('buildVSCodeURI — local (Plan 1)', () => {
     });
 
     it('encodes spaces, Unicode, %, #, ?, and filename colons', () => {
-        expect(
-            buildVSCodeURI('/Users/alex/my project', 'src/main.go'),
-        ).toBe('vscode://file/Users/alex/my%20project/src/main.go');
-        expect(
-            buildVSCodeURI('/Users/alex/uni', 'café/résumé.md'),
-        ).toBe('vscode://file/Users/alex/uni/caf%C3%A9/r%C3%A9sum%C3%A9.md');
+        expect(buildVSCodeURI('/Users/alex/my project', 'src/main.go')).toBe(
+            'vscode://file/Users/alex/my%20project/src/main.go',
+        );
+        expect(buildVSCodeURI('/Users/alex/uni', 'café/résumé.md')).toBe(
+            'vscode://file/Users/alex/uni/caf%C3%A9/r%C3%A9sum%C3%A9.md',
+        );
         expect(buildVSCodeURI('/foo', 'a%20b.md')).toBe(
             'vscode://file/foo/a%2520b.md',
         );

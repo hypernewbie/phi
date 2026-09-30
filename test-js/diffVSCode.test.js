@@ -48,7 +48,10 @@ function bootstrapDiffDom() {
     `;
 }
 
-function buildAppStub({ cwd = '/home/user/project', hostname = 'jupiter' } = {}) {
+function buildAppStub({
+    cwd = '/home/user/project',
+    hostname = 'jupiter',
+} = {}) {
     return {
         showToast: vi.fn(),
         tabManager: {
@@ -161,9 +164,8 @@ describe('DiffController — per-file rich-diff VS Code actions', () => {
             'diff --git a/src/main.go b/src/main.go\n+++ b/src/main.go\n@@ -1 +1 @@\n-old\n+new',
         );
 
-        const headers = diffCtrl.diffModalBody.querySelectorAll(
-            '.d2h-file-header',
-        );
+        const headers =
+            diffCtrl.diffModalBody.querySelectorAll('.d2h-file-header');
         expect(headers.length).toBe(2);
         for (const header of headers) {
             const local = header.querySelector('.ft-vscode-row-local-btn');
@@ -195,9 +197,8 @@ describe('DiffController — per-file rich-diff VS Code actions', () => {
         // on the "No changes detected" branch.
         diffCtrl.renderRichDiff('some diff text');
 
-        const headers = diffCtrl.diffModalBody.querySelectorAll(
-            '.d2h-file-header',
-        );
+        const headers =
+            diffCtrl.diffModalBody.querySelectorAll('.d2h-file-header');
         const localDeleted = headers[0].querySelector(
             '.ft-vscode-row-local-btn',
         );
@@ -260,14 +261,12 @@ describe('DiffController — per-file rich-diff VS Code actions', () => {
         diffCtrl.renderRichDiff('diff text 2');
         diffCtrl.renderRichDiff('diff text 3');
 
-        const localCount =
-            diffCtrl.diffModalBody.querySelectorAll(
-                '.ft-vscode-row-local-btn',
-            ).length;
-        const remoteCount =
-            diffCtrl.diffModalBody.querySelectorAll(
-                '.ft-vscode-row-remote-btn',
-            ).length;
+        const localCount = diffCtrl.diffModalBody.querySelectorAll(
+            '.ft-vscode-row-local-btn',
+        ).length;
+        const remoteCount = diffCtrl.diffModalBody.querySelectorAll(
+            '.ft-vscode-row-remote-btn',
+        ).length;
         expect(localCount).toBe(1);
         expect(remoteCount).toBe(1);
     });

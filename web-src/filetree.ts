@@ -268,10 +268,7 @@ export class FileTreeManager {
      *  null when vscode: launch is unsupported on this surface (the
      *  toolbar already removed itself, and we keep row geometry
      *  consistent by skipping these entirely). */
-    _buildVSCodeRowActions(
-        entry: FSEntry,
-        rel: string,
-    ): HTMLElement | null {
+    _buildVSCodeRowActions(entry: FSEntry, rel: string): HTMLElement | null {
         if (this.vscodeUnsupported) return null;
         const cluster = document.createElement('span');
         cluster.className = 'ft-vscode-row-actions';

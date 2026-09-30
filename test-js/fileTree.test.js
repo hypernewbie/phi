@@ -433,7 +433,10 @@ describe('FileTreeManager', () => {
 function makeVSCodeApp({ cwd = '/ws', hostname = '' } = {}) {
     return {
         sessionsManager: { activeCWD: cwd, activeWorkspace: cwd },
-        tabManager: { getActiveTab: () => ({ coder: 'claude' }), adjustInputHeight() {} },
+        tabManager: {
+            getActiveTab: () => ({ coder: 'claude' }),
+            adjustInputHeight() {},
+        },
         diffController: { isPanelOpen: true, activeTab: 'files' },
         showToast() {},
         markdownManager: { previewFile() {} },
@@ -457,7 +460,9 @@ describe('FileTreeManager — VS Code launch actions', () => {
                 <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
             </div>
         `;
-        const manager = new FileTreeManager(makeVSCodeApp({ cwd: '/Users/alex/code/phi' }));
+        const manager = new FileTreeManager(
+            makeVSCodeApp({ cwd: '/Users/alex/code/phi' }),
+        );
         await manager.refresh();
 
         const btn = document.getElementById('ft-vscode-local-btn');
@@ -765,7 +770,10 @@ describe('FileTreeManager — VS Code launch actions', () => {
         expect(
             Array.from(
                 manager.treeEl.querySelectorAll('.ft-vscode-row-local-btn'),
-            ).some((b) => b.getAttribute('href') === 'vscode://file/proj-a/main.go'),
+            ).some(
+                (b) =>
+                    b.getAttribute('href') === 'vscode://file/proj-a/main.go',
+            ),
         ).toBe(false);
     });
 });
