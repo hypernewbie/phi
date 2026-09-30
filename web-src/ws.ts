@@ -341,18 +341,19 @@ export class PTYWebSocket {
             // it); trim or drop it like a duplicate.
             let start = frames[i].start;
             let bytes = frames[i].bytes;
-            if (start < this.liveSeq!) {
-                const overlap = this.liveSeq! - start;
+            const liveSeq = this.liveSeq ?? 0;
+            if (start < liveSeq) {
+                const overlap = liveSeq - start;
                 if (overlap >= bytes.byteLength) continue;
                 bytes = bytes.subarray(overlap);
-                start = this.liveSeq!;
+                start = liveSeq;
             }
-            if (start > this.liveSeq!) {
+            if (start > liveSeq) {
                 // Internal gap: keep this frame and everything behind it
                 // held, and ask the host to patch the missing range.
                 // Delivering across it would skip bytes silently.
                 this.held = frames.slice(i);
-                this._notify(this.onGap, this.liveSeq!, start);
+                this._notify(this.onGap, liveSeq, start);
                 return;
             }
             this._deliver(start, bytes);

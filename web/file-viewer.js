@@ -120,7 +120,7 @@ export function kindFor(ext) {
         return 'markdown';
     if (e === '.json' || JSON_EXT.test(e))
         return 'json';
-    if (Object.prototype.hasOwnProperty.call(CODE_LANG, e.slice(1)))
+    if (Object.hasOwn(CODE_LANG, e.slice(1)))
         return 'code';
     return 'download';
 }

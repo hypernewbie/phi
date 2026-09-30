@@ -1912,7 +1912,7 @@ describe('electron-builder.json (native branding)', () => {
       path.join(here, '..', '..', '..', 'pnpm-workspace.yaml'),
       'utf8',
     );
-    const catalogElectron = workspace.match(/^  electron:\s*(\S+)\s*$/m)?.[1];
+    const catalogElectron = workspace.match(/^ {2}electron:\s*(\S+)\s*$/m)?.[1];
     if (!catalogElectron) throw new Error('Electron catalog entry is missing');
 
     expect(builder.electronVersion).toBeUndefined();
