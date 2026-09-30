@@ -154,8 +154,12 @@ export function isVSCodeLaunchUnsupported(): boolean {
     if (document.documentElement.hasAttribute('data-phi-desktop-root'))
         return true;
     if (document.documentElement.hasAttribute('data-phi-desktop')) return true;
-    if (new URLSearchParams(location.search).get('desktop') === '1') return true;
-    if (typeof window !== 'undefined' && (window as any).__phiDesktop)
+    if (new URLSearchParams(location.search).get('desktop') === '1')
+        return true;
+    if (
+        typeof window !== 'undefined' &&
+        (window as { __phiDesktop?: unknown }).__phiDesktop
+    )
         return true;
     return false;
 }
@@ -189,7 +193,7 @@ export function buildVSCodeRemoteURI(
     if (!isSafeRelative(relativePath)) return null;
 
     const split = splitPathSegments(root);
-    if (!split || split.head !== '') return null; // remote = POSIX only
+    if (!split?.head && split?.head !== '') return null; // remote = POSIX only
 
     const encoded = split.segments.map(encodeSegment).join('/');
     const tail = relativePath
