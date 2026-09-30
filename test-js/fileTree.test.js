@@ -309,13 +309,18 @@ describe('FileTreeManager', () => {
         const menu = document.querySelector('.ft-context-menu');
         expect(menu.classList.contains('hidden')).toBe(false);
         const actions = menu.querySelectorAll('.md-context-action');
-        expect(actions.length).toBe(3);
+        // 4 actions: Insert @path, Preview, Open in Explorer, Open in
+        // VS Code (local; the remote action is suppressed because the
+        // test app has no hostname).
+        expect(actions.length).toBe(4);
         expect(actions[0].classList.contains('insert-path')).toBe(true);
         expect(actions[0].textContent).toContain('Insert @path');
         expect(actions[1].classList.contains('preview')).toBe(true);
         expect(actions[1].textContent).toContain('Preview');
         expect(actions[2].classList.contains('open-explorer')).toBe(true);
         expect(actions[2].textContent).toContain('Open in Explorer');
+        expect(actions[3].classList.contains('open-vscode-local')).toBe(true);
+        expect(actions[3].textContent).toContain('Open in VS Code');
 
         actions[0].click();
         await Promise.resolve();
@@ -346,9 +351,10 @@ describe('FileTreeManager', () => {
         const menu = document.querySelector('.ft-context-menu');
         expect(menu.classList.contains('hidden')).toBe(false);
         const actions = menu.querySelectorAll('.md-context-action');
-        expect(actions.length).toBe(3);
+        expect(actions.length).toBe(4);
         expect(actions[1].textContent).toContain('Preview');
         expect(actions[2].textContent).toContain('Open in Explorer');
+        expect(actions[3].textContent).toContain('Open in VS Code');
     });
 
     it('clicking Open in Explorer records a folder action on window.__phiFileAction', async () => {
@@ -396,9 +402,13 @@ describe('FileTreeManager', () => {
         const menu = document.querySelector('.ft-context-menu');
         expect(menu.classList.contains('hidden')).toBe(false);
         const actions = menu.querySelectorAll('.md-context-action');
-        expect(actions.length).toBe(2);
+        // 3 actions: Insert @path, Open in Explorer, Open in VS Code
+        // (local). No remote action (no hostname); no Preview (file-
+        // only).
+        expect(actions.length).toBe(3);
         expect(actions[0].textContent).toContain('Insert @path');
         expect(actions[1].textContent).toContain('Open in Explorer');
+        expect(actions[2].textContent).toContain('Open in VS Code');
     });
 
     it('renders a truncated note when the response is marked truncated', async () => {
@@ -409,5 +419,353 @@ describe('FileTreeManager', () => {
         await manager.refresh();
 
         expect(manager.treeEl.textContent).toContain('… list truncated');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 1 + Plan 2: VS Code launch wiring on the Files tab. Pure mock tests:
+// we never trigger the actual navigation (window.location.href would tear
+// down the jsdom harness) — instead we assert href/tooltip targets and
+// that the editor clicks never open the Phi preview, expand folders, or
+// insert text into the prompt.
+// ---------------------------------------------------------------------------
+
+function makeVSCodeApp({ cwd = '/ws', hostname = '' } = {}) {
+    return {
+        sessionsManager: { activeCWD: cwd, activeWorkspace: cwd },
+        tabManager: { getActiveTab: () => ({ coder: 'claude' }), adjustInputHeight() {} },
+        diffController: { isPanelOpen: true, activeTab: 'files' },
+        showToast() {},
+        markdownManager: { previewFile() {} },
+        hostname,
+    };
+}
+
+describe('FileTreeManager — VS Code launch actions', () => {
+    it('renders a local VS Code project button above the tree targeting the active cwd', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(makeVSCodeApp({ cwd: '/Users/alex/code/phi' }));
+        await manager.refresh();
+
+        const btn = document.getElementById('ft-vscode-local-btn');
+        expect(btn.getAttribute('aria-disabled')).toBeNull();
+        expect(btn.getAttribute('href')).toBe(
+            'vscode://file/Users/alex/code/phi',
+        );
+        expect(btn.title).toContain('/Users/alex/code/phi');
+    });
+
+    it('disables the project buttons when there is no active cwd', async () => {
+        installFetch({
+            '': { truncated: false, entries: [] },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(makeVSCodeApp({ cwd: '' }));
+        await manager.refresh();
+
+        const local = document.getElementById('ft-vscode-local-btn');
+        const remote = document.getElementById('ft-vscode-remote-btn');
+        expect(local.getAttribute('aria-disabled')).toBe('true');
+        expect(remote.getAttribute('aria-disabled')).toBe('true');
+        expect(local.getAttribute('href')).toBeNull();
+        expect(remote.getAttribute('href')).toBeNull();
+    });
+
+    it('disables only the remote project button when hostname is invalid', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(
+            makeVSCodeApp({ hostname: 'bad host name' }),
+        );
+        await manager.refresh();
+
+        const local = document.getElementById('ft-vscode-local-btn');
+        const remote = document.getElementById('ft-vscode-remote-btn');
+        expect(local.getAttribute('href')).toBe('vscode://file/ws');
+        expect(remote.getAttribute('aria-disabled')).toBe('true');
+    });
+
+    it('enables the remote project button with the reported hostname as SSH target', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(
+            makeVSCodeApp({
+                cwd: '/Users/alex/code/phi',
+                hostname: 'JUPITER', // upper-case -> normalized to jupiter
+            }),
+        );
+        await manager.refresh();
+
+        const remote = document.getElementById('ft-vscode-remote-btn');
+        expect(remote.getAttribute('href')).toBe(
+            'vscode://vscode-remote/ssh-remote+jupiter/Users/alex/code/phi',
+        );
+        expect(remote.title).toContain('jupiter');
+    });
+
+    it('renders per-row local + remote anchors with the row’s relative path', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(
+            makeVSCodeApp({
+                cwd: '/Users/alex/code/phi',
+                hostname: 'jupiter',
+            }),
+        );
+        await manager.refresh();
+
+        const localBtn = manager.treeEl.querySelector(
+            '.ft-vscode-row-local-btn',
+        );
+        const remoteBtn = manager.treeEl.querySelector(
+            '.ft-vscode-row-remote-btn',
+        );
+        expect(localBtn).not.toBeNull();
+        expect(remoteBtn).not.toBeNull();
+        expect(localBtn.getAttribute('href')).toBe(
+            'vscode://file/Users/alex/code/phi/main.go',
+        );
+        expect(remoteBtn.getAttribute('href')).toBe(
+            'vscode://vscode-remote/ssh-remote+jupiter/Users/alex/code/phi/main.go:1:1',
+        );
+    });
+
+    it('directory rows use folder-kind remote URIs (no :1:1 suffix)', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'src', dir: true }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(
+            makeVSCodeApp({
+                cwd: '/Users/alex/code/phi',
+                hostname: 'jupiter',
+            }),
+        );
+        await manager.refresh();
+
+        const remoteBtn = manager.treeEl.querySelector(
+            '.ft-vscode-row-remote-btn',
+        );
+        expect(remoteBtn.getAttribute('href')).toBe(
+            'vscode://vscode-remote/ssh-remote+jupiter/Users/alex/code/phi/src',
+        );
+        // Folder URIs never have the line suffix.
+        expect(remoteBtn.getAttribute('href')).not.toContain(':1:1');
+    });
+
+    it('clicking a row VS Code link does NOT open the Phi preview or insert @path', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        const md = { previewFile: vi.fn() };
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager({
+            ...makeVSCodeApp({ cwd: '/ws', hostname: 'jupiter' }),
+            markdownManager: md,
+        });
+        await manager.refresh();
+
+        // Spy on navigation by stubbing window.location; jsdom allows
+        // assignment to .href without actually navigating.
+        let navigated = null;
+        const origLocation = window.location;
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: {
+                get href() {
+                    return navigated;
+                },
+                set href(v) {
+                    navigated = v;
+                },
+            },
+        });
+        try {
+            const localBtn = manager.treeEl.querySelector(
+                '.ft-vscode-row-local-btn',
+            );
+            localBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            expect(navigated).toBe('vscode://file/ws/main.go');
+            expect(md.previewFile).not.toHaveBeenCalled();
+            const textarea = document.getElementById('input-textarea');
+            expect(textarea.value).toBe('');
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: origLocation,
+            });
+        }
+    });
+
+    it('disables row actions whose URI cannot be resolved (stale context)', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        // No cwd — the builders cannot resolve any URI.
+        const manager = new FileTreeManager(makeVSCodeApp({ cwd: '' }));
+        await manager.refresh();
+
+        const localBtn = manager.treeEl.querySelector(
+            '.ft-vscode-row-local-btn',
+        );
+        const remoteBtn = manager.treeEl.querySelector(
+            '.ft-vscode-row-remote-btn',
+        );
+        expect(localBtn.getAttribute('aria-disabled')).toBe('true');
+        expect(remoteBtn.getAttribute('aria-disabled')).toBe('true');
+    });
+
+    it('hides the toolbar + row actions in embedded Electron (desktop-root) surfaces', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.documentElement.setAttribute('data-phi-desktop-root', '');
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        try {
+            const manager = new FileTreeManager(
+                makeVSCodeApp({ cwd: '/Users/alex/code/phi' }),
+            );
+            await manager.refresh();
+            expect(
+                manager.treeEl.querySelector('.ft-vscode-row-actions'),
+            ).toBeNull();
+        } finally {
+            document.documentElement.removeAttribute('data-phi-desktop-root');
+        }
+    });
+
+    it('recomputes row URIs when activeCWD changes (no stale roots)', async () => {
+        installFetch({
+            '': {
+                truncated: false,
+                entries: [{ name: 'main.go', dir: false }],
+            },
+        });
+        document.body.innerHTML = `
+            <div id="file-tree-list"></div>
+            <textarea id="input-textarea"></textarea>
+            <div id="file-tree-toolbar" class="file-tree-toolbar hidden">
+                <a id="ft-vscode-local-btn" class="ft-vscode-btn ft-vscode-local-btn" href="#"></a>
+                <a id="ft-vscode-remote-btn" class="ft-vscode-btn ft-vscode-remote-btn" href="#"></a>
+            </div>
+        `;
+        const manager = new FileTreeManager(
+            makeVSCodeApp({ cwd: '/proj-a', hostname: 'jupiter' }),
+        );
+        await manager.refresh();
+
+        let local = manager.treeEl.querySelector('.ft-vscode-row-local-btn');
+        expect(local.getAttribute('href')).toBe('vscode://file/proj-a/main.go');
+
+        // Simulate a server switch: the next refresh picks up the
+        // new cwd; the row URIs must follow.
+        manager.app.sessionsManager.activeCWD = '/proj-b';
+        await manager.refresh();
+
+        local = manager.treeEl.querySelector('.ft-vscode-row-local-btn');
+        expect(local.getAttribute('href')).toBe('vscode://file/proj-b/main.go');
+        // No element still points at the old project.
+        expect(
+            Array.from(
+                manager.treeEl.querySelectorAll('.ft-vscode-row-local-btn'),
+            ).some((b) => b.getAttribute('href') === 'vscode://file/proj-a/main.go'),
+        ).toBe(false);
     });
 });

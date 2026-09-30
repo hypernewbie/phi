@@ -1,6 +1,7 @@
 /* Φ phi — Git Diff & Git Log Controller */
 import { PTYWebSocket } from './ws.js';
 import { getLastFolderName, worktreeGlyph, isCoarseViewport, isDiffDrawerViewport, terminalPreferredFontSize, responsiveTerminalFontSize, DIFF_TERMINAL_TARGET_COLUMNS, openExternalLink, installTerminalLinkProvider, } from './util.js';
+import { buildVSCodeURI, buildVSCodeRemoteURI, normalizeHostname, isVSCodeLaunchUnsupported, } from './vscode.js';
 // Normalize a CWD path for equality comparison between the active
 // project context and a terminal tab's stored CWD. Handles:
 //   - trailing slashes (e.g. '/projects/A' vs '/projects/A/')
@@ -66,12 +67,27 @@ export class DiffController {
     layoutToggleBtn;
     syntaxToggleBtn;
     modalSizeToggleBtn;
+    vscodeLocalBtn;
+    vscodeRemoteBtn;
+    vscodeUnsupported;
+    // Active context snapshot for diff render: the project root we
+    // last accepted for the current rich-diff render. The per-file
+    // editor actions and the file-list anchors are built from this
+    // single snapshot, so a project switch replaces every action at
+    // once. Null means "no accepted render yet" — late fetches must
+    // never install links against an earlier server's identity.
+    activeDiffRoot;
+    activeDiffHostname;
     syntaxHighlightEnabled;
     currentContextLines;
     currentLayout;
     lastRawDiffText;
     activeBatchResults = null;
     commandContextMenuAbort;
+    // Monotonically increasing counter for loadRichDiff fetches. Late
+    // responses (after a project switch or commit change) no longer
+    // match and must be discarded without touching the rendered DOM.
+    _richDiffRequestToken = 0;
     // Diff review comment state. The map keys are the row's logical
     // identity (file + both line numbers) so switching between unified
     // and side-by-side panes preserves the user's notes; localStorage
@@ -109,6 +125,21 @@ export class DiffController {
         this.layoutToggleBtn = document.getElementById('diff-layout-toggle-btn');
         this.syntaxToggleBtn = document.getElementById('diff-syntax-toggle-btn');
         this.modalSizeToggleBtn = document.getElementById('diff-modal-size-btn');
+        this.vscodeLocalBtn = document.getElementById('diff-vscode-local-btn');
+        this.vscodeRemoteBtn = document.getElementById('diff-vscode-remote-btn');
+        // Hidden on surfaces that cannot dispatch vscode: URIs (the
+        // desktop main view + any embedded Electron view). The
+        // rich-diff per-file actions check this same flag and stay
+        // out of the DOM in that case.
+        this.vscodeUnsupported = isVSCodeLaunchUnsupported();
+        if (this.vscodeUnsupported) {
+            this.vscodeLocalBtn?.remove();
+            this.vscodeRemoteBtn?.remove();
+            this.vscodeLocalBtn = null;
+            this.vscodeRemoteBtn = null;
+        }
+        this.activeDiffRoot = null;
+        this.activeDiffHostname = '';
         try {
             this.syntaxHighlightEnabled =
                 localStorage.getItem('phi_diff_syntax_highlight') === 'true';
@@ -468,12 +499,14 @@ export class DiffController {
         const cmdEl = document.getElementById('cmd-panel');
         const syncEl = document.getElementById('sync-panel');
         const ftEl = document.getElementById('file-tree-list');
+        const ftToolbar = document.getElementById('file-tree-toolbar');
         if (mode === 'markdown') {
             termEl.classList.add('hidden');
             mdEl.classList.remove('hidden');
             cmdEl?.classList.add('hidden');
             syncEl?.classList.add('hidden');
             ftEl?.classList.add('hidden');
+            ftToolbar?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'sync') {
@@ -482,6 +515,7 @@ export class DiffController {
             cmdEl?.classList.add('hidden');
             syncEl?.classList.remove('hidden');
             ftEl?.classList.add('hidden');
+            ftToolbar?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'cmd') {
@@ -490,6 +524,7 @@ export class DiffController {
             cmdEl?.classList.remove('hidden');
             syncEl?.classList.add('hidden');
             ftEl?.classList.add('hidden');
+            ftToolbar?.classList.add('hidden');
             this.actionBar?.classList.add('hidden');
         }
         else if (mode === 'files') {
@@ -498,6 +533,7 @@ export class DiffController {
             cmdEl?.classList.add('hidden');
             syncEl?.classList.add('hidden');
             ftEl?.classList.remove('hidden');
+            ftToolbar?.classList.remove('hidden');
             this.actionBar?.classList.add('hidden');
         }
         else {
@@ -506,15 +542,53 @@ export class DiffController {
             cmdEl?.classList.add('hidden');
             syncEl?.classList.add('hidden');
             ftEl?.classList.add('hidden');
+            ftToolbar?.classList.add('hidden');
             if (this.activeTab === 'diff') {
                 this.actionBar?.classList.remove('hidden');
                 this.commitSelect?.classList.remove('hidden');
                 this.richDiffBtn?.classList.remove('hidden');
+                this._refreshDiffProjectActions();
             }
             else {
                 this.actionBar?.classList.add('hidden');
             }
         }
+    }
+    /** Update the diff action bar's VS Code project buttons. Local and
+     *  remote are independent: local can be available when remote is
+     *  not (invalid hostname) or vice versa. Called on every panel
+     *  open and on every accepted rich-diff response so a server
+     *  switch replaces the URIs synchronously. */
+    _refreshDiffProjectActions() {
+        if (this.vscodeUnsupported)
+            return;
+        if (!this.vscodeLocalBtn || !this.vscodeRemoteBtn)
+            return;
+        const root = this.app.sessionsManager?.activeCWD || '';
+        const localURI = buildVSCodeURI(root);
+        const hostname = normalizeHostname(this.app.hostname);
+        const remoteURI = buildVSCodeRemoteURI(hostname, {
+            root,
+            kind: 'folder',
+        });
+        const apply = (btn, uri, isRemote) => {
+            if (!uri) {
+                btn.setAttribute('aria-disabled', 'true');
+                btn.removeAttribute('href');
+                btn.title = isRemote
+                    ? 'Open project in VS Code through SSH (no Phi hostname available)'
+                    : 'Open project in VS Code (no active project)';
+            }
+            else {
+                btn.removeAttribute('aria-disabled');
+                btn.setAttribute('href', uri);
+                btn.title = isRemote
+                    ? `Open ${root} in VS Code through SSH to ${hostname}`
+                    : `Open ${root} in VS Code`;
+            }
+        };
+        apply(this.vscodeLocalBtn, localURI, false);
+        apply(this.vscodeRemoteBtn, remoteURI, true);
     }
     async loadCommits() {
         if (!this.commitSelect)
@@ -1472,10 +1546,30 @@ export class DiffController {
         if (!rawDiffText?.trim()) {
             this.diffModalBody.innerHTML =
                 '<div style="padding: 40px; text-align: center; color: var(--text-muted); font-family: var(--font-mono);">No changes detected.</div>';
+            // The project buttons stay usable with no diff: opening the
+            // project root is independent of which commit is selected.
+            this._refreshDiffProjectActions();
             return;
         }
         const isDrawer = isDiffDrawerViewport();
         const outputFormat = isDrawer ? 'line-by-line' : this.currentLayout;
+        // Parse once with diff2html so we can map rendered file
+        // headers / list entries to their parsed file records. Diff2Html
+        // can decorate names like "old -> new" (renames) and append
+        // binary/quoted decorations; reading those as labels would
+        // conflate "where the file is" with "what to render". The
+        // parsed records give us the newName / oldName / isDeleted /
+        // isBinary flags directly.
+        const parsedFiles = (() => {
+            try {
+                if (typeof window.Diff2Html?.parse !== 'function')
+                    return [];
+                return window.Diff2Html.parse(rawDiffText);
+            }
+            catch {
+                return [];
+            }
+        })();
         const diffHtml = window.Diff2Html.html(rawDiffText, {
             drawFileList: !isDrawer,
             matching: 'lines',
@@ -1487,23 +1581,42 @@ export class DiffController {
         // adopt the parsed nodes — avoids innerHTML entirely. DOMParser
         // is read-only, so even a missed tag couldn't execute.
         const safeDiffHtml = window.DOMPurify?.sanitize
-            ? String(window.DOMPurify.sanitize(diffHtml, {
-                USE_PROFILES: { html: true },
-                FORBID_TAGS: [
-                    'script',
-                    'style',
-                    'iframe',
-                    'object',
-                    'embed',
-                    'form',
-                ],
-            }))
+            ? String(window.Diff2Html.sanitize
+                ? window.Diff2Html.sanitize(diffHtml, {
+                    USE_PROFILES: { html: true },
+                    FORBID_TAGS: [
+                        'script',
+                        'style',
+                        'iframe',
+                        'object',
+                        'embed',
+                        'form',
+                    ],
+                })
+                : window.DOMPurify.sanitize(diffHtml, {
+                    USE_PROFILES: { html: true },
+                    FORBID_TAGS: [
+                        'script',
+                        'style',
+                        'iframe',
+                        'object',
+                        'embed',
+                        'form',
+                    ],
+                }))
             : diffHtml;
         const parsed = new DOMParser().parseFromString(safeDiffHtml, 'text/html');
         this.diffModalBody?.replaceChildren(...Array.from(parsed.body.childNodes));
         if (this.syntaxHighlightEnabled) {
             this._applySyntaxHighlighting();
         }
+        // Wire VS Code editor actions into every file header and the
+        // optional file list. Must happen AFTER DOMPurify + DOMParser
+        // so we never inject a `vscode:` URI into the unsafe source.
+        // The rich-diff data comes from a parsed file record, not from
+        // .d2h-file-name text — renaming or decoration cannot break
+        // the action's identity.
+        this._attachDiffVSCodeActions(parsedFiles);
         // After DOM is in place: wire up the per-row + buttons and
         // rehydrate any saved comments. Re-runs on layout toggle so
         // reviewers don't lose their notes when they flip between
@@ -1512,18 +1625,188 @@ export class DiffController {
         this._attachDiffReviewListeners();
         this._rehydrateReviewOverlays();
         this._updateReviewActionBar();
+        this._refreshDiffProjectActions();
+    }
+    /** Build the per-file VS Code local + remote anchors and slot them
+     *  into every `.d2h-file-wrapper` header and (when present) the
+     *  `.d2h-files-list` anchor entries. Pairing is by parsed record
+     *  order, so a renames display like "a -> b" still gets the right
+     *  actions for the destination name. The active snapshot at
+     *  accept time is pinned on `this` and reused here — late
+     *  renders that didn't re-fetch stay on the same context. */
+    _attachDiffVSCodeActions(parsedFiles) {
+        if (this.vscodeUnsupported)
+            return;
+        if (!this.diffModalBody)
+            return;
+        const root = this.activeDiffRoot;
+        const hostname = this.activeDiffHostname;
+        if (!root)
+            return; // no accepted snapshot — never install actions
+        // Build the per-file target list. Deleted files get a disabled
+        // anchor; renamed files open the destination. Anything that
+        // can't be resolved (no newName, traversal, etc.) is omitted.
+        const targets = parsedFiles.map((file, i) => {
+            const name = file.newName || (file.isDeleted ? file.oldName : '') || '';
+            const rel = this._normalizeRel(name);
+            const isDeleted = !!file.isDeleted;
+            return { index: i, rel, name, isDeleted, file };
+        });
+        const wrappers = this.diffModalBody.querySelectorAll('.d2h-file-wrapper');
+        wrappers.forEach((wrapper, idx) => {
+            // Drop any prior wiring so re-renders (layout toggle,
+            // context change) don't stack controls.
+            wrapper.querySelectorAll('.ft-vscode-row-actions').forEach((n) => n.remove());
+            const target = targets[idx];
+            if (!target)
+                return;
+            const cluster = this._buildDiffVSCodeCluster(root, target.rel, target.isDeleted, target.file?.isBinary ?? false, hostname, 'file');
+            if (!cluster)
+                return;
+            // Slot the cluster after the filename so long names still
+            // dominate the layout (CSS positions it to the right).
+            const fileName = wrapper.querySelector('.d2h-file-name');
+            if (fileName?.parentElement) {
+                fileName.parentElement.appendChild(cluster);
+            }
+            else {
+                wrapper.appendChild(cluster);
+            }
+        });
+        const fileList = this.diffModalBody.querySelector('.d2h-files-list');
+        if (fileList) {
+            const entries = fileList.querySelectorAll('.d2h-file-list-file');
+            // The visible file-list (when present) mirrors parsedFiles
+            // in order — use the same indexing scheme.
+            entries.forEach((entry, idx) => {
+                entry.querySelectorAll('.ft-vscode-row-actions').forEach((n) => n.remove());
+                const target = targets[idx];
+                if (!target)
+                    return;
+                const cluster = this._buildDiffVSCodeCluster(root, target.rel, target.isDeleted, target.file?.isBinary ?? false, hostname, 'file');
+                if (!cluster)
+                    return;
+                entry.appendChild(cluster);
+            });
+        }
+    }
+    /** Normalize a raw Git path coming out of diff2html. The diff header
+     *  can prefix names like `a/...` or `b/...`; we strip those. Quoted
+     *  names with literal `\n`, `\"` etc. are decoded only for the
+     *  comparison's sake — the URI builder encodes whatever bytes are
+     *  left verbatim. */
+    _normalizeRel(rawName) {
+        if (!rawName)
+            return '';
+        // diff2html shows `old/new` for renames; take the destination.
+        const renamed = rawName.includes(' => ')
+            ? rawName.split(' => ').pop() || rawName
+            : rawName;
+        // Drop a/b prefixes diff2html sometimes leaves when the
+        // diff's index line is included in the label.
+        let name = renamed.replace(/^[ab]\//, '');
+        // Git sometimes escapes C-style: "\t", "\"" — decode those
+        // back to the literal character so the URI builder encodes
+        // them as `%09` / `%22` consistently.
+        name = name.replace(/\\([ntvbrf\\"'])/g, (_, ch) => {
+            const map = {
+                n: '\n',
+                t: '\t',
+                v: '\v',
+                b: '\b',
+                r: '\r',
+                f: '\f',
+                '\\': '\\',
+                '"': '"',
+                "'": "'",
+            };
+            return map[ch] ?? ch;
+        });
+        return name;
+    }
+    _buildDiffVSCodeCluster(root, rel, isDeleted, isBinary, hostname, kind) {
+        if (!rel && !isDeleted)
+            return null;
+        const cluster = document.createElement('span');
+        cluster.className = 'ft-vscode-row-actions';
+        const localURI = !isDeleted ? buildVSCodeURI(root, rel) : null;
+        const remoteURI = !isDeleted
+            ? buildVSCodeRemoteURI(hostname, {
+                root,
+                relativePath: rel,
+                kind,
+            })
+            : null;
+        const local = document.createElement('a');
+        local.className = 'ft-vscode-row-btn ft-vscode-row-local-btn';
+        local.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M9 8l-4 4 4 4"></path><path d="M15 8l4 4-4 4"></path></svg>`;
+        local.title = isDeleted
+            ? 'File deleted (cannot open in VS Code)'
+            : isBinary
+                ? `Open ${rel} in VS Code (binary file)`
+                : `Open ${rel} in VS Code`;
+        local.setAttribute('aria-label', local.title);
+        if (localURI) {
+            local.setAttribute('href', localURI);
+        }
+        else {
+            local.setAttribute('aria-disabled', 'true');
+        }
+        local.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (localURI)
+                window.location.href = localURI;
+        });
+        const remote = document.createElement('a');
+        remote.className = 'ft-vscode-row-btn ft-vscode-row-remote-btn';
+        remote.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M5 12h14"></path><path d="M9 8l-4 4 4 4"></path><path d="M15 8l4 4-4 4"></path></svg>`;
+        remote.title = isDeleted
+            ? 'File deleted (cannot open in VS Code Remote)'
+            : !hostname
+                ? 'No Phi hostname available for SSH target'
+                : isBinary
+                    ? `Open ${rel} in VS Code through SSH to ${hostname} (binary file)`
+                    : `Open ${rel} in VS Code through SSH to ${hostname}`;
+        remote.setAttribute('aria-label', remote.title);
+        if (remoteURI) {
+            remote.setAttribute('href', remoteURI);
+        }
+        else {
+            remote.setAttribute('aria-disabled', 'true');
+        }
+        remote.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (remoteURI)
+                window.location.href = remoteURI;
+        });
+        cluster.appendChild(local);
+        cluster.appendChild(remote);
+        return cluster;
     }
     async loadRichDiff() {
         if (!this.diffModalBody)
             return;
         this.diffModalBody.innerHTML =
             '<div style="padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;">Loading rich diff viewer...</div>';
+        // Snapshot the active context BEFORE the fetch starts so a
+        // server switch that lands mid-request cannot confuse the
+        // per-file editor actions with stale project state. Late
+        // responses that no longer match the snapshot must not
+        // install links.
         const cwd = this.app.sessionsManager.activeCWD || '';
         const commitVal = this.commitSelect
             ? this.commitSelect.value
             : 'unstaged';
+        const requestRoot = cwd;
+        const requestHostname = normalizeHostname(this.app.hostname);
+        const requestToken = (this._richDiffRequestToken || 0) + 1;
+        this._richDiffRequestToken = requestToken;
         try {
             const res = await fetch(`/api/git/raw-diff?cwd=${encodeURIComponent(cwd)}&commit=${encodeURIComponent(commitVal)}&context=${this.currentContextLines}`);
+            if (requestToken !== this._richDiffRequestToken)
+                return;
             if (!res.ok) {
                 const errText = await res.text();
                 throw new Error(errText || 'Failed to fetch raw diff');
@@ -1534,10 +1817,18 @@ export class DiffController {
             this.activeGitHead = res.headers.get('X-Phi-Git-Head') || '';
             this.activeGitBranch = res.headers.get('X-Phi-Git-Branch') || '';
             const rawDiffText = await res.text();
+            if (requestToken !== this._richDiffRequestToken)
+                return;
+            // Accepted: pin the active context for per-file actions and
+            // any future re-render of the same data.
+            this.activeDiffRoot = requestRoot;
+            this.activeDiffHostname = requestHostname;
             this.lastRawDiffText = rawDiffText;
             this.renderRichDiff(rawDiffText);
         }
         catch (e) {
+            if (requestToken !== this._richDiffRequestToken)
+                return;
             const errDiv = document.createElement('div');
             errDiv.style.padding = '20px';
             errDiv.style.color = 'var(--red)';
