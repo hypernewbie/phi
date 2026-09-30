@@ -506,40 +506,46 @@ func runGatedUpdateCheck(checker *update.Checker, label string) {
 	}
 }
 
-func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
-	// NOTE: When adding a new theme color, you must update:
-	// 1. web/app.js: Add properties in ACCENT_COLORS
-	// 2. web/index.html: Add <option> in #accent-color-select
-	// 3. main.go: Add entry in printWelcomeBanner colors map
-	// 4. bonus/: Add matching theme profiles to bonus/vim_themes/, bonus/pi_themes/, bonus/opencode_themes/, and bonus/btop_themes/
-	colors := map[string][]int{
-		"purple":  {124, 106, 247},
-		"blue":    {56, 189, 248},
-		"green":   {16, 185, 129},
-		"amber":   {251, 191, 36},
-		"red":     {248, 113, 113},
-		"pink":    {236, 72, 153},
-		"teal":    {20, 184, 166},
-		"indigo":  {99, 102, 241},
-		"orange":  {249, 115, 22},
-		"cyan":    {6, 182, 212},
-		"rose":    {244, 63, 94},
-		"lime":    {132, 204, 22},
-		"white":   {255, 255, 255},
-		"gold":    {212, 175, 55},
-		"canary":  {255, 238, 16},
-		"copper":  {211, 84, 0},
-		"mint":    {46, 213, 115},
-		"violet":  {167, 139, 250},
-		"emerald": {5, 150, 105},
-		"neon":    {0, 240, 255},
-		"coral":   {224, 122, 95},
-		"fuchsia": {217, 70, 239},
-	}
+// bannerColors is the RGB tuple per theme name used by the welcome banner.
+// MUST stay in sync with web/theme.js ACCENT_COLORS keys — drift silently
+// falls back to purple in printWelcomeBanner. The test
+// TestBannerColorsCoversAllAccentColors enforces this.
+//
+// NOTE: When adding a new theme color, you must update:
+//  1. web/app.js: Add properties in ACCENT_COLORS
+//  2. web/index.html: Add <option> in #accent-color-select
+//  3. main.go: Add entry in bannerColors below
+//  4. bonus/: Add matching theme profiles to bonus/vim_themes/,
+//     bonus/pi_themes/, bonus/opencode_themes/, and bonus/btop_themes/
+var bannerColors = map[string][]int{
+	"purple":  {124, 106, 247},
+	"blue":    {56, 189, 248},
+	"green":   {16, 185, 129},
+	"amber":   {251, 191, 36},
+	"red":     {248, 113, 113},
+	"pink":    {236, 72, 153},
+	"teal":    {20, 184, 166},
+	"indigo":  {99, 102, 241},
+	"orange":  {249, 115, 22},
+	"cyan":    {6, 182, 212},
+	"rose":    {244, 63, 94},
+	"lime":    {132, 204, 22},
+	"white":   {255, 255, 255},
+	"gold":    {212, 175, 55},
+	"canary":  {255, 238, 16},
+	"copper":  {211, 84, 0},
+	"mint":    {46, 213, 115},
+	"violet":  {167, 139, 250},
+	"emerald": {5, 150, 105},
+	"neon":    {0, 240, 255},
+	"coral":   {224, 122, 95},
+	"fuchsia": {217, 70, 239},
+}
 
-	rgb, ok := colors[cfg.ThemeColor]
+func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {
+	rgb, ok := bannerColors[cfg.ThemeColor]
 	if !ok {
-		rgb = colors["purple"]
+		rgb = bannerColors["purple"]
 	}
 
 	colorEsc := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", rgb[0], rgb[1], rgb[2])
