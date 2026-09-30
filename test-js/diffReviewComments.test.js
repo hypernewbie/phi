@@ -356,7 +356,9 @@ describe('DiffController._buildPromptEngineeredReview', () => {
         expect(md).toContain('### How to respond:');
         expect(md).toContain('If the reviewer asked a question, ANSWER it');
         expect(md).toContain('push back and explain the concern');
-        expect(md).toContain('prefer answering what the reviewer literally asked');
+        expect(md).toContain(
+            'prefer answering what the reviewer literally asked',
+        );
         // Legacy action-biased wording must not come back.
         expect(md).not.toContain('Please address');
         expect(md).not.toContain('Implement all requested changes');
@@ -377,7 +379,9 @@ describe('DiffController._buildPromptEngineeredReview', () => {
             createdAt: 1,
         });
         const md = Proto._buildPromptEngineeredReview.call(c);
-        expect(md).toContain('on unstaged working tree changes relative to HEAD `abc1234`');
+        expect(md).toContain(
+            'on unstaged working tree changes relative to HEAD `abc1234`',
+        );
     });
 
     it('uses the commit hash verbatim for a specific commit', async () => {
