@@ -1,10 +1,7 @@
 import { renderMarkdownSafe, highlightCodeIn } from './md-render.js';
-import { assistantErrorText } from './chat-pi/render.js';
+import { assistantErrorText, } from './chat-pi/render.js';
 import { renderBashExecution } from './chat-pi/bash-render.js';
-import {
-    renderToolExecution,
-    validatedToolDiff,
-} from './chat-pi/tool-render.js';
+import { renderToolExecution, validatedToolDiff, } from './chat-pi/tool-render.js';
 /** Wrap a structured array as a source-compatible view without conversion. */
 function arrayAsSource(messages) {
     return {
@@ -13,10 +10,7 @@ function arrayAsSource(messages) {
         },
         slice(start, end) {
             const safeStart = Math.min(Math.max(start, 0), messages.length);
-            const safeEnd = Math.min(
-                Math.max(end ?? messages.length, safeStart),
-                messages.length,
-            );
+            const safeEnd = Math.min(Math.max(end ?? messages.length, safeStart), messages.length);
             return messages.slice(safeStart, safeEnd);
         },
     };
@@ -38,9 +32,12 @@ const SCROLL_NEAR_BOTTOM_PX = 40;
 // keep new pi messages pinned when user is near bottom.
 const SNAP_ZONE_PX = 80;
 function roleLabel(role) {
-    if (role === 'user') return 'User';
-    if (role === 'assistant') return 'Assistant';
-    if (role === 'toolResult') return 'Tool Output';
+    if (role === 'user')
+        return 'User';
+    if (role === 'assistant')
+        return 'Assistant';
+    if (role === 'toolResult')
+        return 'Tool Output';
     return role.charAt(0).toUpperCase() + role.slice(1);
 }
 function appendThinkingText(target, text) {
@@ -49,11 +46,10 @@ function appendThinkingText(target, text) {
     let match;
     while (true) {
         match = pattern.exec(text);
-        if (match === null) break;
+        if (match === null)
+            break;
         if (match.index > lastIndex) {
-            target.appendChild(
-                document.createTextNode(text.slice(lastIndex, match.index)),
-            );
+            target.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
         }
         const strong = document.createElement('strong');
         strong.textContent = match[1];
@@ -77,10 +73,7 @@ function createBubble(message, copyText, plainText = false) {
         const copyButton = document.createElement('button');
         copyButton.className = 'copy-bubble-btn';
         copyButton.title = 'Copy message markdown';
-        const icon = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'svg',
-        );
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         icon.setAttribute('class', 'icon');
         icon.setAttribute('viewBox', '0 0 24 24');
         icon.setAttribute('fill', 'none');
@@ -88,23 +81,14 @@ function createBubble(message, copyText, plainText = false) {
         icon.setAttribute('stroke-width', '2');
         icon.setAttribute('stroke-linecap', 'round');
         icon.setAttribute('stroke-linejoin', 'round');
-        const rect = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'rect',
-        );
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         rect.setAttribute('x', '9');
         rect.setAttribute('y', '9');
         rect.setAttribute('width', '13');
         rect.setAttribute('height', '13');
         rect.setAttribute('rx', '2');
-        const path = document.createElementNS(
-            'http://www.w3.org/2000/svg',
-            'path',
-        );
-        path.setAttribute(
-            'd',
-            'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
-        );
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1');
         icon.append(rect, path);
         const copyLabel = document.createElement('span');
         copyLabel.textContent = 'Copy';
@@ -112,10 +96,12 @@ function createBubble(message, copyText, plainText = false) {
         copyButton.addEventListener('click', () => {
             copyText(message.text);
             const label = copyButton.querySelector('span');
-            if (label) label.textContent = 'Copied!';
+            if (label)
+                label.textContent = 'Copied!';
             copyButton.classList.add('copied');
             setTimeout(() => {
-                if (label) label.textContent = 'Copy';
+                if (label)
+                    label.textContent = 'Copy';
                 copyButton.classList.remove('copied');
             }, 2000);
         });
@@ -126,11 +112,9 @@ function createBubble(message, copyText, plainText = false) {
     content.className = 'review-bubble-content';
     if (plainText) {
         content.textContent = message.text;
-    } else {
-        const parsed = new DOMParser().parseFromString(
-            renderMarkdownSafe(message.text),
-            'text/html',
-        );
+    }
+    else {
+        const parsed = new DOMParser().parseFromString(renderMarkdownSafe(message.text), 'text/html');
         content.replaceChildren(...parsed.body.childNodes);
         highlightCodeIn(content);
     }
@@ -157,9 +141,7 @@ function cacheKeyFor(msg, toolResults, toolDiffs) {
             case 'toolCall': {
                 const result = toolResults.get(seg.id);
                 const diff = toolDiffs.get(seg.id);
-                parts.push(
-                    `c:${seg.id}:${seg.name}:${JSON.stringify(seg.args)}:${result ? `${result.isError}:${extractTextFromToolResult(result.message)}` : 'pending'}:d:${diff === undefined ? 'none' : JSON.stringify(diff)}`,
-                );
+                parts.push(`c:${seg.id}:${seg.name}:${JSON.stringify(seg.args)}:${result ? `${result.isError}:${extractTextFromToolResult(result.message)}` : 'pending'}:d:${diff === undefined ? 'none' : JSON.stringify(diff)}`);
                 break;
             }
             case 'toolResult':
@@ -171,22 +153,25 @@ function cacheKeyFor(msg, toolResults, toolDiffs) {
 }
 function extractTextFromToolResult(message) {
     const content = message.content;
-    if (typeof content === 'string') return content;
+    if (typeof content === 'string')
+        return content;
     if (Array.isArray(content)) {
         return content
             .map((item) => {
-                if (item && typeof item === 'object') {
-                    const t = item.text;
-                    if (typeof t === 'string') return t;
-                }
-                return '';
-            })
+            if (item && typeof item === 'object') {
+                const t = item.text;
+                if (typeof t === 'string')
+                    return t;
+            }
+            return '';
+        })
             .filter(Boolean)
             .join('\n');
     }
     if (content && typeof content === 'object' && !Array.isArray(content)) {
         const t = content.text;
-        if (typeof t === 'string') return t;
+        if (typeof t === 'string')
+            return t;
     }
     return '';
 }
@@ -197,7 +182,8 @@ function collectValidatedToolDiffs(messages, toolResults) {
             if (segment.kind !== 'toolCall' || segment.name !== 'edit')
                 continue;
             const diff = validatedToolDiff(toolResults.get(segment.id));
-            if (diff !== undefined) diffs.set(segment.id, diff);
+            if (diff !== undefined)
+                diffs.set(segment.id, diff);
         }
     }
     return diffs;
@@ -217,14 +203,12 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             // `assistant-text markdown-content`.
             textDiv.className = 'assistant-text markdown-content';
             copyTextAggregate += seg.text;
-            const parsed = new DOMParser().parseFromString(
-                renderMarkdownSafe(seg.text),
-                'text/html',
-            );
+            const parsed = new DOMParser().parseFromString(renderMarkdownSafe(seg.text), 'text/html');
             textDiv.replaceChildren(...parsed.body.childNodes);
             highlightCodeIn(textDiv);
             block.appendChild(textDiv);
-        } else if (seg.kind === 'thinking') {
+        }
+        else if (seg.kind === 'thinking') {
             const thinkDiv = document.createElement('div');
             thinkDiv.className = 'thinking-block collapsed';
             const header = document.createElement('div');
@@ -258,7 +242,8 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             });
             thinkDiv.append(header, thinkText);
             block.appendChild(thinkDiv);
-        } else if (seg.kind === 'toolCall') {
+        }
+        else if (seg.kind === 'toolCall') {
             hasToolCalls = true;
             const result = toolResults.get(seg.id);
             // Per-tool error propagation for stopReason error/aborted.
@@ -276,42 +261,36 @@ function buildAssistantMessageBlock(msg, toolResults, toolDiffs, copyText) {
             let output = result
                 ? extractTextFromToolResult(result.message)
                 : '';
-            if (
-                !result &&
-                (msg.stopReason === 'error' || msg.stopReason === 'aborted')
-            ) {
+            if (!result &&
+                (msg.stopReason === 'error' || msg.stopReason === 'aborted')) {
                 status = 'error';
                 output = mapAbortErrorText(msg.errorMessage);
             }
             const diff = toolDiffs.get(seg.id);
             if (seg.name === 'bash') {
-                const cmd =
-                    typeof seg.args.command === 'string'
-                        ? seg.args.command
-                        : '';
-                block.appendChild(
-                    renderBashExecution({
-                        id: seg.id,
-                        command: cmd,
-                        status,
-                        output,
-                        ...(result?.message.details !== undefined
-                            ? { details: result.message.details }
-                            : {}),
-                    }),
-                );
+                const cmd = typeof seg.args.command === 'string'
+                    ? seg.args.command
+                    : '';
+                block.appendChild(renderBashExecution({
+                    id: seg.id,
+                    command: cmd,
+                    status,
+                    output,
+                    ...(result?.message.details !== undefined
+                        ? { details: result.message.details }
+                        : {}),
+                }));
                 copyTextAggregate += `\n\`\`\`bash\n${cmd}\n\`\`\``;
-            } else {
-                block.appendChild(
-                    renderToolExecution({
-                        id: seg.id,
-                        name: seg.name,
-                        args: seg.args,
-                        status,
-                        output,
-                        ...(diff !== undefined ? { diff } : {}),
-                    }),
-                );
+            }
+            else {
+                block.appendChild(renderToolExecution({
+                    id: seg.id,
+                    name: seg.name,
+                    args: seg.args,
+                    status,
+                    output,
+                    ...(diff !== undefined ? { diff } : {}),
+                }));
                 copyTextAggregate += `\n\`\`\`json\n${JSON.stringify(seg.args, null, 2)}\n\`\`\``;
             }
         }
@@ -366,10 +345,7 @@ function buildUserMessageBlock(segments, copyText) {
         // Same `markdown-content` opt-in as the assistant path; Pi's
         // exporter wraps user text in a bare `markdown-content` div.
         div.className = 'user-text markdown-content';
-        const parsed = new DOMParser().parseFromString(
-            renderMarkdownSafe(seg.text),
-            'text/html',
-        );
+        const parsed = new DOMParser().parseFromString(renderMarkdownSafe(seg.text), 'text/html');
         div.replaceChildren(...parsed.body.childNodes);
         highlightCodeIn(div);
         block.appendChild(div);
@@ -425,7 +401,8 @@ export function createReviewTranscriptView(root, options) {
         refreshButton.title = 'Refresh Transcript';
         refreshButton.textContent = 'Refresh';
         header.appendChild(refreshButton);
-    } else if (options.status) {
+    }
+    else if (options.status) {
         status = document.createElement('span');
         status.className = 'review-header-coder';
         status.textContent = options.status;
@@ -500,17 +477,14 @@ export function createReviewTranscriptView(root, options) {
         });
     }
     function syncJumpButton() {
-        if (!jumpBtn) return;
+        if (!jumpBtn)
+            return;
         const newestStart = getNewestStart();
-        const atBottom =
-            transcript.scrollHeight -
-                transcript.scrollTop -
-                transcript.clientHeight <=
+        const atBottom = transcript.scrollHeight -
+            transcript.scrollTop -
+            transcript.clientHeight <=
             SNAP_ZONE_PX;
-        jumpBtn.classList.toggle(
-            'hidden',
-            currentStart >= newestStart && atBottom,
-        );
+        jumpBtn.classList.toggle('hidden', currentStart >= newestStart && atBottom);
     }
     // ── Structured-mode state ──
     let structuredMessages = {
@@ -549,10 +523,7 @@ export function createReviewTranscriptView(root, options) {
         const slice = compactSnapshot
             ? combinedSlice(currentStart, end)
             : structuredMessages.slice(currentStart, end);
-        const toolDiffs = collectValidatedToolDiffs(
-            slice.filter((m) => !m.__compaction),
-            toolResults,
-        );
+        const toolDiffs = collectValidatedToolDiffs(slice.filter((m) => !m.__compaction), toolResults);
         const fragment = document.createDocumentFragment();
         // Tool calls render their result inline (bash-render /
         // tool-render), so a paired toolResult message would duplicate the
@@ -561,9 +532,11 @@ export function createReviewTranscriptView(root, options) {
         // the window) still fall through to the dim block.
         const renderedCallIds = new Set();
         for (const msg of slice) {
-            if (msg.__compaction) continue;
+            if (msg.__compaction)
+                continue;
             for (const seg of msg.segments) {
-                if (seg.kind === 'toolCall') renderedCallIds.add(seg.id);
+                if (seg.kind === 'toolCall')
+                    renderedCallIds.add(seg.id);
             }
         }
         const retainedKeys = new Set();
@@ -574,15 +547,14 @@ export function createReviewTranscriptView(root, options) {
                 retainedKeys.add(key);
                 const cached = cache.get(key);
                 const block = cached ?? buildCompactionBlock(info);
-                if (!cached) cache.set(key, block);
+                if (!cached)
+                    cache.set(key, block);
                 fragment.appendChild(block);
                 continue;
             }
-            if (
-                msg.role === 'toolResult' &&
+            if (msg.role === 'toolResult' &&
                 msg.toolCallId &&
-                renderedCallIds.has(msg.toolCallId)
-            ) {
+                renderedCallIds.has(msg.toolCallId)) {
                 continue;
             }
             // The global message index prevents two identical messages from
@@ -594,19 +566,20 @@ export function createReviewTranscriptView(root, options) {
             const block = cached ?? buildAssistantOrUserBlock(msg, toolDiffs);
             clearActivePromptMarkers(block);
             block.dataset.piMessageIndex = String(currentStart + index);
-            if (!cached) cache.set(key, block);
-            if (
-                compactSnapshot &&
-                currentStart + index < compactSnapshot.messages.length
-            ) {
+            if (!cached)
+                cache.set(key, block);
+            if (compactSnapshot &&
+                currentStart + index < compactSnapshot.messages.length) {
                 block.classList.add('compacted-old');
-            } else {
+            }
+            else {
                 block.classList.remove('compacted-old');
             }
             fragment.appendChild(block);
         }
         for (const key of cache.keys()) {
-            if (!retainedKeys.has(key)) cache.delete(key);
+            if (!retainedKeys.has(key))
+                cache.delete(key);
         }
         // Virtual "live" assistant message appended when streaming. It
         // lives outside the slice so `currentStart` and the persisted
@@ -638,25 +611,18 @@ export function createReviewTranscriptView(root, options) {
         return div;
     }
     function syncActivePromptMarkers() {
-        for (const block of transcript.querySelectorAll(
-            '[data-pi-active-prompt-index]',
-        )) {
+        for (const block of transcript.querySelectorAll('[data-pi-active-prompt-index]')) {
             delete block.dataset.piActivePromptIndex;
         }
-        for (const block of transcript.querySelectorAll(
-            '[data-pi-optimistic-message]',
-        )) {
+        for (const block of transcript.querySelectorAll('[data-pi-optimistic-message]')) {
             block.remove();
         }
-        if (!activeTurn?.active) return;
+        if (!activeTurn?.active)
+            return;
         if (typeof activeTurn.promptOrigin === 'number') {
-            const block = transcript.querySelector(
-                `[data-pi-message-index="${activeTurn.promptOrigin}"]`,
-            );
+            const block = transcript.querySelector(`[data-pi-message-index="${activeTurn.promptOrigin}"]`);
             if (block)
-                block.dataset.piActivePromptIndex = String(
-                    activeTurn.promptOrigin,
-                );
+                block.dataset.piActivePromptIndex = String(activeTurn.promptOrigin);
             return;
         }
         const pending = activeTurn.outgoing ?? [
@@ -666,15 +632,12 @@ export function createReviewTranscriptView(root, options) {
             },
         ];
         for (const item of pending) {
-            const optimistic = buildUserMessageBlock(
-                [
-                    {
-                        kind: 'text',
-                        text: `${item.stateLabel}: ${item.text}`,
-                    },
-                ],
-                undefined,
-            );
+            const optimistic = buildUserMessageBlock([
+                {
+                    kind: 'text',
+                    text: `${item.stateLabel}: ${item.text}`,
+                },
+            ], undefined);
             optimistic.dataset.piOptimisticMessage = 'true';
             if (item.text === activeTurn.promptText)
                 optimistic.dataset.piOptimisticPrompt = 'true';
@@ -682,7 +645,8 @@ export function createReviewTranscriptView(root, options) {
         }
     }
     function syncActiveTurn() {
-        if (!activeHeader || !activeTop || !activeBottom) return;
+        if (!activeHeader || !activeTop || !activeBottom)
+            return;
         const state = activeTurn;
         // Milestone 3: retry indicator alone keeps the working row
         // visible. Overlay/marker pins remain gated on `active` —
@@ -698,63 +662,55 @@ export function createReviewTranscriptView(root, options) {
         // a retry-only state (active=false, retry={...}) still mutates
         // the visible text on the just-shown working row.
         const retry = state?.retry;
-        if (
-            retry &&
+        if (retry &&
             Number.isFinite(retry.attempt) &&
-            Number.isFinite(retry.maxAttempts)
-        ) {
+            Number.isFinite(retry.maxAttempts)) {
             const working = activeHeader.querySelector('.pi-working-label');
             if (working)
                 working.textContent = `Retrying · attempt ${retry.attempt} of ${retry.maxAttempts}`;
-        } else {
-            const working = activeHeader.querySelector('.pi-working-label');
-            if (working) working.textContent = 'Pi is working';
         }
-        if (!state?.active) return;
-        activeHeader.setAttribute(
-            'aria-label',
-            `${state.stateLabel}. Esc to interrupt`,
-        );
-        const source =
-            typeof state.promptOrigin === 'number'
-                ? transcript.querySelector(
-                      `[data-pi-active-prompt-index="${state.promptOrigin}"]`,
-                  )
-                : transcript.querySelector(
-                      '[data-pi-optimistic-prompt="true"]',
-                  );
+        else {
+            const working = activeHeader.querySelector('.pi-working-label');
+            if (working)
+                working.textContent = 'Pi is working';
+        }
+        if (!state?.active)
+            return;
+        activeHeader.setAttribute('aria-label', `${state.stateLabel}. Esc to interrupt`);
+        const source = typeof state.promptOrigin === 'number'
+            ? transcript.querySelector(`[data-pi-active-prompt-index="${state.promptOrigin}"]`)
+            : transcript.querySelector('[data-pi-optimistic-prompt="true"]');
         let placement = null;
-        if (
-            typeof state.promptOrigin === 'number' &&
+        if (typeof state.promptOrigin === 'number' &&
             (state.promptOrigin < currentStart ||
-                state.promptOrigin >= currentStart + windowSize)
-        ) {
+                state.promptOrigin >= currentStart + windowSize)) {
             placement = state.promptOrigin < currentStart ? 'top' : 'bottom';
-        } else if (source) {
+        }
+        else if (source) {
             const viewport = transcript.getBoundingClientRect();
             const rect = source.getBoundingClientRect();
-            if (rect.bottom <= viewport.top) placement = 'top';
-            else if (rect.top >= viewport.bottom) placement = 'bottom';
-        } else if (state.promptOrigin === 'optimistic') {
+            if (rect.bottom <= viewport.top)
+                placement = 'top';
+            else if (rect.top >= viewport.bottom)
+                placement = 'bottom';
+        }
+        else if (state.promptOrigin === 'optimistic') {
             placement = 'bottom';
         }
-        const target =
-            placement === 'top'
-                ? activeTop
-                : placement === 'bottom'
-                  ? activeBottom
-                  : null;
-        if (!target) return;
+        const target = placement === 'top'
+            ? activeTop
+            : placement === 'bottom'
+                ? activeBottom
+                : null;
+        if (!target)
+            return;
         target.replaceChildren();
-        const bubble = buildUserMessageBlock(
-            [
-                {
-                    kind: 'text',
-                    text: `${state.stateLabel}: ${state.promptText}`,
-                },
-            ],
-            undefined,
-        );
+        const bubble = buildUserMessageBlock([
+            {
+                kind: 'text',
+                text: `${state.stateLabel}: ${state.promptText}`,
+            },
+        ], undefined);
         bubble.classList.add('pi-active-prompt-copy');
         target.appendChild(bubble);
         target.classList.remove('hidden');
@@ -776,9 +732,7 @@ export function createReviewTranscriptView(root, options) {
      * last descendant matching `.pi-streaming`.
      */
     function findLiveAssistantBlock() {
-        return transcript.querySelector(
-            ':scope > .assistant-message.pi-streaming',
-        );
+        return transcript.querySelector(':scope > .assistant-message.pi-streaming');
     }
     /**
      * Update only the streaming live block. Never rebuilds the
@@ -798,21 +752,21 @@ export function createReviewTranscriptView(root, options) {
         latestPartial = partial;
         const existing = findLiveAssistantBlock();
         if (partial === '') {
-            if (existing) existing.remove();
+            if (existing)
+                existing.remove();
             syncJumpButton();
             return;
         }
-        const wasAtBottom =
-            transcript.scrollHeight -
-                transcript.scrollTop -
-                transcript.clientHeight <=
+        const wasAtBottom = transcript.scrollHeight -
+            transcript.scrollTop -
+            transcript.clientHeight <=
             SNAP_ZONE_PX;
         if (existing) {
-            const textNode = existing.querySelector(
-                '.assistant-text.pi-partial',
-            );
-            if (textNode) textNode.textContent = partial;
-        } else {
+            const textNode = existing.querySelector('.assistant-text.pi-partial');
+            if (textNode)
+                textNode.textContent = partial;
+        }
+        else {
             const live = buildLiveAssistantBlock(partial);
             transcript.appendChild(live);
         }
@@ -851,12 +805,7 @@ export function createReviewTranscriptView(root, options) {
             block.appendChild(textDiv);
             return block;
         }
-        return buildAssistantMessageBlock(
-            msg,
-            toolResults,
-            toolDiffs,
-            options.copyText,
-        );
+        return buildAssistantMessageBlock(msg, toolResults, toolDiffs, options.copyText);
     }
     function buildCompactionBlock(info) {
         const wrap = document.createElement('div');
@@ -870,10 +819,7 @@ export function createReviewTranscriptView(root, options) {
         if (info?.summary) {
             const sum = document.createElement('div');
             sum.className = 'compaction-summary markdown-content';
-            const parsed = new DOMParser().parseFromString(
-                renderMarkdownSafe(String(info.summary)),
-                'text/html',
-            );
+            const parsed = new DOMParser().parseFromString(renderMarkdownSafe(String(info.summary)), 'text/html');
             sum.replaceChildren(...parsed.body.childNodes);
             highlightCodeIn(sum);
             wrap.appendChild(sum);
@@ -888,18 +834,21 @@ export function createReviewTranscriptView(root, options) {
         const total = snapLen + divider + liveMessages.length;
         const out = [];
         for (let i = start; i < end && i < total; i++) {
-            if (i < snapLen) out.push(compactSnapshot.messages[i]);
+            if (i < snapLen)
+                out.push(compactSnapshot.messages[i]);
             else if (i === snapLen)
                 out.push({
                     __compaction: true,
                     info: compactSnapshot,
                 });
-            else out.push(liveMessages[i - snapLen - divider]);
+            else
+                out.push(liveMessages[i - snapLen - divider]);
         }
         return out;
     }
     function combinedLength() {
-        if (!compactSnapshot || !liveMessages) return structuredMessages.length;
+        if (!compactSnapshot || !liveMessages)
+            return structuredMessages.length;
         return compactSnapshot.messages.length + 1 + liveMessages.length;
     }
     function getNewestStart() {
@@ -913,10 +862,9 @@ export function createReviewTranscriptView(root, options) {
         // than the scroll-near-top prepending trigger so the view sticks
         // to the bottom under hand jitter but still detaches when the
         // user scrolls up by more than ~one row.
-        const wasAtBottom =
-            transcript.scrollHeight -
-                transcript.scrollTop -
-                transcript.clientHeight <=
+        const wasAtBottom = transcript.scrollHeight -
+            transcript.scrollTop -
+            transcript.clientHeight <=
             SNAP_ZONE_PX;
         return {
             wasAtBottom,
@@ -926,7 +874,8 @@ export function createReviewTranscriptView(root, options) {
     function applyScrollAnchor(snap, delta) {
         if (snap.wasAtBottom) {
             transcript.scrollTop = transcript.scrollHeight;
-        } else {
+        }
+        else {
             transcript.scrollTop = Math.max(0, transcript.scrollTop + delta);
         }
     }
@@ -934,12 +883,11 @@ export function createReviewTranscriptView(root, options) {
     const onScroll = () => {
         if (transcript.scrollTop <= SCROLL_NEAR_TOP_PX) {
             view.prependOlder(pageSize);
-        } else if (
-            transcript.scrollHeight -
-                transcript.scrollTop -
-                transcript.clientHeight <=
-            SCROLL_NEAR_BOTTOM_PX
-        ) {
+        }
+        else if (transcript.scrollHeight -
+            transcript.scrollTop -
+            transcript.clientHeight <=
+            SCROLL_NEAR_BOTTOM_PX) {
             view.appendNewer(pageSize);
         }
         syncJumpButton();
@@ -963,13 +911,7 @@ export function createReviewTranscriptView(root, options) {
                 transcript.appendChild(createBubble(message, options.copyText));
             }
             if (partial) {
-                transcript.appendChild(
-                    createBubble(
-                        { role: 'assistant', text: `${partial}▌` },
-                        undefined,
-                        true,
-                    ),
-                );
+                transcript.appendChild(createBubble({ role: 'assistant', text: `${partial}▌` }, undefined, true));
             }
             startBadge.style.display = 'none';
             transcript.scrollTop = transcript.scrollHeight;
@@ -991,10 +933,10 @@ export function createReviewTranscriptView(root, options) {
             if (compactSnapshot) {
                 sourceArr = sourceRaw.slice(0, sourceRaw.length);
                 const snapIds = compactSnapshot.ids;
-                const filtered = sourceArr.filter(
-                    (m) => !m?.id || !snapIds.has(m.id),
-                );
-                if (filtered.length !== sourceArr.length) {
+                const filtered = sourceArr.filter((m) => !m?.id ||
+                    !snapIds.has(m.id));
+                if (filtered.length !==
+                    sourceArr.length) {
                     source = asSource(filtered);
                     sourceArr = filtered;
                 }
@@ -1005,9 +947,11 @@ export function createReviewTranscriptView(root, options) {
             const previousNewestStart = Math.max(0, previousTotal - windowSize);
             const wasAtNewest = currentStart === previousNewestStart;
             if (compactSnapshot) {
-                liveMessages = sourceArr ?? source.slice(0, source.length);
+                liveMessages = (sourceArr ??
+                    source.slice(0, source.length));
                 structuredMessages = source;
-            } else {
+            }
+            else {
                 structuredMessages = source;
             }
             toolResults = results;
@@ -1016,10 +960,13 @@ export function createReviewTranscriptView(root, options) {
                 ? combinedLength()
                 : source.length;
             const newestStart = Math.max(0, newestTotal - windowSize);
-            const curLen = sourceArr ? sourceArr.length : source.length;
+            const curLen = sourceArr
+                ? sourceArr.length
+                : source.length;
             if (wasAtNewest || curLen < previousTotal) {
                 currentStart = newestStart;
-            } else {
+            }
+            else {
                 currentStart = Math.min(currentStart, newestStart);
             }
             const snap = snapScroll();
@@ -1033,14 +980,14 @@ export function createReviewTranscriptView(root, options) {
                 ? combinedLength()
                 : source.length;
             if (wasAtNewest && effectiveLen > previousTotal) {
-                const nearBottom =
-                    transcript.scrollHeight -
-                        transcript.scrollTop -
-                        transcript.clientHeight <=
+                const nearBottom = transcript.scrollHeight -
+                    transcript.scrollTop -
+                    transcript.clientHeight <=
                     SNAP_ZONE_PX * 1.5;
                 if (nearBottom || snap.wasAtBottom) {
                     transcript.scrollTop = transcript.scrollHeight;
-                } else {
+                }
+                else {
                     requestAnimationFrame(() => {
                         transcript.scrollTop = transcript.scrollHeight;
                     });
@@ -1069,7 +1016,8 @@ export function createReviewTranscriptView(root, options) {
             // common case where only the row toggles.
             const existing = transcript.querySelector('.pi-ephemeral-error');
             if (text === null) {
-                if (existing) existing.remove();
+                if (existing)
+                    existing.remove();
                 return;
             }
             if (existing) {
@@ -1081,7 +1029,8 @@ export function createReviewTranscriptView(root, options) {
         getStructuredMessages() {
             if (compactSnapshot) {
                 const all = combinedSlice(0, combinedLength());
-                return all.filter((m) => !m.__compaction);
+                return all.filter((m) => !m
+                    .__compaction);
             }
             return structuredMessages.slice(0, structuredMessages.length);
         },
@@ -1096,10 +1045,11 @@ export function createReviewTranscriptView(root, options) {
                 return;
             }
             const msgs = snapshot.messages;
-            const ids =
-                snapshot.ids instanceof Set
-                    ? snapshot.ids
-                    : new Set(msgs.map((m) => m.id).filter(Boolean));
+            const ids = snapshot.ids instanceof Set
+                ? snapshot.ids
+                : new Set(msgs
+                    .map((m) => m.id)
+                    .filter(Boolean));
             compactSnapshot = {
                 messages: msgs,
                 ids,
@@ -1109,10 +1059,7 @@ export function createReviewTranscriptView(root, options) {
                 at: snapshot.at ?? Date.now(),
             };
             liveMessages = [];
-            currentStart = Math.max(
-                0,
-                compactSnapshot.messages.length + 1 - windowSize,
-            );
+            currentStart = Math.max(0, compactSnapshot.messages.length + 1 - windowSize);
             cache.clear();
         },
         clearCompactSnapshot() {
@@ -1129,39 +1076,37 @@ export function createReviewTranscriptView(root, options) {
             let sessionPath = opts?.sessionPath ?? null;
             if (!sessionPath && opts?.cwd) {
                 try {
-                    const res = await fetchImpl(
-                        `/api/sessions?coder=pi&cwd=${encodeURIComponent(opts.cwd)}`,
-                    );
+                    const res = await fetchImpl(`/api/sessions?coder=pi&cwd=${encodeURIComponent(opts.cwd)}`);
                     if (res.ok) {
                         const data = await res.json();
-                        const sessions = Array.isArray(data?.sessions)
+                        const sessions = Array.isArray(data
+                            ?.sessions)
                             ? data.sessions
                             : Array.isArray(data)
-                              ? data
-                              : [];
+                                ? data
+                                : [];
                         const match = sessions[0];
-                        if (match?.path) sessionPath = match.path;
-                        else if (match?.file) sessionPath = match.file;
+                        if (match?.path)
+                            sessionPath = match.path;
+                        else if (match?.file)
+                            sessionPath = match.file;
                     }
-                } catch {}
+                }
+                catch { }
             }
-            if (!sessionPath) return false;
+            if (!sessionPath)
+                return false;
             try {
-                const res = await fetchImpl(
-                    `/api/fs/read?path=${encodeURIComponent(sessionPath)}`,
-                );
-                if (!res.ok) return false;
+                const res = await fetchImpl(`/api/fs/read?path=${encodeURIComponent(sessionPath)}`);
+                if (!res.ok)
+                    return false;
                 const text = await res.text();
                 const lines = text.split('\n').filter(Boolean);
                 const old = [];
-                const liveIds = new Set(
-                    (
-                        liveMessages ??
-                        structuredMessages.slice(0, structuredMessages.length)
-                    )
-                        .map((m) => m.id)
-                        .filter(Boolean),
-                );
+                const liveIds = new Set((liveMessages ??
+                    structuredMessages.slice(0, structuredMessages.length))
+                    .map((m) => m.id)
+                    .filter(Boolean));
                 const snapIds = compactSnapshot?.ids ?? new Set();
                 let compactionSummary = null;
                 for (const line of lines) {
@@ -1174,33 +1119,37 @@ export function createReviewTranscriptView(root, options) {
                         }
                         if (entry.type !== 'message' && entry.type !== 'custom')
                             continue;
-                        if (
-                            entry.type === 'custom' &&
-                            entry.customType !== 'pi-compaction'
-                        )
+                        if (entry.type === 'custom' &&
+                            entry.customType !== 'pi-compaction')
                             continue;
-                        const msg =
-                            entry.message ?? entry.data?.message ?? entry.data;
-                        if (!msg?.id) continue;
+                        const msg = (entry.message ??
+                            entry.data?.message ??
+                            entry.data);
+                        if (!msg?.id)
+                            continue;
                         if (liveIds.has(msg.id) || snapIds.has(msg.id))
                             continue;
                         old.push(msg);
-                    } catch {}
+                    }
+                    catch { }
                 }
-                if (old.length === 0) return false;
+                if (old.length === 0)
+                    return false;
                 if (!compactSnapshot) {
                     compactSnapshot = {
                         messages: old,
-                        ids: new Set(old.map((m) => m.id).filter(Boolean)),
+                        ids: new Set(old
+                            .map((m) => m.id)
+                            .filter(Boolean)),
                         summary: compactionSummary,
                         from: old.length + (liveMessages?.length ?? 0),
                         kept: liveMessages?.length ?? structuredMessages.length,
                         at: Date.now(),
                     };
-                    liveMessages =
-                        liveMessages ??
-                        structuredMessages.slice(0, structuredMessages.length);
-                } else {
+                    liveMessages = (liveMessages ??
+                        structuredMessages.slice(0, structuredMessages.length));
+                }
+                else {
                     const existingIds = compactSnapshot.ids;
                     const add = old.filter((m) => !existingIds.has(m.id));
                     if (add.length) {
@@ -1208,8 +1157,11 @@ export function createReviewTranscriptView(root, options) {
                             ...add,
                             ...compactSnapshot.messages,
                         ];
-                        for (const m of add) existingIds.add(m.id);
-                    } else return false;
+                        for (const m of add)
+                            existingIds.add(m.id);
+                    }
+                    else
+                        return false;
                 }
                 const preHeight = transcript.scrollHeight;
                 currentStart = 0;
@@ -1218,13 +1170,11 @@ export function createReviewTranscriptView(root, options) {
                     partialStreaming: latestPartial !== '',
                 });
                 const delta = transcript.scrollHeight - preHeight;
-                transcript.scrollTop = Math.max(
-                    0,
-                    transcript.scrollTop + delta,
-                );
+                transcript.scrollTop = Math.max(0, transcript.scrollTop + delta);
                 syncJumpButton();
                 return true;
-            } catch {
+            }
+            catch {
                 return false;
             }
         },
@@ -1232,9 +1182,11 @@ export function createReviewTranscriptView(root, options) {
             const _totalLen = compactSnapshot
                 ? combinedLength()
                 : structuredMessages.length;
-            if (currentStart === 0) return false;
+            if (currentStart === 0)
+                return false;
             const newStart = Math.max(0, currentStart - count);
-            if (newStart === currentStart) return false;
+            if (newStart === currentStart)
+                return false;
             const preHeight = transcript.scrollHeight;
             currentStart = newStart;
             rebuildStructuredWindow({
@@ -1247,14 +1199,14 @@ export function createReviewTranscriptView(root, options) {
             return true;
         },
         appendNewer(count) {
-            if (count <= 0) return false;
-            const newestStart = Math.max(
-                0,
-                structuredMessages.length - windowSize,
-            );
-            if (currentStart >= newestStart) return false;
+            if (count <= 0)
+                return false;
+            const newestStart = Math.max(0, structuredMessages.length - windowSize);
+            if (currentStart >= newestStart)
+                return false;
             const newStart = Math.min(newestStart, currentStart + count);
-            if (newStart === currentStart) return false;
+            if (newStart === currentStart)
+                return false;
             // Boundary-top anchoring: tag the current last rendered block
             // before the rebuild. Cache keys use the GLOBAL message index
             // and paired tool state, so the tagged node survives the
@@ -1263,14 +1215,13 @@ export function createReviewTranscriptView(root, options) {
             // (`.pi-streaming`) is rebuilt from scratch every paint and
             // never survives the slide, so skip it when it is last.
             let anchor = transcript.lastElementChild;
-            while (
-                anchor &&
+            while (anchor &&
                 (!(anchor instanceof HTMLElement) ||
-                    anchor.classList.contains('pi-streaming'))
-            ) {
+                    anchor.classList.contains('pi-streaming'))) {
                 anchor = anchor.previousElementSibling;
             }
-            if (anchor instanceof HTMLElement) anchor.dataset.appendAnchor = '';
+            if (anchor instanceof HTMLElement)
+                anchor.dataset.appendAnchor = '';
             currentStart = newStart;
             rebuildStructuredWindow({
                 appendPartial: latestPartial,
@@ -1287,8 +1238,8 @@ export function createReviewTranscriptView(root, options) {
                 const tr = transcript.getBoundingClientRect().top;
                 transcript.scrollTop =
                     restored.getBoundingClientRect().top -
-                    tr +
-                    transcript.scrollTop;
+                        tr +
+                        transcript.scrollTop;
                 delete restored.dataset.appendAnchor;
             }
             syncJumpButton();

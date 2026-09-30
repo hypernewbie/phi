@@ -22,16 +22,14 @@ export function hideSubagentStrip() {
     document.getElementById('subagent-strip')?.classList.add('hidden');
 }
 export function createSubagentStrip(isActive, onClick) {
-    const root =
-        document.getElementById('subagent-strip') ??
+    const root = document.getElementById('subagent-strip') ??
         document.createElement('div');
     const hide = () => {
         root.classList.add('hidden');
         root.replaceChildren();
     };
     const renderChip = (run) => {
-        const label =
-            typeof run.label === 'string' && run.label ? run.label : run.id;
+        const label = typeof run.label === 'string' && run.label ? run.label : run.id;
         const chip = document.createElement('button');
         chip.className = 'subagent-chip';
         const dot = document.createElement('span');
@@ -40,33 +38,30 @@ export function createSubagentStrip(isActive, onClick) {
         text.className = 'subagent-chip-label';
         text.textContent = truncateLabel(label);
         chip.append(dot, text);
-        const parts = [label, run.state, run.activity?.currentTool].filter(
-            (part) => typeof part === 'string' && part !== '',
-        );
-        if (parts.length > 0) chip.title = parts.join(' · ');
+        const parts = [label, run.state, run.activity?.currentTool].filter((part) => typeof part === 'string' && part !== '');
+        if (parts.length > 0)
+            chip.title = parts.join(' · ');
         chip.addEventListener('click', () => onClick(run.id, label));
         return chip;
     };
     const update = (snapshot) => {
-        if (!isActive()) return;
-        const runs =
-            snapshot != null &&
+        if (!isActive())
+            return;
+        const runs = snapshot != null &&
             typeof snapshot === 'object' &&
             Array.isArray(snapshot.runs)
-                ? snapshot.runs
-                : [];
-        const top = runs.filter(
-            (run) =>
-                run != null &&
-                typeof run === 'object' &&
-                typeof run.id === 'string',
-        );
+            ? snapshot.runs
+            : [];
+        const top = runs.filter((run) => run != null &&
+            typeof run === 'object' &&
+            typeof run.id === 'string');
         if (top.length === 0) {
             hide();
             return;
         }
         const frag = document.createDocumentFragment();
-        for (const run of top) frag.append(renderChip(run));
+        for (const run of top)
+            frag.append(renderChip(run));
         root.replaceChildren(frag);
         root.classList.remove('hidden');
     };
@@ -76,18 +71,18 @@ function isRecord(value) {
     return value !== null && typeof value === 'object';
 }
 function validTranscriptMessages(value) {
-    if (!Array.isArray(value)) return [];
-    return value.filter(
-        (message) =>
-            isRecord(message) &&
-            typeof message.role === 'string' &&
-            Object.hasOwn(message, 'content'),
-    );
+    if (!Array.isArray(value))
+        return [];
+    return value.filter((message) => isRecord(message) &&
+        typeof message.role === 'string' &&
+        Object.hasOwn(message, 'content'));
 }
 function transcriptSteps(value) {
-    if (!isRecord(value) || !Array.isArray(value.steps)) return [];
+    if (!isRecord(value) || !Array.isArray(value.steps))
+        return [];
     return value.steps.flatMap((step) => {
-        if (!isRecord(step)) return [];
+        if (!isRecord(step))
+            return [];
         return [
             {
                 label: typeof step.label === 'string' ? step.label : '',
@@ -120,7 +115,8 @@ export function createSubagentViewer(container, client, cwd) {
     };
     const showError = (error) => {
         clearError();
-        if (!header || !closeButton) return;
+        if (!header || !closeButton)
+            return;
         const message = document.createElement('div');
         message.className = 'subagent-viewer-error';
         message.textContent =
@@ -145,7 +141,8 @@ export function createSubagentViewer(container, client, cwd) {
         payloads.clear();
     }
     const renderRail = () => {
-        if (!rail) return;
+        if (!rail)
+            return;
         rail.replaceChildren();
         const primary = document.createElement('button');
         primary.type = 'button';
@@ -157,7 +154,8 @@ export function createSubagentViewer(container, client, cwd) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'subagent-rail-run';
-            if (runId === activeRunId) button.classList.add('active');
+            if (runId === activeRunId)
+                button.classList.add('active');
             button.textContent = label;
             button.title = label;
             button.addEventListener('click', () => open(runId, label));
@@ -165,7 +163,8 @@ export function createSubagentViewer(container, client, cwd) {
         }
     };
     const ensureViewer = () => {
-        if (wrapper) return;
+        if (wrapper)
+            return;
         wrapper = document.createElement('div');
         wrapper.className = 'subagent-viewer';
         header = document.createElement('div');
@@ -199,12 +198,14 @@ export function createSubagentViewer(container, client, cwd) {
         });
     };
     const renderPayload = (runId, payload) => {
-        if (runId !== activeRunId || !view) return;
+        if (runId !== activeRunId || !view)
+            return;
         clearError();
         const groups = [];
         const messages = [];
         for (const step of transcriptSteps(payload)) {
-            if (step.messages.length === 0) continue;
+            if (step.messages.length === 0)
+                continue;
             if (step.label)
                 groups.push({ label: step.label, start: messages.length });
             messages.push(...step.messages);
@@ -219,16 +220,11 @@ export function createSubagentViewer(container, client, cwd) {
             messages,
         };
         buffer.applySnapshot(snapshot);
-        view.setStructuredMessages(
-            buffer.getStructuredTranscript(),
-            '',
-            buffer.getToolResultMap(),
-        );
+        view.setStructuredMessages(buffer.getStructuredTranscript(), '', buffer.getToolResultMap());
         for (const group of [...groups].reverse()) {
-            const target = view.transcript.querySelector(
-                `[data-pi-message-index="${group.start}"]`,
-            );
-            if (!target) continue;
+            const target = view.transcript.querySelector(`[data-pi-message-index="${group.start}"]`);
+            if (!target)
+                continue;
             const stepHeader = document.createElement('div');
             stepHeader.className = 'subagent-step-header';
             stepHeader.textContent = group.label;
@@ -236,11 +232,13 @@ export function createSubagentViewer(container, client, cwd) {
         }
     };
     function open(runId, label) {
-        if (!runId) return;
+        if (!runId)
+            return;
         ensureViewer();
         openRuns.set(runId, label || runId);
         activeRunId = runId;
-        if (title) title.textContent = label || runId;
+        if (title)
+            title.textContent = label || runId;
         renderRail();
         const token = ++requestToken;
         const generation = viewerGeneration;
@@ -251,20 +249,20 @@ export function createSubagentViewer(container, client, cwd) {
         void client
             .call('subagentTranscript', undefined, { runId })
             .then((payload) => {
-                if (generation !== viewerGeneration || !wrapper) return;
-                payloads.set(runId, payload);
-                if (token !== requestToken || activeRunId !== runId) return;
-                renderPayload(runId, payload);
-            })
+            if (generation !== viewerGeneration || !wrapper)
+                return;
+            payloads.set(runId, payload);
+            if (token !== requestToken || activeRunId !== runId)
+                return;
+            renderPayload(runId, payload);
+        })
             .catch((error) => {
-                if (
-                    generation !== viewerGeneration ||
-                    token !== requestToken ||
-                    activeRunId !== runId
-                )
-                    return;
-                showError(error);
-            });
+            if (generation !== viewerGeneration ||
+                token !== requestToken ||
+                activeRunId !== runId)
+                return;
+            showError(error);
+        });
     }
     return {
         open,

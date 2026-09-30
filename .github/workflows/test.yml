@@ -69,7 +69,7 @@ jobs:
       - name: Lint and Format JS/TS
         run: pnpm run check:code
 
-      - name: Lint CSS/HTML
+      - name: Lint CSS
         run: pnpm run lint:web
 
       - name: Type Check (web-src)
