@@ -151,7 +151,8 @@ export function isVSCodeLaunchUnsupported() {
         return true;
     if (new URLSearchParams(location.search).get('desktop') === '1')
         return true;
-    if (typeof window !== 'undefined' && window.__phiDesktop)
+    if (typeof window !== 'undefined' &&
+        window.__phiDesktop)
         return true;
     return false;
 }
@@ -186,7 +187,7 @@ export function buildVSCodeRemoteURI(hostname, target) {
     if (!isSafeRelative(relativePath))
         return null;
     const split = splitPathSegments(root);
-    if (!split || split.head !== '')
+    if (!split?.head && split?.head !== '')
         return null; // remote = POSIX only
     const encoded = split.segments.map(encodeSegment).join('/');
     const tail = relativePath
