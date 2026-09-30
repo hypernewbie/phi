@@ -330,23 +330,37 @@ describe('DiffController._buildPromptEngineeredReview', () => {
             createdAt: 100,
         });
         const md = Proto._buildPromptEngineeredReview.call(c);
+        // The prompt frames the review as something to RESPOND to, not
+        // a checklist of code changes to implement. Action-biased
+        // language ("Please address", "Requested Change",
+        // "Implement all requested changes surgically") used to ship
+        // here; see [[diff-review-prompt-shapes]] for the failure
+        // mode it caused.
         expect(md).toContain(
-            'Please address the following code review feedback',
+            'Below is a code review on git revision `fa4f33a`',
         );
-        expect(md).toContain('on git revision `fa4f33a`');
         expect(md).toContain('in workspace `phi`');
-        expect(md).toContain('### Code Review Feedback (1 item)');
+        expect(md).toContain('### Reviewer comments (1 item)');
         expect(md).toContain('#### 1. `auth.ts:12`');
         // Snippet wrapped as code block with `>` prefix per line.
         expect(md).toContain('> ```ts');
         expect(md).toContain('> - const a = 1;');
         expect(md).toContain('> + const a = 2;');
-        expect(md).toContain('**Requested Change:**');
+        // Items are labelled neutrally — the reviewer may have asked a
+        // question, made a suggestion, or requested a change.
+        expect(md).toContain('**Reviewer said:**');
+        expect(md).not.toContain('**Requested Change:**');
         expect(md).toContain('Rename `a` to `count` for clarity.');
-        // Directives.
-        expect(md).toContain('### Instructions for Assistant:');
-        expect(md).toContain('1. Locate the exact code locations');
-        expect(md).toContain('3. Verify your changes');
+        // Tail gives the LLM explicit permission to answer questions
+        // instead of editing, and to push back on bad ideas.
+        expect(md).toContain('### How to respond:');
+        expect(md).toContain('If the reviewer asked a question, ANSWER it');
+        expect(md).toContain('push back and explain the concern');
+        expect(md).toContain('prefer answering what the reviewer literally asked');
+        // Legacy action-biased wording must not come back.
+        expect(md).not.toContain('Please address');
+        expect(md).not.toContain('Implement all requested changes');
+        expect(md).not.toContain('Instructions for Assistant:');
     });
 
     it('uses HEAD short hash for unstaged / staged', async () => {
@@ -363,9 +377,7 @@ describe('DiffController._buildPromptEngineeredReview', () => {
             createdAt: 1,
         });
         const md = Proto._buildPromptEngineeredReview.call(c);
-        expect(md).toContain(
-            'unstaged working tree changes relative to HEAD `abc1234`',
-        );
+        expect(md).toContain('on unstaged working tree changes relative to HEAD `abc1234`');
     });
 
     it('uses the commit hash verbatim for a specific commit', async () => {
@@ -399,7 +411,7 @@ describe('DiffController._buildPromptEngineeredReview', () => {
             createdAt: 2,
         });
         const md = Proto._buildPromptEngineeredReview.call(c);
-        expect(md).toContain('### Code Review Feedback (2 items)');
+        expect(md).toContain('### Reviewer comments (2 items)');
     });
 });
 
@@ -799,9 +811,8 @@ describe('DiffController.applyReviewToTerminalPrompt', () => {
         });
         Proto.applyReviewToTerminalPrompt.call(ctx);
         expect(inputTextArea.value).toContain(
-            'Please address the following code review feedback',
+            'Below is a code review on git revision `deadbee`',
         );
-        expect(inputTextArea.value).toContain('on git revision `deadbee`');
         expect(inputTextArea.value).toContain('rename a');
         expect(inputTextArea.style.height).not.toBe('');
         expect(ctx.reviewComments.size).toBe(0);
@@ -898,7 +909,7 @@ describe('DiffController.applyReviewToTerminalPrompt', () => {
         });
         Proto.applyReviewToTerminalPrompt.call(ctx);
         expect(inputTextArea.value.startsWith('first draft\n\n')).toBe(true);
-        expect(inputTextArea.value).toContain('### Code Review Feedback');
+        expect(inputTextArea.value).toContain('### Reviewer comments');
     });
 });
 
