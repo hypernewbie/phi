@@ -1338,12 +1338,14 @@ export class MarkdownManager {
                 this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
             }
             else {
-                throw new Error('Image clipboard copying is not supported in this environment');
+                // Insecure HTTP contexts (e.g. LAN IPs or .local hostnames without HTTPS)
+                // restrict binary image clipboard writes. Fall back to copying the image URL.
+                await this._copyToClipboard(imageUrl, 'Image clipboard requires HTTPS or localhost. Copied image URL instead.');
             }
         }
         catch (err) {
             console.error('Failed to copy image to clipboard:', err);
-            this.app.showToast(`Failed to copy image: ${err.message}`, { type: 'error' });
+            this.app.showToast(`Failed to copy image: ${err.message}`, { type: 'error', title: 'Clipboard' });
         }
     }
     async _canvasToPngBlob(img) {

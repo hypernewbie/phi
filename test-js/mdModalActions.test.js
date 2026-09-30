@@ -193,4 +193,52 @@ describe('md-modal context-aware actions', () => {
             y: 150,
         });
     });
+
+    it('gracefully falls back to copying image URL when ClipboardItem is unavailable', async () => {
+        const { mm, app } = makeMm();
+        const originalClipboardItem = window.ClipboardItem;
+        try {
+            // Simulate insecure HTTP context where ClipboardItem is undefined
+            delete window.ClipboardItem;
+
+            const fakeBlob = new Blob(['image data'], { type: 'image/png' });
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                blob: () => Promise.resolve(fakeBlob),
+            });
+
+            mm._copyToClipboard = vi.fn();
+
+            await mm._copyImageToClipboard(
+                'http://charon.local:7070/assets/logo.png',
+            );
+
+            expect(mm._copyToClipboard).toHaveBeenCalledWith(
+                'http://charon.local:7070/assets/logo.png',
+                expect.stringContaining('Copied image URL instead'),
+            );
+            expect(app.showToast).not.toHaveBeenCalledWith(
+                expect.stringContaining(
+                    'Image clipboard copying is not supported',
+                ),
+                expect.anything(),
+            );
+        } finally {
+            if (originalClipboardItem) {
+                window.ClipboardItem = originalClipboardItem;
+            }
+        }
+    });
+
+    it('shows Toast with title "Error" instead of "Couldn\'t open session" for generic errors', async () => {
+        const { App } = await import('../web/app.js');
+        const app = Object.create(App.prototype);
+        app.showToast('Something went wrong', { type: 'error' });
+
+        const toast = document.querySelector('.toast-error');
+        expect(toast).not.toBeNull();
+        const titleEl = toast?.querySelector('.toast-title');
+        expect(titleEl?.textContent).toBe('Error');
+        expect(titleEl?.textContent).not.toBe("Couldn't open session");
+    });
 });

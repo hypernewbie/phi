@@ -159,8 +159,8 @@ body.show-ctrl-shortcuts .rail-item.has-shortcut .shortcut-hint {
   height: 8px;
   transform: rotate(45deg);
   border-radius: 1px;
-  background: var(--entry-accent, var(--accent, #7c6af7));
-  box-shadow: 0 0 6px color-mix(in srgb, var(--entry-accent, var(--accent, #7c6af7)) 60%, transparent);
+  background: var(--entry-accent, var(--accent, var(--text, #e4e3e9)));
+  box-shadow: 0 0 6px color-mix(in srgb, var(--entry-accent, var(--accent, var(--text, #e4e3e9))) 60%, transparent);
   pointer-events: none;
   z-index: 2;
 }

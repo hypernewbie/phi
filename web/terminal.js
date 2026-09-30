@@ -5135,6 +5135,18 @@ export class TabManager {
                 });
 
         if (tab.coder === 'pi-rpc') destroyRpcChat(tab.paneId);
+        if (tab.autoReconnectTimer) {
+            clearTimeout(tab.autoReconnectTimer);
+            tab.autoReconnectTimer = null;
+        }
+        if (tab.reconnectStableTimer) {
+            clearTimeout(tab.reconnectStableTimer);
+            tab.reconnectStableTimer = null;
+        }
+        if (tab.reconnectWatchdogTimer) {
+            clearTimeout(tab.reconnectWatchdogTimer);
+            tab.reconnectWatchdogTimer = null;
+        }
         try {
             if (tab.ws) tab.ws.close();
         } catch (e) {
@@ -6569,8 +6581,31 @@ export class TabManager {
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {
-        if (tabInfo.coder === 'pi-rpc' || tabInfo.reconnectInFlight) return;
+        if (tabInfo.coder === 'pi-rpc') return;
+        if (tabInfo.reconnectInFlight) {
+            if (auto) return;
+            // Manual retry forces recovery from stalled in-flight attempt
+            if (tabInfo.reconnectWatchdogTimer) {
+                clearTimeout(tabInfo.reconnectWatchdogTimer);
+                tabInfo.reconnectWatchdogTimer = null;
+            }
+            if (tabInfo.ws) {
+                try {
+                    tabInfo.ws.close();
+                } catch (_e) {}
+                tabInfo.ws = null;
+            }
+            tabInfo.reconnectInFlight = false;
+        }
         tabInfo.reconnectInFlight = true;
+        if (tabInfo.autoReconnectTimer) {
+            clearTimeout(tabInfo.autoReconnectTimer);
+            tabInfo.autoReconnectTimer = null;
+        }
+        if (tabInfo.reconnectWatchdogTimer) {
+            clearTimeout(tabInfo.reconnectWatchdogTimer);
+            tabInfo.reconnectWatchdogTimer = null;
+        }
         tabInfo.autoReconnectPending = false;
         tabInfo.exitCode = null;
 
@@ -6584,10 +6619,12 @@ export class TabManager {
         if (btnEl) btnEl.disabled = true;
         if (restartBtn) restartBtn.disabled = true;
 
-        if (tabInfo.ws)
+        if (tabInfo.ws) {
             try {
                 tabInfo.ws.close();
             } catch (_e) {}
+            tabInfo.ws = null;
+        }
 
         // The server replays the whole ring buffer on every attach, so without
         // clearing first a reconnect appends a second copy of the scrollback.
@@ -6601,12 +6638,19 @@ export class TabManager {
             const newWs = new PTYWebSocket(
                 tabInfo.paneId,
                 (data) => {
+                    if (tabInfo.ws !== newWs) return;
                     this._paneData(tabInfo, data);
                 },
                 (control) => {
+                    if (tabInfo.ws !== newWs) return;
                     this.handleControlMessage(tabInfo, control);
                 },
                 () => {
+                    if (tabInfo.ws !== newWs) return;
+                    if (tabInfo.reconnectWatchdogTimer) {
+                        clearTimeout(tabInfo.reconnectWatchdogTimer);
+                        tabInfo.reconnectWatchdogTimer = null;
+                    }
                     tabInfo.reconnectInFlight = false;
                     // Died before proving itself: cancel the pending success
                     // reset so this attempt still counts against the backoff.
@@ -6620,6 +6664,7 @@ export class TabManager {
                         this.maybeAutoReconnect(tabInfo);
                         this.updateDisconnectBanner();
                     } else {
+                        tabInfo.isDead = true;
                         if (msgEl)
                             msgEl.innerText = 'Session expired (PTY gone)';
                         if (btnEl) {
@@ -6632,6 +6677,11 @@ export class TabManager {
                     }
                 },
                 () => {
+                    if (tabInfo.ws !== newWs) return;
+                    if (tabInfo.reconnectWatchdogTimer) {
+                        clearTimeout(tabInfo.reconnectWatchdogTimer);
+                        tabInfo.reconnectWatchdogTimer = null;
+                    }
                     opened = true;
                     tabInfo._perfAttachAt = performance.now();
                     tabInfo._perfWrote = false;
@@ -6680,7 +6730,32 @@ export class TabManager {
                 this._hotOptions(tabInfo),
             );
             tabInfo.ws = newWs;
+            tabInfo.reconnectWatchdogTimer = setTimeout(() => {
+                tabInfo.reconnectWatchdogTimer = null;
+                if (tabInfo.reconnectInFlight && tabInfo.ws === newWs) {
+                    console.warn(
+                        '[term] Reconnect attempt timed out after 10s',
+                    );
+                    tabInfo.reconnectInFlight = false;
+                    try {
+                        newWs.close();
+                    } catch (_e) {}
+                    if (tabInfo.ws === newWs) tabInfo.ws = null;
+                    tabInfo.isDead = true;
+                    if (msgEl) msgEl.innerText = 'Connection timed out';
+                    if (btnEl) {
+                        btnEl.disabled = false;
+                        btnEl.innerText = '⟳ Retry';
+                    }
+                    if (restartBtn) restartBtn.disabled = false;
+                    this.updateDisconnectBanner();
+                }
+            }, 10_000);
         } catch (e) {
+            if (tabInfo.reconnectWatchdogTimer) {
+                clearTimeout(tabInfo.reconnectWatchdogTimer);
+                tabInfo.reconnectWatchdogTimer = null;
+            }
             tabInfo.reconnectInFlight = false;
             if (msgEl) msgEl.innerText = `failed: ${e.message}`;
             if (btnEl) {
@@ -6704,10 +6779,24 @@ export class TabManager {
         if (reconnectBtn) reconnectBtn.disabled = true;
         if (restartBtn) restartBtn.disabled = true;
 
-        if (tabInfo.ws)
+        if (tabInfo.reconnectWatchdogTimer) {
+            clearTimeout(tabInfo.reconnectWatchdogTimer);
+            tabInfo.reconnectWatchdogTimer = null;
+        }
+        if (tabInfo.autoReconnectTimer) {
+            clearTimeout(tabInfo.autoReconnectTimer);
+            tabInfo.autoReconnectTimer = null;
+        }
+        tabInfo.autoReconnectPending = false;
+        tabInfo.reconnectInFlight = false;
+        tabInfo.reconnectAttempts = 0;
+
+        if (tabInfo.ws) {
             try {
                 tabInfo.ws.close();
             } catch (_e) {}
+            tabInfo.ws = null;
+        }
 
         fetch('/api/terminals', {
             method: 'POST',
@@ -6755,12 +6844,15 @@ export class TabManager {
                 const newWs = new PTYWebSocket(
                     tabInfo.paneId,
                     (msg) => {
+                        if (tabInfo.ws !== newWs) return;
                         this._paneData(tabInfo, msg);
                     },
                     (control) => {
+                        if (tabInfo.ws !== newWs) return;
                         this.handleControlMessage(tabInfo, control);
                     },
                     () => {
+                        if (tabInfo.ws !== newWs) return;
                         if (opened) {
                             tabInfo.isDead = true;
                             tabInfo.tabEl.classList.add('dead');
@@ -6768,6 +6860,7 @@ export class TabManager {
                             this._showReconnectOverlay(tabInfo);
                             this.updateDisconnectBanner();
                         } else {
+                            tabInfo.isDead = true;
                             if (msgEl)
                                 msgEl.innerText = 'Session expired (PTY gone)';
                             if (reconnectBtn) reconnectBtn.disabled = false;
@@ -6776,6 +6869,7 @@ export class TabManager {
                         }
                     },
                     () => {
+                        if (tabInfo.ws !== newWs) return;
                         opened = true;
                         tabInfo._perfAttachAt = performance.now();
                         tabInfo._perfWrote = false;
@@ -6909,6 +7003,12 @@ export class TabManager {
                 tabInfo.coder !== 'kanban' &&
                 tabInfo.coder !== 'pi-rpc'
             ) {
+                tabInfo.reconnectAttempts = 0;
+                if (tabInfo.autoReconnectTimer) {
+                    clearTimeout(tabInfo.autoReconnectTimer);
+                    tabInfo.autoReconnectTimer = null;
+                }
+                tabInfo.autoReconnectPending = false;
                 this.reconnectTab(tabInfo, { auto: false });
                 count++;
             }
@@ -6973,6 +7073,10 @@ export class TabManager {
                     tabInfo.coder !== 'pi-rpc'
                 ) {
                     tabInfo.reconnectAttempts = 0;
+                    if (tabInfo.autoReconnectTimer) {
+                        clearTimeout(tabInfo.autoReconnectTimer);
+                        tabInfo.autoReconnectTimer = null;
+                    }
                     tabInfo.autoReconnectPending = false;
                     this.reconnectTab(tabInfo, { auto: true });
                     revived++;
@@ -7001,6 +7105,11 @@ export class TabManager {
             return;
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null) return;
         tabInfo.reconnectAttempts = 0;
+        if (tabInfo.autoReconnectTimer) {
+            clearTimeout(tabInfo.autoReconnectTimer);
+            tabInfo.autoReconnectTimer = null;
+        }
+        tabInfo.autoReconnectPending = false;
         this.reconnectTab(tabInfo, { auto: true });
     }
 
@@ -7019,10 +7128,27 @@ export class TabManager {
         if (tabInfo.exitCode !== undefined && tabInfo.exitCode !== null)
             return false;
 
+        if (tabInfo.autoReconnectTimer) {
+            clearTimeout(tabInfo.autoReconnectTimer);
+            tabInfo.autoReconnectTimer = null;
+        }
+
         if (!tabInfo.reconnectAttempts) tabInfo.reconnectAttempts = 0;
         if (tabInfo.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
             tabInfo.reconnectAttempts = 0;
             tabInfo.autoReconnectPending = false;
+            const overlay =
+                tabInfo.termContainer?.querySelector('.reconnect-overlay');
+            const msgEl = overlay?.querySelector('.reconnect-msg');
+            const btnEl = overlay?.querySelector('.reconnect-btn');
+            const restartBtn = overlay?.querySelector('.restart-btn');
+            if (msgEl) msgEl.innerText = 'Auto-reconnect failed (disconnected)';
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerText = '⟳ Retry';
+            }
+            if (restartBtn) restartBtn.disabled = false;
+            this.updateDisconnectBanner();
             return false;
         }
 
@@ -7044,7 +7170,8 @@ export class TabManager {
         if (msgEl)
             msgEl.innerText = `auto-reconnecting (attempt ${tabInfo.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})...`;
 
-        setTimeout(() => {
+        tabInfo.autoReconnectTimer = setTimeout(() => {
+            tabInfo.autoReconnectTimer = null;
             tabInfo.autoReconnectPending = false;
             if (
                 tabInfo.isDead &&
@@ -7717,6 +7844,12 @@ export class TabManager {
             !tabInfo.reconnectInFlight
         ) {
             if (tabInfo.exitCode === undefined || tabInfo.exitCode === null) {
+                tabInfo.reconnectAttempts = 0;
+                if (tabInfo.autoReconnectTimer) {
+                    clearTimeout(tabInfo.autoReconnectTimer);
+                    tabInfo.autoReconnectTimer = null;
+                }
+                tabInfo.autoReconnectPending = false;
                 this.reconnectTab(tabInfo, { auto: true });
             }
         }

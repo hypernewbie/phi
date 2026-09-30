@@ -235,6 +235,19 @@ export function renderState(state: RailMenuState): void {
   selected = state.profile;
   health = state.health;
   unread = state.unread;
+  if (selected?.accent) {
+    document.documentElement.style.setProperty(
+      '--menu-accent',
+      selected.accent,
+    );
+    document.documentElement.style.setProperty(
+      '--menu-accent-soft',
+      `color-mix(in srgb, ${selected.accent} 14%, transparent)`,
+    );
+  } else {
+    document.documentElement.style.removeProperty('--menu-accent');
+    document.documentElement.style.removeProperty('--menu-accent-soft');
+  }
   render();
 }
 

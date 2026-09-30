@@ -1785,7 +1785,7 @@ export class App {
         const title =
             opts.title ||
             (type === 'error'
-                ? "Couldn't open session"
+                ? 'Error'
                 : type === 'success'
                   ? 'Done'
                   : 'Notice');

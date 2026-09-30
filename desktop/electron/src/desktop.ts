@@ -1636,7 +1636,8 @@ export class DesktopHost {
 
     const isClipboardPermission = (permission: string): boolean =>
       permission === 'clipboard-read' ||
-      permission === 'clipboard-sanitized-write';
+      permission === 'clipboard-sanitized-write' ||
+      permission === 'clipboard-write';
 
     const isTrustedFrame = (
       contents: WebContents | null,
@@ -3487,7 +3488,7 @@ export class DesktopHost {
     ipcMain.on(
       'phi:open-rail-menu',
       (event, id: unknown, screenX: unknown, screenY: unknown) => {
-        if (!isRailSender(event)) return;
+        if (!isRailSender(event) && !isMainViewSender(event)) return;
         if (
           typeof id !== 'string' ||
           id === '' ||

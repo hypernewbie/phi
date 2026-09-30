@@ -16,7 +16,7 @@
  *     sandboxed WebContentsView children with no preload bridge.
  */
 import { app, ipcMain } from 'electron';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopHost } from './desktop.js';
@@ -111,6 +111,45 @@ if (process.env.PHI_DESKTOP_SMOKE === '1') {
   } catch {
     // Non-fatal
   }
+}
+
+// Treat configured and startup server origins as secure origins so Chromium enables
+// standard ClipboardItem / navigator.clipboard.write in profile WebContentsViews.
+try {
+  const insecureOrigins = new Set<string>();
+  const profilesPath = path.join(app.getPath('userData'), 'profiles.json');
+  if (existsSync(profilesPath)) {
+    const raw = readFileSync(profilesPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.profiles)) {
+      for (const p of parsed.profiles) {
+        if (typeof p?.origin === 'string' && p.origin.startsWith('http://')) {
+          try {
+            insecureOrigins.add(new URL(p.origin).origin);
+          } catch {}
+        }
+      }
+    }
+  }
+  if (bootArgs.server && bootArgs.server.startsWith('http://')) {
+    try {
+      insecureOrigins.add(new URL(bootArgs.server).origin);
+    } catch {}
+  }
+  const envServer = process.env.PHI_DESKTOP_SERVER_URL;
+  if (envServer && envServer.startsWith('http://')) {
+    try {
+      insecureOrigins.add(new URL(envServer).origin);
+    } catch {}
+  }
+  if (insecureOrigins.size > 0) {
+    app.commandLine.appendSwitch(
+      'unsafely-treat-insecure-origin-as-secure',
+      [...insecureOrigins].join(','),
+    );
+  }
+} catch {
+  // Non-fatal
 }
 
 const host = new DesktopHost();
