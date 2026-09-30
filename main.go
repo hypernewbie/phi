@@ -540,6 +540,13 @@ var bannerColors = map[string][]int{
 	"neon":    {0, 240, 255},
 	"coral":   {224, 122, 95},
 	"fuchsia": {217, 70, 239},
+	"arc":     {0, 212, 255},
+	"ember":   {255, 69, 0},
+	"fog":     {148, 163, 184},
+	"ash":     {168, 162, 158},
+	"dusk":    {184, 169, 201},
+	"pine":    {132, 165, 157},
+	"fern":    {156, 175, 136},
 }
 
 func printWelcomeBanner(cfg Config, addrs []bindaddr.Addr, port int) {

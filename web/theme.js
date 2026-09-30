@@ -133,6 +133,48 @@ export const ACCENT_COLORS = {
         accentDim: '#1a8a4a',
         accentBright: '#7bed9f',
     },
+    arc: {
+        accent: '#00d4ff',
+        accentGlow: 'rgba(0, 212, 255, 0.18)',
+        accentDim: '#0080c0',
+        accentBright: '#66e0ff',
+    },
+    ember: {
+        accent: '#ff4500',
+        accentGlow: 'rgba(255, 69, 0, 0.18)',
+        accentDim: '#cc2200',
+        accentBright: '#ff7733',
+    },
+    fog: {
+        accent: '#94a3b8',
+        accentGlow: 'rgba(148, 163, 184, 0.18)',
+        accentDim: '#64748b',
+        accentBright: '#cbd5e1',
+    },
+    ash: {
+        accent: '#a8a29e',
+        accentGlow: 'rgba(168, 162, 158, 0.18)',
+        accentDim: '#78716c',
+        accentBright: '#d6d3d1',
+    },
+    dusk: {
+        accent: '#b8a9c9',
+        accentGlow: 'rgba(184, 169, 201, 0.18)',
+        accentDim: '#7c6f8a',
+        accentBright: '#d4cae0',
+    },
+    pine: {
+        accent: '#84a59d',
+        accentGlow: 'rgba(132, 165, 157, 0.18)',
+        accentDim: '#5b7065',
+        accentBright: '#a8c2bc',
+    },
+    fern: {
+        accent: '#9caf88',
+        accentGlow: 'rgba(156, 175, 136, 0.18)',
+        accentDim: '#6b8e5f',
+        accentBright: '#bccbab',
+    },
 };
 
 export function applyThemeTokens(colorKey) {
