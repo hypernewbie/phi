@@ -4,12 +4,12 @@ import { setupDomHarness, mockFetch } from './_dom.js';
 import { App } from '../web/app.js';
 // ACCENT_COLORS is not exported from web/app.js (it's a private const).
 // Importing the module for side effects would still work, but vitest's
-// import is the App class only. We assert the swatch count is 22 by
-// pinning the value (matches the documented 22 themes mirroring bonus/).
-const ACCENT_COLORS_KEY_COUNT = 22;
+// import is the App class only. We assert the swatch count is 29 by
+// pinning the value (matches the documented 29 themes mirroring bonus/).
+const ACCENT_COLORS_KEY_COUNT = 29;
 
 // Settings modal — the new "Config" button in the header pill opens a
-// modal with: 22-swatch accent grid, UI font (select), UI font size
+// modal with: 29-swatch accent grid, UI font (select), UI font size
 // (number), terminal font (select) + terminal font size (number),
 // "reuse shell tab" toggle, and an About group showing Φ logo +
 // version + hostname.
@@ -63,7 +63,7 @@ function buildApp(overrides = {}) {
 }
 
 describe('Settings modal — trigger', () => {
-    it('modal renders the 22 accent swatches', async () => {
+    it('modal renders the 29 accent swatches', async () => {
         makeAppDom();
         const app = buildApp();
         app.openSettingsModal();

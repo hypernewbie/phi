@@ -20,9 +20,9 @@ describe('theme.js & prepaint parity', () => {
         localStorage.clear();
     });
 
-    it('exports all 22 accent color themes', () => {
+    it('exports all 29 accent color themes', () => {
         const keys = Object.keys(ACCENT_COLORS);
-        expect(keys.length).toBe(22);
+        expect(keys.length).toBe(29);
         expect(keys).toContain('purple');
         expect(keys).toContain('blue');
         expect(keys).toContain('green');
@@ -45,6 +45,13 @@ describe('theme.js & prepaint parity', () => {
         expect(keys).toContain('canary');
         expect(keys).toContain('copper');
         expect(keys).toContain('mint');
+        expect(keys).toContain('arc');
+        expect(keys).toContain('ember');
+        expect(keys).toContain('fog');
+        expect(keys).toContain('ash');
+        expect(keys).toContain('dusk');
+        expect(keys).toContain('pine');
+        expect(keys).toContain('fern');
     });
 
     it('applyThemeTokens applies CSS properties and data-theme-color attribute', () => {
