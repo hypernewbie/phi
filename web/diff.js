@@ -2414,9 +2414,9 @@ export class DiffController {
             const label = commitVal === 'staged'
                 ? 'staged changes'
                 : 'unstaged working tree changes';
-            return `Please address the following code review feedback on ${label} relative to HEAD \`${head}\` in workspace \`${workspace}\`:`;
+            return `Below is a code review on ${label} relative to HEAD \`${head}\` in workspace \`${workspace}\`. Read each comment carefully and respond to what the reviewer actually wrote — these notes are heterogeneous (questions, observations, requests, criticisms), and not every comment is a request for a code change.`;
         }
-        return `Please address the following code review feedback on git revision \`${commitVal}\` in workspace \`${workspace}\`:`;
+        return `Below is a code review on git revision \`${commitVal}\` in workspace \`${workspace}\`. Read each comment carefully and respond to what the reviewer actually wrote — these notes are heterogeneous (questions, observations, requests, criticisms), and not every comment is a request for a code change.`;
     }
     _buildPromptEngineeredReview() {
         const comments = this._sortedReviewComments();
@@ -2434,21 +2434,25 @@ export class DiffController {
                 `> \`\`\`${lang}`,
                 snippet,
                 `> \`\`\``,
-                `**Requested Change:**`,
+                `**Reviewer said:**`,
                 c.commentText,
             ].join('\n'));
         });
         const tail = [
             '---',
-            '### Instructions for Assistant:',
-            '1. Locate the exact code locations referenced above in the current workspace.',
-            "2. Implement all requested changes surgically, maintaining the codebase's existing architecture, style, and comments.",
-            '3. Verify your changes (build, tests, or linters) before finishing.',
+            '### How to respond:',
+            '1. For each numbered item above, decide what the reviewer is actually asking for. A comment may be a question ("why X?"), an observation, a suggestion, a criticism, or an explicit request — handle each on its own terms.',
+            '2. If the reviewer asked a question, ANSWER it in plain prose. Do not silently rewrite code.',
+            '3. If the reviewer made a suggestion, evaluate it on the merits. You may agree and implement it, or disagree and explain why. Do not treat suggestions as orders.',
+            '4. If the reviewer requested a code change you consider wrong or destructive, push back and explain the concern rather than complying. Compliance with a bad review is a worse outcome than a missed change.',
+            '5. Do not invent code edits the reviewer did not ask for. Do not "fix" things the reviewer was merely curious about.',
+            '6. When you do edit code, keep changes scoped to the file and line range cited above; preserve surrounding architecture, style, and comments; verify the build / tests / linters after.',
+            '7. If a comment is ambiguous, prefer answering what the reviewer literally asked over guessing an implementation.',
         ].join('\n');
         return [
             header,
             '',
-            `### Code Review Feedback (${comments.length} item${comments.length === 1 ? '' : 's'})`,
+            `### Reviewer comments (${comments.length} item${comments.length === 1 ? '' : 's'})`,
             '',
             blocks.join('\n\n'),
             '',
