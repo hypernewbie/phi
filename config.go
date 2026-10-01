@@ -90,6 +90,13 @@ type Config struct {
 	// default, so a missing key in an existing config file changes nothing.
 	PiOffline bool `json:"pi_offline"`
 
+	// OpenCode defaults to v2's scrollback-based mini interface. Legacy
+	// selects v1's full-screen TUI. These startup-only options require a
+	// Phi restart; they never change the mode of a live terminal.
+	OpenCodeLegacy        bool   `json:"opencode_legacy"`
+	OpenCodeCommand       string `json:"opencode_command,omitempty"`
+	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty"`
+
 	// ClaudeDangerouslySkipPermissions passes --dangerously-skip-permissions
 	// to the claude coder. Opt-in because the flag's name is honest about
 	// what it disables: every Claude tool call that would normally prompt

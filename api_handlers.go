@@ -19,6 +19,7 @@ import (
 
 	"github.com/hypernewbie/phi/pkg/clipboard"
 	"github.com/hypernewbie/phi/pkg/coders"
+	"github.com/hypernewbie/phi/pkg/pty"
 	"github.com/hypernewbie/phi/pkg/session"
 	"github.com/hypernewbie/phi/pkg/system"
 	"github.com/hypernewbie/phi/pkg/update"
@@ -337,8 +338,22 @@ type SpawnRequest struct {
 func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		instances := ptyManager.ListActive()
+		type terminalView struct {
+			*pty.PTYInstance
+			OpenCodeMode string `json:"opencode_mode,omitempty"`
+		}
+		views := make([]terminalView, 0, len(instances))
+		for _, inst := range instances {
+			mode := ""
+			if coderManager != nil {
+				if c, ok := coderManager.Get(inst.Coder); ok {
+					mode = c.OpenCodeMode
+				}
+			}
+			views = append(views, terminalView{inst, mode})
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(instances)
+		_ = json.NewEncoder(w).Encode(views)
 		return
 	}
 
@@ -359,10 +374,15 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		for _, inst := range ptyManager.ListActive() {
 			if inst.Coder == req.Coder && inst.SessionID == req.SessionID {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]string{
-					"pane_id":    inst.ID,
-					"session_id": inst.SessionID,
-				})
+				mode := ""
+				if c, ok := coderManager.Get(inst.Coder); ok {
+					mode = c.OpenCodeMode
+				}
+				payload := map[string]string{"pane_id": inst.ID, "session_id": inst.SessionID}
+				if mode != "" {
+					payload["opencode_mode"] = mode
+				}
+				_ = json.NewEncoder(w).Encode(payload)
 				return
 			}
 		}
@@ -392,6 +412,17 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := coders.VerifyOpenCode(r.Context(), c); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if c.SessionSource == "opencode_v2" && req.SessionID != "" {
+		if err := session.ValidateOpenCodeV2Resume(r.Context(), c, req.SessionID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	spawnDir := plan.Cwd
 
 	inst, err := ptyManager.Spawn(r.Context(), spawnDir, plan.Command, plan.Args, req.Coder, req.SessionID, plan.Env)
@@ -416,10 +447,11 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	ws.StartPTYReadLoop(inst, wsHub)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"pane_id":    inst.ID,
-		"session_id": inst.SessionID,
-	})
+	payload := map[string]string{"pane_id": inst.ID, "session_id": inst.SessionID}
+	if c.OpenCodeMode != "" {
+		payload["opencode_mode"] = c.OpenCodeMode
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 type MetaRequest struct {

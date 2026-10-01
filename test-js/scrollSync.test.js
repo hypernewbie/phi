@@ -149,7 +149,7 @@ function stubXtermGlobals() {
 // events exercises the actual listeners createTab installs. Every call
 // gets its own TabManager with a fresh `tabs` Map, so a fixed paneId
 // never collides across tests — no caller needs to pick one.
-function mountRealTab({ coder = 'bash' } = {}) {
+function mountRealTab({ coder = 'bash', opencodeMode = null } = {}) {
     vi.stubGlobal('requestAnimationFrame', (fn) => {
         fn();
         return 1;
@@ -168,7 +168,19 @@ function mountRealTab({ coder = 'bash' } = {}) {
     // pinned:false skips the fire-and-forget backend pin fetch(), which
     // has nothing to do with the listeners under test and would otherwise
     // reject noisily against jsdom's relative-URL fetch.
-    tm.createTab('p1', 'sess-p1', 'Title', coder, '', '', false);
+    tm.createTab(
+        'p1',
+        'sess-p1',
+        'Title',
+        coder,
+        '',
+        '',
+        false,
+        false,
+        '',
+        null,
+        opencodeMode,
+    );
     const tab = tm.tabs.get('p1');
     // The stub WebSocket never fires onopen, so the deferred open never
     // runs on its own. Production opens on ATTACH_HEAD / first legacy
@@ -176,6 +188,46 @@ function mountRealTab({ coder = 'bash' } = {}) {
     tm._openTermAndViewport(tab);
     return tab;
 }
+
+describe('OpenCode 2 Mini normal scrollback', () => {
+    it('does not intercept wheel gestures or inject legacy TUI scroll keys', () => {
+        const tab = mountRealTab({ coder: 'opencode', opencodeMode: 'mini' });
+        setViewportScrollMetrics(tab, {
+            scrollTop: 50,
+            clientHeight: 100,
+            scrollHeight: 1000,
+        });
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        const wheel = new WheelEvent('wheel', {
+            deltaY: -120,
+            bubbles: true,
+            cancelable: true,
+        });
+        tab.termContainer.dispatchEvent(wheel);
+        expect(tab.opencodeMode).toBe('mini');
+        expect(wheel.defaultPrevented).toBe(false);
+        expect(send).not.toHaveBeenCalled();
+    });
+
+    it('leaves mobile touch scrolling to xterm instead of sending legacy keyboard navigation', () => {
+        const tab = mountRealTab({ coder: 'opencode', opencodeMode: 'mini' });
+        const send = vi.spyOn(tab.ws, 'sendInput');
+        const start = new Event('touchstart', {
+            bubbles: true,
+            cancelable: true,
+        });
+        Object.assign(start, { touches: [{ clientY: 200 }] });
+        const move = new Event('touchmove', {
+            bubbles: true,
+            cancelable: true,
+        });
+        Object.assign(move, { touches: [{ clientY: 100 }] });
+        tab.termContainer.dispatchEvent(start);
+        tab.termContainer.dispatchEvent(move);
+        expect(move.defaultPrevented).toBe(false);
+        expect(send).not.toHaveBeenCalled();
+    });
+});
 
 describe('DOM scroll listener installed by createTab (drives the real handler)', () => {
     it('re-engages follow at the exact bottom, and hides the scroll-to-bottom button', () => {

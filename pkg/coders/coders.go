@@ -59,6 +59,7 @@ type Coder struct {
 	WindowsPowerShellWrap *bool             `json:"windows_powershell_wrap,omitempty"`
 	InputMode             string            `json:"input_mode"` // "staged" | "direct"
 	ModelSwitchDisabled   bool              `json:"model_switch_disabled"`
+	OpenCodeMode          string            `json:"opencode_mode,omitempty"` // "mini" (v2) | "legacy" (v1)
 	Capabilities          Capabilities      `json:"capabilities"`
 }
 
@@ -87,9 +88,10 @@ func DefaultRegistry() map[string]Coder {
 			Name:                  "OpenCode",
 			ShortLabel:            "OpenCode",
 			Command:               "opencode",
-			Args:                  []string{},
+			Args:                  []string{"mini"},
 			ResumeArgs:            []string{"--session", "{session_id}"},
-			SessionSource:         "opencode_sqlite",
+			SessionSource:         "opencode_v2",
+			OpenCodeMode:          "mini",
 			SidebarVisible:        true,
 			IsShell:               false,
 			WindowsPowerShellWrap: &opencodeWrap,
@@ -98,17 +100,14 @@ func DefaultRegistry() map[string]Coder {
 			Capabilities:          Capabilities{List: true, Transcript: true},
 			Presets: []Preset{
 				{Name: "/exit", Value: "/exit\r"},
-				{Name: "/context", Value: "/context\r"},
-				{Name: "/model", Value: "/model\r"},
 				{Name: "/compact", Value: "/compact\r"},
-				{Name: "/undo", Value: "/undo\r"},
-				{Name: "/copy", Value: "/copy\r"},
-				{Name: "/sessions", Value: "/sessions\r"},
+				{Name: "/new", Value: "/new\r"},
+				{Name: "/settings", Value: "/settings\r"},
+				{Name: "menu", Value: "\x10"},
+				{Name: "clear", Value: "\x0c"},
 				{Name: "ctrl+c", Value: "\x03"},
-				{Name: "ctrl+o", Value: "\x0f"},
 				{Name: "y↵", Value: "y\r"},
 				{Name: "esc", Value: "\x1b"},
-				{Name: "/clear", Value: "/clear\r"},
 			},
 		},
 		"claude": {
@@ -267,6 +266,7 @@ func frozenCoder(in Coder) Coder {
 		IsShell:             in.IsShell,
 		InputMode:           in.InputMode,
 		ModelSwitchDisabled: in.ModelSwitchDisabled,
+		OpenCodeMode:        in.OpenCodeMode,
 		Capabilities:        in.Capabilities,
 	}
 	if in.Args != nil {
@@ -312,8 +312,25 @@ type Manager struct {
 // It does NOT scan any filesystem; LoadFromDir is a separate step
 // so the resolver never reads disk on the hot path.
 func NewManager() *Manager {
+	return NewManagerWithOptions(BuiltinOptions{})
+}
+
+func NewManagerWithOptions(opts BuiltinOptions) *Manager {
 	m := &Manager{}
 	defaults := DefaultRegistry()
+	oc := defaults["opencode"]
+	if opts.OpenCodeLegacy {
+		oc.Args = []string{}
+		oc.SessionSource = "opencode_sqlite"
+		oc.OpenCodeMode = "legacy"
+		oc.Presets = legacyOpenCodePresets()
+		if opts.OpenCodeLegacyCommand != "" {
+			oc.Command = opts.OpenCodeLegacyCommand
+		}
+	} else if opts.OpenCodeCommand != "" {
+		oc.Command = opts.OpenCodeCommand
+	}
+	defaults["opencode"] = oc
 	m.data = make(map[string]Coder, len(defaults))
 	for id, c := range defaults {
 		m.data[id] = frozenCoder(c)
@@ -436,6 +453,7 @@ var knownSessionSources = map[string]bool{
 	"":                true, // == none
 	"none":            true,
 	"opencode_sqlite": true,
+	"opencode_v2":     true,
 	"claude_files":    true,
 	"pi_files":        true,
 	"agy_files":       true,

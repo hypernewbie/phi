@@ -132,7 +132,11 @@ func main() {
 
 	// Initialize PTY and WebSocket subsystems
 	ptyManager = pty.NewManager()
-	coderManager = coders.NewManager()
+	coderManager = coders.NewManagerWithOptions(coders.BuiltinOptions{
+		OpenCodeLegacy:        cfg.OpenCodeLegacy,
+		OpenCodeCommand:       cfg.OpenCodeCommand,
+		OpenCodeLegacyCommand: cfg.OpenCodeLegacyCommand,
+	})
 	// Load custom backend files from ~/.phi/backends/*.json. Built-ins
 	// are already seeded by NewManager; custom profiles patch / add.
 	// Per-file failures are logged inside LoadFromDir and skipped so a

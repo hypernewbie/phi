@@ -1033,6 +1033,15 @@ export class SessionsManager {
                 this.activeCoder,
                 this.activeWorkspace,
                 this.activeCWD,
+                ...(this.activeCoder === 'opencode'
+                    ? [
+                          true,
+                          false,
+                          '',
+                          null,
+                          data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                      ]
+                    : []),
             );
 
             this.loadSessions();
@@ -1072,6 +1081,15 @@ export class SessionsManager {
                 this.activeCoder,
                 this.activeWorkspace,
                 this.activeCWD,
+                ...(this.activeCoder === 'opencode'
+                    ? [
+                          true,
+                          false,
+                          '',
+                          null,
+                          data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                      ]
+                    : []),
             );
 
             this.highlightActiveSession(sessionId);

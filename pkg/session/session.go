@@ -58,6 +58,7 @@ var adapterFactories = map[string]AdapterFactory{
 	"":                noneAdapter,
 	"none":            noneAdapter,
 	"opencode_sqlite": opencodeAdapter,
+	"opencode_v2":     opencodeV2Adapter,
 	"claude_files":    claudeAdapter,
 	"pi_files":        piAdapter,
 	"agy_files":       agyAdapter,

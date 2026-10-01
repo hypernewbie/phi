@@ -131,11 +131,40 @@ State is stored in `~/.phi/`:
 
 Both are created automatically. `config.json` also holds an optional browser-derived access-password verifier; an empty value disables access protection. Set or clear it from **Config** rather than editing it by hand. Phi's access password protects casual LAN/Tailnet access, but HTTPS is still required against an active hostile-network attacker.
 
+### OpenCode 2 (default)
+
+Phi starts OpenCode 2 with `opencode mini`, not the full-screen TUI. Both v1 and v2 use the `opencode` executable name. Install v2 on the machine that runs Phi, following the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/). Phi does not install or replace either CLI.
+
+The default in `~/.phi/config.json` is:
+
+```json
+{ "opencode_legacy": false }
+```
+
+To keep using v1:
+
+```json
+{
+  "opencode_legacy": true,
+  "opencode_legacy_command": "opencode-v1"
+}
+```
+
+If v1 is still the `opencode` on Phi's `PATH`, only `"opencode_legacy": true` is needed. For separate installations, set `opencode_command` to the v2 executable and `opencode_legacy_command` to the v1 executable. These values are executable names or absolute paths, not shell commands. Keep a working v1 installation before replacing it; copying a package-manager wrapper alone may not preserve its dependencies.
+
+Restart Phi and refresh the browser after changing these options or installing v2. Phi checks the selected CLI generation before launch. It does not silently fall back to v1 or launch v2's full TUI.
+
+Mini uses normal terminal scrollback and atomic slash-command pastes. The old keyboard-scroll and delayed-Enter workarounds remain scoped to legacy tabs. Its preset buttons use Mini's supported commands. Model presets must use `provider/model`; selection uses Mini's native Ctrl+P menu. Select model variants through that menu rather than putting `#variant` in a Phi model preset. Custom Mini keybindings can require manual menu selection.
+
+V2 history uses its `session_v2` and `session_message` tables. Phi asks `opencode debug paths db` for the database location and reads it without writing or migrating it. Start a new Mini session once to let OpenCode migrate v1 history, then refresh Phi's session list. A missing resume ID is rejected rather than creating an empty conversation. The legacy option keeps the original v1 history reader; it does not convert v2 sessions back to v1.
+
+Custom backend files still override the built-in defaults. Keep `"mini"` as the first argument when overriding v2 Mini's argv.
+
 ## Supported assistants
 
 | ID         | Name         | Command    | Session source                                   |
 | ---------- | ------------ | ---------- | ------------------------------------------------ |
-| `opencode` | OpenCode     | `opencode` | `~/.local/share/opencode/opencode.db` (SQLite)   |
+| `opencode` | OpenCode 2 Mini | `opencode mini` | CLI-resolved SQLite v2 database; v1 reader with `opencode_legacy` |
 | `claude`   | Claude Code  | `claude`   | `~/.claude/projects/` (JSONL)                    |
 | `agy`      | Antigravity  | `agy`      | `~/.gemini/antigravity-cli/conversations/` (`.pb`)|
 | `pi`       | Pi Coder     | `pi`       | Pi session files                                 |

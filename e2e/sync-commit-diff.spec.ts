@@ -51,7 +51,11 @@ test('a show-commit card selects an older hash and opens that hash in the pretty
         return route.fulfill({ contentType: 'text/plain', body: RAW_DIFF });
     });
     await page.goto(phi.url);
-    await page.locator('#diff-term-container .xterm').first().waitFor();
+    // The panel may start hidden; wait for initialization, then open it.
+    await page
+        .locator('#diff-term-container .xterm')
+        .first()
+        .waitFor({ state: 'attached' });
     if (
         await page
             .locator('#diff-panel')

@@ -38,6 +38,8 @@ import {
 import {
     executeRecipe,
     recipeFor,
+    isOpenCodeMini,
+    opencodeMiniRecipe,
     logoFor,
     inputMode,
     hasModelSwitch,
@@ -1061,6 +1063,9 @@ export class TabManager {
                     t.cwd || '',
                     !!t.pinned,
                     !!t.marked,
+                    ...(t.coder === 'opencode'
+                        ? ['', null, t.opencode_mode === 'mini' ? 'mini' : 'legacy']
+                        : []),
                 );
             }
             // Apply the user's drag-reorder (if any) from localStorage. Stale
@@ -2596,6 +2601,7 @@ export class TabManager {
         marked = false,
         initialCmd = '',
         piRpcSessionPath = null,
+        opencodeMode = null,
     ) {
         // If tab already exists, just switch to it
         if (this.tabs.has(paneId)) {
@@ -2955,14 +2961,13 @@ export class TabManager {
             }
         });
 
-        // Opencode scroll fix: intercept in capture phase before xterm.js can consume the event
-        // Scoped strictly to opencode tabs – all other coders pass through untouched.
-        // We always send Ctrl+Alt+Y / Ctrl+Alt+E to the TUI regardless of alternate buffer detection,
-        // as OpenCode is a full-screen TUI application and doesn't use standard terminal scrollback.
+        // Legacy OpenCode's full-screen TUI needs keyboard scroll events.
+        // Mini uses normal xterm scrollback: never intercept its wheel or
+        // touch gestures and never inject TUI navigation keys into it.
         termContainer.addEventListener(
             'wheel',
             (e) => {
-                if (tabInfo.coder !== 'opencode') return;
+                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
 
                 const isUp = e.deltaY < 0;
 
@@ -2990,7 +2995,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchstart',
             (e) => {
-                if (tabInfo.coder !== 'opencode') return;
+                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1) {
                     termTouchStartY = e.touches[0].clientY;
                     termTouchRemainder = 0;
@@ -3002,7 +3007,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchmove',
             (e) => {
-                if (tabInfo.coder !== 'opencode') return;
+                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
                     const currentY = e.touches[0].clientY;
                     const rawDelta = currentY - termTouchStartY;
@@ -3100,6 +3105,11 @@ export class TabManager {
             coder,
             workspace: activeWS,
             cwd: activeCWD,
+            // Pin the server's launch mode to this pane. Older servers and
+            // profiles with no advertised mode retain legacy behavior.
+            opencodeMode: coder === 'opencode'
+                ? (opencodeMode || getCoder(coder)?.opencode_mode || 'legacy')
+                : null,
             term,
             fitAddon,
             searchAddon,
@@ -6489,20 +6499,20 @@ export class TabManager {
     }
 
     /**
-     * OpenCode must process a bracketed-paste event before it receives Enter,
-     * or it can discard Enter while updating the command input. Keep its 200ms
-     * gap, but pin the delayed keypress to the tab clicked by the user. Pi
-     * accepts the atomic form and keeps it to avoid an unnecessary delay.
+     * Legacy OpenCode can discard Enter while updating a pasted command.
+     * Keep its 200ms gap pinned to the clicked tab. V2 Mini queues Enter
+     * behind a pending paste, so it uses the atomic form, like Pi.
      */
     sendSlashCommand(tabInfo, cmd) {
         if (tabInfo?.coder === 'pi-rpc') return false;
         const paste = `\x1b[200~${cmd}\x1b[201~`;
+        const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
         const sent = this.sendToTab(
             tabInfo,
-            tabInfo.coder === 'opencode' ? paste : `${paste}\r`,
+            legacyOpenCode ? paste : `${paste}\r`,
         );
         if (!sent) return false;
-        if (tabInfo.coder === 'opencode') {
+        if (legacyOpenCode) {
             setTimeout(() => {
                 this.sendToTab(tabInfo, '\r');
             }, 200);
@@ -6891,6 +6901,9 @@ export class TabManager {
                 // Update paneId and sessionId
                 tabInfo.paneId = data.pane_id;
                 tabInfo.sessionId = data.session_id;
+                if (tabInfo.coder === 'opencode') {
+                    tabInfo.opencodeMode = data.opencode_mode === 'mini' ? 'mini' : 'legacy';
+                }
 
                 // Update DOM element references to synchronise new IDs
                 tabInfo.tabEl.setAttribute('data-pane-id', data.pane_id);
@@ -8597,14 +8610,19 @@ export class TabManager {
                 // tab (activeTab captured at render) so a tab switch
                 // mid-chain cannot redirect the puppet sequence.
                 //
-                // The opencode / pi / claude paths match the historical
-                // timings from the original dropup exactly — they
-                // remain on setTimeout chains so test-js coverage of
-                // the byte-by-byte timings stays green. Custom
-                // profiles that declare a model_switch recipe go
-                // through the bounded executor in web-src/coders.ts
-                // (R7's seven invariants).
-                const recipe = recipeFor(backend);
+                // Legacy OpenCode / Pi / Claude retain their historical
+                // timings. Mini uses its own native command/model menus
+                // through the bounded executor, with the same pane pin
+                // and cancellation rules as custom recipes.
+                let recipe = recipeFor(backend);
+                if (isOpenCodeMini(activeTab)) {
+                    try {
+                        recipe = opencodeMiniRecipe(model);
+                    } catch (err) {
+                        this.app.showToast(err.message, { type: 'error', title: 'Models' });
+                        return;
+                    }
+                }
                 if (recipe) {
                     const paneId =
                         activeTab.paneId || activeTab.tabId || activeTab.id;

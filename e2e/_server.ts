@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -48,9 +48,18 @@ async function waitForHealth(port: number): Promise<void> {
     }
 }
 
-export async function startPhi(): Promise<PhiServer> {
+export async function startPhi(
+    options: { config?: Record<string, unknown> } = {},
+): Promise<PhiServer> {
     const dir = mkdtempSync(join(tmpdir(), 'phi-e2e-'));
     mkdirSync(join(dir, 'home'), { recursive: true });
+    if (options.config) {
+        mkdirSync(join(dir, 'home', '.phi'), { recursive: true });
+        writeFileSync(
+            join(dir, 'home', '.phi', 'config.json'),
+            JSON.stringify(options.config),
+        );
+    }
 
     const port = await freePort();
     const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
