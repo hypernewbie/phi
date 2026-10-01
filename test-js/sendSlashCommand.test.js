@@ -134,6 +134,66 @@ function makeTab(paneId, coder = 'pi', { dead = false, wsReady = true } = {}) {
     };
 }
 
+describe('OpenCode 2 Mini command and model input', () => {
+    it('sends slash paste plus Enter atomically, without a delayed legacy Enter', () => {
+        const tm = makeTm();
+        const mini = makeTab('mini', 'opencode');
+        mini.opencodeMode = 'mini';
+        const other = makeTab('other', 'pi');
+        tm.tabs.set(mini.paneId, mini);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = mini.paneId;
+        expect(tm.sendSlashCommand(mini, '/compact')).toBe(true);
+        tm.activePaneId = other.paneId;
+        vi.runAllTimers();
+        expect(mini.ws.sendInput.mock.calls).toEqual([
+            ['\x1b[200~/compact\x1b[201~\r'],
+        ]);
+        expect(other.ws.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('uses Mini’s native command/model menus and pins all steps to the original pane', async () => {
+        const tm = makeTm();
+        tm.app.tabManager = tm;
+        tm.app.modelPresets.opencode = ['opencode/big-pickle'];
+        const mini = makeTab('mini', 'opencode');
+        mini.opencodeMode = 'mini';
+        mini.term = {};
+        const other = makeTab('other', 'pi');
+        tm.tabs.set(mini.paneId, mini);
+        tm.tabs.set(other.paneId, other);
+        tm.activePaneId = mini.paneId;
+        tm.renderModelDropup();
+        document.querySelector('.dropup-model-btn').click();
+        tm.activePaneId = other.paneId;
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(mini.ws.sendInput.mock.calls).toEqual([
+            ['\x10'],
+            ['Switch model'],
+            ['\r'],
+            ['opencode big-pickle'],
+            ['\r'],
+        ]);
+        expect(other.ws.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('rejects ambiguous model presets before sending any input', () => {
+        const tm = makeTm();
+        tm.app.modelPresets.opencode = ['bare-model'];
+        const mini = makeTab('mini', 'opencode');
+        mini.opencodeMode = 'mini';
+        tm.tabs.set(mini.paneId, mini);
+        tm.activePaneId = mini.paneId;
+        tm.renderModelDropup();
+        document.querySelector('.dropup-model-btn').click();
+        expect(mini.ws.sendInput).not.toHaveBeenCalled();
+        expect(tm.app.showToast).toHaveBeenCalledWith(
+            expect.stringContaining('provider/model'),
+            expect.objectContaining({ type: 'error' }),
+        );
+    });
+});
+
 beforeEach(() => {
     const makeElement = (tag, id, className = '', textContent = '') => {
         const element = document.createElement(tag);

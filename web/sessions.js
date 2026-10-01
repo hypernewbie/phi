@@ -845,7 +845,15 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to spawn session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD, ...(this.activeCoder === 'opencode'
+                ? [
+                    true,
+                    false,
+                    '',
+                    null,
+                    data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                ]
+                : []));
             this.loadSessions();
         }
         catch (e) {
@@ -871,7 +879,15 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to connect session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD, ...(this.activeCoder === 'opencode'
+                ? [
+                    true,
+                    false,
+                    '',
+                    null,
+                    data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                ]
+                : []));
             this.highlightActiveSession(sessionId);
         }
         catch (e) {

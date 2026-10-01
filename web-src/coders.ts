@@ -35,6 +35,7 @@ export interface CoderDescriptor {
     presets?: Array<{ name: string; value: string }>;
     capabilities: CoderCapabilities;
     model_switch_disabled: boolean;
+    opencode_mode?: 'mini' | 'legacy';
 }
 
 export interface RecipeStep {
@@ -47,7 +48,7 @@ export interface Recipe {
 }
 
 // Max wall-clock duration an executor will spend on one recipe. The
-// largest built-in (opencode) is 4 steps × 350ms = ~1.4s; 5s is a
+// largest built-in (OpenCode Mini) is 5 steps with ~1.4s of waits; 5s is a
 // generous ceiling that still aborts runaway recipes quickly. R7.
 const MAX_RECIPE_TOTAL_MS = 5000;
 
@@ -283,6 +284,10 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
             : [],
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
+        opencode_mode:
+            r.opencode_mode === 'mini' || r.opencode_mode === 'legacy'
+                ? r.opencode_mode
+                : undefined,
     };
 }
 
@@ -560,6 +565,31 @@ function containsControlChar(s: string): boolean {
 // is intentional: the recipes are small, server-owned, and the
 // client never invents new ones. If a future server-side change adds
 // a step, the client version updates too.
+
+export function isOpenCodeMini(
+    tab: { coder?: string; opencodeMode?: string } | null | undefined,
+): boolean {
+    return tab?.coder === 'opencode' && tab.opencodeMode === 'mini';
+}
+
+export function opencodeMiniRecipe(model: string): Recipe {
+    // Mini has no /models slash command. Its picker indexes provider and
+    // model as separate words, not the CLI's provider/model reference.
+    const ref = model.match(/^([^/\s#]+)\/([^\s#]+)$/);
+    if (!ref || containsControlChar(model))
+        throw new Error(
+            'OpenCode 2 model presets must use provider/model. Select variants in Mini’s native menu.',
+        );
+    return {
+        steps: [
+            { send: '\x10' }, // Mini's Ctrl+P menu (not the full TUI's leader)
+            { send: 'Switch model', delay_ms: 350 },
+            { send: '\r', delay_ms: 350 },
+            { send: `${ref[1]} ${ref[2]}`, delay_ms: 350 },
+            { send: '\r', delay_ms: 350 },
+        ],
+    };
+}
 
 export function opencodeRecipe(): Recipe {
     return {

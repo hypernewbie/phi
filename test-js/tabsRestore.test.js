@@ -111,6 +111,28 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
         expect(calls[2]).toBe('p3|s3|shell|bash|/w|/w|false|false');
     });
 
+    it.each(['mini', 'legacy', undefined])(
+        'pins the owner-reported OpenCode mode on restore (%s)',
+        async (mode) => {
+            const { tm } = makeTm();
+            mockFetch(() => [
+                {
+                    id: 'oc',
+                    session_id: 'ses',
+                    title: 'OpenCode',
+                    coder: 'opencode',
+                    opencode_mode: mode,
+                },
+            ]);
+            await tm.restoreTabsState();
+            expect(tm.createTab.mock.calls[0].slice(8)).toEqual([
+                '',
+                null,
+                mode === 'mini' ? 'mini' : 'legacy',
+            ]);
+        },
+    );
+
     it('forwards pinned and marked flags so the tab UI renders them', async () => {
         const { tm } = makeTm();
         mockFetch(() => [

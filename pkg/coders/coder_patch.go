@@ -41,6 +41,7 @@ type CoderPatch struct {
 	WindowsPowerShellWrap *bool              `json:"windows_powershell_wrap,omitempty"`
 	InputMode             *string            `json:"input_mode,omitempty"`
 	ModelSwitchDisabled   *bool              `json:"model_switch_disabled,omitempty"`
+	OpenCodeMode          *string            `json:"opencode_mode,omitempty"`
 	Capabilities          *Capabilities      `json:"capabilities,omitempty"`
 }
 
@@ -71,6 +72,12 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 	}
 	if p.Args != nil {
 		out.Args = append([]string(nil), *p.Args...)
+		// An explicit argv override may replace Mini with a full TUI or
+		// wrapper. Do not advertise the inherited Mini behavior unless
+		// its subcommand remains present (or the patch declares a mode).
+		if out.OpenCodeMode == "mini" && p.OpenCodeMode == nil && (len(out.Args) == 0 || out.Args[0] != "mini") {
+			out.OpenCodeMode = ""
+		}
 	}
 	if p.ResumeArgs != nil {
 		out.ResumeArgs = append([]string(nil), *p.ResumeArgs...)
@@ -129,6 +136,12 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 	}
 	if p.ModelSwitchDisabled != nil {
 		out.ModelSwitchDisabled = *p.ModelSwitchDisabled
+	}
+	if p.OpenCodeMode != nil {
+		if *p.OpenCodeMode != "" && *p.OpenCodeMode != "mini" && *p.OpenCodeMode != "legacy" {
+			return Coder{}, ErrMissingField("valid opencode_mode (mini or legacy)")
+		}
+		out.OpenCodeMode = *p.OpenCodeMode
 	}
 	if p.Capabilities != nil {
 		out.Capabilities = *p.Capabilities

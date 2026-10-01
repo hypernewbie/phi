@@ -15,7 +15,7 @@
  * unavailable" (never a /model fallback).
  */
 // Max wall-clock duration an executor will spend on one recipe. The
-// largest built-in (opencode) is 4 steps × 350ms = ~1.4s; 5s is a
+// largest built-in (OpenCode Mini) is 5 steps with ~1.4s of waits; 5s is a
 // generous ceiling that still aborts runaway recipes quickly. R7.
 const MAX_RECIPE_TOTAL_MS = 5000;
 // Max number of steps. Eight is enough for any built-in or custom
@@ -236,6 +236,9 @@ function coerceDescriptor(id, raw) {
             : [],
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
+        opencode_mode: r.opencode_mode === 'mini' || r.opencode_mode === 'legacy'
+            ? r.opencode_mode
+            : undefined,
     };
 }
 function coerceCapabilities(raw) {
@@ -467,6 +470,25 @@ function containsControlChar(s) {
 // is intentional: the recipes are small, server-owned, and the
 // client never invents new ones. If a future server-side change adds
 // a step, the client version updates too.
+export function isOpenCodeMini(tab) {
+    return tab?.coder === 'opencode' && tab.opencodeMode === 'mini';
+}
+export function opencodeMiniRecipe(model) {
+    // Mini has no /models slash command. Its picker indexes provider and
+    // model as separate words, not the CLI's provider/model reference.
+    const ref = model.match(/^([^/\s#]+)\/([^\s#]+)$/);
+    if (!ref || containsControlChar(model))
+        throw new Error('OpenCode 2 model presets must use provider/model. Select variants in Mini’s native menu.');
+    return {
+        steps: [
+            { send: '\x10' }, // Mini's Ctrl+P menu (not the full TUI's leader)
+            { send: 'Switch model', delay_ms: 350 },
+            { send: '\r', delay_ms: 350 },
+            { send: `${ref[1]} ${ref[2]}`, delay_ms: 350 },
+            { send: '\r', delay_ms: 350 },
+        ],
+    };
+}
 export function opencodeRecipe() {
     return {
         steps: [

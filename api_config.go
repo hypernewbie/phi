@@ -29,6 +29,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"use_hidden_terminal":                 cfg.UseHiddenTerminal,
 		"fast_mode":                           cfg.FastMode,
 		"pi_offline":                          cfg.PiOffline,
+		"opencode_legacy":                     cfg.OpenCodeLegacy,
 		"claude_dangerously_skip_permissions": cfg.ClaudeDangerouslySkipPermissions,
 		"agy_theme_ansi":                      cfg.AgyThemeAnsi,
 		"auto_reconnect":                      cfg.AutoReconnect,
