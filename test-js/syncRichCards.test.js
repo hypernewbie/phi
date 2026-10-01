@@ -35,6 +35,7 @@ function buildAppStub() {
             activeTab: 'sync',
             togglePanel: vi.fn(),
             openRichDiffModal: vi.fn().mockResolvedValue(undefined),
+            openCommitDiff: vi.fn().mockResolvedValue(undefined),
             refreshDiff: vi.fn(),
         },
     };
@@ -574,6 +575,72 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         expect(clickSpy).toHaveBeenCalledTimes(1);
 
         diffTabBtn.remove();
+    });
+
+    it('shows a commit hash with separate panel and pretty-viewer actions, without auto-opening', () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+        const hash = '678d343';
+        mgr.renderMessages([
+            {
+                key: 'show:commit',
+                value: {
+                    title: 'Commit ready',
+                    diff: { commit: hash },
+                    auto_open: true,
+                },
+                updated_at: new Date().toISOString(),
+            },
+        ]);
+        const panel = mgr.messagesList.querySelector('.sync-diff-btn');
+        const pretty = mgr.messagesList.querySelector('.sync-pretty-diff-btn');
+        expect(panel.textContent).toContain(`Show Diff ${hash}`);
+        expect(pretty.textContent).toBe('Open Pretty Diff');
+        expect(app.diffController.openCommitDiff).not.toHaveBeenCalled();
+        panel.click();
+        expect(app.diffController.openCommitDiff).toHaveBeenLastCalledWith(
+            hash,
+            false,
+        );
+        pretty.click();
+        expect(app.diffController.openCommitDiff).toHaveBeenLastCalledWith(
+            hash,
+            true,
+        );
+        expect(app.tabManager.sendRawInput).not.toHaveBeenCalled();
+    });
+
+    it('accepts a hash string shorthand but rejects invalid commits instead of showing unstaged', () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+        mgr.openDiffView('678d343', true);
+        expect(app.diffController.openCommitDiff).toHaveBeenCalledWith(
+            '678d343',
+            true,
+        );
+        app.diffController.openCommitDiff.mockClear();
+        for (const commit of ['--all', 'HEAD; echo bad', '', 123]) {
+            mgr.openDiffView({ commit });
+        }
+        expect(app.diffController.openCommitDiff).not.toHaveBeenCalled();
+        expect(app.diffController.openRichDiffModal).not.toHaveBeenCalled();
+        expect(app.diffController.togglePanel).not.toHaveBeenCalled();
+        expect(app.showToast).toHaveBeenCalledTimes(4);
+    });
+
+    it('reports commit viewer errors without executing terminal input', async () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+        app.diffController.openCommitDiff.mockRejectedValueOnce(
+            new Error('not found'),
+        );
+        mgr.openDiffView({ commit: '678d343' });
+        await Promise.resolve();
+        expect(app.showToast).toHaveBeenCalledWith(
+            'Cannot show commit diff: not found',
+            { type: 'error' },
+        );
+        expect(app.tabManager.sendRawInput).not.toHaveBeenCalled();
     });
 
     it('opens rich diff modal when diff.modal is true or diff is "modal"', async () => {
