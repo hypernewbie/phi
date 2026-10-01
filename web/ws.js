@@ -207,7 +207,7 @@ export class PTYWebSocket {
         if (payload.byteLength < 8)
             return;
         const view = new DataView(payload);
-        const start = Number(view.getBigUint64(0, false));
+        let start = Number(view.getBigUint64(0, false));
         let bytes = new Uint8Array(payload, 8);
         // Duplicate suppression: a frame may re-deliver bytes the host
         // already patched over (overlap window). Skip what is old.
@@ -216,6 +216,10 @@ export class PTYWebSocket {
             if (overlap >= bytes.byteLength)
                 return;
             bytes = bytes.subarray(overlap);
+            // The tail now begins at the current frontier. Retaining the
+            // original offset would regress liveSeq (or trim it twice
+            // when a bootstrap-held frame is released).
+            start = this.liveSeq;
         }
         if (start > this.liveSeq) {
             // Gap: hold delivery until the host patches the missing range.
@@ -284,6 +288,11 @@ export class PTYWebSocket {
     abandonGap(to) {
         if (this.mode !== 'hot' || this.liveSeq === undefined)
             return;
+        if (to > this.liveSeq) {
+            // Bytes on the other side of a real hole must not complete a
+            // UTF-8 prefix retained from before the missing interval.
+            this.decoder = new TextDecoder('utf-8');
+        }
         this.liveSeq = Math.max(this.liveSeq, to);
         this.lastFrameEnd = this.liveSeq;
         this._flushHeld();

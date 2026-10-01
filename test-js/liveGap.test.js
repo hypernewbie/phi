@@ -82,6 +82,19 @@ describe('_onLiveGap', () => {
         );
     });
 
+    it('throttles redraw requests when adjacent gaps really are unavailable', async () => {
+        const p = pty();
+        const c = ctx(async () => null);
+        c._nudgeRedraw = vi.fn();
+        const t = tab(p);
+        await c._onLiveGap(t, 100, 105);
+        await c._onLiveGap(t, 100, 105);
+        expect(c._nudgeRedraw).toHaveBeenCalledOnce();
+        t._gapRedrawAt -= 1001;
+        await c._onLiveGap(t, 100, 105);
+        expect(c._nudgeRedraw).toHaveBeenCalledTimes(2);
+    });
+
     it('abandons when the fetch misses the range start', async () => {
         const p = pty();
         const c = ctx(async () => ({
@@ -95,6 +108,21 @@ describe('_onLiveGap', () => {
         expect(p.applyGapPatch).not.toHaveBeenCalled();
         expect(p.abandonGap).toHaveBeenCalledWith(105);
     });
+
+    it.each([
+        { end: 104, byteLength: 4, bytes: new Uint8Array(4) },
+        { end: 106, byteLength: 6, bytes: new Uint8Array(6) },
+        { end: 105, byteLength: 5, bytes: new Uint8Array(4) },
+    ])(
+        'rejects a patch whose byte span does not exactly cover the hole (%j)',
+        async (range) => {
+            const p = pty();
+            const c = ctx(async () => ({ start: 100, ...range }));
+            await c._onLiveGap(tab(p), 100, 105);
+            expect(p.applyGapPatch).not.toHaveBeenCalled();
+            expect(p.abandonGap).toHaveBeenCalledWith(105);
+        },
+    );
 
     it('ignores non-hot sockets', async () => {
         const p = pty();
@@ -446,6 +474,36 @@ describe('bootstrap gate', () => {
         await gapCall;
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('follows a parse-drain gate handoff to a recording bootstrap before fetching a patch', async () => {
+        const p = pty();
+        const fetchMock = vi.fn(async () => ({
+            start: 100,
+            end: 105,
+            byteLength: 5,
+            bytes: new TextEncoder().encode('hello'),
+        }));
+        const c = ctx(fetchMock);
+        const t = tab(p);
+        let finishDrain;
+        let finishBootstrap;
+        const drain = new Promise((r) => {
+            finishDrain = r;
+        });
+        const boot = new Promise((r) => {
+            finishBootstrap = r;
+        });
+        t._bootstrapGate = drain;
+        const patching = c._onLiveGap(t, 100, 105);
+        t._bootstrapGate = boot;
+        finishDrain();
+        await Promise.resolve();
+        expect(fetchMock).not.toHaveBeenCalled();
+        finishBootstrap();
+        await patching;
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(p.applyGapPatch).toHaveBeenCalledOnce();
     });
 
     it('a swapped socket during the gate wait aborts the patch', async () => {

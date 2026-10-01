@@ -1662,6 +1662,7 @@ export class TabManager {
         }
         this.writeToTerminal(tabInfo, data);
         if (pty && pty.mode === 'hot') {
+            tabInfo._streamDecoder = pty.decoder;
             tabInfo.queuedSeq = pty.lastFrameEnd;
         }
     }
@@ -1876,6 +1877,7 @@ export class TabManager {
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
 
         if (!tabInfo._termOpened) {
+            tabInfo._streamDecoder = pty.decoder;
             // Fresh tab: write the checkpoint synchronously, open the
             // terminal, and release held live frames so first paint is
             // not gated on the network. The bounded tail delta is
@@ -1914,9 +1916,47 @@ export class TabManager {
         }
 
         if (samePane) {
+            // Finish old-socket writes before choosing the resume point.
+            // Fetching from a stale drainedSeq while those writes are still
+            // queued would append the same bytes twice. Hold gap repair too,
+            // so it cannot race ahead of the later recording bootstrap.
+            if (tabInfo.writePending || tabInfo.writeBuffer?.length) {
+                const drainGate = this._drainSettled(tabInfo);
+                tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
+                tabInfo._bootstrapGate = drainGate;
+                await drainGate;
+                if (
+                    tabInfo.isDead ||
+                    tabInfo.ws !== pty ||
+                    tabInfo._bootstrapGate !== drainGate
+                ) {
+                    if (tabInfo._bootstrapGate === drainGate) {
+                        tabInfo._bootstrapGate = null;
+                    }
+                    return;
+                }
+                // The queue is now actually parsed. Its gate suppressed
+                // automatic advancement; publish that proven frontier here.
+                tabInfo.drainedSeq = tabInfo.queuedSeq ?? tabInfo.drainedSeq;
+                tabInfo._bootstrapGate = null;
+            }
             // Reconnect to the same pane: resume from our watermark. Apply the
             // retained delta; never reset, never drop output unnecessarily.
             const from = tabInfo.drainedSeq ?? info.head;
+            // A parsed batch can end with an incomplete UTF-8 prefix in
+            // the decoder, even though no glyph reached xterm yet. Keep
+            // that prefix on a same-pane, fully-drained reconnect. Never
+            // reuse decoder state beyond the resume frontier or across
+            // a truncated recording / different pane lifetime.
+            if (
+                tabInfo._streamDecoder &&
+                from === tabInfo.queuedSeq &&
+                from >= info.oldest &&
+                info.head >= from
+            ) {
+                pty.decoder = tabInfo._streamDecoder;
+            }
+            tabInfo._streamDecoder = pty.decoder;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
             if (info.head > from && from >= info.oldest) {
@@ -1936,6 +1976,8 @@ export class TabManager {
 
         // Different pane lifetime under the same id: fresh start. The
         // existing buffer belongs to a dead epoch — reset it.
+        pty.decoder = new TextDecoder('utf-8');
+        tabInfo._streamDecoder = pty.decoder;
         try {
             tabInfo.term.reset();
         } catch (e) {
@@ -2052,7 +2094,17 @@ export class TabManager {
         if (!d || d.start !== from || d.byteLength > MAX_DELTA_BYTES) {
             return;
         }
-        this.writeToTerminal(tabInfo, d.text);
+        // Bootstrap and live frames are one byte stream. A range can
+        // end inside a UTF-8 character, so retain the decoder's pending
+        // prefix for the first live frame instead of emitting U+FFFD.
+        const text =
+            d.bytes && ws?.mode === 'hot' && ws.decoder
+                ? ws.decoder.decode(d.bytes, { stream: true })
+                : d.text;
+        if (ws?.mode === 'hot' && ws.decoder) {
+            tabInfo._streamDecoder = ws.decoder;
+        }
+        this.writeToTerminal(tabInfo, text);
         if (onEnqueued) onEnqueued();
         // Watermarks advance only on actual queue drain (proving xterm
         // parsed the delta), never on enqueue. Quiet tabs with nothing
@@ -2079,10 +2131,13 @@ export class TabManager {
         // swapped mid-fetch: verify identity before touching watermarks.
         // Superseded when a newer bootstrap generation began mid-fetch:
         // the new head owns the stream now, so this patch dissolves.
-        const gate = tabInfo._bootstrapGate;
-        if (gate) {
+        while (tabInfo._bootstrapGate) {
+            const gate = tabInfo._bootstrapGate;
             await gate.catch(() => {});
             if (tabInfo.isDead || tabInfo.ws !== pty) return;
+            // A parse-drain gate can hand off to a recording bootstrap.
+            // Wait for the successor too, rather than patch ahead of it.
+            if (tabInfo._bootstrapGate === gate) break;
         }
         // The wait may have outlived the hole: a flush-stop re-fire (or
         // another patch) can advance past `from` while this event waits.
@@ -2122,6 +2177,9 @@ export class TabManager {
             if (
                 d &&
                 d.start === from &&
+                d.end === to &&
+                d.byteLength === to - from &&
+                d.bytes?.byteLength === d.byteLength &&
                 d.byteLength > 0 &&
                 d.byteLength <= MAX_DELTA_BYTES
             ) {
@@ -2141,13 +2199,26 @@ export class TabManager {
                 return;
             }
         }
-        pty.abandonGap(to);
-        // Honest marker instead of silently missing output: the live
-        // screen skips the dropped interval and resumes at the new head.
+        // Cancel any escape sequence cut by the hole BEFORE the held
+        // tail flushes. Otherwise xterm can consume live text as an old
+        // CSI/OSC payload, and inserting the notice afterwards loses it.
+        // CAN cancels parser state without clearing scrollback or screen.
         this.writeToTerminal(
             tabInfo,
-            `\r\n\x1b[33m[phi: ${to - from} output bytes dropped — resumed live]\x1b[0m\r\n`,
+            `\x18\r\n\x1b[33m[phi: ${to - from} output bytes dropped — resumed live]\x1b[0m\r\n`,
         );
+        pty.abandonGap(to);
+        tabInfo._streamDecoder = pty.decoder;
+        // An unavailable recording can produce many adjacent holes.
+        // Request a TUI repaint without creating a resize/output storm.
+        const now = Date.now();
+        if (
+            tabInfo._gapRedrawAt === undefined ||
+            now - tabInfo._gapRedrawAt >= 1000
+        ) {
+            tabInfo._gapRedrawAt = now;
+            this._nudgeRedraw(tabInfo);
+        }
     }
 
     _nudgeRedraw(tabInfo) {
