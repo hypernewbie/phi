@@ -97,6 +97,9 @@ export class DiffController {
     reviewStorageKey;
     activeGitHead;
     activeGitBranch;
+    // Commits selected from Sync Board can be older than the recent list.
+    // Keep the explicit option only while this project and selection match.
+    syncCommitTarget = null;
     // Optional overrides used by unit tests + the fallback path in
     // _reviewStorageKeyForCwd. Production always reads through
     // this.app.sessionsManager; tests sometimes pass it directly for
@@ -256,6 +259,7 @@ export class DiffController {
         });
         if (this.commitSelect) {
             this.commitSelect.addEventListener('change', () => {
+                this.syncCommitTarget = null;
                 this.refreshDiff(true); // Don't reload the list when user just changes selection
             });
         }
@@ -590,6 +594,43 @@ export class DiffController {
         apply(this.vscodeLocalBtn, localURI, false);
         apply(this.vscodeRemoteBtn, remoteURI, true);
     }
+    _ensureCommitOption(hash) {
+        if (!this.commitSelect)
+            return;
+        if (!Array.from(this.commitSelect.options).some((o) => o.value === hash)) {
+            const option = document.createElement('option');
+            option.value = hash;
+            option.textContent = `${hash} — Sync Board commit`;
+            this.commitSelect.appendChild(option);
+        }
+        this.commitSelect.value = hash;
+    }
+    async openCommitDiff(hash, modal = false) {
+        if (!/^[0-9a-f]{4,64}$/i.test(hash)) {
+            throw new Error('Invalid Git commit hash');
+        }
+        if (!this.commitSelect)
+            throw new Error('Commit selector is unavailable');
+        const cwd = this.app.sessionsManager.activeCWD || '';
+        this.syncCommitTarget = { hash, cwd };
+        this._ensureCommitOption(hash);
+        this.activeTab = 'diff';
+        document
+            .querySelector('.diff-tab-btn.active')
+            ?.classList.remove('active');
+        document
+            .querySelector('.diff-tab-btn[data-tab="diff"]')
+            ?.classList.add('active');
+        if (!this.isPanelOpen)
+            this.togglePanel(true);
+        this._setPanel('git');
+        const refresh = this.refreshDiff(true);
+        // The selector is set before either fetch. Never open the user's
+        // previously selected commit (or silently default to unstaged).
+        if (modal)
+            await this.openRichDiffModal();
+        await refresh;
+    }
     async loadCommits() {
         if (!this.commitSelect)
             return;
@@ -599,7 +640,15 @@ export class DiffController {
             if (!res.ok)
                 throw new Error('Failed to load commits');
             const commits = await res.json();
-            const currentSelected = this.commitSelect.value || 'unstaged';
+            if ((this.app.sessionsManager.activeCWD || '') !== cwd)
+                return;
+            let currentSelected = this.commitSelect.value || 'unstaged';
+            const target = this.syncCommitTarget;
+            if (target && target.cwd !== cwd) {
+                if (currentSelected === target.hash)
+                    currentSelected = 'unstaged';
+                this.syncCommitTarget = null;
+            }
             const unstagedOpt = document.createElement('option');
             unstagedOpt.value = 'unstaged';
             unstagedOpt.textContent = 'Unstaged Changes';
@@ -615,7 +664,11 @@ export class DiffController {
                     this.commitSelect?.appendChild(opt);
                 });
             }
-            if (Array.from(this.commitSelect.options).some((o) => o.value === currentSelected)) {
+            if (this.syncCommitTarget?.cwd === cwd &&
+                this.syncCommitTarget?.hash === currentSelected) {
+                this._ensureCommitOption(currentSelected);
+            }
+            else if (Array.from(this.commitSelect.options).some((o) => o.value === currentSelected)) {
                 this.commitSelect.value = currentSelected;
             }
             else {

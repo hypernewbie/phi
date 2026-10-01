@@ -26,6 +26,7 @@ export interface SyncActionItem {
 }
 
 export interface SyncDiffTarget {
+    commit?: string;
     target?: string;
     files?: string[];
     modal?: boolean;
@@ -89,6 +90,18 @@ export function parseActionPayload(val: unknown): SyncActionPayload | null {
         return obj as SyncActionPayload;
     }
     return null;
+}
+
+// A string diff target is a commit hash, except for the legacy "modal"
+// shortcut. An explicitly invalid commit must not fall back to unstaged.
+export function getSyncDiffCommit(
+    target: SyncActionPayload['diff'],
+): string | undefined {
+    if (typeof target === 'string' && target !== 'modal') return target.trim();
+    if (typeof target === 'object' && target !== null && 'commit' in target) {
+        return typeof target.commit === 'string' ? target.commit.trim() : '';
+    }
+    return undefined;
 }
 
 export class SyncManager {
@@ -349,15 +362,46 @@ export class SyncManager {
 
     openDiffView(
         diffTarget: boolean | string | SyncDiffTarget | undefined,
+        modalOverride?: boolean,
     ): void {
         const diffCtrl = this.app.diffController;
         if (!diffCtrl) return;
 
         const prefersModal =
-            diffTarget === 'modal' ||
-            (typeof diffTarget === 'object' &&
-                diffTarget !== null &&
-                diffTarget.modal === true);
+            modalOverride ??
+            (diffTarget === 'modal' ||
+                (typeof diffTarget === 'object' &&
+                    diffTarget !== null &&
+                    diffTarget.modal === true));
+        const commit = getSyncDiffCommit(diffTarget);
+        if (commit !== undefined) {
+            if (!/^[0-9a-f]{4,64}$/i.test(commit)) {
+                this.app.showToast(
+                    'Cannot show diff: invalid Git commit hash',
+                    {
+                        type: 'error',
+                    },
+                );
+                return;
+            }
+            if (typeof diffCtrl.openCommitDiff !== 'function') {
+                this.app.showToast('Commit diff viewer is unavailable', {
+                    type: 'error',
+                });
+                return;
+            }
+            void diffCtrl
+                .openCommitDiff(commit, prefersModal)
+                .catch((e: Error) => {
+                    this.app.showToast(
+                        `Cannot show commit diff: ${e.message}`,
+                        {
+                            type: 'error',
+                        },
+                    );
+                });
+            return;
+        }
 
         if (prefersModal && typeof diffCtrl.openRichDiffModal === 'function') {
             void diffCtrl.openRichDiffModal();
@@ -468,15 +512,23 @@ export class SyncManager {
                     ) {
                         fileCount = diffTarget.files.length;
                     }
+                    const commit = getSyncDiffCommit(diffTarget);
                     const label =
-                        fileCount > 0
-                            ? `Review Diff (${fileCount} files)`
-                            : 'Review Diff';
+                        commit !== undefined
+                            ? `Show Diff ${commit.slice(0, 12)}`
+                            : fileCount > 0
+                              ? `Review Diff (${fileCount} files)`
+                              : 'Review Diff';
+                    const title =
+                        commit !== undefined
+                            ? `Show commit ${commit}`
+                            : 'Review Git Diff';
                     diffChipHtml = `
-                        <button type="button" class="sync-chip-btn sync-diff-btn" title="Review Git Diff">
+                        <button type="button" class="sync-chip-btn sync-diff-btn" title="${this.escapeHtml(title)}">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
                             <span>${this.escapeHtml(label)}</span>
                         </button>
+                        ${commit !== undefined ? '<button type="button" class="sync-chip-btn sync-pretty-diff-btn" title="Open this commit in the pretty diff viewer">Open Pretty Diff</button>' : ''}
                     `;
                 }
 
@@ -706,7 +758,18 @@ export class SyncManager {
                     const diffBtn = card.querySelector('.sync-diff-btn');
                     diffBtn?.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        this.openDiffView(actionData.diff);
+                        this.openDiffView(
+                            actionData.diff,
+                            getSyncDiffCommit(actionData.diff) !== undefined
+                                ? false
+                                : undefined,
+                        );
+                    });
+                    card.querySelector(
+                        '.sync-pretty-diff-btn',
+                    )?.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.openDiffView(actionData.diff, true);
                     });
                 }
             }
