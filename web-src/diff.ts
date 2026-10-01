@@ -2472,11 +2472,9 @@ export class DiffController {
         return { filePath, oldLineNumber, newLineNumber, lineType };
     }
 
-    // Build the 3-line context snippet shown next to a review comment.
-    // Walks siblings inside the same tbody to grab up to N rows above
-    // and below. The diff2html .d2h-code-line already carries its
-    // +/-/space prefix inside .d2h-code-line-prefix, so we read it
-    // verbatim rather than prepending another character.
+    // Walk siblings inside the same tbody for the comment's context.
+    // Read only source spans: their parent contains HTML-template
+    // indentation/newlines, and context markers render as NBSPs.
     _rowCodeSnippet(row: HTMLElement, radius: number = 2): string {
         const tbody = row.parentElement;
         if (!tbody) return '';
@@ -2490,13 +2488,46 @@ export class DiffController {
             const sib = siblings[i];
             const lineType = this._rowLineType(sib);
             if (!lineType) continue; // skip hunk headers / placeholders
-            const code = sib.querySelector(
-                '.d2h-code-line, .d2h-code-side-line',
-            );
-            const txt = (code?.textContent || '').replace(/\s+$/, '');
-            lines.push(txt);
+            const code = sib.querySelector('.d2h-code-line-ctn');
+            if (!code) continue; // side-by-side empty placeholders
+            const prefix =
+                lineType === 'insert' ? '+' : lineType === 'delete' ? '-' : ' ';
+            // Tabs, trailing spaces, blank lines, and source NBSPs are
+            // code, not renderer padding. Preserve them verbatim.
+            lines.push(prefix + (code.textContent || ''));
         }
         return lines.join('\n');
+    }
+
+    // Older saved drafts captured diff2html's wrapper text. Repair only
+    // that exact template structure, not arbitrary code whitespace.
+    // Its old trim already lost trailing source whitespace; do not guess
+    // at those bytes or replace the saved context with a newer diff.
+    _normalizeReviewCodeSnippet(snippet: string): string {
+        if (!snippet.startsWith('\n')) return snippet;
+        const padding = ' '.repeat(12);
+        const lines = snippet.split('\n');
+        const source: string[] = [];
+        let foundTemplate = false;
+        for (let i = 0; i < lines.length; ) {
+            if (lines[i] !== '') return snippet;
+            const marker = lines[i + 1]?.match(/^ {12}([+\u00a0-])$/);
+            if (!marker) {
+                // Old trimming collapsed empty context rows to ''.
+                source.push(' ');
+                i++;
+                continue;
+            }
+            foundTemplate = true;
+            const content = lines[i + 2];
+            const hasContent = content?.startsWith(padding);
+            source.push(
+                (marker[1] === '\u00a0' ? ' ' : marker[1]) +
+                    (hasContent ? content.slice(padding.length) : ''),
+            );
+            i += hasContent ? 3 : 2;
+        }
+        return foundTemplate ? source.join('\n') : snippet;
     }
 
     _reviewActionBarParent(): HTMLElement | null {
@@ -2651,7 +2682,9 @@ export class DiffController {
             next.remove();
         }
 
-        const snippet = existing?.codeSnippet || this._rowCodeSnippet(row);
+        const snippet = existing?.codeSnippet
+            ? this._normalizeReviewCodeSnippet(existing.codeSnippet)
+            : this._rowCodeSnippet(row);
 
         const editorRow = document.createElement('tr');
         editorRow.className = 'diff-comment-editor-row';
@@ -2973,7 +3006,7 @@ export class DiffController {
         comments.forEach((c, i) => {
             const lineRef = c.newLineNumber ?? c.oldLineNumber ?? '?';
             const lang = c.filePath.split('.').pop() || '';
-            const snippet = c.codeSnippet
+            const snippet = this._normalizeReviewCodeSnippet(c.codeSnippet)
                 .split('\n')
                 .map((l) => `> ${l}`)
                 .join('\n');
