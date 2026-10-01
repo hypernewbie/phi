@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { html as renderDiff } from 'diff2html';
 import { setupDomHarness, stubWebSocket } from './_dom.js';
 
 // Tests for the diff-review commenting feature in web-src/diff.ts. The
@@ -282,10 +283,8 @@ describe('DiffController._rowCodeSnippet', () => {
         const target = rows[3];
         const snippet = Proto._rowCodeSnippet.call(makeCtx(Proto), target, 2);
         const lines = snippet.split('\n');
-        // diff2html's .d2h-code-line-prefix span already carries
-        // '+' / '-' / ' ' for the line marker; we read textContent
-        // verbatim so the snippet includes the prefix and any
-        // leading whitespace inside the code span.
+        // Keep one diff marker next to each source line, without
+        // changing the source's leading whitespace.
         expect(lines).toEqual([
             '   line 1;',
             '   line 2;',
@@ -294,6 +293,147 @@ describe('DiffController._rowCodeSnippet', () => {
             '   line 5;',
         ]);
     });
+});
+
+describe('DiffController review snippet whitespace', () => {
+    const patch = [
+        'diff --git a/sample.ts b/sample.ts',
+        'index 1111111..2222222 100644',
+        '--- a/sample.ts',
+        '+++ b/sample.ts',
+        '@@ -1,3 +1,3 @@',
+        ' function example() {',
+        '-\treturn 1; \t',
+        '+\treturn 2; \t',
+        ' }',
+        '',
+    ].join('\n');
+
+    it.each([
+        ['line-by-line', 'LF'],
+        ['line-by-line', 'CRLF'],
+        ['side-by-side', 'LF'],
+        ['side-by-side', 'CRLF'],
+    ])(
+        'reads real diff2html source spans (%s, %s)',
+        async (outputFormat, lineEnding) => {
+            const Proto = await loadDiffControllerProto();
+            const body = document.createElement('div');
+            body.innerHTML = renderDiff(
+                lineEnding === 'CRLF' ? patch.replaceAll('\n', '\r\n') : patch,
+                {
+                    outputFormat,
+                    drawFileList: false,
+                    matching: 'lines',
+                },
+            );
+            document.body.appendChild(body);
+            const target = body.querySelector('tr:has(td.d2h-ins)');
+            const expected =
+                outputFormat === 'line-by-line'
+                    ? [
+                          ' function example() {',
+                          '-\treturn 1; \t',
+                          '+\treturn 2; \t',
+                          ' }',
+                      ]
+                    : [' function example() {', '+\treturn 2; \t', ' }'];
+            expect(Proto._rowCodeSnippet.call(makeCtx(Proto), target)).toBe(
+                expected.join('\n'),
+            );
+        },
+    );
+
+    it.each([
+        ['ins', '\t  return 2; \t\u00a0', '+'],
+        ['del', '\t  return 1; \t', '-'],
+        ['cntx', '\u00a0source NBSP\u00a0', ' '],
+        ['cntx', '', ' '],
+        ['ins', '', '+'],
+        ['del', ' \t ', '-'],
+    ])(
+        'preserves all source whitespace (%s, %j)',
+        async (kind, source, marker) => {
+            const Proto = await loadDiffControllerProto();
+            const { tr, wrapper } = makeRow({ kind, code: source });
+            const code = tr.querySelector('.d2h-code-line');
+            const prefix = code.querySelector('.d2h-code-line-prefix');
+            if (kind === 'cntx') prefix.textContent = '\u00a0';
+            code.prepend(document.createTextNode('\n            '));
+            prefix.after(document.createTextNode('\n            '));
+            code.append(document.createTextNode('\n        '));
+            document.body.appendChild(wrapper);
+            expect(Proto._rowCodeSnippet.call(makeCtx(Proto), tr, 0)).toBe(
+                marker + source,
+            );
+        },
+    );
+
+    it('reads highlighted inline changes as text without losing indentation or entities', async () => {
+        const Proto = await loadDiffControllerProto();
+        const { tr, wrapper } = makeRow({ kind: 'ins' });
+        tr.querySelector('.d2h-code-line-ctn').innerHTML =
+            '\t<span class="hljs-keyword">return</span> <ins>&lt;new&gt; &amp; value</ins>; \t';
+        document.body.appendChild(wrapper);
+        expect(Proto._rowCodeSnippet.call(makeCtx(Proto), tr, 0)).toBe(
+            '+\treturn <new> & value; \t',
+        );
+    });
+
+    it('skips side-by-side placeholders without inventing source lines', async () => {
+        const Proto = await loadDiffControllerProto();
+        const { tr, wrapper } = makeRow({ side: 'side-by-side', kind: 'cntx' });
+        tr.querySelector('.d2h-code-line-ctn').remove();
+        document.body.appendChild(wrapper);
+        expect(Proto._rowCodeSnippet.call(makeCtx(Proto), tr, 0)).toBe('');
+    });
+
+    it('repairs saved template-contaminated snippets without trimming source indentation', async () => {
+        const Proto = await loadDiffControllerProto();
+        const c = makeCtx(Proto, {
+            commitSelect: { value: 'unstaged' },
+            app: { sessionsManager: { activeCWD: '/code/phi' } },
+            reviewComments: new Map([
+                [
+                    'sample.ts::2',
+                    {
+                        id: 'legacy',
+                        filePath: 'sample.ts',
+                        oldLineNumber: null,
+                        newLineNumber: 2,
+                        lineType: 'insert',
+                        createdAt: 1,
+                        codeSnippet:
+                            '\n            \u00a0\n            function example() {\n\n            -\n                return 1;\n\n            +\n                return 2;\n\n            \u00a0\n            }',
+                        commentText: 'Why?\n\n    Keep my comment indentation.',
+                    },
+                ],
+            ]),
+        });
+        const prompt = c._buildPromptEngineeredReview();
+        expect(prompt).toContain(
+            '> ```ts\n>  function example() {\n> -    return 1;\n> +    return 2;\n>  }\n> ```',
+        );
+        expect(prompt).toContain('Why?\n\n    Keep my comment indentation.');
+    });
+
+    it.each([
+        ['\n\n            +\n            new\n', ' \n+new\n '],
+        ['\n            -\n\n            +', '-\n+'],
+        ['+\tvalid new snippet \t\u00a0', '+\tvalid new snippet \t\u00a0'],
+        [
+            '\n            +\nnot a renderer source span',
+            '\n            +\nnot a renderer source span',
+        ],
+    ])(
+        'only normalizes complete legacy renderer structure (%j)',
+        async (snippet, expected) => {
+            const Proto = await loadDiffControllerProto();
+            expect(
+                Proto._normalizeReviewCodeSnippet.call(makeCtx(Proto), snippet),
+            ).toBe(expected);
+        },
+    );
 });
 
 // ─── Prompt builder ────────────────────────────────────────────────
