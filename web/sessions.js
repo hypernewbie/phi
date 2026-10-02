@@ -49,6 +49,7 @@ export class SessionsManager {
     wsModalAddBtn;
     selectedSuggestionIndex;
     worktreeDirtyRequestId;
+    worktreeLoadRequestId;
     _measureSpan = null;
     _contextMenu;
     _ctxDismissMousedown;
@@ -76,6 +77,7 @@ export class SessionsManager {
         this.wsModalAddBtn = document.getElementById('ws-modal-add-btn');
         this.selectedSuggestionIndex = -1;
         this.worktreeDirtyRequestId = 0;
+        this.worktreeLoadRequestId = 0;
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
@@ -442,36 +444,50 @@ export class SessionsManager {
         });
     }
     async loadWorktrees(targetCwd = null) {
+        const requestId = (this.worktreeLoadRequestId ?? 0) + 1;
+        this.worktreeLoadRequestId = requestId;
+        const workspace = this.activeWorkspace;
+        const coder = this.activeCoder;
+        const startingCwd = this.activeCWD;
+        const isCurrentRequest = () => requestId === this.worktreeLoadRequestId &&
+            workspace === this.activeWorkspace &&
+            coder === this.activeCoder;
         this.sessionList.innerHTML =
             '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
-            const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(this.activeWorkspace)}`);
+            const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`);
+            if (!isCurrentRequest())
+                return;
             if (!res.ok)
                 throw new Error('Failed to scan worktrees');
             const worktrees = await res.json();
+            if (!isCurrentRequest())
+                return;
             this.sessionList.innerHTML = '';
             if (!worktrees || worktrees.length === 0) {
                 this.sessionList.innerHTML =
                     '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
                 return;
             }
-            if (targetCwd) {
-                this.activeCWD = targetCwd;
-            }
-            else {
-                const hasCwd = worktrees.some((wt) => normalizePath(wt.path) ===
-                    normalizePath(this.activeCWD));
-                if (!hasCwd) {
-                    const activeWT = worktrees.find((wt) => wt.active);
-                    if (activeWT) {
-                        this.activeCWD = activeWT.path;
-                    }
-                    else {
-                        this.activeCWD = worktrees[0].path;
+            if (this.activeCWD === startingCwd) {
+                if (targetCwd) {
+                    this.activeCWD = targetCwd;
+                }
+                else {
+                    const hasCwd = worktrees.some((wt) => normalizePath(wt.path) ===
+                        normalizePath(startingCwd));
+                    if (!hasCwd) {
+                        const activeWT = worktrees.find((wt) => wt.active);
+                        if (activeWT) {
+                            this.activeCWD = activeWT.path;
+                        }
+                        else {
+                            this.activeCWD = worktrees[0].path;
+                        }
                     }
                 }
             }
-            localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+            localStorage.setItem('phi_last_chosen_project', workspace);
             // Append a faint "-- No workspace --" section for sessions with no cwd.
             // Only relevant for agy (others don't have unworkspaced sessions).
             // Rendered after real worktrees, collapsed by default.
@@ -578,10 +594,12 @@ export class SessionsManager {
                 }
             });
             appendNoWorkspaceSection();
-            this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
+            this.loadWorktreeDirtyStates(workspace, ++this.worktreeDirtyRequestId);
         }
         catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
+            if (isCurrentRequest()) {
+                this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
+            }
         }
     }
     async loadWorktreeDirtyStates(workspace, requestId) {
@@ -821,10 +839,13 @@ export class SessionsManager {
     }
     async spawnNewSession() {
         try {
+            const coderId = this.activeCoder;
+            const workspace = this.activeWorkspace;
+            const cwd = this.activeCWD;
             // Preserve built-in session titles; use the descriptor's
             // display name only for custom backends.
-            const coder = getCoder(this.activeCoder);
-            const coderName = BUILTIN_SESSION_TITLES.get(this.activeCoder) ??
+            const coder = getCoder(coderId);
+            const coderName = BUILTIN_SESSION_TITLES.get(coderId) ??
                 coder?.short_label ??
                 coder?.name ??
                 'Shell';
@@ -833,11 +854,11 @@ export class SessionsManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    coder: this.activeCoder,
-                    cwd: this.activeCWD,
+                    coder: coderId,
+                    cwd: cwd,
                     session_id: '',
                     title: title,
-                    workspace: this.activeWorkspace,
+                    workspace: workspace,
                 }),
             });
             if (!res.ok) {
@@ -845,7 +866,7 @@ export class SessionsManager {
                 throw new Error(errText.trim() || 'Failed to spawn session');
             }
             const data = await res.json();
-            this.app.tabManager.createTab(data.pane_id, data.session_id, title, this.activeCoder, this.activeWorkspace, this.activeCWD);
+            this.app.tabManager.createTab(data.pane_id, data.session_id, title, coderId, workspace, cwd);
             this.loadSessions();
         }
         catch (e) {
