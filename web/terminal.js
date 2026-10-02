@@ -4505,30 +4505,10 @@ export class TabManager {
             this._renderPiRpcThinkingDropup();
     }
 
-    switchTab(paneId, { userInitiated = false, preserveProject = false } = {}) {
+    switchTab(paneId, { userInitiated = false } = {}) {
         this._closePiRpcDropups();
         if (this.activePaneId === paneId) {
             const activeTab = this.getActiveTab();
-            if (
-                activeTab &&
-                userInitiated &&
-                !preserveProject &&
-                this._projectSyncPendingPaneId === paneId
-            ) {
-                // A close handoff deliberately skipped project sync. A later
-                // explicit click on that now-active tab is the opt-in to
-                // perform the normal sidebar/project update.
-                this._projectSyncPendingPaneId = null;
-                const independentView = this._syncProjectForTab(activeTab);
-                this.activateTabViewport(activeTab, {
-                    scrollToBottom: false,
-                    autoReconnect: true,
-                    force: userInitiated,
-                });
-                if (independentView) this.renderPiRpcStatusBar();
-                this.updateDocumentTitle();
-                return;
-            }
             if (activeTab) {
                 // Already on this tab - the user just clicked the active tab to
                 // refocus. Don't scroll the terminal to bottom (loses their
@@ -4620,10 +4600,8 @@ export class TabManager {
         });
         this.saveTabsState();
 
-        // A close-triggered selection is intentionally visual only. The tab
-        // bar may contain sessions from other projects, but closing the active
-        // tab must not silently change the sidebar's project/worktree. A
-        // genuine user selection uses the normal sync path below.
+        // Close-triggered selections use the same project synchronization as
+        // any other tab selection so the sidebar matches the active tab.
         // Preserve scroll position if user had scrolled up in newTab; only snap to
         // bottom if newTab is following bottom or already at bottom.
         const shouldScrollToBottom = newTab.term
@@ -4631,17 +4609,6 @@ export class TabManager {
               (newTab.term.buffer?.active?.viewportY ?? 0) >=
                   (newTab.term.buffer?.active?.baseY ?? 0)
             : true;
-
-        if (preserveProject) {
-            this._projectSyncPendingPaneId = newTab.paneId;
-            this.activateTabViewport(newTab, {
-                scrollToBottom: shouldScrollToBottom,
-                autoReconnect: true,
-                force: userInitiated,
-            });
-            this.updateDocumentTitle();
-            return;
-        }
 
         if (this._syncProjectForTab(newTab)) {
             this.activateTabViewport(newTab, {
@@ -4681,6 +4648,25 @@ export class TabManager {
             return true;
         }
 
+        const selectedWorkspace =
+            newTab.workspace || this.app.sessionsManager.activeWorkspace;
+        const selectedCoder = newTab.coder;
+        const selectedCwd = newTab.cwd;
+        const isCurrentProjectContext = () => {
+            const sessionsManager = this.app.sessionsManager;
+            return (
+                sessionsManager.activeCoder === selectedCoder &&
+                (!selectedWorkspace ||
+                    (sessionsManager.activeWorkspace &&
+                        normalizePath(sessionsManager.activeWorkspace) ===
+                            normalizePath(selectedWorkspace))) &&
+                (!selectedCwd ||
+                    (sessionsManager.activeCWD &&
+                        normalizePath(sessionsManager.activeCWD) ===
+                            normalizePath(selectedCwd)))
+            );
+        };
+
         // Sync project / workspace context from the tab using normalized paths.
         const workspaceChanged =
             newTab.workspace &&
@@ -4699,9 +4685,13 @@ export class TabManager {
             this.app.sessionsManager.updateWorkspaceSelectWidth();
 
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                this.app.sessionsManager.highlightActiveSession(
-                    newTab.sessionId,
-                );
+                if (!isCurrentProjectContext()) return;
+                const activeTab = this.getActiveTab();
+                if (activeTab) {
+                    this.app.sessionsManager.highlightActiveSession(
+                        activeTab.sessionId,
+                    );
+                }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
@@ -4712,9 +4702,13 @@ export class TabManager {
             // the new coder.
             this.app.sessionsManager.activeCWD = newTab.cwd;
             this.app.sessionsManager.loadWorktrees(newTab.cwd).then(() => {
-                this.app.sessionsManager.highlightActiveSession(
-                    newTab.sessionId,
-                );
+                if (!isCurrentProjectContext()) return;
+                const activeTab = this.getActiveTab();
+                if (activeTab) {
+                    this.app.sessionsManager.highlightActiveSession(
+                        activeTab.sessionId,
+                    );
+                }
                 this.app.diffController.refreshDiff();
                 if (this.app.markdownManager) {
                     this.app.markdownManager.refreshFiles({ force: false });
@@ -4907,11 +4901,10 @@ export class TabManager {
     // they have to undo. The PTY is NOT killed yet — if the user clicks
     // ↻, or the "Undo" button in the toast, the tab is restored.
     //
-    // The active tab is NOT auto-switched on close. Instead, a content
-    // overlay covers the terminal with the same spinner + countdown so
-    // the user can still see what they were looking at while they
-    // decide whether to undo. After the 3s grace (or × twice), if the
-    // tab was the only one, the empty state finally shows.
+    // A closing tab is hidden from the strip while it remains recoverable
+    // during the undo grace. An active close selects a visible survivor;
+    // undo restores the tab through ordinary selection. After the 3s grace
+    // (or × twice), the closing tab is finalized.
     softCloseTab(paneId) {
         const tab = this.tabs.get(paneId);
         if (!tab || tab.softClosing) return;
@@ -4937,8 +4930,7 @@ export class TabManager {
 
         this._startSoftCloseCountdown(tab);
 
-        // Closing the active tab selects a visible survivor. This is the
-        // one switch path that must not change the sidebar project.
+        // Closing the active tab selects and synchronizes a visible survivor.
         if (wasActive) this._selectTabAfterClose(paneId);
 
         // Undo toast for all soft-closes. The dropdown is the durable
@@ -4980,7 +4972,7 @@ export class TabManager {
         }
         if (nextTab) {
             this.hideEmptyState?.();
-            this.switchTab(nextTab.paneId, { preserveProject: true });
+            this.switchTab(nextTab.paneId);
             return;
         }
 
@@ -5206,16 +5198,12 @@ export class TabManager {
             }
         } else if (this.activePaneId === paneId) {
             // Defensive fallback for an active tab finalized without the
-            // normal soft-close handoff. Keep this automatic selection
-            // project-neutral for the same reason as the close path.
+            // normal soft-close handoff. Synchronize the selected survivor.
             const survivor = Array.from(this.tabs.values()).find(
                 (candidate) => !candidate.softClosing,
             );
             if (survivor) {
-                this.switchTab(survivor.paneId, {
-                    userInitiated: false,
-                    preserveProject: true,
-                });
+                this.switchTab(survivor.paneId);
             }
         }
     }

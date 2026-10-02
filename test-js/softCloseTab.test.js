@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { setupDomHarness, mockFetch } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
+import { SessionsManager } from '../web/sessions.js';
+import { DiffController } from '../web/diff.js';
 
 // Tests for the soft-close tab pipeline:
 //   closeTab(paneId)   -> softCloseTab (grace period)
@@ -12,9 +14,9 @@ import { TabManager } from '../web/terminal.js';
 // use vi.useFakeTimers so we can advance the clock without waiting in
 // real time. The MAX_SOFT_CLOSED_TABS cap = 3.
 //
-// Soft-close hides the tab from the strip, selects a visible survivor,
-// and keeps the sidebar project unchanged for that automatic selection.
-// The tab remains recoverable in the tab-list dropdown until finalization.
+// Soft-close hides the tab from the strip and selects a visible survivor
+// through ordinary tab synchronization. The tab remains recoverable in the
+// tab-list dropdown until finalization.
 
 setupDomHarness();
 
@@ -41,6 +43,21 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
     tm.hideEmptyState = vi.fn();
     tm.updateDisconnectBanner = vi.fn();
     tm.saveTabsState = vi.fn();
+    const sessionsManager = {
+        activeCoder: 'shell',
+        activeWorkspace: '/wsA',
+        activeCWD: '/wsA',
+        switchCoder: vi.fn((coder) => {
+            if (!['pi-rpc', 'review', 'kanban'].includes(coder)) {
+                sessionsManager.activeCoder = coder;
+            }
+        }),
+        highlightActiveSession: vi.fn(),
+        highlightActiveWorktree: vi.fn(),
+        workspaceSelect: { value: '/wsA' },
+        updateWorkspaceSelectWidth: vi.fn(),
+        loadWorktrees: vi.fn(() => Promise.resolve()),
+    };
     tm.app = {
         config: {},
         showToast: vi.fn(() => {
@@ -52,19 +69,8 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
         kanbanManager: { cleanup: vi.fn() },
         reviewManager: { cleanup: vi.fn() },
         markdownManager: { refreshFiles: vi.fn() },
-        // switchTab reaches into sessionsManager to coordinate the
-        // sidebar; stub it so the switch doesn't throw mid-test.
-        sessionsManager: {
-            activeCoder: 'shell',
-            activeWorkspace: '/wsA',
-            activeCWD: '/wsA',
-            switchCoder: vi.fn(),
-            highlightActiveSession: vi.fn(),
-            highlightActiveWorktree: vi.fn(),
-            workspaceSelect: { value: '/wsA' },
-            updateWorkspaceSelectWidth: vi.fn(),
-            loadWorktrees: vi.fn(() => Promise.resolve()),
-        },
+        // switchTab reaches into sessionsManager to coordinate the sidebar.
+        sessionsManager,
         diffController: { refreshDiff: vi.fn() },
     };
 
@@ -107,7 +113,202 @@ function makeTm({ withTabs = [], activePaneId = null } = {}) {
         };
         tm.tabs.set(meta.paneId, fullMeta);
     }
+    const activeTab = tm.tabs.get(activePaneId);
+    if (activeTab) {
+        sessionsManager.activeWorkspace = activeTab.workspace;
+        sessionsManager.activeCWD = activeTab.cwd;
+        sessionsManager.workspaceSelect.value = activeTab.workspace;
+        if (!['pi-rpc', 'review', 'kanban'].includes(activeTab.coder)) {
+            sessionsManager.activeCoder = activeTab.coder;
+        }
+    }
     return tm;
+}
+
+function controlledPromise() {
+    let resolve;
+    const promise = new Promise((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
+
+function makeRealStatusController(sessionsManager, initialStatus) {
+    const output = { value: initialStatus };
+    const term = {
+        reset: vi.fn(() => {
+            output.value = '';
+        }),
+        clear: vi.fn(() => {
+            output.value = '';
+        }),
+        write: vi.fn((text) => {
+            output.value += text;
+        }),
+    };
+    const diffController = Object.create(DiffController.prototype);
+    Object.assign(diffController, {
+        app: { sessionsManager },
+        activeTab: 'status',
+        currentWs: null,
+        isPanelOpen: true,
+        term,
+        commitSelect: null,
+        fitTerminal: vi.fn(),
+        _setPanel: vi.fn(),
+    });
+    return { diffController, output };
+}
+
+function makeRealSessionsManager(tm) {
+    const initialSessionsManager = tm.app.sessionsManager;
+    const sessionsManager = Object.create(SessionsManager.prototype);
+    const sessionList = document.createElement('div');
+    const workspaceSelect = document.createElement('input');
+    sessionList.id = 'session-list';
+    document.body.appendChild(sessionList);
+    document.body.appendChild(workspaceSelect);
+
+    Object.assign(sessionsManager, {
+        sessionList,
+        workspaceSelect,
+        activeCoder: initialSessionsManager.activeCoder,
+        activeWorkspace: initialSessionsManager.activeWorkspace,
+        activeCWD: initialSessionsManager.activeCWD,
+        worktreeDirtyRequestId: 0,
+        loadWorktreeSessions: vi.fn(),
+        loadWorktreeDirtyStates: vi.fn(),
+        highlightActiveSession: vi.fn(),
+        saveWorktreeState: vi.fn(async () => {}),
+        updateWorkspaceSelectWidth: vi.fn(),
+        app: {
+            diffController: tm.app.diffController,
+            tabManager: { getActiveTab: () => tm.getActiveTab() },
+        },
+    });
+    workspaceSelect.value = initialSessionsManager.workspaceSelect.value;
+
+    const loads = [];
+    sessionsManager.loadWorktrees = vi.fn((cwd) => {
+        const load = SessionsManager.prototype.loadWorktrees.call(
+            sessionsManager,
+            cwd,
+        );
+        loads.push(load);
+        return load;
+    });
+    tm.app.sessionsManager = sessionsManager;
+    return { sessionsManager, loads };
+}
+
+function makeSpawnCloseFixture(spawnResponse) {
+    const tm = makeTm({
+        withTabs: [
+            {
+                paneId: 'a',
+                workspace: '/wsA',
+                cwd: '/wsA/main',
+                coder: 'shell',
+            },
+            {
+                paneId: 'b',
+                workspace: '/wsB',
+                cwd: '/wsB/main',
+                coder: 'opencode',
+            },
+        ],
+        activePaneId: 'a',
+    });
+    const { sessionsManager, loads } = makeRealSessionsManager(tm);
+    const createTab = vi.fn();
+    const loadSessions = vi.fn();
+    const showSessionError = vi.fn();
+    sessionsManager.app.tabManager.createTab = createTab;
+    sessionsManager.app.showToast = showSessionError;
+    sessionsManager.loadSessions = loadSessions;
+
+    const fetchRequests = [];
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((url, options) => {
+            const requestUrl = String(url);
+            fetchRequests.push({ url: requestUrl, options });
+            if (requestUrl === '/api/terminals') return spawnResponse();
+            if (requestUrl === '/api/git/worktrees?cwd=%2FwsB') {
+                return Promise.resolve({
+                    ok: true,
+                    json: vi.fn(async () => [
+                        { path: '/wsB/main', active: true },
+                    ]),
+                });
+            }
+            throw new Error(`Unexpected fetch: ${requestUrl}`);
+        }),
+    );
+    return {
+        tm,
+        sessionsManager,
+        loads,
+        createTab,
+        loadSessions,
+        showSessionError,
+        fetchRequests,
+    };
+}
+
+function makePendingProjectRefresh(tm, initialStatus) {
+    const { sessionsManager, loads } = makeRealSessionsManager(tm);
+    const { diffController, output } = makeRealStatusController(
+        sessionsManager,
+        initialStatus,
+    );
+    tm.app.diffController = diffController;
+    sessionsManager.app.diffController = diffController;
+    const refreshSpy = vi.spyOn(diffController, 'refreshDiff');
+    const worktreeResponses = [];
+    const fetchUrls = [];
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((url) => {
+            const requestUrl = String(url);
+            fetchUrls.push(requestUrl);
+            if (requestUrl === '/api/git/worktrees?cwd=%2FwsB') {
+                const response = controlledPromise();
+                worktreeResponses.push(response);
+                return response.promise;
+            }
+            if (requestUrl === '/api/git/raw-status?cwd=%2FwsB%2Fmain') {
+                return Promise.resolve({
+                    ok: true,
+                    text: vi.fn(async () => 'status for /wsB/main'),
+                });
+            }
+            throw new Error(`Unexpected fetch: ${requestUrl}`);
+        }),
+    );
+    return {
+        sessionsManager,
+        loads,
+        diffController,
+        output,
+        refreshSpy,
+        worktreeResponses,
+        fetchUrls,
+    };
+}
+
+async function completeProjectRefresh(project) {
+    project.worktreeResponses[0].resolve({
+        ok: true,
+        json: vi.fn(async () => [
+            { path: '/wsB/main', active: true },
+            { path: '/wsB/other' },
+        ]),
+    });
+    await project.loads[0];
+    await Promise.resolve();
+    const refresh = project.refreshSpy.mock.results[0]?.value;
+    if (refresh) await refresh;
 }
 
 beforeEach(() => {
@@ -216,6 +417,591 @@ describe('undoCloseTab - reverse a soft-close', () => {
     });
 });
 
+// ---- spawn request context while a tab closes ------------------------
+
+describe('spawnNewSession - request-time context', () => {
+    const requestBodyA = {
+        coder: 'shell',
+        cwd: '/wsA/main',
+        session_id: '',
+        title: '+ Shell',
+        workspace: '/wsA',
+    };
+    const createdTabA = [
+        'spawned-pane-a',
+        'spawned-session-a',
+        '+ Shell',
+        'shell',
+        '/wsA',
+        '/wsA/main',
+    ];
+
+    it('keeps request metadata when A closes before the POST response', async () => {
+        const postResponse = controlledPromise();
+        const fixture = makeSpawnCloseFixture(() => postResponse.promise);
+        const spawn = fixture.sessionsManager.spawnNewSession();
+
+        expect(fixture.fetchRequests).toHaveLength(1);
+        expect(fixture.fetchRequests[0].url).toBe('/api/terminals');
+        expect(JSON.parse(fixture.fetchRequests[0].options.body)).toEqual(
+            requestBodyA,
+        );
+
+        fixture.tm.closeTab('a');
+        await fixture.loads[0];
+        expect(fixture.tm.activePaneId).toBe('b');
+        expect(fixture.sessionsManager.activeCoder).toBe('opencode');
+        expect(fixture.sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(fixture.sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(fixture.sessionsManager.activeCWD).toBe('/wsB/main');
+        expect(fixture.tm.app.showToast).toHaveBeenCalledTimes(1);
+        expect(fixture.fetchRequests.map(({ url }) => url)).toEqual([
+            '/api/terminals',
+            '/api/git/worktrees?cwd=%2FwsB',
+        ]);
+
+        postResponse.resolve({
+            ok: true,
+            json: vi.fn(async () => ({
+                pane_id: 'spawned-pane-a',
+                session_id: 'spawned-session-a',
+            })),
+        });
+        await spawn;
+
+        expect(fixture.createTab).toHaveBeenCalledTimes(1);
+        expect(fixture.createTab).toHaveBeenCalledWith(...createdTabA);
+        expect(fixture.loadSessions).toHaveBeenCalledTimes(1);
+        expect(fixture.showSessionError).not.toHaveBeenCalled();
+    });
+
+    it('keeps request metadata when A closes while response JSON is pending', async () => {
+        const jsonBody = controlledPromise();
+        const jsonEntered = controlledPromise();
+        const json = vi.fn(() => {
+            jsonEntered.resolve();
+            return jsonBody.promise;
+        });
+        const fixture = makeSpawnCloseFixture(() =>
+            Promise.resolve({ ok: true, json }),
+        );
+        const spawn = fixture.sessionsManager.spawnNewSession();
+
+        await jsonEntered.promise;
+        expect(json).toHaveBeenCalledTimes(1);
+        expect(fixture.fetchRequests).toHaveLength(1);
+        expect(JSON.parse(fixture.fetchRequests[0].options.body)).toEqual(
+            requestBodyA,
+        );
+
+        fixture.tm.closeTab('a');
+        await fixture.loads[0];
+        expect(fixture.tm.activePaneId).toBe('b');
+        expect(fixture.sessionsManager.activeCoder).toBe('opencode');
+        expect(fixture.sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(fixture.sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(fixture.sessionsManager.activeCWD).toBe('/wsB/main');
+        expect(fixture.tm.app.showToast).toHaveBeenCalledTimes(1);
+        expect(fixture.fetchRequests.map(({ url }) => url)).toEqual([
+            '/api/terminals',
+            '/api/git/worktrees?cwd=%2FwsB',
+        ]);
+
+        jsonBody.resolve({
+            pane_id: 'spawned-pane-a',
+            session_id: 'spawned-session-a',
+        });
+        await spawn;
+
+        expect(json).toHaveBeenCalledTimes(1);
+        expect(fixture.createTab).toHaveBeenCalledTimes(1);
+        expect(fixture.createTab).toHaveBeenCalledWith(...createdTabA);
+        expect(fixture.loadSessions).toHaveBeenCalledTimes(1);
+        expect(fixture.showSessionError).not.toHaveBeenCalled();
+    });
+});
+
+// ---- stale real-loader responses after close + Undo ------------------
+
+describe('softCloseTab - stale real worktree responses', () => {
+    it.each(['A then B', 'B then A'])(
+        'keeps restored tab A selected when responses resolve %s',
+        async (responseOrder) => {
+            const tm = makeTm({
+                withTabs: [
+                    {
+                        paneId: 'a',
+                        workspace: '/wsA',
+                        cwd: '/wsA/main',
+                        coder: 'opencode',
+                    },
+                    {
+                        paneId: 'b',
+                        workspace: '/wsB',
+                        cwd: '/wsB/main',
+                        coder: 'shell',
+                    },
+                ],
+                activePaneId: 'a',
+            });
+            const { sessionsManager, loads } = makeRealSessionsManager(tm);
+            const requests = [];
+            vi.stubGlobal(
+                'fetch',
+                vi.fn((url) => {
+                    const response = controlledPromise();
+                    requests.push({ url: String(url), ...response });
+                    return response.promise;
+                }),
+            );
+
+            tm.softCloseTab('a');
+            tm.undoCloseTab('a');
+
+            expect(tm.activePaneId).toBe('a');
+            expect(sessionsManager.activeWorkspace).toBe('/wsA');
+            expect(sessionsManager.workspaceSelect.value).toBe('/wsA');
+            expect(sessionsManager.activeCWD).toBe('/wsA/main');
+            expect(sessionsManager.activeCoder).toBe('opencode');
+            expect(loads).toHaveLength(2);
+            expect(requests.map(({ url }) => url)).toEqual([
+                '/api/git/worktrees?cwd=%2FwsB',
+                '/api/git/worktrees?cwd=%2FwsA',
+            ]);
+
+            const resolveRequest = (index, workspace) => {
+                requests[index].resolve({
+                    ok: true,
+                    json: vi.fn(async () => [
+                        { path: `${workspace}/main`, active: true },
+                    ]),
+                });
+            };
+            const assertRestoredA = () => {
+                expect(tm.activePaneId).toBe('a');
+                expect(sessionsManager.activeWorkspace).toBe('/wsA');
+                expect(sessionsManager.workspaceSelect.value).toBe('/wsA');
+                expect(sessionsManager.activeCWD).toBe('/wsA/main');
+                expect(sessionsManager.activeCoder).toBe('opencode');
+                expect(
+                    sessionsManager.sessionList
+                        .querySelector('.worktree-section.active')
+                        ?.getAttribute('data-worktree-path'),
+                ).toBe('/wsA/main');
+                expect(
+                    sessionsManager.highlightActiveSession.mock.calls,
+                ).toEqual([['a']]);
+                expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(
+                    1,
+                );
+                expect(tm.app.markdownManager.refreshFiles.mock.calls).toEqual([
+                    [{ force: false }],
+                ]);
+            };
+
+            if (responseOrder === 'A then B') {
+                resolveRequest(1, '/wsA');
+                await loads[1];
+                await Promise.resolve();
+                assertRestoredA();
+
+                resolveRequest(0, '/wsB');
+                await loads[0];
+                await Promise.resolve();
+                assertRestoredA();
+            } else {
+                resolveRequest(0, '/wsB');
+                await loads[0];
+                await Promise.resolve();
+
+                expect(sessionsManager.activeCWD).toBe('/wsA/main');
+                expect(sessionsManager.sessionList.textContent).toContain(
+                    'Scanning git worktrees',
+                );
+                expect(
+                    sessionsManager.highlightActiveSession,
+                ).not.toHaveBeenCalled();
+                expect(
+                    tm.app.diffController.refreshDiff,
+                ).not.toHaveBeenCalled();
+                expect(
+                    tm.app.markdownManager.refreshFiles,
+                ).not.toHaveBeenCalled();
+
+                resolveRequest(1, '/wsA');
+                await loads[1];
+                await Promise.resolve();
+                assertRestoredA();
+            }
+        },
+    );
+
+    it.each([
+        [
+            'workspace change with explicit C selection',
+            '/wsA',
+            '/wsA/main',
+            'shell',
+            'select',
+        ],
+        [
+            'workspace change with a second close to C',
+            '/wsA',
+            '/wsA/main',
+            'shell',
+            'close',
+        ],
+        [
+            'coder change with explicit C selection',
+            '/wsB',
+            '/wsB/other',
+            'opencode',
+            'select',
+        ],
+        [
+            'coder change with a second close to C',
+            '/wsB',
+            '/wsB/other',
+            'opencode',
+            'close',
+        ],
+    ])(
+        'refreshes status for current C after %s',
+        async (_label, aWorkspace, aCwd, aCoder, selection) => {
+            const tm = makeTm({
+                withTabs: [
+                    {
+                        paneId: 'a',
+                        workspace: aWorkspace,
+                        cwd: aCwd,
+                        coder: aCoder,
+                    },
+                    {
+                        paneId: 'b',
+                        workspace: '/wsB',
+                        cwd: '/wsB/main',
+                        coder: 'shell',
+                    },
+                    {
+                        paneId: 'c',
+                        workspace: '/wsB',
+                        cwd: '/wsB/main',
+                        coder: 'shell',
+                    },
+                ],
+                activePaneId: 'a',
+            });
+            const { sessionsManager, loads } = makeRealSessionsManager(tm);
+            const { diffController, output } = makeRealStatusController(
+                sessionsManager,
+                'status for /wsA/main',
+            );
+            tm.app.diffController = diffController;
+            sessionsManager.app.diffController = diffController;
+            const refreshSpy = vi.spyOn(diffController, 'refreshDiff');
+            const worktreeResponses = [];
+            const fetchUrls = [];
+            vi.stubGlobal(
+                'fetch',
+                vi.fn((url) => {
+                    const requestUrl = String(url);
+                    fetchUrls.push(requestUrl);
+                    if (requestUrl === '/api/git/worktrees?cwd=%2FwsB') {
+                        const response = controlledPromise();
+                        worktreeResponses.push(response);
+                        return response.promise;
+                    }
+                    if (
+                        requestUrl === '/api/git/raw-status?cwd=%2FwsB%2Fmain'
+                    ) {
+                        return Promise.resolve({
+                            ok: true,
+                            text: vi.fn(async () => 'status for /wsB/main'),
+                        });
+                    }
+                    throw new Error(`Unexpected fetch: ${requestUrl}`);
+                }),
+            );
+
+            tm.softCloseTab('a');
+            expect(tm.activePaneId).toBe('b');
+            expect(loads).toHaveLength(1);
+            expect(worktreeResponses).toHaveLength(1);
+
+            if (selection === 'select') {
+                tm.switchTab('c', { userInitiated: true });
+            } else {
+                tm.softCloseTab('b');
+            }
+
+            expect(tm.activePaneId).toBe('c');
+            expect(sessionsManager.activeWorkspace).toBe('/wsB');
+            expect(sessionsManager.workspaceSelect.value).toBe('/wsB');
+            expect(sessionsManager.activeCWD).toBe('/wsB/main');
+            expect(sessionsManager.activeCoder).toBe('shell');
+            expect(loads).toHaveLength(1);
+            expect(
+                fetchUrls.filter((url) =>
+                    url.startsWith('/api/git/worktrees?'),
+                ),
+            ).toEqual(['/api/git/worktrees?cwd=%2FwsB']);
+
+            worktreeResponses[0].resolve({
+                ok: true,
+                json: vi.fn(async () => [
+                    { path: '/wsB/main', active: true },
+                    { path: '/wsB/other' },
+                ]),
+            });
+            await loads[0];
+            await Promise.resolve();
+            const refresh = refreshSpy.mock.results[0]?.value;
+            if (refresh) await refresh;
+
+            expect(tm.activePaneId).toBe('c');
+            expect(sessionsManager.activeWorkspace).toBe('/wsB');
+            expect(sessionsManager.activeCWD).toBe('/wsB/main');
+            expect(sessionsManager.activeCoder).toBe('shell');
+            expect(
+                fetchUrls.filter((url) =>
+                    url.startsWith('/api/git/raw-status?'),
+                ),
+            ).toEqual(['/api/git/raw-status?cwd=%2FwsB%2Fmain']);
+            expect(output.value).toBe('status for /wsB/main');
+            expect(refreshSpy).toHaveBeenCalledTimes(1);
+            expect(sessionsManager.highlightActiveSession.mock.calls).toEqual([
+                ['c'],
+                ['c'],
+            ]);
+        },
+    );
+
+    it.each(['pi-rpc', 'review', 'kanban'])(
+        'refreshes the retained project after a pending load crosses a %s view',
+        async (viewCoder) => {
+            const tm = makeTm({
+                withTabs: [
+                    {
+                        paneId: 'a',
+                        workspace: '/wsA',
+                        cwd: '/wsA/main',
+                        coder: 'shell',
+                    },
+                    {
+                        paneId: 'b',
+                        workspace: '/wsB',
+                        cwd: '/wsB/main',
+                        coder: 'shell',
+                    },
+                    {
+                        paneId: 'neutral',
+                        workspace: `/unrelated-${viewCoder}`,
+                        cwd: `/unrelated-${viewCoder}/worktree`,
+                        coder: viewCoder,
+                    },
+                ],
+                activePaneId: 'a',
+            });
+            const project = makePendingProjectRefresh(
+                tm,
+                'status for /wsA/main',
+            );
+
+            tm.softCloseTab('a');
+            expect(tm.activePaneId).toBe('b');
+            expect(project.loads).toHaveLength(1);
+            const retainedContext = {
+                workspace: project.sessionsManager.activeWorkspace,
+                workspaceSelect: project.sessionsManager.workspaceSelect.value,
+                coder: project.sessionsManager.activeCoder,
+                cwd: project.sessionsManager.activeCWD,
+            };
+            expect(retainedContext).toEqual({
+                workspace: '/wsB',
+                workspaceSelect: '/wsB',
+                coder: 'shell',
+                cwd: '/wsB/main',
+            });
+
+            tm.switchTab('neutral', { userInitiated: true });
+            expect(tm.activePaneId).toBe('neutral');
+            expect(project.sessionsManager.activeWorkspace).toBe('/wsB');
+            expect(project.sessionsManager.workspaceSelect.value).toBe('/wsB');
+            expect(project.sessionsManager.activeCoder).toBe('shell');
+            expect(project.sessionsManager.activeCWD).toBe('/wsB/main');
+            expect(project.refreshSpy).not.toHaveBeenCalled();
+            expect(project.worktreeResponses).toHaveLength(1);
+
+            await completeProjectRefresh(project);
+
+            expect(tm.activePaneId).toBe('neutral');
+            expect(project.sessionsManager.activeWorkspace).toBe('/wsB');
+            expect(project.sessionsManager.workspaceSelect.value).toBe('/wsB');
+            expect(project.sessionsManager.activeCoder).toBe('shell');
+            expect(project.sessionsManager.activeCWD).toBe('/wsB/main');
+            expect(
+                project.fetchUrls.filter((url) =>
+                    url.startsWith('/api/git/worktrees?'),
+                ),
+            ).toEqual(['/api/git/worktrees?cwd=%2FwsB']);
+            expect(
+                project.fetchUrls.filter((url) =>
+                    url.startsWith('/api/git/raw-status?'),
+                ),
+            ).toEqual(['/api/git/raw-status?cwd=%2FwsB%2Fmain']);
+            expect(project.output.value).toBe('status for /wsB/main');
+            expect(project.refreshSpy).toHaveBeenCalledTimes(1);
+            expect(
+                project.sessionsManager.highlightActiveSession.mock.calls,
+            ).toEqual([['neutral'], ['neutral']]);
+            expect(
+                project.sessionsManager.highlightActiveSession.mock.calls,
+            ).not.toContainEqual(['b']);
+        },
+    );
+
+    it('refreshes the retained project after its last pane closes during a pending load', async () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsB',
+                    cwd: '/wsB/main',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        const project = makePendingProjectRefresh(tm, 'status for /wsA/main');
+
+        tm.softCloseTab('a');
+        expect(tm.activePaneId).toBe('b');
+        expect(project.loads).toHaveLength(1);
+        tm.softCloseTab('b');
+
+        expect(tm.activePaneId).toBeNull();
+        expect(project.sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(project.sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(project.sessionsManager.activeCoder).toBe('shell');
+        expect(project.sessionsManager.activeCWD).toBe('/wsB/main');
+        expect(
+            project.sessionsManager.highlightActiveSession,
+        ).not.toHaveBeenCalled();
+        expect(project.refreshSpy).not.toHaveBeenCalled();
+        expect(project.worktreeResponses).toHaveLength(1);
+
+        await completeProjectRefresh(project);
+
+        expect(tm.activePaneId).toBeNull();
+        expect(project.sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(project.sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(project.sessionsManager.activeCoder).toBe('shell');
+        expect(project.sessionsManager.activeCWD).toBe('/wsB/main');
+        expect(
+            project.fetchUrls.filter((url) =>
+                url.startsWith('/api/git/worktrees?'),
+            ),
+        ).toEqual(['/api/git/worktrees?cwd=%2FwsB']);
+        expect(
+            project.fetchUrls.filter((url) =>
+                url.startsWith('/api/git/raw-status?'),
+            ),
+        ).toEqual(['/api/git/raw-status?cwd=%2FwsB%2Fmain']);
+        expect(project.output.value).toBe('status for /wsB/main');
+        expect(project.refreshSpy).toHaveBeenCalledTimes(1);
+        expect(
+            project.sessionsManager.highlightActiveSession,
+        ).not.toHaveBeenCalled();
+    });
+
+    it('renders the workspace list for C after a worktree-only switch during close synchronization', async () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsB',
+                    cwd: '/wsB/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'c',
+                    workspace: '/wsB',
+                    cwd: '/wsB/other',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        const { sessionsManager, loads } = makeRealSessionsManager(tm);
+        const request = controlledPromise();
+        const fetchWorktrees = vi.fn(() => request.promise);
+        vi.stubGlobal('fetch', fetchWorktrees);
+
+        tm.softCloseTab('a');
+        expect(tm.activePaneId).toBe('b');
+        expect(loads).toHaveLength(1);
+
+        tm.switchTab('c', { userInitiated: true });
+        expect(tm.activePaneId).toBe('c');
+        expect(loads).toHaveLength(1);
+        expect(fetchWorktrees).toHaveBeenCalledTimes(1);
+        expect(fetchWorktrees).toHaveBeenCalledWith(
+            '/api/git/worktrees?cwd=%2FwsB',
+        );
+
+        request.resolve({
+            ok: true,
+            json: vi.fn(async () => [
+                { path: '/wsB/main', active: true },
+                { path: '/wsB/other' },
+            ]),
+        });
+        await loads[0];
+        await Promise.resolve();
+
+        expect(tm.activePaneId).toBe('c');
+        expect(sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(sessionsManager.activeCWD).toBe('/wsB/other');
+        expect(sessionsManager.activeCoder).toBe('shell');
+        expect(
+            Array.from(
+                sessionsManager.sessionList.querySelectorAll(
+                    '.worktree-section',
+                ),
+                (section) => section.getAttribute('data-worktree-path'),
+            ),
+        ).toEqual(['/wsB/main', '/wsB/other']);
+        expect(
+            sessionsManager.sessionList
+                .querySelector('.worktree-section.active')
+                ?.getAttribute('data-worktree-path'),
+        ).toBe('/wsB/other');
+        expect(sessionsManager.sessionList.textContent).not.toContain(
+            'Scanning git worktrees',
+        );
+        expect(sessionsManager.highlightActiveSession.mock.calls).toEqual([
+            ['c'],
+        ]);
+        expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(1);
+        expect(tm.app.markdownManager.refreshFiles.mock.calls).toEqual([
+            [{ force: false }],
+        ]);
+    });
+});
+
 // ---- close selection -------------------------------------------------
 
 describe('close selection', () => {
@@ -288,36 +1074,154 @@ describe('finalizeCloseTab - actually kill the PTY', () => {
     });
 });
 
-// ---- softCloseTab - close selects a project-neutral survivor ------------
+// ---- softCloseTab - close selects and synchronizes a survivor ------------
 
 describe('softCloseTab - active-tab close selects a survivor', () => {
-    it('selects the next visible tab without syncing its project', () => {
+    it('applies cross-workspace context before another click', async () => {
         const tm = makeTm({
             withTabs: [
-                { paneId: 'a', workspace: '/wsA', coder: 'opencode' },
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'opencode',
+                },
                 {
                     paneId: 'b',
                     workspace: '/wsZ',
-                    cwd: '/wsZ',
+                    cwd: '/wsZ/main',
                     coder: 'shell',
                 },
             ],
             activePaneId: 'a',
         });
-        const switchSpy = vi.spyOn(tm, 'switchTab');
-        tm.softCloseTab('a');
-        expect(switchSpy).toHaveBeenCalledWith('b', {
-            preserveProject: true,
-        });
-        expect(tm.activePaneId).toBe('b');
-        expect(tm.app.sessionsManager.switchCoder).not.toHaveBeenCalled();
-        expect(tm.app.sessionsManager.loadWorktrees).not.toHaveBeenCalled();
-
-        // The explicit second click opts back into normal project sync.
-        tm.switchTab('b', { userInitiated: true });
-        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
-            '/wsZ',
+        const worktreeLoad = controlledPromise();
+        tm.app.sessionsManager.loadWorktrees = vi.fn(
+            () => worktreeLoad.promise,
         );
+        const switchSpy = vi.spyOn(tm, 'switchTab');
+
+        tm.softCloseTab('a');
+
+        expect(switchSpy).toHaveBeenCalledTimes(1);
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsZ');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsZ');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsZ/main');
+        expect(tm.app.sessionsManager.activeCoder).toBe('shell');
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledTimes(1);
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsZ/main',
+        );
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).not.toHaveBeenCalled();
+        expect(tm.app.diffController.refreshDiff).not.toHaveBeenCalled();
+        expect(tm.app.markdownManager.refreshFiles).not.toHaveBeenCalled();
+
+        worktreeLoad.resolve();
+        await worktreeLoad.promise;
+        await Promise.resolve();
+
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).toHaveBeenCalledWith('b');
+        expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(1);
+        expect(tm.app.markdownManager.refreshFiles).toHaveBeenCalledWith({
+            force: false,
+        });
+
+        tm.switchTab('b', { userInitiated: true });
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it('synchronously applies a worktree-only replacement', () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsA',
+                    cwd: '/wsA/feature',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+
+        tm.softCloseTab('a');
+
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsA');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsA');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsA/feature');
+        expect(tm.app.sessionsManager.activeCoder).toBe('shell');
+        expect(tm.app.sessionsManager.loadWorktrees).not.toHaveBeenCalled();
+        expect(
+            tm.app.sessionsManager.highlightActiveWorktree,
+        ).toHaveBeenCalledWith('/wsA/feature');
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).toHaveBeenCalledWith('b');
+        expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(1);
+        expect(tm.app.markdownManager.refreshFiles).toHaveBeenCalledWith({
+            force: false,
+        });
+    });
+
+    it('reloads worktrees when only the replacement coder changes', async () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'opencode',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        const worktreeLoad = controlledPromise();
+        tm.app.sessionsManager.loadWorktrees = vi.fn(
+            () => worktreeLoad.promise,
+        );
+
+        tm.softCloseTab('a');
+
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsA');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsA');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsA/main');
+        expect(tm.app.sessionsManager.activeCoder).toBe('opencode');
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledTimes(1);
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsA/main',
+        );
+        expect(tm.app.diffController.refreshDiff).not.toHaveBeenCalled();
+        expect(tm.app.markdownManager.refreshFiles).not.toHaveBeenCalled();
+
+        worktreeLoad.resolve();
+        await worktreeLoad.promise;
+        await Promise.resolve();
+
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).toHaveBeenCalledWith('b');
+        expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(1);
+        expect(tm.app.markdownManager.refreshFiles).toHaveBeenCalledWith({
+            force: false,
+        });
     });
 
     it('keeps normal user tab selection project-aware', () => {
@@ -339,12 +1243,242 @@ describe('softCloseTab - active-tab close selects a survivor', () => {
         );
     });
 
+    it('applies fallback project context when an active tab is finalized directly', async () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'opencode',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsZ',
+                    cwd: '/wsZ/main',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        const worktreeLoad = controlledPromise();
+        tm.app.sessionsManager.loadWorktrees = vi.fn(
+            () => worktreeLoad.promise,
+        );
+
+        tm.finalizeCloseTab('a');
+
+        expect(tm.tabs.has('a')).toBe(false);
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsZ');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsZ');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsZ/main');
+        expect(tm.app.sessionsManager.activeCoder).toBe('shell');
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledTimes(1);
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsZ/main',
+        );
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).not.toHaveBeenCalled();
+        expect(tm.app.diffController.refreshDiff).not.toHaveBeenCalled();
+        expect(tm.app.markdownManager.refreshFiles).not.toHaveBeenCalled();
+
+        worktreeLoad.resolve();
+        await worktreeLoad.promise;
+        await Promise.resolve();
+
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).toHaveBeenCalledWith('b');
+        expect(tm.app.diffController.refreshDiff).toHaveBeenCalledTimes(1);
+        expect(tm.app.markdownManager.refreshFiles).toHaveBeenCalledWith({
+            force: false,
+        });
+    });
+
+    it.each(['pi-rpc', 'review', 'kanban'])(
+        'preserves project context when a %s tab is selected',
+        (coder) => {
+            const staleWorkspace = `/stale/${coder}`;
+            const staleCWD = `${staleWorkspace}/worktree`;
+            const tm = makeTm({
+                withTabs: [
+                    {
+                        paneId: 'a',
+                        workspace: '/wsA',
+                        cwd: '/wsA/main',
+                        coder: 'shell',
+                    },
+                    {
+                        paneId: 'b',
+                        workspace: staleWorkspace,
+                        cwd: staleCWD,
+                        coder,
+                    },
+                ],
+                activePaneId: 'a',
+            });
+
+            tm.softCloseTab('a');
+
+            expect(tm.activePaneId).toBe('b');
+            expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsA');
+            expect(tm.app.sessionsManager.activeCWD).toBe('/wsA/main');
+            expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsA');
+            expect(tm.app.sessionsManager.activeCoder).toBe('shell');
+            expect(tm.app.sessionsManager.loadWorktrees).not.toHaveBeenCalled();
+            expect(tm.app.diffController.refreshDiff).not.toHaveBeenCalled();
+            expect(tm.app.markdownManager.refreshFiles).not.toHaveBeenCalled();
+            expect(
+                tm.app.sessionsManager.highlightActiveSession,
+            ).toHaveBeenCalledWith('b');
+            expect(tm.activateTabViewport).toHaveBeenCalledWith(
+                tm.tabs.get('b'),
+                expect.objectContaining({
+                    scrollToBottom: true,
+                    autoReconnect: true,
+                    force: false,
+                }),
+            );
+
+            if (coder === 'pi-rpc') {
+                expect(
+                    tm.app.sessionsManager.switchCoder,
+                ).not.toHaveBeenCalled();
+            } else {
+                expect(tm.app.sessionsManager.switchCoder).toHaveBeenCalledWith(
+                    coder,
+                    true,
+                );
+            }
+        },
+    );
+
+    it('selects the next visible tab and skips a soft-closing neighbor', () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsB',
+                    cwd: '/wsB/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'c',
+                    workspace: '/wsC',
+                    cwd: '/wsC/selected',
+                    coder: 'opencode',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+
+        tm.softCloseTab('a');
+
+        expect(tm.activePaneId).toBe('c');
+        expect(tm.tabs.get('b').softClosing).toBe(true);
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsC');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsC');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsC/selected');
+        expect(tm.app.sessionsManager.activeCoder).toBe('opencode');
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsC/selected',
+        );
+    });
+
+    it('wraps past a soft-closing neighbor to the next visible tab', () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'b',
+                    workspace: '/wsB',
+                    cwd: '/wsB/main',
+                    coder: 'shell',
+                },
+                {
+                    paneId: 'c',
+                    workspace: '/wsC',
+                    cwd: '/wsC/wrap',
+                    coder: 'opencode',
+                },
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+        tm.softCloseTab('b');
+
+        tm.softCloseTab('a');
+
+        expect(tm.activePaneId).toBe('c');
+        expect(tm.tabs.get('b').softClosing).toBe(true);
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsC');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsC');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsC/wrap');
+        expect(tm.app.sessionsManager.activeCoder).toBe('opencode');
+        expect(tm.app.sessionsManager.loadWorktrees).toHaveBeenCalledWith(
+            '/wsC/wrap',
+        );
+    });
+
     it('shows the empty state while the last tab remains undoable', () => {
         const tm = makeTm({ withTabs: ['a'], activePaneId: 'a' });
         tm.softCloseTab('a');
         expect(tm.showEmptyState).toHaveBeenCalled();
         expect(tm.activePaneId).toBeNull();
         expect(tm.tabs.get('a').softClosing).toBe(true);
+    });
+
+    it('restores the original project context when undo follows a cross-workspace close', () => {
+        const tm = makeTm({
+            withTabs: [
+                {
+                    paneId: 'a',
+                    workspace: '/wsA',
+                    cwd: '/wsA/main',
+                    coder: 'opencode',
+                },
+                {
+                    paneId: 'b',
+                    workspace: '/wsB',
+                    cwd: '/wsB/main',
+                    coder: 'shell',
+                },
+            ],
+            activePaneId: 'a',
+        });
+
+        tm.softCloseTab('a');
+
+        expect(tm.activePaneId).toBe('b');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsB');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsB');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsB/main');
+        expect(tm.app.sessionsManager.activeCoder).toBe('shell');
+
+        tm.undoCloseTab('a');
+
+        expect(tm.activePaneId).toBe('a');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsA');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsA');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsA/main');
+        expect(tm.app.sessionsManager.activeCoder).toBe('opencode');
+        expect(tm.app.sessionsManager.loadWorktrees.mock.calls).toEqual([
+            ['/wsB/main'],
+            ['/wsA/main'],
+        ]);
     });
 
     it('hides a background closing tab without disturbing the active tab', () => {
@@ -359,6 +1493,20 @@ describe('softCloseTab - active-tab close selects a survivor', () => {
         tm.softCloseTab('b');
         expect(switchSpy).not.toHaveBeenCalled();
         expect(tm.activePaneId).toBe('a');
+        expect(tm.app.sessionsManager.activeWorkspace).toBe('/wsA');
+        expect(tm.app.sessionsManager.workspaceSelect.value).toBe('/wsA');
+        expect(tm.app.sessionsManager.activeCWD).toBe('/wsA');
+        expect(tm.app.sessionsManager.activeCoder).toBe('opencode');
+        expect(tm.app.sessionsManager.switchCoder).not.toHaveBeenCalled();
+        expect(tm.app.sessionsManager.loadWorktrees).not.toHaveBeenCalled();
+        expect(
+            tm.app.sessionsManager.highlightActiveSession,
+        ).not.toHaveBeenCalled();
+        expect(
+            tm.app.sessionsManager.highlightActiveWorktree,
+        ).not.toHaveBeenCalled();
+        expect(tm.app.diffController.refreshDiff).not.toHaveBeenCalled();
+        expect(tm.app.markdownManager.refreshFiles).not.toHaveBeenCalled();
         expect(tm.tabs.get('b').tabEl.classList.contains('soft-closed')).toBe(
             true,
         );
