@@ -6204,6 +6204,18 @@ html[data-phi-config-page] .settings-modal {
     font-size: 12px;
 }
 
+/* Source previews need explicit typography instead of the browser's
+   smaller default monospace font. Do not affect Markdown or diffs. */
+.file-viewer-code {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.file-viewer-code code {
+    font: inherit;
+}
+
 /* ═══════════════════════════════════════════════════════════
    MARKDOWN TYPOGRAPHY (inside .md-rendered)
    ═══════════════════════════════════════════════════════════ */
