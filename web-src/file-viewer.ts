@@ -325,6 +325,7 @@ async function mountCode(
     // textContent (NOT innerHTML) — the file may contain HTML-looking
     // snippets that must render literally, not as markup.
     const pre = document.createElement('pre');
+    pre.className = 'file-viewer-code';
     const code = document.createElement('code');
     code.className = `hljs language-${lang}`;
     code.textContent = text;
