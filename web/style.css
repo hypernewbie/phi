@@ -6026,6 +6026,45 @@ html[data-phi-config-page] .settings-modal {
     overflow: hidden;
 }
 
+#md-modal .md-modal-content.md-modal-maximized {
+    width: 100vw !important;
+    max-width: none !important;
+    height: var(--vv-height, 100dvh) !important;
+    max-height: var(--vv-height, 100dvh) !important;
+    border: none !important;
+    border-radius: 0 !important;
+}
+
+#md-modal .md-modal-size-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+    margin-right: 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+#md-modal .md-modal-size-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-border);
+}
+
+#md-modal .md-modal-icon-restore,
+#md-modal .md-modal-size-btn[aria-pressed="true"] .md-modal-icon-maximize {
+    display: none;
+}
+
+#md-modal .md-modal-size-btn[aria-pressed="true"] .md-modal-icon-restore {
+    display: block;
+}
+
 .md-modal-header {
     display: flex;
     align-items: center;

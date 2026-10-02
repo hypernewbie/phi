@@ -19,6 +19,7 @@ export class MarkdownManager {
     modalTitle: HTMLElement;
     modalBody: HTMLElement;
     modalClose!: HTMLElement;
+    modalSizeToggleBtn: HTMLElement | null;
     modalActions!: HTMLElement | null;
     modalBtnGroup!: HTMLElement | null;
     modalCopyBtn: HTMLElement;
@@ -72,6 +73,7 @@ export class MarkdownManager {
         this.modalClose = document.getElementById(
             'md-modal-close',
         ) as HTMLElement;
+        this.modalSizeToggleBtn = document.getElementById('md-modal-size-btn');
         this.modalActions = document.getElementById('md-modal-actions');
         this.modalBtnGroup = document.getElementById('md-modal-btn-group');
         this.modalCopyBtn = document.getElementById(
@@ -123,6 +125,9 @@ export class MarkdownManager {
 
     _setupEventListeners(): void {
         this.modalClose.addEventListener('click', () => this.closeModal());
+        this.modalSizeToggleBtn?.addEventListener('click', () =>
+            this.toggleModalSize(),
+        );
         this.modal.addEventListener('click', (e) => {
             if (e.target === this.modal) this.closeModal();
         });
@@ -652,6 +657,16 @@ export class MarkdownManager {
             url: handle.url || assetUrl,
         };
         this._updateModalActions();
+    }
+
+    toggleModalSize(): void {
+        const content = this.modal.querySelector('.md-modal-content');
+        if (!content || !this.modalSizeToggleBtn) return;
+        const maximized = content.classList.toggle('md-modal-maximized');
+        this.modalSizeToggleBtn.setAttribute('aria-pressed', String(maximized));
+        const label = maximized ? 'Restore preview size' : 'Maximize preview';
+        this.modalSizeToggleBtn.title = label;
+        this.modalSizeToggleBtn.setAttribute('aria-label', label);
     }
 
     closeModal(): void {

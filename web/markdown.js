@@ -12,6 +12,7 @@ export class MarkdownManager {
     modalTitle;
     modalBody;
     modalClose;
+    modalSizeToggleBtn;
     modalActions;
     modalBtnGroup;
     modalCopyBtn;
@@ -56,6 +57,7 @@ export class MarkdownManager {
         this.modalTitle = document.getElementById('md-modal-title');
         this.modalBody = document.getElementById('md-modal-body');
         this.modalClose = document.getElementById('md-modal-close');
+        this.modalSizeToggleBtn = document.getElementById('md-modal-size-btn');
         this.modalActions = document.getElementById('md-modal-actions');
         this.modalBtnGroup = document.getElementById('md-modal-btn-group');
         this.modalCopyBtn = document.getElementById('md-modal-copy-btn');
@@ -87,6 +89,7 @@ export class MarkdownManager {
     }
     _setupEventListeners() {
         this.modalClose.addEventListener('click', () => this.closeModal());
+        this.modalSizeToggleBtn?.addEventListener('click', () => this.toggleModalSize());
         this.modal.addEventListener('click', (e) => {
             if (e.target === this.modal)
                 this.closeModal();
@@ -544,6 +547,16 @@ export class MarkdownManager {
             url: handle.url || assetUrl,
         };
         this._updateModalActions();
+    }
+    toggleModalSize() {
+        const content = this.modal.querySelector('.md-modal-content');
+        if (!content || !this.modalSizeToggleBtn)
+            return;
+        const maximized = content.classList.toggle('md-modal-maximized');
+        this.modalSizeToggleBtn.setAttribute('aria-pressed', String(maximized));
+        const label = maximized ? 'Restore preview size' : 'Maximize preview';
+        this.modalSizeToggleBtn.title = label;
+        this.modalSizeToggleBtn.setAttribute('aria-label', label);
     }
     closeModal() {
         this.modal.classList.add('hidden');
