@@ -95,7 +95,7 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
     await expect(size.locator('svg:visible')).toHaveCount(1);
     const expanded = await content.boundingBox();
     expect(expanded!.width).toBeGreaterThan(original!.width + 20);
-    expect(expanded!.width).toBeLessThan(1400);
+    expect(expanded!.width).toBeCloseTo(1400, 0);
     expect(expanded!.height).toBeGreaterThan(original!.height);
     expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
     await size.click();
@@ -218,9 +218,9 @@ test('modal size toggle remains an in-page dialog on a narrow viewport', async (
     await expect(size).toBeVisible();
     await size.click();
     const box = (await content.boundingBox())!;
-    expect(box.x).toBeGreaterThanOrEqual(10);
-    expect(box.x + box.width).toBeLessThanOrEqual(410);
-    expect(box.height).toBeLessThan(800);
+    expect(box.x).toBeCloseTo(0, 0);
+    expect(box.x + box.width).toBeCloseTo(420, 0);
+    expect(box.height).toBeCloseTo(800, 0);
     expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
     await size.click();
     await expect(content).not.toHaveClass(/diff-modal-maximized/);

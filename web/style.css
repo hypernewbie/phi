@@ -6512,14 +6512,15 @@ html[data-phi-config-page] .settings-modal {
     max-height: 92vh;
 }
 
-/* Near-viewport modal mode, not the browser Fullscreen API. Keep a small
-   border/overlay visible and let the existing body remain the scroller. */
+/* Edge-to-edge in-page mode, not the browser Fullscreen API. The
+   existing body remains the scroller and the header stays available. */
 #diff-modal .md-modal-content.diff-modal-maximized {
-    width: calc(100vw - 24px) !important;
+    width: 100vw !important;
     max-width: none !important;
-    height: calc(var(--vv-height, 100vh) - 24px) !important;
-    max-height: calc(var(--vv-height, 100vh) - 24px) !important;
-    border-radius: 12px !important;
+    height: var(--vv-height, 100dvh) !important;
+    max-height: var(--vv-height, 100dvh) !important;
+    border: none !important;
+    border-radius: 0 !important;
 }
 
 #diff-modal .diff-modal-size-btn {
