@@ -86,7 +86,11 @@ describe('picker.html (the add-server picker)', () => {
           onAddServerResult: () => () => {},
           postAddServers: (urls: string[]) => {
             bulkAdded = urls;
-            return Promise.resolve({ ok: true, added: urls.length, errors: [] });
+            return Promise.resolve({
+              ok: true,
+              added: urls.length,
+              errors: [],
+            });
           },
         };
       },

@@ -419,7 +419,11 @@ export class ProfileViewManager {
     // body view (the main-view listener in desktop.ts does not catch keys
     // that fire while a body view has focus). Modified F11 chords stay
     // untouched; xterm.js leaves plain F11 unbound.
-    installFullscreenToggle(view.webContents, this.win, this.onFullscreenToggle);
+    installFullscreenToggle(
+      view.webContents,
+      this.win,
+      this.onFullscreenToggle,
+    );
     if (this.onFullscreenToggle) {
       const onToggle = this.onFullscreenToggle;
       view.webContents.on('enter-html-full-screen', () => onToggle(true));
