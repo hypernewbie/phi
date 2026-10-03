@@ -125,7 +125,7 @@ describe('_fetchRecordingRange hash-cache loop', () => {
             'fetch',
             vi.fn(async (url) => {
                 seen.push(String(url));
-                return envelope(0, 10, '0123456789');
+                return envelope(0, 10, '0123456789', 8);
             }),
         );
         await c._fetchRecordingRange('p', 0, 10, 8);

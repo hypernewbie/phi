@@ -3,9 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager, termPerfLogSlowFit } from '../web/terminal.js';
 
-// Live-gap healing (hot-v1 §6): a small missing interval must patch
-// invisibly through the normal write queue; only an oversize interval
-// abandons with an honest banner. This file exists because `d.bytes`
+// Live-gap healing: recover every interval through bounded requests.
+// An unavailable interval reconnects; it never permits skipping bytes.
+// This file exists because `d.bytes`
 // (always undefined — the fetch returns `byteLength`) once made the
 // patch branch dead, so EVERY gap dropped bytes with a banner.
 
@@ -25,6 +25,8 @@ function pty() {
         lastFrameEnd: 110,
         applyGapPatch: vi.fn(),
         abandonGap: vi.fn(),
+        ws: { close: vi.fn() },
+        release: vi.fn(),
     };
 }
 
@@ -69,33 +71,31 @@ describe('_onLiveGap', () => {
         expect(p.abandonGap).not.toHaveBeenCalled();
     });
 
-    it('abandons an oversize gap with an honest banner', async () => {
+    it('reconnects for an unavailable gap without skipping or injecting a banner', async () => {
         const p = pty();
         const c = ctx(async () => null);
         const t = tab(p);
         await c._onLiveGap(t, 100, 100 + 70 * 1024);
         expect(p.applyGapPatch).not.toHaveBeenCalled();
-        expect(p.abandonGap).toHaveBeenCalledWith(100 + 70 * 1024);
-        expect(c.writeToTerminal).toHaveBeenCalledTimes(1);
-        expect(String(c.writeToTerminal.mock.calls[0][1])).toContain(
-            'output bytes dropped',
-        );
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(p.ws.close).toHaveBeenCalledOnce();
+        expect(c.writeToTerminal).not.toHaveBeenCalled();
+        expect(p.release).not.toHaveBeenCalled();
     });
 
-    it('throttles redraw requests when adjacent gaps really are unavailable', async () => {
+    it('does not provoke resize storms when gaps remain unavailable', async () => {
         const p = pty();
         const c = ctx(async () => null);
         c._nudgeRedraw = vi.fn();
         const t = tab(p);
         await c._onLiveGap(t, 100, 105);
         await c._onLiveGap(t, 100, 105);
-        expect(c._nudgeRedraw).toHaveBeenCalledOnce();
-        t._gapRedrawAt -= 1001;
-        await c._onLiveGap(t, 100, 105);
-        expect(c._nudgeRedraw).toHaveBeenCalledTimes(2);
+        expect(c._nudgeRedraw).not.toHaveBeenCalled();
+        expect(p.ws.close).toHaveBeenCalledTimes(2);
+        expect(p.abandonGap).not.toHaveBeenCalled();
     });
 
-    it('abandons when the fetch misses the range start', async () => {
+    it('reconnects when the fetch misses the range start', async () => {
         const p = pty();
         const c = ctx(async () => ({
             start: 0, // truncated: ring no longer holds `from`
@@ -106,7 +106,8 @@ describe('_onLiveGap', () => {
         }));
         await c._onLiveGap(tab(p), 100, 105);
         expect(p.applyGapPatch).not.toHaveBeenCalled();
-        expect(p.abandonGap).toHaveBeenCalledWith(105);
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(p.ws.close).toHaveBeenCalledOnce();
     });
 
     it.each([
@@ -120,7 +121,8 @@ describe('_onLiveGap', () => {
             const c = ctx(async () => ({ start: 100, ...range }));
             await c._onLiveGap(tab(p), 100, 105);
             expect(p.applyGapPatch).not.toHaveBeenCalled();
-            expect(p.abandonGap).toHaveBeenCalledWith(105);
+            expect(p.abandonGap).not.toHaveBeenCalled();
+            expect(p.ws.close).toHaveBeenCalledOnce();
         },
     );
 
@@ -220,7 +222,7 @@ describe('_onLiveGap', () => {
         expect(c.writeToTerminal).not.toHaveBeenCalled();
     });
 
-    it('abandons a zero-byte patch instead of re-firing forever', async () => {
+    it('reconnects for a zero-byte patch instead of re-firing forever', async () => {
         // An empty patch would not advance liveSeq; flushing would re-fire
         // the same gap and fetch it again in a hot loop.
         const p = pty();
@@ -232,7 +234,8 @@ describe('_onLiveGap', () => {
         }));
         await c._onLiveGap(tab(p), 100, 105);
         expect(p.applyGapPatch).not.toHaveBeenCalled();
-        expect(p.abandonGap).toHaveBeenCalledWith(105);
+        expect(p.abandonGap).not.toHaveBeenCalled();
+        expect(p.ws.close).toHaveBeenCalledOnce();
     });
 });
 
@@ -615,13 +618,23 @@ describe('_bootstrappedRelease generation', () => {
         };
         c._bootstrappedRelease(tab, pty, 0, 100);
         c._bootstrappedRelease(tab, pty, 50, 100);
-        resolvers[0]({ start: 0, end: 100, byteLength: 5, text: 'STALE' });
+        resolvers[0]({
+            start: 0,
+            end: 100,
+            byteLength: 100,
+            text: 'STALE'.padEnd(100),
+        });
         await new Promise((r) => setTimeout(r, 0));
-        resolvers[1]({ start: 50, end: 100, byteLength: 5, text: 'FRESH' });
+        resolvers[1]({
+            start: 50,
+            end: 100,
+            byteLength: 50,
+            text: 'FRESH'.padEnd(50),
+        });
         await Promise.all(tab._pendingBootstraps || []);
         await new Promise((r) => setTimeout(r, 0));
         const texts = c.writeToTerminal.mock.calls.map((call) => call[1]);
-        expect(texts).toEqual(['FRESH']);
+        expect(texts).toEqual(['FRESH'.padEnd(50)]);
         expect(pty.release).toHaveBeenCalledTimes(1);
         expect(tab._bootstrapGate).toBe(null);
     });
@@ -655,7 +668,7 @@ describe('_trackBootstrap', () => {
 });
 
 describe('_bootstrapDelta', () => {
-    it('drops an oversize delta without touching the buffer or watermarks', async () => {
+    it('rejects an oversized response to a bounded request without touching watermarks', async () => {
         const oversize = 3 * 1024 * 1024;
         const c = ctx(async () => ({
             start: 0,

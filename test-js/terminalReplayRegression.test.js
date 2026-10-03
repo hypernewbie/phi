@@ -14,7 +14,9 @@ class WireSocket {
         this.readyState = 1;
     }
     send() {}
-    close() {}
+    close() {
+        this.closed = true;
+    }
     emit(type, payload) {
         const frame = new Uint8Array(1 + payload.byteLength);
         frame[0] = type;
@@ -376,7 +378,7 @@ describe('actual xterm byte-stream recovery', () => {
     });
 
     it.each(['\x1b[', '\x1b]0;unfinished title'])(
-        'a genuinely unavailable gap cancels a partial escape before the notice and live tail (%j)',
+        'an unavailable gap reconnects without corrupting a partial escape or skipping its tail (%j)',
         async (prefix) => {
             const from = encode(prefix).length;
             const source = encode(`${prefix}XXOK\r\n`);
@@ -391,11 +393,11 @@ describe('actual xterm byte-stream recovery', () => {
                 h.pty.ws.output(from + 2, encode('OK\r\n'));
                 await h.settle();
                 const output = screen(h.term).join('\n');
-                expect(output).toContain('2 output bytes dropped');
-                expect(output).toContain('\nOK\n');
-                expect(output.indexOf('2 output bytes dropped')).toBeLessThan(
-                    output.indexOf('\nOK\n'),
-                );
+                expect(h.pty.ws.closed).toBe(true);
+                expect(h.pty.liveSeq).toBe(from);
+                expect(output).not.toContain('output bytes dropped');
+                expect(output).not.toContain('OK');
+                expect(h.tab.drainedSeq).toBe(from);
             } finally {
                 h.term.dispose();
             }
