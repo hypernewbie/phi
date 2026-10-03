@@ -31,6 +31,7 @@ async function harness(mode = 'tui') {
         wsModalClose: button,
         wsModalCancelBtn: button,
         wsModalAddBtn: button,
+        wsModalBrowseBtn: document.createElement('button'),
         wsModalInput: document.createElement('input'),
         activeCoder: 'opencode',
         activeCWD: '/repo',

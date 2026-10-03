@@ -1,3 +1,4 @@
+import { mountDirectoryTree, } from './path-picker.js';
 import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
@@ -46,11 +47,27 @@ export class SessionsManager {
     wsModal;
     wsModalClose;
     wsModalInput;
+    wsModalBrowseBtn;
+    wsModalTree;
+    wsModalPathStatus;
     wsModalSuggestions;
     wsModalCancelBtn;
     wsModalAddBtn;
     selectedSuggestionIndex;
+    wsTreeController;
+    wsDialogGeneration;
+    wsDraftGeneration;
+    wsAutocompleteRequestId;
+    wsPathResolveId;
+    wsSubmitPending;
+    wsSubmitOperationId;
+    wsSubmitPostStarted;
+    wsModalComposing;
+    wsModalOpener;
+    wsModalKeydownHandler;
+    wsModalFocusinHandler;
     worktreeDirtyRequestId;
+    worktreeLoadRequestId;
     _measureSpan = null;
     _contextMenu;
     _ctxDismissMousedown;
@@ -73,11 +90,27 @@ export class SessionsManager {
         this.wsModal = document.getElementById('ws-modal');
         this.wsModalClose = document.getElementById('ws-modal-close');
         this.wsModalInput = document.getElementById('ws-modal-input');
+        this.wsModalBrowseBtn = document.getElementById('ws-modal-browse-btn');
+        this.wsModalTree = document.getElementById('ws-modal-tree');
+        this.wsModalPathStatus = document.getElementById('ws-modal-path-status');
         this.wsModalSuggestions = document.getElementById('ws-modal-suggestions');
         this.wsModalCancelBtn = document.getElementById('ws-modal-cancel-btn');
         this.wsModalAddBtn = document.getElementById('ws-modal-add-btn');
         this.selectedSuggestionIndex = -1;
+        this.wsTreeController = null;
+        this.wsDialogGeneration = 0;
+        this.wsDraftGeneration = 0;
+        this.wsAutocompleteRequestId = 0;
+        this.wsPathResolveId = 0;
+        this.wsSubmitPending = false;
+        this.wsSubmitOperationId = 0;
+        this.wsSubmitPostStarted = false;
+        this.wsModalComposing = false;
+        this.wsModalOpener = null;
+        this.wsModalKeydownHandler = null;
+        this.wsModalFocusinHandler = null;
         this.worktreeDirtyRequestId = 0;
+        this.worktreeLoadRequestId = 0;
         this._contextMenu = null;
         this._ctxDismissMousedown = null;
         this._ctxDismissKey = null;
@@ -193,40 +226,20 @@ export class SessionsManager {
         this.wsModalClose.addEventListener('click', () => this.closeWorkspaceModal());
         this.wsModalCancelBtn.addEventListener('click', () => this.closeWorkspaceModal());
         this.wsModalAddBtn.addEventListener('click', () => this.submitWorkspaceModal());
-        this.wsModalInput.addEventListener('input', () => {
-            this.fetchAutocompleteSuggestions();
+        this.wsModalBrowseBtn.addEventListener('click', () => {
+            void this.revealWorkspacePath();
         });
-        this.wsModalInput.addEventListener('keydown', (e) => {
-            const items = this.wsModalSuggestions.querySelectorAll('.suggestion-item');
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                this.selectedSuggestionIndex =
-                    (this.selectedSuggestionIndex + 1) % items.length;
-                this.highlightSuggestion(items);
-            }
-            else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                this.selectedSuggestionIndex =
-                    (this.selectedSuggestionIndex - 1 + items.length) %
-                        items.length;
-                this.highlightSuggestion(items);
-            }
-            else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (this.selectedSuggestionIndex >= 0 &&
-                    this.selectedSuggestionIndex < items.length) {
-                    this.wsModalInput.value = items[this.selectedSuggestionIndex].innerText;
-                    this.wsModalSuggestions.classList.add('hidden');
-                    this.selectedSuggestionIndex = -1;
-                }
-                else {
-                    this.submitWorkspaceModal();
-                }
-            }
-            else if (e.key === 'Escape') {
-                e.preventDefault();
-                this.closeWorkspaceModal();
-            }
+        this.wsModalInput.addEventListener('compositionstart', () => {
+            this.wsModalComposing = true;
+        });
+        this.wsModalInput.addEventListener('compositionend', () => {
+            this.wsModalComposing = false;
+        });
+        this.wsModalInput.addEventListener('input', () => {
+            this.onWorkspacePathInput();
+        });
+        this.wsModalInput.addEventListener('keydown', (event) => {
+            this.onWorkspacePathKeydown(event);
         });
     }
     getLastFolderName(path) {
@@ -398,23 +411,20 @@ export class SessionsManager {
         }
     }
     async addWorkspace(path) {
-        try {
-            const res = await fetch('/api/config/workspaces', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path }),
-            });
-            if (res.ok) {
-                await this.loadConfig();
-                this.workspaceSelect.value = path;
-                this.activeWorkspace = path;
-                this.updateWorkspaceSelectWidth();
-                this.loadWorktrees();
-            }
+        const res = await fetch('/api/config/workspaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        if (!res.ok) {
+            const message = await res.text().catch(() => '');
+            throw new Error(message.trim() || 'Failed to add workspace.');
         }
-        catch (e) {
-            console.error('[config] Failed to add workspace:', e);
-        }
+        await this.loadConfig();
+        this.workspaceSelect.value = path;
+        this.activeWorkspace = path;
+        this.updateWorkspaceSelectWidth();
+        this.loadWorktrees();
     }
     async removeWorkspace(path) {
         try {
@@ -484,36 +494,50 @@ export class SessionsManager {
         });
     }
     async loadWorktrees(targetCwd = null) {
+        const requestId = (this.worktreeLoadRequestId ?? 0) + 1;
+        this.worktreeLoadRequestId = requestId;
+        const workspace = this.activeWorkspace;
+        const coder = this.activeCoder;
+        const startingCwd = this.activeCWD;
+        const isCurrentRequest = () => requestId === this.worktreeLoadRequestId &&
+            workspace === this.activeWorkspace &&
+            coder === this.activeCoder;
         this.sessionList.innerHTML =
             '<div style="padding: 16px; color: var(--text-muted); font-size: 13px;">Scanning git worktrees...</div>';
         try {
-            const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(this.activeWorkspace)}`);
+            const res = await fetch(`/api/git/worktrees?cwd=${encodeURIComponent(workspace)}`);
+            if (!isCurrentRequest())
+                return;
             if (!res.ok)
                 throw new Error('Failed to scan worktrees');
             const worktrees = await res.json();
+            if (!isCurrentRequest())
+                return;
             this.sessionList.innerHTML = '';
             if (!worktrees || worktrees.length === 0) {
                 this.sessionList.innerHTML =
                     '<div style="padding: 16px; color: var(--text-muted); font-size: 13px; text-align: center;">No worktrees found</div>';
                 return;
             }
-            if (targetCwd) {
-                this.activeCWD = targetCwd;
-            }
-            else {
-                const hasCwd = worktrees.some((wt) => normalizePath(wt.path) ===
-                    normalizePath(this.activeCWD));
-                if (!hasCwd) {
-                    const activeWT = worktrees.find((wt) => wt.active);
-                    if (activeWT) {
-                        this.activeCWD = activeWT.path;
-                    }
-                    else {
-                        this.activeCWD = worktrees[0].path;
+            if (this.activeCWD === startingCwd) {
+                if (targetCwd) {
+                    this.activeCWD = targetCwd;
+                }
+                else {
+                    const hasCwd = worktrees.some((wt) => normalizePath(wt.path) ===
+                        normalizePath(startingCwd));
+                    if (!hasCwd) {
+                        const activeWT = worktrees.find((wt) => wt.active);
+                        if (activeWT) {
+                            this.activeCWD = activeWT.path;
+                        }
+                        else {
+                            this.activeCWD = worktrees[0].path;
+                        }
                     }
                 }
             }
-            localStorage.setItem('phi_last_chosen_project', this.activeWorkspace);
+            localStorage.setItem('phi_last_chosen_project', workspace);
             // Append a faint "-- No workspace --" section for sessions with no cwd.
             // Only relevant for agy (others don't have unworkspaced sessions).
             // Rendered after real worktrees, collapsed by default.
@@ -620,10 +644,12 @@ export class SessionsManager {
                 }
             });
             appendNoWorkspaceSection();
-            this.loadWorktreeDirtyStates(this.activeWorkspace, ++this.worktreeDirtyRequestId);
+            this.loadWorktreeDirtyStates(workspace, ++this.worktreeDirtyRequestId);
         }
         catch (e) {
-            this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
+            if (isCurrentRequest()) {
+                this.sessionList.innerHTML = `<div style="padding: 16px; color: var(--red); font-size: 13px;">Error scanning worktrees: ${escapeHtml(e.message)}</div>`;
+            }
         }
     }
     async loadWorktreeDirtyStates(workspace, requestId) {
@@ -1133,68 +1159,322 @@ export class SessionsManager {
         });
     }
     openWorkspaceModal() {
+        if (!this.wsModal.classList.contains('hidden'))
+            return;
+        this.wsDialogGeneration++;
+        this.wsDraftGeneration++;
+        this.wsPathResolveId++;
+        this.invalidateAutocompleteSuggestions();
         this.wsModalInput.value = '';
-        this.wsModalSuggestions.innerHTML = '';
-        this.wsModalSuggestions.classList.add('hidden');
-        this.selectedSuggestionIndex = -1;
+        this.wsModalPathStatus.textContent = '';
+        this.wsModalOpener =
+            document.activeElement instanceof HTMLElement &&
+                document.activeElement !== document.body
+                ? document.activeElement
+                : this.addWorkspaceBtn;
         this.wsModal.classList.remove('hidden');
-        setTimeout(() => this.wsModalInput.focus({ preventScroll: true }), 50);
+        this.wsModalAddBtn.disabled = this.wsSubmitPending;
+        const onKeydown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                this.closeWorkspaceModal();
+                return;
+            }
+            if (event.key !== 'Tab')
+                return;
+            const focusable = Array.from(this.wsModal.querySelectorAll('button:not(:disabled):not([hidden]), input:not(:disabled), [tabindex="0"]')).filter((element) => !element.closest('.hidden'));
+            if (focusable.length === 0) {
+                event.preventDefault();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const activeIndex = focusable.indexOf(document.activeElement);
+            if (event.shiftKey && activeIndex <= 0) {
+                event.preventDefault();
+                last.focus({ preventScroll: true });
+            }
+            else if (!event.shiftKey &&
+                activeIndex === focusable.length - 1) {
+                event.preventDefault();
+                first.focus({ preventScroll: true });
+            }
+        };
+        const onFocusin = (event) => {
+            if (!this.wsModal.classList.contains('hidden') &&
+                event.target instanceof Node &&
+                !this.wsModal.contains(event.target)) {
+                this.wsModalInput.focus({ preventScroll: true });
+            }
+        };
+        this.wsModalKeydownHandler = onKeydown;
+        this.wsModalFocusinHandler = onFocusin;
+        document.addEventListener('keydown', onKeydown, true);
+        document.addEventListener('focusin', onFocusin, true);
+        const dialog = this.wsDialogGeneration;
+        this.wsTreeController = mountDirectoryTree(this.wsModalTree, {
+            startPath: this.activeWorkspace || '~',
+            onSelect: (path) => {
+                if (dialog === this.wsDialogGeneration &&
+                    !this.wsModal.classList.contains('hidden')) {
+                    this.onWorkspaceTreeSelect(path);
+                }
+            },
+        });
+        this.wsModalInput.focus({ preventScroll: true });
     }
     closeWorkspaceModal() {
+        if (this.wsModal.classList.contains('hidden'))
+            return;
+        this.wsDialogGeneration++;
+        this.wsDraftGeneration++;
+        this.wsPathResolveId++;
+        if (this.wsSubmitPending && !this.wsSubmitPostStarted) {
+            this.wsSubmitOperationId++;
+            this.wsSubmitPending = false;
+            this.wsModalAddBtn.disabled = false;
+        }
+        this.invalidateAutocompleteSuggestions();
+        this.wsTreeController?.destroy();
+        this.wsTreeController = null;
+        if (this.wsModalKeydownHandler) {
+            document.removeEventListener('keydown', this.wsModalKeydownHandler, true);
+            this.wsModalKeydownHandler = null;
+        }
+        if (this.wsModalFocusinHandler) {
+            document.removeEventListener('focusin', this.wsModalFocusinHandler, true);
+            this.wsModalFocusinHandler = null;
+        }
         this.wsModal.classList.add('hidden');
+        const opener = this.wsModalOpener;
+        this.wsModalOpener = null;
+        if (opener?.isConnected)
+            opener.focus({ preventScroll: true });
     }
-    submitWorkspaceModal() {
+    onWorkspacePathInput() {
+        this.wsDraftGeneration++;
+        this.wsPathResolveId++;
+        this.wsTreeController?.invalidateDraft();
+        this.wsModalPathStatus.textContent = '';
+        this.invalidateAutocompleteSuggestions();
+        void this.fetchAutocompleteSuggestions();
+    }
+    onWorkspacePathKeydown(event) {
+        if (this.wsModalComposing || event.isComposing)
+            return;
+        const items = this.wsModalSuggestions.querySelectorAll('.suggestion-item');
+        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
+            items.length) {
+            event.preventDefault();
+            if (event.key === 'ArrowDown') {
+                this.selectedSuggestionIndex =
+                    (this.selectedSuggestionIndex + 1) % items.length;
+            }
+            else {
+                this.selectedSuggestionIndex =
+                    this.selectedSuggestionIndex < 0
+                        ? items.length - 1
+                        : (this.selectedSuggestionIndex - 1 + items.length) %
+                            items.length;
+            }
+            this.highlightSuggestion(items);
+            return;
+        }
+        if (event.key !== 'Enter')
+            return;
+        event.preventDefault();
+        if (this.selectedSuggestionIndex >= 0 &&
+            this.selectedSuggestionIndex < items.length) {
+            this.acceptWorkspaceSuggestion(items[this.selectedSuggestionIndex].textContent ?? '');
+        }
+        void this.revealWorkspacePath();
+    }
+    onWorkspaceTreeSelect(path) {
+        this.wsModalInput.value = path;
+        this.wsDraftGeneration++;
+        this.wsPathResolveId++;
+        this.wsModalPathStatus.textContent = '';
+        this.invalidateAutocompleteSuggestions();
+    }
+    invalidateAutocompleteSuggestions() {
+        this.wsAutocompleteRequestId++;
+        this.wsModalSuggestions.replaceChildren();
+        this.wsModalSuggestions.classList.add('hidden');
+        this.wsModalInput.setAttribute('aria-expanded', 'false');
+        this.wsModalInput.removeAttribute('aria-activedescendant');
+        this.selectedSuggestionIndex = -1;
+    }
+    acceptWorkspaceSuggestion(path) {
+        this.wsModalInput.value = path;
+        this.wsDraftGeneration++;
+        this.wsPathResolveId++;
+        this.wsTreeController?.invalidateDraft();
+        this.wsModalPathStatus.textContent = '';
+        this.invalidateAutocompleteSuggestions();
+    }
+    async revealWorkspacePath() {
         const path = this.wsModalInput.value.trim();
-        if (path) {
-            this.addWorkspace(path);
-            this.closeWorkspaceModal();
+        const dialog = this.wsDialogGeneration;
+        const draft = this.wsDraftGeneration;
+        const operation = ++this.wsPathResolveId;
+        const controller = this.wsTreeController;
+        this.invalidateAutocompleteSuggestions();
+        this.wsModalInput.focus({ preventScroll: true });
+        if (!path) {
+            this.wsModalPathStatus.textContent =
+                'Enter a directory path to reveal.';
+            return;
+        }
+        if (!controller)
+            return;
+        try {
+            const resolved = await controller.reveal(path);
+            if (resolved === null ||
+                operation !== this.wsPathResolveId ||
+                dialog !== this.wsDialogGeneration ||
+                draft !== this.wsDraftGeneration ||
+                this.wsModal.classList.contains('hidden')) {
+                return;
+            }
+            this.wsModalInput.value = resolved;
+            this.wsModalPathStatus.textContent = '';
+            this.wsModalInput.focus({ preventScroll: true });
+        }
+        catch {
+            if (operation === this.wsPathResolveId &&
+                dialog === this.wsDialogGeneration &&
+                draft === this.wsDraftGeneration &&
+                !this.wsModal.classList.contains('hidden')) {
+                this.wsModalPathStatus.textContent =
+                    'This path is not an accessible directory.';
+            }
+        }
+    }
+    async submitWorkspaceModal() {
+        if (this.wsSubmitPending)
+            return;
+        const path = this.wsModalInput.value.trim();
+        const dialog = this.wsDialogGeneration;
+        const draft = this.wsDraftGeneration;
+        const operation = ++this.wsPathResolveId;
+        const controller = this.wsTreeController;
+        if (!path) {
+            this.wsModalPathStatus.textContent =
+                'Enter a directory path to add.';
+            return;
+        }
+        if (!controller)
+            return;
+        const submission = ++this.wsSubmitOperationId;
+        this.wsSubmitPending = true;
+        this.wsSubmitPostStarted = false;
+        this.wsModalAddBtn.disabled = true;
+        this.invalidateAutocompleteSuggestions();
+        try {
+            const resolved = await controller.reveal(path);
+            if (resolved === null ||
+                operation !== this.wsPathResolveId ||
+                dialog !== this.wsDialogGeneration ||
+                draft !== this.wsDraftGeneration ||
+                submission !== this.wsSubmitOperationId ||
+                this.wsModal.classList.contains('hidden')) {
+                return;
+            }
+            this.wsModalInput.value = resolved;
+            this.wsSubmitPostStarted = true;
+            await this.addWorkspace(resolved);
+            if (operation === this.wsPathResolveId &&
+                dialog === this.wsDialogGeneration &&
+                draft === this.wsDraftGeneration &&
+                !this.wsModal.classList.contains('hidden')) {
+                this.closeWorkspaceModal();
+            }
+        }
+        catch (error) {
+            if (operation === this.wsPathResolveId &&
+                dialog === this.wsDialogGeneration &&
+                draft === this.wsDraftGeneration &&
+                !this.wsModal.classList.contains('hidden')) {
+                this.wsModalPathStatus.textContent =
+                    error instanceof Error
+                        ? error.message
+                        : 'Failed to add workspace.';
+            }
+        }
+        finally {
+            if (submission === this.wsSubmitOperationId) {
+                this.wsSubmitPending = false;
+                this.wsSubmitPostStarted = false;
+                this.wsModalAddBtn.disabled = false;
+            }
         }
     }
     async fetchAutocompleteSuggestions() {
-        const val = this.wsModalInput.value;
-        if (!val) {
-            this.wsModalSuggestions.innerHTML = '';
-            this.wsModalSuggestions.classList.add('hidden');
-            this.selectedSuggestionIndex = -1;
+        const value = this.wsModalInput.value;
+        const dialog = this.wsDialogGeneration;
+        const draft = this.wsDraftGeneration;
+        const requestId = ++this.wsAutocompleteRequestId;
+        if (!value || this.wsModal.classList.contains('hidden'))
             return;
-        }
         try {
-            const res = await fetch(`/api/fs/autocomplete?path=${encodeURIComponent(val)}`);
+            const res = await fetch(`/api/fs/autocomplete?path=${encodeURIComponent(value)}`);
             if (!res.ok)
-                throw new Error();
-            const suggestions = await res.json();
-            this.wsModalSuggestions.innerHTML = '';
-            this.selectedSuggestionIndex = -1;
-            if (suggestions.length === 0) {
+                throw new Error('Autocomplete request failed.');
+            const suggestions = (await res.json());
+            if (requestId !== this.wsAutocompleteRequestId ||
+                dialog !== this.wsDialogGeneration ||
+                draft !== this.wsDraftGeneration ||
+                value !== this.wsModalInput.value ||
+                this.wsModal.classList.contains('hidden')) {
+                return;
+            }
+            this.wsModalSuggestions.replaceChildren();
+            if (!Array.isArray(suggestions) || suggestions.length === 0) {
                 this.wsModalSuggestions.classList.add('hidden');
+                this.wsModalInput.setAttribute('aria-expanded', 'false');
+                this.selectedSuggestionIndex = -1;
                 return;
             }
             this.wsModalSuggestions.classList.remove('hidden');
-            suggestions.forEach((sugg, _idx) => {
-                const div = document.createElement('div');
-                div.className = 'suggestion-item';
-                div.innerText = sugg;
-                div.addEventListener('click', () => {
-                    this.wsModalInput.value = sugg;
-                    this.wsModalSuggestions.classList.add('hidden');
-                    this.selectedSuggestionIndex = -1;
+            this.wsModalInput.setAttribute('aria-expanded', 'true');
+            this.selectedSuggestionIndex = -1;
+            for (const [index, suggestion] of suggestions.entries()) {
+                if (typeof suggestion !== 'string')
+                    continue;
+                const item = document.createElement('div');
+                item.className = 'suggestion-item';
+                item.id = `ws-modal-suggestion-${dialog}-${requestId}-${index}`;
+                item.setAttribute('role', 'option');
+                item.setAttribute('aria-selected', 'false');
+                item.textContent = suggestion;
+                item.addEventListener('click', () => {
+                    this.acceptWorkspaceSuggestion(suggestion);
                     this.wsModalInput.focus({ preventScroll: true });
                 });
-                this.wsModalSuggestions.appendChild(div);
-            });
+                this.wsModalSuggestions.appendChild(item);
+            }
+            if (this.wsModalSuggestions.childElementCount === 0) {
+                this.wsModalSuggestions.classList.add('hidden');
+                this.wsModalInput.setAttribute('aria-expanded', 'false');
+            }
         }
-        catch (e) {
-            console.error('[autocomplete] Suggestion fetch error:', e);
+        catch (error) {
+            if (requestId === this.wsAutocompleteRequestId &&
+                dialog === this.wsDialogGeneration &&
+                draft === this.wsDraftGeneration) {
+                console.error('[autocomplete] Suggestion fetch error:', error);
+            }
         }
     }
     highlightSuggestion(items) {
-        items.forEach((item, idx) => {
-            if (idx === this.selectedSuggestionIndex) {
-                item.classList.add('selected');
-                item.scrollIntoView({ block: 'nearest' });
-            }
-            else {
-                item.classList.remove('selected');
+        items.forEach((item, index) => {
+            const selected = index === this.selectedSuggestionIndex;
+            item.classList.toggle('selected', selected);
+            item.setAttribute('aria-selected', String(selected));
+            if (selected) {
+                this.wsModalInput.setAttribute('aria-activedescendant', item.id);
+                item.scrollIntoView?.({ block: 'nearest' });
             }
         });
     }
