@@ -299,9 +299,9 @@ func TestOpenCodeIdleStopAPI(t *testing.T) {
 	}{
 		{input: 0, want: 0},
 		{input: -5, want: 0},
-		{input: 2, want: 5},     // clamped to min 5
-		{input: 60, want: 60},   // valid
-		{input: 120, want: 120}, // valid
+		{input: 2, want: 5},       // clamped to min 5
+		{input: 60, want: 60},     // valid
+		{input: 120, want: 120},   // valid
 		{input: 5000, want: 1440}, // clamped to max 1440 (24h)
 	}
 
