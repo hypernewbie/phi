@@ -19,12 +19,13 @@ const ids = (selector) =>
     [...document.querySelectorAll(selector)].map((el) => el.dataset.coder);
 
 function expectBuiltInSidebar() {
-    const buttons = [...document.querySelectorAll('.coder-tab')].slice(0, 5);
+    const buttons = [...document.querySelectorAll('.coder-tab')].slice(0, 6);
     expect(buttons.map((b) => b.dataset.coder)).toEqual([
         'opencode',
         'claude',
         'agy',
         'pi',
+        'codex',
         'bash',
     ]);
     expect(buttons.map((b) => b.title)).toEqual([
@@ -32,6 +33,7 @@ function expectBuiltInSidebar() {
         'Claude Code',
         'Antigravity / Agy',
         'Pi (term)',
+        'OpenAI Codex',
         'Shell Prompt',
     ]);
     expect(buttons.map((b) => b.querySelector('img.coder-logo')?.alt)).toEqual([
@@ -39,11 +41,12 @@ function expectBuiltInSidebar() {
         'Claude',
         'Agy',
         'Pi',
+        'Codex',
         'Shell',
     ]);
     expect(
         buttons.map((b) => b.querySelectorAll(':scope > span').length),
-    ).toEqual([1, 1, 1, 1, 1]);
+    ).toEqual([1, 1, 1, 1, 1, 1]);
 }
 
 describe('default coder UI parity', () => {
@@ -58,6 +61,7 @@ describe('default coder UI parity', () => {
             'claude',
             'pi',
             'agy',
+            'codex',
             'bash',
         ]);
         expect(document.querySelector('.coder-tab.active').dataset.coder).toBe(
@@ -85,9 +89,16 @@ describe('default coder UI parity', () => {
                     'Antigravity',
                     'vendor/logos/agy.png',
                 ),
+                codex: descriptor(
+                    'codex',
+                    4,
+                    'Codex',
+                    'Codex',
+                    'vendor/logos/codex.svg',
+                ),
                 bash: descriptor(
                     'bash',
-                    4,
+                    5,
                     'Shell',
                     'Shell',
                     'vendor/logos/bash.jpg',
@@ -119,7 +130,7 @@ describe('default coder UI parity', () => {
                 'custom-agent': {
                     ...descriptor(
                         'custom-agent',
-                        5,
+                        6,
                         'Custom',
                         'Custom Agent',
                         'emoji:🤖',
@@ -144,6 +155,7 @@ describe('default coder UI parity', () => {
             'claude',
             'agy',
             'pi',
+            'codex',
             'bash',
             'custom-agent',
         ]);
@@ -160,6 +172,7 @@ describe('default coder UI parity', () => {
             'claude',
             'pi',
             'agy',
+            'codex',
             'bash',
             'custom-agent',
         ]);

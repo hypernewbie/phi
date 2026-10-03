@@ -62,6 +62,7 @@ var adapterFactories = map[string]AdapterFactory{
 	"claude_files":    claudeAdapter,
 	"pi_files":        piAdapter,
 	"agy_files":       agyAdapter,
+	"codex_sqlite":    codexAdapter,
 }
 
 func noneAdapter(c coders.Coder) Adapter { return noneAdapterImpl{c: c} }

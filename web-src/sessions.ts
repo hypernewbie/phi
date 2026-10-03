@@ -39,14 +39,16 @@ const BUILTIN_TAB_TITLES = new Map([
     ['claude', 'Claude Code'],
     ['agy', 'Antigravity / Agy'],
     ['pi', 'Pi (term)'],
+    ['codex', 'OpenAI Codex'],
     ['bash', 'Shell Prompt'],
 ]);
-const QUICK_LAUNCH_ORDER = ['opencode', 'claude', 'pi', 'agy', 'bash'];
+const QUICK_LAUNCH_ORDER = ['opencode', 'claude', 'pi', 'agy', 'codex', 'bash'];
 const BUILTIN_SESSION_TITLES = new Map([
     ['opencode', 'OpenCode'],
     ['claude', 'Claude'],
     ['pi', 'Pi'],
     ['agy', 'Agy'],
+    ['codex', 'Codex'],
     ['bash', 'Shell'],
     ['pwsh', 'Shell'],
 ]);

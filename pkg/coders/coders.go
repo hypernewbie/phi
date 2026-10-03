@@ -202,6 +202,7 @@ func DefaultRegistry() map[string]Coder {
 				{Name: "/clear", Value: "/clear\r"},
 			},
 		},
+		"codex": defaultCodex(),
 		"bash": {
 			ID:                    "bash",
 			Name:                  "Shell",
@@ -248,7 +249,7 @@ func DefaultRegistry() map[string]Coder {
 // quick-launch buttons in this order, and the default active coder
 // is the first visible one. Keep this stable across releases.
 func OrderedBuiltinIDs() []string {
-	return []string{"opencode", "claude", "agy", "pi", "bash", "pwsh"}
+	return []string{"opencode", "claude", "agy", "pi", "codex", "bash", "pwsh"}
 }
 
 // frozenCoder is a deep copy of a Coder, safe to hand to consumers
@@ -459,6 +460,7 @@ var knownSessionSources = map[string]bool{
 	"claude_files":    true,
 	"pi_files":        true,
 	"agy_files":       true,
+	"codex_sqlite":    true,
 }
 
 // IsKnownSessionSource reports whether the named adapter is
