@@ -8062,7 +8062,8 @@ export class TabManager {
                         if (
                             activeTab &&
                             (activeTab.coder === 'opencode' ||
-                                activeTab.coder === 'pi') &&
+                                activeTab.coder === 'pi' ||
+                                activeTab.coder === 'codex') &&
                             p.value.startsWith('/') &&
                             p.value.endsWith('\r')
                         ) {
@@ -8133,7 +8134,15 @@ export class TabManager {
             !['opencode', 'claude', 'pi', 'agy', 'bash', 'pwsh'].includes(
                 modelCoder,
             );
-        if (
+        if (modelCoder === 'codex') {
+            // /model has no inline model argument. Let Codex's live,
+            // account-specific picker choose the model and reasoning effort.
+            modelsTriggerBtn.innerText = '🤖 Models';
+            modelsTriggerBtn.title = 'Choose model and reasoning effort in Codex';
+            modelsTriggerBtn.addEventListener('click', () => {
+                this.sendSlashCommand(activeTab, '/model');
+            });
+        } else if (
             modelCoder === 'agy' ||
             (isCustomModelCoder && !hasModelSwitch(modelCoder))
         ) {
@@ -8253,7 +8262,8 @@ export class TabManager {
                 if (
                     activeTab &&
                     (activeTab.coder === 'opencode' ||
-                        activeTab.coder === 'pi') &&
+                        activeTab.coder === 'pi' ||
+                        activeTab.coder === 'codex') &&
                     p.value.startsWith('/') &&
                     p.value.endsWith('\r')
                 ) {

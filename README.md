@@ -160,6 +160,10 @@ V2 history uses its `session_v2` and `session_message` tables. Phi asks `opencod
 
 Custom backend files still override the built-in defaults. Keep `"mini"` as the first argument when overriding v2 Mini's argv.
 
+### Codex CLI
+
+Install the official CLI with `npm install -g @openai/codex`, then run `codex login` on the Phi server's computer. Phi opens its interactive CLI with native scrollback and resumes saved conversations by UUID. **Models** opens Codex's own model/reasoning picker; no stale model-name list or guessed selection sequence is shipped. Current official options include `gpt-6.1-sol`, `gpt-6-astra`, and `gpt-6-luna`, subject to account availability. See [Codex setup and verified commands](docs/CODEX.md).
+
 ## Supported assistants
 
 | ID         | Name         | Command    | Session source                                   |
@@ -168,6 +172,7 @@ Custom backend files still override the built-in defaults. Keep `"mini"` as the 
 | `claude`   | Claude Code  | `claude`   | `~/.claude/projects/` (JSONL)                    |
 | `agy`      | Antigravity  | `agy`      | `~/.gemini/antigravity-cli/conversations/` (`.pb`)|
 | `pi`       | Pi Coder     | `pi`       | Pi session files                                 |
+| `codex`    | Codex        | `codex --no-alt-screen` | Native read-only Codex thread index |
 | `bash`     | Shell        | `bash -l` | —                                                |
 
 ## Acknowledgments

@@ -116,6 +116,23 @@ export function seedBuiltins() {
             },
             model_switch_disabled: false,
         },
+        codex: {
+            id: 'codex',
+            name: 'Codex',
+            short_label: 'Codex',
+            logo: 'vendor/logos/codex.svg',
+            sidebar_visible: true,
+            is_shell: false,
+            input_mode: 'staged',
+            presets: [],
+            capabilities: {
+                list: true,
+                transcript: false,
+                rename: false,
+                pi_rpc: false,
+            },
+            model_switch_disabled: false,
+        },
         bash: {
             id: 'bash',
             name: 'Shell',
@@ -315,7 +332,7 @@ export function modelSwitchDisabled(id) {
 // also return true — the function reads from the same registry the
 // executor reads from.
 export function hasModelSwitch(id) {
-    return id === 'opencode' || id === 'pi' || id === 'claude';
+    return (id === 'opencode' || id === 'pi' || id === 'claude' || id === 'codex');
 }
 // logoFor returns the favicon URL for a coder ID — the legacy
 // `<img src=...>` style favicon used by tab strips and the
@@ -381,7 +398,10 @@ export function formatAttachment(coderId, path) {
     // that field on CoderDescriptor (it stays server-side). The two
     // built-in fallbacks below match the legacy static map exactly
     // so existing UX is preserved.
-    if (coderId === 'claude' || coderId === 'opencode' || coderId === 'agy') {
+    if (coderId === 'claude' ||
+        coderId === 'opencode' ||
+        coderId === 'agy' ||
+        coderId === 'codex') {
         return `@${path}`;
     }
     return path;

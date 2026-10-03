@@ -49,7 +49,10 @@ async function waitForHealth(port: number): Promise<void> {
 }
 
 export async function startPhi(
-    options: { config?: Record<string, unknown> } = {},
+    options: {
+        config?: Record<string, unknown>;
+        setup?: (dir: string) => void | Promise<void>;
+    } = {},
 ): Promise<PhiServer> {
     const dir = mkdtempSync(join(tmpdir(), 'phi-e2e-'));
     mkdirSync(join(dir, 'home'), { recursive: true });
@@ -61,6 +64,7 @@ export async function startPhi(
         );
     }
 
+    await options.setup?.(dir);
     const port = await freePort();
     const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
     await run('go', ['build', '-o', bin, '.'], process.cwd());

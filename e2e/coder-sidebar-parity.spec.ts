@@ -24,8 +24,8 @@ test('built-in coder controls keep their pre-registry layout before and after bo
 
     const tabs = page.locator('#coder-selector .coder-tab');
     const quick = page.locator('#empty-quick-launch .empty-launch-btn');
-    const tabIds = ['opencode', 'claude', 'agy', 'pi', 'bash'];
-    const quickIds = ['opencode', 'claude', 'pi', 'agy', 'bash'];
+    const tabIds = ['opencode', 'claude', 'agy', 'pi', 'codex', 'bash'];
+    const quickIds = ['opencode', 'claude', 'pi', 'agy', 'codex', 'bash'];
     const assertControls = async () => {
         expect(
             await tabs.evaluateAll((els) =>
@@ -46,15 +46,16 @@ test('built-in coder controls keep their pre-registry layout before and after bo
             'Claude Code',
             'Antigravity / Agy',
             'Pi (term)',
+            'OpenAI Codex',
             'Shell Prompt',
         ]);
-        expect(await tabs.locator('img.coder-logo').count()).toBe(5);
+        expect(await tabs.locator('img.coder-logo').count()).toBe(6);
         const widths = await tabs
             .locator('img.coder-logo')
             .evaluateAll((els) =>
                 els.map((el) => Math.round(el.getBoundingClientRect().width)),
             );
-        expect(widths).toEqual([16, 16, 16, 16, 16]);
+        expect(widths).toEqual([16, 16, 16, 16, 16, 16]);
     };
 
     await assertControls();
@@ -108,7 +109,7 @@ test('built-in coder controls keep their pre-registry layout before and after bo
         .evaluateAll((els) =>
             els.map((el) => Math.round(el.getBoundingClientRect().width)),
         );
-    expect(narrowWidths).toEqual([18, 18, 18, 18, 18]);
+    expect(narrowWidths).toEqual([18, 18, 18, 18, 18, 18]);
 });
 
 test('initial coder controls remain when config cannot load', async ({
@@ -118,10 +119,10 @@ test('initial coder controls remain when config cannot load', async ({
         route.fulfill({ status: 503, body: 'unavailable' }),
     );
     await page.goto(phi.url);
-    await expect(page.locator('#coder-selector .coder-tab')).toHaveCount(5);
+    await expect(page.locator('#coder-selector .coder-tab')).toHaveCount(6);
     await expect(
         page.locator('#empty-quick-launch .empty-launch-btn'),
-    ).toHaveCount(5);
+    ).toHaveCount(6);
     await expect(
         page.locator('#coder-selector img.coder-logo').first(),
     ).toBeVisible();
