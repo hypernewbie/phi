@@ -45,6 +45,8 @@ function setup(): {
     remove: ReturnType<typeof vi.fn>;
     reloadServer: ReturnType<typeof vi.fn>;
     reloadAll: ReturnType<typeof vi.fn>;
+    copyUrl: ReturnType<typeof vi.fn>;
+    copyAll: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   };
 } {
@@ -60,6 +62,8 @@ function setup(): {
     remove: vi.fn(),
     reloadServer: vi.fn(),
     reloadAll: vi.fn(),
+    copyUrl: vi.fn(),
+    copyAll: vi.fn(),
     close: vi.fn(),
   };
   (window as { electron?: unknown }).electron = {
@@ -72,6 +76,8 @@ function setup(): {
     postRemoveProfile: calls.remove,
     postReloadServer: calls.reloadServer,
     postReloadAllServers: calls.reloadAll,
+    postCopyServerUrl: calls.copyUrl,
+    postCopyAllServers: calls.copyAll,
     postCloseRailMenu: calls.close,
   };
   boot();
@@ -100,10 +106,23 @@ describe('desktop rail context popup', () => {
       '▣Open sessions',
       '↻Reload server',
       '⟳Reload all servers',
+      '📋Copy server URL',
+      '📋Copy all server URLs',
       '✎Rename',
       '×Remove server',
     ]);
     expect(root.querySelector('.rail-menu-panel')).not.toBeNull();
+  });
+
+  it('routes copy actions through the bridge and closes the popup', () => {
+    const { calls } = setup();
+    actionButton('Copy server URL').click();
+    expect(calls.copyUrl).toHaveBeenCalledWith('a');
+    expect(calls.close).toHaveBeenCalledTimes(1);
+
+    actionButton('Copy all server URLs').click();
+    expect(calls.copyAll).toHaveBeenCalledTimes(1);
+    expect(calls.close).toHaveBeenCalledTimes(2);
   });
 
   it('routes server actions through the existing bridge and closes the popup', () => {

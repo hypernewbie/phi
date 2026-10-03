@@ -42,6 +42,7 @@ const { fakeApp, fakeMenu, fakeNativeImage, fakeNet, fakeDialog, FakeTray } =
 vi.mock('electron', () => ({
   app: fakeApp,
   BrowserWindow: class {},
+  clipboard: { writeText: vi.fn(), readText: vi.fn(() => '') },
   ipcMain: {},
   Menu: fakeMenu,
   nativeImage: fakeNativeImage,

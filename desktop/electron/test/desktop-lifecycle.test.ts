@@ -234,6 +234,7 @@ const fake = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: fake.app,
   ipcMain: fake.ipcMain,
+  clipboard: { writeText: vi.fn(), readText: vi.fn(() => '') },
   BrowserWindow: fake.FakeBrowserWindow,
   WebContentsView: fake.FakeWebContentsView,
   Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => ({})) },

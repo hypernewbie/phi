@@ -549,6 +549,36 @@ describe('rail entry context menu (src/renderer.ts)', () => {
     expect(calls).toEqual([['b', 31, 97]]);
     expect(doc.getElementById('rail-menu')).toBeNull();
   });
+
+  it('right-click on empty rail background opens rail menu for the active server', () => {
+    const calls: Array<[string, number, number]> = [];
+    const stateCbs: Array<(state: RailState) => void> = [];
+    (window as { electron?: unknown }).electron = {
+      onRailState: (cb: (state: RailState) => void) => {
+        stateCbs.push(cb);
+        return () => {};
+      },
+      postSelectProfile: () => {},
+      postOpenRailMenu: (id: string, x: number, y: number) => {
+        calls.push([id, x, y]);
+      },
+      postOpenPicker: () => {},
+    };
+    const doc = withPage(htmlSource, (d) => {
+      boot();
+      stateCbs[0](SNAPSHOT);
+      return d;
+    });
+    const rail = doc.getElementById('rail') as HTMLElement;
+    const evt = new doc.defaultView!.MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      screenX: 20,
+      screenY: 400,
+    });
+    expect(rail.dispatchEvent(evt)).toBe(false);
+    expect(calls).toEqual([['b', 20, 400]]);
+  });
 });
 
 describe('rail drag-and-drop reorder (src/renderer.ts)', () => {

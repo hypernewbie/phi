@@ -32,11 +32,30 @@
       #server-url:focus {
         border-color: #4f46e5;
       }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 16px;
+      }
       .actions {
         display: flex;
-        justify-content: flex-end;
         gap: 8px;
-        margin-top: 16px;
+      }
+      .btn-link {
+        background: transparent;
+        border: none;
+        color: #9ca3af;
+        padding: 6px 0;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn-link:hover {
+        color: #e6e6e6;
+        text-decoration: underline;
       }
       button {
         padding: 6px 16px;
@@ -72,26 +91,112 @@
       autofocus
     />
     <p id="error" role="alert" hidden></p>
-    <div class="actions">
-      <button id="cancel" type="button">Cancel</button>
-      <button id="add" type="button">Add</button>
+    <div class="footer">
+      <button id="copy-all" type="button" class="btn-link" title="Copy all saved server URLs to clipboard">
+        <span>📋</span> <span id="copy-all-label">Copy all server URLs</span>
+      </button>
+      <div class="actions">
+        <button id="cancel" type="button">Cancel</button>
+        <button id="add" type="button">Add</button>
+      </div>
     </div>
     <script>
       const input = document.getElementById('server-url');
       const error = document.getElementById('error');
-      const submit = () => {
-        let url = input.value.trim();
-        if (url === '') return;
+      const addBtn = document.getElementById('add');
+      const copyBtn = document.getElementById('copy-all');
+      const copyLabel = document.getElementById('copy-all-label');
+
+      if (copyBtn && window.electron && typeof window.electron.postCopyAllServers === 'function') {
+        copyBtn.addEventListener('click', async () => {
+          try {
+            const res = await window.electron.postCopyAllServers();
+            const count = res && typeof res.count === 'number' ? res.count : '';
+            copyLabel.textContent = `✓ Copied ${count ? count + ' servers' : ''}!`;
+            setTimeout(() => {
+              copyLabel.textContent = 'Copy all server URLs';
+            }, 2000);
+          } catch {
+            copyLabel.textContent = 'Failed to copy';
+          }
+        });
+      }
+
+      function parseUrls(raw) {
+        const tokens = raw.split(/[\r\n\s]+/).map((s) => s.trim()).filter(Boolean);
+        const parsedUrls = [];
+        for (let url of tokens) {
+          if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+            url = 'http://' + url;
+          }
+          try {
+            const parsed = new URL(url);
+            if (parsed.port === '') {
+              parsed.port = '7070';
+            }
+            parsedUrls.push(parsed.toString());
+          } catch {}
+        }
+        return parsedUrls;
+      }
+
+      const updateAddLabel = () => {
+        const urls = parseUrls(input.value);
+        if (urls.length > 1) {
+          addBtn.textContent = `Add ${urls.length} servers`;
+        } else {
+          addBtn.textContent = 'Add';
+        }
+      };
+      input.addEventListener('input', updateAddLabel);
+      input.addEventListener('paste', (event) => {
+        const text = (event.clipboardData || window.clipboardData)?.getData('text');
+        if (text && /[\r\n]/.test(text)) {
+          event.preventDefault();
+          const replaced = text.replace(/[\r\n]+/g, ' ').trim();
+          const start = input.selectionStart || 0;
+          const end = input.selectionEnd || 0;
+          const current = input.value;
+          input.value = (current.slice(0, start) + replaced + current.slice(end)).trim();
+          updateAddLabel();
+        }
+      });
+
+      const submit = async () => {
+        const raw = input.value.trim();
+        if (raw === '') return;
         error.textContent = '';
         error.hidden = true;
-        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
-          url = 'http://' + url;
+        const urls = parseUrls(raw);
+        if (urls.length === 0) {
+          error.textContent = 'Invalid server URL';
+          error.hidden = false;
+          return;
         }
-        const parsed = new URL(url);
-        if (parsed.port === '') {
-          parsed.port = '7070';
+        if (urls.length === 1 || typeof window.electron.postAddServers !== 'function') {
+          window.electron.postAddServer(urls[0]);
+        } else {
+          addBtn.disabled = true;
+          addBtn.textContent = 'Adding...';
+          try {
+            const result = await window.electron.postAddServers(urls);
+            addBtn.disabled = false;
+            if (result.ok) {
+              window.close();
+            } else {
+              error.textContent = (result.errors && result.errors.length)
+                ? result.errors.join('; ')
+                : 'Failed to add servers';
+              error.hidden = false;
+              updateAddLabel();
+            }
+          } catch (err) {
+            addBtn.disabled = false;
+            error.textContent = String(err);
+            error.hidden = false;
+            updateAddLabel();
+          }
         }
-        window.electron.postAddServer(parsed.toString());
       };
       window.electron.onAddServerResult((result) => {
         if (result.ok) {
@@ -101,7 +206,7 @@
           error.hidden = false;
         }
       });
-      document.getElementById('add').addEventListener('click', submit);
+      addBtn.addEventListener('click', submit);
       input.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           submit();
