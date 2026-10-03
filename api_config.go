@@ -40,6 +40,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		"terminal_font_size":                  cfg.TerminalFontSize,
 		"mobile_scrollback_rows":              cfg.MobileScrollbackRows,
 		"hostname_override":                   cfg.HostnameOverride,
+		"opencode_idle_stop_minutes":          cfg.OpenCodeIdleStopMinutes,
 	})
 }
 
@@ -638,6 +639,31 @@ func handleAutoReconnect(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.AutoReconnect == "visible"})
+}
+
+// handleOpenCodeIdleStop sets the idle timeout in minutes before stopping the
+// OpenCode background server. 0 disables the auto-stop. Clamped to 5..1440 when > 0.
+func handleOpenCodeIdleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Minutes *int `json:"minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Minutes == nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	val := normalizeOpenCodeIdleStopMinutes(*req.Minutes)
+	cfg := loadConfig()
+	cfg.OpenCodeIdleStopMinutes = val
+	saveConfig(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]int{"opencode_idle_stop_minutes": cfg.OpenCodeIdleStopMinutes})
 }
 
 // encodeConfigData serializes, base64-encodes, hashes, and formats with a prefix.

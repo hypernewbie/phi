@@ -137,6 +137,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Pane not found", http.StatusNotFound)
 			return
 		}
+		inst.UpdateInput()
 		if _, err := inst.Pty.Write([]byte(paneInputPayload(req.Text))); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

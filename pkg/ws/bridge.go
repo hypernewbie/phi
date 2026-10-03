@@ -120,6 +120,7 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 
 		switch msgType {
 		case 0x01: // PTY stdin data
+			inst.UpdateInput()
 			if inst.Pty != nil {
 				_, writeErr := inst.Pty.Write(payload)
 				if writeErr != nil {

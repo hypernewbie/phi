@@ -1076,13 +1076,13 @@ export class SessionsManager {
                 }
                 return;
             }
-            this.renderOpenCodeServiceStatus(Boolean(data.running), data.tabs || 0);
+            this.renderOpenCodeServiceStatus(Boolean(data.running), data.tabs || 0, data.idle_stop_minutes, data.idle_stop_remaining_seconds);
         }
         catch {
             this.renderOpenCodeServiceError();
         }
     }
-    renderOpenCodeServiceStatus(running, tabs) {
+    renderOpenCodeServiceStatus(running, tabs, idleStopMinutes, idleStopRemainingSeconds) {
         if (!this.openCodeServiceBtn)
             return;
         const label = this.openCodeServiceBtn.querySelector('.opencode-service-label');
@@ -1092,7 +1092,14 @@ export class SessionsManager {
             if (label)
                 label.textContent = 'Kill server';
             const tabText = tabs > 0 ? ` (${tabs} active tab${tabs === 1 ? '' : 's'})` : '';
-            this.openCodeServiceBtn.title = `OpenCode background server is running${tabText}. Click to kill server.`;
+            let idleText = '';
+            if (idleStopMinutes &&
+                idleStopRemainingSeconds !== undefined &&
+                idleStopRemainingSeconds >= 0) {
+                const remMins = Math.max(1, Math.round(idleStopRemainingSeconds / 60));
+                idleText = ` (auto-stops in ~${remMins}m if idle)`;
+            }
+            this.openCodeServiceBtn.title = `OpenCode background server is running${tabText}${idleText}. Click to kill server.`;
         }
         else {
             this.openCodeServiceBtn.setAttribute('data-state', 'stopped');

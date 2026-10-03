@@ -1315,6 +1315,8 @@ export class SessionsManager {
                 running: boolean;
                 tabs?: number;
                 error?: string;
+                idle_stop_minutes?: number;
+                idle_stop_remaining_seconds?: number;
             };
             if (!data.supported) {
                 if (this.openCodeServiceRow) {
@@ -1325,13 +1327,20 @@ export class SessionsManager {
             this.renderOpenCodeServiceStatus(
                 Boolean(data.running),
                 data.tabs || 0,
+                data.idle_stop_minutes,
+                data.idle_stop_remaining_seconds,
             );
         } catch {
             this.renderOpenCodeServiceError();
         }
     }
 
-    renderOpenCodeServiceStatus(running: boolean, tabs: number): void {
+    renderOpenCodeServiceStatus(
+        running: boolean,
+        tabs: number,
+        idleStopMinutes?: number,
+        idleStopRemainingSeconds?: number,
+    ): void {
         if (!this.openCodeServiceBtn) return;
         const label = this.openCodeServiceBtn.querySelector(
             '.opencode-service-label',
@@ -1343,7 +1352,19 @@ export class SessionsManager {
             if (label) label.textContent = 'Kill server';
             const tabText =
                 tabs > 0 ? ` (${tabs} active tab${tabs === 1 ? '' : 's'})` : '';
-            this.openCodeServiceBtn.title = `OpenCode background server is running${tabText}. Click to kill server.`;
+            let idleText = '';
+            if (
+                idleStopMinutes &&
+                idleStopRemainingSeconds !== undefined &&
+                idleStopRemainingSeconds >= 0
+            ) {
+                const remMins = Math.max(
+                    1,
+                    Math.round(idleStopRemainingSeconds / 60),
+                );
+                idleText = ` (auto-stops in ~${remMins}m if idle)`;
+            }
+            this.openCodeServiceBtn.title = `OpenCode background server is running${tabText}${idleText}. Click to kill server.`;
         } else {
             this.openCodeServiceBtn.setAttribute('data-state', 'stopped');
             this.openCodeServiceBtn.disabled = true;
