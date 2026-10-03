@@ -68,6 +68,18 @@ test('a show-commit card selects an older hash and opens that hash in the pretty
     await expect(card.locator('.sync-diff-btn')).toHaveText(
         `Show Diff ${HASH.slice(0, 12)}`,
     );
+    const prettyButton = card.locator('.sync-pretty-diff-btn');
+    await expect(prettyButton).toHaveAccessibleName('Open Pretty Diff');
+    const prettyBox = (await prettyButton.boundingBox())!;
+    const selectBox = (await card.locator('.sync-diff-btn').boundingBox())!;
+    const rowBox = (await card.locator('.sync-pretty-diff-row').boundingBox())!;
+    expect(prettyBox.y).toBeGreaterThanOrEqual(selectBox.y + selectBox.height);
+    expect(prettyBox.width).toBeCloseTo(rowBox.width, 0);
+    expect(
+        await prettyButton.evaluate(
+            (element) => getComputedStyle(element).boxShadow,
+        ),
+    ).not.toBe('none');
     await expect(page.locator('#diff-modal')).toBeHidden();
     expect(requested).not.toContain(HASH);
 

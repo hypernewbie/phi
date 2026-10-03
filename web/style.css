@@ -3656,12 +3656,13 @@ body.has-terminal-bg
 
 .diff-action-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
     background-color: var(--bg-panel);
     border-bottom: 1px solid var(--bg-border);
-    height: 38px;
+    min-height: 38px;
 }
 
 .diff-action-bar.hidden {
@@ -3705,6 +3706,47 @@ body.has-terminal-bg
 .diff-action-bar button:hover {
     color: var(--text-primary);
     background-color: var(--bg-border);
+}
+
+.diff-action-bar .pretty-diff-btn,
+.sync-pretty-diff-row .pretty-diff-btn {
+    display: flex;
+    flex: 0 0 100%;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: 36px;
+    padding: 8px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background-color: var(--accent-glow);
+    color: var(--accent-bright);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow:
+        0 0 12px var(--accent-glow),
+        inset 0 0 8px var(--accent-glow);
+    text-shadow: 0 0 8px var(--accent-glow);
+}
+
+.diff-action-bar .pretty-diff-btn:hover,
+.sync-pretty-diff-row .pretty-diff-btn:hover {
+    border-color: var(--accent-bright);
+    background-color: var(--accent-glow);
+    color: var(--accent-bright);
+    box-shadow:
+        0 0 18px var(--accent-glow),
+        inset 0 0 12px var(--accent-glow);
+}
+
+.pretty-diff-btn:focus-visible {
+    outline: 2px solid var(--accent-bright);
+    outline-offset: 2px;
 }
 
 .diff-content {
@@ -9580,6 +9622,12 @@ html[data-phi-config-page] .settings-modal {
     flex-wrap: wrap;
     gap: 6px;
     margin: 2px 0;
+}
+
+.sync-pretty-diff-row {
+    display: flex;
+    flex: 0 0 100%;
+    min-width: 0;
 }
 
 .sync-chip-btn {
