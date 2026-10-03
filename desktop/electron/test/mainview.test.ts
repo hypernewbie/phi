@@ -325,7 +325,7 @@ describe('vendored browser JS (web/vendor/*)', () => {
       ctx.skip('web/vendor missing — run `pnpm run build` first');
       return;
     }
-    for (const name of ['app.js', 'sessions.js', 'util.js']) {
+    for (const name of ['app.js', 'sessions.js', 'path-picker.js', 'util.js']) {
       const vendored = readFileSync(path.join(vendorDir, name), 'utf8');
       const canonical = readFileSync(
         path.join(rootWebIndex, '..', name),

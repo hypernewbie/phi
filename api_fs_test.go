@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -164,6 +166,313 @@ func TestHandleFSList_MissingDir(t *testing.T) {
 	handleFSList(w, fsListRequest(dir, "nope"))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("got %d want 404; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// fsBrowseRequest builds a /api/fs/browse request with an explicit absolute path.
+func fsBrowseRequest(path string) *http.Request {
+	q := url.Values{}
+	if path != "" {
+		q.Set("path", path)
+	}
+	return httptest.NewRequest(http.MethodGet, "/api/fs/browse?"+q.Encode(), nil)
+}
+
+func decodeFSBrowseResponse(t *testing.T, w *httptest.ResponseRecorder) FSBrowseResponse {
+	t.Helper()
+	var resp FSBrowseResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, w.Body.String())
+	}
+	return resp
+}
+
+func TestHandleFSBrowse_MethodAndPathValidation(t *testing.T) {
+	post := httptest.NewRequest(http.MethodPost, "/api/fs/browse?path=/", nil)
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, post)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: got %d want 405; body=%s", w.Code, w.Body.String())
+	}
+
+	for _, path := range []string{"", "relative/path"} {
+		t.Run(strconv.Quote(path), func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handleFSBrowse(w, fsBrowseRequest(path))
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("path=%q: got %d want 400; body=%s", path, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleFSBrowse_ExpandsHomeAndCleansPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", home)
+	workspace := filepath.Join(home, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest("~"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("home: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if resp.Path != home || resp.Parent != filepath.Dir(home) {
+		t.Fatalf("home path/parent = %q/%q, want %q/%q", resp.Path, resp.Parent, home, filepath.Dir(home))
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].Path != workspace {
+		t.Fatalf("home entries = %+v, want workspace path %q", resp.Entries, workspace)
+	}
+
+	dirtyPath := workspace + string(filepath.Separator) + "missing" + string(filepath.Separator) + ".."
+	w = httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dirtyPath))
+	if w.Code != http.StatusOK {
+		t.Fatalf("cleaned path: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp = decodeFSBrowseResponse(t, w)
+	if resp.Path != filepath.Clean(dirtyPath) || resp.Parent != filepath.Dir(workspace) {
+		t.Fatalf("cleaned path/parent = %q/%q, want %q/%q", resp.Path, resp.Parent, filepath.Clean(dirtyPath), filepath.Dir(workspace))
+	}
+}
+
+func TestHandleFSBrowse_FilesystemRootHasNoParent(t *testing.T) {
+	root := t.TempDir()
+	for filepath.Dir(root) != root {
+		root = filepath.Dir(root)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(root))
+	if w.Code != http.StatusOK {
+		t.Fatalf("root: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if resp.Path != root || resp.Parent != "" {
+		t.Fatalf("root path/parent = %q/%q, want %q/empty", resp.Path, resp.Parent, root)
+	}
+}
+
+func TestHandleFSBrowse_EmptyDirectoryHasEmptyArray(t *testing.T) {
+	dir := t.TempDir()
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code != http.StatusOK {
+		t.Fatalf("empty dir: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if resp.Entries == nil || len(resp.Entries) != 0 {
+		t.Fatalf("empty entries = %#v, want non-nil empty slice", resp.Entries)
+	}
+	if !strings.Contains(w.Body.String(), `"entries":[]`) {
+		t.Fatalf("empty response must encode entries as an array: %s", w.Body.String())
+	}
+}
+
+func TestHandleFSBrowse_HidesFilesAndDotDirectories(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"visible", ".hidden", ".git"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	mustWriteFile(t, filepath.Join(dir, "file.txt"), "file")
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if len(resp.Entries) != 1 || resp.Entries[0].Name != "visible" {
+		t.Fatalf("entries = %+v, want only visible directory", resp.Entries)
+	}
+}
+
+func TestHandleFSBrowse_ExcludesSymlinkedChildren(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on windows")
+	}
+	workspace := t.TempDir()
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(workspace, "linked-dir")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(workspace))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if len(resp.Entries) != 0 {
+		t.Fatalf("symlinked child was listed: %+v", resp.Entries)
+	}
+}
+
+func TestHandleFSBrowse_PreservesRequestedSymlinkAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on windows")
+	}
+	workspace := t.TempDir()
+	target := t.TempDir()
+	if err := os.Mkdir(filepath.Join(target, "child"), 0o755); err != nil {
+		t.Fatalf("mkdir child: %v", err)
+	}
+	alias := filepath.Join(workspace, "alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(alias))
+	if w.Code != http.StatusOK {
+		t.Fatalf("alias: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	wantChild := filepath.Join(alias, "child")
+	if resp.Path != alias || resp.Parent != workspace || len(resp.Entries) != 1 || resp.Entries[0].Path != wantChild {
+		t.Fatalf("alias response = %+v, want path=%q parent=%q child=%q", resp, alias, workspace, wantChild)
+	}
+}
+
+func TestHandleFSBrowse_IncludesGitIgnoredDirectories(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	mustWriteFile(t, filepath.Join(dir, ".gitignore"), "ignored-dir/\n")
+	if err := os.Mkdir(filepath.Join(dir, "ignored-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir ignored dir: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if len(resp.Entries) != 1 || resp.Entries[0].Name != "ignored-dir" {
+		t.Fatalf("entries = %+v, want ignored directory", resp.Entries)
+	}
+}
+
+func TestHandleFSBrowse_SortsCaseInsensitivelyAndStably(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"bravo", "Alpha", "charlie", "Beta"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	tieNames := []string{"Folder", "folder"}
+	tieSupported := true
+	for _, name := range tieNames {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			if os.IsExist(err) {
+				tieSupported = false
+				break
+			}
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	var wantTieOrder []string
+	if tieSupported {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read input order: %v", err)
+		}
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), tieNames[0]) {
+				wantTieOrder = append(wantTieOrder, entry.Name())
+			}
+		}
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	var gotTieOrder []string
+	for i, entry := range resp.Entries {
+		if i > 0 && strings.ToLower(resp.Entries[i-1].Name) > strings.ToLower(entry.Name) {
+			t.Fatalf("entries are not case-insensitively sorted: %+v", resp.Entries)
+		}
+		if strings.EqualFold(entry.Name, tieNames[0]) {
+			gotTieOrder = append(gotTieOrder, entry.Name)
+		}
+	}
+	if tieSupported && (len(gotTieOrder) != len(wantTieOrder) || gotTieOrder[0] != wantTieOrder[0] || gotTieOrder[1] != wantTieOrder[1]) {
+		t.Fatalf("equal-key order = %v, want stable input order %v", gotTieOrder, wantTieOrder)
+	}
+}
+
+func TestHandleFSBrowse_TruncatesAtMaximum(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i <= fsListMaxEntries; i++ {
+		name := "dir-" + strconv.Itoa(i)
+		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing: got %d want 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := decodeFSBrowseResponse(t, w)
+	if len(resp.Entries) != fsListMaxEntries || !resp.Truncated {
+		t.Fatalf("entries/truncated = %d/%v, want %d/true", len(resp.Entries), resp.Truncated, fsListMaxEntries)
+	}
+}
+
+func TestHandleFSBrowse_MissingAndNonDirectoryPaths(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file.txt")
+	mustWriteFile(t, file, "file")
+	for _, path := range []string{filepath.Join(dir, "missing"), file} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handleFSBrowse(w, fsBrowseRequest(path))
+			if w.Code != http.StatusNotFound {
+				t.Errorf("path=%q: got %d want 404; body=%s", path, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleFSBrowse_UnreadableDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not supported by this test on windows")
+	}
+	dir := filepath.Join(t.TempDir(), "unreadable")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Restore permissions before changing them so cleanup can always read the directory.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatalf("chmod unreadable: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	handleFSBrowse(w, fsBrowseRequest(dir))
+	if w.Code == http.StatusOK {
+		t.Skip("runner privileges allow reading a mode-000 directory")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unreadable path: got %d want 404; body=%s", w.Code, w.Body.String())
 	}
 }
 

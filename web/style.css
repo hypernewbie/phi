@@ -3826,7 +3826,28 @@ body.has-terminal-bg
    body box. Its content is a fixed single input that can never exceed
    the modal, so the scroller is pure cost there. */
 #ws-modal .modal-body {
-    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: visible !important;
+}
+
+.path-input-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.path-input-row .input-autocomplete-wrapper {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.path-input-row > .btn {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 12px;
+    white-space: nowrap;
 }
 
 .input-autocomplete-wrapper {
@@ -3891,6 +3912,190 @@ body.has-terminal-bg
 .suggestion-item.selected {
     background-color: var(--accent-glow);
     color: var(--accent-bright);
+}
+
+.ws-modal-content {
+    width: min(600px, calc(100vw - 24px));
+    overflow: hidden;
+}
+
+.ws-modal-path-label {
+    margin-bottom: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.ws-modal-path-status {
+    min-height: 1.2em;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.ws-modal-path-status:not(:empty) {
+    color: var(--red);
+}
+
+.ws-modal-tree {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    margin-top: 4px;
+}
+
+.directory-tree-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.directory-tree-up {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 12px;
+}
+
+.directory-tree-location {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.directory-tree-status {
+    min-height: 0;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.directory-tree-scroll {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 84px;
+    max-height: min(42vh, 360px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px;
+    border: 1px solid var(--bg-border);
+    border-radius: 6px;
+}
+
+.directory-tree-item {
+    display: block;
+    flex: 0 0 auto;
+    min-width: 0;
+    color: var(--text-primary);
+}
+
+.directory-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: default;
+}
+
+.directory-tree-item[aria-selected="true"] > .directory-tree-row {
+    background-color: var(--accent-glow);
+    border-color: var(--accent-soft);
+    color: var(--accent-bright);
+}
+
+.directory-tree-item:hover > .directory-tree-row:not(.is-selected) {
+    background-color: var(--bg-elevated);
+}
+
+.directory-tree-item:focus-visible > .directory-tree-row {
+    outline: 1px solid var(--accent-bright);
+    outline-offset: -1px;
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.directory-tree-disclosure {
+    display: inline-flex;
+    flex: 0 0 18px;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 26px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    cursor: default;
+}
+
+.directory-tree-disclosure.is-expandable {
+    cursor: pointer;
+}
+
+.directory-tree-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.directory-tree-branch-state {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.directory-tree-retry {
+    width: auto;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--bg-border);
+    border-radius: 4px;
+    background-color: var(--bg-elevated);
+    color: var(--accent-bright);
+    font-family: var(--font-ui);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.directory-tree-retry:hover {
+    border-color: var(--accent);
+    background-color: var(--accent-trace);
+}
+
+.directory-tree-group[hidden] {
+    display: none;
+}
+
+.directory-tree-empty,
+.directory-tree-truncated {
+    padding: 6px 8px 6px 28px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.directory-tree-truncated {
+    font-style: italic;
+}
+
+@media (max-height: 600px) {
+    .directory-tree-scroll {
+        min-height: 64px;
+        max-height: 24vh;
+    }
+}
+
+@media (max-width: 480px) {
+    .path-input-row {
+        gap: 6px;
+    }
+
+    .path-input-row > .btn {
+        padding: 0 10px;
+    }
 }
 
 .modal-footer {
