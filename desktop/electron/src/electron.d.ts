@@ -165,6 +165,14 @@ export interface ElectronApi {
   postReloadServer(id?: string): void;
   /** Ask the main process to reload all retained server views (channel 'phi:reload-all-servers'). */
   postReloadAllServers(): void;
+  /** Ask the main process to copy all server URLs to the clipboard (channel 'phi:copy-all-servers'). */
+  postCopyAllServers?(): Promise<{ ok: boolean; count: number; text?: string }>;
+  /** Ask the main process to copy a specific server's URL to the clipboard (channel 'phi:copy-server-url'). */
+  postCopyServerUrl?(id?: string): Promise<{ ok: boolean; url?: string }>;
+  /** Ask the main process to add multiple server profiles in bulk (channel 'phi:add-servers'). */
+  postAddServers?(
+    urls: string[],
+  ): Promise<{ ok: boolean; added: number; errors: string[] }>;
   /** Ask the main process to minimize the window (channel 'phi:window-minimize'). */
   postWindowMinimize(): void;
   /** Ask the main process to toggle the window between maximized and restored (channel 'phi:window-toggle-maximize'). */

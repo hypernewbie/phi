@@ -111,11 +111,14 @@ export function badgeText(n: number): string {
  * The shell-level context popup receives its own state update from the
  * host, so the narrow rail never owns menu geometry.
  */
+let lastRailState: RailState | null = null;
+
 export function render(
   state: RailState,
   list: HTMLElement | null = document.getElementById('rail-list'),
 ): void {
   if (list === null) return;
+  lastRailState = state;
   // Active server accent drives the rail chrome; unobserved keeps the fallback.
   const rail = list.closest('#rail') as HTMLElement | null;
   const active = state.profiles.find((p) => p.id === state.activeId);
@@ -191,6 +194,7 @@ export function render(
     });
     item.addEventListener('contextmenu', (event) => {
       event.preventDefault();
+      event.stopPropagation();
       window.electron.postOpenRailMenu(
         profile.id,
         event.screenX,
@@ -318,6 +322,21 @@ export function boot(): void {
   const addButton = document.getElementById('rail-add');
   if (addButton !== null) {
     addButton.addEventListener('click', () => window.electron.postOpenPicker());
+  }
+  const rail = document.getElementById('rail');
+  if (rail !== null) {
+    rail.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      const targetId =
+        lastRailState?.activeId || lastRailState?.profiles[0]?.id;
+      if (targetId) {
+        window.electron.postOpenRailMenu(
+          targetId,
+          event.screenX,
+          event.screenY,
+        );
+      }
+    });
   }
   window.electron.onRailState(render);
   if (typeof window.electron.onRailShortcuts === 'function') {

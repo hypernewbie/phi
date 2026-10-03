@@ -24,6 +24,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   net,
   ipcMain,
@@ -1249,7 +1250,7 @@ export class DesktopHost {
       transparent: true,
       backgroundColor: '#00000000',
       width: 320,
-      height: 380,
+      height: 460,
       useContentSize: true,
       resizable: false,
       movable: false,
@@ -3716,6 +3717,55 @@ export class DesktopHost {
           });
         }
       }
+    });
+    ipcMain.handle('phi:copy-all-servers', (event) => {
+      if (!isCurrentSessionSender(event)) return { ok: false, count: 0 };
+      const ctrl = this.controller;
+      if (!ctrl) return { ok: false, count: 0 };
+      const profiles = ctrl.state().profiles;
+      const urls = profiles.map((p) => p.origin);
+      const text = urls.join('\n') + (urls.length > 0 ? '\n' : '');
+      clipboard.writeText(text);
+      return { ok: true, count: urls.length, text };
+    });
+    ipcMain.handle('phi:copy-server-url', (event, profileId: unknown) => {
+      if (!isCurrentSessionSender(event)) return { ok: false };
+      const ctrl = this.controller;
+      if (!ctrl) return { ok: false };
+      const id =
+        typeof profileId === 'string' && profileId
+          ? profileId
+          : ctrl.state().activeId;
+      const profile = ctrl.state().profiles.find((p) => p.id === id);
+      if (!profile) return { ok: false };
+      clipboard.writeText(profile.origin);
+      return { ok: true, url: profile.origin };
+    });
+    ipcMain.handle('phi:add-servers', (event, urls: unknown) => {
+      if (!isCurrentSessionSender(event))
+        return { ok: false, added: 0, errors: ['Unauthorized'] };
+      const ctrl = this.controller;
+      if (!ctrl || !Array.isArray(urls))
+        return { ok: false, added: 0, errors: ['Invalid payload'] };
+      const added: string[] = [];
+      const errors: string[] = [];
+      for (const raw of urls) {
+        if (typeof raw !== 'string') continue;
+        const trimmed = raw.trim();
+        if (!trimmed) continue;
+        try {
+          const profile = ctrl.add(trimmed);
+          this.profileViews?.addProfile(profile.id, profile.origin);
+          added.push(profile.id);
+        } catch (err) {
+          errors.push(`${trimmed}: ${String(err)}`);
+        }
+      }
+      if (added.length > 0) {
+        ctrl.setActive(added[added.length - 1]);
+        void ctrl.updateHealth(realHealthChecker);
+      }
+      return { ok: added.length > 0, added: added.length, errors };
     });
     // Requires a nonempty profile id and a nonempty name; controller.rename
     // throws on unknown ids — logged, no reply channel.

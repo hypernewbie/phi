@@ -128,6 +128,16 @@ function renderActions(panel: HTMLElement): void {
       closeMenu();
     }),
     makeDivider(),
+    makeSectionLabel('Clipboard'),
+    makeAction('📋', 'Copy server URL', () => {
+      void window.electron.postCopyServerUrl?.(profile.id);
+      closeMenu();
+    }),
+    makeAction('📋', 'Copy all server URLs', () => {
+      void window.electron.postCopyAllServers?.();
+      closeMenu();
+    }),
+    makeDivider(),
     makeSectionLabel('Profile'),
     makeAction('✎', 'Rename', () => {
       mode = 'rename';
