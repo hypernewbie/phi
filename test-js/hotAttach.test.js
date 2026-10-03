@@ -113,10 +113,10 @@ async function flushBootstrap(tab) {
     await new Promise((r) => setTimeout(r, 0));
 }
 
-function recordingResponse(text, start, end) {
-    const bytes = new TextEncoder().encode(text);
+function recordingResponse(text, start, end, epoch = 7) {
+    const bytes = new TextEncoder().encode(text.padEnd(end - start, ' '));
     const json = new TextEncoder().encode(
-        JSON.stringify({ epoch: 7, start, end, resizes: [] }),
+        JSON.stringify({ epoch, start, end, resizes: [] }),
     );
     const buf = new Uint8Array(4 + json.byteLength + bytes.byteLength);
     const view = new DataView(buf.buffer);
@@ -366,7 +366,7 @@ describe('TabManager hot attach bootstrap', () => {
         await flushBootstrap(tab);
         expect(tab.term.writes).toEqual([
             'CHECKPOINT-ANSI',
-            'delta-bytes',
+            'delta-bytes'.padEnd(40, ' '),
             'live!',
         ]);
         expect(tab.queuedSeq).toBe(105);
@@ -502,7 +502,10 @@ describe('TabManager hot attach bootstrap', () => {
         // Terminal sized to the checkpoint before anything renders.
         expect(tab.term.cols).toBe(120);
         // Order: checkpoint, then the fetched delta [60,100).
-        expect(tab.term.writes).toEqual(['CHECKPOINT-ANSI', 'delta-bytes']);
+        expect(tab.term.writes).toEqual([
+            'CHECKPOINT-ANSI',
+            'delta-bytes'.padEnd(40, ' '),
+        ]);
         expect(tab.term.opened).toBe(true);
         expect(tab.drainedSeq).toBe(100);
 
@@ -512,13 +515,15 @@ describe('TabManager hot attach bootstrap', () => {
         expect(tab.queuedSeq).toBe(105);
     });
 
-    it('without checkpoint applies history from oldest up to cap', async () => {
+    it('without checkpoint applies the complete retained history', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
         const history = 'x'.repeat(64 * 1024 - 10);
         const fetchMock = vi
             .fn()
-            .mockResolvedValue(recordingResponse(history, 0, 1_000_000));
+            .mockResolvedValue(
+                recordingResponse(history, 0, history.length, 9),
+            );
         vi.stubGlobal('fetch', fetchMock);
 
         tm.createTab('p2', 's2', 'T', 'bash', '', '', false);
@@ -526,7 +531,7 @@ describe('TabManager hot attach bootstrap', () => {
         tab.ws.ws.emitAttachHead({
             epoch: 9,
             oldest: 0,
-            head: 1_000_000,
+            head: history.length,
         });
         await new Promise((r) => setTimeout(r, 0));
 
@@ -580,7 +585,9 @@ describe('TabManager hot attach bootstrap', () => {
 
         expect(tab.term.resetCount || 0).toBe(0);
         expect(tab.term.writes.length).toBe(priorWrites + 1);
-        expect(tab.term.writes[tab.term.writes.length - 1]).toBe('missed');
+        expect(tab.term.writes[tab.term.writes.length - 1]).toBe(
+            'missed'.padEnd(10, ' '),
+        );
         expect(tab.drainedSeq).toBe(60);
     });
 
@@ -589,7 +596,7 @@ describe('TabManager hot attach bootstrap', () => {
         const tm = makeTm();
         vi.stubGlobal(
             'fetch',
-            vi.fn().mockResolvedValue(recordingResponse('fresh', 0, 5)),
+            vi.fn().mockResolvedValue(recordingResponse('fresh', 0, 5, 99)),
         );
 
         tm.createTab('p5', 's5', 'T', 'bash', '', '', false);

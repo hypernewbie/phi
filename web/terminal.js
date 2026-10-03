@@ -1728,10 +1728,18 @@ export class TabManager {
     // exact d.start === from contract. epoch scopes the cache: unknown
     // epochs fetch plain, exactly as before.
     async _fetchRecordingRange(paneId, from, through, epoch) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const range = await this._fetchRecordingRangeOnce(paneId, from, through, epoch);
+            if (range) return range;
+            if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+        }
+        return null;
+    }
+
+    async _fetchRecordingRangeOnce(paneId, from, through, epoch) {
         try {
-            // Bounded: delivery startup (release) waits on this fetch, so
-            // a wedged request must degrade to a skipped delta, never a
-            // frozen terminal. Same-origin and ≤64 KiB in practice.
+            // Bound each attempt. Failure never authorizes skipping bytes:
+            // callers keep the stream held and reconnect for a fresh head.
             // Old Chromium lacks AbortSignal.timeout: degrade to an
             // unbounded fetch there (as before) rather than failing
             // every delta closed.
@@ -1742,9 +1750,10 @@ export class TabManager {
             const parts = [];
             const resizes = [];
             let cursor = from;
+            let useCache = true;
             for (let round = 0; round < REC_CACHE_ROUNDS; round++) {
                 if (cursor >= through) break;
-                const have = this._recHave(paneId, epoch, cursor, through);
+                const have = useCache ? this._recHave(paneId, epoch, cursor, through) : '';
                 // Epoch scopes the read server-side too: a pane rebirth
                 // between our attach and this fetch must 409, never serve
                 // another lifetime's bytes into this stream.
@@ -1761,7 +1770,13 @@ export class TabManager {
                         cursor,
                         through,
                     );
-                    if (!tail) return null;
+                    if (!tail) {
+                        // Cache eviction can race a declaration. Retry the
+                        // same interval without negotiation, not without data.
+                        if (!useCache) return null;
+                        useCache = false;
+                        continue;
+                    }
                     parts.push(tail.bytes);
                     resizes.push(...tail.resizes);
                     cursor = through;
@@ -1789,7 +1804,18 @@ export class TabManager {
                 // start past the cursor: fill [cursor, hdr.start) from the
                 // cache that justified the skip. Unfillable gaps (ring
                 // truncation, evicted cache) stay null, exactly as before.
-                if (hdr.start < cursor || hdr.start > through) return null;
+                const data = buf.subarray(4 + jsonLen);
+                const seq = n => Number.isSafeInteger(n) && n >= 0;
+                if (!hdr || !seq(hdr.epoch) ||
+                    (epoch !== undefined && hdr.epoch !== epoch) ||
+                    !seq(hdr.start) || !seq(hdr.end) ||
+                    hdr.start < cursor || hdr.start > through ||
+                    hdr.end <= hdr.start || hdr.end > through ||
+                    data.byteLength !== hdr.end - hdr.start ||
+                    (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) ||
+                        hdr.resizes.some(m => !Array.isArray(m) || m.length !== 3 ||
+                            !seq(m[0]) || m[0] > hdr.end || !Number.isInteger(m[1]) ||
+                            !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0)))) return null;
                 if (hdr.start > cursor) {
                     const gap = this._recCachedSpan(
                         paneId,
@@ -1801,7 +1827,6 @@ export class TabManager {
                     parts.push(gap.bytes);
                     resizes.push(...gap.resizes);
                 }
-                const data = buf.subarray(4 + jsonLen);
                 this._recCacheStore(
                     paneId,
                     epoch,
@@ -1954,11 +1979,7 @@ export class TabManager {
             tabInfo.drainedSeq = from;
             this._openTermAndViewport(tabInfo);
             if (info.head > from) {
-                const reqFrom =
-                    info.head - from <= MAX_DELTA_BYTES
-                        ? from
-                        : Math.max(from, info.head - MAX_DELTA_BYTES);
-                this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
+                this._bootstrappedRelease(tabInfo, pty, from, info.head);
             } else {
                 pty.release();
             }
@@ -2010,11 +2031,7 @@ export class TabManager {
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
             if (info.head > from && from >= info.oldest) {
-                const reqFrom =
-                    info.head - from <= MAX_DELTA_BYTES
-                        ? from
-                        : Math.max(from, info.head - MAX_DELTA_BYTES);
-                this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
+                this._bootstrappedRelease(tabInfo, pty, from, info.head);
             } else {
                 pty.release();
                 if (info.head > from) {
@@ -2046,11 +2063,7 @@ export class TabManager {
         const from = info.ckpt ? info.ckpt.through : info.oldest;
         tabInfo.drainedSeq = from;
         if (info.head > from) {
-            const reqFrom =
-                info.head - from <= MAX_DELTA_BYTES
-                    ? from
-                    : Math.max(from, info.head - MAX_DELTA_BYTES);
-            this._bootstrappedRelease(tabInfo, pty, reqFrom, info.head);
+            this._bootstrappedRelease(tabInfo, pty, from, info.head);
         } else {
             pty.release();
         }
@@ -2090,16 +2103,12 @@ export class TabManager {
             }
         };
         const boot = (async () => {
-            try {
-                await this._bootstrapDelta(
-                    tabInfo,
-                    from,
-                    head,
-                    gen,
-                    releaseOnce,
-                );
-            } finally {
-                releaseOnce();
+            const complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce);
+            if (complete) releaseOnce();
+            else if (tabInfo.ws === pty && tabInfo._bootstrapGen === gen) {
+                // Never release held live frames across an unfilled interval.
+                tabInfo._bootstrapGate = null;
+                try { pty.ws?.close(); } catch (_e) {}
             }
         })();
         tabInfo._bootstrapGate = boot;
@@ -2124,53 +2133,44 @@ export class TabManager {
             });
     }
 
+    _reserveReplayRows(tabInfo, text) {
+        const term = tabInfo.term;
+        if (!term?.options || !term.buffer?.active || !term.cols) return;
+        // A cold replay is an explicit history load, not a live-cache
+        // eviction. Reserve enough rows for it before xterm can trim them.
+        let lines = 0;
+        for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) lines++;
+        const needed = term.buffer.active.length + lines + Math.ceil(text.length * 2 / term.cols);
+        if (needed > term.options.scrollback) term.options.scrollback = needed;
+    }
+
     async _bootstrapDelta(tabInfo, from, head, expectGen, onEnqueued) {
-        if (tabInfo.isDead) return;
-        // Stale when the socket swapped mid-fetch (reconnect during a slow
-        // fetch): the old stream's bytes must not land in the new one, and
-        // watermarks must not regress — verify the socket before touching
-        // anything. Superseded when a newer bootstrap generation exists:
-        // only the newest generation may write.
         const ws = tabInfo.ws;
-        const d = await this._fetchRecordingRange(
-            tabInfo.paneId,
-            from,
-            head,
-            tabInfo.paneEpoch,
-        );
-        if (tabInfo.isDead || tabInfo.ws !== ws) return;
-        if (expectGen !== undefined && tabInfo._bootstrapGen !== expectGen)
-            return;
-        if (!d || d.start !== from || d.byteLength > MAX_DELTA_BYTES) {
-            return;
+        const current = () => !tabInfo.finalizing && tabInfo.ws === ws &&
+            (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
+        if (!current()) return false;
+        for (let cursor = from; cursor < head;) {
+            const end = Math.min(head, cursor + MAX_DELTA_BYTES);
+            const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
+            if (!current()) return false;
+            if (!d || d.start !== cursor || d.end !== end || d.byteLength !== end - cursor ||
+                (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
+            // Keep one decoder across requests and subsequent live frames.
+            const text = d.bytes && ws?.mode === 'hot' && ws.decoder
+                ? ws.decoder.decode(d.bytes, { stream: true }) : d.text;
+            if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
+            this._reserveReplayRows(tabInfo, text);
+            this.writeToTerminal(tabInfo, text);
+            if (end === head && onEnqueued) onEnqueued();
+            await this._drainSettled(tabInfo);
+            if (!current()) return false;
+            if ((tabInfo.queuedSeq ?? 0) <= end) {
+                tabInfo.queuedSeq = end;
+                tabInfo.drainedSeq = end;
+            }
+            cursor = end;
         }
-        // Bootstrap and live frames are one byte stream. A range can
-        // end inside a UTF-8 character, so retain the decoder's pending
-        // prefix for the first live frame instead of emitting U+FFFD.
-        const text =
-            d.bytes && ws?.mode === 'hot' && ws.decoder
-                ? ws.decoder.decode(d.bytes, { stream: true })
-                : d.text;
-        if (ws?.mode === 'hot' && ws.decoder) {
-            tabInfo._streamDecoder = ws.decoder;
-        }
-        this.writeToTerminal(tabInfo, text);
-        if (onEnqueued) onEnqueued();
-        // Watermarks advance only on actual queue drain (proving xterm
-        // parsed the delta), never on enqueue. Quiet tabs with nothing
-        // newer set both to head here; busy tabs advance naturally via
-        // the drain path once the gate clears.
-        await this._drainSettled(tabInfo);
-        if (
-            tabInfo.isDead ||
-            tabInfo.ws !== ws ||
-            (expectGen !== undefined && tabInfo._bootstrapGen !== expectGen)
-        )
-            return;
-        if ((tabInfo.queuedSeq ?? 0) <= head) {
-            tabInfo.queuedSeq = head;
-            tabInfo.drainedSeq = head;
-        }
+        return true;
     }
 
     async _onLiveGap(tabInfo, from, to) {
@@ -2202,72 +2202,32 @@ export class TabManager {
         // onGap if a gap remains, so dropping concurrent events converges
         // instead of stalling.
         if (tabInfo._gapInFlight) return;
-        if (to - from <= MAX_DELTA_BYTES) {
-            tabInfo._gapInFlight = true;
-            let d = null;
-            try {
-                d = await this._fetchRecordingRange(
-                    tabInfo.paneId,
-                    from,
-                    to,
-                    tabInfo.paneEpoch,
-                );
-            } finally {
-                tabInfo._gapInFlight = false;
-            }
-            // Stale fetch (socket swapped mid-flight): the old stream's
-            // patch must not land in the new one. Superseded fetch (new
-            // bootstrap generation began): the new head owns ordering.
-            if (
-                tabInfo.isDead ||
-                tabInfo.ws !== pty ||
-                tabInfo._bootstrapGen !== bootGen
-            )
-                return;
-            if (
-                d &&
-                d.start === from &&
-                d.end === to &&
-                d.byteLength === to - from &&
-                d.bytes?.byteLength === d.byteLength &&
-                d.byteLength > 0 &&
-                d.byteLength <= MAX_DELTA_BYTES
-            ) {
-                // Deliver via the patch path so seq accounting and held
-                // frames stay contiguous. The bytes must reach the terminal
-                // through the normal write queue afterwards. Raw bytes, not
-                // a text round-trip: re-encoding replaces invalid UTF-8
-                // with U+FFFD, changing both content and length and
-                // drifting every seq that follows.
-                const savedSeq = pty.liveSeq;
+        tabInfo._gapInFlight = true;
+        let recovered = false;
+        try {
+            for (let cursor = from; cursor < to;) {
+                const end = Math.min(to, cursor + MAX_DELTA_BYTES);
+                const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
+                if (tabInfo.finalizing || tabInfo.ws !== pty || tabInfo._bootstrapGen !== bootGen) return;
+                if (!d || d.start !== cursor || d.end !== end ||
+                    d.byteLength !== end - cursor || d.bytes?.byteLength !== d.byteLength) {
+                    // Retry through a new atomic attach. Do not discard the
+                    // hole, reset the decoder, or inject text into its stream.
+                    try { pty.ws?.close(); } catch (_e) {}
+                    return;
+                }
+                this._reserveReplayRows(tabInfo, d.text ?? new TextDecoder().decode(d.bytes));
                 pty.applyGapPatch(d.bytes);
-                // applyGapPatch delivers through onData → _paneData →
-                // writeToTerminal, which queues in order. Re-assert the
-                // watermark direction in case of ordering races.
-                if (pty.liveSeq < savedSeq) pty.liveSeq = savedSeq;
                 tabInfo.queuedSeq = pty.lastFrameEnd;
-                return;
+                await this._drainSettled(tabInfo);
+                cursor = end;
             }
-        }
-        // Cancel any escape sequence cut by the hole BEFORE the held
-        // tail flushes. Otherwise xterm can consume live text as an old
-        // CSI/OSC payload, and inserting the notice afterwards loses it.
-        // CAN cancels parser state without clearing scrollback or screen.
-        this.writeToTerminal(
-            tabInfo,
-            `\x18\r\n\x1b[33m[phi: ${to - from} output bytes dropped — resumed live]\x1b[0m\r\n`,
-        );
-        pty.abandonGap(to);
-        tabInfo._streamDecoder = pty.decoder;
-        // An unavailable recording can produce many adjacent holes.
-        // Request a TUI repaint without creating a resize/output storm.
-        const now = Date.now();
-        if (
-            tabInfo._gapRedrawAt === undefined ||
-            now - tabInfo._gapRedrawAt >= 1000
-        ) {
-            tabInfo._gapRedrawAt = now;
-            this._nudgeRedraw(tabInfo);
+            recovered = true;
+        } finally {
+            tabInfo._gapInFlight = false;
+            // applyGapPatch may encounter the next hole while this handler
+            // owns the gate. Re-fire after relinquishing it, not before.
+            if (recovered && tabInfo.ws === pty && !tabInfo.finalizing) pty.release?.();
         }
     }
 
@@ -2482,7 +2442,7 @@ export class TabManager {
         return new Promise((resolve) => {
             if (
                 tabInfo.finalizing ||
-                (!tabInfo.writePending && tabInfo.writeBuffer.length === 0)
+                (!tabInfo.writePending && !tabInfo.writeBuffer?.length)
             ) {
                 resolve();
             } else {
