@@ -48,7 +48,10 @@ async function openDiff(page: Page, lineEnding: string) {
         }),
     );
     await page.goto(phi.url);
-    await page.locator('#diff-term-container .xterm').first().waitFor();
+    await page
+        .locator('#diff-term-container .xterm')
+        .first()
+        .waitFor({ state: 'attached' });
     if (
         await page
             .locator('#diff-panel')
