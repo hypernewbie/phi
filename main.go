@@ -182,6 +182,11 @@ func main() {
 	})
 	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := wsHub.SetRecordingDirectory(filepath.Join(home, ".phi", "recordings")); err != nil {
+			slog.Error("terminal recording directory unavailable", "err", err)
+		}
+	}
 	restoreSavedTabs()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every

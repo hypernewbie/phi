@@ -95,11 +95,11 @@ func TestSeqAccountingAcrossWraparound(t *testing.T) {
 	if !ok {
 		t.Fatal("recording failed")
 	}
-	if rec.Start != 7 || rec.End != 15 {
-		t.Fatalf("recording span [%d,%d), want [7,15)", rec.Start, rec.End)
+	if rec.Start != 0 || rec.End != 15 {
+		t.Fatalf("recording span [%d,%d), want [0,15)", rec.Start, rec.End)
 	}
-	if string(rec.Data) != "89ABCDEF" {
-		t.Fatalf("recording data = %q, want 89ABCDEF (8 retained bytes clamped to oldest)", rec.Data)
+	if string(rec.Data) != "123456789ABCDEF" {
+		t.Fatalf("recording data = %q; replay eviction must not delete history", rec.Data)
 	}
 
 	// Partial range inside the retained window.
@@ -157,9 +157,9 @@ func TestRecordResizeMarkersOrderAgainstOutput(t *testing.T) {
 		t.Fatalf("marker[1] = %+v", rec.Resizes[1])
 	}
 
-	// Range filters markers.
+	// A range also carries the geometry already in force at its start.
 	rec2, _ := h.Recording("p", 5, 8)
-	if len(rec2.Resizes) != 1 || rec2.Resizes[0].AtSeq != 6 {
+	if len(rec2.Resizes) != 2 || rec2.Resizes[0].AtSeq != 4 || rec2.Resizes[1].AtSeq != 6 {
 		t.Fatalf("range markers = %+v", rec2.Resizes)
 	}
 }
@@ -239,9 +239,8 @@ func TestHotDropWarningIsControlNotStream(t *testing.T) {
 		t.Fatalf("hot client warning must be a 0x02 control frame, got %v", m)
 	}
 	var v map[string]string
-	n := binary.BigEndian.Uint32(m[1:5])
-	if err := json.Unmarshal(m[5:5+n], &v); err != nil || v["type"] != "output-dropped" {
-		t.Fatalf("hot warning payload = %q err=%v", m[5:5+n], err)
+	if err := json.Unmarshal(m[1:], &v); err != nil || v["type"] != "output-dropped" {
+		t.Fatalf("hot warning payload = %q err=%v", m[1:], err)
 	}
 
 	h.injectDropWarning(legacy, time.Now())

@@ -2,11 +2,14 @@ package ws
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -75,9 +78,11 @@ type paneCheckpoint struct {
 }
 
 type PaneHub struct {
-	clients map[*Client]bool
-	mu      sync.Mutex
-	Ring    *RingBuffer
+	clients      map[*Client]bool
+	mu           sync.Mutex
+	Ring         *RingBuffer
+	recording    *coldRecording
+	recordingErr error
 
 	// epoch changes identity: a fresh random value per pane creation, so
 	// stale clients/caches cannot mix output from a previous PTY lifetime
@@ -99,16 +104,35 @@ type PaneHub struct {
 const maxResizeMarkers = 512
 
 type Hub struct {
-	panes             map[string]*PaneHub
-	mu                sync.RWMutex
-	replayBufferBytes int
+	panes              map[string]*PaneHub
+	mu                 sync.RWMutex
+	replayBufferBytes  int
+	recordingDirectory string
+	archives           map[string]*PaneHub
 }
 
 func NewHub(replayBufferBytes int) *Hub {
 	return &Hub{
 		panes:             make(map[string]*PaneHub),
+		archives:          make(map[string]*PaneHub),
 		replayBufferBytes: replayBufferBytes,
 	}
+}
+
+// SetRecordingDirectory enables private persistence for the application's
+// logical pane histories. Call before restoring or spawning any panes.
+func (h *Hub) SetRecordingDirectory(dir string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recordingDirectory = dir
+	return os.MkdirAll(dir, 0700)
+}
+
+func (h *Hub) recordingPath(paneID string) string {
+	if h.recordingDirectory == "" {
+		return ""
+	}
+	return filepath.Join(h.recordingDirectory, fmt.Sprintf("%x.log", sha256.Sum256([]byte(paneID))))
 }
 
 func (h *Hub) SetReplayBufferBytes(bytes int) {
@@ -131,6 +155,25 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 			clients: make(map[*Client]bool),
 			Ring:    ring,
 			epoch:   randomEpoch(),
+		}
+		if archive := h.archives[paneID]; archive != nil {
+			ph.recording = archive.recording
+			delete(h.archives, paneID)
+		} else {
+			ph.recording, ph.recordingErr = openRecording(h.recordingPath(paneID))
+		}
+		if ph.recording != nil {
+			ph.total = ph.recording.head
+			if ring != nil {
+				from := uint64(0)
+				if ph.total > uint64(h.replayBufferBytes) {
+					from = ph.total - uint64(h.replayBufferBytes)
+				}
+				data, _, err := ph.recording.read(from, ph.total)
+				if err == nil {
+					ring.Write(data)
+				}
+			}
 		}
 		h.panes[paneID] = ph
 	}
@@ -198,6 +241,9 @@ func (ph *PaneHub) positionLocked() PanePosition {
 		retained = ph.total
 	}
 	oldest = ph.total - retained
+	if ph.recording != nil {
+		oldest = 0
+	}
 	return PanePosition{Epoch: ph.epoch, Oldest: oldest, Head: ph.total}
 }
 
@@ -288,6 +334,16 @@ func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
 			return
 		}
 	}
+	if ph.recording == nil {
+		return
+	}
+	var geometry [4]byte
+	binary.BigEndian.PutUint16(geometry[:2], cols)
+	binary.BigEndian.PutUint16(geometry[2:], rows)
+	if err := ph.recording.append(2, geometry[:]); err != nil {
+		log.Printf("[recording] resize: %v", err)
+		return
+	}
 	ph.resizes = append(ph.resizes, ResizeMarker{AtSeq: ph.total, Cols: cols, Rows: rows})
 	if len(ph.resizes) > maxResizeMarkers {
 		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
@@ -309,7 +365,12 @@ type Recording struct {
 func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 	ph, ok := h.LookupPane(paneID)
 	if !ok {
-		return Recording{}, false
+		h.mu.RLock()
+		ph = h.archives[paneID]
+		h.mu.RUnlock()
+		if ph == nil {
+			return Recording{}, false
+		}
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -326,15 +387,12 @@ func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
 		end = pos.Head
 	}
 	rec := Recording{Epoch: pos.Epoch, Start: from, End: end}
-	if end > from && ph.Ring != nil {
-		rec.Data = ph.Ring.RangeView(int(from-pos.Oldest), int(end-pos.Oldest))
+	if ph.recording == nil {
+		return Recording{}, false
 	}
-	for _, m := range ph.resizes {
-		if m.AtSeq >= from && m.AtSeq <= end {
-			rec.Resizes = append(rec.Resizes, m)
-		}
-	}
-	return rec, true
+	var err error
+	rec.Data, rec.Resizes, err = ph.recording.read(from, end)
+	return rec, err == nil
 }
 
 // MaxCheckpointBytes bounds client-uploaded screen snapshots.
@@ -455,8 +513,19 @@ func (h *Hub) CloseAllClients() {
 func (h *Hub) ClosePane(paneID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if ph := h.panes[paneID]; ph != nil {
+		ph.mu.Lock()
+		for client := range ph.clients {
+			delete(ph.clients, client)
+			close(client.Send)
+		}
+		ph.Ring = nil
+		ph.ckpt = nil
+		h.archives[paneID] = ph
+		ph.mu.Unlock()
+	}
 	delete(h.panes, paneID)
-	log.Printf("[ws] Closed pane %s and deleted its ring buffer", paneID)
+	log.Printf("[ws] Closed pane %s; cold recording retained", paneID)
 }
 
 // deliverOrDrop pushes msg to client's Send channel. If the channel is
@@ -519,7 +588,8 @@ func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 	}
 	client.LastDropWarning = now
 	if client.Hot {
-		warnCtl := frameFramedJSON(0x02, map[string]string{"type": "output-dropped"}, nil)
+		payload, _ := json.Marshal(map[string]string{"type": "output-dropped"})
+		warnCtl := append([]byte{0x02}, payload...)
 		if warnCtl != nil {
 			select {
 			case client.Send <- warnCtl:
@@ -538,12 +608,24 @@ func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 	}
 }
 
-func (h *Hub) Ingest(paneID string, payload []byte) {
+func (h *Hub) Ingest(paneID string, payload []byte) error {
 	ph := h.GetOrCreatePaneHub(paneID)
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
-	// 1. Write to ring buffer and assign the absolute seq range
+	// Commit to the authoritative journal before publishing a frontier or
+	// admitting the bytes to the cache/live stream. A storage failure must
+	// backpressure the PTY reader, not silently drop output.
+	if ph.recording == nil {
+		ph.recording, ph.recordingErr = openRecording(h.recordingPath(paneID))
+		if ph.recordingErr != nil {
+			return ph.recordingErr
+		}
+		ph.total = ph.recording.head
+	}
+	if err := ph.recording.append(1, payload); err != nil {
+		return err
+	}
 	start := ph.total
 	if ph.Ring != nil {
 		ph.Ring.Write(payload)
@@ -572,6 +654,7 @@ func (h *Hub) Ingest(paneID string, payload []byte) {
 			h.deliverOrDrop(client, legacyMsg)
 		}
 	}
+	return nil
 }
 
 func (h *Hub) Broadcast(paneID string, msgType byte, payload []byte) {

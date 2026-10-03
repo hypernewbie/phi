@@ -172,6 +172,11 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 			wantEpoch = v
 			hasEpoch = true
 		}
+		// Cold history can be much larger than the replay cache. Bound the
+		// response allocation; clients assemble the advertised byte spans.
+		if through > from && through-from > ws.MaxCheckpointBytes {
+			through = from + ws.MaxCheckpointBytes
+		}
 		rec, ok := wsHub.Recording(id, from, through)
 		if !ok {
 			http.Error(w, "from is beyond the pane head", http.StatusBadRequest)
