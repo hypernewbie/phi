@@ -2,6 +2,18 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.22.1 — 2026-10-03
+
+### Added
+- **OpenCode background service controls** (`576389d`). The sidebar shows whether the service runs and provides a stop button. Stopping requires confirmation when OpenCode tabs are open.
+- **OpenCode idle shutdown** (`c99e006`). Settings can stop the background service after 5–1440 minutes of inactivity. The default is off. OpenCode input and terminal output reset the timer.
+
+### Fixed
+- **Version labels**. The sidebar fallback, npm package, desktop package, and newest changelog entry now use the same version. Tests reject mismatched versions. Stamped binaries still show their actual server version.
+- **Image clipboard fallback** (`352cb3c`). Failed image copies leave the clipboard unchanged and offer a Download Image button instead of copying a URL. Browsers without image clipboard support show Download Image as the primary action. Clipboard writes start before image loading to retain Safari's click permission.
+- **Touch hover previews** (`1cf9460`). Synthetic mouse events on touch devices no longer open glyph previews over tabs or worktree headers.
+- **macOS tray icon** (`1845512`). The tray icon no longer renders as a solid blob on Retina displays.
+
 ## v0.22.0 — 2026-10-03
 
 ### Added
