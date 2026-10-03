@@ -26,26 +26,21 @@ func init() {
 	}
 }
 
-func TestOpenCodeDefaultsToV2Mini(t *testing.T) {
+func TestOpenCodeDefaultsToV2TUI(t *testing.T) {
 	m := NewManager()
 	c, _ := m.Get("opencode")
-	if c.Command != "opencode" || c.OpenCodeMode != "mini" || c.SessionSource != "opencode_v2" || !reflect.DeepEqual(c.Args, []string{"mini"}) {
+	if c.Command != "opencode" || c.OpenCodeMode != "tui" || c.SessionSource != "opencode_v2" || len(c.Args) != 0 {
 		t.Fatalf("wrong default: %+v", c)
 	}
 	plan, err := ResolveLaunch(c, SpawnRequest{SessionID: "ses_test", ExtraArgs: []string{"--model", "opencode/big-pickle"}}, LaunchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(plan.Args, []string{"mini", "--session", "ses_test", "--model", "opencode/big-pickle"}) {
+	if !reflect.DeepEqual(plan.Args, []string{"--session", "ses_test", "--model", "opencode/big-pickle"}) {
 		t.Fatalf("args: %v", plan.Args)
 	}
-	for _, p := range c.Presets {
-		if p.Name == "/models" || p.Name == "/undo" || p.Name == "/sessions" || p.Name == "/copy" {
-			t.Fatalf("unsupported mini preset: %+v", p)
-		}
-	}
 	d := c.Descriptor()
-	if d.OpenCodeMode != "mini" {
+	if d.OpenCodeMode != "tui" || len(d.OpenCodeMiniPresets) == 0 {
 		t.Fatalf("mode missing from descriptor: %+v", d)
 	}
 	body, _ := json.Marshal(d)
@@ -62,8 +57,8 @@ func TestOpenCodeLegacyOptionAndSeparateCommands(t *testing.T) {
 			if c.Command != "/v1 bin/opencode" || len(c.Args) != 0 || c.SessionSource != "opencode_sqlite" || c.OpenCodeMode != "legacy" || len(c.Presets) != 12 {
 				t.Fatalf("wrong legacy: %+v", c)
 			}
-		} else if c.Command != "/v2 bin/opencode" || c.OpenCodeMode != "mini" {
-			t.Fatalf("wrong mini: %+v", c)
+		} else if c.Command != "/v2 bin/opencode" || c.OpenCodeMode != "tui" {
+			t.Fatalf("wrong v2 TUI: %+v", c)
 		}
 		claude, _ := m.Get("claude")
 		if claude.Command != "claude" || len(claude.Args) != 0 {
@@ -81,6 +76,8 @@ func TestOpenCodeVersionChecks(t *testing.T) {
 		mode, version string
 		valid         bool
 	}{
+		{"tui", "opencode v2.0.21\n", true},
+		{"tui", "1.18.34\n", false},
 		{"mini", "opencode v2.0.21\n", true},
 		{"mini", "2.0.21\n", true},
 		{"mini", "1.18.34\n", false},
@@ -110,14 +107,38 @@ func TestOpenCodeInspectionOutputBound(t *testing.T) {
 }
 
 func TestOpenCodeCustomArgvDoesNotAdvertiseMini(t *testing.T) {
-	c, _ := NewManager().Get("opencode")
+	base, _ := NewManager().Get("opencode")
+	c, _ := OpenCodeMini(base)
 	args := []string{}
 	patched, err := (&CoderPatch{Args: &args}).Apply(c)
-	if err != nil || patched.OpenCodeMode != "" {
+	if err != nil || patched.OpenCodeMode != "tui" {
 		t.Fatalf("wrong overridden mode: %+v %v", patched, err)
 	}
 	if c.OpenCodeMode != "mini" || len(c.Args) != 1 {
 		t.Fatal("patch mutated original")
+	}
+}
+
+func TestOpenCodeMiniIsPerLaunchAndCannotSwitchLegacyGeneration(t *testing.T) {
+	m := NewManager()
+	base, _ := m.Get("opencode")
+	mini, err := OpenCodeMini(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := ResolveLaunch(mini, SpawnRequest{SessionID: "ses_test"}, LaunchOptions{})
+	if err != nil || !reflect.DeepEqual(plan.Args, []string{"mini", "--session", "ses_test"}) {
+		t.Fatalf("bad Mini argv: %v %v", plan.Args, err)
+	}
+	if mini.OpenCodeMode != "mini" || m.MustGet("opencode").OpenCodeMode != "tui" || len(base.Args) != 0 {
+		t.Fatal("Mini changed the default")
+	}
+	legacy, _ := NewManagerWithOptions(BuiltinOptions{OpenCodeLegacy: true}).Get("opencode")
+	if _, err := OpenCodeMini(legacy); err == nil {
+		t.Fatal("Mini bypassed legacy selection")
+	}
+	if _, err := OpenCodeMini(m.MustGet("claude")); err == nil {
+		t.Fatal("Mini applied to another coder")
 	}
 }
 

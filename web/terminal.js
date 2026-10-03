@@ -39,6 +39,7 @@ import {
     executeRecipe,
     recipeFor,
     isOpenCodeMini,
+    openCodePaneMode,
     opencodeMiniRecipe,
     logoFor,
     inputMode,
@@ -1064,7 +1065,7 @@ export class TabManager {
                     !!t.pinned,
                     !!t.marked,
                     ...(t.coder === 'opencode'
-                        ? ['', null, t.opencode_mode === 'mini' ? 'mini' : 'legacy']
+                        ? ['', null, openCodePaneMode(t.opencode_mode)]
                         : []),
                 );
             }
@@ -6888,6 +6889,7 @@ export class TabManager {
                 session_id: tabInfo.sessionId || '',
                 title: tabInfo.title || '',
                 workspace: tabInfo.workspace || '',
+                ...(tabInfo.coder === 'opencode' ? { opencode_mini: isOpenCodeMini(tabInfo) } : {}),
             }),
         })
             .then((res) => {
@@ -6902,7 +6904,7 @@ export class TabManager {
                 tabInfo.paneId = data.pane_id;
                 tabInfo.sessionId = data.session_id;
                 if (tabInfo.coder === 'opencode') {
-                    tabInfo.opencodeMode = data.opencode_mode === 'mini' ? 'mini' : 'legacy';
+                    tabInfo.opencodeMode = openCodePaneMode(data.opencode_mode);
                 }
 
                 // Update DOM element references to synchronise new IDs
@@ -7994,7 +7996,11 @@ export class TabManager {
         if (!this.presetsContainer) return;
         this.presetsContainer.innerHTML = '';
 
-        const coderPresetInfo = this.app.codersPresetRegistry[coderId];
+        const defaultPresetInfo = this.app.codersPresetRegistry[coderId];
+        const miniPresets = getCoder(coderId)?.opencode_mini_presets;
+        const coderPresetInfo = isOpenCodeMini(activeTab) && miniPresets?.length
+            ? { ...defaultPresetInfo, presets: miniPresets }
+            : defaultPresetInfo;
         const hasCoderPresets =
             coderPresetInfo?.presets && coderPresetInfo.presets.length > 0;
 

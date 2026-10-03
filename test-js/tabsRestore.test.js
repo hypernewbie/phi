@@ -111,7 +111,7 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
         expect(calls[2]).toBe('p3|s3|shell|bash|/w|/w|false|false');
     });
 
-    it.each(['mini', 'legacy', undefined])(
+    it.each(['tui', 'mini', 'legacy', undefined])(
         'pins the owner-reported OpenCode mode on restore (%s)',
         async (mode) => {
             const { tm } = makeTm();
@@ -128,7 +128,7 @@ describe('restoreTabsState rebuilds tabs from /api/terminals', () => {
             expect(tm.createTab.mock.calls[0].slice(8)).toEqual([
                 '',
                 null,
-                mode === 'mini' ? 'mini' : 'legacy',
+                mode === 'mini' || mode === 'tui' ? mode : 'legacy',
             ]);
         },
     );

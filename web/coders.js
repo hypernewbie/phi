@@ -236,10 +236,23 @@ function coerceDescriptor(id, raw) {
             : [],
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
-        opencode_mode: r.opencode_mode === 'mini' || r.opencode_mode === 'legacy'
+        opencode_mode: r.opencode_mode === 'mini' ||
+            r.opencode_mode === 'tui' ||
+            r.opencode_mode === 'legacy'
             ? r.opencode_mode
             : undefined,
+        opencode_mini_presets: coercePresets(r.opencode_mini_presets),
     };
+}
+function coercePresets(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    return raw
+        .filter((p) => p && typeof p.name === 'string' && typeof p.value === 'string')
+        .map((p) => ({ name: p.name, value: p.value }));
+}
+export function openCodePaneMode(mode) {
+    return mode === 'mini' || mode === 'tui' ? mode : 'legacy';
 }
 function coerceCapabilities(raw) {
     if (!raw || typeof raw !== 'object') {
