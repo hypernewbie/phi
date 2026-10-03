@@ -84,6 +84,62 @@ describe('_initHieroPreview', () => {
     });
 });
 
+describe('touch hover previews', () => {
+    beforeEach(() => {
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query) => ({ matches: query === '(pointer: coarse)' })),
+        );
+    });
+
+    it('ignores synthetic mouseover on tabs in touch mode', () => {
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, {
+            paneId: 'p1',
+            glyph: '𓀀',
+            cwd: '/x',
+        });
+
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+        expect(tm._hieroPreview.classList.contains('visible')).toBe(false);
+    });
+
+    it('ignores synthetic mouseover on worktree headers in touch mode', () => {
+        const sessionList = mountSidebarDom();
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const { header } = attachWorktreeSection(sessionList, {
+            path: '/x',
+            glyph: '𓀀',
+            name: 'x',
+        });
+
+        header.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+        expect(tm._hieroPreview.classList.contains('visible')).toBe(false);
+    });
+
+    it('clears an existing preview when input switches to touch mode', () => {
+        window.matchMedia.mockReturnValue({ matches: false });
+        const tm = makeManager();
+        tm._initHieroPreview();
+        const tabEl = attachTab(tm, {
+            paneId: 'p1',
+            glyph: '𓀀',
+            cwd: '/x',
+        });
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        expect(tm._hieroPreview.classList.contains('visible')).toBe(true);
+
+        window.matchMedia.mockReturnValue({ matches: true });
+        tabEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+        expect(tm._hieroPreview.classList.contains('visible')).toBe(false);
+    });
+});
+
 describe('_showHieroPreview / _hideHieroPreview', () => {
     it('shows on mouseover and hides on mouseout', () => {
         const tm = makeManager();
