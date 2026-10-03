@@ -1213,19 +1213,20 @@ export class DesktopHost {
   ): void {
     const [width, height] = menu.getSize();
     const display = screen.getDisplayNearestPoint({ x: screenX, y: screenY });
-    const work = display.workArea;
+    const isFullScreen = parent.isFullScreen();
+    const area = isFullScreen ? display.bounds : display.workArea;
     const parentBounds = parent.getBounds();
     const railEdge = parentBounds.x + RAIL_WIDTH + 8;
     const left = Math.max(
-      work.x + 8,
+      area.x + 8,
       Math.min(
         Math.max(screenX + 10, railEdge),
-        work.x + work.width - width - 8,
+        area.x + area.width - width - 8,
       ),
     );
     const top = Math.max(
-      work.y + 8,
-      Math.min(screenY + 4, work.y + work.height - height - 8),
+      area.y + 8,
+      Math.min(screenY + 4, area.y + area.height - height - 8),
     );
     menu.setPosition(Math.round(left), Math.round(top));
   }
@@ -1241,6 +1242,14 @@ export class DesktopHost {
       ?.state()
       .profiles.find((candidate) => candidate.id === profileId);
     if (!parent || !profile) return;
+    if (
+      this.railMenuProfileId === profileId &&
+      this.railMenuWindow &&
+      !this.railMenuWindow.isDestroyed()
+    ) {
+      this.closeRailMenu();
+      return;
+    }
     this.closeRailMenu();
 
     const menu = new BrowserWindow({
@@ -1256,6 +1265,7 @@ export class DesktopHost {
       movable: false,
       minimizable: false,
       maximizable: false,
+      fullscreenable: false,
       skipTaskbar: true,
       show: false,
       webPreferences: {
@@ -1267,6 +1277,15 @@ export class DesktopHost {
         session: session.defaultSession,
       },
     });
+    if (typeof menu.setVisibleOnAllWorkspaces === 'function') {
+      menu.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
+    }
+    if (typeof menu.setAlwaysOnTop === 'function') {
+      menu.setAlwaysOnTop(true, 'pop-up-menu');
+    }
     this.railMenuWindow = menu;
     this.railMenuProfileId = profileId;
     this.sessionChildren.add(menu);
@@ -1277,7 +1296,9 @@ export class DesktopHost {
     installZoomShortcuts(menuContents, (action) =>
       this.requestContentZoom(action),
     );
+    let shownAt = 0;
     menu.on('blur', () => {
+      if (Date.now() - shownAt < 150) return;
       if (this.railMenuWindow === menu) this.closeRailMenu();
     });
     menu.on('closed', () => {
@@ -1297,6 +1318,7 @@ export class DesktopHost {
         if (this.railMenuWindow !== menu || menu.isDestroyed()) return;
         this.positionRailMenu(menu, screenX, screenY, parent);
         this.pushRailState();
+        shownAt = Date.now();
         menu.show();
         menu.focus();
       })
@@ -2723,6 +2745,7 @@ export class DesktopHost {
       if (!win.isDestroyed()) win.flashFrame(false);
       this.pushWindowState();
       this.hooks?.trigger('focus', true);
+      if (this.railMenuWindow && !this.railMenuWindow.isDestroyed()) return;
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
@@ -3162,6 +3185,9 @@ export class DesktopHost {
                   (features.includes('width=') || features.includes('phi-')),
               );
             if (isInternalPopout) {
+              if (this.liveMainWindow()?.isFullScreen()) {
+                return { action: 'deny' };
+              }
               const size = popupSize(features);
               return {
                 action: 'allow',
@@ -4656,6 +4682,9 @@ export class DesktopHost {
         typeof action.id === 'string' &&
         HEADER_ACTION_BUTTONS.has(action.id)
       ) {
+        if (action.id === 'header-config-pill') {
+          view.webContents.focus();
+        }
         void view.webContents
           .executeJavaScript(headerActionClickScript(action.id))
           .catch(() => {});
