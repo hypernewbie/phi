@@ -1951,6 +1951,7 @@ export class TabManager {
         if (pty?.mode !== 'hot') return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
+        if (!samePane || !tabInfo._termOpened) tabInfo._historyOmitted = Boolean(info.ckpt?.through);
 
         if (!tabInfo._termOpened) {
             tabInfo._streamDecoder = pty.decoder;
@@ -2134,6 +2135,66 @@ export class TabManager {
             });
     }
 
+    async _loadColdHistory(tabInfo) {
+        const pty = tabInfo.ws;
+        if (!tabInfo._historyOmitted || tabInfo._historyLoading || tabInfo.finalizing || pty?.mode !== 'hot') return;
+        tabInfo._historyLoading = true;
+        let finishGate;
+        let gate;
+        const epoch = tabInfo.paneEpoch;
+        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo.paneEpoch === epoch;
+        let reset = false;
+        try {
+            if (tabInfo._bootstrapGate) await tabInfo._bootstrapGate;
+            if (!current()) return;
+            pty.hold();
+            gate = new Promise(resolve => { finishGate = resolve; });
+            tabInfo._bootstrapGate = gate;
+            await this._drainSettled(tabInfo);
+            if (!current()) return;
+            const through = tabInfo.drainedSeq;
+            // Leave the fast-painted screen untouched until all required
+            // ranges validate. This is an explicit cold-history load.
+            const ranges = [];
+            for (let from = 0; from < through;) {
+                const end = Math.min(through, from + MAX_DELTA_BYTES);
+                const range = await this._fetchRecordingRange(tabInfo.paneId, from, end, epoch);
+                if (!current()) return;
+                if (!range) throw new Error('terminal history temporarily unavailable');
+                ranges.push(range);
+                from = end;
+            }
+            tabInfo._historyParsing = true;
+            tabInfo.term.reset();
+            reset = true;
+            pty.decoder = new TextDecoder('utf-8');
+            tabInfo._streamDecoder = pty.decoder;
+            tabInfo.queuedSeq = 0;
+            tabInfo.drainedSeq = 0;
+            tabInfo.userFollowBottom = false;
+            for (const range of ranges) {
+                const text = pty.decodeOutput(range.bytes);
+                this._reserveReplayRows(tabInfo, text);
+                this.writeToTerminal(tabInfo, text);
+                await this._drainSettled(tabInfo);
+                if (!current()) return;
+                tabInfo.queuedSeq = range.end;
+                tabInfo.drainedSeq = range.end;
+            }
+            tabInfo._historyOmitted = false;
+            tabInfo.term.scrollToTop();
+        } catch (error) {
+            console.warn('[term] cold history:', error);
+            if (reset && current()) pty.ws.close();
+        } finally {
+            tabInfo._historyLoading = false;
+            tabInfo._historyParsing = false;
+            if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
+            finishGate?.();
+            if (current() && (!reset || !tabInfo._historyOmitted)) pty.release();
+        }
+    }
+
     _reserveReplayRows(tabInfo, text) {
         const term = tabInfo.term;
         if (!term?.options || !term.buffer?.active || !term.cols) return;
@@ -2256,7 +2317,7 @@ export class TabManager {
             !tabInfo.serializeAddon ||
             !pty ||
             pty.mode !== 'hot' ||
-            tabInfo.isDead || tabInfo.writePending || tabInfo.writeBuffer?.length ||
+            tabInfo.isDead || tabInfo._historyLoading || tabInfo.writePending || tabInfo.writeBuffer?.length ||
             !tabInfo.term ||
             tabInfo.paneEpoch === undefined ||
             tabInfo.drainedSeq === undefined
@@ -3272,6 +3333,22 @@ export class TabManager {
         // user intent without changing that loop's timing or behavior.
         const cancelFollowForUserScroll = () =>
             this._cancelScrollFollowForUserScroll(tabInfo);
+        const loadOlder = () => {
+            if (tabInfo.term.buffer.active.viewportY === 0) this._loadColdHistory(tabInfo);
+        };
+        termContainer.addEventListener('wheel', e => { if (e.deltaY < 0) loadOlder(); }, { capture: true, passive: true });
+        let touchY;
+        termContainer.addEventListener('touchstart', e => { touchY = e.touches?.[0]?.clientY; }, { passive: true });
+        termContainer.addEventListener('touchmove', e => {
+            if (e.touches?.length === 1 && e.touches[0].clientY > touchY) loadOlder();
+        }, { passive: true });
+        term.onScroll?.(() => {
+            if (tabInfo.userFollowBottom === false) loadOlder();
+        });
+        // Detect native buffer eviction too; cold scroll-up can recover it.
+        term._core?._bufferService?.buffers?.normal?.lines?.onTrim?.(() => {
+            if (!tabInfo._historyLoading) tabInfo._historyOmitted = true;
+        });
         termContainer.addEventListener('wheel', cancelFollowForUserScroll, {
             capture: true,
             passive: true,
@@ -3451,6 +3528,7 @@ export class TabManager {
             const protocolReply =
                 /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
+            if (tabInfo._historyParsing && protocolReply) return;
             if (tabInfo.directMode || protocolReply) {
                 this.sendInput(tabInfo, data);
                 if (tabInfo.directMode && data.includes('\r')) {

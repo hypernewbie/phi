@@ -445,6 +445,10 @@ export class PTYWebSocket {
 
     /** release() starts live delivery. Call after the bootstrap writes
      * (checkpoint + delta) are queued so live frames land after them. */
+    hold() {
+        this.holding = true;
+    }
+
     release() {
         this.holding = false;
         this._flushHeld();
