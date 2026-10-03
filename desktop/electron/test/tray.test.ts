@@ -63,6 +63,10 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
         resize: vi.fn((_opts?: unknown) => ({})),
         setTemplateImage: vi.fn(),
       })),
+      createEmpty: vi.fn(() => ({
+        addRepresentation: vi.fn(),
+        setTemplateImage: vi.fn(),
+      })),
     },
     FakeTray,
   };
@@ -861,10 +865,19 @@ describe('setupTray (wiring, recording fakes)', () => {
     );
   });
 
-  it('resizes the icon to 16x16 and marks as template image on macOS', () => {
+  it('resizes the icon to 16x16 and 32x32, builds multi-representation and marks as template image on macOS', () => {
+    const multi = {
+      addRepresentation: vi.fn(),
+      setTemplateImage: vi.fn(),
+    };
+    fakeNativeImage.createEmpty = vi.fn(
+      () => multi as unknown as ReturnType<typeof nativeImage.createEmpty>,
+    );
     const fakeImage = {
       isEmpty: () => false,
-      resize: vi.fn((_opts?: unknown) => fakeImage),
+      resize: vi.fn((_opts?: unknown) => ({
+        toPNG: () => Buffer.from('png'),
+      })),
       setTemplateImage: vi.fn(),
     };
     (
@@ -873,7 +886,16 @@ describe('setupTray (wiring, recording fakes)', () => {
     setupTrayForTest();
     if (process.platform === 'darwin') {
       expect(fakeImage.resize).toHaveBeenCalledWith({ width: 16, height: 16 });
-      expect(fakeImage.setTemplateImage).toHaveBeenCalledWith(true);
+      expect(fakeImage.resize).toHaveBeenCalledWith({ width: 32, height: 32 });
+      expect(multi.addRepresentation).toHaveBeenCalledWith({
+        scaleFactor: 1.0,
+        buffer: expect.any(Buffer),
+      });
+      expect(multi.addRepresentation).toHaveBeenCalledWith({
+        scaleFactor: 2.0,
+        buffer: expect.any(Buffer),
+      });
+      expect(multi.setTemplateImage).toHaveBeenCalledWith(true);
     }
   });
 

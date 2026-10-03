@@ -456,7 +456,24 @@ export function setupTray(deps: TrayDeps): TrayHandle {
     );
   } else if (process.platform === 'darwin') {
     if (typeof icon.resize === 'function') {
-      icon = icon.resize({ width: 16, height: 16 });
+      const icon16 = icon.resize({ width: 16, height: 16 });
+      const icon32 = icon.resize({ width: 32, height: 32 });
+      if (
+        typeof nativeImage.createEmpty === 'function' &&
+        typeof icon16.toPNG === 'function' &&
+        typeof icon32.toPNG === 'function'
+      ) {
+        const multi = nativeImage.createEmpty();
+        if (typeof multi.addRepresentation === 'function') {
+          multi.addRepresentation({ scaleFactor: 1.0, buffer: icon16.toPNG() });
+          multi.addRepresentation({ scaleFactor: 2.0, buffer: icon32.toPNG() });
+          icon = multi;
+        } else {
+          icon = icon16;
+        }
+      } else {
+        icon = icon16;
+      }
     }
     if (typeof icon.setTemplateImage === 'function') {
       icon.setTemplateImage(true);
@@ -471,9 +488,17 @@ export function setupTray(deps: TrayDeps): TrayHandle {
     );
     const pngPath = iconPath.replace(/\.ico$/, '.png');
     const unpackedPng = pngPath.replace('app.asar', 'app.asar.unpacked');
-    const fallback = nativeImage.createFromPath(
+    let fallback = nativeImage.createFromPath(
       existsSync(unpackedPng) ? unpackedPng : pngPath,
     );
+    if (process.platform === 'darwin' && !fallback.isEmpty()) {
+      if (typeof fallback.resize === 'function') {
+        fallback = fallback.resize({ width: 16, height: 16 });
+      }
+      if (typeof fallback.setTemplateImage === 'function') {
+        fallback.setTemplateImage(true);
+      }
+    }
     try {
       tray = new Tray(fallback);
     } catch {

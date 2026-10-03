@@ -76,9 +76,10 @@ NSStatusItem/StatusNotifierItem code paths):
   with ` (N unread)` appended when it has unread — driven by
   `TrayHandle.setActiveProfile(p)` / `TrayHandle.setUnread(profileId, n)`
   (only the active profile's tooltip changes);
-- the tray icon is `assets/tray.png` (16x16, with `@2x`/`@4x` variants)
-  resolved via `TRAY_ICON_PATH` at production load time; a missing icon
-  is logged once and the tray continues with the default empty icon (the
+- the tray icon is `assets/tray.png` (256x256 Phi glyph, resized to
+  16x16 template image with 1x/2x representations on macOS) resolved
+  via `TRAY_ICON_PATH` at production load time; a missing icon is
+  logged once and the tray continues with the default empty icon (the
   Wails missing-icon convention). A real icon belongs in step 10
   (packaging);
 - teardown: the tray is closed on `before-quit` (and on non-macOS
@@ -332,7 +333,7 @@ src/preload.ts          sandboxed preload: window.electron.onDeeplink / onForwar
 src/electron.d.ts       typed window.electron surface + the RailState payload types
 src/shell.html        host window's covered placeholder page (phase-1 shell)
 src/shell.css         Phi design tokens + shell styles
-assets/tray.png       tray icon placeholder (16x16 + @2x/@4x; real art belongs in step 10 packaging)
+assets/tray.png       tray icon (256x256 Phi glyph, resized to 16x16 template on macOS)
 test/                 vitest unit tests + e2e smoke test
 scripts/copy-assets.mjs  copies shell/renderer assets into dist/ at build time
 ```
