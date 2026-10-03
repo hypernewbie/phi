@@ -485,6 +485,18 @@ eager to avoid a first-open unstyled flash. -->
                             </svg>
                             <span>New Session</span>
                         </button>
+                        <div id="opencode-service-row" class="opencode-service-row" style="display: none;">
+                            <button
+                                id="opencode-service-btn"
+                                class="btn opencode-service-btn"
+                                type="button"
+                                data-state="stopped"
+                                title="OpenCode background server is stopped (starts automatically on new session)"
+                            >
+                                <span class="opencode-service-dot"></span>
+                                <span class="opencode-service-label">Server off</span>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="session-list-container">
