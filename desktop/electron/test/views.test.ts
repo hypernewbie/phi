@@ -165,7 +165,10 @@ function makeManager(opts?: {
   contentZoomPercent?: number;
   onZoomAction?: (action: ZoomAction) => void;
   onFullscreenToggle?: (nextFullscreen: boolean) => void;
-}): ManagerHarness & { zoomActions: ZoomAction[]; fullscreenToggles: boolean[] } {
+}): ManagerHarness & {
+  zoomActions: ZoomAction[];
+  fullscreenToggles: boolean[];
+} {
   const win = makeFakeWindow();
   const views: RecordingView[] = [];
   const zoomActions: ZoomAction[] = [];
@@ -403,7 +406,8 @@ describe('ProfileViewManager (retained per-profile views)', () => {
   });
 
   it('installs the plain-F11 fullscreen toggle, F5 reload, and zoom shortcuts on every retained body view', () => {
-    const { manager, views, win, zoomActions, fullscreenToggles } = makeManager();
+    const { manager, views, win, zoomActions, fullscreenToggles } =
+      makeManager();
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
     manager.setActive('p1');

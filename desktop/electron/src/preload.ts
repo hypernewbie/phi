@@ -143,11 +143,12 @@ contextBridge.exposeInMainWorld('electron', {
   postReloadAllServers: (): void => {
     ipcRenderer.send('phi:reload-all-servers');
   },
-  postCopyAllServers: (): Promise<{ ok: boolean; count: number; text?: string }> =>
-    ipcRenderer.invoke('phi:copy-all-servers'),
-  postCopyServerUrl: (
-    id?: string,
-  ): Promise<{ ok: boolean; url?: string }> =>
+  postCopyAllServers: (): Promise<{
+    ok: boolean;
+    count: number;
+    text?: string;
+  }> => ipcRenderer.invoke('phi:copy-all-servers'),
+  postCopyServerUrl: (id?: string): Promise<{ ok: boolean; url?: string }> =>
     ipcRenderer.invoke('phi:copy-server-url', id),
   postAddServers: (
     urls: string[],

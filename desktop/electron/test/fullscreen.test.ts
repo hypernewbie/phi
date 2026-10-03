@@ -135,4 +135,3 @@ describe('installFullscreenToggle (plain-F11 fullscreen)', () => {
     expect(toggles).toEqual([true, false]);
   });
 });
-
