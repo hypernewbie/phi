@@ -67,7 +67,16 @@ test('Codex launches safely and Models sends only the native picker command', as
     const pane = await reply.json();
     await expect.poll(launchArgs).toBe('--no-alt-screen\n');
     await expect(page.locator(`#term-${pane.pane_id} .xterm`)).toBeVisible();
-    await expect.poll(() => output.join('')).toContain('codex ready');
+    // hot-v1 attaches live-only. Startup output can precede attachment,
+    // so check the authoritative recording instead of racing the socket.
+    await expect
+        .poll(async () => {
+            const recording = await request.get(
+                `${phi.url}/api/terminals/${pane.pane_id}/recording?from=0&through=65536`,
+            );
+            return recording.ok() ? recording.text() : '';
+        })
+        .toContain('codex ready');
     await page
         .locator('#presets-container button', { hasText: '🤖 Models' })
         .click();
@@ -75,6 +84,7 @@ test('Codex launches safely and Models sends only the native picker command', as
         .poll(() => input.join(''))
         .toContain('\x1b[200~/model\x1b[201~\r');
     expect(input.join('')).not.toMatch(/gpt-[0-9]/);
+    await expect.poll(() => output.join('')).toContain('/model');
     const resumed = await request.post(`${phi.url}/api/terminals`, {
         data: {
             coder: 'codex',
