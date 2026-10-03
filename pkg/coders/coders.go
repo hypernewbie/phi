@@ -59,7 +59,7 @@ type Coder struct {
 	WindowsPowerShellWrap *bool             `json:"windows_powershell_wrap,omitempty"`
 	InputMode             string            `json:"input_mode"` // "staged" | "direct"
 	ModelSwitchDisabled   bool              `json:"model_switch_disabled"`
-	OpenCodeMode          string            `json:"opencode_mode,omitempty"` // "mini" (v2) | "legacy" (v1)
+	OpenCodeMode          string            `json:"opencode_mode,omitempty"` // "tui" / "mini" (v2) | "legacy" (v1)
 	Capabilities          Capabilities      `json:"capabilities"`
 }
 
@@ -88,10 +88,10 @@ func DefaultRegistry() map[string]Coder {
 			Name:                  "OpenCode",
 			ShortLabel:            "OpenCode",
 			Command:               "opencode",
-			Args:                  []string{"mini"},
+			Args:                  []string{},
 			ResumeArgs:            []string{"--session", "{session_id}"},
 			SessionSource:         "opencode_v2",
-			OpenCodeMode:          "mini",
+			OpenCodeMode:          "tui",
 			SidebarVisible:        true,
 			IsShell:               false,
 			WindowsPowerShellWrap: &opencodeWrap,
@@ -100,12 +100,14 @@ func DefaultRegistry() map[string]Coder {
 			Capabilities:          Capabilities{List: true, Transcript: true},
 			Presets: []Preset{
 				{Name: "/exit", Value: "/exit\r"},
-				{Name: "/compact", Value: "/compact\r"},
 				{Name: "/new", Value: "/new\r"},
-				{Name: "/settings", Value: "/settings\r"},
-				{Name: "menu", Value: "\x10"},
-				{Name: "clear", Value: "\x0c"},
+				{Name: "/models", Value: "/models\r"},
+				{Name: "/compact", Value: "/compact\r"},
+				{Name: "/undo", Value: "/undo\r"},
+				{Name: "/redo", Value: "/redo\r"},
+				{Name: "/sessions", Value: "/sessions\r"},
 				{Name: "ctrl+c", Value: "\x03"},
+				{Name: "ctrl+o", Value: "\x0f"},
 				{Name: "y↵", Value: "y\r"},
 				{Name: "esc", Value: "\x1b"},
 			},

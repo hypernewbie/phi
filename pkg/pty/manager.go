@@ -56,6 +56,7 @@ type PTYInstance struct {
 	Cwd              string      `json:"cwd"`
 	Coder            string      `json:"coder"`
 	SessionID        string      `json:"session_id"`
+	OpenCodeMode     string      `json:"opencode_mode,omitempty"` // immutable launch mode
 	DetachTimer      *time.Timer `json:"-"`
 	mu               sync.Mutex
 	ActiveWS         bool
@@ -215,6 +216,12 @@ func GenerateID() string {
 // environment merging. Reserved keys (PATH, PHI_CLIPBOARD_FILE) cannot
 // be overridden.
 func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string, coder, sessionID string, envOverrides ...map[string]string) (*PTYInstance, error) {
+	return m.SpawnWithOpenCodeMode(ctx, dir, command, args, coder, sessionID, "", envOverrides...)
+}
+
+// The mode is assigned before publication so concurrent listings, attach,
+// and state snapshots always see the mode this process actually launched.
+func (m *Manager) SpawnWithOpenCodeMode(ctx context.Context, dir, command string, args []string, coder, sessionID, mode string, envOverrides ...map[string]string) (*PTYInstance, error) {
 	// Refuse new spawns during the drain window (signal received). Tests
 	// can flip the flag directly via BeginDrain to assert this path.
 	if m.IsDraining() {
@@ -236,6 +243,7 @@ func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string,
 		Cwd:          dir,
 		Coder:        coder,
 		SessionID:    sessionID,
+		OpenCodeMode: mode,
 		LastOutputAt: time.Now(),
 	}
 
@@ -406,6 +414,7 @@ type PTYInstanceSnapshot struct {
 	Cwd              string `json:"cwd"`
 	Coder            string `json:"coder"`
 	SessionID        string `json:"session_id"`
+	OpenCodeMode     string `json:"opencode_mode,omitempty"`
 	ActiveWS         bool   `json:"-"`
 	ActiveWSCount    int    `json:"-"`
 	Pinned           bool   `json:"pinned"`
@@ -427,6 +436,7 @@ func (inst *PTYInstance) Snapshot() PTYInstanceSnapshot {
 		Cwd:              inst.Cwd,
 		Coder:            inst.Coder,
 		SessionID:        inst.SessionID,
+		OpenCodeMode:     inst.OpenCodeMode,
 		ActiveWS:         inst.ActiveWS,
 		ActiveWSCount:    inst.ActiveWSCount,
 		Pinned:           inst.Pinned,

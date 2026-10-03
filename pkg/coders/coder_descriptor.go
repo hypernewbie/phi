@@ -26,6 +26,7 @@ type CoderDescriptor struct {
 	Capabilities        Capabilities `json:"capabilities"`
 	ModelSwitchDisabled bool         `json:"model_switch_disabled"`
 	OpenCodeMode        string       `json:"opencode_mode,omitempty"`
+	OpenCodeMiniPresets []Preset     `json:"opencode_mini_presets,omitempty"`
 }
 
 // Descriptor converts a resolved Coder into its public DTO. The
@@ -46,6 +47,9 @@ func (c Coder) Descriptor() CoderDescriptor {
 	}
 	if c.Presets != nil {
 		out.Presets = append([]Preset(nil), c.Presets...)
+	}
+	if c.ID == "opencode" && c.SessionSource == "opencode_v2" {
+		out.OpenCodeMiniPresets = OpenCodeMiniPresets()
 	}
 	return out
 }

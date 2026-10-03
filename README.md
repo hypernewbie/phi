@@ -133,7 +133,7 @@ Both are created automatically. `config.json` also holds an optional browser-der
 
 ### OpenCode 2 (default)
 
-Phi starts OpenCode 2 with `opencode mini`, not the full-screen TUI. Both v1 and v2 use the `opencode` executable name. Install v2 on the machine that runs Phi, following the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/). Phi does not install or replace either CLI.
+Phi starts OpenCode 2's full-screen TUI with `opencode` by default. To use Mini for one launch, right-click the OpenCode sidebar or quick-launch button, **New Session**, or a saved OpenCode session, then choose **Open Mini**. This does not change the default. Both v1 and v2 use the `opencode` executable name. Install v2 on the machine that runs Phi, following the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/). Phi does not install or replace either CLI.
 
 The default in `~/.phi/config.json` is:
 
@@ -152,11 +152,11 @@ To keep using v1:
 
 If v1 is still the `opencode` on Phi's `PATH`, only `"opencode_legacy": true` is needed. For separate installations, set `opencode_command` to the v2 executable and `opencode_legacy_command` to the v1 executable. These values are executable names or absolute paths, not shell commands. Keep a working v1 installation before replacing it; copying a package-manager wrapper alone may not preserve its dependencies.
 
-Restart Phi and refresh the browser after changing these options or installing v2. Phi checks the selected CLI generation before launch. It does not silently fall back to v1 or launch v2's full TUI.
+Restart Phi and refresh the browser after changing these options or installing v2. Phi checks the selected CLI generation before launch. It does not silently fall back to v1. An explicit Mini launch never falls back to the full TUI.
 
-Mini uses normal terminal scrollback and atomic slash-command pastes. The old keyboard-scroll and delayed-Enter workarounds remain scoped to legacy tabs. Its preset buttons use Mini's supported commands. Model presets must use `provider/model`; selection uses Mini's native Ctrl+P menu. Select model variants through that menu rather than putting `#variant` in a Phi model preset. Custom Mini keybindings can require manual menu selection.
+Mini uses normal terminal scrollback and atomic slash-command pastes. The keyboard-scroll and delayed-Enter workarounds remain scoped to full-TUI tabs. Each pane retains its launch mode through reload, reattach, and restart. Its preset buttons use Mini's supported commands. Model presets must use `provider/model`; selection uses Mini's native Ctrl+P menu. Select model variants through that menu rather than putting `#variant` in a Phi model preset. Custom Mini keybindings can require manual menu selection.
 
-V2 history uses its `session_v2` and `session_message` tables. Phi asks `opencode debug paths db` for the database location and reads it without writing or migrating it. Start a new Mini session once to let OpenCode migrate v1 history, then refresh Phi's session list. A missing resume ID is rejected rather than creating an empty conversation. The legacy option keeps the original v1 history reader; it does not convert v2 sessions back to v1.
+V2 history uses its `session_v2` and `session_message` tables. Phi asks `opencode debug paths db` for the database location and reads it without writing or migrating it. Start a new OpenCode 2 session once to let OpenCode migrate v1 history, then refresh Phi's session list. A missing resume ID is rejected rather than creating an empty conversation. The legacy option keeps the original v1 history reader; it does not convert v2 sessions back to v1.
 
 Custom backend files still override the built-in defaults. Keep `"mini"` as the first argument when overriding v2 Mini's argv.
 
@@ -164,7 +164,7 @@ Custom backend files still override the built-in defaults. Keep `"mini"` as the 
 
 | ID         | Name         | Command    | Session source                                   |
 | ---------- | ------------ | ---------- | ------------------------------------------------ |
-| `opencode` | OpenCode 2 Mini | `opencode mini` | CLI-resolved SQLite v2 database; v1 reader with `opencode_legacy` |
+| `opencode` | OpenCode 2 | `opencode` (Mini via right-click) | CLI-resolved SQLite v2 database; v1 reader with `opencode_legacy` |
 | `claude`   | Claude Code  | `claude`   | `~/.claude/projects/` (JSONL)                    |
 | `agy`      | Antigravity  | `agy`      | `~/.gemini/antigravity-cli/conversations/` (`.pb`)|
 | `pi`       | Pi Coder     | `pi`       | Pi session files                                 |

@@ -327,12 +327,25 @@ func ensureCoderManager() {
 }
 
 type SpawnRequest struct {
-	Coder     string   `json:"coder"`
-	Cwd       string   `json:"cwd"`
-	SessionID string   `json:"session_id"`
-	ExtraArgs []string `json:"extra_args"`
-	Title     string   `json:"title"`
-	Workspace string   `json:"workspace"`
+	Coder        string   `json:"coder"`
+	Cwd          string   `json:"cwd"`
+	SessionID    string   `json:"session_id"`
+	ExtraArgs    []string `json:"extra_args"`
+	Title        string   `json:"title"`
+	Workspace    string   `json:"workspace"`
+	OpenCodeMini bool     `json:"opencode_mini,omitempty"`
+}
+
+func terminalOpenCodeMode(inst *pty.PTYInstance) string {
+	if inst.OpenCodeMode != "" {
+		return inst.OpenCodeMode
+	}
+	if coderManager != nil {
+		if c, ok := coderManager.Get(inst.Coder); ok {
+			return c.OpenCodeMode
+		}
+	}
+	return ""
 }
 
 func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
@@ -344,13 +357,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		views := make([]terminalView, 0, len(instances))
 		for _, inst := range instances {
-			mode := ""
-			if coderManager != nil {
-				if c, ok := coderManager.Get(inst.Coder); ok {
-					mode = c.OpenCodeMode
-				}
-			}
-			views = append(views, terminalView{inst, mode})
+			views = append(views, terminalView{inst, terminalOpenCodeMode(inst)})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(views)
@@ -369,15 +376,26 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-attach to running PTY instance if already spawned
+	c, ok := coderManager.Get(req.Coder)
+	if req.OpenCodeMini {
+		var err error
+		c, err = coders.OpenCodeMini(c)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Reattach only to the requested presentation of this session. Mini
+	// and full TUI clients may coexist; never replace a running process.
 	if req.SessionID != "" {
 		for _, inst := range ptyManager.ListActive() {
 			if inst.Coder == req.Coder && inst.SessionID == req.SessionID {
-				w.Header().Set("Content-Type", "application/json")
-				mode := ""
-				if c, ok := coderManager.Get(inst.Coder); ok {
-					mode = c.OpenCodeMode
+				mode := terminalOpenCodeMode(inst)
+				if req.Coder == "opencode" && ok && c.OpenCodeMode != "" && mode != c.OpenCodeMode {
+					continue
 				}
+				w.Header().Set("Content-Type", "application/json")
 				payload := map[string]string{"pane_id": inst.ID, "session_id": inst.SessionID}
 				if mode != "" {
 					payload["opencode_mode"] = mode
@@ -388,7 +406,6 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	c, ok := coderManager.Get(req.Coder)
 	if !ok {
 		http.Error(w, "Unknown coder type", http.StatusBadRequest)
 		return
@@ -425,7 +442,7 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 
 	spawnDir := plan.Cwd
 
-	inst, err := ptyManager.Spawn(r.Context(), spawnDir, plan.Command, plan.Args, req.Coder, req.SessionID, plan.Env)
+	inst, err := ptyManager.SpawnWithOpenCodeMode(r.Context(), spawnDir, plan.Command, plan.Args, req.Coder, req.SessionID, c.OpenCodeMode, plan.Env)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

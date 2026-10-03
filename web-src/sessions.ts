@@ -12,6 +12,7 @@ import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
 import {
     loadCoderRegistry,
+    openCodePaneMode,
     visibleCoders,
     getCoder,
     hasTranscript,
@@ -138,6 +139,22 @@ export class SessionsManager {
                 this.activeCoder = id;
                 this.loadSessions();
             });
+            coderContainer.addEventListener('contextmenu', (e) => {
+                const target = (e.target as Element | null)?.closest(
+                    '.coder-tab[data-coder="opencode"]',
+                );
+                if (
+                    !target ||
+                    !this.quickLaunchReady ||
+                    !this._canOpenCodeMini()
+                )
+                    return;
+                e.preventDefault();
+                this._showOpenCodeMiniMenu(e, () => {
+                    this.switchCoder('opencode');
+                    this.spawnNewSession(true);
+                });
+            });
         }
 
         // Empty-state quick launch buttons: same delegated pattern
@@ -155,11 +172,40 @@ export class SessionsManager {
                 this.switchCoder(coder);
                 this.spawnNewSession();
             });
+            emptyQuickLaunch.addEventListener('contextmenu', (e) => {
+                const target = (e.target as Element | null)?.closest(
+                    '.empty-launch-btn[data-coder="opencode"]',
+                );
+                if (
+                    !target ||
+                    !this.quickLaunchReady ||
+                    !this._canOpenCodeMini()
+                )
+                    return;
+                e.preventDefault();
+                this._showOpenCodeMiniMenu(e, () => {
+                    this.switchCoder('opencode');
+                    this.spawnNewSession(true);
+                });
+            });
         }
 
         // New Session Trigger
         this.newSessionBtn.addEventListener('click', () => {
             this.spawnNewSession();
+        });
+        this.newSessionBtn.addEventListener('contextmenu', (e) => {
+            if (
+                this.activeCoder !== 'opencode' ||
+                !this.quickLaunchReady ||
+                !this._canOpenCodeMini()
+            )
+                return;
+            e.preventDefault();
+            this._showOpenCodeMiniMenu(e, () => {
+                this.switchCoder('opencode');
+                this.spawnNewSession(true);
+            });
         });
 
         // Workspace Toggle and Auto-Width Formatter
@@ -997,13 +1043,16 @@ export class SessionsManager {
         });
     }
 
-    async spawnNewSession(): Promise<void> {
+    async spawnNewSession(mini: boolean = false): Promise<void> {
         try {
-            // Preserve built-in session titles; use the descriptor's
-            // display name only for custom backends.
-            const coder = getCoder(this.activeCoder);
+            const coderId = this.activeCoder,
+                cwd = this.activeCWD,
+                workspace = this.activeWorkspace;
+            // Preserve the launch target even if the sidebar changes while
+            // this request is in flight.
+            const coder = getCoder(coderId);
             const coderName =
-                BUILTIN_SESSION_TITLES.get(this.activeCoder) ??
+                BUILTIN_SESSION_TITLES.get(coderId) ??
                 coder?.short_label ??
                 coder?.name ??
                 'Shell';
@@ -1013,11 +1062,12 @@ export class SessionsManager {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    coder: this.activeCoder,
-                    cwd: this.activeCWD,
+                    coder: coderId,
+                    cwd,
                     session_id: '',
                     title: title,
-                    workspace: this.activeWorkspace,
+                    workspace,
+                    ...(mini ? { opencode_mini: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -1030,16 +1080,16 @@ export class SessionsManager {
                 data.pane_id,
                 data.session_id,
                 title,
-                this.activeCoder,
-                this.activeWorkspace,
-                this.activeCWD,
-                ...(this.activeCoder === 'opencode'
+                coderId,
+                workspace,
+                cwd,
+                ...(coderId === 'opencode'
                     ? [
                           true,
                           false,
                           '',
                           null,
-                          data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                          openCodePaneMode(data.opencode_mode),
                       ]
                     : []),
             );
@@ -1054,18 +1104,23 @@ export class SessionsManager {
         sessionId: string,
         title: string,
         extraArgs: string[] = [],
+        mini: boolean = false,
     ): Promise<void> {
         try {
+            const coderId = this.activeCoder,
+                cwd = this.activeCWD,
+                workspace = this.activeWorkspace;
             const res = await fetch('/api/terminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    coder: this.activeCoder,
-                    cwd: this.activeCWD,
+                    coder: coderId,
+                    cwd,
                     session_id: sessionId,
                     extra_args: extraArgs,
                     title: title,
-                    workspace: this.activeWorkspace,
+                    workspace,
+                    ...(mini ? { opencode_mini: true } : {}),
                 }),
             });
             if (!res.ok) {
@@ -1078,16 +1133,16 @@ export class SessionsManager {
                 data.pane_id,
                 data.session_id,
                 title,
-                this.activeCoder,
-                this.activeWorkspace,
-                this.activeCWD,
-                ...(this.activeCoder === 'opencode'
+                coderId,
+                workspace,
+                cwd,
+                ...(coderId === 'opencode'
                     ? [
                           true,
                           false,
                           '',
                           null,
-                          data.opencode_mode === 'mini' ? 'mini' : 'legacy',
+                          openCodePaneMode(data.opencode_mode),
                       ]
                     : []),
             );
@@ -1122,6 +1177,12 @@ export class SessionsManager {
             if (sidebar) sidebar.classList.remove('drawer-open');
         });
 
+        if (this.activeCoder === 'opencode' && this._canOpenCodeMini()) {
+            mkItem('Open Mini', () => {
+                this.launchSession(sess.id, sess.title, [], true);
+            });
+        }
+
         mkItem('⚙ Launch with args…', () => {
             this._openArgsInput(item, sess);
         });
@@ -1132,6 +1193,40 @@ export class SessionsManager {
             });
         }
 
+        this._mountSessionContextMenu(e, menu);
+    }
+
+    _canOpenCodeMini(): boolean {
+        const mode = getCoder('opencode')?.opencode_mode;
+        return mode === 'tui' || mode === 'mini';
+    }
+
+    _showOpenCodeMiniMenu(e: MouseEvent, launch: () => void): void {
+        this._dismissContextMenu();
+        const menu = document.createElement('div');
+        menu.className = 'session-ctx-menu';
+        menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999`;
+        const item = document.createElement('div');
+        item.className = 'session-ctx-item';
+        item.textContent = 'Open Mini';
+        item.setAttribute('role', 'menuitem');
+        item.tabIndex = 0;
+        const activate = () => {
+            this._dismissContextMenu();
+            launch();
+        };
+        item.addEventListener('click', activate);
+        item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                activate();
+            }
+        });
+        menu.appendChild(item);
+        this._mountSessionContextMenu(e, menu);
+    }
+
+    _mountSessionContextMenu(e: MouseEvent, menu: HTMLElement): void {
         document.body.appendChild(menu);
         this._contextMenu = menu;
 
@@ -1148,6 +1243,7 @@ export class SessionsManager {
             if (ev.key === 'Escape') this._dismissContextMenu();
         };
         setTimeout(() => {
+            if (this._contextMenu !== menu) return;
             document.addEventListener('mousedown', this._ctxDismissMousedown!);
             document.addEventListener('keydown', this._ctxDismissKey!);
         }, 0);

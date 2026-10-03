@@ -75,8 +75,12 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 		// An explicit argv override may replace Mini with a full TUI or
 		// wrapper. Do not advertise the inherited Mini behavior unless
 		// its subcommand remains present (or the patch declares a mode).
-		if out.OpenCodeMode == "mini" && p.OpenCodeMode == nil && (len(out.Args) == 0 || out.Args[0] != "mini") {
-			out.OpenCodeMode = ""
+		if p.OpenCodeMode == nil && out.ID == "opencode" && out.SessionSource == "opencode_v2" {
+			if len(out.Args) > 0 && out.Args[0] == "mini" {
+				out.OpenCodeMode = "mini"
+			} else {
+				out.OpenCodeMode = "tui"
+			}
 		}
 	}
 	if p.ResumeArgs != nil {
@@ -138,8 +142,8 @@ func (p *CoderPatch) Apply(base Coder) (Coder, error) {
 		out.ModelSwitchDisabled = *p.ModelSwitchDisabled
 	}
 	if p.OpenCodeMode != nil {
-		if *p.OpenCodeMode != "" && *p.OpenCodeMode != "mini" && *p.OpenCodeMode != "legacy" {
-			return Coder{}, ErrMissingField("valid opencode_mode (mini or legacy)")
+		if *p.OpenCodeMode != "" && *p.OpenCodeMode != "mini" && *p.OpenCodeMode != "tui" && *p.OpenCodeMode != "legacy" {
+			return Coder{}, ErrMissingField("valid opencode_mode (tui, mini or legacy)")
 		}
 		out.OpenCodeMode = *p.OpenCodeMode
 	}

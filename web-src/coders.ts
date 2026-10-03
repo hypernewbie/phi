@@ -35,7 +35,8 @@ export interface CoderDescriptor {
     presets?: Array<{ name: string; value: string }>;
     capabilities: CoderCapabilities;
     model_switch_disabled: boolean;
-    opencode_mode?: 'mini' | 'legacy';
+    opencode_mode?: 'tui' | 'mini' | 'legacy';
+    opencode_mini_presets?: Array<{ name: string; value: string }>;
 }
 
 export interface RecipeStep {
@@ -285,10 +286,27 @@ function coerceDescriptor(id: string, raw: unknown): CoderDescriptor | null {
         capabilities: coerceCapabilities(r.capabilities),
         model_switch_disabled: r.model_switch_disabled === true,
         opencode_mode:
-            r.opencode_mode === 'mini' || r.opencode_mode === 'legacy'
+            r.opencode_mode === 'mini' ||
+            r.opencode_mode === 'tui' ||
+            r.opencode_mode === 'legacy'
                 ? r.opencode_mode
                 : undefined,
+        opencode_mini_presets: coercePresets(r.opencode_mini_presets),
     };
+}
+
+function coercePresets(raw: unknown): Array<{ name: string; value: string }> {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .filter(
+            (p) =>
+                p && typeof p.name === 'string' && typeof p.value === 'string',
+        )
+        .map((p) => ({ name: p.name, value: p.value }));
+}
+
+export function openCodePaneMode(mode: unknown): 'tui' | 'mini' | 'legacy' {
+    return mode === 'mini' || mode === 'tui' ? mode : 'legacy';
 }
 
 function coerceCapabilities(raw: unknown): CoderCapabilities {

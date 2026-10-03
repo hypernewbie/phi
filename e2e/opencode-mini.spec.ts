@@ -29,7 +29,7 @@ case "$1" in
   debug) printf '%s\\n' "$HOME/.local/share/opencode/opencode.db"; exit 0 ;;
 esac
 printf '%s\\n' "$*" > "$HOME/launch-args.txt"
-${generation === 1 ? "printf '\\033[?1049h'" : ''}
+if [ '${generation}' = '1' ] || [ "$1" != 'mini' ]; then printf '\\033[?1049h'; fi
 i=0
 while [ "$i" -lt 400 ]; do printf 'history row %s\\r\\n' "$i"; i=$((i+1)); done
 printf 'ready\\r\\n'
@@ -52,14 +52,19 @@ test.afterAll(async () => {
     if (fixture) rmSync(fixture, { recursive: true, force: true });
 });
 
-for (const mode of ['mini', 'legacy']) {
+for (const mode of ['tui', 'mini', 'legacy']) {
     test(`configured ${mode}: launch, restore metadata, and wheel routing agree`, async ({
         page,
         request,
     }) => {
-        const phi = mode === 'mini' ? mini : legacy;
+        const phi = mode === 'legacy' ? legacy : mini;
         const response = await request.post(`${phi.url}/api/terminals`, {
-            data: { coder: 'opencode', cwd: phi.dir, title: 'OpenCode test' },
+            data: {
+                coder: 'opencode',
+                cwd: phi.dir,
+                title: 'OpenCode test',
+                ...(mode === 'mini' ? { opencode_mini: true } : {}),
+            },
         });
         expect(response.ok()).toBe(true);
         const pane = await response.json();
@@ -67,7 +72,9 @@ for (const mode of ['mini', 'legacy']) {
         const metadata = await (
             await request.get(`${phi.url}/api/coders`)
         ).json();
-        expect(metadata.opencode.opencode_mode).toBe(mode);
+        expect(metadata.opencode.opencode_mode).toBe(
+            mode === 'legacy' ? 'legacy' : 'tui',
+        );
         const running = await (
             await request.get(`${phi.url}/api/terminals`)
         ).json();
@@ -76,10 +83,11 @@ for (const mode of ['mini', 'legacy']) {
                 .opencode_mode,
         ).toBe(mode);
         const argFile = join(phi.dir, 'home', 'launch-args.txt');
-        await expect.poll(() => existsSync(argFile)).toBe(true);
-        expect(readFileSync(argFile, 'utf8')).toBe(
-            mode === 'mini' ? 'mini\n' : '\n',
-        );
+        await expect
+            .poll(() =>
+                existsSync(argFile) ? readFileSync(argFile, 'utf8') : null,
+            )
+            .toBe(mode === 'mini' ? 'mini\n' : '\n');
         await page.addInitScript(() => {
             type BufferView = {
                 type: string;
@@ -125,6 +133,7 @@ for (const mode of ['mini', 'legacy']) {
         await page.goto(phi.url);
         const terminal = page.locator(`#term-${pane.pane_id}`);
         const viewport = terminal.locator('.xterm-viewport');
+        await page.locator(`.tab[data-pane-id="${pane.pane_id}"]`).click();
         await expect(viewport).toBeVisible();
         const buffer = () =>
             page.evaluate((paneId) => {
@@ -168,7 +177,7 @@ for (const mode of ['mini', 'legacy']) {
             el.dispatchEvent(event);
             return event.defaultPrevented;
         });
-        if (mode === 'legacy') {
+        if (mode !== 'mini') {
             expect(prevented).toBe(true);
             await expect.poll(() => inputs.join('')).toContain('\x1b\x19');
         } else {
@@ -185,3 +194,36 @@ for (const mode of ['mini', 'legacy']) {
         }
     });
 }
+
+test('right-click Open Mini opts in once, then normal launch remains full TUI', async ({
+    page,
+}) => {
+    await page.goto(mini.url);
+    const button = page.locator('#new-session-btn');
+    await expect(button).toBeVisible();
+    await page
+        .locator('#coder-selector .coder-tab[data-coder="opencode"]')
+        .click();
+    await button.click({ button: 'right' });
+    const item = page.locator('.session-ctx-item', { hasText: 'Open Mini' });
+    await expect(item).toBeVisible();
+    const miniResponse = page.waitForResponse(
+        (r) =>
+            r.url().endsWith('/api/terminals') &&
+            r.request().method() === 'POST',
+    );
+    await item.click();
+    const opened = await miniResponse;
+    expect(opened.ok()).toBe(true);
+    expect(opened.request().postDataJSON().opencode_mini).toBe(true);
+    expect((await opened.json()).opencode_mode).toBe('mini');
+    const normalResponse = page.waitForResponse(
+        (r) =>
+            r.url().endsWith('/api/terminals') &&
+            r.request().method() === 'POST',
+    );
+    await button.click();
+    const normal = await normalResponse;
+    expect(normal.request().postDataJSON().opencode_mini).toBeUndefined();
+    expect((await normal.json()).opencode_mode).toBe('tui');
+});

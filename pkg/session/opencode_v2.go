@@ -87,7 +87,7 @@ func ValidateOpenCodeV2Resume(ctx context.Context, c coders.Coder, id string) er
 			return nil
 		}
 	}
-	return fmt.Errorf("OpenCode 2 session was not found; start a new Mini session once to migrate v1 history, then refresh the session list")
+	return fmt.Errorf("OpenCode 2 session was not found; start a new OpenCode 2 session once to migrate v1 history, then refresh the session list")
 }
 
 func (a opencodeV2AdapterImpl) List(ctx context.Context, cwd string) ([]Session, error) {

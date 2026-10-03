@@ -20,6 +20,35 @@ type BuiltinOptions struct {
 	OpenCodeLegacyCommand string
 }
 
+func OpenCodeMiniPresets() []Preset {
+	return []Preset{
+		{Name: "/exit", Value: "/exit\r"},
+		{Name: "/compact", Value: "/compact\r"},
+		{Name: "/new", Value: "/new\r"},
+		{Name: "/settings", Value: "/settings\r"},
+		{Name: "menu", Value: "\x10"},
+		{Name: "clear", Value: "\x0c"},
+		{Name: "ctrl+c", Value: "\x03"},
+		{Name: "y↵", Value: "y\r"},
+		{Name: "esc", Value: "\x1b"},
+	}
+}
+
+// OpenCodeMini selects Mini for one launch, without modifying the registry
+// or changing the generation selected by the user's legacy config option.
+func OpenCodeMini(c Coder) (Coder, error) {
+	if c.ID != "opencode" || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
+		return Coder{}, fmt.Errorf("Mini requires the OpenCode 2 backend")
+	}
+	out := frozenCoder(c)
+	if len(out.Args) == 0 || out.Args[0] != "mini" {
+		out.Args = append([]string{"mini"}, out.Args...)
+	}
+	out.OpenCodeMode = "mini"
+	out.Presets = OpenCodeMiniPresets()
+	return out, nil
+}
+
 func legacyOpenCodePresets() []Preset {
 	return []Preset{
 		{Name: "/exit", Value: "/exit\r"},
@@ -83,7 +112,7 @@ func OpenCodeOutput(ctx context.Context, c Coder, args ...string) ([]byte, error
 // VerifyOpenCode rejects the wrong installed generation instead of silently
 // launching a v1 mini experiment or the v2 full-screen TUI in legacy mode.
 func VerifyOpenCode(ctx context.Context, c Coder) error {
-	if c.ID != "opencode" || (c.OpenCodeMode != "mini" && c.OpenCodeMode != "legacy") {
+	if c.ID != "opencode" || (c.OpenCodeMode != "mini" && c.OpenCodeMode != "tui" && c.OpenCodeMode != "legacy") {
 		return nil
 	}
 	out, err := OpenCodeOutput(ctx, c, "--version")
@@ -103,5 +132,5 @@ func VerifyOpenCode(ctx context.Context, c Coder) error {
 	if c.OpenCodeMode == "legacy" {
 		return fmt.Errorf("legacy OpenCode requires a v1 binary; set opencode_legacy_command to its executable path and restart Phi")
 	}
-	return fmt.Errorf("OpenCode 2 mini requires a v2 binary; install OpenCode 2 (https://opencode.ai/v2/docs/migrate-v1/) or set opencode_legacy=true and restart Phi")
+	return fmt.Errorf("OpenCode 2 requires a v2 binary; install OpenCode 2 (https://opencode.ai/v2/docs/migrate-v1/) or set opencode_legacy=true and restart Phi")
 }
