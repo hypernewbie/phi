@@ -870,9 +870,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       addRepresentation: vi.fn(),
       setTemplateImage: vi.fn(),
     };
-    fakeNativeImage.createEmpty = vi.fn(
-      () => multi as unknown as ReturnType<typeof nativeImage.createEmpty>,
-    );
+    fakeNativeImage.createEmpty.mockReturnValueOnce(multi);
     const fakeImage = {
       isEmpty: () => false,
       resize: vi.fn((_opts?: unknown) => ({
