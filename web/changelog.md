@@ -2,6 +2,30 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.22.0 — 2026-10-03
+
+### Added
+- **Tabs survive server restarts** (`7e40278`). Phi restores live terminal processes with the same pane IDs, titles, projects, pin flags, and mark flags. The browser retains tab order, selection, unsent prompts, and attachments.
+- **Independent restore fallback** (`7e40278`). Each tab resumes its saved native session when available. A failed resume starts a fresh session. An unavailable backend falls back to Shell. A broken tab does not abort startup or discard other tabs. No separate supervisor process is required.
+- **OpenAI Codex backend** (`3f99c99`). Added native session history, resume, transcripts, and the `/model` picker. Model presets use the current GPT-6 family, including GPT-6.1 Sol.
+- **OpenCode 2 support** (`477302a`, `5d0b59c`). Full TUI is the default. The right-click **Open Mini** action selects Mini for one launch. Each tab retains its mode through reload and restart. The `opencode_legacy` configuration supports OpenCode 1.
+- **VS Code launch actions** (`7473c4c`, `b6ad202`). Added separate local and Remote SSH actions for projects, files, and diff files. Local actions require a localhost Phi server. Remote actions use the reported Phi hostname.
+- **Viewer size controls** (`dafbcb3`, `1d62792`). Added icon-only maximize and restore controls for pretty diffs and Markdown previews. Maximized viewers fill the browser viewport without the Fullscreen API.
+- **Sync-board commit diffs** (`5d4286a`). Commit cards provide separate actions to select the diff and open its pretty viewer. Incoming cards never open the viewer automatically.
+- **Seven accent themes** (`68c203b`, `74605b9`). Added Arc, Ember, Fog, Ash, Dusk, Pine, and Fern.
+
+### Changed
+- **Pretty diff actions** (`8f2b9ca`). The labeled button occupies a full-width row with a theme-colored glow.
+- **Narrow sidebar controls** (`abd618b`). Coder controls hide labels before they wrap into two rows.
+- **One-click Shell** (`eaca429`). A Shell click starts a terminal directly instead of opening an empty session list.
+
+### Fixed
+- **Terminal resume output** (`da15523`). Preserved byte order and parser state across reconnects and live-output gaps.
+- **Diff review whitespace** (`6107ee3`). Review prompts preserve source tabs, trailing spaces, blank lines, and source nonbreaking spaces. Legacy draft repair does not replace code context.
+- **Desktop project selector** (`ef284e2`). Server switches clear the outgoing project list. Late responses cannot restore projects or header actions from another computer.
+- **Source preview typography** (`dfc2962`). Code previews use a 14px monospace font in wide and narrow layouts.
+- **Restart notifications** (`7e40278`). Removed the "Fresh start" toast and the deletion of saved browser tab references.
+
 ## v0.21.5 — 2026-09-28
 
 ### Added
