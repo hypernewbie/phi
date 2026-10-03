@@ -175,7 +175,14 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 				if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 					logger.Debug("frame", "dir", "pty->hub", "bytes", n)
 				}
-				hub.Ingest(inst.ID, buf[:n])
+				for {
+					if err := hub.Ingest(inst.ID, buf[:n]); err == nil {
+						break
+					} else {
+						logger.Error("recording write failed; holding PTY output for retry", "err", err)
+						time.Sleep(100 * time.Millisecond)
+					}
+				}
 			}
 			if err != nil {
 				break
