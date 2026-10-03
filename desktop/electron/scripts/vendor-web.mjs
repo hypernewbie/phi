@@ -36,6 +36,7 @@ const outDir = path.join(electronRoot, 'web');
 const WEB_JS_MODULES = [
   'app.js',
   'terminal.js',
+  'terminal-state.js',
   'ws.js',
   'sessions.js',
   'path-picker.js',
