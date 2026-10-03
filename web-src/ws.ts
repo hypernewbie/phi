@@ -90,6 +90,7 @@ function parseFramedHeader(
         const hdr = JSON.parse(
             new TextDecoder().decode(new Uint8Array(payload, 4, jsonLen)),
         );
+        if (!hdr || typeof hdr !== 'object' || Array.isArray(hdr)) return null;
         return { hdr, extra: new Uint8Array(payload, 4 + jsonLen) };
     } catch (_e) {
         return null;
@@ -271,7 +272,15 @@ export class PTYWebSocket {
 
     private _handleAttachHead(payload: ArrayBuffer) {
         const parsed = parseFramedHeader(payload);
-        if (!parsed) {
+        const validSeq = (n: unknown): n is number =>
+            typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+        if (
+            !parsed ||
+            !validSeq(parsed.hdr.epoch) ||
+            !validSeq(parsed.hdr.oldest) ||
+            !validSeq(parsed.hdr.head) ||
+            parsed.hdr.oldest > parsed.hdr.head
+        ) {
             console.error('[ws] Malformed ATTACH_HEAD frame');
             // No head means no seq base: staying held would brick the tab
             // silently. Close and let the host reconnect path redial.
@@ -288,7 +297,16 @@ export class PTYWebSocket {
         this.lastFrameEnd = head;
         let ckpt: AttachCheckpoint | null = null;
         const c = parsed.hdr.ckpt as Record<string, unknown> | undefined;
-        if (c && typeof c.through === 'number') {
+        if (
+            c &&
+            validSeq(c.through) &&
+            c.through <= head &&
+            Number.isInteger(c.cols) &&
+            Number(c.cols) > 0 &&
+            Number.isInteger(c.rows) &&
+            Number(c.rows) > 0 &&
+            (c.len === undefined || c.len === parsed.extra.byteLength)
+        ) {
             ckpt = {
                 through: c.through,
                 cols: Number(c.cols),
@@ -300,11 +318,30 @@ export class PTYWebSocket {
     }
 
     private _handleLiveOutput(payload: ArrayBuffer) {
-        if (this.mode !== 'hot' || this.liveSeq === undefined) return;
-        if (payload.byteLength < 8) return;
+        if (
+            this.mode !== 'hot' ||
+            this.liveSeq === undefined ||
+            payload.byteLength < 8
+        ) {
+            // Without the atomic attach frontier, no live byte is safe to
+            // deliver. Reconnect and recover it from the recording instead.
+            try {
+                this.ws.close();
+            } catch (_e) {}
+            return;
+        }
         const view = new DataView(payload);
         let start = Number(view.getBigUint64(0, false));
         let bytes = new Uint8Array(payload, 8);
+        if (
+            !Number.isSafeInteger(start) ||
+            !Number.isSafeInteger(start + bytes.byteLength)
+        ) {
+            try {
+                this.ws.close();
+            } catch (_e) {}
+            return;
+        }
         // Duplicate suppression: a frame may re-deliver bytes the host
         // already patched over (overlap window). Skip what is old.
         if (start < this.liveSeq) {
