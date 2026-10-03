@@ -2,6 +2,7 @@ export interface ToastOptions {
     type?: 'info' | 'success' | 'error';
     title?: string;
     duration?: number;
+    action?: { text: string; callback: () => void };
 }
 
 // AppLike is the minimal slice of the (unconverted) App class that

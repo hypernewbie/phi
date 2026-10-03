@@ -173,16 +173,21 @@ export class MarkdownManager {
                     e.preventDefault();
                     this._renderContextMenuActions(
                         [
-                            {
-                                icon: '📋',
-                                label: 'Copy Image',
-                                className: 'copy-image',
-                                handler: () =>
-                                    this._copyImageToClipboard(
-                                        img.src,
-                                        'Copied image to clipboard',
-                                    ),
-                            },
+                            ...(this._canCopyImage()
+                                ? [
+                                      {
+                                          icon: '📋',
+                                          label: 'Copy Image',
+                                          className: 'copy-image',
+                                          handler: () =>
+                                              this._copyImageToClipboard(
+                                                  img.src,
+                                                  'Copied image to clipboard',
+                                                  img.alt || 'image',
+                                              ),
+                                      },
+                                  ]
+                                : []),
                             {
                                 icon: '⬇',
                                 label: 'Download Image',
@@ -1317,8 +1322,13 @@ export class MarkdownManager {
         if (this.modalActions) this.modalActions.style.display = '';
 
         if (ctx.kind === 'image') {
-            this.modalCopyBtn.textContent = 'Copy Image';
-            this.modalCopyBtn.title = 'Copy image to clipboard';
+            const canCopy = this._canCopyImage();
+            this.modalCopyBtn.textContent = canCopy
+                ? 'Copy Image'
+                : 'Download Image';
+            this.modalCopyBtn.title = canCopy
+                ? 'Copy image to clipboard'
+                : 'Download image (image clipboard unavailable)';
             if (this.modalDropdownBtn) this.modalDropdownBtn.style.display = '';
         } else if (ctx.kind === 'code') {
             this.modalCopyBtn.textContent = 'Copy Code';
@@ -1363,7 +1373,15 @@ export class MarkdownManager {
 
         if (ctx.kind === 'image') {
             const url = ctx.url || this._currentFileView?.imageElement?.src;
-            await this._copyImageToClipboard(url, 'Copied image to clipboard');
+            if (this._canCopyImage()) {
+                await this._copyImageToClipboard(
+                    url,
+                    'Copied image to clipboard',
+                    ctx.name || 'image',
+                );
+            } else {
+                this._downloadFile(url, ctx.name || 'image');
+            }
         } else if (
             ctx.kind === 'video' ||
             ctx.kind === 'audio' ||
@@ -1407,16 +1425,19 @@ export class MarkdownManager {
 
         if (ctx.kind === 'image') {
             const imgUrl = ctx.url || this._currentFileView?.imageElement?.src;
-            actions.push({
-                icon: '📋',
-                label: 'Copy Image',
-                className: 'copy-image',
-                handler: () =>
-                    this._copyImageToClipboard(
-                        imgUrl,
-                        'Copied image to clipboard',
-                    ),
-            });
+            if (this._canCopyImage()) {
+                actions.push({
+                    icon: '📋',
+                    label: 'Copy Image',
+                    className: 'copy-image',
+                    handler: () =>
+                        this._copyImageToClipboard(
+                            imgUrl,
+                            'Copied image to clipboard',
+                            ctx.name || 'image',
+                        ),
+                });
+            }
             if (relPath) {
                 actions.push({
                     icon: '📝',
@@ -1439,12 +1460,13 @@ export class MarkdownManager {
                         ),
                 });
             }
-            if (ctx.url) {
+            if (imgUrl) {
                 actions.push({
                     icon: '⬇',
                     label: 'Download Image',
                     className: 'download-image',
-                    handler: () => this._downloadFile(ctx.url, ctx.name),
+                    handler: () =>
+                        this._downloadFile(imgUrl, ctx.name || 'image'),
                 });
             }
         } else if (
@@ -1528,77 +1550,91 @@ export class MarkdownManager {
         }
     }
 
+    _canCopyImage(): boolean {
+        return (
+            typeof navigator.clipboard?.write === 'function' &&
+            typeof window.ClipboardItem === 'function'
+        );
+    }
+
+    _offerImageDownload(
+        imageUrl: string,
+        filename: string,
+        message: string,
+    ): void {
+        this.app.showToast(message, {
+            type: 'error',
+            title: 'Image not copied',
+            duration: 10000,
+            action: {
+                text: 'Download Image',
+                callback: () => this._downloadFile(imageUrl, filename),
+            },
+        });
+    }
+
     async _copyImageToClipboard(
         imageUrl?: string,
         msg = 'Copied image to clipboard',
+        filename = 'image',
     ): Promise<void> {
         if (!imageUrl) {
             this.app.showToast('No image to copy', { type: 'error' });
             return;
         }
+        if (!this._canCopyImage()) {
+            this._offerImageDownload(
+                imageUrl,
+                filename,
+                'Image copying is unavailable here. You can download the image instead.',
+            );
+            return;
+        }
 
         try {
-            let originalBlob: Blob | null = null;
-            try {
-                const res = await fetch(imageUrl);
-                if (res.ok) {
-                    originalBlob = await res.blob();
-                }
-            } catch {
-                // Ignore fetch error, attempt canvas from DOM element if present
-            }
-
-            let pngBlob: Blob | null = null;
-            if (!originalBlob && this._currentFileView?.imageElement) {
-                pngBlob = await this._canvasToPngBlob(
-                    this._currentFileView.imageElement,
-                );
-            } else if (originalBlob) {
-                const isPng =
-                    originalBlob.type === 'image/png' ||
-                    (!originalBlob.type &&
-                        imageUrl.toLowerCase().endsWith('.png'));
-
-                if (isPng) {
-                    pngBlob =
-                        originalBlob.type === 'image/png'
-                            ? originalBlob
-                            : originalBlob.slice(
-                                  0,
-                                  originalBlob.size,
-                                  'image/png',
-                              );
-                } else {
-                    pngBlob = await this._convertBlobToPng(originalBlob);
-                }
-            }
-
-            if (!pngBlob) {
-                throw new Error('Failed to load image data');
-            }
-
-            if (
-                navigator.clipboard?.write &&
-                typeof window.ClipboardItem !== 'undefined'
-            ) {
-                const item = new window.ClipboardItem({ 'image/png': pngBlob });
-                await navigator.clipboard.write([item]);
-                this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
-            } else {
-                // Insecure HTTP contexts (e.g. LAN IPs or .local hostnames without HTTPS)
-                // restrict binary image clipboard writes. Fall back to copying the image URL.
-                await this._copyToClipboard(
-                    imageUrl,
-                    'Image clipboard requires HTTPS or localhost. Copied image URL instead.',
-                );
-            }
+            const png = this._imageToPngBlob(imageUrl);
+            // A denied write or a throwing ClipboardItem constructor can leave
+            // image loading in flight. Observe its rejection in either case.
+            void png.catch(() => {});
+            // Keep write in the click's activation window (not after fetch or
+            // conversion). Safari supports deferred data via ClipboardItem.
+            const item = new window.ClipboardItem({ 'image/png': png });
+            await navigator.clipboard.write([item]);
+            this.app.showToast(msg, { type: 'info', title: 'Clipboard' });
         } catch (err) {
             console.error('Failed to copy image to clipboard:', err);
-            this.app.showToast(
-                `Failed to copy image: ${(err as Error).message}`,
-                { type: 'error', title: 'Clipboard' },
+            this._offerImageDownload(
+                imageUrl,
+                filename,
+                'The image was not copied. You can download it instead.',
             );
         }
+    }
+
+    async _imageToPngBlob(imageUrl: string): Promise<Blob> {
+        // Capture the displayed image before the user opens another preview.
+        const displayedImage = this._currentFileView?.imageElement;
+        let originalBlob: Blob | null = null;
+        try {
+            const res = await fetch(imageUrl);
+            if (res.ok) originalBlob = await res.blob();
+        } catch {
+            // A displayed image can still supply pixels when fetch fails.
+        }
+
+        if (!originalBlob && displayedImage) {
+            return this._canvasToPngBlob(displayedImage);
+        }
+        if (!originalBlob) throw new Error('Failed to load image data');
+        const isPng =
+            originalBlob.type === 'image/png' ||
+            (!originalBlob.type && imageUrl.toLowerCase().endsWith('.png'));
+        if (isPng) {
+            return originalBlob.type === 'image/png'
+                ? originalBlob
+                : originalBlob.slice(0, originalBlob.size, 'image/png');
+        }
+        return this._convertBlobToPng(originalBlob);
     }
 
     async _canvasToPngBlob(img: HTMLImageElement): Promise<Blob> {
