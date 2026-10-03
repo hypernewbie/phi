@@ -1,7 +1,7 @@
 import { escapeHtml, getLastFolderName as getLastFolderNameUtil, formatWorkspaceLabel as formatWorkspaceLabelUtil, worktreeGlyph, displayHostname, isCompactViewport, setServerHostOverride, } from './util.js';
 import { openPiRpcChatTab } from './chat-pi/tab.js';
 import { createReviewTranscriptView } from './review-transcript.js';
-import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
+import { loadCoderRegistry, openCodePaneMode, visibleCoders, getCoder, hasTranscript, hasPiRpc, hasRename, isShell, renderLogo, RESERVED_CODER_IDS, } from './coders.js';
 export function normalizePath(p) {
     if (!p)
         return '';
@@ -103,7 +103,12 @@ export class SessionsManager {
                     ?.classList.remove('active');
                 target.classList.add('active');
                 this.activeCoder = id;
-                this.loadSessions();
+                if (isShell(id) && this.quickLaunchReady) {
+                    this.spawnNewSession();
+                }
+                else {
+                    this.loadSessions();
+                }
             });
             coderContainer.addEventListener('contextmenu', (e) => {
                 const target = e.target?.closest('.coder-tab[data-coder="opencode"]');
