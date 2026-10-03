@@ -23,6 +23,20 @@ type FSListResponse struct {
 	Entries   []FSEntry `json:"entries"`
 }
 
+// FSBrowseEntry is one immediate child directory for the path browser.
+type FSBrowseEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// FSBrowseResponse is the JSON shape of /api/fs/browse.
+type FSBrowseResponse struct {
+	Path      string          `json:"path"`
+	Parent    string          `json:"parent"`
+	Truncated bool            `json:"truncated"`
+	Entries   []FSBrowseEntry `json:"entries"`
+}
+
 // fsListMaxEntries caps a single directory listing.
 const fsListMaxEntries = 1000
 
@@ -146,6 +160,67 @@ func handleFSList(w http.ResponseWriter, r *http.Request) {
 			return a.Dir
 		}
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+	if len(resp.Entries) > fsListMaxEntries {
+		resp.Entries = resp.Entries[:fsListMaxEntries]
+		resp.Truncated = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleFSBrowse lists immediate visible directories at an absolute path.
+// Unlike the workspace Files tree, this endpoint preserves symlink aliases
+// and does not apply workspace confinement or Git-ignore filtering.
+func handleFSBrowse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	requested := r.URL.Query().Get("path")
+	if requested == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	if !filepath.IsAbs(requested) && !strings.HasPrefix(requested, "~") {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	currentPath := filepath.Clean(expandHome(requested))
+	if !filepath.IsAbs(currentPath) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	dirEntries, err := os.ReadDir(currentPath)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	parent := filepath.Dir(currentPath)
+	if parent == currentPath {
+		parent = ""
+	}
+	resp := FSBrowseResponse{
+		Path:    currentPath,
+		Parent:  parent,
+		Entries: []FSBrowseEntry{},
+	}
+	for _, entry := range dirEntries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		resp.Entries = append(resp.Entries, FSBrowseEntry{
+			Name: entry.Name(),
+			Path: filepath.Join(currentPath, entry.Name()),
+		})
+	}
+	sort.SliceStable(resp.Entries, func(i, j int) bool {
+		return strings.ToLower(resp.Entries[i].Name) < strings.ToLower(resp.Entries[j].Name)
 	})
 	if len(resp.Entries) > fsListMaxEntries {
 		resp.Entries = resp.Entries[:fsListMaxEntries]

@@ -190,6 +190,7 @@ describe('default coder UI parity', () => {
             addWorkspaceBtn: button,
             removeWorkspaceBtn: button,
             wsModalClose: button,
+            wsModalBrowseBtn: button,
             wsModalCancelBtn: button,
             wsModalAddBtn: button,
             wsModalInput: document.createElement('input'),
