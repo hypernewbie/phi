@@ -147,6 +147,7 @@ export class SessionsManager {
                 else {
                     this.loadSessions();
                 }
+                this.updateOpenCodeServiceVisibility?.();
             });
             coderContainer.addEventListener('contextmenu', (e) => {
                 const target = e.target?.closest('.coder-tab[data-coder="opencode"]');
@@ -1129,6 +1130,7 @@ export class SessionsManager {
         this.openCodeServiceBtn.disabled = true;
         if (label)
             label.textContent = 'Stopping…';
+        this.openCodeServiceBtn.title = 'Stopping OpenCode background server…';
         try {
             const res = await fetch('/api/opencode/service/stop', {
                 method: 'POST',
@@ -1751,6 +1753,7 @@ export class SessionsManager {
         if (this.activeCoder !== activeId) {
             this.activeCoder = activeId;
         }
+        this.updateOpenCodeServiceVisibility?.();
         // loadConfig already calls loadSessions after rendering. Do not
         // make a second request or redraw the sidebar on every config load.
     }
