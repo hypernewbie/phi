@@ -2,6 +2,19 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.22.2 — 2026-10-04
+
+### Added
+- **Server URL clipboard copy and bulk add** (`2db4e2b`). Rail context menus and dialogs allow copying configured server URLs directly to the clipboard and importing multiple servers at once.
+- **Desktop shell and server hooks** (`598b6ff`). Exposes desktop shell lifecycle events, active window state, and server connection status to external user hook scripts.
+- **Server rail accent color preview on Ctrl** (`2188fa9`). Holding `Ctrl` illuminates server accent colors and rings around server rail numbers to improve navigation and visual identification.
+- **Phi themes for OpenAI Codex CLI** (`3631d61`). All 29 Phi accent palettes packaged as standard TextMate `.tmTheme` definitions with native `codex.accent` scopes and diff highlight styling for Codex CLI.
+
+### Fixed
+- **macOS fullscreen popouts and rail context menus** (`6797460`). Opening Settings, documentation, or right-clicking server rail buttons while in macOS fullscreen no longer triggers violent OS space-switching bounce loops. Settings and docs fall back cleanly to in-page dialogs in fullscreen, and context menus render as auxiliary always-on-top overlays with blur-loop suppression.
+- **Authentic OpenAI Codex logo** (`52e677e`, `fff321f`). Replaced placeholder icon assets with the authentic OpenAI Codex vector logo across the sidebar and model selectors.
+- **Coder tab status synchronization** (`b419e96`). Switched highlight styling to a clean monochrome UX and synchronized OpenCode service status across coder tab switches.
+
 ## v0.22.1 — 2026-10-03
 
 ### Added
