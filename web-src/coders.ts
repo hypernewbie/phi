@@ -161,7 +161,7 @@ export function seedBuiltins(): void {
             id: 'codex',
             name: 'Codex',
             short_label: 'Codex',
-            logo: 'vendor/logos/codex.svg',
+            logo: 'vendor/logos/codex.png',
             sidebar_visible: true,
             is_shell: false,
             input_mode: 'staged',
