@@ -290,7 +290,7 @@ describe('main view page behaviors (web/mainview.js)', () => {
   });
 
   it('populates the header from the active server config and relays actions to the body', () => {
-    expect(mainJsSource).toContain('fetchServerConfig()');
+    expect(mainJsSource).toContain('fetchServerConfig(requestedServerId)');
     expect(mainJsSource).toContain('fetchActiveWorkspace');
     expect(mainJsSource).toContain('postHeaderAction(');
     expect(mainJsSource).toContain('onActiveServer(');

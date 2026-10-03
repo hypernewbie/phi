@@ -67,8 +67,8 @@ export type HeaderActionId =
 
 /** A header interaction relayed to the ACTIVE body view on 'phi:header-action'. */
 export type HeaderAction =
-  | { kind: 'click'; id: HeaderActionId }
-  | { kind: 'workspace'; value: string };
+  | { kind: 'click'; id: HeaderActionId; profileId?: string }
+  | { kind: 'workspace'; value: string; profileId?: string };
 
 /** The active server pushed to the main view page on 'phi:active-server'. */
 export interface ActiveServer {
@@ -89,6 +89,8 @@ export interface ActiveServer {
  *  on `.brand .logo` + `.brand .brand-name`; `is-active` class on
  *  `#terminal-activity-indicator`). See `web/header-state.js`. */
 export interface HeaderState {
+  /** Owner of this snapshot; queued updates must not cross server switches. */
+  profileId: string | null;
   /** Active server's CPU utilisation percentage (0..100) or null when
    *  the body has not published a reading yet. */
   cpuPercent: number | null;
@@ -174,11 +176,11 @@ export interface ElectronApi {
   /** Subscribe to the observed remote title for the main view page (channel 'phi:window-title'); returns an unsubscribe function. */
   onWindowTitle(cb: (title: string) => void): () => void;
   /** Resolve the ACTIVE server's /api/config JSON through the main process (channel 'phi:server-config'). */
-  fetchServerConfig(): Promise<unknown>;
+  fetchServerConfig(profileId?: string | null): Promise<unknown>;
   /** Relay a header interaction to the active body view (channel 'phi:header-action'). */
   postHeaderAction(action: HeaderAction): void;
   /** Read the active retained body's own workspace selector (channel 'phi:active-workspace'). */
-  fetchActiveWorkspace(): Promise<string | null>;
+  fetchActiveWorkspace(profileId?: string | null): Promise<string | null>;
   /** Subscribe to active-server changes (channel 'phi:active-server'); returns an unsubscribe function. */
   onActiveServer(cb: (info: ActiveServer) => void): () => void;
   /** Subscribe to access-auth prompts (channel 'phi:auth-required');

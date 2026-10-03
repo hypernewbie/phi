@@ -1519,12 +1519,14 @@ export class DesktopHost {
     )
       return;
     const state: HeaderState = {
+      profileId: this.controller?.state().activeId || null,
       cpuPercent,
       terminalActivity,
       workspace: workspace ?? null,
     };
     if (
       this.lastHeaderState !== null &&
+      this.lastHeaderState.profileId === state.profileId &&
       this.lastHeaderState.cpuPercent === state.cpuPercent &&
       this.lastHeaderState.terminalActivity === state.terminalActivity &&
       this.lastHeaderState.workspace === state.workspace
@@ -3994,13 +3996,14 @@ export class DesktopHost {
       p.finally(() => bodyOps.delete(origin));
     };
 
-    ipcMain.handle('phi:server-config', async (event) => {
+    ipcMain.handle('phi:server-config', async (event, id?: unknown) => {
       if (!isMainViewSender(event)) return null;
       const ctrl = this.controller;
       if (!ctrl) return null;
       const st = ctrl.state();
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return null;
+      if (id != null && id !== active.id) return null;
       const origin = new URL(active.origin).origin;
       // Coalesce concurrent calls for the same origin. The handler
       // does a racy fetchConfig (which deletes the cookie on 401)
@@ -4016,10 +4019,15 @@ export class DesktopHost {
           profileId: active.id,
           origin,
           generation: this.sessionGeneration,
+          epoch: activeEpoch,
           ts: Date.now(),
         };
+        const isCurrentCapture = () =>
+          capture.generation === this.sessionGeneration &&
+          capture.epoch === activeEpoch &&
+          ctrl.state().activeId === capture.profileId;
         const result = await auth.fetchConfig(origin);
-        if (capture.generation !== this.sessionGeneration) return null;
+        if (!isCurrentCapture()) return null;
         // A config response for the outgoing server must never repaint the
         // header after the rail has switched to another profile.
         if (ctrl.state().activeId !== capture.profileId) return null;
@@ -4066,8 +4074,7 @@ export class DesktopHost {
                 verifierCopy.fill(0);
               }
               if (
-                capture.generation === this.sessionGeneration &&
-                ctrl.state().activeId === capture.profileId &&
+                isCurrentCapture() &&
                 unlock?.kind === 'ok' &&
                 unlock.config
               ) {
@@ -4110,8 +4117,7 @@ export class DesktopHost {
               theme_color?: string;
             } | null;
             if (
-              capture.generation === this.sessionGeneration &&
-              ctrl.state().activeId === capture.profileId &&
+              isCurrentCapture() &&
               remoteConfig &&
               Array.isArray(remoteConfig.workspaces) &&
               remoteConfig.workspaces.length > 0
@@ -4137,29 +4143,19 @@ export class DesktopHost {
             /* body view not ready; proceed to auth flow */
           }
         }
-        // Validate the status before prompting. Re-check active profile at
-        // every await point to avoid A-response-after-switch races.
-        if (
-          capture.generation !== this.sessionGeneration ||
-          ctrl.state().activeId !== active.id
-        )
-          return null;
+        // Re-check the visit as well as the profile, including A→B→A.
+        if (!isCurrentCapture()) return null;
         const status = await auth
           .fetchStatus(
             origin,
             pendingUnlock === null ? undefined : pendingUnlock.abort.signal,
           )
           .catch(() => null);
-        if (capture.generation !== this.sessionGeneration || status === null)
-          return null;
+        if (!isCurrentCapture() || status === null) return null;
         if (status.kind === 'no-auth') {
           // Server reports no auth protection — the unlock is moot.
           const cfg = await auth.fetchConfig(origin).catch(() => null);
-          if (
-            capture.generation !== this.sessionGeneration ||
-            ctrl.state().activeId !== capture.profileId
-          )
-            return null;
+          if (!isCurrentCapture()) return null;
           if (cfg?.kind === 'ok') {
             if (
               pendingUnlock &&
@@ -4218,7 +4214,7 @@ export class DesktopHost {
               verifierCopy.fill(0);
             }
           }
-          if (capture.generation !== this.sessionGeneration) return null;
+          if (!isCurrentCapture()) return null;
           if (unlock?.kind === 'ok' && ctrl.state().activeId === active.id) {
             // Main-process cookie is fresh; the body's Chromium cookie
             // is still stale, so silently re-login + reload it via the
@@ -4247,10 +4243,7 @@ export class DesktopHost {
               );
             }
             const retry = await auth.fetchConfig(origin);
-            if (
-              capture.generation === this.sessionGeneration &&
-              ctrl.state().activeId === active.id
-            ) {
+            if (isCurrentCapture()) {
               if (retry.kind === 'ok') {
                 if (
                   pendingUnlock &&
@@ -4297,7 +4290,7 @@ export class DesktopHost {
           // unreachable it surfaces 'unavailable' which the renderer
           // never paints as a real prompt.
         }
-        if (capture.generation !== this.sessionGeneration) return null;
+        if (!isCurrentCapture()) return null;
         if (pendingUnlock !== null) {
           if (
             (pendingUnlock.origin === origin ||
@@ -4317,12 +4310,7 @@ export class DesktopHost {
         }
         if (promptSuppressedFor === origin) return null; // user dismissed; require explicit retry
         if (unlockInFlight) return null;
-        if (
-          capture.generation !== this.sessionGeneration ||
-          ctrl.state().activeId !== active.id
-        ) {
-          return null;
-        }
+        if (!isCurrentCapture()) return null;
         pendingUnlock = {
           requestId: randomRequestId(),
           profileId: capture.profileId,
@@ -4347,13 +4335,16 @@ export class DesktopHost {
       return promise;
     });
 
-    ipcMain.handle('phi:active-workspace', async (event) => {
+    ipcMain.handle('phi:active-workspace', async (event, id?: unknown) => {
       if (!isMainViewSender(event)) return null;
       const ctrl = this.controller;
       if (!ctrl) return null;
       const st = ctrl.state();
       const active = st.profiles.find((p) => p.id === st.activeId) ?? null;
       if (!active) return null;
+      if (id != null && id !== active.id) return null;
+      const epoch = activeEpoch;
+      const generation = this.sessionGeneration;
       const view =
         this.profileViews?.getView(active.id) ??
         this.viewByOrigin.get(active.origin) ??
@@ -4373,7 +4364,12 @@ export class DesktopHost {
           view.webContents.executeJavaScript(READ_WORKSPACE_SCRIPT),
           timeoutPromise,
         ]);
-        if (ctrl.state().activeId !== active.id) return null;
+        if (
+          epoch !== activeEpoch ||
+          generation !== this.sessionGeneration ||
+          ctrl.state().activeId !== active.id
+        )
+          return null;
         return typeof raw === 'string' && raw !== '' ? raw : null;
       } catch {
         return null;
@@ -4487,6 +4483,8 @@ export class DesktopHost {
       if (!view?.webContents || view.webContents.isDestroyed()) return;
       const action = payload as HeaderAction | null;
       if (action === null || typeof action !== 'object') return;
+      if (action.profileId !== undefined && action.profileId !== active.id)
+        return;
       if (
         action.kind === 'click' &&
         typeof action.id === 'string' &&
