@@ -1167,62 +1167,96 @@ html[data-phi-desktop-root] .app-header {
     padding: 4px 8px;
     border-radius: 4px;
     border: 1px solid var(--bg-border);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
+    background: transparent;
+    color: var(--text-muted);
     cursor: pointer;
     transition: all 0.15s ease;
 }
 
 .opencode-service-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--text-muted);
-    opacity: 0.4;
+    opacity: 0.35;
     flex-shrink: 0;
+    transition: all 0.15s ease;
 }
 
 .opencode-service-btn[data-state="running"] {
-    background: rgba(239, 68, 68, 0.12);
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #fca5a5;
+    background: var(--bg-elevated);
+    border-color: var(--bg-border);
+    color: var(--text-primary);
     cursor: pointer;
 }
 
 .opencode-service-btn[data-state="running"]:hover {
-    background: rgba(239, 68, 68, 0.22);
-    border-color: rgba(239, 68, 68, 0.55);
-    color: #fecaca;
+    background: var(--bg-border);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.08);
 }
 
 .opencode-service-btn[data-state="running"] .opencode-service-dot {
-    background: #ef4444;
+    background: var(--text-primary);
+    opacity: 0.9;
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.4);
+}
+
+.opencode-service-btn[data-state="running"]:hover .opencode-service-dot {
+    background: #ffffff;
     opacity: 1;
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
 }
 
 .opencode-service-btn[data-state="stopped"] {
     background: transparent;
-    border-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.05);
     color: var(--text-muted);
     cursor: default;
-    opacity: 0.65;
+    opacity: 0.55;
 }
 
 .opencode-service-btn[data-state="stopping"] {
+    background: transparent;
+    border-color: var(--bg-border);
+    color: var(--text-muted);
     opacity: 0.75;
     cursor: wait;
 }
 
+.opencode-service-btn[data-state="stopping"] .opencode-service-dot {
+    background: var(--text-muted);
+    opacity: 0.6;
+    animation: opencode-service-pulse 1s infinite alternate;
+}
+
+@keyframes opencode-service-pulse {
+    from {
+        opacity: 0.2;
+    }
+    to {
+        opacity: 0.8;
+    }
+}
+
 .opencode-service-btn[data-state="error"] {
-    border-color: rgba(245, 158, 11, 0.35);
-    color: #fcd34d;
+    background: transparent;
+    border-color: var(--bg-border);
+    border-style: dashed;
+    color: var(--text-muted);
     cursor: pointer;
 }
 
+.opencode-service-btn[data-state="error"]:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
 .opencode-service-btn[data-state="error"] .opencode-service-dot {
-    background: #f59e0b;
-    opacity: 1;
+    background: var(--text-muted);
+    opacity: 0.4;
 }
 
 .sidebar-footer {
@@ -6903,6 +6937,7 @@ html[data-phi-config-page] .settings-modal {
     height: 24px;
     padding: 0;
     justify-content: center;
+    margin: 0 auto;
 }
 
 .sidebar-narrow .opencode-service-btn .opencode-service-label {
@@ -11444,6 +11479,7 @@ body.fast-mode .empty-state-decoration,
 body.fast-mode .empty-logo,
 body.fast-mode .sidebar-version-btn.has-update::after,
 body.fast-mode .fleet-stale-badge,
+body.fast-mode .opencode-service-dot,
 body.fast-mode #input-textarea:focus {
     animation: none !important;
 }

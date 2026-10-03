@@ -86,4 +86,70 @@ describe('OpenCode service button UI', () => {
         expect(serviceBtn.disabled).toBe(false);
         expect(label.textContent).toBe('Server: retry');
     });
+
+    it('switchCoder hides service button when switching to non-opencode and shows when returning', async () => {
+        const { ctx, serviceRow } = await harness('tui');
+        ctx.loadSessions = vi.fn();
+        ctx.activeCoder = 'opencode';
+        ctx.updateOpenCodeServiceVisibility();
+        expect(serviceRow.style.display).toBe('block');
+
+        ctx.switchCoder('claude');
+        expect(ctx.activeCoder).toBe('claude');
+        expect(serviceRow.style.display).toBe('none');
+        expect(ctx._stopOpenCodeServicePolling).toHaveBeenCalled();
+
+        ctx.switchCoder('opencode');
+        expect(ctx.activeCoder).toBe('opencode');
+        expect(serviceRow.style.display).toBe('block');
+    });
+
+    it('delegated coderContainer click calls switchCoder and updates visibility', async () => {
+        const { ctx, serviceRow } = await harness('tui');
+        ctx.loadSessions = vi.fn();
+        ctx.spawnNewSession = vi.fn();
+        ctx.quickLaunchReady = true;
+
+        const coderContainer = document.createElement('div');
+        coderContainer.id = 'coder-selector';
+        const opencodeTab = document.createElement('button');
+        opencodeTab.className = 'coder-tab active';
+        opencodeTab.setAttribute('data-coder', 'opencode');
+        const claudeTab = document.createElement('button');
+        claudeTab.className = 'coder-tab';
+        claudeTab.setAttribute('data-coder', 'claude');
+        coderContainer.appendChild(opencodeTab);
+        coderContainer.appendChild(claudeTab);
+        document.body.appendChild(coderContainer);
+
+        const button = document.createElement('button');
+        ctx.newSessionBtn = button;
+        ctx.workspaceSelect = document.createElement('select');
+        ctx.addWorkspaceBtn = button;
+        ctx.removeWorkspaceBtn = button;
+        ctx.wsModalClose = button;
+        ctx.wsModalBrowseBtn = button;
+        ctx.wsModalCancelBtn = button;
+        ctx.wsModalAddBtn = button;
+        ctx.wsModalInput = document.createElement('input');
+
+        ctx.setupEventListeners =
+            Object.getPrototypeOf(ctx).setupEventListeners;
+        ctx.setupEventListeners();
+        ctx.activeCoder = 'opencode';
+        ctx.updateOpenCodeServiceVisibility();
+        expect(serviceRow.style.display).toBe('block');
+
+        // Simulate click on Claude tab
+        claudeTab.click();
+        expect(ctx.activeCoder).toBe('claude');
+        expect(serviceRow.style.display).toBe('none');
+
+        // Simulate click back to OpenCode tab
+        opencodeTab.click();
+        expect(ctx.activeCoder).toBe('opencode');
+        expect(serviceRow.style.display).toBe('block');
+
+        coderContainer.remove();
+    });
 });
