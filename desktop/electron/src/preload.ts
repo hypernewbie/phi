@@ -161,8 +161,8 @@ contextBridge.exposeInMainWorld('electron', {
   // The main view page resolves the active server's config through the
   // main process (no cross-origin fetch from a file:// page; the main
   // process validates the sender and pins the path to /api/config).
-  fetchServerConfig: (): Promise<unknown> =>
-    ipcRenderer.invoke('phi:server-config'),
+  fetchServerConfig: (profileId?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('phi:server-config', profileId),
   // Relay a header interaction to the active body view (the main process
   // validates the sender and the action id).
   postHeaderAction: (action: HeaderAction): void => {
@@ -171,8 +171,8 @@ contextBridge.exposeInMainWorld('electron', {
   // Read the active body view's own workspace selector. Each retained
   // server view has independent local state, so the main header must
   // not reuse the previous server's selection.
-  fetchActiveWorkspace: (): Promise<string | null> =>
-    ipcRenderer.invoke('phi:active-workspace'),
+  fetchActiveWorkspace: (profileId?: string | null): Promise<string | null> =>
+    ipcRenderer.invoke('phi:active-workspace', profileId),
   onActiveServer: (cb: (info: ActiveServer) => void): (() => void) =>
     subscribe('phi:active-server', cb),
   // Dynamic brand-state push: the active server's CPU percent and

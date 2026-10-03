@@ -283,6 +283,100 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     rmSync(temp, { recursive: true, force: true });
   });
 
+  it('pins config/workspace requests and header actions to the requested server', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const a = ctrl.add('http://alpha.example.test:7070/');
+    const b = ctrl.add('http://beta.example.test:7070/');
+    host.profileViews!.addProfile(a.id, a.origin);
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(b.id);
+    const view = host.profileViews!.getView(b.id)!;
+    const execute = vi
+      .spyOn(view.webContents, 'executeJavaScript')
+      .mockResolvedValue('/beta/code');
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ hostname: 'BETA', workspaces: ['/beta/code'] }),
+          { status: 200 },
+        ),
+    );
+    globalThis.fetch = fetcher;
+    const event = { sender: win.webContents };
+    expect(
+      await fake.ipcHandlers.get('phi:server-config')!(event, a.id),
+    ).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(
+      await fake.ipcHandlers.get('phi:active-workspace')!(event, a.id),
+    ).toBeNull();
+    execute.mockClear();
+    fake.ipcHandlers.get('phi:header-action')!(event, {
+      kind: 'workspace',
+      value: '/alpha/code',
+      profileId: a.id,
+    });
+    expect(execute).not.toHaveBeenCalled();
+    fake.ipcHandlers.get('phi:header-action')!(event, {
+      kind: 'workspace',
+      value: '/beta/code',
+      profileId: b.id,
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+    host.pushHeaderState(0, false, '/beta/code');
+    expect(
+      win.webContents.sent
+        .filter(([channel]) => channel === 'phi:header-state')
+        .at(-1)?.[1],
+    ).toMatchObject({ profileId: b.id, workspace: '/beta/code' });
+    ctrl.setActive(a.id);
+    host.pushHeaderState(0, false, '/beta/code');
+    expect(
+      win.webContents.sent
+        .filter(([channel]) => channel === 'phi:header-state')
+        .at(-1)?.[1],
+    ).toMatchObject({ profileId: a.id });
+  });
+
+  it('discards config from an earlier A visit after switching A → B → A', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    win.webContents.emit('did-finish-load');
+    await flush();
+    const ctrl = host.controller!;
+    const a = ctrl.add('http://alpha.example.test:7070/');
+    const b = ctrl.add('http://beta.example.test:7070/');
+    host.profileViews!.addProfile(a.id, a.origin);
+    host.profileViews!.addProfile(b.id, b.origin);
+    ctrl.setActive(a.id);
+    let finish: (response: Response) => void = () => {};
+    globalThis.fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = fake.ipcHandlers.get('phi:server-config')!(
+      { sender: win.webContents },
+      a.id,
+    );
+    ctrl.setActive(b.id);
+    ctrl.setActive(a.id);
+    finish(
+      new Response(
+        JSON.stringify({ hostname: 'OLD A', workspaces: ['/old/a'] }),
+        { status: 200 },
+      ),
+    );
+    expect(await pending).toBeNull();
+  });
+
   it('installs the second-instance listener exactly once during host.start (listener singleton)', async () => {
     const host = new DesktopHost();
     await host.start(primary);

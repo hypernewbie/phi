@@ -36,9 +36,11 @@ interface FakeBridge {
 
 let fakeBridge: FakeBridge;
 let recordedActiveServer: ((info: any) => void) | null = null;
+let recordedHeaderState: ((info: any) => void) | null = null;
 
 beforeEach(() => {
   recordedActiveServer = null;
+  recordedHeaderState = null;
   fakeBridge = {
     fetchServerConfig: vi.fn(async () => null),
     fetchActiveWorkspace: vi.fn(async () => null),
@@ -58,7 +60,9 @@ beforeEach(() => {
         cb(info);
       };
     },
-    onHeaderState: () => undefined,
+    onHeaderState: (cb) => {
+      recordedHeaderState = cb;
+    },
     onWindowState: () => undefined,
     onWindowTitle: () => undefined,
   };
@@ -100,6 +104,155 @@ async function loadMainView(): Promise<Document> {
 }
 
 describe('TBAR wedge and race condition prevention', () => {
+  it.each(['unreachable', 'locked', 'loading'])(
+    'clears the previous computer’s project list when the incoming server is %s',
+    async (condition) => {
+      fakeBridge.fetchServerConfig = vi.fn(async () => ({
+        hostname: 'CHARON',
+        workspaces: ['/charon/code', '/charon/other'],
+        active_cwd: '/charon/code',
+      }));
+      fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/charon/code');
+      const doc = await loadMainView();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      const select = doc.getElementById(
+        'workspace-select',
+      ) as HTMLSelectElement;
+      expect([...select.options].map((o) => o.value)).toEqual([
+        '/charon/code',
+        '/charon/other',
+      ]);
+      fakeBridge.fetchServerConfig = vi.fn(() =>
+        condition === 'loading'
+          ? new Promise(() => {})
+          : condition === 'unreachable'
+            ? Promise.reject(new Error('offline'))
+            : Promise.resolve(null),
+      );
+      recordedActiveServer?.({
+        id: 'jupiter',
+        origin: 'http://jupiter:7070/',
+        hostname: 'JUPITER',
+      });
+      expect([...select.options]).toHaveLength(0);
+      expect(select.disabled).toBe(true);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect([...select.options]).toHaveLength(0);
+    },
+  );
+
+  it('publishes the incoming list before its body workspace read finishes', async () => {
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'CHARON',
+      workspaces: ['/charon/code'],
+      active_cwd: '/charon/code',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/charon/code');
+    const doc = await loadMainView();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'JUPITER',
+      workspaces: ['/jupiter/a', '/jupiter/b'],
+      active_cwd: '/jupiter/a',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(
+      () => new Promise<string | null>(() => {}),
+    );
+    recordedActiveServer?.({ id: 'jupiter', origin: 'http://jupiter:7070/' });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const select = doc.getElementById('workspace-select') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual([
+      '/jupiter/a',
+      '/jupiter/b',
+    ]);
+    expect(select.disabled).toBe(false);
+  });
+
+  it('ignores a queued workspace push belonging to the outgoing computer', async () => {
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'JUPITER',
+      workspaces: ['/jupiter/code'],
+      active_cwd: '/jupiter/code',
+    }));
+    fakeBridge.fetchActiveWorkspace = vi.fn(async () => '/jupiter/code');
+    const doc = await loadMainView();
+    recordedActiveServer?.({ id: 'jupiter', origin: 'http://jupiter:7070/' });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    recordedHeaderState?.({
+      profileId: 'charon',
+      cpuPercent: 90,
+      terminalActivity: true,
+      workspace: '/charon/secret-project',
+    });
+    const select = doc.getElementById('workspace-select') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['/jupiter/code']);
+    expect(select.value).toBe('/jupiter/code');
+    recordedHeaderState?.({
+      profileId: 'jupiter',
+      cpuPercent: 0,
+      terminalActivity: false,
+      workspace: '/jupiter/new-project',
+    });
+    expect(select.value).toBe('/jupiter/new-project');
+  });
+
+  it('does not resurrect an old visit’s config after A → B → A when the current fetch fails', async () => {
+    const doc = await loadMainView();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    let oldResolve: (config: unknown) => void = () => {};
+    fakeBridge.fetchServerConfig = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            oldResolve = resolve;
+          }),
+      )
+      .mockResolvedValue(null);
+    recordedActiveServer?.({ id: 'a', origin: 'http://a/' });
+    recordedActiveServer?.({ id: 'b', origin: 'http://b/' });
+    recordedActiveServer?.({ id: 'a', origin: 'http://a/' });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    oldResolve({
+      hostname: 'OLD A',
+      workspaces: ['/old/a'],
+      active_cwd: '/old/a',
+    });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect([
+      ...(doc.getElementById('workspace-select') as HTMLSelectElement).options,
+    ]).toHaveLength(0);
+  });
+
+  it('keeps a user’s incoming-server selection when a body read completes late', async () => {
+    fakeBridge.fetchServerConfig = vi.fn(async () => ({
+      hostname: 'JUPITER',
+      workspaces: ['/jupiter/a', '/jupiter/b'],
+      active_cwd: '/jupiter/a',
+    }));
+    let resolveWorkspace: (value: string | null) => void = () => {};
+    fakeBridge.fetchActiveWorkspace = vi.fn(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveWorkspace = resolve;
+        }),
+    );
+    const doc = await loadMainView();
+    recordedActiveServer?.({ id: 'jupiter', origin: 'http://jupiter:7070/' });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const select = doc.getElementById('workspace-select') as HTMLSelectElement;
+    select.value = '/jupiter/b';
+    select.dispatchEvent(new doc.defaultView!.Event('change'));
+    expect(fakeBridge.postHeaderAction).toHaveBeenCalledWith({
+      kind: 'workspace',
+      value: '/jupiter/b',
+      profileId: 'jupiter',
+    });
+    resolveWorkspace('/jupiter/a');
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(select.value).toBe('/jupiter/b');
+  });
+
   it('TBAR updates to JUPITER even when fetchActiveWorkspace hangs on switching', async () => {
     // 1. Initial server is CHARON
     fakeBridge.fetchServerConfig = vi.fn(async () => ({

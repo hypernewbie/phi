@@ -104,6 +104,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   }
 
   let activeServerId = null;
+  let activeServerOrigin = null;
+  let serverEpoch = 0;
   let refreshSerial = 0;
   let appliedConfigSerial = 0;
   let appliedWorkspaceSerial = 0;
@@ -113,15 +115,17 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   async function refreshConfig() {
     const serial = ++refreshSerial;
     const requestedServerId = activeServerId;
+    const requestedEpoch = serverEpoch;
     let config;
     try {
-      config = await window.electron.fetchServerConfig();
+      config = await window.electron.fetchServerConfig(requestedServerId);
     } catch {
-      return; // server unreachable; keep the last rendered state
+      return; // Keep state only from the current server; switches clear it.
     }
     if (
       serial < appliedConfigSerial ||
       requestedServerId !== activeServerId ||
+      requestedEpoch !== serverEpoch ||
       !config ||
       typeof config !== 'object'
     ) return;
@@ -137,9 +141,28 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
 
     if (workspaceSelect && Array.isArray(config.workspaces)) {
       const revision = workspaceChangeSerial;
+      const workspaces = config.workspaces.filter((ws) => typeof ws === 'string' && ws !== '');
+      const previous = workspaceSelect.value;
+      const active = typeof config.active_cwd === 'string' ? config.active_cwd : '';
+      // Publish this server's list immediately. Its body view may still be
+      // loading, locked, or unable to finish the workspace read.
+      workspaceSelect.textContent = '';
+      for (const ws of workspaces) {
+        const opt = document.createElement('option');
+        opt.value = ws;
+        opt.textContent = workspaceLabel(ws, workspaces);
+        opt.title = ws;
+        workspaceSelect.appendChild(opt);
+      }
+      workspaceSelect.value = workspaces.includes(previous)
+        ? previous
+        : workspaces.includes(active) ? active : workspaces[0] ?? '';
+      workspaceSelect.disabled = workspaces.length === 0;
+      appliedWorkspaceSerial = serial;
+      updateWorkspaceSelectWidth();
       let bodyWorkspace = null;
       try {
-        const workspacePromise = window.electron.fetchActiveWorkspace?.();
+        const workspacePromise = window.electron.fetchActiveWorkspace?.(requestedServerId);
         if (workspacePromise) {
           const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1000));
           bodyWorkspace = (await Promise.race([workspacePromise, timeoutPromise])) ?? null;
@@ -147,27 +170,16 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
       } catch {
         // The body may still be loading; use the server config fallback.
       }
-      if (serial < appliedWorkspaceSerial || requestedServerId !== activeServerId) return;
-      appliedWorkspaceSerial = serial;
-
-      const userSelection = workspaceSelect.value;
-      workspaceSelect.textContent = '';
-      for (const ws of config.workspaces) {
-        const opt = document.createElement('option');
-        opt.value = ws;
-        opt.textContent = workspaceLabel(ws, config.workspaces);
-        opt.title = ws;
-        workspaceSelect.appendChild(opt);
+      if (
+        serial < appliedWorkspaceSerial ||
+        requestedServerId !== activeServerId ||
+        requestedEpoch !== serverEpoch ||
+        revision !== workspaceChangeSerial
+      ) return;
+      if (typeof bodyWorkspace === 'string' && workspaces.includes(bodyWorkspace)) {
+        workspaceSelect.value = bodyWorkspace;
+        updateWorkspaceSelectWidth();
       }
-      const current = revision !== workspaceChangeSerial ? userSelection : bodyWorkspace;
-      const active = typeof config.active_cwd === 'string' ? config.active_cwd : '';
-      workspaceSelect.value =
-        typeof current === 'string' && config.workspaces.includes(current)
-          ? current
-          : active !== '' && config.workspaces.includes(active)
-            ? active
-            : config.workspaces[0] ?? '';
-      updateWorkspaceSelectWidth();
     }
   }
 
@@ -190,23 +202,30 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
     document.title = title === '' ? 'Phi' : title;
   });
 
+  function postHeaderAction(action) {
+    if (!activeServerId) return;
+    window.electron.postHeaderAction({ ...action, profileId: activeServerId });
+  }
+
   // --- Project selector: the server is the channel (the body's native
   // --- workspace-change handler re-renders the body's sessions) ---
   if (workspaceSelect) {
     workspaceSelect.addEventListener('change', () => {
       workspaceChangeSerial += 1;
       updateWorkspaceSelectWidth();
-      window.electron.postHeaderAction({ kind: 'workspace', value: workspaceSelect.value });
+      if (!workspaceSelect.disabled && workspaceSelect.value) {
+        postHeaderAction({ kind: 'workspace', value: workspaceSelect.value });
+      }
     });
   }
   if (addWorkspaceBtn) {
     addWorkspaceBtn.addEventListener('click', () =>
-      window.electron.postHeaderAction({ kind: 'click', id: 'add-workspace-btn' }),
+      postHeaderAction({ kind: 'click', id: 'add-workspace-btn' }),
     );
   }
   if (removeWorkspaceBtn) {
     removeWorkspaceBtn.addEventListener('click', () =>
-      window.electron.postHeaderAction({ kind: 'click', id: 'remove-workspace-btn' }),
+      postHeaderAction({ kind: 'click', id: 'remove-workspace-btn' }),
     );
   }
 
@@ -224,14 +243,14 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   for (const id of ACTION_BUTTONS) {
     const btn = document.getElementById(id);
     if (btn) {
-      btn.addEventListener('click', () => window.electron.postHeaderAction({ kind: 'click', id }));
+      btn.addEventListener('click', () => postHeaderAction({ kind: 'click', id }));
     }
   }
   const configPill = document.getElementById('header-config-pill');
   if (configPill) {
     configPill.addEventListener('click', (e) => {
       if (e.target.closest('.pill-btn')) return;
-      window.electron.postHeaderAction({ kind: 'click', id: 'header-config-pill' });
+      postHeaderAction({ kind: 'click', id: 'header-config-pill' });
     });
   }
 
@@ -247,7 +266,19 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   // --- Server sync: refresh on profile activation and on a light cadence
   // --- (the server exposes no push channel for config) ---
   window.electron.onActiveServer((info) => {
-    activeServerId = info?.id ?? null;
+    const nextId = info?.id ?? null;
+    const nextOrigin = info?.origin ?? null;
+    if (nextId !== activeServerId || nextOrigin !== activeServerOrigin) {
+      serverEpoch += 1;
+      workspaceChangeSerial += 1;
+      if (workspaceSelect) {
+        workspaceSelect.textContent = '';
+        workspaceSelect.disabled = true;
+        updateWorkspaceSelectWidth();
+      }
+    }
+    activeServerId = nextId;
+    activeServerOrigin = nextOrigin;
     if (info && typeof info.hostname === 'string' && info.hostname !== '' && hostnameDisplay) {
       hostnameDisplay.innerText = displayHostname(info.hostname);
     }
@@ -408,7 +439,7 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
   // hostname is always known by the time the main view is up (the
   // unlock modal flow uses it).
   window.electron.onHeaderState((state) => {
-    if (!state) return;
+    if (!state || state.profileId !== activeServerId) return;
     applyBrandCpuTier(state.cpuPercent ?? 0);
     applyTerminalActivityIndicator(Boolean(state.terminalActivity), true);
     if (typeof state.workspace === 'string' && state.workspace !== '' && workspaceSelect) {
@@ -422,6 +453,8 @@ import { applyBrandCpuTier, applyTerminalActivityIndicator } from './vendor/head
           workspaceSelect.appendChild(opt);
         }
         workspaceSelect.value = state.workspace;
+        workspaceSelect.disabled = false;
+        workspaceChangeSerial += 1;
         updateWorkspaceSelectWidth();
       }
     }
