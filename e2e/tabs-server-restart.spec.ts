@@ -215,7 +215,13 @@ test('close/restart preserves every backend, exact session, pane identity, flags
     const running = await (
         await request.get(`${phi.url}/api/terminals`)
     ).json();
-    if (running.some((pane: {id: string; session_id: string}) => rows.find(row => row.id === pane.id)?.session_id !== pane.session_id)) {
+    if (
+        running.some(
+            (pane: { id: string; session_id: string }) =>
+                rows.find((row) => row.id === pane.id)?.session_id !==
+                pane.session_id,
+        )
+    ) {
         console.error(readFileSync(phi.logPath, 'utf8'));
     }
     for (const row of rows) {

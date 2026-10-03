@@ -153,7 +153,6 @@ export async function mountFileView(opts) {
         case 'json':
             handle = await mountJson(url, container, signal);
             break;
-        case 'download':
         default:
             handle = mountDownload(url, path, container);
             break;
