@@ -12,6 +12,7 @@ All notable changes to phi are documented here. Newest versions first.
 - **VS Code launch actions** (`7473c4c`, `b6ad202`). Added separate local and Remote SSH actions for projects, files, and diff files. Local actions require a localhost Phi server. Remote actions use the reported Phi hostname.
 - **Viewer size controls** (`dafbcb3`, `1d62792`). Added icon-only maximize and restore controls for pretty diffs and Markdown previews. Maximized viewers fill the browser viewport without the Fullscreen API.
 - **Sync-board commit diffs** (`5d4286a`). Commit cards provide separate actions to select the diff and open its pretty viewer. Incoming cards never open the viewer automatically.
+- **Workspace directory picker** (`9e795ff`). Added a directory tree, path reveal, keyboard navigation, and guarded workspace submission to the Add Workspace dialog.
 - **Seven accent themes** (`68c203b`, `74605b9`). Added Arc, Ember, Fog, Ash, Dusk, Pine, and Fern.
 
 ### Changed
@@ -24,6 +25,7 @@ All notable changes to phi are documented here. Newest versions first.
 - **Diff review whitespace** (`6107ee3`). Review prompts preserve source tabs, trailing spaces, blank lines, and source nonbreaking spaces. Legacy draft repair does not replace code context.
 - **Desktop project selector** (`ef284e2`). Server switches clear the outgoing project list. Late responses cannot restore projects or header actions from another computer.
 - **Source preview typography** (`dfc2962`). Code previews use a 14px monospace font in wide and narrow layouts.
+- **Tab-close project context** (`bdb1eaa`). The sidebar follows the surviving active tab after a close. Late worktree responses cannot replace a newer project selection.
 - **Restart notifications** (`7e40278`). Removed the "Fresh start" toast and the deletion of saved browser tab references.
 
 ## v0.21.5 — 2026-09-28

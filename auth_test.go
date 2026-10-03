@@ -74,7 +74,7 @@ func TestAccessAuthMiddlewareDisabledAndEnabledCoverage(t *testing.T) {
 	if err := auth.configure(testAccessHash()); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/coders", "/api/auth/password", "/ws/pane/a"} {
+	for _, path := range []string{"/api/coders", "/api/auth/password", "/api/fs/browse", "/ws/pane/a"} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		if w.Code != http.StatusUnauthorized {

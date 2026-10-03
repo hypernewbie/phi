@@ -17,6 +17,7 @@ function harness(ready = true) {
         wsModalClose: button,
         wsModalCancelBtn: button,
         wsModalAddBtn: button,
+        wsModalBrowseBtn: document.createElement('button'),
         wsModalInput: document.createElement('input'),
         activeCoder: 'opencode',
         quickLaunchReady: ready,

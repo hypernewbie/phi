@@ -40,6 +40,37 @@ async function run(ctx, targetCwd, worktrees) {
     await SessionsManager.prototype.loadWorktrees.call(ctx, targetCwd);
 }
 
+function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((done, fail) => {
+        resolve = done;
+        reject = fail;
+    });
+    return { promise, resolve, reject };
+}
+
+function pendingFetches() {
+    const requests = [];
+    vi.stubGlobal(
+        'fetch',
+        vi.fn((url) => {
+            const response = deferred();
+            requests.push({ url: String(url), ...response });
+            return response.promise;
+        }),
+    );
+    return requests;
+}
+
+function startLoad(ctx, targetCwd = null) {
+    return SessionsManager.prototype.loadWorktrees.call(ctx, targetCwd);
+}
+
+function worktreeResponse(worktrees) {
+    return { ok: true, json: vi.fn(async () => worktrees) };
+}
+
 const sections = (ctx) =>
     Array.from(ctx.sessionList.querySelectorAll('.worktree-section'));
 const paths = (ctx) =>
@@ -168,6 +199,204 @@ describe('loadWorktrees — collaborators + side effects', () => {
         );
         expect(calledPaths).toContain('/b');
         expect(calledPaths).not.toContain('/a');
+    });
+});
+
+describe('loadWorktrees — stale requests', () => {
+    it('keeps the newest successful response when request contexts are identical', async () => {
+        const requests = pendingFetches();
+        const ctx = makeCtx({ activeCWD: '/ws/missing' });
+        const olderLoad = startLoad(ctx);
+        const newerLoad = startLoad(ctx);
+
+        expect(requests.map((request) => request.url)).toEqual([
+            '/api/git/worktrees?cwd=%2Fws',
+            '/api/git/worktrees?cwd=%2Fws',
+        ]);
+
+        requests[1].resolve(
+            worktreeResponse([{ path: '/ws/new', active: true }]),
+        );
+        await newerLoad;
+        requests[0].resolve(
+            worktreeResponse([{ path: '/ws/old', active: true }]),
+        );
+        await olderLoad;
+
+        expect(paths(ctx)).toEqual(['/ws/new']);
+        expect(ctx.activeCWD).toBe('/ws/new');
+        expect(
+            ctx.loadWorktreeSessions.mock.calls.map(([path]) => path),
+        ).toEqual(['/ws/new']);
+        expect(ctx.loadWorktreeDirtyStates).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['HTTP error', 'fetch rejection'])(
+        'does not let a stale %s replace the latest sidebar',
+        async (failure) => {
+            const requests = pendingFetches();
+            const ctx = makeCtx({ activeCWD: '/ws/missing' });
+            const olderLoad = startLoad(ctx);
+            const newerLoad = startLoad(ctx);
+
+            requests[1].resolve(
+                worktreeResponse([{ path: '/ws/new', active: true }]),
+            );
+            await newerLoad;
+
+            if (failure === 'HTTP error') {
+                requests[0].resolve({ ok: false, json: vi.fn() });
+            } else {
+                requests[0].reject(new Error('old network failure'));
+            }
+            await olderLoad;
+
+            expect(paths(ctx)).toEqual(['/ws/new']);
+            expect(ctx.activeCWD).toBe('/ws/new');
+            expect(ctx.sessionList.textContent).not.toContain(
+                'Error scanning worktrees',
+            );
+        },
+    );
+
+    it('does not let a stale JSON rejection replace the latest sidebar', async () => {
+        const requests = pendingFetches();
+        const jsonBody = deferred();
+        const ctx = makeCtx({ activeCWD: '/ws/missing' });
+        const json = vi.fn(() => jsonBody.promise);
+        const olderLoad = startLoad(ctx);
+
+        requests[0].resolve({ ok: true, json });
+        await Promise.resolve();
+        expect(json).toHaveBeenCalledTimes(1);
+
+        const newerLoad = startLoad(ctx);
+        requests[1].resolve(
+            worktreeResponse([{ path: '/ws/new', active: true }]),
+        );
+        await newerLoad;
+
+        jsonBody.reject(new Error('old JSON failure'));
+        await olderLoad;
+
+        expect(paths(ctx)).toEqual(['/ws/new']);
+        expect(ctx.activeCWD).toBe('/ws/new');
+        expect(ctx.sessionList.textContent).not.toContain(
+            'Error scanning worktrees',
+        );
+        expect(ctx.loadWorktreeDirtyStates).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['workspace', 'activeWorkspace', '/ws/changed'],
+        ['coder', 'activeCoder', 'shell'],
+    ])(
+        'ignores a response when the %s changes before fetch completes',
+        async (_label, key, changedValue) => {
+            const requests = pendingFetches();
+            const ctx = makeCtx({ activeCWD: '/ws/main' });
+            const load = startLoad(ctx);
+            const json = vi.fn(async () => [
+                { path: '/ws/other', active: true },
+            ]);
+
+            ctx[key] = changedValue;
+            requests[0].resolve({ ok: true, json });
+            await load;
+
+            expect(json).not.toHaveBeenCalled();
+            expect(ctx[key]).toBe(changedValue);
+            expect(ctx.sessionList.textContent).toContain(
+                'Scanning git worktrees',
+            );
+            expect(ctx.loadWorktreeDirtyStates).not.toHaveBeenCalled();
+        },
+    );
+
+    it('renders a valid list after CWD changes before fetch completes without applying the old target', async () => {
+        const requests = pendingFetches();
+        const ctx = makeCtx({ activeCWD: '/ws/main' });
+        const load = startLoad(ctx, '/ws/target');
+        const json = vi.fn(async () => [
+            { path: '/ws/target', active: true },
+            { path: '/ws/other' },
+        ]);
+
+        ctx.activeCWD = '/ws/other';
+        requests[0].resolve({ ok: true, json });
+        await load;
+
+        expect(json).toHaveBeenCalledTimes(1);
+        expect(ctx.activeCWD).toBe('/ws/other');
+        expect(paths(ctx)).toEqual(['/ws/target', '/ws/other']);
+        expect(activePath(ctx)).toBe('/ws/other');
+        expect(ctx.sessionList.textContent).not.toContain(
+            'Scanning git worktrees',
+        );
+        expect(ctx.loadWorktreeDirtyStates).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders parsed worktrees after CWD changes during JSON reading without applying the fallback', async () => {
+        const requests = pendingFetches();
+        const jsonBody = deferred();
+        const ctx = makeCtx({ activeCWD: '/ws/missing' });
+        const json = vi.fn(() => jsonBody.promise);
+        const load = startLoad(ctx);
+
+        requests[0].resolve({ ok: true, json });
+        await Promise.resolve();
+        expect(json).toHaveBeenCalledTimes(1);
+
+        ctx.activeCWD = '/ws/other';
+        jsonBody.resolve([{ path: '/ws/fallback', active: true }]);
+        await load;
+
+        expect(ctx.activeCWD).toBe('/ws/other');
+        expect(paths(ctx)).toEqual(['/ws/fallback']);
+        expect(activePath(ctx)).toBeNull();
+        expect(ctx.sessionList.textContent).not.toContain(
+            'Scanning git worktrees',
+        );
+        expect(ctx.loadWorktreeDirtyStates).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['workspace', 'activeWorkspace', '/ws/changed'],
+        ['coder', 'activeCoder', 'shell'],
+    ])(
+        'ignores parsed worktrees when the %s changes during JSON reading',
+        async (_label, key, changedValue) => {
+            const requests = pendingFetches();
+            const jsonBody = deferred();
+            const ctx = makeCtx({ activeCWD: '/ws/main' });
+            const json = vi.fn(() => jsonBody.promise);
+            const load = startLoad(ctx);
+
+            requests[0].resolve({ ok: true, json });
+            await Promise.resolve();
+            expect(json).toHaveBeenCalledTimes(1);
+
+            ctx[key] = changedValue;
+            jsonBody.resolve([{ path: '/ws/other', active: true }]);
+            await load;
+
+            expect(ctx[key]).toBe(changedValue);
+            expect(ctx.sessionList.textContent).toContain(
+                'Scanning git worktrees',
+            );
+            expect(ctx.loadWorktreeDirtyStates).not.toHaveBeenCalled();
+        },
+    );
+
+    it('renders a current request error normally', async () => {
+        const ctx = makeCtx();
+        mockFetch(() => ({ ok: false }));
+
+        await startLoad(ctx);
+
+        expect(ctx.sessionList.textContent).toContain(
+            'Error scanning worktrees',
+        );
     });
 });
 

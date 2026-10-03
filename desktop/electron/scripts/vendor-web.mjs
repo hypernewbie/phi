@@ -38,6 +38,7 @@ const WEB_JS_MODULES = [
   'terminal.js',
   'ws.js',
   'sessions.js',
+  'path-picker.js',
   'util.js',
   'attachments.js',
   'coders.js',

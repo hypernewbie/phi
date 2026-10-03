@@ -1302,34 +1302,73 @@ eager to avoid a first-open unstyled flash. -->
 
         <!-- WORKSPACE MODAL DIALOG -->
         <div id="ws-modal" class="modal-overlay hidden">
-            <div class="modal-content">
+            <div
+                class="modal-content ws-modal-content"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="ws-modal-title"
+            >
                 <div class="modal-header">
-                    <h3>Add Workspace</h3>
-                    <button id="ws-modal-close" class="modal-close-btn">
+                    <h3 id="ws-modal-title">Add Workspace</h3>
+                    <button
+                        id="ws-modal-close"
+                        class="modal-close-btn"
+                        type="button"
+                        aria-label="Close Add Workspace"
+                    >
                         ×
                     </button>
                 </div>
                 <div class="modal-body">
-                    <div class="input-autocomplete-wrapper">
-                        <input
-                            type="text"
-                            id="ws-modal-input"
-                            placeholder="Type absolute path... (e.g., /home/user/code)"
-                            autocomplete="off"
-                        >
-                        <div
-                            id="ws-modal-suggestions"
-                            class="autocomplete-suggestions hidden"
-                        ></div>
+                    <label class="ws-modal-path-label" for="ws-modal-input">
+                        Path on this server
+                    </label>
+                    <div class="path-input-row">
+                        <div class="input-autocomplete-wrapper">
+                            <input
+                                type="text"
+                                id="ws-modal-input"
+                                placeholder="Type an absolute path or ~ path"
+                                autocomplete="off"
+                                role="combobox"
+                                aria-autocomplete="list"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                                aria-controls="ws-modal-suggestions"
+                                aria-describedby="ws-modal-path-status"
+                            >
+                            <div
+                                id="ws-modal-suggestions"
+                                class="autocomplete-suggestions hidden"
+                                role="listbox"
+                                aria-label="Path suggestions"
+                            ></div>
+                        </div>
+                        <button
+                            id="ws-modal-browse-btn"
+                            class="btn btn-primary"
+                            type="button"
+                        >Reveal</button>
                     </div>
+                    <div
+                        id="ws-modal-path-status"
+                        class="ws-modal-path-status"
+                        role="status"
+                        aria-live="polite"
+                    ></div>
+                    <div id="ws-modal-tree" class="ws-modal-tree"></div>
                 </div>
                 <div class="modal-footer">
-                    <button id="ws-modal-cancel-btn" class="btn btn-primary">
-                        Cancel
-                    </button>
-                    <button id="ws-modal-add-btn" class="btn btn-accent">
-                        Add Workspace
-                    </button>
+                    <button
+                        id="ws-modal-cancel-btn"
+                        class="btn btn-primary"
+                        type="button"
+                    >Cancel</button>
+                    <button
+                        id="ws-modal-add-btn"
+                        class="btn btn-accent"
+                        type="button"
+                    >Add Workspace</button>
                 </div>
             </div>
         </div>
