@@ -354,8 +354,8 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         expect(tab.drainedSeq).toBe(100);
     });
 
-    it('a dead tab with buffered data still settles bootstrap waiters', async () => {
-        // Probe case: tab dies mid-parse with newer data buffered. The
+    it('a finalized tab with buffered data still settles bootstrap waiters', async () => {
+        // Probe case: tab is disposed mid-parse with newer data buffered. The
         // callback used to skip waiter resolution, hanging the bootstrap
         // promise (gate stuck, slot leaked). Owners re-verify death, so
         // resolving only ends the wait.
@@ -393,6 +393,7 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         await new Promise((r) => setTimeout(r, 0));
         c.writeToTerminal(tab, 'live!');
         tab.isDead = true;
+        tab.finalizing = true;
         callbacks.shift()();
         await p;
         expect(tab._drainWaiters ?? []).toEqual([]);

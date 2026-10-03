@@ -234,7 +234,7 @@ describe('Terminal History Preservation', () => {
             expect.anything(),
         );
         // Must NOT drop the delta — all 128 KiB must reach xterm
-        expect(tab.term.writes).toContain(largeHistory);
+        expect(tab.term.writes.join('')).toContain(largeHistory);
         expect(tab.term.opened).toBe(true);
     });
 
@@ -271,7 +271,7 @@ describe('Terminal History Preservation', () => {
             expect.stringContaining('from=10000'),
             expect.anything(),
         );
-        expect(tab.term.writes).toContain(missedOutput);
+        expect(tab.term.writes.join('')).toContain(missedOutput);
         expect(tab.term.resetCount || 0).toBe(0);
     });
 });

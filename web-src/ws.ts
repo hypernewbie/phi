@@ -410,6 +410,17 @@ export class PTYWebSocket {
         return true;
     }
 
+    // xterm's onBinary carries byte-valued strings (not Unicode text),
+    // notably classic mouse reports with coordinates above ASCII.
+    sendBinaryInput(data: string): boolean {
+        if (this.ws.readyState !== WebSocket.OPEN) return false;
+        const frame = new Uint8Array(1 + data.length);
+        frame[0] = 0x01;
+        for (let i = 0; i < data.length; i++) frame[i + 1] = data.charCodeAt(i);
+        this.ws.send(frame.buffer);
+        return true;
+    }
+
     // Reports whether the resize actually went out: callers that must
     // not lose an unsent sizing (first-fit backend sync) gate retries
     // on this. A not-open socket is a quiet false, never a throw.
