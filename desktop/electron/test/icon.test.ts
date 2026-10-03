@@ -95,3 +95,10 @@ describe('scripts/gen-icon.mjs (the committed generator)', () => {
     expect(source).toContain('using committed icon assets');
   });
 });
+
+describe('assets/ (no stale @Nx tray overrides)', () => {
+  it('does not contain any tray@*x.png placeholder assets', () => {
+    expect(existsSync(path.join(assetsDir, 'tray@2x.png'))).toBe(false);
+    expect(existsSync(path.join(assetsDir, 'tray@4x.png'))).toBe(false);
+  });
+});
