@@ -19,6 +19,7 @@ import {
     hasPiRpc,
     hasRename,
     hasSessions,
+    isShell,
     renderLogo,
     RESERVED_CODER_IDS,
 } from './coders.js';
@@ -139,7 +140,11 @@ export class SessionsManager {
                     ?.classList.remove('active');
                 target.classList.add('active');
                 this.activeCoder = id;
-                this.loadSessions();
+                if (isShell(id) && this.quickLaunchReady) {
+                    this.spawnNewSession();
+                } else {
+                    this.loadSessions();
+                }
             });
             coderContainer.addEventListener('contextmenu', (e) => {
                 const target = (e.target as Element | null)?.closest(
