@@ -180,6 +180,7 @@ func main() {
 			_ = sendSimplepushNotification(cfg.SimplepushKey, notifTitle, notifMsg, "phi_idle")
 		}
 	})
+	startOpenCodeIdleWatcher()
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
 	restoreSavedTabs()
 
@@ -288,6 +289,7 @@ func main() {
 	http.HandleFunc("/api/config/auto-reconnect", handleAutoReconnect)
 	http.HandleFunc("/api/opencode/service", handleOpenCodeService)
 	http.HandleFunc("/api/opencode/service/stop", handleOpenCodeServiceStop)
+	http.HandleFunc("/api/config/opencode-idle-stop", handleOpenCodeIdleStop)
 	http.HandleFunc("/api/markdown/files", handleMarkdownFiles)
 	http.HandleFunc("/api/markdown/file", handleMarkdownFile)
 	http.HandleFunc("/api/markdown/asset", handleMarkdownAsset)
@@ -667,6 +669,7 @@ func isInteractiveTTY() bool {
 
 func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.Duration) {
 	shuttingDown.Store(true) // /readyz -> 503
+	stopOpenCodeIdleWatcher()
 	if mdWatcher != nil {
 		mdWatcher.Close()
 	}

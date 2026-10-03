@@ -97,6 +97,11 @@ type Config struct {
 	OpenCodeCommand       string `json:"opencode_command,omitempty"`
 	OpenCodeLegacyCommand string `json:"opencode_legacy_command,omitempty"`
 
+	// OpenCodeIdleStopMinutes stops the OpenCode background service after this
+	// many minutes of inactivity across all OpenCode tabs in Phi. 0 disables it.
+	// Clamped between 5 and 1440 when enabled.
+	OpenCodeIdleStopMinutes int `json:"opencode_idle_stop_minutes"`
+
 	// ClaudeDangerouslySkipPermissions passes --dangerously-skip-permissions
 	// to the claude coder. Opt-in because the flag's name is honest about
 	// what it disables: every Claude tool call that would normally prompt
@@ -306,7 +311,21 @@ func loadConfig() Config {
 	if cfg.Peers == nil {
 		cfg.Peers = []PeerConfig{}
 	}
+	cfg.OpenCodeIdleStopMinutes = normalizeOpenCodeIdleStopMinutes(cfg.OpenCodeIdleStopMinutes)
 	return cfg
+}
+
+func normalizeOpenCodeIdleStopMinutes(mins int) int {
+	if mins <= 0 {
+		return 0
+	}
+	if mins < 5 {
+		return 5
+	}
+	if mins > 1440 {
+		return 1440
+	}
+	return mins
 }
 
 func ensureModelPresetDefaults(m ModelPresetsMap) ModelPresetsMap {

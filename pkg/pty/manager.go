@@ -68,6 +68,7 @@ type PTYInstance struct {
 	Pinned           bool                `json:"pinned"`
 	Marked           bool                `json:"marked"`
 	LastOutputAt     time.Time           `json:"-"`
+	LastInputAt      time.Time           `json:"-"`
 	Title            string              `json:"title"`
 	Workspace        string              `json:"workspace"`
 	IsBusy           bool                `json:"-"`
@@ -88,6 +89,24 @@ func (inst *PTYInstance) UpdateActivity() {
 		inst.BusyStartTime = time.Now()
 	}
 	inst.NotifiedIdle = false
+}
+
+// UpdateInput records user input timestamp.
+func (inst *PTYInstance) UpdateInput() {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	inst.LastInputAt = time.Now()
+	inst.LastActivityUnix = inst.LastInputAt.Unix()
+}
+
+// LastActivity returns the latest of LastInputAt and LastOutputAt.
+func (inst *PTYInstance) LastActivity() time.Time {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	if inst.LastInputAt.After(inst.LastOutputAt) {
+		return inst.LastInputAt
+	}
+	return inst.LastOutputAt
 }
 
 // BusyState returns busy + last-activity under the instance lock (race-free for /api/diag).
@@ -127,16 +146,19 @@ type Manager struct {
 	// draining flips true on graceful shutdown (see BeginDrain). Spawn
 	// consults IsDraining to refuse new PTYs during the drain window so
 	// the load balancer can stop routing requests before sockets close.
-	draining     atomic.Bool
-	shutdownTabs []*PTYInstance
-	restoring    atomic.Bool
-	saveWriteMu  sync.Mutex
+	draining          atomic.Bool
+	shutdownTabs      []*PTYInstance
+	restoring         atomic.Bool
+	saveWriteMu       sync.Mutex
+	lastOpenCodeEvent atomic.Int64 // unix nano timestamp of last spawn/close/startup event
 }
 
 func NewManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		instances: make(map[string]*PTYInstance),
 	}
+	m.lastOpenCodeEvent.Store(time.Now().UnixNano())
+	return m
 }
 
 // BeginDrain stops the manager from spawning new PTYs. Idempotent; called
@@ -283,6 +305,11 @@ func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, arg
 		Title:        opts.Title, Workspace: opts.Workspace, Pinned: opts.Pinned, Marked: opts.Marked,
 		ExtraArgs: append([]string(nil), opts.ExtraArgs...), ObserveOutput: opts.ObserveOutput,
 		LastOutputAt: time.Now(),
+		LastInputAt:  time.Now(),
+	}
+
+	if coder == "opencode" {
+		m.lastOpenCodeEvent.Store(time.Now().UnixNano())
 	}
 
 	m.mu.Lock()
@@ -388,6 +415,10 @@ func (m *Manager) Kill(id string) error {
 		return fmt.Errorf("terminal instance %s not found", id)
 	}
 
+	if inst.Coder == "opencode" {
+		m.lastOpenCodeEvent.Store(time.Now().UnixNano())
+	}
+
 	inst.mu.Lock()
 	if inst.DetachTimer != nil {
 		inst.DetachTimer.Stop()
@@ -419,6 +450,47 @@ func (m *Manager) ListActive() []*PTYInstance {
 		list = append(list, inst)
 	}
 	return list
+}
+
+// RecordOpenCodeActivity records an external OpenCode event (such as startup or tab mutation).
+func (m *Manager) RecordOpenCodeActivity() {
+	m.lastOpenCodeEvent.Store(time.Now().UnixNano())
+}
+
+// LastOpenCodeActivity returns the most recent activity timestamp across all live
+// OpenCode tabs, or the latest OpenCode lifecycle event (spawn/kill/startup) if no tabs are active.
+func (m *Manager) LastOpenCodeActivity() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	latest := time.Unix(0, m.lastOpenCodeEvent.Load())
+	for _, inst := range m.instances {
+		if inst.Coder != "opencode" {
+			continue
+		}
+		if inst.Pty == nil || inst.IsPtyDead() {
+			continue
+		}
+		act := inst.LastActivity()
+		if act.After(latest) {
+			latest = act
+		}
+	}
+	return latest
+}
+
+// ActiveOpenCodeTabsCount returns the count of running OpenCode tabs.
+func (m *Manager) ActiveOpenCodeTabsCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, inst := range m.instances {
+		if inst.Coder == "opencode" && (inst.Pty != nil && !inst.IsPtyDead()) {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Manager) SaveState() error {

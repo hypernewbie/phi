@@ -4676,6 +4676,13 @@ body.has-terminal-bg
     font-size: 11px;
     color: var(--text-muted);
 }
+.settings-row-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: -4px;
+    margin-bottom: 10px;
+    line-height: 1.4;
+}
 .settings-access-error {
     font-size: 11px;
     color: var(--red);

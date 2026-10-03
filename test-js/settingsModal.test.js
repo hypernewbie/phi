@@ -523,4 +523,43 @@ describe('Settings modal — access password flow', () => {
         // The Remove link is visible (password is set).
         expect(removeLink.classList.contains('hidden')).toBe(false);
     });
+
+    it('renders opencode idle auto-stop select and posts on change', async () => {
+        makeAppDom();
+        const app = buildApp();
+        app.config = { opencode_idle_stop_minutes: 60 };
+        app.openSettingsModal();
+        await new Promise((r) => setTimeout(r, 0));
+
+        const select = document.getElementById('settings-opencode-idle-stop');
+        expect(select).toBeTruthy();
+        expect(select.value).toBe('60');
+
+        let postedBody = null;
+        const origFetch = global.fetch;
+        global.fetch = vi.fn().mockImplementation((url, opts) => {
+            if (url === '/api/config/opencode-idle-stop') {
+                postedBody = JSON.parse(opts.body);
+                return Promise.resolve({
+                    ok: true,
+                    json: () =>
+                        Promise.resolve({ opencode_idle_stop_minutes: 120 }),
+                });
+            }
+            return Promise.resolve({
+                ok: true,
+                json: () => Promise.resolve({}),
+            });
+        });
+
+        try {
+            select.value = '120';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+
+            expect(postedBody).toEqual({ minutes: 120 });
+            expect(app.config.opencode_idle_stop_minutes).toBe(120);
+        } finally {
+            global.fetch = origFetch;
+        }
+    });
 });

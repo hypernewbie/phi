@@ -813,6 +813,51 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 );
             }
         });
+
+    const openCodeIdleOptions = [
+        { value: '0', label: 'Off' },
+        { value: '15', label: '15 min' },
+        { value: '30', label: '30 min' },
+        { value: '60', label: '1 hr' },
+        { value: '120', label: '2 hr' },
+        { value: '240', label: '4 hr' },
+    ];
+    const currentIdleMins = String(app.config?.opencode_idle_stop_minutes || 0);
+    const openCodeIdleRow = _buildSelectRow(
+        'Stop OpenCode server when idle',
+        'settings-opencode-idle-stop',
+        openCodeIdleOptions,
+        openCodeIdleOptions.some((o) => o.value === currentIdleMins)
+            ? currentIdleMins
+            : '0',
+    );
+    behGroup.appendChild(openCodeIdleRow);
+
+    const openCodeIdleHint = document.createElement('div');
+    openCodeIdleHint.className = 'settings-row-hint';
+    openCodeIdleHint.textContent =
+        'Stops OpenCode\u2019s background server after no OpenCode activity in Phi. Assumes OpenCode is only used through Phi.';
+    behGroup.appendChild(openCodeIdleHint);
+
+    openCodeIdleRow
+        .querySelector('select')
+        ?.addEventListener('change', async (e) => {
+            const minutes = parseInt(e.target.value, 10) || 0;
+            if (app.config) app.config.opencode_idle_stop_minutes = minutes;
+            try {
+                await fetch('/api/config/opencode-idle-stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ minutes }),
+                });
+            } catch (err) {
+                console.warn(
+                    '[settings] failed to persist opencode-idle-stop setting',
+                    err,
+                );
+            }
+        });
+
     setPasswordBtn.addEventListener('click', async () => {
         const newPw = newInput.value;
         const confirmPw = confirmInput.value;

@@ -82,6 +82,18 @@ func handleOpenCodeService(w http.ResponseWriter, r *http.Request) {
 		"running":   running,
 		"tabs":      tabs,
 	}
+	cfg := loadConfig()
+	if cfg.OpenCodeIdleStopMinutes > 0 {
+		resp["idle_stop_minutes"] = cfg.OpenCodeIdleStopMinutes
+		if ptyManager != nil {
+			lastAct := ptyManager.LastOpenCodeActivity()
+			rem := time.Duration(cfg.OpenCodeIdleStopMinutes)*time.Minute - time.Since(lastAct)
+			if rem < 0 {
+				rem = 0
+			}
+			resp["idle_stop_remaining_seconds"] = int(rem.Seconds())
+		}
+	}
 	if err != nil {
 		resp["error"] = err.Error()
 	}

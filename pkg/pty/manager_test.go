@@ -848,3 +848,72 @@ func TestListActive_SkipsCorpsesKeepsGhosts(t *testing.T) {
 		t.Error("corpse should stay in the registry; only the listing skips it")
 	}
 }
+
+func TestOpenCodeActivityTracking(t *testing.T) {
+	manager := NewManager()
+
+	// Initial activity is non-zero (startup time)
+	initAct := manager.LastOpenCodeActivity()
+	if initAct.IsZero() {
+		t.Fatal("expected non-zero startup OpenCode activity")
+	}
+
+	// Active tabs count is 0 initially
+	if manager.ActiveOpenCodeTabsCount() != 0 {
+		t.Fatalf("expected 0 active tabs, got %d", manager.ActiveOpenCodeTabsCount())
+	}
+
+	shell, args := getTestShell()
+	inst, err := manager.Spawn(context.Background(), "", shell, args, "opencode", "sess-oc-1")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() {
+		_ = manager.Kill(inst.ID)
+	}()
+
+	if manager.ActiveOpenCodeTabsCount() != 1 {
+		t.Fatalf("expected 1 active tab, got %d", manager.ActiveOpenCodeTabsCount())
+	}
+
+	// UpdateInput should update LastInputAt and LastActivity
+	time.Sleep(10 * time.Millisecond)
+	inst.UpdateInput()
+
+	if inst.LastInputAt.IsZero() {
+		t.Fatal("expected LastInputAt to be non-zero after UpdateInput")
+	}
+	if !inst.LastActivity().Equal(inst.LastInputAt) {
+		t.Fatal("expected LastActivity to reflect LastInputAt when newer than output")
+	}
+
+	act := manager.LastOpenCodeActivity()
+	if !act.Equal(inst.LastInputAt) {
+		t.Fatalf("manager LastOpenCodeActivity mismatch: got %v, want %v", act, inst.LastInputAt)
+	}
+
+	// UpdateActivity updates LastOutputAt
+	time.Sleep(10 * time.Millisecond)
+	inst.UpdateActivity()
+	if !inst.LastActivity().Equal(inst.LastOutputAt) {
+		t.Fatal("expected LastActivity to reflect LastOutputAt when newer than input")
+	}
+	act = manager.LastOpenCodeActivity()
+	if !act.Equal(inst.LastOutputAt) {
+		t.Fatalf("manager LastOpenCodeActivity mismatch: got %v, want %v", act, inst.LastOutputAt)
+	}
+
+	// Killing tab should update manager's lastOpenCodeEvent
+	time.Sleep(10 * time.Millisecond)
+	beforeKill := time.Now()
+	_ = manager.Kill(inst.ID)
+
+	if manager.ActiveOpenCodeTabsCount() != 0 {
+		t.Fatalf("expected 0 active tabs after kill, got %d", manager.ActiveOpenCodeTabsCount())
+	}
+
+	afterKillAct := manager.LastOpenCodeActivity()
+	if afterKillAct.Before(beforeKill) {
+		t.Fatalf("expected LastOpenCodeActivity to update on tab kill; beforeKill=%v afterKillAct=%v", beforeKill, afterKillAct)
+	}
+}
