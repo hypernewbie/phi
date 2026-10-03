@@ -72,6 +72,8 @@ export interface ProfileViewManagerOptions {
   getContentZoomPercent: () => number;
   /** Routes a body-view zoom chord to the controller-owned global action. */
   onZoomAction: (action: ZoomAction) => void;
+  /** Optional callback fired when plain F11 toggles fullscreen on any body view. */
+  onFullscreenToggle?: (nextFullscreen: boolean) => void;
   /** Diagnostics logger (defaults to a no-op). */
   log?: (s: string) => void;
 }
@@ -108,6 +110,7 @@ export class ProfileViewManager {
   private readonly railWidth: number;
   private readonly getContentZoomPercent: () => number;
   private readonly onZoomAction: (action: ZoomAction) => void;
+  private readonly onFullscreenToggle?: (nextFullscreen: boolean) => void;
   private readonly log: (s: string) => void;
   private readonly profiles = new Map<string, RegisteredProfile>();
   private readonly views = new Map<string, ViewEntry>();
@@ -120,6 +123,7 @@ export class ProfileViewManager {
     this.railWidth = opts.railWidth;
     this.getContentZoomPercent = opts.getContentZoomPercent;
     this.onZoomAction = opts.onZoomAction;
+    this.onFullscreenToggle = opts.onFullscreenToggle;
     this.log = opts.log ?? (() => {});
   }
 
@@ -415,7 +419,12 @@ export class ProfileViewManager {
     // body view (the main-view listener in desktop.ts does not catch keys
     // that fire while a body view has focus). Modified F11 chords stay
     // untouched; xterm.js leaves plain F11 unbound.
-    installFullscreenToggle(view.webContents, this.win);
+    installFullscreenToggle(view.webContents, this.win, this.onFullscreenToggle);
+    if (this.onFullscreenToggle) {
+      const onToggle = this.onFullscreenToggle;
+      view.webContents.on('enter-html-full-screen', () => onToggle(true));
+      view.webContents.on('leave-html-full-screen', () => onToggle(false));
+    }
     installReloadShortcut(view.webContents, undefined, (ignoringCache) =>
       this.reloadAll(ignoringCache),
     );

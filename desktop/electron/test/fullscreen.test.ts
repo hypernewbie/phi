@@ -107,4 +107,32 @@ describe('installFullscreenToggle (plain-F11 fullscreen)', () => {
     fire({ type: 'keyDown', key: 'Enter' });
     expect(fullscreenStates).toEqual([]);
   });
+
+  it('notifies onToggle callback on fullscreen changes', () => {
+    let fullscreen = false;
+    const toggles: boolean[] = [];
+    const event = { preventDefault: vi.fn() };
+    let listener: ((event: unknown, input: InputLike) => void) | null = null;
+    const contents = {
+      on: (name: string, cb: (event: unknown, input: InputLike) => void) => {
+        if (name === 'before-input-event') listener = cb;
+      },
+    };
+    const win = {
+      isDestroyed: () => false,
+      isFullScreen: () => fullscreen,
+      setFullScreen: (v: boolean) => {
+        fullscreen = v;
+      },
+    };
+    installFullscreenToggle(contents as never, win as never, (next) =>
+      toggles.push(next),
+    );
+
+    listener!(event, { type: 'keyDown', key: 'F11' });
+    expect(toggles).toEqual([true]);
+    listener!(event, { type: 'keyDown', key: 'F11' });
+    expect(toggles).toEqual([true, false]);
+  });
 });
+

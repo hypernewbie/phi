@@ -46,11 +46,16 @@ export function isFullscreenToggleInput(input: {
 export function installFullscreenToggle(
   contents: WebContents,
   win: BrowserWindow,
+  onToggle?: (nextFullscreen: boolean) => void,
 ): void {
   contents.on('before-input-event', (event, input) => {
     if (isFullscreenToggleInput(input)) {
       event.preventDefault();
-      if (!win.isDestroyed()) win.setFullScreen(!win.isFullScreen());
+      if (!win.isDestroyed()) {
+        const next = !win.isFullScreen();
+        win.setFullScreen(next);
+        onToggle?.(next);
+      }
     }
   });
 }
