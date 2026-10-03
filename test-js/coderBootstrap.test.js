@@ -94,7 +94,7 @@ describe('default coder UI parity', () => {
                     4,
                     'Codex',
                     'Codex',
-                    'vendor/logos/codex.svg',
+                    'vendor/logos/codex.png',
                 ),
                 bash: descriptor(
                     'bash',

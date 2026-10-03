@@ -8,7 +8,7 @@ func defaultCodex() Coder {
 		ID: "codex", Name: "Codex", ShortLabel: "Codex", Command: "codex",
 		Args: []string{"--no-alt-screen"}, ResumeArgs: []string{"resume", ResumeIDPlaceholder},
 		SessionSource: "codex_sqlite", SidebarVisible: true,
-		WindowsPowerShellWrap: &wrap, InputMode: "staged", Logo: "vendor/logos/codex.svg",
+		WindowsPowerShellWrap: &wrap, InputMode: "staged", Logo: "vendor/logos/codex.png",
 		Capabilities: Capabilities{List: true},
 		Presets: []Preset{
 			{Name: "/model", Value: "/model\r"},

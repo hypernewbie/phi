@@ -86,6 +86,7 @@ describe('no external asset references in web/', () => {
             'vendor/logos/claude.png',
             'vendor/logos/agy.png',
             'vendor/logos/pi.png',
+            'vendor/logos/codex.png',
             'vendor/logos/bash.jpg',
             'vendor/logos/review.png',
         ];

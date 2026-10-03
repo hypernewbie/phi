@@ -476,6 +476,7 @@ describe('executeRecipe', () => {
         expect(logoFor('claude')).toBe('vendor/logos/claude.png');
         expect(logoFor('agy')).toBe('vendor/logos/agy.png');
         expect(logoFor('pi')).toBe('vendor/logos/pi.png');
+        expect(logoFor('codex')).toBe('vendor/logos/codex.png');
         expect(logoFor('bash')).toBe('vendor/logos/bash.jpg');
         expect(logoFor('pwsh')).toBe('vendor/logos/bash.jpg');
         expect(logoFor('unknown')).toBe('');
