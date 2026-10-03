@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { startPhi, type PhiServer } from './_server.js';
 
 const RAW_DIFF = `diff --git a/sample.txt b/sample.txt
@@ -13,6 +13,39 @@ index 4458ac6..98043d1 100644
  context two
  context three
 `;
+
+async function expectPrettyDiffRow(page: Page): Promise<void> {
+    const button = page.locator('#rich-diff-btn');
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAccessibleName('Open Pretty Diff');
+    const layout = await button.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const parent = element.parentElement!;
+        const parentStyle = getComputedStyle(parent);
+        const peers = [...parent.children]
+            .filter((peer) => peer !== element)
+            .map((peer) => peer.getBoundingClientRect())
+            .filter((peer) => peer.width && peer.height);
+        const style = getComputedStyle(element);
+        return {
+            top: box.top,
+            peersBottom: Math.max(...peers.map((peer) => peer.bottom)),
+            width: box.width,
+            availableWidth:
+                parent.clientWidth -
+                parseFloat(parentStyle.paddingLeft) -
+                parseFloat(parentStyle.paddingRight),
+            shadow: style.boxShadow,
+            border: style.borderTopStyle,
+        };
+    });
+    expect(layout.top).toBeGreaterThanOrEqual(layout.peersBottom);
+    expect(Math.abs(layout.width - layout.availableWidth)).toBeLessThanOrEqual(
+        1,
+    );
+    expect(layout.shadow).not.toBe('none');
+    expect(layout.border).toBe('solid');
+}
 
 let phi: PhiServer;
 
@@ -36,13 +69,16 @@ test('hovering unified old/new lines does not move diff rows; comments and modal
         }),
     );
     await page.goto(phi.url);
-    await page.locator('#diff-term-container .xterm').first().waitFor();
+    await page
+        .locator('#diff-term-container .xterm')
+        .first()
+        .waitFor({ state: 'attached' });
     const panelHidden = await page
         .locator('#diff-panel')
         .evaluate((el) => el.classList.contains('hidden'));
     if (panelHidden) await page.locator('#header-diff-toggle-btn').click();
     await page.locator('.diff-tab-btn[data-tab="diff"]').click();
-    await expect(page.locator('#rich-diff-btn')).toBeVisible();
+    await expectPrettyDiffRow(page);
     await page.locator('#rich-diff-btn').click();
 
     const modal = page.locator('#diff-modal');
@@ -203,7 +239,10 @@ test('modal size toggle remains an in-page dialog on a narrow viewport', async (
         }),
     );
     await page.goto(phi.url);
-    await page.locator('#diff-term-container .xterm').first().waitFor();
+    await page
+        .locator('#diff-term-container .xterm')
+        .first()
+        .waitFor({ state: 'attached' });
     const panel = page.locator('#diff-panel');
     if (!(await panel.evaluate((el) => el.classList.contains('mobile-open')))) {
         await page.locator('#header-diff-toggle-btn').click();
@@ -211,6 +250,7 @@ test('modal size toggle remains an in-page dialog on a narrow viewport', async (
     await page
         .locator('.diff-tab-btn[data-tab="diff"]')
         .click({ timeout: 5_000 });
+    await expectPrettyDiffRow(page);
     await page.locator('#rich-diff-btn').click();
     const modal = page.locator('#diff-modal');
     const content = modal.locator('.md-modal-content');

@@ -596,6 +596,11 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         const pretty = mgr.messagesList.querySelector('.sync-pretty-diff-btn');
         expect(panel.textContent).toContain(`Show Diff ${hash}`);
         expect(pretty.textContent).toBe('Open Pretty Diff');
+        expect(pretty.classList.contains('pretty-diff-btn')).toBe(true);
+        expect(
+            pretty.parentElement.classList.contains('sync-pretty-diff-row'),
+        ).toBe(true);
+        expect(pretty.parentElement.children).toHaveLength(1);
         expect(app.diffController.openCommitDiff).not.toHaveBeenCalled();
         panel.click();
         expect(app.diffController.openCommitDiff).toHaveBeenLastCalledWith(
