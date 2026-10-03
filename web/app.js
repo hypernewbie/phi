@@ -113,6 +113,11 @@ export class App {
                 // Don't open settings if the user clicked one of the
                 // export/import sub-buttons (they have their own handlers).
                 if (e.target.closest('.pill-btn')) return;
+                const existing = document.querySelector('.settings-overlay');
+                if (existing) {
+                    existing.querySelector('.modal-close-btn')?.click();
+                    return;
+                }
                 this.openSettingsModal();
             });
         }
