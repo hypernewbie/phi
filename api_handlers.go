@@ -352,12 +352,15 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		instances := ptyManager.ListActive()
 		type terminalView struct {
-			*pty.PTYInstance
-			OpenCodeMode string `json:"opencode_mode,omitempty"`
+			pty.PTYInstanceSnapshot
+			ActiveWS      bool
+			ActiveWSCount int
 		}
 		views := make([]terminalView, 0, len(instances))
 		for _, inst := range instances {
-			views = append(views, terminalView{inst, terminalOpenCodeMode(inst)})
+			snapshot := inst.Snapshot()
+			snapshot.OpenCodeMode = terminalOpenCodeMode(inst)
+			views = append(views, terminalView{snapshot, snapshot.ActiveWS, snapshot.ActiveWSCount})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(views)
@@ -390,13 +393,14 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 	// and full TUI clients may coexist; never replace a running process.
 	if req.SessionID != "" {
 		for _, inst := range ptyManager.ListActive() {
-			if inst.Coder == req.Coder && inst.SessionID == req.SessionID {
+			snapshot := inst.Snapshot()
+			if snapshot.Coder == req.Coder && snapshot.SessionID == req.SessionID {
 				mode := terminalOpenCodeMode(inst)
 				if req.Coder == "opencode" && ok && c.OpenCodeMode != "" && mode != c.OpenCodeMode {
 					continue
 				}
 				w.Header().Set("Content-Type", "application/json")
-				payload := map[string]string{"pane_id": inst.ID, "session_id": inst.SessionID}
+				payload := map[string]string{"pane_id": snapshot.ID, "session_id": snapshot.SessionID}
 				if mode != "" {
 					payload["opencode_mode"] = mode
 				}
@@ -411,49 +415,15 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := loadConfig()
-	plan, err := coders.ResolveLaunch(c, coders.SpawnRequest{
-		Coder:     req.Coder,
-		Cwd:       req.Cwd,
-		SessionID: req.SessionID,
-		ExtraArgs: req.ExtraArgs,
-	}, coders.LaunchOptions{
-		Config: coders.ConfigView{
-			PiOffline:                        cfg.PiOffline,
-			ClaudeDangerouslySkipPermissions: cfg.ClaudeDangerouslySkipPermissions,
-		},
-		DefaultCwd: activeCWD,
-	})
+	inst, err := spawnTerminal(r.Context(), c, req, loadConfig(), pty.SpawnOptions{}, false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := coders.VerifyOpenCode(r.Context(), c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if c.SessionSource == "opencode_v2" && req.SessionID != "" {
-		if err := session.ValidateOpenCodeV2Resume(r.Context(), c, req.SessionID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		status := http.StatusInternalServerError
+		if launchErr, ok := err.(terminalLaunchError); ok {
+			status = launchErr.status
 		}
-	}
-
-	spawnDir := plan.Cwd
-
-	inst, err := ptyManager.SpawnWithOpenCodeMode(r.Context(), spawnDir, plan.Command, plan.Args, req.Coder, req.SessionID, c.OpenCodeMode, plan.Env)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), status)
 		return
 	}
-	inst.Title = req.Title
-	inst.Workspace = req.Workspace
-
-	// Provider-specific post-spawn side effects (agy sidecar cwd
-	// update, future per-coder hooks) live in session.AfterSpawn
-	// rather than being baked into the spawn handler (R5).
-	session.AfterSpawn(c, req.SessionID, spawnDir)
 
 	// A new pane may be the first live one in this cwd/worktree, so it
 	// can widen the markdown watch set.
@@ -461,10 +431,8 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		mdWatcher.Recompute()
 	}
 
-	ws.StartPTYReadLoop(inst, wsHub)
-
 	w.Header().Set("Content-Type", "application/json")
-	payload := map[string]string{"pane_id": inst.ID, "session_id": inst.SessionID}
+	payload := map[string]string{"pane_id": inst.ID, "session_id": inst.Snapshot().SessionID}
 	if c.OpenCodeMode != "" {
 		payload["opencode_mode"] = c.OpenCodeMode
 	}

@@ -25,7 +25,7 @@ func ListOpenCodeSessions(ctx context.Context, cwd string) ([]Session, error) {
 	defer db.Close()
 
 	query := `
-		SELECT s.id, s.title, s.directory, p.worktree, s.time_updated
+		SELECT s.id, s.title, s.directory, COALESCE(p.worktree, ''), s.time_updated
 		FROM session s
 		LEFT JOIN project p ON s.project_id = p.id
 		WHERE (s.parent_id IS NULL OR s.parent_id = '') AND (s.time_archived IS NULL OR s.time_archived = 0)

@@ -145,17 +145,8 @@ func main() {
 		log.Printf("[backends] failed to load custom backends: %v", err)
 	}
 	rpcMgr := rpc.NewManager()
-	// Do NOT call LoadState() here. tabs.json holds PTYInstance
-	// metadata for tabs the server was managing in its previous life,
-	// but in this codebase the underlying PTY process is always a
-	// child of the Go process — it dies with us. So loading tabs.json
-	// resurrects entries with Pty == nil: terminal-shaped zombies
-	// that the front-end renders as closed-but-not-closable black
-	// boxes after a server restart. Users have to click X on each.
-	// Just start with an empty Manager. tabs.json continues to be
-	// written during this session (pin/mark tracking) so any future
-	// revival mechanism (tmux-backed, out-of-process, etc.) has the
-	// metadata to work with.
+	// Saved tabs are restored as new live processes after the hub exists.
+	// Never deserialize OS process handles or publish nil-PTY ghosts.
 	if err := LoadSyncStore(); err != nil {
 		log.Printf("[sync] Failed to load sync store state: %v", err)
 	}
@@ -190,6 +181,7 @@ func main() {
 		}
 	})
 	wsHub = ws.NewHub(*cfg.ReplayBufferBytes)
+	restoreSavedTabs()
 
 	// Markdown watcher: fswatch over the resolved markdownDirs of every
 	// live pane cwd. Fires 0x07 md-changed so open UIs can silently
@@ -690,6 +682,13 @@ func gracefulShutdown(servers []*http.Server, drainDelay, ptyGrace, grace time.D
 	time.Sleep(200 * time.Millisecond) // let the WS 0x05 frame flush
 	if ptyManager != nil {
 		ptyManager.Shutdown(ptyGrace)
+		// Native exit notices can publish the exact resume ID during drain.
+		readCtx, readCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		ptyManager.WaitForReadLoops(readCtx)
+		readCancel()
+		if err := ptyManager.FlushSaveState(); err != nil {
+			slog.Error("shutdown tab snapshot", "err", err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
