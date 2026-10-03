@@ -39,6 +39,7 @@ interface RecordingView {
   focusCalls: number;
   loadHandlers: Array<() => void>;
   beforeInputHandlers: Array<(event: unknown, input: unknown) => void>;
+  eventListeners: Map<string, Array<() => void>>;
   zoomModes: string[];
   zoomFactors: number[];
   webContentsDestroyed: boolean;
@@ -53,6 +54,7 @@ function makeFakeView(): RecordingView {
   const loadHandlers: Array<() => void> = [];
   const beforeInputHandlers: Array<(event: unknown, input: unknown) => void> =
     [];
+  const eventListeners = new Map<string, Array<() => void>>();
   const zoomModes: string[] = [];
   const zoomFactors: number[] = [];
   const webContentsDestroyed = false;
@@ -65,6 +67,8 @@ function makeFakeView(): RecordingView {
       },
       webContents: {
         on: (event: string, cb: () => void) => {
+          if (!eventListeners.has(event)) eventListeners.set(event, []);
+          eventListeners.get(event)!.push(cb);
           if (event === 'did-finish-load') loadHandlers.push(cb);
           if (event === 'before-input-event') beforeInputHandlers.push(cb);
         },
@@ -101,6 +105,7 @@ function makeFakeView(): RecordingView {
     focusCalls: 0,
     loadHandlers,
     beforeInputHandlers,
+    eventListeners,
     zoomModes,
     zoomFactors,
     webContentsDestroyed,
@@ -159,10 +164,12 @@ function makeManager(opts?: {
   bounds?: () => ViewBounds;
   contentZoomPercent?: number;
   onZoomAction?: (action: ZoomAction) => void;
-}): ManagerHarness & { zoomActions: ZoomAction[] } {
+  onFullscreenToggle?: (nextFullscreen: boolean) => void;
+}): ManagerHarness & { zoomActions: ZoomAction[]; fullscreenToggles: boolean[] } {
   const win = makeFakeWindow();
   const views: RecordingView[] = [];
   const zoomActions: ZoomAction[] = [];
+  const fullscreenToggles: boolean[] = [];
   const manager = new ProfileViewManager({
     win: win.win,
     makeView: () => {
@@ -178,9 +185,14 @@ function makeManager(opts?: {
       ((action: ZoomAction) => {
         zoomActions.push(action);
       }),
+    onFullscreenToggle:
+      opts?.onFullscreenToggle ??
+      ((next: boolean) => {
+        fullscreenToggles.push(next);
+      }),
     log: () => {},
   });
-  return { manager, win, views, zoomActions };
+  return { manager, win, views, zoomActions, fullscreenToggles };
 }
 
 describe('ProfileViewManager (retained per-profile views)', () => {
@@ -391,13 +403,13 @@ describe('ProfileViewManager (retained per-profile views)', () => {
   });
 
   it('installs the plain-F11 fullscreen toggle, F5 reload, and zoom shortcuts on every retained body view', () => {
-    const { manager, views, win, zoomActions } = makeManager();
+    const { manager, views, win, zoomActions, fullscreenToggles } = makeManager();
     manager.addProfile('p1', 'http://127.0.0.1:7070/');
     manager.addProfile('p2', 'http://127.0.0.1:8080/');
     manager.setActive('p1');
     manager.setActive('p2');
     for (const v of views) expect(v.beforeInputHandlers).toHaveLength(3);
-    // Plain F11 from the focused body view toggles the BrowserWindow.
+    // Plain F11 from the focused body view toggles the BrowserWindow and notifies onFullscreenToggle.
     const ev = { preventDefault: vi.fn() };
     views[1].beforeInputHandlers[0](ev as never, {
       type: 'keyDown',
@@ -408,6 +420,12 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     });
     expect(ev.preventDefault).toHaveBeenCalled();
     expect(win.fullscreenStates).toEqual([true]);
+    expect(fullscreenToggles).toEqual([true]);
+    // HTML fullscreen events on the body view also notify onFullscreenToggle.
+    views[1].eventListeners.get('enter-html-full-screen')?.[0]?.();
+    expect(fullscreenToggles).toEqual([true, true]);
+    views[1].eventListeners.get('leave-html-full-screen')?.[0]?.();
+    expect(fullscreenToggles).toEqual([true, true, false]);
     // Modified F11 is left to the page (no preventDefault, no toggle).
     const ev2 = { preventDefault: vi.fn() };
     views[1].beforeInputHandlers[0](ev2 as never, {

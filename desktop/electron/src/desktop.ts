@@ -107,6 +107,7 @@ import {
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
+import { DesktopHooksManager, type DesktopHookState } from './hooks.js';
 import { installReloadShortcut } from './reload.js';
 import {
   applyContentZoom,
@@ -428,6 +429,9 @@ export class DesktopHost {
   // The retained per-profile view manager + the rail child view.
   profileViews: ProfileViewManager | null = null;
   railView: WebContentsView | null = null;
+  hooks: DesktopHooksManager | null = null;
+  private fullscreenOverride: boolean | null = null;
+  private lastRecordedFullscreen = false;
   /** The desktop-sized rail context popup; the rail view itself is only 72px wide. */
   private railMenuWindow: BrowserWindow | null = null;
   private railMenuProfileId: string | null = null;
@@ -1401,6 +1405,9 @@ export class DesktopHost {
       };
       if (identity.hostname === '' && identity.accent === '') return null;
       this.observedIdentity.set(profile.id, identity);
+      if (profile.id === this.controller?.state().activeId) {
+        this.hooks?.trigger('accent');
+      }
       return identity;
     } catch (err) {
       console.log(`phi-desktop: observe identity ${origin}: ${String(err)}`);
@@ -2336,6 +2343,75 @@ export class DesktopHost {
       win.setIcon(iconResolver.resolve(info.accent));
     }
     win.webContents.send('phi:active-server', info);
+    this.hooks?.trigger('switch', true);
+  }
+
+  /**
+   * Broadcasts fullscreen state changes immediately to window-state listeners and user hooks.
+   */
+  notifyFullscreen(next?: boolean): void {
+    const win = this.mainWindow;
+    const isFs =
+      typeof next === 'boolean'
+        ? next
+        : Boolean(win && !win.isDestroyed() && win.isFullScreen());
+    this.fullscreenOverride = isFs;
+    this.lastRecordedFullscreen = isFs;
+    this.pushWindowState();
+    this.hooks?.trigger(isFs ? 'fullscreen' : 'leave-fullscreen', true);
+    setTimeout(() => {
+      if (this.fullscreenOverride === isFs) {
+        this.fullscreenOverride = null;
+      }
+    }, 1000);
+  }
+
+  /** Gathers current desktop shell and active server state for user hook scripts and state file. */
+  getHookState(event: string): DesktopHookState {
+    const win = this.mainWindow;
+    const isAlive = Boolean(win && !win.isDestroyed());
+    const focused = isAlive && win ? win.isFocused() : false;
+    const fullscreen =
+      this.fullscreenOverride !== null
+        ? this.fullscreenOverride
+        : isAlive && win
+          ? win.isFullScreen()
+          : false;
+    const maximized = isAlive && win ? win.isMaximized() : false;
+    const minimized = isAlive && win ? win.isMinimized() : false;
+
+    const ctrl = this.controller;
+    const activeId = ctrl?.state().activeId ?? '';
+    const profile = ctrl?.state().profiles.find((p) => p.id === activeId);
+    const identity = this.observedIdentity.get(activeId);
+    const accent = identity?.accent ?? '';
+    const serverName = identity?.hostname || profile?.name || '';
+    const origin = profile?.origin ?? '';
+    const themeColor = identity?.themeColor ?? '';
+    const cpu = this.observedCpu.get(activeId) ?? null;
+    const unread = ctrl?.state().unread.get(activeId) ?? 0;
+    const now = Date.now();
+
+    return {
+      event,
+      focused,
+      fullscreen,
+      maximized,
+      minimized,
+      active_id: activeId,
+      activeId,
+      server_name: serverName,
+      serverName,
+      origin,
+      accent,
+      theme_color: themeColor,
+      themeColor,
+      cpu,
+      unread,
+      timestamp: now,
+      iso_time: new Date(now).toISOString(),
+      isoTime: new Date(now).toISOString(),
+    };
   }
 
   /**
@@ -2645,6 +2721,7 @@ export class DesktopHost {
     win.on('focus', () => {
       if (!win.isDestroyed()) win.flashFrame(false);
       this.pushWindowState();
+      this.hooks?.trigger('focus', true);
       const activeId = this.profileViews?.getActive() ?? null;
       if (activeId !== null) {
         const view = this.profileViews?.getView(activeId) ?? null;
@@ -2661,6 +2738,31 @@ export class DesktopHost {
     win.on('blur', () => {
       this.pushWindowState();
       this.pushRailShortcuts(false);
+      this.hooks?.trigger('blur', true);
+    });
+    win.on('maximize', () => {
+      this.hooks?.trigger('maximize');
+    });
+    win.on('unmaximize', () => {
+      this.hooks?.trigger('unmaximize');
+    });
+    win.on('minimize', () => {
+      this.hooks?.trigger('minimize');
+    });
+    win.on('restore', () => {
+      this.hooks?.trigger('restore');
+    });
+    win.on('enter-full-screen', () => {
+      this.notifyFullscreen(true);
+    });
+    win.on('leave-full-screen', () => {
+      this.notifyFullscreen(false);
+    });
+    win.webContents.on('enter-html-full-screen', () => {
+      this.notifyFullscreen(true);
+    });
+    win.webContents.on('leave-html-full-screen', () => {
+      this.notifyFullscreen(false);
     });
     win.webContents.on('before-input-event', (_event, input) => {
       if (input.key === 'Control') {
@@ -2687,6 +2789,9 @@ export class DesktopHost {
       // lets every real quit (tray Quit, Cmd+Q, window-all-closed) through.
       this.quitting = true;
       this.petGeneration += 1;
+      this.hooks?.trigger('quit', true);
+      this.hooks?.destroy();
+      this.hooks = null;
       // Stop the polls before the view teardown below (no pending probe or
       // executeJavaScript may outlive the retained views).
       if (this.healthInterval !== null) {
@@ -2799,6 +2904,8 @@ export class DesktopHost {
       persistPath: `${app.getPath('userData')}/profiles.json`,
       log: (msg) => console.log(`phi-desktop: controller: ${msg}`),
     });
+    this.hooks = new DesktopHooksManager((event) => this.getHookState(event));
+    this.hooks.trigger('init');
     // Auto-enable low memory mode on <10GB RAM machines (default off, but massively aggro 1-tab).
     try {
       const { totalmem } = await import('node:os');
@@ -3327,6 +3434,7 @@ export class DesktopHost {
         railWidth: RAIL_WIDTH,
         getContentZoomPercent: () => this.getContentZoomPercent(),
         onZoomAction: (action) => this.requestContentZoom(action),
+        onFullscreenToggle: (next) => this.notifyFullscreen(next),
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
       });
       // Sync every persisted profile into the view manager so setActive
@@ -3367,7 +3475,15 @@ export class DesktopHost {
       };
       this.layoutCurrentSession = layoutChildren;
       // Window resize: recompute the children from the content bounds.
-      win.on('resize', () => layoutChildren());
+      win.on('resize', () => {
+        layoutChildren();
+        if (isCurrent() && !win.isDestroyed()) {
+          const isFs = win.isFullScreen();
+          if (this.lastRecordedFullscreen !== isFs) {
+            this.notifyFullscreen(isFs);
+          }
+        }
+      });
       // Maximize/restore change the content bounds; the window-state icon follows.
       win.on('maximize', () => {
         if (!isCurrent()) return;
