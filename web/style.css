@@ -852,6 +852,7 @@ html[data-phi-desktop-root] .app-header {
 
 /* SIDEBAR: SESSIONS PANEL */
 .sidebar-panel {
+    container: phi-sidebar / inline-size;
     background-color: var(--bg-panel);
     border-right: 1px solid var(--bg-border);
     display: flex;
@@ -910,6 +911,19 @@ html[data-phi-desktop-root] .app-header {
     align-items: center;
     justify-content: center;
     gap: 6px;
+}
+
+/* Compact the labels before the coder selector needs a second row.
+   Use the panel width, not the window width: docked and drawer layouts
+   can have very different space available at the same viewport size. */
+@container phi-sidebar (max-width: 420px) {
+    .coder-tab > span:not(.coder-logo) {
+        display: none;
+    }
+
+    .coder-tab {
+        gap: 0;
+    }
 }
 
 .coder-logo {
