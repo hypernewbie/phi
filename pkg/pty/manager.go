@@ -300,6 +300,13 @@ func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, arg
 	return inst, nil
 }
 
+// AddInstanceForTesting inserts an instance into the manager for testing.
+func (m *Manager) AddInstanceForTesting(inst *PTYInstance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instances[inst.ID] = inst
+}
+
 func (m *Manager) Get(id string) (*PTYInstance, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

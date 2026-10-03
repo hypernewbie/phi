@@ -1,0 +1,89 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { setupDomHarness, mockFetch } from './_dom.js';
+
+setupDomHarness();
+
+async function harness(mode = 'tui') {
+    vi.resetModules();
+    mockFetch(() => ({
+        opencode: {
+            name: 'OpenCode',
+            sidebar_visible: true,
+            input_mode: 'staged',
+            capabilities: { list: true, transcript: true },
+            opencode_mode: mode,
+        },
+    }));
+    const coders = await import('../web/coders.js');
+    await coders.loadCoderRegistry();
+    const { SessionsManager } = await import('../web/sessions.js');
+
+    const serviceRow = document.createElement('div');
+    serviceRow.id = 'opencode-service-row';
+    const serviceBtn = document.createElement('button');
+    serviceBtn.id = 'opencode-service-btn';
+    const dot = document.createElement('span');
+    dot.className = 'opencode-service-dot';
+    const label = document.createElement('span');
+    label.className = 'opencode-service-label';
+    serviceBtn.appendChild(dot);
+    serviceBtn.appendChild(label);
+    serviceRow.appendChild(serviceBtn);
+
+    const ctx = Object.assign(Object.create(SessionsManager.prototype), {
+        openCodeServiceRow: serviceRow,
+        openCodeServiceBtn: serviceBtn,
+        activeCoder: 'opencode',
+        fetchOpenCodeServiceStatus: vi.fn(),
+        _startOpenCodeServicePolling: vi.fn(),
+        _stopOpenCodeServicePolling: vi.fn(),
+    });
+
+    return { ctx, serviceRow, serviceBtn, label };
+}
+
+describe('OpenCode service button UI', () => {
+    it('shows service row for opencode v2 and hides for other coders', async () => {
+        const { ctx, serviceRow } = await harness('tui');
+        ctx.updateOpenCodeServiceVisibility();
+        expect(serviceRow.style.display).toBe('block');
+        expect(ctx.fetchOpenCodeServiceStatus).toHaveBeenCalled();
+
+        ctx.activeCoder = 'claude';
+        ctx.updateOpenCodeServiceVisibility();
+        expect(serviceRow.style.display).toBe('none');
+        expect(ctx._stopOpenCodeServicePolling).toHaveBeenCalled();
+    });
+
+    it('hides service row for legacy opencode', async () => {
+        const { ctx, serviceRow } = await harness('legacy');
+        ctx.updateOpenCodeServiceVisibility();
+        expect(serviceRow.style.display).toBe('none');
+    });
+
+    it('renders running state with Kill server label and active button', async () => {
+        const { ctx, serviceBtn, label } = await harness();
+        ctx.renderOpenCodeServiceStatus(true, 2);
+        expect(serviceBtn.getAttribute('data-state')).toBe('running');
+        expect(serviceBtn.disabled).toBe(false);
+        expect(label.textContent).toBe('Kill server');
+        expect(serviceBtn.title).toContain('2 active tabs');
+    });
+
+    it('renders stopped state with Server off label and disabled button', async () => {
+        const { ctx, serviceBtn, label } = await harness();
+        ctx.renderOpenCodeServiceStatus(false, 0);
+        expect(serviceBtn.getAttribute('data-state')).toBe('stopped');
+        expect(serviceBtn.disabled).toBe(true);
+        expect(label.textContent).toBe('Server off');
+    });
+
+    it('renders error state with retry label and enabled button', async () => {
+        const { ctx, serviceBtn, label } = await harness();
+        ctx.renderOpenCodeServiceError();
+        expect(serviceBtn.getAttribute('data-state')).toBe('error');
+        expect(serviceBtn.disabled).toBe(false);
+        expect(label.textContent).toBe('Server: retry');
+    });
+});

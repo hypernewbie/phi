@@ -97,7 +97,13 @@ func (b *openCodeProbeOutput) Write(p []byte) (int, error) {
 // profile's child environment and Windows wrapper without changing the
 // server environment or starting OpenCode's background service.
 func OpenCodeOutput(ctx context.Context, c Coder, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	return OpenCodeOutputWithTimeout(ctx, c, 5*time.Second, args...)
+}
+
+// OpenCodeOutputWithTimeout runs a bounded, noninteractive CLI inspection with
+// a caller-specified timeout duration.
+func OpenCodeOutputWithTimeout(ctx context.Context, c Coder, timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	probe := c
 	probe.Args = args
@@ -119,6 +125,37 @@ func OpenCodeOutput(ctx context.Context, c Coder, args ...string) ([]byte, error
 		return nil, ctx.Err()
 	}
 	return output.Bytes(), err
+}
+
+// OpenCodeService executes OpenCode v2 background service management actions ("status" or "stop").
+// It returns whether the service is running, or an error.
+func OpenCodeService(ctx context.Context, c Coder, action string) (bool, error) {
+	if c.ID != "opencode" || c.SessionSource != "opencode_v2" || c.OpenCodeMode == "legacy" {
+		return false, fmt.Errorf("OpenCode service management requires the OpenCode 2 backend")
+	}
+	switch action {
+	case "status":
+		out, err := OpenCodeOutputWithTimeout(ctx, c, 5*time.Second, "service", "status")
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed == "stopped" {
+			return false, nil
+		}
+		if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	case "stop":
+		_, err := OpenCodeOutputWithTimeout(ctx, c, 10*time.Second, "service", "stop")
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid OpenCode service action %q", action)
+	}
 }
 
 // VerifyOpenCode rejects the wrong installed generation instead of silently

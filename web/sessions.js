@@ -41,6 +41,9 @@ export class SessionsManager {
     config;
     sessionList;
     newSessionBtn;
+    openCodeServiceRow;
+    openCodeServiceBtn;
+    _openCodeServicePollTimer = null;
     workspaceSelect;
     addWorkspaceBtn;
     removeWorkspaceBtn;
@@ -82,6 +85,8 @@ export class SessionsManager {
         this.activeCWD = '';
         this.sessionList = document.getElementById('session-list');
         this.newSessionBtn = document.getElementById('new-session-btn');
+        this.openCodeServiceRow = document.getElementById('opencode-service-row');
+        this.openCodeServiceBtn = document.getElementById('opencode-service-btn');
         // Workspace Controls
         this.workspaceSelect = document.getElementById('workspace-select');
         this.addWorkspaceBtn = document.getElementById('add-workspace-btn');
@@ -198,6 +203,23 @@ export class SessionsManager {
                 this.switchCoder('opencode');
                 this.spawnNewSession(true);
             });
+        });
+        if (this.openCodeServiceBtn) {
+            this.openCodeServiceBtn.addEventListener('click', () => {
+                const state = this.openCodeServiceBtn?.getAttribute('data-state');
+                if (state === 'running') {
+                    this.stopOpenCodeService(false);
+                }
+                else if (state === 'error') {
+                    this.fetchOpenCodeServiceStatus();
+                }
+            });
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' &&
+                this.activeCoder === 'opencode') {
+                this.fetchOpenCodeServiceStatus();
+            }
         });
         // Workspace Toggle and Auto-Width Formatter
         this.workspaceSelect.addEventListener('change', () => {
@@ -405,6 +427,7 @@ export class SessionsManager {
                 }
             }
             await this.loadSessions();
+            this.updateOpenCodeServiceVisibility();
         }
         catch (e) {
             console.error('[config] Failed to load workspace config:', e);
@@ -467,6 +490,7 @@ export class SessionsManager {
         if (!skipReload) {
             this.loadSessions();
         }
+        this.updateOpenCodeServiceVisibility();
         // The Ctrl+Shift+X chip is rendered inside the presets-container row
         // by renderPresets() based on the *active tab's* coder, so it appears
         // exactly when the user is in a pi session — not just when the sidebar
@@ -925,6 +949,9 @@ export class SessionsManager {
                 ]
                 : []));
             this.loadSessions();
+            if (coderId === 'opencode') {
+                setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
+            }
         }
         catch (e) {
             this.app.showToast(e.message, { type: 'error' });
@@ -961,6 +988,9 @@ export class SessionsManager {
                 ]
                 : []));
             this.highlightActiveSession(sessionId);
+            if (coderId === 'opencode') {
+                setTimeout(() => this.fetchOpenCodeServiceStatus(), 1200);
+            }
         }
         catch (e) {
             this.app.showToast(e.message, { type: 'error' });
@@ -1001,6 +1031,126 @@ export class SessionsManager {
             });
         }
         this._mountSessionContextMenu(e, menu);
+    }
+    updateOpenCodeServiceVisibility() {
+        if (!this.openCodeServiceRow)
+            return;
+        const isV2OpenCode = this.activeCoder === 'opencode' && this._canOpenCodeMini();
+        if (isV2OpenCode) {
+            this.openCodeServiceRow.style.display = 'block';
+            this.fetchOpenCodeServiceStatus();
+            this._startOpenCodeServicePolling();
+        }
+        else {
+            this.openCodeServiceRow.style.display = 'none';
+            this._stopOpenCodeServicePolling();
+        }
+    }
+    _startOpenCodeServicePolling() {
+        if (this._openCodeServicePollTimer !== null)
+            return;
+        this._openCodeServicePollTimer = window.setInterval(() => {
+            if (this.activeCoder === 'opencode' &&
+                document.visibilityState === 'visible') {
+                this.fetchOpenCodeServiceStatus();
+            }
+        }, 15000);
+    }
+    _stopOpenCodeServicePolling() {
+        if (this._openCodeServicePollTimer !== null) {
+            clearInterval(this._openCodeServicePollTimer);
+            this._openCodeServicePollTimer = null;
+        }
+    }
+    async fetchOpenCodeServiceStatus() {
+        if (!this.openCodeServiceBtn)
+            return;
+        try {
+            const res = await fetch('/api/opencode/service');
+            if (!res.ok)
+                throw new Error(`HTTP ${res.status}`);
+            const data = (await res.json());
+            if (!data.supported) {
+                if (this.openCodeServiceRow) {
+                    this.openCodeServiceRow.style.display = 'none';
+                }
+                return;
+            }
+            this.renderOpenCodeServiceStatus(Boolean(data.running), data.tabs || 0);
+        }
+        catch {
+            this.renderOpenCodeServiceError();
+        }
+    }
+    renderOpenCodeServiceStatus(running, tabs) {
+        if (!this.openCodeServiceBtn)
+            return;
+        const label = this.openCodeServiceBtn.querySelector('.opencode-service-label');
+        if (running) {
+            this.openCodeServiceBtn.setAttribute('data-state', 'running');
+            this.openCodeServiceBtn.disabled = false;
+            if (label)
+                label.textContent = 'Kill server';
+            const tabText = tabs > 0 ? ` (${tabs} active tab${tabs === 1 ? '' : 's'})` : '';
+            this.openCodeServiceBtn.title = `OpenCode background server is running${tabText}. Click to kill server.`;
+        }
+        else {
+            this.openCodeServiceBtn.setAttribute('data-state', 'stopped');
+            this.openCodeServiceBtn.disabled = true;
+            if (label)
+                label.textContent = 'Server off';
+            this.openCodeServiceBtn.title =
+                'OpenCode background server is stopped (starts automatically on new session).';
+        }
+    }
+    renderOpenCodeServiceError() {
+        if (!this.openCodeServiceBtn)
+            return;
+        this.openCodeServiceBtn.setAttribute('data-state', 'error');
+        this.openCodeServiceBtn.disabled = false;
+        const label = this.openCodeServiceBtn.querySelector('.opencode-service-label');
+        if (label)
+            label.textContent = 'Server: retry';
+        this.openCodeServiceBtn.title =
+            'Could not check OpenCode background server status. Click to retry.';
+    }
+    async stopOpenCodeService(force = false) {
+        if (!this.openCodeServiceBtn)
+            return;
+        const label = this.openCodeServiceBtn.querySelector('.opencode-service-label');
+        this.openCodeServiceBtn.setAttribute('data-state', 'stopping');
+        this.openCodeServiceBtn.disabled = true;
+        if (label)
+            label.textContent = 'Stopping…';
+        try {
+            const res = await fetch('/api/opencode/service/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force }),
+            });
+            if (res.status === 409) {
+                const data = (await res.json().catch(() => ({})));
+                const tabs = data.tabs || 1;
+                const tabWord = tabs === 1 ? 'tab is' : 'tabs are';
+                const confirmed = window.confirm(`${tabs} OpenCode ${tabWord} currently running in Phi.\n\n` +
+                    `Killing the server will disconnect active sessions.\n\n` +
+                    `Kill the OpenCode background server anyway?`);
+                if (confirmed) {
+                    await this.stopOpenCodeService(true);
+                }
+                else {
+                    await this.fetchOpenCodeServiceStatus();
+                }
+                return;
+            }
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+            await this.fetchOpenCodeServiceStatus();
+        }
+        catch {
+            this.renderOpenCodeServiceError();
+        }
     }
     _canOpenCodeMini() {
         const mode = getCoder('opencode')?.opencode_mode;

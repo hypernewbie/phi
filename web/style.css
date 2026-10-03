@@ -1153,6 +1153,78 @@ html[data-phi-desktop-root] .app-header {
     border-bottom: 1px solid var(--bg-border);
 }
 
+.opencode-service-row {
+    margin-top: 6px;
+}
+
+.opencode-service-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--bg-border);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.opencode-service-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    opacity: 0.4;
+    flex-shrink: 0;
+}
+
+.opencode-service-btn[data-state="running"] {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    cursor: pointer;
+}
+
+.opencode-service-btn[data-state="running"]:hover {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.55);
+    color: #fecaca;
+}
+
+.opencode-service-btn[data-state="running"] .opencode-service-dot {
+    background: #ef4444;
+    opacity: 1;
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+.opencode-service-btn[data-state="stopped"] {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+    cursor: default;
+    opacity: 0.65;
+}
+
+.opencode-service-btn[data-state="stopping"] {
+    opacity: 0.75;
+    cursor: wait;
+}
+
+.opencode-service-btn[data-state="error"] {
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #fcd34d;
+    cursor: pointer;
+}
+
+.opencode-service-btn[data-state="error"] .opencode-service-dot {
+    background: #f59e0b;
+    opacity: 1;
+}
+
 .sidebar-footer {
     display: flex;
     align-items: center;
@@ -6788,7 +6860,10 @@ html[data-phi-config-page] .settings-modal {
 .sidebar-narrow .new-session-container {
     padding: 12px 6px;
     display: flex;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
+    gap: 6px;
 }
 
 .sidebar-narrow #new-session-btn {
@@ -6807,6 +6882,28 @@ html[data-phi-config-page] .settings-modal {
     margin: 0;
     width: 16px;
     height: 16px;
+}
+
+.sidebar-narrow .opencode-service-row {
+    margin-top: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.sidebar-narrow .opencode-service-btn {
+    width: 32px;
+    height: 24px;
+    padding: 0;
+    justify-content: center;
+}
+
+.sidebar-narrow .opencode-service-btn .opencode-service-label {
+    display: none;
+}
+
+.sidebar-narrow .opencode-service-btn .opencode-service-dot {
+    margin: 0;
 }
 
 .sidebar-narrow .sidebar-footer {

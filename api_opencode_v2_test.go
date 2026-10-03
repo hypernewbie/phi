@@ -19,6 +19,19 @@ func init() {
 		fmt.Println(version)
 		os.Exit(0)
 	}
+	if svc := os.Getenv("PHI_TEST_ROOT_OC_SERVICE"); svc != "" {
+		if len(os.Args) >= 3 && os.Args[1] == "service" {
+			switch os.Args[2] {
+			case "status":
+				fmt.Println(svc)
+				os.Exit(0)
+			case "stop":
+				fmt.Println("stopped")
+				os.Exit(0)
+			}
+		}
+		os.Exit(0)
+	}
 }
 
 func TestOpenCodeConfigDefaultsAndLegacyRoundTrip(t *testing.T) {
