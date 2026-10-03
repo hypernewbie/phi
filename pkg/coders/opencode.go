@@ -49,6 +49,18 @@ func OpenCodeMini(c Coder) (Coder, error) {
 	return out, nil
 }
 
+// OpenCodeTUI restores the full presentation of a v2 launch profile without
+// changing the registry's default or its configured command/environment.
+func OpenCodeTUI(c Coder) Coder {
+	out := frozenCoder(c)
+	if len(out.Args) > 0 && out.Args[0] == "mini" {
+		out.Args = out.Args[1:]
+	}
+	out.OpenCodeMode = "tui"
+	out.Presets = DefaultRegistry()["opencode"].Presets
+	return out
+}
+
 func legacyOpenCodePresets() []Preset {
 	return []Preset{
 		{Name: "/exit", Value: "/exit\r"},

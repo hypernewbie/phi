@@ -424,6 +424,7 @@ export class TabManager {
         // delta.
         if (typeof window !== 'undefined') {
             window.addEventListener('pagehide', () => {
+                this.saveActiveDraft();
                 for (const tab of this.tabs.values()) {
                     if (tab.serializeAddon && !tab.isDead) {
                         this._uploadCheckpoint(tab);
@@ -586,6 +587,40 @@ export class TabManager {
         }
     }
 
+    loadTabDraft(paneId) {
+        try {
+            const raw = localStorage.getItem(`phi_tab_draft_${paneId}`);
+            if (!raw || raw.length > 1024 * 1024) return {};
+            const draft = JSON.parse(raw);
+            return {
+                draft: typeof draft.text === 'string' ? draft.text : '',
+                draftAttachments: Array.isArray(draft.attachments)
+                    ? draft.attachments.filter(a => a && typeof a.id === 'string' && typeof a.name === 'string' && typeof a.path === 'string' && typeof a.type === 'string' && Number.isFinite(a.sizeBytes) && (a.source === 'drop' || a.source === 'paste')).slice(0, 100)
+                    : [],
+            };
+        } catch { return {}; }
+    }
+
+    saveTabDraft(tab) {
+        if (!tab || tab.coder === 'review' || tab.coder === 'kanban') return;
+        try {
+            const key = `phi_tab_draft_${tab.paneId}`;
+            if (!tab.draft && !tab.draftAttachments?.length) {
+                localStorage.removeItem(key);
+            } else {
+                localStorage.setItem(key, JSON.stringify({text: tab.draft || '', attachments: tab.draftAttachments || []}));
+            }
+        } catch { /* Browser storage must not block typing or switching tabs. */ }
+    }
+
+    saveActiveDraft() {
+        const tab = this.getActiveTab();
+        if (!tab || !this.inputTextArea || tab.coder === 'review' || tab.coder === 'kanban') return;
+        tab.draft = this.inputTextArea.value;
+        tab.draftAttachments = this.stagedAttachments || [];
+        this.saveTabDraft(tab);
+    }
+
     saveTabsState() {
         localStorage.setItem('phi_active_pane', this.activePaneId || '');
         // Tab order is localStorage-only (no backend sync). Drag-reorder
@@ -598,6 +633,7 @@ export class TabManager {
     // (closed tabs, or paneIds that were renamed during a session restart)
     // are filtered out at restore time - see restoreTabsState.
     saveTabOrder() {
+        if (this.restoringTabs) return;
         try {
             localStorage.setItem(
                 'phi_tab_order',
@@ -1045,10 +1081,13 @@ export class TabManager {
 
     async restoreTabsState() {
         localStorage.removeItem('phi_tabs'); // Clear legacy browser storage tabs
+        this.restoringTabs = true;
+        let restored = false;
         try {
             const res = await fetch('/api/terminals');
             if (!res.ok) throw new Error('Failed to load server terminal list');
             const instances = await res.json();
+            restored = true;
             if (!instances?.length) {
                 this.showEmptyState();
             }
@@ -1094,6 +1133,9 @@ export class TabManager {
             }
         } catch (e) {
             console.error('Failed to restore tabs from server-side state:', e);
+        } finally {
+            this.restoringTabs = false;
+            if (restored) this.saveTabOrder();
         }
     }
 
@@ -1170,6 +1212,7 @@ export class TabManager {
                 }
             }
             this.lastInputValue = currentVal;
+            this.saveActiveDraft();
             this.adjustInputHeight();
             // Cursor-reset-on-type for prompt history lives in
             // _initPromptHistoryKeydown's own 'input' listener (kept
@@ -2610,6 +2653,7 @@ export class TabManager {
             return;
         }
 
+        const savedDraft = this.loadTabDraft(paneId);
         // Resolve the coder favicon: registry first (covers built-
         // ins and custom backends), then the legacy fallback map
         // for UI pseudo-tabs the registry doesn't advertise.
@@ -3133,8 +3177,8 @@ export class TabManager {
             // Per-tab staged input. The DOM textarea + stagedAttachments
             // hold the ACTIVE tab's draft; these fields park it while the
             // tab is inactive (written on switch-away, read on switch-in).
-            draft: '',
-            draftAttachments: [],
+            draft: savedDraft.draft || '',
+            draftAttachments: savedDraft.draftAttachments || [],
             lastOutputAt: undefined,
             isBusy: false,
             isAttention: false,
@@ -4647,6 +4691,7 @@ export class TabManager {
             ) {
                 prevTab.draft = this.inputTextArea.value;
                 prevTab.draftAttachments = this.stagedAttachments;
+                this.saveTabDraft(prevTab);
             }
             prevTab.tabEl.classList.remove('active');
             prevTab.termContainer.classList.remove('active');
@@ -5261,6 +5306,7 @@ export class TabManager {
         }
         const wasPiRpc = tab.coder === 'pi-rpc';
         this.tabs.delete(paneId);
+        try { localStorage.removeItem(`phi_tab_draft_${paneId}`); } catch {}
         this.updateDocumentTitle();
         this.updateDisconnectBanner();
         this.saveTabsState();
@@ -5973,6 +6019,7 @@ export class TabManager {
         if (this.stagedAttachments.some((a) => a.path === attachment.path))
             return;
         this.stagedAttachments.push(attachment);
+        this.saveActiveDraft();
         this._renderAttachmentStrip();
     }
 
@@ -5981,6 +6028,7 @@ export class TabManager {
         this.stagedAttachments = this.stagedAttachments.filter(
             (a) => a.id !== id,
         );
+        this.saveActiveDraft();
         this._renderAttachmentStrip();
     }
 
@@ -6393,6 +6441,7 @@ export class TabManager {
         this.inputTextArea.value = '';
         this.lastInputValue = '';
         this.stagedAttachments = [];
+        this.saveActiveDraft();
         this._renderAttachmentStrip();
         this.adjustInputHeight();
         this._spamScrollToBottom(activeTab);
@@ -8817,6 +8866,7 @@ export class TabManager {
                 this.sendInput(activeTab, `${payload}\r`);
                 this.inputTextArea.value = '';
                 this.lastInputValue = '';
+                this.saveActiveDraft();
                 this.adjustInputHeight();
                 this.inputTextArea.focus({ preventScroll: true });
                 this._spamScrollToBottom(activeTab);

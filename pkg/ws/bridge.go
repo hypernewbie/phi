@@ -156,20 +156,28 @@ func StartPTYReadLoop(inst *pty.PTYInstance, hub *Hub) {
 	if inst.Pty == nil {
 		return
 	}
+	done := inst.BeginReadLoop()
+	if done == nil {
+		return
+	}
 	logger := componentLogger().With("pane", inst.ID)
 	go func() {
+		defer close(done)
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := inst.Pty.Read(buf)
-			if err != nil {
-				break
-			}
 			if n > 0 {
+				if inst.ObserveOutput != nil {
+					inst.ObserveOutput(buf[:n])
+				}
 				inst.UpdateActivity()
 				if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 					logger.Debug("frame", "dir", "pty->hub", "bytes", n)
 				}
 				hub.Ingest(inst.ID, buf[:n])
+			}
+			if err != nil {
+				break
 			}
 		}
 		// Reap process exit status and broadcast exit event

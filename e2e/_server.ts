@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+    appendFileSync,
+    mkdtempSync,
+    rmSync,
+    mkdirSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -12,6 +18,8 @@ export interface PhiServer {
     url: string;
     dir: string;
     stop: () => Promise<void>;
+    restart: () => Promise<void>;
+    logPath: string;
 }
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
@@ -52,6 +60,7 @@ export async function startPhi(
     options: {
         config?: Record<string, unknown>;
         setup?: (dir: string) => void | Promise<void>;
+        env?: Record<string, string>;
     } = {},
 ): Promise<PhiServer> {
     const dir = mkdtempSync(join(tmpdir(), 'phi-e2e-'));
@@ -68,36 +77,54 @@ export async function startPhi(
     const port = await freePort();
     const bin = join(dir, process.platform === 'win32' ? 'phi.exe' : 'phi');
     await run('go', ['build', '-o', bin, '.'], process.cwd());
-    const server: ChildProcess = spawn(
-        bin,
-        ['--port', String(port), '--ip', '127.0.0.1'],
-        {
+    const launch = (): ChildProcess =>
+        spawn(bin, ['--port', String(port), '--ip', '127.0.0.1'], {
             cwd: dir,
             env: {
                 ...process.env,
                 HOME: join(dir, 'home'),
                 USERPROFILE: join(dir, 'home'),
                 APPDATA: join(dir, 'home'),
+                ...options.env,
             },
-            stdio: 'ignore',
-        },
-    );
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+    const logPath = join(dir, 'server.log');
+    const capture = (child: ChildProcess) => {
+        child.stdout?.on('data', (data) => appendFileSync(logPath, data));
+        child.stderr?.on('data', (data) => appendFileSync(logPath, data));
+        return child;
+    };
+    let server = capture(launch());
     await waitForHealth(port);
+
+    const terminate = async () => {
+        if (server.exitCode !== null) return;
+        const exited = new Promise<void>((resolve) =>
+            server.once('exit', () => resolve()),
+        );
+        server.kill();
+        await Promise.race([
+            exited,
+            new Promise((resolve) => setTimeout(resolve, 10_000)),
+        ]);
+        if (server.exitCode === null) {
+            server.kill('SIGKILL');
+            await exited;
+        }
+    };
 
     return {
         url: `http://127.0.0.1:${port}`,
+        logPath,
         dir,
+        restart: async () => {
+            await terminate();
+            server = capture(launch());
+            await waitForHealth(port);
+        },
         stop: async () => {
-            if (server.exitCode === null) {
-                const exited = new Promise<void>((resolve) =>
-                    server.once('exit', () => resolve()),
-                );
-                server.kill();
-                await Promise.race([
-                    exited,
-                    new Promise((r) => setTimeout(r, 5_000)),
-                ]);
-            }
+            await terminate();
             // Best-effort: the binary can stay briefly locked on Windows.
             try {
                 rmSync(dir, { recursive: true, force: true });

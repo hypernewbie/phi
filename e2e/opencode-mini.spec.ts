@@ -87,7 +87,11 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             .poll(() =>
                 existsSync(argFile) ? readFileSync(argFile, 'utf8') : null,
             )
-            .toBe(mode === 'mini' ? 'mini\n' : '\n');
+            .toBe(
+                mode === 'legacy'
+                    ? '\n'
+                    : `${mode === 'mini' ? 'mini ' : ''}--session ${pane.session_id}\n`,
+            );
         await page.addInitScript(() => {
             type BufferView = {
                 type: string;

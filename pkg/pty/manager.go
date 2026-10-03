@@ -51,12 +51,15 @@ var (
 )
 
 type PTYInstance struct {
-	ID               string      `json:"id"`
-	Pty              *Pty        `json:"-"`
-	Cwd              string      `json:"cwd"`
-	Coder            string      `json:"coder"`
-	SessionID        string      `json:"session_id"`
-	OpenCodeMode     string      `json:"opencode_mode,omitempty"` // immutable launch mode
+	ID               string       `json:"id"`
+	Pty              *Pty         `json:"-"`
+	Cwd              string       `json:"cwd"`
+	Coder            string       `json:"coder"`
+	SessionID        string       `json:"session_id"`
+	OpenCodeMode     string       `json:"opencode_mode,omitempty"` // immutable launch mode
+	ExtraArgs        []string     `json:"-"`                       // private launch options, persisted separately
+	ObserveOutput    func([]byte) `json:"-"`
+	readLoopDone     chan struct{}
 	DetachTimer      *time.Timer `json:"-"`
 	mu               sync.Mutex
 	ActiveWS         bool
@@ -124,7 +127,10 @@ type Manager struct {
 	// draining flips true on graceful shutdown (see BeginDrain). Spawn
 	// consults IsDraining to refuse new PTYs during the drain window so
 	// the load balancer can stop routing requests before sockets close.
-	draining atomic.Bool
+	draining     atomic.Bool
+	shutdownTabs []*PTYInstance
+	restoring    atomic.Bool
+	saveWriteMu  sync.Mutex
 }
 
 func NewManager() *Manager {
@@ -137,7 +143,20 @@ func NewManager() *Manager {
 // at the very start of graceful shutdown (before the drain delay) so
 // in-flight spawn requests during the whole drain window are rejected,
 // not leaked.
-func (m *Manager) BeginDrain() { m.draining.Store(true) }
+func (m *Manager) BeginDrain() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.draining.Swap(true) {
+		return
+	}
+	// Freeze open-tab intent before terminating children. Later persistence
+	// must not mistake shutdown-induced exits for tabs the user closed.
+	for _, inst := range m.instances {
+		if !inst.IsPtyDead() {
+			m.shutdownTabs = append(m.shutdownTabs, inst)
+		}
+	}
+}
 
 // Shutdown gracefully terminates every managed PTY: stop detach timers,
 // Terminate() each child, wait up to grace for exit (which fires its
@@ -222,6 +241,19 @@ func (m *Manager) Spawn(ctx context.Context, dir, command string, args []string,
 // The mode is assigned before publication so concurrent listings, attach,
 // and state snapshots always see the mode this process actually launched.
 func (m *Manager) SpawnWithOpenCodeMode(ctx context.Context, dir, command string, args []string, coder, sessionID, mode string, envOverrides ...map[string]string) (*PTYInstance, error) {
+	return m.SpawnWithOptions(ctx, dir, command, args, coder, sessionID, SpawnOptions{OpenCodeMode: mode}, envOverrides...)
+}
+
+// SpawnOptions initializes tab identity and presentation before publication.
+// Saved tabs reuse their pane ID; a restarted process is not a new UI tab.
+type SpawnOptions struct {
+	ID, Title, Workspace, OpenCodeMode string
+	Pinned, Marked                     bool
+	ExtraArgs                          []string
+	ObserveOutput                      func([]byte)
+}
+
+func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, args []string, coder, sessionID string, opts SpawnOptions, envOverrides ...map[string]string) (*PTYInstance, error) {
 	// Refuse new spawns during the drain window (signal received). Tests
 	// can flip the flag directly via BeginDrain to assert this path.
 	if m.IsDraining() {
@@ -237,13 +269,19 @@ func (m *Manager) SpawnWithOpenCodeMode(ctx context.Context, dir, command string
 		return nil, err
 	}
 
+	id := opts.ID
+	if id == "" {
+		id = GenerateID()
+	}
 	inst := &PTYInstance{
-		ID:           GenerateID(),
+		ID:           id,
 		Pty:          p,
 		Cwd:          dir,
 		Coder:        coder,
 		SessionID:    sessionID,
-		OpenCodeMode: mode,
+		OpenCodeMode: opts.OpenCodeMode,
+		Title:        opts.Title, Workspace: opts.Workspace, Pinned: opts.Pinned, Marked: opts.Marked,
+		ExtraArgs: append([]string(nil), opts.ExtraArgs...), ObserveOutput: opts.ObserveOutput,
 		LastOutputAt: time.Now(),
 	}
 
@@ -377,6 +415,12 @@ func (m *Manager) ListActive() []*PTYInstance {
 }
 
 func (m *Manager) SaveState() error {
+	return m.saveStateTo(tabsFilePath())
+}
+
+func (m *Manager) saveStateTo(path string) error {
+	m.saveWriteMu.Lock()
+	defer m.saveWriteMu.Unlock()
 	m.mu.Lock()
 	list := make([]*PTYInstance, 0, len(m.instances))
 	for _, inst := range m.instances {
@@ -386,6 +430,9 @@ func (m *Manager) SaveState() error {
 		}
 		list = append(list, inst)
 	}
+	if m.IsDraining() {
+		list = append([]*PTYInstance(nil), m.shutdownTabs...)
+	}
 	m.mu.Unlock()
 
 	// Snapshot each instance's serialisable fields under inst.mu so
@@ -393,9 +440,13 @@ func (m *Manager) SaveState() error {
 	// writes to fields like DetachTimer / Busy / LastActivityUnix.
 	// The snapshot is a plain struct (no goroutine writes to it after
 	// build), so marshalling it is race-free.
-	snapshots := make([]PTYInstanceSnapshot, 0, len(list))
+	snapshots := make([]SavedTab, 0, len(list))
 	for _, inst := range list {
-		snapshots = append(snapshots, inst.Snapshot())
+		snapshot := inst.Snapshot()
+		if snapshot.Coder == "diff" || snapshot.Coder == "git-log" || snapshot.Coder == "git-status" {
+			continue
+		}
+		snapshots = append(snapshots, SavedTab{PTYInstanceSnapshot: snapshot, ExtraArgs: append([]string(nil), inst.ExtraArgs...)})
 	}
 
 	b, err := json.MarshalIndent(snapshots, "", "  ")
@@ -403,8 +454,7 @@ func (m *Manager) SaveState() error {
 		return err
 	}
 
-	path := tabsFilePath()
-	return system.WriteFileAtomic(path, b, 0644)
+	return system.WriteFileAtomic(path, b, 0600)
 }
 
 // PTYInstanceSnapshot is a lock-free, JSON-safe copy of a PTYInstance.
@@ -451,12 +501,16 @@ func (inst *PTYInstance) Snapshot() PTYInstanceSnapshot {
 // scheduleSave coalesces SaveState calls onto a 500ms debounce (plan §3.3).
 // Use this from hot paths (Spawn/Kill/Pin/Mark) instead of SaveState directly.
 func (m *Manager) scheduleSave() error {
+	if m.restoring.Load() {
+		return nil
+	}
 	saveMu.Lock()
 	if saveTimer != nil {
 		saveTimer.Stop()
 	}
+	path := tabsFilePath()
 	saveTimer = time.AfterFunc(500*time.Millisecond, func() {
-		if err := m.SaveState(); err != nil {
+		if err := m.saveStateTo(path); err != nil {
 			log.Printf("[pty] Failed to save tabs state: %v", err)
 		}
 	})
