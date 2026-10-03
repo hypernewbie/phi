@@ -5605,6 +5605,10 @@ export class TabManager {
     }) {
         const p = this._hieroPreview;
         if (!p) return;
+        if (isCoarseViewport()) {
+            this._hideHieroPreview();
+            return;
+        }
 
         // Toggle the size modifier. Only one size at a time so the
         // transition between sources is clean (e.g., user hovers a
