@@ -18,6 +18,9 @@ function parseFramedHeader(payload) {
         return null;
     }
 }
+// Decoder instances survive a same-pane reconnect. Keep their incomplete
+// UTF-8 prefix with them so checkpoints can rewind to a complete boundary.
+const decoderPrefixes = new WeakMap();
 export class PTYWebSocket {
     paneId;
     onData;
@@ -91,7 +94,7 @@ export class PTYWebSocket {
             switch (msgType) {
                 case 0x01: // PTY Output Stdout (legacy framing)
                     this._markLegacy();
-                    this.onData(this.decoder.decode(payload, { stream: true }));
+                    this.onData(this.decodeOutput(new Uint8Array(payload)));
                     break;
                 case 0x02: // Control JSON Message
                     this._handleJsonPayload(payload, (data) => {
@@ -262,8 +265,39 @@ export class PTYWebSocket {
         }
         this._deliver(start, bytes);
     }
+    get pendingUTF8Bytes() {
+        return decoderPrefixes.get(this.decoder)?.byteLength ?? 0;
+    }
+    decodeOutput(bytes) {
+        const prior = decoderPrefixes.get(this.decoder) ?? new Uint8Array();
+        const tail = new Uint8Array(prior.length + Math.min(4, bytes.length));
+        tail.set(prior);
+        tail.set(bytes.subarray(Math.max(0, bytes.length - 4)), prior.length);
+        let start = tail.length - 1;
+        while (start >= 0 && tail[start] >= 0x80 && tail[start] <= 0xbf)
+            start--;
+        const lead = tail[start];
+        const need = lead >= 0xc2 && lead <= 0xdf
+            ? 2
+            : lead >= 0xe0 && lead <= 0xef
+                ? 3
+                : lead >= 0xf0 && lead <= 0xf4
+                    ? 4
+                    : 0;
+        const second = tail[start + 1];
+        const valid = second === undefined ||
+            !((lead === 0xe0 && second < 0xa0) ||
+                (lead === 0xed && second > 0x9f) ||
+                (lead === 0xf0 && second < 0x90) ||
+                (lead === 0xf4 && second > 0x8f));
+        const prefix = valid && need && tail.length - start < need
+            ? tail.slice(start)
+            : new Uint8Array();
+        decoderPrefixes.set(this.decoder, prefix);
+        return this.decoder.decode(bytes, { stream: true });
+    }
     _deliver(start, bytes) {
-        const text = this.decoder.decode(bytes, { stream: true });
+        const text = this.decodeOutput(bytes);
         this.liveSeq = start + bytes.byteLength;
         this.lastFrameEnd = this.liveSeq;
         this.onData(text);

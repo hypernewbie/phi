@@ -1,6 +1,7 @@
 /* Φ phi — Terminal & Tab Manager */
 
 import { PTYWebSocket } from './ws.js';
+import { terminalContinuation } from './terminal-state.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
@@ -2157,7 +2158,7 @@ export class TabManager {
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
             // Keep one decoder across requests and subsequent live frames.
             const text = d.bytes && ws?.mode === 'hot' && ws.decoder
-                ? ws.decoder.decode(d.bytes, { stream: true }) : d.text;
+                ? (ws.decodeOutput ? ws.decodeOutput(d.bytes) : ws.decoder.decode(d.bytes, { stream: true })) : d.text;
             if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
             this._reserveReplayRows(tabInfo, text);
             this.writeToTerminal(tabInfo, text);
@@ -2255,7 +2256,7 @@ export class TabManager {
             !tabInfo.serializeAddon ||
             !pty ||
             pty.mode !== 'hot' ||
-            tabInfo.isDead ||
+            tabInfo.isDead || tabInfo.writePending || tabInfo.writeBuffer?.length ||
             !tabInfo.term ||
             tabInfo.paneEpoch === undefined ||
             tabInfo.drainedSeq === undefined
@@ -2270,11 +2271,12 @@ export class TabManager {
             : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
         let ansi = '';
         try {
+            const continuation = terminalContinuation(tabInfo.term);
             let scrollback = LIVE_SCROLLBACK_ROWS;
             for (let attempt = 0; ; attempt++) {
                 const cells = tabInfo.serializeAddon.serialize({ scrollback });
-                if (!cells) return;
-                ansi = cells + mouseMode;
+                if (!cells && !mouseMode && !continuation) return;
+                ansi = cells + mouseMode + continuation;
                 // The server bounds UTF-8 bytes, not UTF-16 string length.
                 const bytes = new TextEncoder().encode(ansi).byteLength;
                 if (bytes <= MAX_CHECKPOINT_BYTES) break;
@@ -2294,7 +2296,9 @@ export class TabManager {
         }
         const payload = {
             epoch: tabInfo.paneEpoch,
-            through: tabInfo.drainedSeq,
+            // Pixels omit an incomplete UTF-8 prefix held by the decoder.
+            // Replay those bytes on restore rather than claiming they rendered.
+            through: Math.max(0, tabInfo.drainedSeq - (pty.pendingUTF8Bytes ?? 0)),
             cols: tabInfo.term.cols,
             rows: tabInfo.term.rows,
             ansi,
