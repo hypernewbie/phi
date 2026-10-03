@@ -751,4 +751,19 @@ describe('rail keyboard shortcut hints (Ctrl)', () => {
       /body\.show-ctrl-shortcuts\s+\.rail-item\.has-shortcut\s+\.shortcut-hint\s*\{[^}]*display:\s*inline-flex/s,
     );
   });
+
+  it('css colors .shortcut-hint with entry-accent and illuminates reachable tiles under show-ctrl-shortcuts', () => {
+    expect(cssSource).toMatch(
+      /\.rail-item\s+\.shortcut-hint\s*\{[^}]*color:\s*var\(--entry-accent,\s*var\(--text\)\)/s,
+    );
+    expect(cssSource).toMatch(
+      /\.rail-item\.active\s+\.shortcut-hint\s*\{[^}]*color:\s*var\(--entry-accent,\s*var\(--accent\)\)/s,
+    );
+    expect(cssSource).toMatch(
+      /body\.show-ctrl-shortcuts\s+\.rail-item\.has-shortcut:not\(\.active\):not\(\.offline\)\s*\{[^}]*border-color:[^}]*--entry-accent[^}]*background-color:[^}]*--entry-accent/s,
+    );
+    expect(cssSource).toMatch(
+      /body\.show-ctrl-shortcuts\s+\.rail-item\.offline\s+\.shortcut-hint\s*\{[^}]*color:\s*var\(--dim\)[^}]*text-shadow:\s*none/s,
+    );
+  });
 });

@@ -109,6 +109,13 @@ body {
   font-size: 14px;
   line-height: 1;
   text-align: center;
+  color: var(--entry-accent, var(--text));
+  text-shadow: 0 0 8px color-mix(in srgb, var(--entry-accent, transparent) 40%, transparent);
+}
+
+.rail-item.active .shortcut-hint {
+  color: var(--entry-accent, var(--accent));
+  text-shadow: 0 0 8px var(--accent-glow);
 }
 
 body.show-ctrl-shortcuts .rail-item.has-shortcut .mono {
@@ -119,6 +126,22 @@ body.show-ctrl-shortcuts .rail-item.has-shortcut .shortcut-hint {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* While holding Control, non-active reachable shortcuts illuminate with that
+   server's own accent colour so the keyboard user can instantly match digits
+   to server identities without mouse hover. */
+body.show-ctrl-shortcuts .rail-item.has-shortcut:not(.active):not(.offline) {
+  border-color: color-mix(in srgb, var(--entry-accent, var(--bg-border)) 45%, var(--bg-border));
+  background-color: color-mix(in srgb, var(--entry-accent, var(--bg-elevated)) 8%, var(--bg-elevated));
+  box-shadow:
+    0 0 10px color-mix(in srgb, var(--entry-accent, transparent) 20%, transparent),
+    0 0 calc(4px + 12px * var(--cpu-strength)) var(--cpu-glow);
+}
+
+body.show-ctrl-shortcuts .rail-item.offline .shortcut-hint {
+  color: var(--dim);
+  text-shadow: none;
 }
 
 /* Hover previews the entry's own known accent (--entry-accent), the
