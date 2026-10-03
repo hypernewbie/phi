@@ -655,8 +655,13 @@ describe('checkpoint upload', () => {
         await new Promise((r) => setTimeout(r, 0));
 
         expect(serializeOpts).toEqual({ scrollback: 10000 });
-        const [url, init] =
-            fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+        const request = fetchMock.mock.calls.find(
+            ([url, init]) =>
+                String(url).includes('/api/terminals/p7/checkpoint') &&
+                init?.method === 'POST',
+        );
+        expect(request).toBeDefined();
+        const [url, init] = request;
         expect(url).toContain('/api/terminals/p7/checkpoint');
         const body = JSON.parse(init.body);
         expect(body.epoch).toBe(7);
