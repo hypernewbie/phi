@@ -212,6 +212,7 @@ const PERF_SLOW_MS = 16;
 // ensuring terminal history is never dropped or truncated on attach.
 const MAX_DELTA_BYTES = 2 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024;
+const MAX_WRITE_CHARS = 64 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
@@ -2300,31 +2301,37 @@ export class TabManager {
             tabInfo.drainedSeq === undefined
         )
             return;
+        // SerializeAddon restores mouse tracking but omits its encoding.
+        // A restored Pi pane would then emit X10 instead of the SGR reports
+        // the running TUI expects. Preserve the actual encoding, not a
+        // coder-specific guess or a forced global mouse mode.
+        const encoding = tabInfo.term._core?.mouseStateService?.activeEncoding;
+        const mouseMode = encoding === 'SGR' ? '\x1b[?1006h'
+            : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
         let ansi = '';
         try {
-            ansi = tabInfo.serializeAddon.serialize({
-                scrollback: LIVE_SCROLLBACK_ROWS,
-            });
-            if (ansi && ansi.length > MAX_CHECKPOINT_BYTES) {
-                const totalLines =
-                    (tabInfo.term.buffer?.active?.baseY ?? 0) +
-                    tabInfo.term.rows;
-                const bytesPerLine = ansi.length / Math.max(1, totalLines);
-                const targetLines = Math.max(
-                    tabInfo.term.rows,
-                    Math.floor(
-                        MAX_CHECKPOINT_BYTES / Math.max(1, bytesPerLine),
-                    ),
-                );
-                ansi = tabInfo.serializeAddon.serialize({
-                    scrollback: Math.max(0, targetLines - tabInfo.term.rows),
-                });
+            let scrollback = LIVE_SCROLLBACK_ROWS;
+            for (let attempt = 0; ; attempt++) {
+                const cells = tabInfo.serializeAddon.serialize({ scrollback });
+                if (!cells) return;
+                ansi = cells + mouseMode;
+                // The server bounds UTF-8 bytes, not UTF-16 string length.
+                const bytes = new TextEncoder().encode(ansi).byteLength;
+                if (bytes <= MAX_CHECKPOINT_BYTES) break;
+                // Never post a snapshot the server cannot accept. The cold
+                // recording, not a truncated string, owns omitted history.
+                if (scrollback === 0) return;
+                const lines = Math.min(scrollback,
+                    tabInfo.term.buffer?.active?.baseY ?? scrollback) + tabInfo.term.rows;
+                const target = Math.max(0,
+                    Math.floor(MAX_CHECKPOINT_BYTES * lines / bytes) - tabInfo.term.rows);
+                scrollback = Math.min(scrollback - 1, target,
+                    attempt ? Math.floor(scrollback / 2) : scrollback);
             }
         } catch (e) {
             console.error('[term] serialize failed:', e);
             return;
         }
-        if (!ansi) return;
         const payload = {
             epoch: tabInfo.paneEpoch,
             through: tabInfo.drainedSeq,
@@ -2399,7 +2406,10 @@ export class TabManager {
     }
 
     writeToTerminal(tabInfo, data) {
-        if (tabInfo.isDead) return;
+        // Disconnection and process exit do not dispose xterm. Already
+        // received output still belongs to its history, including exit
+        // sequences that leave the alternate screen. Only teardown cancels.
+        if (tabInfo.finalizing) return;
 
         // First live/replay byte of an attach. Measured against
         // the socket-open mark so attach latency is attributable end-to-end.
@@ -2467,11 +2477,11 @@ export class TabManager {
 
     // Resolves once the write queue drains past everything enqueued so
     // far — proving xterm parsed it — or immediately when already
-    // quiescent or dead.
+    // quiescent or finalized. A disconnected pane must finish parsing.
     _drainSettled(tabInfo) {
         return new Promise((resolve) => {
             if (
-                tabInfo.isDead ||
+                tabInfo.finalizing ||
                 (!tabInfo.writePending && tabInfo.writeBuffer.length === 0)
             ) {
                 resolve();
@@ -2483,13 +2493,13 @@ export class TabManager {
     }
 
     _flushTerminalWrite(tabInfo) {
-        if (tabInfo.writePending) return;
+        if (tabInfo.writePending || tabInfo._writeRetryTimer) return;
         // Quiescence runs drain waiters (bootstrap watermarks): every
         // byte enqueued so far is parsed at this point — the pump is
         // strictly FIFO and a pending batch would still be flagged above.
         // Owners re-verify state after awaiting, so resolving here is
         // always safe, including on dead tabs.
-        if (tabInfo.isDead || tabInfo.writeBuffer.length === 0) {
+        if (tabInfo.finalizing || tabInfo.writeBuffer.length === 0) {
             this._runDrainWaiters(tabInfo);
             return;
         }
@@ -2501,20 +2511,24 @@ export class TabManager {
             buffer &&
             buffer.viewportY >= buffer.baseY &&
             tabInfo.userFollowBottom !== false;
-        const data = tabInfo.writeBuffer;
-        tabInfo.writeBuffer = '';
+        let length = Math.min(MAX_WRITE_CHARS, tabInfo.writeBuffer.length);
+        // Do not split an astral character at a UTF-16 boundary.
+        const last = tabInfo.writeBuffer.charCodeAt(length - 1);
+        if (length < tabInfo.writeBuffer.length && last >= 0xd800 && last <= 0xdbff) length--;
+        const data = tabInfo.writeBuffer.slice(0, length);
+        tabInfo.writeBuffer = tabInfo.writeBuffer.slice(length);
         tabInfo.writePending = true;
+        let parsed = false;
 
         // Measures xterm parse+render time for each batch (slow
         // ones only). Recorded from buffer swap to write callback.
         const _writeT0 = performance.now();
 
-        // xterm throws past its internal backlog cap (flood). Without this
-        // guard writePending sticks true and the tab bricks until reload —
-        // the throw already means the batch is refused, so drop it and
-        // keep the pump alive.
+        // Keep one bounded parse in flight. A refused write is retryable;
+        // it must not remove bytes or let the drain watermark pass them.
         try {
             tabInfo.term.write(data, () => {
+                parsed = true;
                 termPerfMeasureSince('write-batch', _writeT0);
                 tabInfo.writePending = false;
                 // Quiescence (nothing left unparsed) resolves watermark
@@ -2524,7 +2538,7 @@ export class TabManager {
                 // arrived meanwhile.
                 if (tabInfo.writeBuffer.length === 0)
                     this._runDrainWaiters(tabInfo);
-                if (tabInfo.isDead) {
+                if (tabInfo.finalizing) {
                     tabInfo.writeBuffer = '';
                     // Unblock watermark waiters even with data buffered:
                     // owners re-verify death and dissolve, so resolving
@@ -2562,9 +2576,19 @@ export class TabManager {
                 this._flushTerminalWrite(tabInfo);
             });
         } catch (e) {
-            console.error('[term] write failed, dropping batch:', e);
+            console.error('[term] write failed:', e);
             tabInfo.writePending = false;
-            if (!tabInfo.isDead) this._flushTerminalWrite(tabInfo);
+            if (tabInfo.finalizing) {
+                this._runDrainWaiters(tabInfo);
+                return;
+            }
+            // A synchronous post-parse callback error must not duplicate
+            // admitted bytes. A pre-admission refusal keeps the exact FIFO.
+            if (!parsed) tabInfo.writeBuffer = data + tabInfo.writeBuffer;
+            tabInfo._writeRetryTimer = setTimeout(() => {
+                tabInfo._writeRetryTimer = null;
+                this._flushTerminalWrite(tabInfo);
+            }, 50);
         }
     }
 
@@ -3455,12 +3479,26 @@ export class TabManager {
         // always reflects the full tab set.
         this.updateTabOverflow();
 
-        // Direct writing bridge — routes through tabInfo.ws so reconnect can swap the socket
+        // Staged mode only gates typing, not terminal protocol replies.
+        // Full-screen Pi scrolls its own transcript via SGR mouse reports;
+        // dropping these leaves a perfectly drawn but unscrollable screen.
+        // Route through tabInfo.ws so a reconnect swaps the destination.
         term.onData((data) => {
-            if (tabInfo.directMode) {
+            const protocolReply =
+                /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
+                /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
+            if (tabInfo.directMode || protocolReply) {
                 this.sendInput(tabInfo, data);
-                if (data.includes('\r')) this._spamScrollToBottom(tabInfo);
+                if (tabInfo.directMode && data.includes('\r')) {
+                    this._spamScrollToBottom(tabInfo);
+                }
             }
+        });
+
+        // X10 mouse reports use byte-valued strings, not UTF-8 text.
+        // Forwarding through sendInput would corrupt non-ASCII coordinates.
+        term.onBinary?.((data) => {
+            if (!tabInfo.isDead) tabInfo.ws.sendBinaryInput(data);
         });
 
         // Double click terminal → toggle direct focus mode

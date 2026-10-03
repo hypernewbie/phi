@@ -54,10 +54,8 @@ describe('single-flight terminal write pump', () => {
         expect(tab.writePending).toBe(false);
     });
 
-    it('a throwing xterm write drops the batch but keeps the pump alive', () => {
-        // xterm throws past its internal backlog cap (flood — most likely
-        // on the slowest devices). Without the guard writePending sticks
-        // true and the tab bricks until reload.
+    it('a refused write stays queued and retries without losing its place', () => {
+        vi.useFakeTimers();
         const { manager, tab } = makeHarness();
         const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
@@ -71,14 +69,18 @@ describe('single-flight terminal write pump', () => {
                 written.push(data);
                 if (cb) cb();
             });
-            manager.writeToTerminal(tab, 'doomed');
+            manager.writeToTerminal(tab, 'retained');
             expect(tab.writePending).toBe(false);
-            manager.writeToTerminal(tab, 'alive');
-            expect(written).toEqual(['alive']);
+            manager.writeToTerminal(tab, 'tail');
+            expect(written).toEqual([]);
+            expect(tab.writeBuffer).toBe('retainedtail');
+            vi.advanceTimersByTime(50);
+            expect(written).toEqual(['retainedtail']);
             expect(tab.writePending).toBe(false);
             expect(errors).toHaveBeenCalledTimes(1);
         } finally {
             errors.mockRestore();
+            vi.useRealTimers();
         }
     });
 
@@ -150,12 +152,12 @@ describe('single-flight terminal write pump', () => {
         expect(tab.term.scrollToBottom).not.toHaveBeenCalled();
     });
 
-    it('drops only unsubmitted output when the tab dies', () => {
+    it('cancels pending rendering only after the tab is finalized', () => {
         const { callbacks, manager, tab } = makeHarness();
 
         manager.writeToTerminal(tab, 'submitted');
         manager.writeToTerminal(tab, 'pending');
-        tab.isDead = true;
+        tab.finalizing = true;
         callbacks.shift()();
 
         expect(tab.term.write).toHaveBeenCalledTimes(1);

@@ -48,7 +48,8 @@ describe('xterm scrollback configuration', () => {
         // Screen restore on attach (pre-open write) and quiet-tab uploads
         // are what keep attach fast without a 1 MiB replay.
         expect(src).toContain('_onAttachHead');
-        expect(src).toContain('scrollback: LIVE_SCROLLBACK_ROWS');
+        expect(src).toContain('let scrollback = LIVE_SCROLLBACK_ROWS');
+        expect(src).toContain('serialize({ scrollback })');
         expect(src).toContain('/checkpoint');
     });
 });

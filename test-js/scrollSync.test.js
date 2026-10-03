@@ -67,10 +67,10 @@ describe('write batches sync the DOM scroll area', () => {
         expect(tab.term.scrollToBottom).toHaveBeenCalled();
     });
 
-    it('does not write or sync on a dead tab', () => {
+    it('does not write or sync on a finalized tab', () => {
         const tm = Object.create(TabManager.prototype);
         const tab = makeTab();
-        tab.isDead = true;
+        tab.finalizing = true;
         tm.writeToTerminal(tab, 'hello');
         expect(tab.term.write).not.toHaveBeenCalled();
         expect(tab._syncSpy).not.toHaveBeenCalled();
@@ -116,7 +116,17 @@ function stubXtermGlobals() {
         viewportEl.className = 'xterm-viewport';
         const rootEl = document.createElement('div');
         rootEl.appendChild(viewportEl);
+        const dataListeners = [];
+        const binaryListeners = [];
         return {
+            emitData: (data) =>
+                dataListeners.forEach((fn) => {
+                    fn(data);
+                }),
+            emitBinary: (data) =>
+                binaryListeners.forEach((fn) => {
+                    fn(data);
+                }),
             element: rootEl,
             buffer: { active: { viewportY: 100, baseY: 100 } },
             // Real xterm.js renders term.element into the container passed
@@ -131,7 +141,8 @@ function stubXtermGlobals() {
             onSelectionChange: () => {},
             onBell: () => {},
             onScroll: () => {},
-            onData: () => {},
+            onData: (fn) => dataListeners.push(fn),
+            onBinary: (fn) => binaryListeners.push(fn),
             getSelection: () => '',
             write: vi.fn((_data, cb) => {
                 if (cb) cb();
@@ -188,6 +199,40 @@ function mountRealTab({ coder = 'bash', opencodeMode = null } = {}) {
     tm._openTermAndViewport(tab);
     return tab;
 }
+
+describe('Pi full-screen input is independent of staged prompt mode', () => {
+    it('forwards classic mouse reports as raw bytes, including coordinates above ASCII', () => {
+        const tab = mountRealTab({ coder: 'pi' });
+        window.WebSocket.OPEN = 1;
+        tab.ws.ws.readyState = 1;
+        const wireSend = vi.spyOn(tab.ws.ws, 'send');
+        const mouse = '\x1b[M' + String.fromCharCode(96, 180, 210);
+        tab.term.emitBinary(mouse);
+        expect(wireSend).toHaveBeenCalledOnce();
+        expect(Array.from(new Uint8Array(wireSend.mock.calls[0][0]))).toEqual([
+            1, 27, 91, 77, 96, 180, 210,
+        ]);
+        expect(tab.directMode).toBe(false);
+    });
+
+    it.each([
+        ['wheel up', '\x1b[<64;20;5M'],
+        ['wheel down', '\x1b[<65;20;5M'],
+        ['scrollbar drag', '\x1b[<32;79;10M'],
+    ])(
+        'forwards %s reports without enabling direct typing',
+        (_gesture, report) => {
+            const tab = mountRealTab({ coder: 'pi' });
+            const send = vi.spyOn(tab.ws, 'sendInput').mockReturnValue(true);
+            expect(tab.directMode).toBe(false);
+            tab.draft = 'do not send my unsent prompt';
+            tab.term.emitData(report);
+            expect(send).toHaveBeenCalledWith(report);
+            expect(tab.directMode).toBe(false);
+            expect(tab.draft).toBe('do not send my unsent prompt');
+        },
+    );
+});
 
 describe('OpenCode 2 Mini normal scrollback', () => {
     it('does not intercept wheel gestures or inject legacy TUI scroll keys', () => {
