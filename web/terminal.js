@@ -2137,7 +2137,10 @@ export class TabManager {
 
     async _loadColdHistory(tabInfo) {
         const pty = tabInfo.ws;
-        if (!tabInfo._historyOmitted || tabInfo._historyLoading || tabInfo.finalizing || pty?.mode !== 'hot') return;
+        // Alternate-screen scroll belongs to the live application, not
+        // xterm scrollback. Never reset a TUI in response to its wheel input.
+        if (tabInfo.term?.buffer?.active?.type !== 'normal' ||
+            !tabInfo._historyOmitted || tabInfo._historyLoading || tabInfo.finalizing || pty?.mode !== 'hot') return;
         tabInfo._historyLoading = true;
         let finishGate;
         let gate;
