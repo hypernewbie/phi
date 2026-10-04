@@ -67,7 +67,7 @@ describe('_onLiveGap', () => {
         }));
         await c._onLiveGap(tab(p), 100, 102);
         expect(p.applyGapPatch).toHaveBeenCalledTimes(1);
-        expect(p.applyGapPatch.mock.calls[0][0]).toBe(raw);
+        expect(p.applyGapPatch.mock.calls[0][0]).toStrictEqual(raw);
         expect(p.abandonGap).not.toHaveBeenCalled();
     });
 
