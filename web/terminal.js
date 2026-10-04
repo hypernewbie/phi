@@ -2176,11 +2176,7 @@ export class TabManager {
             tabInfo.drainedSeq = 0;
             tabInfo.userFollowBottom = false;
             for (const range of ranges) {
-                const text = pty.decodeOutput(range.bytes);
-                this._reserveReplayRows(tabInfo, text);
-                this.writeToTerminal(tabInfo, text);
-                await this._drainSettled(tabInfo);
-                if (!current()) return;
+                if (!await this._parseRecordingRange(tabInfo, range, current)) return;
                 tabInfo.queuedSeq = range.end;
                 tabInfo.drainedSeq = range.end;
             }
@@ -2196,6 +2192,52 @@ export class TabManager {
             finishGate?.();
             if (current() && (!reset || !tabInfo._historyOmitted)) pty.release();
         }
+    }
+
+    async _parseRecordingRange(tabInfo, range, current, deliver, onEnqueued) {
+        // Resize only after preceding bytes reach the parser. Applying
+        // geometry to a queued write interprets that write in the new grid.
+        await this._drainSettled(tabInfo);
+        if (!current()) return false;
+        const markers = (range.resizes || []).slice().sort((a, b) => a[0] - b[0]);
+        let prior;
+        const changes = [];
+        for (const marker of markers) {
+            if (marker[0] < range.start) prior = marker;
+            else if (marker[0] <= range.end) changes.push(marker);
+        }
+        if (prior) changes.unshift(prior);
+        let cursor = range.start;
+        const parse = async (end) => {
+            if (end <= cursor) return true;
+            const bytes = range.bytes.subarray(cursor - range.start, end - range.start);
+            if (deliver) {
+                // The socket owns the streaming decoder and sequence
+                // frontier for a gap patch. Decode only there, exactly once.
+                this._reserveReplayRows(tabInfo, new TextDecoder().decode(bytes));
+                deliver(bytes);
+            } else {
+                const ws = tabInfo.ws;
+                const text = ws?.decodeOutput ? ws.decodeOutput(bytes)
+                    : ws?.decoder ? ws.decoder.decode(bytes, { stream: true })
+                    : new TextDecoder().decode(bytes);
+                this._reserveReplayRows(tabInfo, text);
+                this.writeToTerminal(tabInfo, text);
+            }
+            // Without geometry changes, preserve enqueue-before-live
+            // acceleration. With changes, live waits for the matching grid.
+            if (!markers.length && end === range.end) onEnqueued?.();
+            await this._drainSettled(tabInfo);
+            if (!current()) return false;
+            cursor = end;
+            return true;
+        };
+        for (const [at, cols, rows] of changes) {
+            if (!await parse(Math.max(range.start, at))) return false;
+            if (!current()) return false;
+            if (tabInfo.term.cols !== cols || tabInfo.term.rows !== rows) tabInfo.term.resize(cols, rows);
+        }
+        return parse(range.end);
     }
 
     _reserveReplayRows(tabInfo, text) {
@@ -2214,27 +2256,33 @@ export class TabManager {
         const current = () => !tabInfo.finalizing && tabInfo.ws === ws &&
             (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
         if (!current()) return false;
+        let released = false;
+        const enqueued = () => { if (!released && onEnqueued) { released = true; onEnqueued(); } };
         for (let cursor = from; cursor < head;) {
             const end = Math.min(head, cursor + MAX_DELTA_BYTES);
             const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
             if (!current()) return false;
             if (!d || d.start !== cursor || d.end !== end || d.byteLength !== end - cursor ||
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
-            // Keep one decoder across requests and subsequent live frames.
-            const text = d.bytes && ws?.mode === 'hot' && ws.decoder
-                ? (ws.decodeOutput ? ws.decodeOutput(d.bytes) : ws.decoder.decode(d.bytes, { stream: true })) : d.text;
-            if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
-            this._reserveReplayRows(tabInfo, text);
-            this.writeToTerminal(tabInfo, text);
-            if (end === head && onEnqueued) onEnqueued();
-            await this._drainSettled(tabInfo);
+            if (d.bytes) {
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, end === head ? enqueued : undefined)) return false;
+            } else {
+                this._reserveReplayRows(tabInfo, d.text);
+                this.writeToTerminal(tabInfo, d.text);
+                await this._drainSettled(tabInfo);
+            }
             if (!current()) return false;
+            if (ws?.mode === 'hot' && ws.decoder) tabInfo._streamDecoder = ws.decoder;
             if ((tabInfo.queuedSeq ?? 0) <= end) {
                 tabInfo.queuedSeq = end;
                 tabInfo.drainedSeq = end;
             }
             cursor = end;
         }
+        // Historical geometry must not leave the live terminal at an old
+        // size. Fit without sending a historical resize to the backend.
+        tabInfo.fitAddon?.fit?.();
+        enqueued();
         return true;
     }
 
@@ -2268,6 +2316,8 @@ export class TabManager {
         // instead of stalling.
         if (tabInfo._gapInFlight) return;
         tabInfo._gapInFlight = true;
+        pty.hold?.();
+        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo._bootstrapGen === bootGen;
         let recovered = false;
         try {
             for (let cursor = from; cursor < to;) {
@@ -2281,12 +2331,11 @@ export class TabManager {
                     try { pty.ws?.close(); } catch (_e) {}
                     return;
                 }
-                this._reserveReplayRows(tabInfo, d.text ?? new TextDecoder().decode(d.bytes));
-                pty.applyGapPatch(d.bytes);
+                if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes))) return;
                 tabInfo.queuedSeq = pty.lastFrameEnd;
-                await this._drainSettled(tabInfo);
                 cursor = end;
             }
+            tabInfo.fitAddon?.fit?.();
             recovered = true;
         } finally {
             tabInfo._gapInFlight = false;
