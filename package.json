@@ -31,6 +31,7 @@
   "devDependencies": {
     "@alenaksu/json-viewer": "catalog:",
     "@biomejs/biome": "catalog:",
+    "@earendil-works/pi-coding-agent": "1.0.1",
     "@highlightjs/cdn-assets": "catalog:",
     "@noble/hashes": "catalog:",
     "@playwright/test": "catalog:",
@@ -55,8 +56,8 @@
     "stylelint": "catalog:",
     "stylelint-config-standard": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:",
     "viewerjs": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }
