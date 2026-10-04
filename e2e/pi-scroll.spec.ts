@@ -247,8 +247,13 @@ for (const situation of [
         await page.locator(`#term-${pane} .xterm-screen`).hover();
         await page.mouse.wheel(0, -240);
         await expect
-            .poll(() => firstRow(page, pane))
-            .not.toBe('PI HISTORY ROW 0180');
+            .poll(async () => {
+                const match = /^PI HISTORY ROW (\d{4})$/.exec(
+                    await firstRow(page, pane),
+                );
+                return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+            })
+            .toBeLessThan(180);
         await expect(page.locator('#input-textarea')).toHaveValue(
             'keep this unsent draft',
         );
