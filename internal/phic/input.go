@@ -22,6 +22,8 @@ type inputParser struct {
 	prefix   []byte
 	paste    bool
 	rest     []byte
+	servers  int
+	claimed  map[[2]int]bool
 }
 
 func (p *inputParser) Feed(data []byte) ([]byte, error) {
@@ -89,13 +91,40 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 		return seq, nil
 	}
 	code, mods, event, ok := encodedKey(seq)
+	identity := [2]int{code, mods}
+	if ok && p.claimed[identity] {
+		if event == 3 {
+			delete(p.claimed, identity)
+			return nil, nil
+		}
+		if event == 2 {
+			return nil, nil
+		}
+	}
+	claim := func() {
+		if ok {
+			if p.claimed == nil {
+				p.claimed = make(map[[2]int]bool)
+			}
+			p.claimed[identity] = true
+		}
+	}
+	// Ctrl-digits are distinguishable only under an enhanced keyboard
+	// encoding. Never infer a server shortcut from legacy/plain digits.
+	if ok && event == 1 && mods == 5 && code >= '1' && code <= '9' && code-'0' <= p.servers {
+		claim()
+		p.prefix = nil
+		return nil, viewCommand(byte(code))
+	}
 	prefix := bytes.Equal(seq, []byte{0x1d}) || (ok && code == 93 && mods == 5 && event != 3)
 	if prefix {
 		if len(p.prefix) != 0 {
 			out := p.prefix
 			p.prefix = nil
+			delete(p.claimed, identity)
 			return out, nil
 		}
+		claim()
 		p.prefix = append([]byte{}, seq...)
 		return nil, nil
 	}
@@ -115,9 +144,11 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 	}
 	switch command {
 	case 'q':
+		claim()
 		p.prefix = nil
 		return nil, errDetach
-	case 's', 'd', 'w', '?':
+	case 's', 'd', 'w', '?', 'b', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		claim()
 		p.prefix = nil
 		return nil, viewCommand(command)
 	}

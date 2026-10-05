@@ -1,6 +1,6 @@
 # Native terminal client
 
-`phic` is a Go client for Phi on the same host. It forwards terminal bytes without a TUI framework or an emulator.
+`phic` is a native multi-server Phi client. Backend output is raw; client menus are inline TUIs. It uses no Charm libraries, TUI framework, or terminal emulator.
 
 Phi owns the processes, sessions, and durable recordings. The native terminal owns the displayed buffers and its scrollback limit.
 
@@ -15,13 +15,22 @@ phic --coder pi .
 phic --pane <pane-id>
 ```
 
-The default server is `http://127.0.0.1:7070`. Use `--server` for a different local port.
+By default, phic reads the desktop client's `profiles.json` in saved sidebar order and starts with the most recently used server. Standard locations are:
+
+- macOS: `~/Library/Application Support/phi-client/profiles.json`
+- Linux: `$XDG_CONFIG_HOME/phi-client/profiles.json`, or `~/.config/phi-client/profiles.json`
+
+The development app's `phi-desktop-electron` directory is also recognized. Use `--profiles FILE` if desktop userData is elsewhere. The client reads the backup when necessary, but never writes or renames either desktop file.
+
+With no saved profiles, the default is `http://127.0.0.1:7070`. `--server URL` uses one explicit server; combine it with `--profiles FILE` to retain that saved list and select or add the explicit origin for this run. No server configuration is duplicated or persisted by phic.
 
 Without an unambiguous free pane, the client shows a numbered startup list. A live pane with another attached client requires explicit selection. Shared clients can change the same backend terminal size.
 
 `--pane` uses the server's exact pane identity and directory. It does not change the existing OpenCode launch mode.
 
-Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored by the client.
+Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored by the client. Each origin owns a separate cookie jar, even for servers on the same host at different ports. Changing servers leaves the old backend running and remembers its exact pane for return during this client run.
+
+Remote `phic .` opens the server's project list. Absolute remote paths are server paths, not local filesystem checks. A server switch never carries the outgoing server's directory into the next server's project selection. An unavailable server can be skipped from the startup picker; a failed live switch returns to the outgoing pane.
 
 ## Other operations
 
@@ -36,6 +45,9 @@ phic --worktrees .
 
 ## Relay keys
 
+- Press Ctrl-], then `b`, for the colored server bar.
+- Press Ctrl-], then `1`–`9`, to switch servers in desktop sidebar order.
+- On terminals with Kitty or modifyOtherKeys reporting, Ctrl-1 through Ctrl-9 also switch servers. Plain digits are never interpreted as shortcuts.
 - Press Ctrl-], then `s`, for sessions and new panes.
 - Press Ctrl-], then `d`, for the current pane's diff.
 - Press Ctrl-], then `w`, for worktrees.
@@ -43,6 +55,10 @@ phic --worktrees .
 - Press Ctrl-], then `q`, to detach.
 - Press Ctrl-] twice to send one original prefix sequence.
 - Other application input stays unchanged, including delimited paste.
+
+The server bar shows colored boxes and highlights the active server. Session, project, worktree, help, error, and diff headings use the selected server's reported Phi accent. Backend output is not recolored. Unobserved or login-protected servers use the default accent until their identity is available. `NO_COLOR` and `TERM=dumb` disable client colors.
+
+Use numbered choices, Enter, n/p for pages, and Esc/q to return. Enhanced Ctrl-digit shortcuts also work in client selection menus. Inside the external pager, use its own keys and exit it before switching servers. Holding Ctrl alone is not observable on legacy terminals; use Ctrl-] b.
 
 The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodings. Kitty alternate-key identities, associated text, and Caps/Num Lock state bits are supported. Undelimited pasted control bytes cannot be distinguished from typed control bytes.
 

@@ -21,8 +21,13 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 		if err := c.tty.PrepareRelay(); err != nil {
 			return err
 		}
+		if state := c.activeServer(); state != nil {
+			state.remember(current)
+		}
+		c.keys.servers = len(c.servers)
 		relay := NewRelay(c.tty, c.api)
 		relay.fresh = fresh
+		relay.keys = &c.keys
 		if _, err = relay.Connect(ctx, current.PaneID); err == nil {
 			err = relay.Run(ctx)
 		}
@@ -35,25 +40,51 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 		if err := c.tty.PrepareMenu(); err != nil {
 			return err
 		}
-		next, viewErr := c.liveView(ctx, current, byte(command))
+		c.refreshIdentity(ctx, c.activeServer())
+		next, isFresh, viewErr := c.dispatchView(ctx, current, byte(command))
 		fresh = false
 		if ctx.Err() != nil {
 			return nil
 		}
-		if viewErr != nil && !errors.Is(viewErr, errDetach) {
+		if viewErr == nil {
+			current, fresh = next, isFresh
+		} else if !errors.Is(viewErr, errDetach) {
 			if err := c.viewError(ctx, viewErr); err != nil {
 				return err
 			}
-		} else if viewErr == nil && next != nil {
-			replacement, isFresh, spawnErr := c.materialize(ctx, *next)
-			if spawnErr != nil {
-				if err := c.viewError(ctx, spawnErr); err != nil {
-					return err
-				}
-			} else {
-				current, fresh = replacement, isFresh
-			}
 		}
+	}
+}
+
+func (c *client) dispatchView(ctx context.Context, current SelectResult, key byte) (SelectResult, bool, error) {
+	for {
+		if key >= '1' && key <= '9' {
+			if c.keys.claimed == nil {
+				c.keys.claimed = make(map[[2]int]bool)
+			}
+			c.keys.claimed[[2]int{int(key), 5}] = true
+			return c.switchServer(ctx, int(key-'1'), current)
+		}
+		var next *SelectResult
+		var err error
+		if key == 'b' {
+			var i int
+			i, err = c.serverPicker(ctx)
+			if err == nil {
+				return c.switchServer(ctx, i, current)
+			}
+		} else {
+			next, err = c.liveView(ctx, current, key)
+		}
+		var shortcut viewCommand
+		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
+			key = byte(shortcut)
+			continue
+		}
+		if err != nil || next == nil {
+			return current, false, err
+		}
+		return c.materialize(ctx, *next)
 	}
 }
 
@@ -87,9 +118,9 @@ func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (
 	dir := current.Existing.Dir
 	switch key {
 	case '?':
-		err := writeAll(c.tty, []byte("Φ  Shortcuts\r\n\r\nCtrl-] s   Sessions / new pane\r\nCtrl-] d   Diff\r\nCtrl-] w   Worktrees\r\nCtrl-] q   Detach (backend keeps running)\r\nCtrl-] ?   Help\r\nCtrl-] twice sends the prefix to the backend\r\n\r\nEnter or Esc/q to return: "))
+		err := writeAll(c.tty, []byte(c.color("Φ  Shortcuts\r\n\r\nCtrl-] b   Server bar\r\nCtrl-] 1..9 or enhanced Ctrl-1..9 switches server\r\nCtrl-] s   Sessions / new pane\r\nCtrl-] d   Diff\r\nCtrl-] w   Worktrees\r\nCtrl-] q   Detach (backend keeps running)\r\nCtrl-] ?   Help\r\nCtrl-] twice sends the prefix to the backend\r\n\r\nEnter or Esc/q to return: ")))
 		if err == nil {
-			_, err = readMenuInput(ctx, c.tty)
+			_, err = readMenuInput(ctx, c.tty, len(c.servers))
 		}
 		return nil, err
 	case 'd':
@@ -97,7 +128,7 @@ func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (
 		if err != nil {
 			return nil, err
 		}
-		pager, err := NewPager(text)
+		pager, err := NewPager(c.diffText(dir, text))
 		if err != nil {
 			return nil, err
 		}
@@ -136,7 +167,7 @@ func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (
 }
 
 func (c *client) viewError(ctx context.Context, err error) error {
-	if e := writeAll(c.tty, []byte(fmt.Sprintf("\r\nΦ  %s\r\nEnter or Esc/q to return: ", QuotedID(err.Error())))); e != nil {
+	if e := writeAll(c.tty, []byte(fmt.Sprintf("\r\n%s\r\nEnter or Esc/q to return: ", c.heading(QuotedID(err.Error()))))); e != nil {
 		return e
 	}
 	_, e := readMenuInput(ctx, c.tty)

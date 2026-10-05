@@ -157,14 +157,6 @@ func QuotedID(s string) string {
 	return string(safe)
 }
 
-// normalizePath returns an absolute path or an error.
-func normalizePath(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("phic: empty path")
-	}
-	return resolveDir(p)
-}
-
 // MatchDir returns true if viewDir matches the wanted dir.
 // Empty want matches anything.
 func MatchDir(viewDir, want string) bool {

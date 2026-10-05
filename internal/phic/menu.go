@@ -15,30 +15,9 @@ type lineTerminal interface {
 	Write([]byte) (int, error)
 }
 
-func readLine(ctx context.Context, t lineTerminal) (string, error) {
-	var line []byte
-	var b [1]byte
-	for len(line) < 4096 {
-		n, err := t.ReadContext(ctx, b[:])
-		if n > 0 {
-			if b[0] == '\n' || b[0] == '\r' {
-				return string(line), nil
-			}
-			line = append(line, b[0])
-		}
-		if err != nil {
-			return "", err
-		}
-		if n == 0 {
-			return "", io.EOF
-		}
-	}
-	return "", fmt.Errorf("phic: input line too long")
-}
-
-// readMenuInput handles menu keys in raw mode. Unlike readLine (password
-// entry), Escape does not require Enter and backend reports are not choices.
-func readMenuInput(ctx context.Context, t lineTerminal) (string, error) {
+// readMenuInput handles menu keys in raw mode. Escape does not require Enter
+// and backend reports are not choices.
+func readMenuInput(ctx context.Context, t lineTerminal, servers ...int) (string, error) {
 	var line, sequence []byte
 	var b [1]byte
 	for len(line) < 4096 {
@@ -86,6 +65,9 @@ func readMenuInput(ctx context.Context, t lineTerminal) (string, error) {
 			if code == 27 {
 				return "", errDetach
 			}
+			if mods == 5 && event == 1 && code >= '1' && code <= '9' && len(servers) > 0 && code-'0' <= servers[0] {
+				return "", viewCommand(byte(code))
+			}
 			if code > 127 {
 				continue
 			}
@@ -130,6 +112,10 @@ func readMenuInput(ctx context.Context, t lineTerminal) (string, error) {
 }
 
 func (c *client) choose(ctx context.Context, title string, items []string) (int, error) {
+	return c.chooseStyled(ctx, title, items, nil)
+}
+
+func (c *client) chooseStyled(ctx context.Context, title string, items []string, paint func(int, string) string) (int, error) {
 	if c.tty == nil {
 		return 0, fmt.Errorf("phic: selection requires a terminal")
 	}
@@ -150,7 +136,7 @@ func (c *client) choose(ctx context.Context, title string, items []string) (int,
 	page := 0
 	for {
 		var out strings.Builder
-		fmt.Fprintf(&out, "Φ  %s\r\n", title)
+		fmt.Fprintf(&out, "%s\r\n", c.heading(title))
 		start, end := page*perPage, (page+1)*perPage
 		if end > len(items) {
 			end = len(items)
@@ -161,13 +147,18 @@ func (c *client) choose(ctx context.Context, title string, items []string) (int,
 			if len(line) > cols-1 {
 				line = line[:cols-4] + "..."
 			}
+			if paint != nil {
+				line = paint(i, line)
+			} else {
+				line = c.color(line)
+			}
 			fmt.Fprintf(&out, "%s\r\n", line)
 		}
-		fmt.Fprint(&out, "number + Enter · n/p page · Esc/q back: ")
+		fmt.Fprint(&out, c.color("number + Enter · n/p page · Esc/q back: "))
 		if err := writeAll(c.tty, []byte(out.String())); err != nil {
 			return 0, err
 		}
-		line, err := readMenuInput(ctx, c.tty)
+		line, err := readMenuInput(ctx, c.tty, len(c.servers))
 		if err != nil {
 			return 0, err
 		}
