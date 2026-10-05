@@ -44,6 +44,22 @@ jobs:
           go vet -tags=embedassets ./...
           go test -tags=embedassets -race .
 
+      # The phic client is a separate binary. Build it for every
+      # supported platform so a syntax error in cmd/phic or a
+      # platform-specific stub does not rot unnoticed.
+      - name: Build phic (linux/darwin/windows)
+        run: |
+          for goos in linux darwin windows; do
+            GOOS=$goos CGO_ENABLED=0 go build -o /tmp/phic-${goos} ./cmd/phic
+          done
+
+      # Cross-platform client tests. The relay and TTY layer
+      # have Unix-only behavior; the Windows test is a stub.
+      - name: Test phic (cross-platform)
+        run: |
+          GOOS=linux CGO_ENABLED=0 go test ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
+          GOOS=windows CGO_ENABLED=0 go test ./internal/phic/... ./internal/termproof/... ./pkg/ws/wireproto/...
+
   test-ts:
     name: TS Build + Type Check + Drift Guard
     runs-on: ubuntu-latest
