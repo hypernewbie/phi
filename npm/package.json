@@ -3,7 +3,8 @@
   "version": "0.22.2",
   "description": "Terminal multiplexer & control center for AI coding assistants",
   "bin": {
-    "phi": "./bin/phi"
+    "phi": "./bin/phi",
+    "phic": "./bin/phic"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"
