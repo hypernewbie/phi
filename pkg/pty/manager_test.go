@@ -762,11 +762,13 @@ func TestManagerShutdown_KillsStragglers(t *testing.T) {
 		t.Errorf("Shutdown took too long waiting on a SIGTERM-ignoring straggler: %v", elapsed)
 	}
 
+	// Shutdown sends SIGKILL within its bound. Cmd.Wait and shim cleanup
+	// finish asynchronously; Closed is the exact cleanup barrier, not the
+	// instant Shutdown returns. The child otherwise sleeps for 1000s.
 	select {
 	case <-inst.Pty.Closed:
-		// SIGKILLed and cleaned up, as expected
-	default:
-		t.Error("expected inst.Pty.Closed to be closed after Shutdown SIGKILLed the straggler")
+	case <-time.After(15 * time.Second):
+		t.Fatal("SIGKILLed straggler never exited and finished cleanup")
 	}
 
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
