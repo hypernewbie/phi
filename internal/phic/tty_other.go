@@ -28,8 +28,11 @@ func (t *TTY) Read(_ []byte) (int, error) { return 0, errors.New("phic: unix-onl
 func (t *TTY) ReadContext(_ context.Context, _ []byte) (int, error) {
 	return 0, errors.New("phic: unix-only first version")
 }
-func (t *TTY) EnterRaw() error { return errors.New("phic: unix-only first version") }
-func (t *TTY) Restore() error  { return errors.New("phic: unix-only first version") }
+func (t *TTY) EnterRaw() error     { return errors.New("phic: unix-only first version") }
+func (t *TTY) Unread(_ []byte)     {}
+func (t *TTY) PrepareMenu() error  { return errors.New("phic: unix-only first version") }
+func (t *TTY) PrepareRelay() error { return errors.New("phic: unix-only first version") }
+func (t *TTY) Restore() error      { return errors.New("phic: unix-only first version") }
 func (t *TTY) Password(_ context.Context, _ string) (string, error) {
 	return "", errors.New("phic: unix-only first version")
 }

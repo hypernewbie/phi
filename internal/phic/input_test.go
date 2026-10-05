@@ -24,7 +24,10 @@ func TestInputAllPacketSplits(t *testing.T) {
 		{"literal enhanced prefix", "\x1b[93;5u\x1b[93;5u", "\x1b[93;5u", nil},
 		{"unknown command", "\x1dz", "\x1dz", nil},
 		{"paste is never a command", "\x1b[200~hello \x1dq\x1b[201~", "\x1b[200~hello \x1dq\x1b[201~", nil},
-		{"unproved live view stays disabled", "\x1ds", "", errLiveView},
+		{"session view handoff", "\x1ds", "", viewCommand('s')},
+		{"diff view handoff", "\x1dd", "", viewCommand('d')},
+		{"worktree view handoff", "\x1dw", "", viewCommand('w')},
+		{"help view handoff", "\x1d?", "", viewCommand('?')},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for cut := 0; cut <= len(tc.in); cut++ {

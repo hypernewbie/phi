@@ -77,7 +77,7 @@ func (p *Pager) Close() error {
 }
 
 // RunPager lends the existing TTY to a child. It must be called only when
-// no relay reader owns that TTY; live overlays remain disabled.
+// no relay worker owns that TTY; the controller joins both before calling.
 func RunPager(ctx context.Context, tty *TTY, file string) (runErr error) {
 	if tty == nil {
 		return errors.New("phic: pager needs a TTY")
@@ -104,6 +104,8 @@ func RunPager(ctx context.Context, tty *TTY, file string) (runErr error) {
 	bin := PagerBinary()
 	args := append(PagerArgs(), file)
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// A read-only Phi diff must not run LESSOPEN filters or shell commands.
+	cmd.Env = append(os.Environ(), "LESSSECURE=1")
 	cmd.Stdin = f
 	cmd.Stdout = f
 	cmd.Stderr = f

@@ -125,8 +125,11 @@ func (r *Relay) output(ctx context.Context, data []byte, historical bool) error 
 	}
 	before := r.written
 	err = r.write(ctx, paint)
+	// Display bytes have no one-to-one source offset after query suppression.
+	// Only a completed batch can certify its source interval.
+	r.written = before
 	if err == nil {
-		r.written = before + uint64(len(data))
+		r.written += uint64(len(data))
 	}
 	return err
 }

@@ -31,17 +31,18 @@ type relayTerminal interface {
 // Relay retains only an output frontier, not a client recording. One reader
 // delivers output; one input worker writes the socket. Closing wakes both.
 type Relay struct {
-	tty     relayTerminal
-	api     *apiClient
-	mu      sync.Mutex
-	conn    *websocket.Conn
-	header  wireAttach
-	written uint64
-	epoch   uint64
-	fresh   bool
-	repaint *repaintFilter
-	pane    string
-	cancel  context.CancelFunc
+	tty       relayTerminal
+	api       *apiClient
+	mu        sync.Mutex
+	conn      *websocket.Conn
+	header    wireAttach
+	written   uint64
+	epoch     uint64
+	fresh     bool
+	repaint   *repaintFilter
+	viewInput []byte
+	pane      string
+	cancel    context.CancelFunc
 }
 
 func NewRelay(tty relayTerminal, api *apiClient) *Relay { return &Relay{tty: tty, api: api} }
@@ -357,6 +358,7 @@ func (r *Relay) runInput(ctx context.Context) error {
 			}
 		}
 		if commandErr != nil {
+			r.viewInput = parser.rest
 			return commandErr
 		}
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {

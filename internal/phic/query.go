@@ -6,9 +6,9 @@ import (
 	"unicode/utf8"
 )
 
-// queryGuard is an escape lexer, not a screen model. It rejects known
-// historical reply-producing controls before bootstrap paints anything.
-// State survives recording pages and retained partial escape sequences.
+// queryGuard classifies reply-producing controls and counts keyboard-stack
+// operations. It is an escape lexer, not a screen model. Repaint uses its
+// classification; TTY cleanup uses its keyboard callback.
 type queryGuard struct {
 	state    byte
 	text     []byte

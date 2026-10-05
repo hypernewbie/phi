@@ -1,6 +1,6 @@
 # phic screen proof status
 
-**Live overlays are not approved or enabled.**
+**Inline client views use recording rebuilds, not native-buffer snapshots.**
 
 The original `TestProofReport` contained a hard-coded compatibility table. It did not measure rendered screens. That table is removed.
 
@@ -20,11 +20,11 @@ These are failure evidence. They are not a passing compatibility matrix. The shi
 
 ## Runtime boundary
 
-The relay does not draw live menus. Ctrl-] q detaches. A live-view request returns an explicit unsupported-operation error after cleanup.
+The operator approved a practical recording-rebuild scope: raw backend output, temporary inline client menus, no emulator, and current-geometry replay. Exact reconstruction across arbitrary historical resizes is not claimed.
 
-Session and worktree selection run before a backend owns the terminal. `--diff` runs as a separate pager operation, not a live overlay.
+Ctrl-] s/d/w/? transfers ownership after both relay workers stop. Menus and the native pager do not race with backend output. Phi keeps recording while the client view is open. On return, the controller neutralizes terminal input modes, unwinds observed backend keyboard pushes, initializes both native buffers, reconnects, and rebuilds from the recording.
 
-The client ignores opaque browser checkpoints. It reads retained recording bytes in bounded requests. It checks geometry before initial replay and rejects known historical terminal queries before painting reused panes. It does not scrub or skip output to fabricate a successful replay.
+The client ignores opaque browser checkpoints. Repaint suppresses historical reply-producing queries and clipboard writes without changing Phi's recording. New live controls remain raw, including replies and ambiguous legacy keys. An incomplete historical control keeps its old policy until complete, including across the live boundary. Work is bounded by recording pages and a 1 MiB unfinished-control limit.
 
 Fresh launches receive their initial terminal dimensions before the process starts. Their startup query replies can reach the new application.
 
@@ -42,8 +42,10 @@ A parser barrier alone also cannot establish that every asynchronous terminal se
 
 The OpenCode fixture assigns an isolated service port. A separate HOME alone does not isolate its default port. The runner never stops or changes a service in the user's HOME.
 
-## Remaining proof
+## Recording-rebuild evidence
 
-A general live-view implementation still requires measured screen restoration and a reply policy. Restoration of retained content in both native buffers remains unproved. It also requires native terminal checks for the supported backends and keyboard protocols.
+`test-js/phicRebuild.test.js` imports the actual production reset and repaint operations from `TestRebuildOracleInput`. Six fixed-geometry cases compare visible cells, cursor, modes, and future output after three consecutive menu returns: normal, alternate, both buffers, custom tabs/scroll region/styles, keyboard modes, and historical queries. The dual-buffer case also returns to the normal buffer. No historical query reply is generated during reconstruction. Native scrollback is excluded: it contains inline menus and replayed output, not a virtual client archive.
 
-The byte fixtures and the headless counterexamples do not replace those checks. No approval for a smaller live-overlay scope is assumed.
+`TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss` runs the CLI in a controlling PTY. It proves help/session/worktree cancellation, pager return, output recorded while a menu is open, same-read menu responses, exact pane switching, old-query suppression, and unchanged legacy Shift-F3 plus bracketed paste. It uses isolated HTTP/WS fixtures, not installed provider processes.
+
+Installed-backend menu restoration and multi-server behavior still require the native smoke pass. The existing startup checks and headless tests do not substitute for that pass.
