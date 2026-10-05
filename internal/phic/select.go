@@ -29,7 +29,7 @@ func (c *client) Select(ctx context.Context) (SelectResult, error) {
 		}
 		return SelectResult{}, fmt.Errorf("phic: pane %s is not live", QuotedID(c.cfg.Pane))
 	}
-	dir, err := normalizePath(c.cfg.Dir)
+	dir, err := c.directory(ctx, c.cfg.Dir)
 	if err != nil {
 		return SelectResult{}, err
 	}

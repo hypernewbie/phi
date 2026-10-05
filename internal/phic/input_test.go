@@ -46,6 +46,47 @@ func TestInputAllPacketSplits(t *testing.T) {
 		})
 	}
 }
+func TestServerShortcutsAcrossHandoffsAndEveryPacketSplit(t *testing.T) {
+	for _, tc := range []struct {
+		source, want string
+		request      viewCommand
+	}{
+		{"a\x1b[49;5u\x1b[49;5:2u\x1b[49;5:3uZ", "aZ", viewCommand('1')},
+		{"a\x1b[27;5;50~Z", "aZ", viewCommand('2')},
+		{"a\x1d3Z", "aZ", viewCommand('3')},
+		{"123\x11\x00", "123\x11\x00", 0},
+		{"\x1b[200~\x1b[49;5u\x1d1\x1b[201~", "\x1b[200~\x1b[49;5u\x1d1\x1b[201~", 0},
+	} {
+		for split := 0; split <= len(tc.source); split++ {
+			p := inputParser{servers: 3}
+			var output []byte
+			var commands []viewCommand
+			for _, chunk := range [][]byte{[]byte(tc.source[:split]), []byte(tc.source[split:])} {
+				for len(chunk) > 0 {
+					out, err := p.Feed(chunk)
+					output = append(output, out...)
+					chunk = nil
+					if err != nil {
+						var command viewCommand
+						if !errors.As(err, &command) {
+							t.Fatal(err)
+						}
+						commands = append(commands, command)
+						chunk = p.rest
+						p.rest = nil
+					}
+				}
+			}
+			if string(output) != tc.want {
+				t.Fatalf("split %d: %q want %q", split, output, tc.want)
+			}
+			if tc.request == 0 && len(commands) != 0 || tc.request != 0 && (len(commands) != 1 || commands[0] != tc.request) {
+				t.Fatalf("split %d commands %v", split, commands)
+			}
+		}
+	}
+}
+
 func TestEscapeTimeoutDoesNotLoseApplicationEscape(t *testing.T) {
 	p := inputParser{}
 	_, _ = p.Feed([]byte{0x1b})

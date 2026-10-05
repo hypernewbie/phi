@@ -44,7 +44,8 @@ func parseFlags(args []string) (config, error) {
 	fs := flag.NewFlagSet("phic", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var c config
-	fs.StringVar(&c.Server, "server", "http://127.0.0.1:7070", "Phi server URL")
+	fs.StringVar(&c.Server, "server", "http://127.0.0.1:7070", "Phi server URL override")
+	fs.StringVar(&c.Profiles, "profiles", "", "desktop profiles.json path")
 	fs.StringVar(&c.Pane, "pane", "", "exact live pane ID to attach to")
 	fs.StringVar(&c.Coder, "coder", "", "backend name (e.g. pi, opencode, bash)")
 	fs.BoolVar(&c.NewPane, "new", false, "create a fresh pane rather than reattaching")
@@ -59,6 +60,11 @@ func parseFlags(args []string) (config, error) {
 		}
 		return c, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "server" {
+			c.ServerExplicit = true
+		}
+	})
 	c.Dir = "."
 	if rest := fs.Args(); len(rest) > 0 {
 		if len(rest) > 1 {
@@ -73,22 +79,25 @@ func parseFlags(args []string) (config, error) {
 }
 
 type config struct {
-	Server    string
-	Pane      string
-	Coder     string
-	Dir       string
-	NewPane   bool
-	Help      bool
-	Version   bool
-	Diff      bool
-	Worktrees bool
+	Server         string
+	ServerExplicit bool
+	Profiles       string
+	Pane           string
+	Coder          string
+	Dir            string
+	NewPane        bool
+	Help           bool
+	Version        bool
+	Diff           bool
+	Worktrees      bool
 }
 
 func printUsage(w *os.File) {
 	fmt.Fprintln(w, `Usage: phic [options] <directory>
 
 Options:
-  --server URL    Phi server URL (default http://127.0.0.1:7070)
+  --server URL    use this server (overrides desktop profiles by default)
+  --profiles FILE desktop profiles.json (default: desktop userData file)
   --pane ID       attach to an exact live pane ID
   --coder NAME    backend name (e.g. pi, opencode, bash)
   --new           create a fresh pane rather than reattaching (requires --coder)
@@ -97,28 +106,39 @@ Options:
   --help          show this message
   --version       show version
 
-Relay keys: Ctrl-] then s sessions, d diff, w worktrees, ? help, q detach.
+Relay keys: Ctrl-] then b servers, 1-9 switch server, s sessions, d diff,
+w worktrees, ? help, q detach. Enhanced terminals also support Ctrl-1..9.
 Ctrl-] Ctrl-] sends a literal prefix. Client menus are inline; backend
 output stays raw. Returning rebuilds from Phi's recording at current size.`)
 }
 
 type client struct {
-	cfg config
-	tty *TTY
-	api *apiClient
+	cfg         config
+	tty         *TTY
+	api         *apiClient
+	servers     []*serverState
+	serverIndex int
+	keys        inputParser
 }
 
 func newClient(_ context.Context, cfg config) (*client, error) {
+	profiles, selected, err := loadServerProfiles(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var servers []*serverState
+	for _, profile := range profiles {
+		api, err := newAPIClient(profile.Origin)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, &serverState{profile: profile, api: api})
+	}
 	tty, err := OpenTTY()
 	if err != nil {
 		return nil, err
 	}
-	api, err := newAPIClient(cfg.Server)
-	if err != nil {
-		_ = tty.Close()
-		return nil, err
-	}
-	return &client{cfg: cfg, tty: tty, api: api}, nil
+	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected}, nil
 }
 
 func (c *client) Close() error {
@@ -129,11 +149,58 @@ func (c *client) Close() error {
 }
 
 func (c *client) Run(ctx context.Context) error {
+	for {
+		err := c.start(ctx)
+		if ctx.Err() != nil || errors.Is(err, errDetach) {
+			return nil
+		}
+		var exit *ExitError
+		if err == nil || len(c.servers) < 2 || errors.As(err, &exit) {
+			return err
+		}
+		if e := c.tty.EnterRaw(); e != nil {
+			return e
+		}
+		if e := c.tty.PrepareMenu(); e != nil {
+			return e
+		}
+		var shortcut viewCommand
+		index := -1
+		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
+			index = int(byte(shortcut) - '1')
+		} else {
+			if e := writeAll(c.tty, []byte(c.heading(QuotedID(err.Error()))+"\r\n")); e != nil {
+				return e
+			}
+			var e error
+			index, e = c.serverPicker(ctx)
+			if errors.As(e, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
+				index = int(byte(shortcut) - '1')
+			} else if errors.Is(e, errDetach) {
+				return nil
+			} else if e != nil {
+				return e
+			}
+		}
+		if index < 0 || index >= len(c.servers) {
+			return fmt.Errorf("phic: unknown server shortcut")
+		}
+		c.serverIndex = index
+		c.api = c.servers[index].api
+		c.cfg.Pane = ""
+		c.cfg.NewPane = false
+		c.cfg.Coder = ""
+		c.cfg.Dir = ""
+	}
+}
+
+func (c *client) start(ctx context.Context) error {
 	if err := c.authenticate(ctx); err != nil {
 		return err
 	}
+	c.refreshIdentity(ctx, c.servers[c.serverIndex])
 	if c.cfg.Worktrees {
-		dir, err := resolveDir(c.cfg.Dir)
+		dir, err := c.directory(ctx, c.cfg.Dir)
 		if err != nil {
 			return err
 		}
@@ -155,7 +222,7 @@ func (c *client) Run(ctx context.Context) error {
 		c.cfg.Dir = items[i].Path
 	}
 	if c.cfg.Diff {
-		dir, err := resolveDir(c.cfg.Dir)
+		dir, err := c.directory(ctx, c.cfg.Dir)
 		if c.cfg.Pane != "" {
 			selection, selectErr := c.Select(ctx)
 			err = selectErr
@@ -170,7 +237,7 @@ func (c *client) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		pager, err := NewPager(text)
+		pager, err := NewPager(c.diffText(dir, text))
 		if err != nil {
 			return err
 		}

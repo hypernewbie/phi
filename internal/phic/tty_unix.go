@@ -241,7 +241,7 @@ func (t *TTY) Password(ctx context.Context, prompt string) (string, error) {
 	if _, err := t.Write([]byte(prompt)); err != nil {
 		return "", err
 	}
-	line, err := readLine(ctx, t)
+	line, err := readPasswordLine(ctx, t)
 	_, _ = t.Write([]byte("\n"))
 	return line, err
 }

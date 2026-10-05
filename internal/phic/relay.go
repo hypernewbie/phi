@@ -41,6 +41,7 @@ type Relay struct {
 	fresh     bool
 	repaint   *repaintFilter
 	viewInput []byte
+	keys      *inputParser
 	pane      string
 	cancel    context.CancelFunc
 }
@@ -329,7 +330,10 @@ func (r *Relay) write(ctx context.Context, data []byte) error {
 	return nil
 }
 func (r *Relay) runInput(ctx context.Context) error {
-	parser := inputParser{}
+	parser := r.keys
+	if parser == nil {
+		parser = &inputParser{}
+	}
 	buf := make([]byte, 4096)
 	for {
 		select {
