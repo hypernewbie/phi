@@ -40,7 +40,7 @@ phic --worktrees .
 - Press Ctrl-] twice to send one original prefix sequence.
 - Other application input stays unchanged, including delimited paste.
 
-The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodings. Undelimited pasted control bytes cannot be distinguished from typed control bytes.
+The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodings. Kitty alternate-key identities, associated text, and Caps/Num Lock state bits are supported. Undelimited pasted control bytes cannot be distinguished from typed control bytes.
 
 ## Compatibility limits
 
@@ -52,8 +52,22 @@ Initial replay of a reused pane rejects incompatible historical geometry and kno
 
 Native scrollback capacity depends on the terminal. The full recording remains in Phi; this client does not implement a deferred history viewer.
 
+A saved-session resume starts a new process and recording. Its startup terminal replies are live, even though its conversation already exists.
+
 On an input socket-write failure, the client exits instead of retrying an input frame whose delivery is ambiguous. Output reconnects recover missed recording bytes without moving the written frontier over a failed range.
 
 Detach does not kill or pin a backend. Existing server policy applies: an unpinned pane with no attached clients has a 30-minute grace timer.
 
 Terminal cleanup is best effort. SIGKILL cannot run cleanup.
+
+## Native test
+
+Run installed backends without user credentials or model prompts:
+
+```sh
+python3 scripts/test-phic-native.py --opencode2 /absolute/path/to/opencode2
+```
+
+Use `--coders bash,pi` for a smaller installed set. The runner requires tmux as a test dependency; phic does not. It uses an isolated HOME, service port, and tmux socket. It prints the evidence directory. A blank screen or failure to detach makes the command fail.
+
+This tests startup and detach, not historical reattachment or live screen restoration.

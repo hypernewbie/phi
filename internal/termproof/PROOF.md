@@ -30,6 +30,18 @@ Fresh launches receive their initial terminal dimensions before the process star
 
 A same-epoch reconnect preserves the written byte frontier and recovers missed output. A different epoch fails closed instead of merging terminal states.
 
+## Native checks and parser barrier
+
+`TestNativeTMUXParserBarrier` runs in a separate tmux socket. It sends a random, unknown private-mode request (`DECRQM`). The native terminal echoes the mode number with status 0. The headless oracle checks that the same request does not change cells, cursor, active buffer, or modes.
+
+This proves a parser boundary for that terminal. It does not prove screen restoration or a complete reply policy. Legacy Shift-F3 and a cursor report at row 1, column 2 both encode as `ESC [ 1 ; 2 R`. The experimental filter consumes that key. `TestLegacyShiftF3CannotBeDistinguishedFromCursorReport` records this counterexample. The filter remains in the proof package and is not linked into the client.
+
+A parser barrier alone also cannot establish that every asynchronous terminal service has sent its reply. Do not use it as permission to forward later clipboard or color replies into a live application.
+
+`scripts/test-phic-native.py` runs actual installed backends through Phi and phic in an isolated native tmux terminal. It checks a rendered startup screen, detach acknowledgment, and backend survival. The local run covered Shell, Pi 1.0.1, Codex 0.160.0, Claude 2.1.289, and OpenCode 2.0.21 in full TUI and Mini modes. Codex and Claude reached onboarding screens without user credentials. These checks do not claim successful model access, historical reattachment, or menu restoration.
+
+The OpenCode fixture assigns an isolated service port. A separate HOME alone does not isolate its default port. The runner never stops or changes a service in the user's HOME.
+
 ## Remaining proof
 
 A general live-view implementation still requires measured screen restoration and a reply policy. Restoration of retained content in both native buffers remains unproved. It also requires native terminal checks for the supported backends and keyboard protocols.
