@@ -94,6 +94,17 @@ Then run `./phi` from any project directory (or move the binary onto your `PATH`
 
 The directory you launch Phi from becomes the default workspace; switch between projects from the workspace picker in the UI and add more with the **+** button.
 
+### Native terminal client (macOS/Linux)
+
+Build the separate client and start Phi before connecting:
+
+```bash
+go build -o phic ./cmd/phic
+./phic .
+```
+
+`phic` reads the desktop client's saved servers. Backend output stays raw; Ctrl-] opens inline server, session, diff, worktree, and help views. The next release that includes the client also installs the `phic` npm command on macOS/Linux. See [native client setup, keys, and compatibility limits](docs/PHIC.md).
+
 ### Frontend dev (live reload)
 
 - Terminal 1: `./phi` (backend, :7070)

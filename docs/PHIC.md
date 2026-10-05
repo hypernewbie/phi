@@ -6,7 +6,15 @@ Phi owns the processes, sessions, and durable recordings. The native terminal ow
 
 ## Start
 
-Start Phi first. Then run:
+Start Phi first. To build the client from this checkout:
+
+```sh
+go build -o phic ./cmd/phic
+```
+
+Place it on your PATH or use `./phic`. Release builds provide a separate `phi_<version>_<os>_<arch>_phic.tar.gz` archive. The next npm release that includes this client installs `phic` on macOS/Linux; Windows retains a clear unsupported-client message without breaking `phi`.
+
+Then run:
 
 ```sh
 phic .
