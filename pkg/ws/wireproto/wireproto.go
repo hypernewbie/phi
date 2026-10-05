@@ -33,7 +33,7 @@ const (
 	FramePong byte = 0x03
 
 	// FrameExit is server → client: the backend process has ended.
-	// The payload is a JSON object: {"code": <int>}.
+	// The payload is one raw exit-status byte.
 	FrameExit byte = 0x04
 
 	// FrameAttachHead is server → client at attach: a u32 BE
@@ -64,11 +64,11 @@ func EncodeResizeFrame(cols, rows uint16) []byte {
 // certified-replay mode and the bytes below it are guaranteed to
 // start on a line boundary.
 type AttachHeadHeader struct {
-	Epoch  uint64             `json:"epoch"`
-	Oldest uint64             `json:"oldest"`
-	Head   uint64             `json:"head"`
-	Ckpt   *CheckpointHeader  `json:"ckpt,omitempty"`
-	ReplayFrom uint64          `json:"replay_from,omitempty"`
+	Epoch      uint64            `json:"epoch"`
+	Oldest     uint64            `json:"oldest"`
+	Head       uint64            `json:"head"`
+	Ckpt       *CheckpointHeader `json:"ckpt,omitempty"`
+	ReplayFrom uint64            `json:"replay_from,omitempty"`
 }
 
 // CheckpointHeader describes the bytes that follow the JSON in the

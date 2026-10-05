@@ -5,40 +5,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// TestMatchingPanesFiltersByDirAndCoder pins the rules in
-// PHIC_PLAN.md section 2: matching means same dir, optional
-// same coder, and no other client already attached.
 func TestMatchingPanesFiltersByDirAndCoder(t *testing.T) {
-	panes := []TerminalView{
-		{ID: "a", Dir: "/x", Coder: "pi", ActiveWSCount: 0},
-		{ID: "b", Dir: "/x", Coder: "bash", ActiveWSCount: 0},
-		{ID: "c", Dir: "/x", Coder: "pi", ActiveWSCount: 1}, // attached
-		{ID: "d", Dir: "/y", Coder: "pi", ActiveWSCount: 0},
-	}
-	got := matchingPanes(panes, "/x", "pi")
-	if len(got) != 1 || got[0].ID != "a" {
-		t.Fatalf("want [a], got %v", got)
-	}
-	got = matchingPanes(panes, "/x", "")
-	ids := idsOf(got)
-	sort.Strings(ids)
-	if strings.Join(ids, ",") != "a,b" {
-		t.Fatalf("want [a b], got %v", got)
-	}
-	got = matchingPanes(panes, "", "pi")
-	ids = idsOf(got)
-	sort.Strings(ids)
-	// c is filtered because it has ActiveWSCount > 0.
-	if strings.Join(ids, ",") != "a,d" {
-		t.Fatalf("want [a d], got %v", got)
+	panes := []TerminalView{{ID: "a", Dir: "/x", Coder: "pi"}, {ID: "b", Dir: "/x", Coder: "bash"}, {ID: "c", Dir: "/x", Coder: "pi", ActiveWSCount: 1}, {ID: "d", Dir: "/y", Coder: "pi"}}
+	for _, tc := range []struct{ dir, coder, want string }{{"/x", "pi", "a"}, {"/x", "", "a,b"}, {"", "pi", "a,d"}} {
+		ids := idsOf(matchingPanes(panes, tc.dir, tc.coder))
+		sort.Strings(ids)
+		if strings.Join(ids, ",") != tc.want {
+			t.Fatalf("matching(%s,%s): %v", tc.dir, tc.coder, ids)
+		}
 	}
 }
-
 func idsOf(in []TerminalView) []string {
 	out := make([]string, len(in))
 	for i, v := range in {
@@ -46,109 +29,94 @@ func idsOf(in []TerminalView) []string {
 	}
 	return out
 }
-
-// TestQuotedIDEscapesControlBytes pins the metadata-safety
-// rule from the plan: control bytes become \xNN escapes.
 func TestQuotedIDEscapesControlBytes(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"", `""`},
-		{"abc", `"abc"`},
-		{"\x1b[2J", `"\x1b[2J"`},
-		{"hi\nthere", `"hi\x0athere"`},
-		{`a"b\c`, `"a\"b\\c"`},
-	}
-	for _, c := range cases {
-		got := QuotedID(c.in)
-		if got != c.want {
-			t.Fatalf("QuotedID(%q) = %q, want %q", c.in, got, c.want)
+	for _, tc := range []struct{ in, want string }{{"", `""`}, {"abc", `"abc"`}, {"\x1b[2J", `"\x1b[2J"`}, {"hi\nthere", `"hi\x0athere"`}, {`a"b\c`, `"a\"b\\c"`}} {
+		if got := QuotedID(tc.in); got != tc.want {
+			t.Fatalf("QuotedID(%q)=%q want %q", tc.in, got, tc.want)
 		}
 	}
 }
-
-// TestSelectExactPane verifies that --pane short-circuits the
-// selection.
-func TestSelectExactPane(t *testing.T) {
+func selectionServer(t *testing.T, panes []TerminalView) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]TerminalView{})
+		if r.URL.Path == "/api/coders" {
+			_ = json.NewEncoder(w).Encode(map[string]CoderDescriptor{"pi": {ID: "pi", Name: "Pi"}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(panes)
 	}))
-	defer srv.Close()
-
-	c := &client{
-		cfg: config{Server: srv.URL, Pane: "exact-id", Dir: "/x"},
-		api: mustAPI(t, srv.URL),
-	}
+	t.Cleanup(srv.Close)
+	return srv
+}
+func TestSelectExactPaneUsesServerIdentityWithoutDirectoryArgument(t *testing.T) {
+	srv := selectionServer(t, []TerminalView{{ID: "exact-id", Dir: "/server-directory", Coder: "pi", OpenCodeMode: "mini"}})
+	c := &client{cfg: config{Pane: "exact-id"}, api: mustAPI(t, srv.URL)}
 	got, err := c.Select(context.Background())
-	if err != nil {
-		t.Fatalf("Select: %v", err)
+	if err != nil || got.PaneID != "exact-id" || got.Existing == nil || got.Existing.Dir != "/server-directory" || got.Existing.OpenCodeMode != "mini" {
+		t.Fatalf("selection: %+v err=%v", got, err)
 	}
-	if got.PaneID != "exact-id" {
-		t.Fatalf("pane id = %q", got.PaneID)
+	c.cfg.Pane = "missing"
+	if _, err := c.Select(context.Background()); err == nil {
+		t.Fatal("nonexistent pane accepted")
 	}
 }
-
-// TestSelectNewRequiresCoder pins the --new + no --coder case.
 func TestSelectNewRequiresCoder(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]TerminalView{})
-	}))
-	defer srv.Close()
-
-	c := &client{
-		cfg: config{Server: srv.URL, Dir: "/x", NewPane: true},
-		api: mustAPI(t, srv.URL),
-	}
-	if _, err := c.Select(context.Background()); err == nil {
-		t.Fatalf("expected --new without --coder to fail")
+	srv := selectionServer(t, nil)
+	c := &client{cfg: config{Dir: t.TempDir(), NewPane: true}, api: mustAPI(t, srv.URL)}
+	if _, err := c.Select(context.Background()); err == nil || !strings.Contains(err.Error(), "--new requires --coder") {
+		t.Fatalf("wrong error: %v", err)
 	}
 }
-
-// TestSelectUniqueMatchAutoAttaches covers the "one matching
-// pane" branch.
 func TestSelectUniqueMatchAutoAttaches(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]TerminalView{
-			{ID: "p1", Dir: "/x", Coder: "pi", ActiveWSCount: 0},
-		})
-	}))
-	defer srv.Close()
-
-	c := &client{
-		cfg: config{Server: srv.URL, Dir: "/x"},
-		api: mustAPI(t, srv.URL),
-	}
-	got, err := c.Select(context.Background())
+	dir, err := resolveDir(t.TempDir())
 	if err != nil {
-		t.Fatalf("Select: %v", err)
+		t.Fatal(err)
 	}
-	if got.PaneID != "p1" || got.Existing == nil {
-		t.Fatalf("got %+v", got)
+	srv := selectionServer(t, []TerminalView{{ID: "p1", Dir: dir, Coder: "pi"}})
+	c := &client{cfg: config{Dir: dir}, api: mustAPI(t, srv.URL)}
+	got, err := c.Select(context.Background())
+	if err != nil || got.PaneID != "p1" || got.Existing == nil {
+		t.Fatalf("selection: %+v %v", got, err)
 	}
 }
-
-// TestSelectAmbiguousRequiresMenu covers the "ambiguous" branch.
 func TestSelectAmbiguousRequiresMenu(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]TerminalView{
-			{ID: "p1", Dir: "/x", Coder: "pi", ActiveWSCount: 0},
-			{ID: "p2", Dir: "/x", Coder: "bash", ActiveWSCount: 0},
-		})
-	}))
-	defer srv.Close()
-
-	c := &client{
-		cfg: config{Server: srv.URL, Dir: "/x"},
-		api: mustAPI(t, srv.URL),
+	dir, err := resolveDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := c.Select(context.Background()); err == nil {
-		t.Fatalf("expected ambiguous error")
+	srv := selectionServer(t, []TerminalView{{ID: "p1", Dir: dir, Coder: "pi"}, {ID: "p2", Dir: dir, Coder: "bash"}})
+	c := &client{cfg: config{Dir: dir}, api: mustAPI(t, srv.URL)}
+	if _, err := c.Select(context.Background()); err == nil || !strings.Contains(err.Error(), "requires a terminal") {
+		t.Fatalf("selection bypassed menu: %v", err)
 	}
 }
-
+func TestResolveDirectoryAndSymlink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	want, err := resolveDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveDir(link)
+	if err != nil || got != want {
+		t.Fatalf("directory alias: %q %v", got, err)
+	}
+}
+func TestSpawnRejectsUnadvertisedCoder(t *testing.T) {
+	srv := selectionServer(t, nil)
+	c := &client{cfg: config{Dir: t.TempDir(), NewPane: true, Coder: "not-advertised"}, api: mustAPI(t, srv.URL)}
+	if _, err := c.Select(context.Background()); err == nil || !strings.Contains(err.Error(), "not advertised") {
+		t.Fatalf("unadvertised backend accepted: %v", err)
+	}
+}
 func mustAPI(t *testing.T, base string) *apiClient {
 	t.Helper()
 	a, err := newAPIClient(base)
 	if err != nil {
-		t.Fatalf("newAPIClient: %v", err)
+		t.Fatal(err)
 	}
 	return a
 }

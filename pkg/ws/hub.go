@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
 // componentLogger returns the "ws" component-tagged base logger, derived
@@ -258,31 +259,13 @@ func (ph *PaneHub) positionLocked() PanePosition {
 // and by the /recording HTTP response. In ATTACH_HEAD, Checkpoint is nil
 // unless a usable client snapshot exists, in which case the raw ANSI bytes
 // follow the JSON header in the same frame.
-type attachHeadJSON struct {
-	Epoch  uint64          `json:"epoch"`
-	Oldest uint64          `json:"oldest"`
-	Head   uint64          `json:"head"`
-	Ckpt   *checkpointJSON `json:"ckpt,omitempty"`
-	// Optional, certified plain-text line boundary. Absence means that
-	// clients without a checkpoint must replay from Oldest.
-	ReplayFrom uint64 `json:"replay_from,omitempty"`
-}
+type attachHeadJSON = wireproto.AttachHeadHeader
 
-type checkpointJSON struct {
-	Through uint64 `json:"through"`
-	Cols    uint16 `json:"cols"`
-	Rows    uint16 `json:"rows"`
-	Len     int    `json:"len"`
-}
+type checkpointJSON = wireproto.CheckpointHeader
 
 // RecordingHeaderJSON is the header of the /recording HTTP response; raw
 // bytes follow it in the body, exactly as with ATTACH_HEAD.
-type RecordingHeaderJSON struct {
-	Epoch   uint64      `json:"epoch"`
-	Start   uint64      `json:"start"`
-	End     uint64      `json:"end"`
-	Resizes [][3]uint64 `json:"resizes"` // [atSeq, cols, rows]
-}
+type RecordingHeaderJSON = wireproto.RecordingHeader
 
 // frameFramedJSON builds [msgType][u32 jsonLen BE][json bytes][extra bytes].
 func frameFramedJSON(msgType byte, v any, extra []byte) []byte {

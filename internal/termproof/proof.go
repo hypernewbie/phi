@@ -21,8 +21,12 @@ type Backend struct {
 	Cmd *gopty.Cmd
 	Pty gopty.Pty
 
-	pumpOnce sync.Once
-	log      *pumpLog
+	pumpOnce  sync.Once
+	closeOnce sync.Once
+	waitOnce  sync.Once
+	closeErr  error
+	waitErr   error
+	log       *pumpLog
 }
 
 // StartBackend spawns a child program attached to a freshly
@@ -57,20 +61,29 @@ func StartBackend(ctx context.Context, cols, rows uint16, name string, args ...s
 	return b, nil
 }
 
-func (b *Backend) Write(p []byte) (int, error)         { return b.Pty.Write(p) }
-func (b *Backend) Resize(cols, rows uint16) error      { return b.Pty.Resize(int(cols), int(rows)) }
-func (b *Backend) BytesSince(off int) []byte           { return b.log.since(off) }
-func (b *Backend) LogOffset() int                      { return b.log.offset() }
-func (b *Backend) ReadAvailable(buf []byte) []byte     { return b.log.drainTo(buf) }
+func (b *Backend) Write(p []byte) (int, error)     { return b.Pty.Write(p) }
+func (b *Backend) Resize(cols, rows uint16) error  { return b.Pty.Resize(int(cols), int(rows)) }
+func (b *Backend) BytesSince(off int) []byte       { return b.log.since(off) }
+func (b *Backend) LogOffset() int                  { return b.log.offset() }
+func (b *Backend) ReadAvailable(buf []byte) []byte { return b.log.drainTo(buf) }
 func (b *Backend) WaitForIdle(ctx context.Context, idle time.Duration) []byte {
 	return b.log.waitForIdle(ctx, idle)
 }
 func (b *Backend) Close() error {
-	err := b.Pty.Close()
-	b.log.signalClose()
-	return err
+	b.closeOnce.Do(func() {
+		b.closeErr = b.Pty.Close()
+		b.log.signalClose()
+		if b.Cmd.Process != nil {
+			_ = b.Cmd.Process.Kill()
+		}
+		_ = b.Wait()
+	})
+	return b.closeErr
 }
-func (b *Backend) Wait() error { return b.Cmd.Wait() }
+func (b *Backend) Wait() error {
+	b.waitOnce.Do(func() { b.waitErr = b.Cmd.Wait() })
+	return b.waitErr
+}
 
 func (b *Backend) startPump() {
 	b.pumpOnce.Do(func() { go b.pump() })
@@ -93,10 +106,11 @@ func (b *Backend) pump() {
 // pumpLog is a thread-safe byte buffer that wakes readers on
 // new data or close.
 type pumpLog struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	closed bool
-	cond   *sync.Cond
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	closed    bool
+	lastWrite time.Time
+	cond      *sync.Cond
 }
 
 func newPumpLog() *pumpLog {
@@ -108,6 +122,7 @@ func newPumpLog() *pumpLog {
 func (l *pumpLog) append(p []byte) {
 	l.mu.Lock()
 	l.buf.Write(p)
+	l.lastWrite = time.Now()
 	l.mu.Unlock()
 	l.cond.Broadcast()
 }
@@ -157,6 +172,12 @@ func (l *pumpLog) waitForIdle(ctx context.Context, idle time.Duration) []byte {
 	}
 	for {
 		l.mu.Lock()
+		if last := l.lastWrite.Add(idle); last.After(idleAt) {
+			idleAt = last
+		}
+		if hasDeadline && deadline.Before(idleAt) {
+			idleAt = deadline
+		}
 		if l.closed && time.Now().After(idleAt) {
 			out := append([]byte(nil), l.buf.Bytes()...)
 			l.mu.Unlock()

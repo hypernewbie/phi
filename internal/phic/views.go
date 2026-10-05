@@ -21,9 +21,9 @@ func (a *apiClient) RawDiff(ctx context.Context, dir string, ansi bool) (string,
 
 // Worktree is one row of /api/git/worktrees.
 type Worktree struct {
-	Path    string `json:"path"`
-	Active  bool   `json:"active"`
-	Expanded bool  `json:"expanded"`
+	Path     string `json:"path"`
+	Active   bool   `json:"active"`
+	Expanded bool   `json:"expanded"`
 }
 
 // Worktrees returns the worktree list for a directory.
@@ -48,11 +48,14 @@ func (a *apiClient) getText(ctx context.Context, path string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("phic: GET %s: %s", path, resp.Status)
+		return "", &apiError{Code: resp.StatusCode, Message: "GET " + path + ": " + resp.Status}
 	}
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if len(b) > maxMetadataBytes {
+		return "", fmt.Errorf("phic: diff response too large")
 	}
 	return string(b), nil
 }

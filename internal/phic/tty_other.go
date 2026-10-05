@@ -2,7 +2,10 @@
 
 package phic
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // TTY is a stub on non-Unix platforms. The plan targets macOS
 // and Linux first; the Windows client requires a separate
@@ -22,9 +25,17 @@ func (t *TTY) Resizes() <-chan Resize { return nil }
 
 // Read is a stub that always returns an error.
 func (t *TTY) Read(_ []byte) (int, error) { return 0, errors.New("phic: unix-only first version") }
+func (t *TTY) ReadContext(_ context.Context, _ []byte) (int, error) {
+	return 0, errors.New("phic: unix-only first version")
+}
+func (t *TTY) EnterRaw() error { return errors.New("phic: unix-only first version") }
+func (t *TTY) Restore() error  { return errors.New("phic: unix-only first version") }
+func (t *TTY) Password(_ context.Context, _ string) (string, error) {
+	return "", errors.New("phic: unix-only first version")
+}
 
 // Write is a stub that always returns an error.
-func (t *TTY) Write(p []byte) (int, error) { return len(p), nil }
+func (t *TTY) Write(p []byte) (int, error) { return 0, errors.New("phic: unix-only first version") }
 
 // EncodeResize is a stub that returns nil.
 func (t *TTY) EncodeResize(_ Resize) []byte { return nil }

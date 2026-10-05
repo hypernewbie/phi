@@ -6,170 +6,360 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync/atomic"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-// Relay owns one WebSocket and two goroutines: server -> TTY
-// and TTY -> server. The plan's invariants: one writer owns
-// terminal output, one writer owns WebSocket writes.
-type Relay struct {
-	conn   *websocket.Conn
-	tty    *TTY
-	api    *apiClient
-	closed atomic.Bool
-}
+var errProtocol = errors.New("phic: invalid terminal protocol")
 
-func NewRelay(tty *TTY, api *apiClient) *Relay {
-	return &Relay{tty: tty, api: api}
-}
-
-// Connect dials /ws/pane/:id?term_proto=hot-v1 and reads the
-// ATTACH_HEAD response.
-func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
-	if r.conn != nil {
-		return wireAttach{}, errors.New("phic: relay already connected")
-	}
-	u := r.api.base.String() + "/ws/pane/" + pane + "?term_proto=hot-v1"
-	wsURL, err := mustWebsocketURL(u)
-	if err != nil {
-		return wireAttach{}, err
-	}
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
-	if err != nil {
-		return wireAttach{}, fmt.Errorf("phic: dial %s: %w", wsURL, err)
-	}
-	r.conn = conn
-	return r.attachHead(ctx)
-}
-
-func (r *Relay) attachHead(ctx context.Context) (wireAttach, error) {
-	if err := r.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return wireAttach{}, err
-	}
-	mt, msg, err := r.conn.ReadMessage()
-	if err != nil {
-		return wireAttach{}, fmt.Errorf("phic: read attach: %w", err)
-	}
-	if mt != websocket.BinaryMessage {
-		return wireAttach{}, fmt.Errorf("phic: attach not binary: %d", mt)
-	}
-	hdr, ckpt, err := ParseAttachHead(msg)
-	if err != nil {
-		return wireAttach{}, err
-	}
-	return wireAttach{Header: hdr, Checkpoint: ckpt}, nil
-}
-
-// Run is the live phase. Returns on disconnect, signal, or error.
-func (r *Relay) Run(ctx context.Context) error {
-	if r.conn == nil {
-		return errors.New("phic: relay not connected")
-	}
-	defer r.Close()
-	go r.readServerToTTY(ctx)
-	r.runInput(ctx)
-	return nil
-}
-
-// readServerToTTY writes 0x09 payloads to the TTY. Reserved
-// frames (0x04 exit, 0x02 control) are not terminal output.
-func (r *Relay) readServerToTTY(ctx context.Context) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		_ = r.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		mt, msg, err := r.conn.ReadMessage()
-		if err != nil {
-			if ctx.Err() != nil || r.closed.Load() {
-				return
-			}
-			if isWSClose(err) {
-				return
-			}
-			return
-		}
-		if mt != websocket.BinaryMessage {
-			continue
-		}
-		_, payload, err := ParseLiveOutput(msg)
-		if err != nil {
-			continue
-		}
-		_, _ = r.tty.Write(payload)
-	}
-}
-
-func (r *Relay) runInput(ctx context.Context) {
-	buf := make([]byte, 4096)
-	resizes := r.tty.Resizes()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case r0 := <-resizes:
-			if err := r.conn.WriteMessage(websocket.BinaryMessage, r.tty.EncodeResize(r0)); err != nil {
-				return
-			}
-		default:
-		}
-		_ = r.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-		n, err := r.tty.Read(buf)
-		if n > 0 {
-			frame := EncodeInputFrame(buf[:n])
-			if err := r.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-				return
-			}
-		}
-		if err != nil && !isTimeout(err) {
-			return
-		}
-	}
-}
-
-func (r *Relay) Close() {
-	if r.closed.Swap(true) {
-		return
-	}
-	if r.conn != nil {
-		_ = r.conn.Close()
-	}
-}
-
-// wireAttach is the ATTACH_HEAD response.
 type wireAttach struct {
 	Header     wireproto.AttachHeadHeader
 	Checkpoint []byte
 }
 
-func isWSClose(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, io.EOF) {
-		return true
-	}
-	var ce *websocket.CloseError
-	return errors.As(err, &ce)
+type relayTerminal interface {
+	ReadContext(context.Context, []byte) (int, error)
+	Write([]byte) (int, error)
+	Size() (int, int, error)
+	Resizes() <-chan Resize
 }
 
-func isTimeout(err error) bool {
-	if err == nil {
-		return false
+// Relay retains only an output frontier, not a client recording. One reader
+// delivers output; one input worker writes the socket. Closing wakes both.
+type Relay struct {
+	tty     relayTerminal
+	api     *apiClient
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	header  wireAttach
+	written uint64
+	epoch   uint64
+	fresh   bool
+	pane    string
+	cancel  context.CancelFunc
+}
+
+func NewRelay(tty relayTerminal, api *apiClient) *Relay { return &Relay{tty: tty, api: api} }
+
+func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
+	r.mu.Lock()
+	already := r.conn != nil
+	r.mu.Unlock()
+	if already {
+		return wireAttach{}, errors.New("phic: relay already connected")
 	}
-	if errors.Is(err, http.ErrServerClosed) {
+	u := r.api.base.String() + "/ws/pane/" + url.PathEscape(pane) + "?term_proto=hot-v1"
+	wsURL, err := mustWebsocketURL(u)
+	if err != nil {
+		return wireAttach{}, err
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: r.api.http.Jar}
+	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		if resp != nil {
+			if resp.StatusCode < 400 {
+				return wireAttach{}, fmt.Errorf("%w: WebSocket %s", errProtocol, resp.Status)
+			}
+			return wireAttach{}, &apiError{Code: resp.StatusCode, Message: "WebSocket: " + resp.Status}
+		}
+		return wireAttach{}, fmt.Errorf("phic: connect: %w", err)
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	conn.SetReadLimit(4 << 20)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	mt, msg, err := conn.ReadMessage()
+	if err == nil && mt != websocket.BinaryMessage {
+		err = fmt.Errorf("%w: attach is not binary", errProtocol)
+	}
+	var head wireAttach
+	if err == nil {
+		head.Header, head.Checkpoint, err = ParseAttachHead(msg)
+		if err != nil {
+			err = fmt.Errorf("%w: %v", errProtocol, err)
+		}
+	}
+	if err != nil {
+		_ = conn.Close()
+		return wireAttach{}, err
+	}
+	// Only the socket reader touches read deadlines. Input cannot poison reads.
+	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	conn.SetPingHandler(func(data string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
+	})
+	r.mu.Lock()
+	r.conn = conn
+	r.header = head
+	r.pane = pane
+	r.mu.Unlock()
+	return head, nil
+}
+
+func (r *Relay) send(frame []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.conn == nil {
+		return errors.New("phic: input disconnected; not retried because delivery is ambiguous")
+	}
+	_ = r.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return r.conn.WriteMessage(websocket.BinaryMessage, frame)
+}
+func (r *Relay) Close() {
+	r.mu.Lock()
+	cancel := r.cancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	r.disconnect()
+}
+
+func (r *Relay) disconnect() {
+	r.mu.Lock()
+	conn := r.conn
+	r.conn = nil
+	r.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+func (r *Relay) Run(ctx context.Context) error {
+	if r.conn == nil {
+		return errors.New("phic: relay not connected")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	r.mu.Lock()
+	r.cancel = cancel
+	r.mu.Unlock()
+	// Closing is safe concurrently with a blocked socket reader.
+	closed := make(chan struct{})
+	go func() { <-ctx.Done(); r.Close(); close(closed) }()
+	inputDone := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			inputDone <- ctx.Err()
+			return
+		}
+		err := r.runInput(ctx)
+		inputDone <- err
+		cancel()
+	}()
+	defer func() { cancel(); <-closed; <-inputDone }()
+	cols, rows, err := r.tty.Size()
+	if err != nil || cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
+		return errors.New("phic: terminal has no usable geometry")
+	}
+	r.epoch = r.header.Header.Epoch
+	if r.header.Header.Oldest != 0 {
+		return errors.New("phic: recording prefix unavailable; cannot reconstruct terminal")
+	}
+	// Fresh launches need startup terminal replies. Existing recordings must
+	// pass the query/geometry guard before any historical output is written.
+	if r.fresh {
+		close(ready)
+	}
+	if err = r.preflight(ctx, r.pane, r.header.Header.Head, cols, rows); err == nil {
+		err = r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+		if err == nil {
+			err = r.recover(ctx, r.pane, r.header.Header.Head)
+		}
+	}
+	if !r.fresh {
+		close(ready)
+	}
+	if err == nil {
+		err = r.live(ctx, r.pane)
+	}
+	if ctx.Err() != nil {
+		select {
+		case inputErr := <-inputDone:
+			inputDone <- inputErr
+			if errors.Is(inputErr, errDetach) || errors.Is(inputErr, context.Canceled) {
+				return nil
+			}
+			if inputErr != nil {
+				return inputErr
+			}
+		default:
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+	}
+	return err
+}
+
+func (r *Relay) live(ctx context.Context, pane string) error {
+	for {
+		r.mu.Lock()
+		conn := r.conn
+		r.mu.Unlock()
+		if conn == nil {
+			return ctx.Err()
+		}
+		mt, msg, err := conn.ReadMessage()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			r.disconnect()
+			if err := r.reconnect(ctx, pane); err != nil {
+				return err
+			}
+			continue
+		}
+		if mt != websocket.BinaryMessage || len(msg) == 0 {
+			return errors.New("phic: malformed terminal frame")
+		}
+		switch msg[0] {
+		case wireproto.FrameLiveOutput:
+			start, data, err := ParseLiveOutput(msg)
+			if err != nil {
+				return err
+			}
+			if start > r.written {
+				if err := r.recover(ctx, pane, start); err != nil {
+					return err
+				}
+			}
+			end := start + uint64(len(data))
+			if end <= r.written {
+				continue
+			}
+			data = data[r.written-start:]
+			if err := r.write(ctx, data); err != nil {
+				return err
+			}
+		case wireproto.FrameExit:
+			// Drain retained output before reporting the backend status.
+			if len(msg) != 2 {
+				return fmt.Errorf("%w: invalid exit frame", errProtocol)
+			}
+			if err := r.drainExit(ctx, pane); err != nil {
+				return err
+			}
+			if msg[1] != 0 {
+				return &ExitError{Code: int(msg[1])}
+			}
+			return nil
+		case 0x02: // JSON control. No terminal output; gaps are caught by sequence.
+			if err := r.control(ctx, pane, msg[1:]); err != nil {
+				return err
+			}
+		case 0x03: // keepalive
+		case 0x01, 0x08:
+			return errors.New("phic: unsequenced output or repeated attach head")
+		default: // notifications are not terminal bytes
+		}
+	}
+}
+
+func (r *Relay) reconnect(ctx context.Context, pane string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+		head, err := r.Connect(ctx, pane)
+		if err != nil {
+			if permanent(err) {
+				return err
+			}
+			continue
+		}
+		if head.Header.Epoch != r.epoch {
+			return errors.New("phic: recording epoch changed; detach rather than merge different terminal states")
+		}
+		if r.written < head.Header.Oldest || r.written > head.Header.Head {
+			return errors.New("phic: written frontier is outside retained recording")
+		}
+		if err := r.recover(ctx, pane, head.Header.Head); err != nil {
+			return err
+		}
+		cols, rows, err := r.tty.Size()
+		if err != nil {
+			return err
+		}
+		return r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+	}
+}
+func permanent(err error) bool {
+	if errors.Is(err, errProtocol) {
 		return true
 	}
-	type timeout interface{ Timeout() bool }
-	var t timeout
-	if errors.As(err, &t) {
-		return t.Timeout()
+	var e *apiError
+	return errors.As(err, &e) && e.Code >= 400 && e.Code < 500 && e.Code != http.StatusTooManyRequests
+}
+
+func (r *Relay) write(ctx context.Context, data []byte) error {
+	for len(data) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		batch := data
+		if len(batch) > 64<<10 {
+			batch = batch[:64<<10]
+		}
+		n, err := r.tty.Write(batch)
+		if n < 0 || n > len(batch) {
+			return errors.New("phic: invalid terminal write count")
+		}
+		r.written += uint64(n)
+		data = data[n:]
+		if err != nil {
+			return fmt.Errorf("phic: terminal write: %w", err)
+		}
+		if n == 0 {
+			return io.ErrNoProgress
+		}
 	}
-	return false
+	return nil
+}
+func (r *Relay) runInput(ctx context.Context) error {
+	parser := inputParser{}
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case size := <-r.tty.Resizes():
+			if size.Cols != 0 && size.Rows != 0 {
+				if err := r.send(wireproto.EncodeResizeFrame(size.Cols, size.Rows)); err != nil {
+					return err
+				}
+			}
+		default:
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		n, err := r.tty.ReadContext(readCtx, buf)
+		cancel()
+		var out []byte
+		var commandErr error
+		if n > 0 {
+			out, commandErr = parser.Feed(buf[:n])
+		}
+		if errors.Is(err, context.DeadlineExceeded) && len(parser.sequence) > 0 {
+			out = append(out, parser.FlushEscape()...)
+		}
+		if len(out) != 0 {
+			if err := r.send(EncodeInputFrame(out)); err != nil {
+				return err
+			}
+		}
+		if commandErr != nil {
+			return commandErr
+		}
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+	}
 }

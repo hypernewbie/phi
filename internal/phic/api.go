@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // authStatus mirrors GET /api/auth/status.
@@ -40,13 +42,26 @@ func newAPIClient(server string) (*apiClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("phic: bad server URL %q: %w", server, err)
 	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, fmt.Errorf("phic: server must be an HTTP(S) origin without credentials, path, query, or fragment")
+	}
+	u.Path = ""
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
 	return &apiClient{
 		base: u,
-		http: &http.Client{Jar: jar},
+		http: &http.Client{Jar: jar, Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Do not move credentials or proof bodies to another server.
+			if req.URL.Scheme != u.Scheme || !strings.EqualFold(req.URL.Host, u.Host) {
+				return fmt.Errorf("phic: cross-origin redirect refused")
+			}
+			if len(via) >= 5 {
+				return fmt.Errorf("phic: too many redirects")
+			}
+			return nil
+		}},
 	}, nil
 }
 
@@ -64,6 +79,9 @@ func (a *apiClient) AuthStatus(ctx context.Context) (authStatus, error) {
 func (a *apiClient) Login(ctx context.Context, status authStatus, password string) error {
 	if !status.Enabled {
 		return nil
+	}
+	if status.Version != "v1" || len(status.Salt) > 128 || len(status.Challenge) == 0 || len(status.Challenge) > 4096 {
+		return fmt.Errorf("phic: unsupported or malformed login challenge")
 	}
 	salt, err := base64.RawURLEncoding.DecodeString(status.Salt)
 	if err != nil {
@@ -95,7 +113,7 @@ func deriveVerifier(password string, salt []byte, algo string, iters int) ([]byt
 	if algo != "pbkdf2-sha256" {
 		return nil, fmt.Errorf("phic: unsupported KDF %q", algo)
 	}
-	if iters <= 0 {
+	if iters <= 0 || iters > 1_000_000 {
 		return nil, fmt.Errorf("phic: bad iteration count %d", iters)
 	}
 	return pbkdf2SHA256(password, salt, iters, 32)
@@ -112,9 +130,9 @@ func (a *apiClient) getJSON(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("phic: GET %s: %s", path, resp.Status)
+		return &apiError{Code: resp.StatusCode, Message: "GET " + path + ": " + resp.Status}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeJSON(resp.Body, out)
 }
 
 func (a *apiClient) postJSON(ctx context.Context, path string, body []byte, out any) error {
@@ -129,7 +147,27 @@ func (a *apiClient) postJSON(ctx context.Context, path string, body []byte, out 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("phic: POST %s: %s", path, resp.Status)
+		return &apiError{Code: resp.StatusCode, Message: "POST " + path + ": " + resp.Status}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeJSON(resp.Body, out)
+}
+
+type apiError struct {
+	Code    int
+	Message string
+}
+
+func (e *apiError) Error() string { return "phic: " + e.Message }
+
+const maxMetadataBytes = 16 << 20
+
+func decodeJSON(r io.Reader, out any) error {
+	body, err := io.ReadAll(io.LimitReader(r, maxMetadataBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > maxMetadataBytes {
+		return fmt.Errorf("phic: metadata response too large")
+	}
+	return json.Unmarshal(body, out)
 }
