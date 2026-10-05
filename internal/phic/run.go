@@ -185,6 +185,12 @@ func (c *client) Run(ctx context.Context) error {
 		if index < 0 || index >= len(c.servers) {
 			return fmt.Errorf("phic: unknown server shortcut")
 		}
+		if c.keys.claimed == nil {
+			c.keys.claimed = make(map[[2]int]bool)
+		}
+		if index < 9 {
+			c.keys.claimed[[2]int{int('1') + index, 5}] = true
+		}
 		c.serverIndex = index
 		c.api = c.servers[index].api
 		c.cfg.Pane = ""
@@ -222,13 +228,16 @@ func (c *client) start(ctx context.Context) error {
 		c.cfg.Dir = items[i].Path
 	}
 	if c.cfg.Diff {
-		dir, err := c.directory(ctx, c.cfg.Dir)
+		var dir string
+		var err error
 		if c.cfg.Pane != "" {
 			selection, selectErr := c.Select(ctx)
 			err = selectErr
 			if err == nil {
 				dir = selection.Existing.Dir
 			}
+		} else {
+			dir, err = c.directory(ctx, c.cfg.Dir)
 		}
 		if err != nil {
 			return err

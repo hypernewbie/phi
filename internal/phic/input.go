@@ -18,12 +18,13 @@ func (v viewCommand) Error() string { return "phic: client view " + string(byte(
 // inputParser recognizes only client keys and paste boundaries. Application
 // sequences stay opaque. A lone Escape is flushed by the caller's short timer.
 type inputParser struct {
-	sequence []byte
-	prefix   []byte
-	paste    bool
-	rest     []byte
-	servers  int
-	claimed  map[[2]int]bool
+	sequence      []byte
+	prefix        []byte
+	prefixRelease []byte
+	paste         bool
+	rest          []byte
+	servers       int
+	claimed       map[[2]int]bool
 }
 
 func (p *inputParser) Feed(data []byte) ([]byte, error) {
@@ -32,8 +33,7 @@ func (p *inputParser) Feed(data []byte) ([]byte, error) {
 		if len(p.sequence) > 0 {
 			p.sequence = append(p.sequence, b)
 			if len(p.sequence) == 2 && b != '[' {
-				out = append(out, p.prefix...)
-				p.prefix = nil
+				out = append(out, p.forwardPrefix()...)
 				out = append(out, p.sequence...)
 				p.sequence = nil
 				continue
@@ -69,18 +69,27 @@ func (p *inputParser) Feed(data []byte) ([]byte, error) {
 func (p *inputParser) FlushEscape() []byte {
 	if len(p.prefix) > 0 && bytes.Equal(p.sequence, []byte{0x1b}) {
 		p.prefix = nil
+		p.prefixRelease = nil
 		p.sequence = nil
 		return nil
 	}
-	out := append(append([]byte{}, p.prefix...), p.sequence...)
-	p.prefix = nil
+	out := append(p.forwardPrefix(), p.sequence...)
 	p.sequence = nil
 	return out
 }
+func (p *inputParser) forwardPrefix() []byte {
+	out := append(append([]byte{}, p.prefix...), p.prefixRelease...)
+	if len(p.prefix) > 0 {
+		delete(p.claimed, [2]int{93, 5})
+	}
+	p.prefix = nil
+	p.prefixRelease = nil
+	return out
+}
+
 func (p *inputParser) key(seq []byte) ([]byte, error) {
 	if bytes.Equal(seq, []byte("\x1b[200~")) {
-		out := append(append([]byte{}, p.prefix...), seq...)
-		p.prefix = nil
+		out := append(p.forwardPrefix(), seq...)
 		p.paste = true
 		return out, nil
 	}
@@ -94,6 +103,9 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 	identity := [2]int{code, mods}
 	if ok && p.claimed[identity] {
 		if event == 3 {
+			if code == 93 && mods == 5 && len(p.prefix) > 0 {
+				p.prefixRelease = append(p.prefixRelease, seq...)
+			}
 			delete(p.claimed, identity)
 			return nil, nil
 		}
@@ -114,14 +126,17 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 	if ok && event == 1 && mods == 5 && code >= '1' && code <= '9' && code-'0' <= p.servers {
 		claim()
 		p.prefix = nil
+		p.prefixRelease = nil
 		return nil, viewCommand(byte(code))
 	}
 	prefix := bytes.Equal(seq, []byte{0x1d}) || (ok && code == 93 && mods == 5 && event != 3)
 	if prefix {
 		if len(p.prefix) != 0 {
-			out := p.prefix
-			p.prefix = nil
-			delete(p.claimed, identity)
+			hadRelease := len(p.prefixRelease) > 0
+			out := p.forwardPrefix()
+			if hadRelease {
+				claim()
+			} // the second key belongs to the client
 			return out, nil
 		}
 		claim()
@@ -146,18 +161,20 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 	case 'q':
 		claim()
 		p.prefix = nil
+		p.prefixRelease = nil
 		return nil, errDetach
 	case 's', 'd', 'w', '?', 'b', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		claim()
 		p.prefix = nil
+		p.prefixRelease = nil
 		return nil, viewCommand(command)
 	}
 	if bytes.Equal(seq, []byte{0x1b}) {
 		p.prefix = nil
+		p.prefixRelease = nil
 		return nil, nil
 	}
-	out := append(append([]byte{}, p.prefix...), seq...)
-	p.prefix = nil
+	out := append(p.forwardPrefix(), seq...)
 	return out, nil
 }
 

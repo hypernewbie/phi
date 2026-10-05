@@ -138,11 +138,19 @@ func serverAbsolutePath(s string) bool {
 }
 
 func (c *client) directory(ctx context.Context, want string) (string, error) {
+	if want != "" && serverAbsolutePath(want) {
+		// Loopback may be a container/proxy with a different filesystem.
+		// Canonicalize locally existing paths, but let Phi validate an absolute
+		// server path instead of requiring it to exist on the client.
+		if c.isLocal() {
+			if resolved, err := resolveDir(want); err == nil {
+				return resolved, nil
+			}
+		}
+		return want, nil
+	}
 	if want != "" && c.isLocal() {
 		return resolveDir(want)
-	}
-	if want != "" && serverAbsolutePath(want) {
-		return want, nil
 	}
 	state := c.activeServer()
 	if state == nil {
