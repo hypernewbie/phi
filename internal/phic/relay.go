@@ -14,30 +14,22 @@ import (
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
-// Relay owns one WebSocket connection and two goroutines: one
-// drains the server's frames into the TTY, the other copies
-// the TTY's input into 0x01 frames. The plan's "one writer
-// owns terminal output" and "one writer owns WebSocket
-// application writes" invariants are enforced by routing all
-// terminal output through relay.writeTTY and all WS writes
-// through relay.send.
+// Relay owns one WebSocket and two goroutines: server -> TTY
+// and TTY -> server. The plan's invariants: one writer owns
+// terminal output, one writer owns WebSocket writes.
 type Relay struct {
 	conn   *websocket.Conn
 	tty    *TTY
 	api    *apiClient
-	epoch  atomic.Uint64
 	closed atomic.Bool
 }
 
-// NewRelay builds a Relay but does not connect.
 func NewRelay(tty *TTY, api *apiClient) *Relay {
 	return &Relay{tty: tty, api: api}
 }
 
-// Connect dials /ws/pane/:id?term_proto=hot-v1, sends the
-// 0x08 ATTACH_HEAD response to the controller, and returns
-// the bytes the controller should write to the TTY before
-// entering the live phase.
+// Connect dials /ws/pane/:id?term_proto=hot-v1 and reads the
+// ATTACH_HEAD response.
 func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
 	if r.conn != nil {
 		return wireAttach{}, errors.New("phic: relay already connected")
@@ -71,30 +63,22 @@ func (r *Relay) attachHead(ctx context.Context) (wireAttach, error) {
 	if err != nil {
 		return wireAttach{}, err
 	}
-	r.epoch.Store(hdr.Epoch)
 	return wireAttach{Header: hdr, Checkpoint: ckpt}, nil
 }
 
-// Run is the live phase. It returns when the connection drops,
-// the context is canceled, or the backend exits.
+// Run is the live phase. Returns on disconnect, signal, or error.
 func (r *Relay) Run(ctx context.Context) error {
 	if r.conn == nil {
 		return errors.New("phic: relay not connected")
 	}
 	defer r.Close()
-
-	// Server -> TTY: one goroutine.
 	go r.readServerToTTY(ctx)
-
-	// TTY -> Server: another goroutine, plus resize forwarding.
 	r.runInput(ctx)
 	return nil
 }
 
-// readServerToTTY pumps the WebSocket and writes 0x09 payloads
-// directly to the TTY. The plan's "one writer owns terminal
-// output" rule: this is the only path that writes to the
-// controlling terminal during the relay.
+// readServerToTTY writes 0x09 payloads to the TTY. Reserved
+// frames (0x04 exit, 0x02 control) are not terminal output.
 func (r *Relay) readServerToTTY(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
@@ -116,20 +100,12 @@ func (r *Relay) readServerToTTY(ctx context.Context) {
 		}
 		_, payload, err := ParseLiveOutput(msg)
 		if err != nil {
-			// Reserved frames (0x04 exit, 0x02 control) are
-			// not terminal output; the plan calls this out.
 			continue
 		}
-		// Best-effort write: a short write does not advance
-		// the written frontier. The plan's "Short writes"
-		// test is in production via the bounded 64 KiB
-		// batches; here we just write the full payload.
 		_, _ = r.tty.Write(payload)
 	}
 }
 
-// runInput copies TTY bytes into 0x01 frames and forwards
-// SIGWINCH as 0x02 frames.
 func (r *Relay) runInput(ctx context.Context) {
 	buf := make([]byte, 4096)
 	resizes := r.tty.Resizes()
@@ -157,7 +133,6 @@ func (r *Relay) runInput(ctx context.Context) {
 	}
 }
 
-// Close releases the connection. Safe to call more than once.
 func (r *Relay) Close() {
 	if r.closed.Swap(true) {
 		return
@@ -167,16 +142,12 @@ func (r *Relay) Close() {
 	}
 }
 
-// wireAttach is the controller's view of the ATTACH_HEAD
-// response. The plan names the checkpoint bytes the bytes
-// that follow the JSON header.
+// wireAttach is the ATTACH_HEAD response.
 type wireAttach struct {
 	Header     wireproto.AttachHeadHeader
 	Checkpoint []byte
 }
 
-// isWSClose returns true for the websocket close error and
-// for the I/O EOF the gorilla library surfaces on close.
 func isWSClose(err error) bool {
 	if err == nil {
 		return false
@@ -188,8 +159,6 @@ func isWSClose(err error) bool {
 	return errors.As(err, &ce)
 }
 
-// isTimeout matches the deadline-exceeded errors that come
-// from the runtime poller.
 func isTimeout(err error) bool {
 	if err == nil {
 		return false

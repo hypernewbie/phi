@@ -4,7 +4,6 @@ package phic
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -12,9 +11,6 @@ import (
 	"syscall"
 )
 
-// Run is the entry point. It parses flags, performs the auth
-// dance, opens the WebSocket, and runs the relay loop until
-// the backend exits or the user detaches.
 func Run(args []string) error {
 	cfg, err := parseFlags(args)
 	if err != nil {
@@ -53,6 +49,9 @@ func parseFlags(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
+	if rest := fs.Args(); len(rest) > 0 {
+		c.Dir = rest[0]
+	}
 	return c, nil
 }
 
@@ -60,6 +59,7 @@ type config struct {
 	Server  string
 	Pane    string
 	Coder   string
+	Dir     string
 	NewPane bool
 	Help    bool
 	Version bool
@@ -79,7 +79,6 @@ Options:
 
 const version = "phic dev (commit unreleased)"
 
-// client owns the connection lifetime.
 type client struct {
 	cfg config
 	tty *TTY
@@ -99,7 +98,6 @@ func newClient(_ context.Context, cfg config) (*client, error) {
 	return &client{cfg: cfg, tty: tty, api: api}, nil
 }
 
-// Close releases the controlling terminal.
 func (c *client) Close() error {
 	if c.tty != nil {
 		return c.tty.Close()
@@ -107,16 +105,21 @@ func (c *client) Close() error {
 	return nil
 }
 
-// Run performs the auth dance, resolves a pane, and enters
-// the relay loop. It returns on disconnect, fatal error, or
-// signal.
 func (c *client) Run(ctx context.Context) error {
 	if err := c.authenticate(ctx); err != nil {
 		return err
 	}
-	pane, err := c.resolvePane(ctx)
+	sel, err := c.Select(ctx)
 	if err != nil {
 		return err
+	}
+	pane := sel.PaneID
+	if pane == "" && sel.NewSpawn != nil {
+		sp, err := c.api.Spawn(ctx, *sel.NewSpawn)
+		if err != nil {
+			return err
+		}
+		pane = sp.PaneID
 	}
 	relay := NewRelay(c.tty, c.api)
 	if _, err := relay.Connect(ctx, pane); err != nil {
@@ -126,18 +129,13 @@ func (c *client) Run(ctx context.Context) error {
 }
 
 // authenticate checks /api/auth/status and prompts for a
-// password if the server requires one. The plan calls for
-// the password to be read without echo before the relay
-// takes input ownership — the relay is not yet started.
+// password before the relay takes input ownership.
 func (c *client) authenticate(ctx context.Context) error {
 	status, err := c.api.AuthStatus(ctx)
 	if err != nil {
 		return err
 	}
-	if !status.Enabled {
-		return nil
-	}
-	if status.Authenticated {
+	if !status.Enabled || status.Authenticated {
 		return nil
 	}
 	pw, err := readPassword("Phi server password: ")
@@ -147,20 +145,7 @@ func (c *client) authenticate(ctx context.Context) error {
 	return c.api.Login(ctx, status, pw)
 }
 
-// resolvePane is the plan's startup selection (section 2).
-// For Commit 2 the implementation is reduced to "use --pane
-// or fail with a clear message"; Commit 3 adds the session
-// list.
-func (c *client) resolvePane(_ context.Context) (string, error) {
-	if c.cfg.Pane != "" {
-		return c.cfg.Pane, nil
-	}
-	return "", errors.New("phic: --pane is required in this build (commit 3 adds the session list)")
-}
-
-// readPassword reads a line from /dev/tty without echo. The
-// plan: "Read the password without echo before the relay
-// takes input ownership."
+// readPassword reads a line from /dev/tty without echo.
 func readPassword(prompt string) (string, error) {
 	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
