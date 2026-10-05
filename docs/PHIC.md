@@ -36,6 +36,10 @@ phic --worktrees .
 
 ## Relay keys
 
+- Press Ctrl-], then `s`, for sessions and new panes.
+- Press Ctrl-], then `d`, for the current pane's diff.
+- Press Ctrl-], then `w`, for worktrees.
+- Press Ctrl-], then `?`, for help.
 - Press Ctrl-], then `q`, to detach.
 - Press Ctrl-] twice to send one original prefix sequence.
 - Other application input stays unchanged, including delimited paste.
@@ -46,7 +50,9 @@ The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodi
 
 macOS and Linux are the supported client platforms. Windows still supports the existing `phi` server command. The native `phic` relay is not supported there.
 
-Live session, diff, and worktree overlays remain disabled. The original screen fixture did not prove safe restoration. See `internal/termproof/PROOF.md` for the measured counterexamples.
+Client views take ownership only after both relay workers stop. Menus print inline, with numbered choices, pagination, and Esc/q cancellation. Backend output continues into Phi's recording, not a client queue. Returning reconnects to the selected pane and rebuilds the native display. The diff pager runs with `LESSSECURE=1` and does not run shell commands or input filters.
+
+Fixed-geometry rebuilds are tested against a development-only terminal oracle, including normal/alternate buffers, cursor/style continuation, tabs, scroll regions, and repeated returns. See `internal/termproof/PROOF.md` for the distinction from arbitrary screen snapshotting.
 
 Reused panes replay from the beginning of Phi's recording in bounded requests. Repaint suppresses historical terminal queries and clipboard writes; live output and new queries remain unchanged. A control split between replay and live retains its replay policy until complete. The original recording is never changed.
 

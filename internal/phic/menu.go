@@ -2,10 +2,12 @@ package phic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type lineTerminal interface {
@@ -33,9 +35,106 @@ func readLine(ctx context.Context, t lineTerminal) (string, error) {
 	}
 	return "", fmt.Errorf("phic: input line too long")
 }
+
+// readMenuInput handles menu keys in raw mode. Unlike readLine (password
+// entry), Escape does not require Enter and backend reports are not choices.
+func readMenuInput(ctx context.Context, t lineTerminal) (string, error) {
+	var line, sequence []byte
+	var b [1]byte
+	for len(line) < 4096 {
+		readCtx := ctx
+		cancel := func() {}
+		if len(sequence) > 0 {
+			readCtx, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
+		}
+		n, err := t.ReadContext(readCtx, b[:])
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			if len(sequence) == 1 {
+				return "", errDetach
+			}
+			sequence = nil
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if n == 0 {
+			return "", io.EOF
+		}
+		key := b[0]
+		if len(sequence) > 0 {
+			sequence = append(sequence, key)
+			if len(sequence) == 2 && key != '[' && key != 'O' {
+				sequence = nil
+				continue
+			}
+			if len(sequence) == 2 {
+				continue
+			}
+			if key < 0x40 || key > 0x7e {
+				if len(sequence) > 128 {
+					sequence = nil
+				}
+				continue
+			}
+			code, mods, event, ok := encodedKey(sequence)
+			sequence = nil
+			if !ok || event == 3 || (mods != 1 && mods != 5) {
+				continue
+			}
+			if code == 27 {
+				return "", errDetach
+			}
+			if code > 127 {
+				continue
+			}
+			key = byte(code)
+		}
+		if key == 0x1b {
+			sequence = []byte{key}
+			continue
+		}
+		if key == 3 || key == 4 {
+			return "", errDetach
+		}
+		if key == '\r' || key == '\n' {
+			if err := writeAll(t, []byte("\r\n")); err != nil {
+				return "", err
+			}
+			return string(line), nil
+		}
+		if key == 8 || key == 127 {
+			if len(line) > 0 {
+				line = line[:len(line)-1]
+				if err := writeAll(t, []byte("\b \b")); err != nil {
+					return "", err
+				}
+			}
+			continue
+		}
+		if len(line) == 0 && (key == 'q' || key == 'n' || key == 'p') {
+			if err := writeAll(t, []byte{key, '\r', '\n'}); err != nil {
+				return "", err
+			}
+			return string(key), nil
+		}
+		if key >= '0' && key <= '9' {
+			line = append(line, key)
+			if err := writeAll(t, []byte{key}); err != nil {
+				return "", err
+			}
+		}
+	}
+	return "", fmt.Errorf("phic: menu input too long")
+}
+
 func (c *client) choose(ctx context.Context, title string, items []string) (int, error) {
 	if c.tty == nil {
 		return 0, fmt.Errorf("phic: selection requires a terminal")
+	}
+	if err := c.tty.EnterRaw(); err != nil {
+		return 0, err
 	}
 	cols, rows, err := c.tty.Size()
 	if err != nil {
@@ -51,7 +150,7 @@ func (c *client) choose(ctx context.Context, title string, items []string) (int,
 	page := 0
 	for {
 		var out strings.Builder
-		fmt.Fprintln(&out, title)
+		fmt.Fprintf(&out, "Φ  %s\r\n", title)
 		start, end := page*perPage, (page+1)*perPage
 		if end > len(items) {
 			end = len(items)
@@ -62,13 +161,13 @@ func (c *client) choose(ctx context.Context, title string, items []string) (int,
 			if len(line) > cols-1 {
 				line = line[:cols-4] + "..."
 			}
-			fmt.Fprintln(&out, line)
+			fmt.Fprintf(&out, "%s\r\n", line)
 		}
-		fmt.Fprint(&out, "number, n/p, or q: ")
-		if _, err := c.tty.Write([]byte(out.String())); err != nil {
+		fmt.Fprint(&out, "number + Enter · n/p page · Esc/q back: ")
+		if err := writeAll(c.tty, []byte(out.String())); err != nil {
 			return 0, err
 		}
-		line, err := readLine(ctx, c.tty)
+		line, err := readMenuInput(ctx, c.tty)
 		if err != nil {
 			return 0, err
 		}

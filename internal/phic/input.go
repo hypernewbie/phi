@@ -8,7 +8,12 @@ import (
 )
 
 var errDetach = errors.New("detach")
-var errLiveView = errors.New("live views are disabled: screen restoration has not been proved; detach and use startup selection or --diff")
+
+// viewCommand transfers ownership to the client controller after relay workers
+// have stopped. It is never an instruction to paint from the input goroutine.
+type viewCommand byte
+
+func (v viewCommand) Error() string { return "phic: client view " + string(byte(v)) }
 
 // inputParser recognizes only client keys and paste boundaries. Application
 // sequences stay opaque. A lone Escape is flushed by the caller's short timer.
@@ -16,11 +21,12 @@ type inputParser struct {
 	sequence []byte
 	prefix   []byte
 	paste    bool
+	rest     []byte
 }
 
 func (p *inputParser) Feed(data []byte) ([]byte, error) {
 	var out []byte
-	for _, b := range data {
+	for i, b := range data {
 		if len(p.sequence) > 0 {
 			p.sequence = append(p.sequence, b)
 			if len(p.sequence) == 2 && b != '[' {
@@ -39,6 +45,7 @@ func (p *inputParser) Feed(data []byte) ([]byte, error) {
 				send, err := p.key(seq)
 				out = append(out, send...)
 				if err != nil {
+					p.rest = append([]byte{}, data[i+1:]...)
 					return out, err
 				}
 			}
@@ -51,6 +58,7 @@ func (p *inputParser) Feed(data []byte) ([]byte, error) {
 		send, err := p.key([]byte{b})
 		out = append(out, send...)
 		if err != nil {
+			p.rest = append([]byte{}, data[i+1:]...)
 			return out, err
 		}
 	}
@@ -111,7 +119,7 @@ func (p *inputParser) key(seq []byte) ([]byte, error) {
 		return nil, errDetach
 	case 's', 'd', 'w', '?':
 		p.prefix = nil
-		return nil, errLiveView
+		return nil, viewCommand(command)
 	}
 	if bytes.Equal(seq, []byte{0x1b}) {
 		p.prefix = nil

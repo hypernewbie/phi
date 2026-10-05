@@ -97,9 +97,9 @@ Options:
   --help          show this message
   --version       show version
 
-Relay keys: Ctrl-] q detaches; Ctrl-] Ctrl-] sends a literal prefix.
-Live menus are disabled until screen restoration is proved. Startup
-selection and --diff do not overwrite an attached backend screen.`)
+Relay keys: Ctrl-] then s sessions, d diff, w worktrees, ? help, q detach.
+Ctrl-] Ctrl-] sends a literal prefix. Client menus are inline; backend
+output stays raw. Returning rebuilds from Phi's recording at current size.`)
 }
 
 type client struct {
@@ -184,37 +184,7 @@ func (c *client) Run(ctx context.Context) error {
 		}
 		return err
 	}
-	pane := sel.PaneID
-	if pane == "" && sel.NewSpawn != nil {
-		cols, rows, err := c.tty.Size()
-		if err != nil {
-			return err
-		}
-		if cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
-			return fmt.Errorf("phic: unusable terminal size")
-		}
-		sel.NewSpawn.Cols, sel.NewSpawn.Rows = uint16(cols), uint16(rows)
-		sp, err := c.api.Spawn(ctx, *sel.NewSpawn)
-		if err != nil {
-			return err
-		}
-		pane = sp.PaneID
-	}
-	if pane == "" {
-		return fmt.Errorf("phic: server returned an empty pane ID")
-	}
-	if err := c.tty.EnterRaw(); err != nil {
-		return err
-	}
-	relay := NewRelay(c.tty, c.api)
-	// Resuming a saved session still starts a new process and recording. Its
-	// startup terminal queries are live, not replies from an older attachment.
-	relay.fresh = sel.NewSpawn != nil
-	if _, err := relay.Connect(ctx, pane); err != nil {
-		return err
-	}
-	defer relay.Close()
-	return relay.Run(ctx)
+	return c.attachSelected(ctx, sel)
 }
 
 // authenticate checks /api/auth/status and prompts for a

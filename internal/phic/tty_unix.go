@@ -30,6 +30,7 @@ type TTY struct {
 	closeErr      error
 	keyboardDepth int
 	outputLexer   queryGuard
+	pendingInput  []byte
 }
 
 type Resize struct{ Cols, Rows uint16 }
@@ -91,7 +92,46 @@ func makeRaw(t *unix.Termios) {
 
 func (t *TTY) Resizes() <-chan Resize       { return t.resizeCh }
 func (t *TTY) Read(buf []byte) (int, error) { return t.ReadContext(context.Background(), buf) }
+
+// Unread is used only after both relay workers have joined. Menu input typed
+// in the same OS read as a prefix command must not disappear at the handoff.
+func (t *TTY) Unread(data []byte) {
+	t.pendingInput = append(append([]byte{}, data...), t.pendingInput...)
+}
+
+func (t *TTY) PrepareMenu() error {
+	// Abort a partial OSC/DCS/CSI before emitting keyboard-stack controls.
+	if err := writeAll(t, []byte("\x18\x1b\\")); err != nil {
+		return err
+	}
+	if t.keyboardDepth > 1 {
+		if err := writeAll(t, []byte(fmt.Sprintf("\x1b[<%du", t.keyboardDepth-1))); err != nil {
+			return err
+		}
+	}
+	return writeAll(t, []byte(neutralDisplay+"\r\n"))
+}
+
+func (t *TTY) PrepareRelay() error {
+	if err := t.PrepareMenu(); err != nil {
+		return err
+	}
+	cols, _, err := t.Size()
+	if err != nil {
+		return err
+	}
+	return writeAll(t, []byte(clearRelayDisplay+defaultTabStops(cols)))
+}
+
 func (t *TTY) ReadContext(ctx context.Context, buf []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(t.pendingInput) > 0 {
+		n := copy(buf, t.pendingInput)
+		t.pendingInput = t.pendingInput[n:]
+		return n, nil
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, err
