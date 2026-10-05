@@ -156,17 +156,19 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 		if h.replayBufferBytes > 0 {
 			ring = NewRingBuffer(h.replayBufferBytes)
 		}
-		ph = &PaneHub{
-			clients: make(map[*Client]bool),
-			Ring:    ring,
-			epoch:   randomEpoch(),
-		}
-		if archive := h.archives[paneID]; archive != nil {
-			ph.recording = archive.recording
+		ph = h.archives[paneID]
+		if ph != nil {
+			// Promote the owner, not just its file. In-flight cold reads and
+			// the live writer must continue to use the same journal mutex.
 			delete(h.archives, paneID)
 		} else {
+			ph = &PaneHub{clients: make(map[*Client]bool)}
 			ph.recording, ph.recordingErr = openRecording(h.recordingPath(paneID))
 		}
+		ph.mu.Lock()
+		defer ph.mu.Unlock()
+		ph.Ring = ring
+		ph.epoch = randomEpoch()
 		if ph.recording != nil {
 			ph.total = ph.recording.head
 			if ring != nil {
@@ -261,6 +263,9 @@ type attachHeadJSON struct {
 	Oldest uint64          `json:"oldest"`
 	Head   uint64          `json:"head"`
 	Ckpt   *checkpointJSON `json:"ckpt,omitempty"`
+	// Optional, certified plain-text line boundary. Absence means that
+	// clients without a checkpoint must replay from Oldest.
+	ReplayFrom uint64 `json:"replay_from,omitempty"`
 }
 
 type checkpointJSON struct {
@@ -313,6 +318,9 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 			Len:     len(ph.ckpt.Ansi),
 		}
 		extra = ph.ckpt.Ansi
+	}
+	if ph.ckpt == nil && ph.recording != nil {
+		hdr.ReplayFrom = ph.recording.replayStart()
 	}
 	frame := frameFramedJSON(0x08, hdr, extra)
 	if frame != nil {
@@ -390,10 +398,23 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	if ph == nil {
 		ph = h.archives[paneID]
 	}
-	path := h.recordingPath(paneID)
 	h.mu.RUnlock()
-	if ph != nil || path == "" {
+	if ph != nil {
 		return ph
+	}
+	// Opening includes journal recovery. Serialize it with every other
+	// opener and publish exactly one owner before any writer can append.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ph = h.panes[paneID]; ph != nil {
+		return ph
+	}
+	if ph = h.archives[paneID]; ph != nil {
+		return ph
+	}
+	path := h.recordingPath(paneID)
+	if path == "" {
+		return nil
 	}
 	if _, err := os.Stat(path); err != nil {
 		return nil
@@ -402,25 +423,13 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 	if err != nil {
 		return nil
 	}
-	cold := &PaneHub{
+	ph = &PaneHub{
 		clients:   make(map[*Client]bool),
 		recording: recording,
 		epoch:     randomEpoch(),
 		total:     recording.head,
 	}
-	h.mu.Lock()
-	if live := h.panes[paneID]; live != nil {
-		ph = live
-	} else if archived := h.archives[paneID]; archived != nil {
-		ph = archived
-	} else {
-		h.archives[paneID] = cold
-		ph = cold
-	}
-	h.mu.Unlock()
-	if ph != cold {
-		_ = recording.file.Close()
-	}
+	h.archives[paneID] = ph
 	return ph
 }
 

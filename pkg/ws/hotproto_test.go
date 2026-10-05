@@ -215,10 +215,11 @@ func TestEpochDiffersPerPane(t *testing.T) {
 	if ea.epoch == eb.epoch {
 		t.Fatal("panes must not share an epoch")
 	}
+	previousEpoch := ea.EpochOf()
 	h.ClosePane("a")
-	h.Ingest("a", []byte("z")) // recreates the pane
+	h.Ingest("a", []byte("z")) // recreates the pane, reusing the journal owner
 	ea2, _ := h.LookupPane("a")
-	if ea2.epoch == ea.epoch {
+	if ea2.EpochOf() == previousEpoch {
 		t.Fatal("pane recreation must mint a fresh epoch")
 	}
 }
