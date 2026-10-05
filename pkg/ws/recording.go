@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ type coldRecording struct {
 	head      uint64
 	chunks    []recordingChunk
 	resizes   []ResizeMarker
+	// Only ASCII text with CRLF line resets is eligible for a raw tail
+	// shortcut. ANSI, UTF-8, tabs, and bare LF require prefix replay.
+	plain    bool
+	lastByte byte
 }
 
 func openRecording(path string) (*coldRecording, error) {
@@ -42,7 +47,7 @@ func openRecording(path string) (*coldRecording, error) {
 		f.Close()
 		return nil, fmt.Errorf("secure recording permissions: %w", err)
 	}
-	r := &coldRecording{file: f, path: f.Name(), ephemeral: ephemeral}
+	r := &coldRecording{file: f, path: f.Name(), ephemeral: ephemeral, plain: true}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -63,6 +68,10 @@ func openRecording(path string) (*coldRecording, error) {
 		}
 		switch hdr[0] {
 		case 1:
+			if err := r.inspectPlain(r.offset+5, n); err != nil {
+				f.Close()
+				return nil, err
+			}
 			r.chunks = append(r.chunks, recordingChunk{r.head, r.offset + 5, n})
 			r.head += uint64(n)
 		case 2:
@@ -98,23 +107,28 @@ func openRecording(path string) (*coldRecording, error) {
 
 // hasValidRecordSuffix distinguishes a torn final append from a damaged
 // middle header with later committed records. The journal predates checksums,
-// so recovery accepts a suffix only when a complete chain of framed records
-// reaches EOF; otherwise it truncates only the incomplete tail.
+// so a committed record chain followed by a torn final append also counts
+// as a retained suffix. Ambiguous damage must fail closed, not delete data.
 func hasValidRecordChain(file *os.File, start, end int64) bool {
 	position := start
 	records := 0
 	for position < end {
 		if position+5 > end {
-			return false
+			// The preceding records are complete even if the last header
+			// was only partly written before shutdown.
+			return records > 0
 		}
 		var header [5]byte
 		if _, err := file.ReadAt(header[:], position); err != nil {
 			return false
 		}
 		length := binary.BigEndian.Uint32(header[1:])
-		if length > 64*1024*1024 || position+5+int64(length) > end ||
+		if length > 64*1024*1024 ||
 			(header[0] == 2 && length != 4) || (header[0] != 1 && header[0] != 2) {
 			return false
+		}
+		if position+5+int64(length) > end {
+			return records > 0 // complete suffix, then an incomplete payload
 		}
 		position += 5 + int64(length)
 		records++
@@ -151,6 +165,59 @@ func hasValidRecordSuffix(file *os.File, start, end int64) bool {
 	return false
 }
 
+func (r *coldRecording) notePlain(data []byte) {
+	if !r.plain {
+		return
+	}
+	for _, b := range data {
+		if (b < 32 && b != '\r' && b != '\n') || b > 126 || (b == '\n' && r.lastByte != '\r') {
+			r.plain = false
+			return
+		}
+		r.lastByte = b
+	}
+}
+
+func (r *coldRecording) inspectPlain(offset int64, length uint32) error {
+	if !r.plain || length == 0 {
+		return nil
+	}
+	block := make([]byte, min(length, 64*1024))
+	for left := int64(length); left > 0 && r.plain; {
+		n := min(int64(len(block)), left)
+		if _, err := r.file.ReadAt(block[:n], offset); err != nil {
+			return err
+		}
+		r.notePlain(block[:n])
+		offset += n
+		left -= n
+	}
+	return nil
+}
+
+// A line reset is a safe raw replay boundary only when the entire prefix is
+// plain text and enough complete lines follow it to replace the live buffer.
+// Otherwise no shortcut is certified; the client must replay the prefix.
+func (r *coldRecording) replayStart() uint64 {
+	const tailBytes = 2*1024*1024 - 128*1024
+	const minimumLines = 10000 + 4096
+	if !r.plain || r.head <= tailBytes {
+		return 0
+	}
+	from := r.head - tailBytes
+	data, resizes, err := r.read(from, r.head)
+	if err != nil || bytes.Count(data, []byte("\r\n")) < minimumLines {
+		return 0
+	}
+	for _, resize := range resizes {
+		if resize.Rows > 4096 {
+			return 0
+		}
+	}
+	reset := bytes.Index(data, []byte("\r\n"))
+	return from + uint64(reset) + 2
+}
+
 func (r *coldRecording) append(kind byte, data []byte) error {
 	var hdr [5]byte
 	hdr[0] = kind
@@ -164,6 +231,7 @@ func (r *coldRecording) append(kind byte, data []byte) error {
 		return io.ErrShortWrite
 	}
 	if kind == 1 {
+		r.notePlain(data)
 		r.chunks = append(r.chunks, recordingChunk{r.head, r.offset + 5, uint32(len(data))})
 		r.head += uint64(len(data))
 	} else {
