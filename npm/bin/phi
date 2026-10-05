@@ -1,21 +1,12 @@
 #!/usr/bin/env node
-// Phi CLI shim. On Unix this spawns the bundled `phi` binary;
-// on Windows it reports unsupported until a tested native
-// client exists. The plan's gate: "A Unix-only client must
-// not create a broken Windows npm command."
 const { spawn } = require('child_process');
 const path = require('path');
 
-if (process.platform === 'win32') {
-  process.stderr.write(
-    'phic: Windows is not supported in this release.\n' +
-    'See PHIC_PLAN.md commit 5 for the platform list.\n'
-  );
-  process.exit(1);
-}
+const binaryName = process.platform === 'win32' ? 'phi.exe' : 'phi';
+const binaryPath = path.join(__dirname, binaryName);
 
-const binaryPath = path.join(__dirname, 'phi');
-const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+const args = process.argv.slice(2);
+const child = spawn(binaryPath, args, { stdio: 'inherit' });
 
 child.on('close', (code) => {
   process.exit(code);
