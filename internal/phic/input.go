@@ -142,15 +142,25 @@ func encodedKey(seq []byte) (code, mods, event int, ok bool) {
 		return
 	}
 	fields := strings.Split(s[2:len(s)-1], ";")
-	if len(fields) > 2 {
+	if len(fields) > 3 {
 		return
 	}
-	code, err := strconv.Atoi(fields[0])
+	// Kitty flag 4 appends shifted/base-layout identities to the primary
+	// codepoint. They are not separate keys. Associated text (flag 32) is
+	// likewise not a command; the primary key remains authoritative.
+	identities := strings.Split(fields[0], ":")
+	if len(identities) > 3 || !validCodepoints(identities, true) {
+		return 0, 0, 0, false
+	}
+	if len(fields) == 3 && !validCodepoints(strings.Split(fields[2], ":"), false) {
+		return 0, 0, 0, false
+	}
+	code, err := strconv.Atoi(identities[0])
 	if err != nil {
 		return 0, 0, 0, false
 	}
 	mods, event = 1, 1
-	if len(fields) == 2 {
+	if len(fields) >= 2 && fields[1] != "" {
 		part := strings.Split(fields[1], ":")
 		if len(part) > 2 {
 			return 0, 0, 0, false
@@ -166,5 +176,23 @@ func encodedKey(seq []byte) (code, mods, event int, ok bool) {
 			}
 		}
 	}
-	return code, mods, event, code > 0 && mods > 0 && event >= 1 && event <= 3
+	if mods < 1 || mods > 256 {
+		return 0, 0, 0, false
+	}
+	// Caps/Num Lock are state bits, not extra shortcut modifiers.
+	mods = ((mods - 1) &^ (64 | 128)) + 1
+	return code, mods, event, code > 0 && event >= 1 && event <= 3
+}
+
+func validCodepoints(parts []string, optionalAlternates bool) bool {
+	for i, part := range parts {
+		if optionalAlternates && i > 0 && part == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(part, 10, 32)
+		if err != nil || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff) {
+			return false
+		}
+	}
+	return len(parts) > 0
 }

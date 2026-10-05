@@ -14,6 +14,11 @@ func TestInputAllPacketSplits(t *testing.T) {
 		{"ordinary binary/Unicode", "\x00\xff\r\n界\x1b[A", "\x00\xff\r\n界\x1b[A", nil},
 		{"legacy detach", "\x1dq", "", errDetach},
 		{"kitty detach", "\x1b[93;5:1u\x1b[93;5:3u\x1b[113;1:1u", "", errDetach},
+		{"kitty alternate keys", "\x1b[93:125:93;5u\x1b[113:81:113;1u", "", errDetach},
+		{"kitty omitted shifted key", "\x1b[93::93;5u\x1b[113::113;1u", "", errDetach},
+		{"kitty associated text", "\x1b[93;5u\x1b[113;1;113u", "", errDetach},
+		{"kitty lock modifiers", "\x1b[93;197u\x1b[113;193u", "", errDetach},
+		{"kitty ordinary alternate keys untouched", "\x1b[97:65:97;2;65u", "\x1b[97:65:97;2;65u", nil},
 		{"modifyOtherKeys detach", "\x1b[27;5;93~q", "", errDetach},
 		{"literal legacy prefix", "\x1d\x1d", "\x1d", nil},
 		{"literal enhanced prefix", "\x1b[93;5u\x1b[93;5u", "\x1b[93;5u", nil},
@@ -50,7 +55,7 @@ func TestEscapeTimeoutDoesNotLoseApplicationEscape(t *testing.T) {
 	}
 }
 func TestHistoricalQueryGuardAcrossEverySplit(t *testing.T) {
-	for _, source := range []string{"\x1b[6n", "\x1b[c", "\x1b[?2004$p", "\x1b]11;?\a", "\x1bP+q544e\x1b\\", "\x1b[?u"} {
+	for _, source := range []string{"\x1b[6n", "\x1b[c", "\x1b[?2004$p", "\x1b]11;?\a", "\x1bP+q544e\x1b\\", "\x1bP$qm\x1b\\", "\x1b[?u"} {
 		for cut := 0; cut <= len(source); cut++ {
 			g := queryGuard{}
 			found := g.Feed([]byte(source[:cut]))

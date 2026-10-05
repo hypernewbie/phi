@@ -51,6 +51,7 @@ func TestPreflightRejectsHistoricalQueriesAndGeometryBeforePainting(t *testing.T
 		cols       uint64
 	}{
 		{"historical reply-producing query", "screen\x1b[6n", 80},
+		{"historical status-string query", "screen\x1bP$qm\x1b\\", 80},
 		{"historical geometry", "screen", 120},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
