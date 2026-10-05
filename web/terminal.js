@@ -221,9 +221,11 @@ const LIVE_SCROLLBACK_ROWS = 10000;
 // adjacent recording windows on scroll. Both the request and resident xterm
 // buffer stay bounded independently of session age.
 const HISTORY_WINDOW_BYTES = MAX_DELTA_BYTES;
-// An anchor batch covers at most this many rows even for one-byte lines.
-// xterm markers follow trim/reflow, so adjacent pages overlap resident rows.
-const HISTORY_ANCHOR_BYTES = 4 * 1024;
+// Anchor the bounded write batches at actual retained rows. If only the
+// ending cursor survives a dense page, retreat by a small byte step instead.
+// That step cannot cross the entire resident buffer, even for one-byte lines.
+const HISTORY_ANCHOR_BYTES = MAX_WRITE_CHARS;
+const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // Bounded in-memory recording-chunk cache backing hash-cache
 // negotiation (concept 4): Map preserves insertion order, so the oldest
 // entry is evicted first. 16 entries x <=64 KiB mirrors the ring cap.
@@ -2275,7 +2277,7 @@ export class TabManager {
                 : anchor && anchor.through > oldest && anchor.through < previousEnd
                     ? anchor.through
                     : tabInfo._historyBrowsing
-                        ? Math.max(oldest, previousEnd - HISTORY_ANCHOR_BYTES)
+                        ? Math.max(oldest, previousEnd - HISTORY_MIN_STEP_BYTES)
                         : windowHead;
             const from = Math.max(oldest, end - HISTORY_WINDOW_BYTES);
             if (!liveState) {
