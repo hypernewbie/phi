@@ -471,7 +471,10 @@ describe('TabManager hot attach bootstrap', () => {
         await flushBootstrap(tab);
         await new Promise((r) => setTimeout(r, 0));
         expect(tab.term.writes).toEqual([]);
-        expect(tab.queuedSeq).toBe(100);
+        // An advertised head is not a parsed frontier when its recording
+        // request was superseded before any bytes reached xterm.
+        expect(tab.queuedSeq).toBe(0);
+        expect(tab.drainedSeq).toBe(0);
         expect(releaseSpy).not.toHaveBeenCalled();
     });
 
@@ -563,20 +566,24 @@ describe('TabManager hot attach bootstrap', () => {
     it('reconnect with same epoch applies the small delta without reset', async () => {
         stubTerminalGlobal();
         const tm = makeTm();
-        vi.stubGlobal(
-            'fetch',
-            vi.fn().mockResolvedValue(recordingResponse('missed', 50, 60)),
-        );
+        const fetchMock = vi.fn(async (url) => {
+            const from = Number(
+                new URL(url, 'http://localhost').searchParams.get('from'),
+            );
+            return from === 0
+                ? recordingResponse('initial', 0, 50)
+                : recordingResponse('missed', 50, 60);
+        });
+        vi.stubGlobal('fetch', fetchMock);
 
         tm.createTab('p4', 's4', 'T', 'bash', '', '', false);
         const tab = tm.tabs.get('p4');
         tab.ws.ws.emitAttachHead({ epoch: 7, oldest: 0, head: 50 });
-        await new Promise((r) => setTimeout(r, 0));
-        expect(tab.term.writes).toEqual([]);
+        await flushBootstrap(tab);
+        expect(tab.term.writes).toEqual(['initial'.padEnd(50, ' ')]);
+        expect(tab.drainedSeq).toBe(50);
 
-        // Simulate the pre-disconnect watermark.
-        tab.drainedSeq = 50;
-        tab.paneEpoch = 7;
+        // Reconnect resumes from the parser-confirmed frontier.
         const priorWrites = tab.term.writes.length;
         tab._termOpened = true; // reconnect: terminal already open
 

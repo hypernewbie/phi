@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setupDomHarness } from './_dom.js';
 import { TabManager } from '../web/terminal.js';
 
@@ -96,7 +96,7 @@ function makeTm({ withTabs = [] } = {}) {
                 scrollToBottom: vi.fn(),
                 scrollToLine: vi.fn(),
                 scrollLines: vi.fn(),
-                write: vi.fn((_d, cb) => cb && cb()),
+                write: vi.fn((_d, cb) => cb?.()),
                 resize: vi.fn(),
                 open: vi.fn(),
                 reset: vi.fn(),
@@ -242,11 +242,15 @@ describe('Terminal History Preservation', () => {
         stubTerminalGlobal();
         const tm = makeTm();
         const missedOutput = 'M'.repeat(90 * 1024); // 90 KiB missed while disconnected
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValue(
-                recordingResponse(missedOutput, 10000, 10000 + 90 * 1024),
+        const initialOutput = 'I'.repeat(10000);
+        const fetchMock = vi.fn(async (url) => {
+            const from = Number(
+                new URL(url, 'http://localhost').searchParams.get('from'),
             );
+            return from === 0
+                ? recordingResponse(initialOutput, 0, 10000)
+                : recordingResponse(missedOutput, 10000, 10000 + 90 * 1024);
+        });
         vi.stubGlobal('fetch', fetchMock);
 
         tm.createTab('p-hist-3', 's3', 'T', 'bash', '', '', false);

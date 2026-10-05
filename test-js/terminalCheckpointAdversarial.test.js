@@ -109,6 +109,10 @@ describe('checkpoint continuation matches uninterrupted xterm', () => {
             );
             // Checkpoint omission is safe when the caller replays the retained
             // raw prefix. If published, the actual production snapshot is used.
+            expect(
+                request,
+                'the supported state case must exercise the production checkpoint',
+            ).toBeDefined();
             const continuation = request
                 ? JSON.parse(request[1].body).ansi
                 : prefix;

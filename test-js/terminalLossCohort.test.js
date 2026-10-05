@@ -158,7 +158,7 @@ for (const phase of [
             'preserves a %i-byte retained recording',
             async (size) => {
                 const source = encode(
-                    'FIRST\r\n' + 'x'.repeat(size) + '\r\nLAST\r\n',
+                    `FIRST\r\n${'x'.repeat(size)}\r\nLAST\r\n`,
                 );
                 const h = replayHarness(source);
                 try {
@@ -186,9 +186,22 @@ for (const phase of [
                         h.requests.every((r) => r.to - r.from <= LIMIT),
                         'recovery stays bounded per request',
                     ).toBe(true);
+                    const buffer = h.term.buffer.active;
+                    const liveTail = Array.from(
+                        { length: Math.min(24, buffer.length) },
+                        (_, i) =>
+                            buffer
+                                .getLine(
+                                    buffer.length -
+                                        Math.min(24, buffer.length) +
+                                        i,
+                                )
+                                ?.translateToString(true) ?? '',
+                    ).join('\n');
                     expect(
-                        h.term.buffer.active.getLine(0).translateToString(true),
-                    ).toBe('FIRST');
+                        liveTail,
+                        'bounded xterm retains the newest part of the fully verified recording',
+                    ).toContain('LAST');
                 } finally {
                     h.dispose();
                 }
