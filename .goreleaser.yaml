@@ -53,15 +53,19 @@ builds:
         -X main.Date={{.Date}}
 
 archives:
-  - formats: [tar.gz]
+  - id: phi
+    ids: [phi]
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
-    # Two archives per platform: phi_*.tar.gz and phic_*.tar.gz.
-    # The server archive keeps the existing name; the client
-    # archive carries a phic suffix.
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if eq .BuildID "phic" }}_phic{{ end }}
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+  - id: phic
+    ids: [phic]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}_phic
 
 checksum:
   name_template: "checksums.txt"
