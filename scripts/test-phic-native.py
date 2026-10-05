@@ -2,7 +2,8 @@
 """Run installed backends through phic in an isolated native tmux terminal.
 
 No model prompts or user credentials. tmux is a test dependency, never a
-phic runtime dependency. Startup and detach are tested, not screen restoration.
+phic runtime dependency. Tests startup, repeated client views, detach, and
+historical reattachment without provider prompts.
 """
 import argparse
 import json
@@ -40,7 +41,15 @@ def main():
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL")}
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                XDG_DATA_HOME=str(home / ".local/share"), XDG_CACHE_HOME=str(home / ".cache"),
-               TERM="xterm-256color", COLORTERM="truecolor")
+               TERM="xterm-256color", COLORTERM="truecolor",
+               SHELL=shutil.which("bash") or "/bin/sh", PS1="PHIC NATIVE work $ ",
+               GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", str(work)], env=env, check=True)
+    (work / "native.txt").write_text("original fixture\n")
+    subprocess.run(["git", "-C", str(work), "add", "native.txt"], env=env, check=True)
+    subprocess.run(["git", "-C", str(work), "-c", "user.name=Phic Native",
+                    "-c", "user.email=phic-native@invalid", "commit", "-qm", "native fixture"], env=env, check=True)
+    (work / "native.txt").write_text("changed fixture\n")
     coders = args.coders.split(",")
     for coder in coders:
         if coder in ("bash", "pi", "codex", "claude") and not shutil.which(coder):
@@ -61,6 +70,8 @@ def main():
             "id": "opencode-mini-native", "name": "OpenCode Mini Native", "command": opencode,
             "args": ["mini"], "session_source": "none", "input_mode": "direct"}))
     (home / ".phi/config.json").write_text(json.dumps(config))
+    (home / ".phi/backends/bash.json").write_text(json.dumps({
+        "id": "bash", "args": ["--noprofile", "--norc"]}))
     (home / ".phi/backends/pi.json").write_text(json.dumps({
         "id": "pi", "args": ["--offline", "--no-extensions", "--no-skills", "--no-prompt-templates"]}))
     server_bin, client_bin = run / "phi", run / "phic"
@@ -79,6 +90,36 @@ def main():
     def api(path):
         with urllib.request.urlopen(url + path, timeout=3) as response:
             return json.load(response)
+
+    def snapshot(name):
+        cells = tmux("capture-pane", "-e", "-p", "-t", name, check=False)
+        if cells.returncode:
+            return None
+        cursor = tmux("display-message", "-p", "-t", name,
+                      "#{cursor_x} #{cursor_y} #{alternate_on} #{cursor_flag}", check=False)
+        return {"cells": cells.stdout.decode("utf-8", "replace"),
+                "cursor": cursor.stdout.decode("utf-8", "replace").strip()}
+
+    def settled(name, timeout=10):
+        previous, stable = None, 0
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current = snapshot(name)
+            stable = stable + 1 if current is not None and current == previous else 0
+            previous = current
+            if stable >= 8:
+                return current
+            time.sleep(.1)
+        raise RuntimeError(f"{name} did not settle")
+
+    def wait_view(name, marker):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            capture = tmux("capture-pane", "-p", "-t", name, check=False)
+            if marker in capture.stdout.decode("utf-8", "replace"):
+                return
+            time.sleep(.05)
+        raise RuntimeError(f"{name} never displayed {marker}")
 
     expected = {
         "bash": r"work [%$#]", "pi": r"unknown",
@@ -121,6 +162,33 @@ def main():
             (run / (coder + ".screen.txt")).write_text(tape)
             panes = [p for p in api("/api/terminals") if p.get("coder") == coder]
             pane = panes[-1] if panes else None
+            views = []
+            if ready and coder == "bash":
+                # Keep an unfinished command in Readline. No Enter, execution,
+                # or model prompt: menus must preserve the editable input line.
+                tmux("send-keys", "-t", name, "-l", "printf PHIC_UNSUBMITTED")
+                wait_view(name, "PHIC_UNSUBMITTED")
+            reference = settled(name) if ready else None
+            for key, marker, leave in [("?", "Shortcuts", "Enter"), ("s", "Phi sessions", "Escape"),
+                                       ("w", "Worktrees", "q"), ("d", "Diff", "q"),
+                                       ("b", "Servers", "q"), ("?", "Shortcuts", "Enter")]:
+                if reference is None:
+                    break
+                try:
+                    tmux("send-keys", "-t", name, "C-]", key)
+                    wait_view(name, marker)
+                    view = snapshot(name)
+                    (run / f"{coder}.{key if key != '?' else 'help'}.{len(views)}.view.json").write_text(json.dumps(view, indent=2))
+                    tmux("send-keys", "-t", name, leave)
+                    restored = settled(name)
+                    equal = restored == reference
+                    views.append({"key": key, "restored": equal})
+                    (run / f"{coder}.return.{len(views)}.json").write_text(json.dumps({"expected": reference, "actual": restored}, indent=2))
+                    if not equal:
+                        break
+                except (RuntimeError, subprocess.CalledProcessError) as error:
+                    views.append({"key": key, "restored": False, "error": str(error)})
+                    break
             tmux("send-keys", "-t", name, "C-]", "q", check=False)
             detached, alive = False, False
             deadline = time.monotonic() + 3
@@ -131,7 +199,38 @@ def main():
                 if detached:
                     break
                 time.sleep(.05)
+            reattached = False
+            if ready and detached and pane and all(v["restored"] for v in views):
+                resumed_name = name + "_reattach"
+                tmux("new-session", "-d", "-s", resumed_name, "-x", "120", "-y", "36", str(client_bin),
+                     "--server", url, "--pane", pane["id"])
+                try:
+                    # Require an actual backend marker before the settle check;
+                    # a stable empty terminal is not a successful reattachment.
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        capture = tmux("capture-pane", "-p", "-t", resumed_name, check=False)
+                        if re.search(expected[coder], capture.stdout.decode("utf-8", "replace")):
+                            break
+                        time.sleep(.05)
+                    else:
+                        raise RuntimeError("reattachment never painted the backend marker")
+                    restored = settled(resumed_name, timeout=20)
+                    reattached = restored == reference
+                    (run / f"{coder}.reattach.json").write_text(json.dumps({"expected": reference, "actual": restored}, indent=2))
+                    tmux("send-keys", "-t", resumed_name, "C-]", "q", check=False)
+                    deadline = time.monotonic() + 3
+                    while time.monotonic() < deadline:
+                        current = next((p for p in api("/api/terminals") if p["id"] == pane["id"]), None)
+                        if current and current.get("ActiveWSCount", 0) == 0:
+                            break
+                        time.sleep(.05)
+                    else:
+                        reattached = False
+                except (RuntimeError, subprocess.CalledProcessError) as error:
+                    (run / f"{coder}.reattach-error.txt").write_text(str(error))
             row = {"coder": coder, "elapsed": round(time.monotonic() - started, 3), "ready": ready,
+                   "views": views, "reattached": reattached,
                    "detached": detached, "backend_survives_detach": alive, "pane": pane}
             report.append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
@@ -152,7 +251,8 @@ def main():
         (run / "report.json").write_text(json.dumps(report, indent=2))
         print("Evidence:", run)
     return 0 if len(report) == len(coders) and all(
-        r["ready"] and r["detached"] and r["backend_survives_detach"] for r in report) else 1
+        r["ready"] and len(r["views"]) == 6 and all(v["restored"] for v in r["views"])
+        and r["reattached"] and r["detached"] and r["backend_survives_detach"] for r in report) else 1
 
 
 if __name__ == "__main__":
