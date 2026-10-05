@@ -141,7 +141,7 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 	// While the client owns the view, the old socket is gone and output exists
 	// only in Phi. Native input cannot be forwarded into the previous backend.
 	mu.Lock()
-	source["p"] = append(source["p"], []byte("OUTPUT WHILE MENU OPEN\r\n")...)
+	source["p"] = append(source["p"], []byte("OUTPUT WHILE MENU OPEN\r\n\x1b[6n")...)
 	oldActive := active["p"]
 	mu.Unlock()
 	if oldActive != 0 {
@@ -153,6 +153,18 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 	pos = len(tape.snapshot())
 	_, _ = master.Write([]byte("\r"))
 	await("OUTPUT WHILE MENU OPEN", pos)
+	await("\x1b[6n", pos)
+	_, _ = master.Write([]byte("\x1b[1;1R"))
+	replyDeadline := time.Now().Add(time.Second)
+	for time.Now().Before(replyDeadline) {
+		mu.Lock()
+		replied := bytes.Equal(inputs["p"], []byte("\x1b[1;1R"))
+		mu.Unlock()
+		if replied {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	// A complete command and menu response in one OS read must survive handoff.
 	pos = len(tape.snapshot())
 	_, _ = master.Write([]byte("\x1d?\r"))
@@ -190,12 +202,12 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("CLI failed: %v %q", err, tape.snapshot())
 	}
-	if bytes.Contains(tape.snapshot(), []byte("\x1b[6n")) {
-		t.Fatal("historical query reached native terminal")
+	if bytes.Count(tape.snapshot(), []byte("\x1b[6n")) != 1 {
+		t.Fatal("old queries were repeated or the fresh menu-time query was swallowed")
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(inputs["p"]) != 0 || !bytes.Equal(inputs["other"], application) {
+	if !bytes.Equal(inputs["p"], []byte("\x1b[1;1R")) || !bytes.Equal(inputs["other"], application) {
 		t.Fatalf("menu leaked or application keys lost: %#v", inputs)
 	}
 	if connections["p"] != 6 || connections["other"] != 1 {

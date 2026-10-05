@@ -28,6 +28,11 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 		relay := NewRelay(c.tty, c.api)
 		relay.fresh = fresh
 		relay.keys = &c.keys
+		if state := c.activeServer(); state != nil {
+			if cursor, ok := state.frontiers[current.PaneID]; ok {
+				relay.previous = &cursor
+			}
+		}
 		if _, err = relay.Connect(ctx, current.PaneID); err == nil {
 			err = relay.Run(ctx)
 		}
@@ -36,6 +41,12 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 		var command viewCommand
 		if !errors.As(err, &command) {
 			return err
+		}
+		if state := c.activeServer(); state != nil {
+			if state.frontiers == nil {
+				state.frontiers = make(map[string]recordingCursor)
+			}
+			state.frontiers[current.PaneID] = recordingCursor{epoch: relay.epoch, through: relay.written}
 		}
 		if err := c.tty.PrepareMenu(); err != nil {
 			return err
