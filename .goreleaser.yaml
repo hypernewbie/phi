@@ -6,7 +6,12 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  # Server build. Embeds the web assets so the binary is
+  # self-contained.
+  - id: phi
+    main: .
+    binary: phi
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -26,13 +31,37 @@ builds:
         -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
         -X main.Date={{.Date}} -X main.BuildSource=release
 
+  # Native client build. No embedded assets; the binary is
+  # a thin terminal client. The build id is "phic" so the
+  # archive is phi_<version>_<os>_<arch>_phic.tar.gz.
+  - id: phic
+    main: ./cmd/phic
+    binary: phic
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
+        -X main.Date={{.Date}}
+
 archives:
   - formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
+    # Two archives per platform: phi_*.tar.gz and phic_*.tar.gz.
+    # The server archive keeps the existing name; the client
+    # archive carries a phic suffix.
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if eq .BuildID "phic" }}_phic{{ end }}
 
 checksum:
   name_template: "checksums.txt"
