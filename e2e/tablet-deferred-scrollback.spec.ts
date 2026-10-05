@@ -12,6 +12,9 @@ test.afterAll(async () => {
 const LIVE_ROWS = 10000;
 const HISTORY_LINES = 120000;
 const HISTORY_BUDGET_BYTES = 2 * 1024 * 1024;
+// The barrier checks exact parser admission, not an elapsed sleep. Shared
+// software-rendered CI browsers need more time than the default 5 seconds.
+const PAGE_SETTLE_TIMEOUT = 30000;
 const NEWEST = 'DEFERRED_NEWEST';
 const IMMEDIATE_OLDER = `ARCHIVE ${String(HISTORY_LINES - 1).padStart(7, '0')}`;
 
@@ -38,7 +41,7 @@ for (const checkpoint of [false, true]) {
     test(`tablet history stays bounded on ${checkpoint ? 'one older-page gesture' : 'cold attach'}`, async ({
         browser,
     }, info) => {
-        test.setTimeout(120000);
+        test.setTimeout(180000);
         const context = await browser.newContext({
             viewport: { width: 834, height: 1194 },
             isMobile: true,
@@ -300,15 +303,18 @@ for (const checkpoint of [false, true]) {
                     .slice(requestIndex)
                     .reduce((sum, r) => sum + r.through - r.from, 0);
                 await expect
-                    .poll(async () => {
-                        const current = await stats();
-                        return (
-                            activeRequests === 0 &&
-                            current.pendingWrites === 0 &&
-                            current.inputBytes === firstActionBytes &&
-                            current.now - current.lastWriteAt >= 250
-                        );
-                    })
+                    .poll(
+                        async () => {
+                            const current = await stats();
+                            return (
+                                activeRequests === 0 &&
+                                current.pendingWrites === 0 &&
+                                current.inputBytes === firstActionBytes &&
+                                current.now - current.lastWriteAt >= 250
+                            );
+                        },
+                        { timeout: PAGE_SETTLE_TIMEOUT },
+                    )
                     .toBe(true);
                 firstPage = await stats();
                 actionBytes.push(firstActionBytes);
@@ -360,15 +366,18 @@ for (const checkpoint of [false, true]) {
                     .slice(requestIndex)
                     .reduce((sum, r) => sum + r.through - r.from, 0);
                 await expect
-                    .poll(async () => {
-                        const current = await stats();
-                        return (
-                            activeRequests === 0 &&
-                            current.pendingWrites === 0 &&
-                            current.inputBytes === secondActionBytes &&
-                            current.now - current.lastWriteAt >= 250
-                        );
-                    })
+                    .poll(
+                        async () => {
+                            const current = await stats();
+                            return (
+                                activeRequests === 0 &&
+                                current.pendingWrites === 0 &&
+                                current.inputBytes === secondActionBytes &&
+                                current.now - current.lastWriteAt >= 250
+                            );
+                        },
+                        { timeout: PAGE_SETTLE_TIMEOUT },
+                    )
                     .toBe(true);
                 secondPage = await stats();
                 actionBytes.push(secondActionBytes);
@@ -420,15 +429,18 @@ for (const checkpoint of [false, true]) {
                         .slice(requestIndex)
                         .reduce((sum, r) => sum + r.through - r.from, 0);
                     await expect
-                        .poll(async () => {
-                            const current = await stats();
-                            return (
-                                activeRequests === 0 &&
-                                current.pendingWrites === 0 &&
-                                current.inputBytes === pageBytes &&
-                                current.now - current.lastWriteAt >= 250
-                            );
-                        })
+                        .poll(
+                            async () => {
+                                const current = await stats();
+                                return (
+                                    activeRequests === 0 &&
+                                    current.pendingWrites === 0 &&
+                                    current.inputBytes === pageBytes &&
+                                    current.now - current.lastWriteAt >= 250
+                                );
+                            },
+                            { timeout: PAGE_SETTLE_TIMEOUT },
+                        )
                         .toBe(true);
                     const olderPage = await stats();
                     const ids = visibleArchiveIds(olderPage);
