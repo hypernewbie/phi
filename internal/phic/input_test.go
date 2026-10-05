@@ -27,6 +27,8 @@ func TestInputAllPacketSplits(t *testing.T) {
 		{"unknown enhanced command preserves prefix release", "\x1b[93;5:1u\x1b[93;5:3u\x1b[122;1u", "\x1b[93;5:1u\x1b[93;5:3u\x1b[122;1u", nil},
 		{"unknown enhanced command with late release", "\x1b[93;5:1u\x1b[122;1u\x1b[93;5:3u", "\x1b[93;5:1u\x1b[122;1u\x1b[93;5:3u", nil},
 		{"paste is never a command", "\x1b[200~hello \x1dq\x1b[201~", "\x1b[200~hello \x1dq\x1b[201~", nil},
+		{"classic binary mouse payload is opaque", "\x1b[M \x1ds", "\x1b[M \x1ds", nil},
+		{"detach after binary mouse payload", "\x1b[M \x1ds\x1dq", "\x1b[M \x1ds", errDetach},
 		{"session view handoff", "\x1ds", "", viewCommand('s')},
 		{"diff view handoff", "\x1dd", "", viewCommand('d')},
 		{"worktree view handoff", "\x1dw", "", viewCommand('w')},

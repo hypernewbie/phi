@@ -22,6 +22,7 @@ type inputParser struct {
 	prefix        []byte
 	prefixRelease []byte
 	paste         bool
+	mouse         int
 	rest          []byte
 	servers       int
 	claimed       map[[2]int]bool
@@ -30,6 +31,11 @@ type inputParser struct {
 func (p *inputParser) Feed(data []byte) ([]byte, error) {
 	var out []byte
 	for i, b := range data {
+		if p.mouse > 0 {
+			out = append(out, b)
+			p.mouse--
+			continue
+		}
 		if len(p.sequence) > 0 {
 			p.sequence = append(p.sequence, b)
 			if len(p.sequence) == 2 && b != '[' {
@@ -88,6 +94,10 @@ func (p *inputParser) forwardPrefix() []byte {
 }
 
 func (p *inputParser) key(seq []byte) ([]byte, error) {
+	if !p.paste && bytes.Equal(seq, []byte("\x1b[M")) {
+		p.mouse = 3 // X10: button and two coordinates are opaque bytes.
+		return append(p.forwardPrefix(), seq...), nil
+	}
 	if bytes.Equal(seq, []byte("\x1b[200~")) {
 		out := append(p.forwardPrefix(), seq...)
 		p.paste = true
