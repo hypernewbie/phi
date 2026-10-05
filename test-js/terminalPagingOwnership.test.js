@@ -146,6 +146,37 @@ it('older pages retain every short numbered line', async () => {
     }
 });
 
+it('dense pages retreat safely when all earlier write anchors were evicted', async () => {
+    const source = encode(
+        Array.from({ length: 60000 }, (_, i) =>
+            i % 1000 ? '\r\n' : `DENSE ${String(i).padStart(5, '0')}\r\n`,
+        ).join(''),
+    );
+    const h = replayHarness(source);
+    try {
+        serializer(h);
+        h.pty.ws.head(liveCheckpointHead(source.length));
+        await h.settle();
+        await h.manager._loadColdHistory(h.tab);
+        expect(h.manager._oldestHistoryAnchor(h.tab).through).toBe(
+            source.length,
+        );
+        const first = rows(h.term).filter((r) => r.startsWith('DENSE '));
+        await h.manager._loadColdHistory(h.tab);
+        const second = rows(h.term).filter((r) => r.startsWith('DENSE '));
+        expect(h.tab._historyWindowEnd).toBe(source.length - 4096);
+        expect(Number(second[0].slice(6))).toBeLessThan(
+            Number(first[0].slice(6)),
+        );
+        expect(second).toContain(first[0]);
+        expect(h.term.buffer.active.length).toBeLessThanOrEqual(
+            10000 + h.term.rows,
+        );
+    } finally {
+        h.dispose();
+    }
+});
+
 it('a new pane epoch clears older-history ownership', async () => {
     const text = 'OLD\r\n'.repeat(400000);
     const bytes = encode(text);
