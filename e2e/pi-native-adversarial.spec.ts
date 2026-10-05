@@ -6,6 +6,9 @@ import { startPhi } from './_server.js';
 interface Observed {
     element?: HTMLElement;
     rows: number;
+    pendingWrites?: number;
+    lastWriteAt?: number;
+    write(data: string | Uint8Array, callback?: () => void): void;
     buffer: {
         active: {
             viewportY: number;
@@ -26,9 +29,20 @@ async function observe(page: Page) {
             get: () => ctor,
             set: (base: Constructor) => {
                 ctor = class extends base {
+                    pendingWrites = 0;
+                    lastWriteAt = performance.now();
                     constructor(opts: Record<string, unknown>) {
                         super(opts);
                         w.stressTerms.push(this);
+                    }
+                    write(data: string | Uint8Array, callback?: () => void) {
+                        this.pendingWrites++;
+                        this.lastWriteAt = performance.now();
+                        super.write(data, () => {
+                            this.pendingWrites--;
+                            this.lastWriteAt = performance.now();
+                            callback?.();
+                        });
                     }
                 };
             },
@@ -59,6 +73,50 @@ async function firstID(page: Page, pane: string) {
         (m) => Number(m[1]),
     );
     return ids.length ? Math.min(...ids) : Infinity;
+}
+
+async function settledLatestAnchor(page: Page, pane: string) {
+    let anchor = Infinity;
+    await expect
+        .poll(
+            async () => {
+                anchor = await page.evaluate((id) => {
+                    const term = (
+                        window as unknown as { stressTerms: Observed[] }
+                    ).stressTerms.find(
+                        (t) =>
+                            t.element?.closest('.term-container')?.id ===
+                            `term-${id}`,
+                    );
+                    if (
+                        !term ||
+                        term.pendingWrites ||
+                        performance.now() - (term.lastWriteAt ?? 0) < 250
+                    )
+                        return Infinity;
+                    const visible = Array.from(
+                        { length: term.rows },
+                        (_, i) =>
+                            term.buffer.active
+                                .getLine(term.buffer.active.viewportY + i)
+                                ?.translateToString(true) ?? '',
+                    ).join('\n');
+                    // A shell-output marker may appear before a resize redraw has
+                    // finished. Compare wheel movement to a complete *latest* screen.
+                    if (!visible.includes('STRESS HISTORY 0299'))
+                        return Infinity;
+                    const ids = Array.from(
+                        visible.matchAll(/STRESS HISTORY (\d{4})/g),
+                        (m) => Number(m[1]),
+                    );
+                    return ids.length ? Math.min(...ids) : Infinity;
+                }, pane);
+                return anchor;
+            },
+            { timeout: 20000 },
+        )
+        .toBeLessThan(Infinity);
+    return anchor;
 }
 
 for (const mode of ['regular', 'fullscreen'])
@@ -234,10 +292,7 @@ for (const mode of ['regular', 'fullscreen'])
                         )
                         .toBe(true);
                 }
-                const oldest = await firstID(page, pane);
-                // If latest output pushes every original marker out of the
-                // visible grid, return to latest then collect a readable anchor.
-                expect(oldest).toBeLessThan(Infinity);
+                const oldest = await settledLatestAnchor(page, pane);
                 await page
                     .locator(`#term-${pane} .xterm-screen`)
                     .hover({ position: { x: 60, y: 40 } });
