@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// authStatus is the response of GET /api/auth/status.
+// authStatus mirrors GET /api/auth/status.
 type authStatus struct {
 	Enabled       bool   `json:"enabled"`
 	Authenticated bool   `json:"authenticated"`
@@ -24,19 +24,17 @@ type authStatus struct {
 	Challenge     string `json:"challenge,omitempty"`
 }
 
-// loginResponse is the response of POST /api/auth/login.
+// loginResponse mirrors POST /api/auth/login.
 type loginResponse struct {
 	OK bool `json:"ok"`
 }
 
-// apiClient wraps a *http.Client with the cookie jar and base
-// URL. All phic HTTP traffic goes through this type.
+// apiClient wraps a *http.Client with the cookie jar and base URL.
 type apiClient struct {
 	base *url.URL
 	http *http.Client
 }
 
-// newAPIClient builds an apiClient from a server base URL.
 func newAPIClient(server string) (*apiClient, error) {
 	u, err := url.Parse(server)
 	if err != nil {
@@ -52,8 +50,7 @@ func newAPIClient(server string) (*apiClient, error) {
 	}, nil
 }
 
-// AuthStatus calls GET /api/auth/status and returns the parsed
-// response. The challenge is single-use; do not call twice.
+// AuthStatus returns the parsed /api/auth/status body.
 func (a *apiClient) AuthStatus(ctx context.Context) (authStatus, error) {
 	var s authStatus
 	if err := a.getJSON(ctx, "/api/auth/status", &s); err != nil {
@@ -62,9 +59,8 @@ func (a *apiClient) AuthStatus(ctx context.Context) (authStatus, error) {
 	return s, nil
 }
 
-// Login posts a password proof to /api/auth/login. The proof
-// is HMAC-SHA256(verifier, challenge), matching the server's
-// accessAuthManager.login.
+// Login posts a password proof derived from the KDF. The
+// password never crosses the wire; only the HMAC proof does.
 func (a *apiClient) Login(ctx context.Context, status authStatus, password string) error {
 	if !status.Enabled {
 		return nil
@@ -73,11 +69,6 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	if err != nil {
 		return fmt.Errorf("phic: bad salt: %w", err)
 	}
-	// The server stores only the verifier, never the password.
-	// The phic client derives the same verifier from the
-	// password + advertised KDF parameters. This means the
-	// password never crosses the wire: only the HMAC proof
-	// does.
 	verifier, err := deriveVerifier(password, salt, status.Algorithm, status.Iterations)
 	if err != nil {
 		return err
@@ -100,10 +91,6 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	return nil
 }
 
-// deriveVerifier reproduces the server's KDF. The server
-// stores v1.pbkdf2-sha256.<iters>.<salt>.<verifier>; the
-// verifier is PBKDF2(password, salt, iters, 32). The client
-// mirrors that to avoid sending the password.
 func deriveVerifier(password string, salt []byte, algo string, iters int) ([]byte, error) {
 	if algo != "pbkdf2-sha256" {
 		return nil, fmt.Errorf("phic: unsupported KDF %q", algo)
@@ -114,7 +101,6 @@ func deriveVerifier(password string, salt []byte, algo string, iters int) ([]byt
 	return pbkdf2SHA256(password, salt, iters, 32)
 }
 
-// getJSON performs a GET and decodes the response into out.
 func (a *apiClient) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.base.String()+path, nil)
 	if err != nil {
@@ -131,8 +117,6 @@ func (a *apiClient) getJSON(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// postJSON performs a POST with a JSON body and decodes the
-// response into out.
 func (a *apiClient) postJSON(ctx context.Context, path string, body []byte, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base.String()+path, strings.NewReader(string(body)))
 	if err != nil {
