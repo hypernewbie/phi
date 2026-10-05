@@ -18,18 +18,29 @@ function charsets(maps, level) {
 
 function attributes(a) {
     if (!a) return `${CSI}0m`;
-    const codes = [0];
+    const codes = ['0'];
     for (const [method, code] of [['isBold', 1], ['isDim', 2], ['isItalic', 3],
-        ['isUnderline', 4], ['isBlink', 5], ['isInverse', 7], ['isInvisible', 8],
+        ['isBlink', 5], ['isInverse', 7], ['isInvisible', 8],
         ['isStrikethrough', 9], ['isOverline', 53]]) {
-        if (a[method]?.()) codes.push(code);
+        if (a[method]?.()) codes.push(String(code));
+    }
+    const underlineStyle = a.getUnderlineStyle?.() ?? (a.isUnderline?.() ? 1 : 0);
+    if (underlineStyle > 1) codes.push(`4:${underlineStyle}`);
+    else if (underlineStyle === 1 || a.isUnderline?.()) codes.push('4');
+    const underlineMode = a.getUnderlineColorMode?.();
+    const underlineColor = a.getUnderlineColor?.();
+    if (!a.isUnderlineColorDefault?.()) {
+        if (underlineMode === 0x2000000) codes.push(`58:5:${underlineColor}`);
+        else if (underlineMode === 0x3000000) {
+            codes.push(`58:2::${underlineColor >>> 16 & 255}:${underlineColor >>> 8 & 255}:${underlineColor & 255}`);
+        }
     }
     for (const [side, base] of [['Fg', 38], ['Bg', 48]]) {
         const mode = a[`get${side}ColorMode`]?.();
         const color = a[`get${side}Color`]?.();
-        if (mode === 0x1000000) codes.push((side === 'Fg' ? 30 : 40) + (color < 8 ? color : color + 52));
-        else if (mode === 0x2000000) codes.push(base, 5, color);
-        else if (mode === 0x3000000) codes.push(base, 2, color >>> 16 & 255, color >>> 8 & 255, color & 255);
+        if (mode === 0x1000000) codes.push(String((side === 'Fg' ? 30 : 40) + (color < 8 ? color : color + 52)));
+        else if (mode === 0x2000000) codes.push(`${base};5;${color}`);
+        else if (mode === 0x3000000) codes.push(`${base};2;${color >>> 16 & 255};${color >>> 8 & 255};${color & 255}`);
     }
     return `${CSI}${codes.join(';')}m`;
 }
@@ -79,30 +90,103 @@ function pending(p) {
     }
 }
 
-export function terminalContinuation(term) {
-    const core = term._core;
-    const b = core?.buffer;
-    const input = core?._inputHandler;
-    // Lightweight terminal doubles do not expose the parser. Real xterm does.
-    if (!b || !input?._parser) return '';
-    const origin = Boolean(term.modes.originMode);
-    const cup = (x, y, relative) => `${CSI}${Math.max(0, y - (relative ? b.scrollTop : 0)) + 1};${x + 1}H`;
-    // DECSTBM and DECOM both home the cursor. Set the saved cursor first,
-    // then the current position, after the addon restores those modes.
-    let ansi = `${CSI}?6${b.savedOriginMode ? 'h' : 'l'}`;
-    ansi += `${CSI}?7${b.savedWraparoundMode ? 'h' : 'l'}`;
-    ansi += cup(b.savedX, Math.max(0, b.savedY - b.ybase), b.savedOriginMode);
-    ansi += attributes(b.savedCurAttrData);
-    ansi += charsets(b.savedCharsets, b.savedGlevel) + '\x1b7';
-    ansi += `${CSI}?6${origin ? 'h' : 'l'}${CSI}?7${term.modes.wraparoundMode ? 'h' : 'l'}`;
-    // Tab stops belong to the terminal buffer, not the displayed cells.
+function setPrivateMode(mode, enabled) {
+    return `${CSI}?${mode}${enabled ? 'h' : 'l'}`;
+}
+
+function cursorPosition(buffer, x, y, origin) {
+    const relativeY = origin ? y - buffer.scrollTop : y;
+    return `${CSI}${Math.max(0, relativeY) + 1};${x + 1}H`;
+}
+
+function restoreBufferState(term, buffer, bufferView, state) {
+    const rows = term.rows;
+    let ansi = setPrivateMode(6, false);
+    ansi += `${CSI}r`;
+    if (buffer.scrollTop !== 0 || buffer.scrollBottom !== rows - 1) {
+        ansi += `${CSI}${buffer.scrollTop + 1};${buffer.scrollBottom + 1}r`;
+    }
     ansi += `${CSI}3g`;
-    for (const [col, set] of Object.entries(b.tabs)) {
+    for (const [col, set] of Object.entries(buffer.tabs)) {
         if (set) ansi += `${CSI}${Number(col) + 1}G\x1bH`;
     }
-    ansi += cup(b.x, b.y, origin);
-    ansi += attributes(input._curAttrData);
-    ansi += charsets(core._charsetService._charsets, core._charsetService.glevel);
+
+    // Rebuild DECSC while this buffer is active. The serializer restores its
+    // cells, but saved cursor attributes, charset, and origin mode are not
+    // part of that screen data.
+    ansi += setPrivateMode(6, Boolean(buffer.savedOriginMode));
+    ansi += setPrivateMode(7, Boolean(buffer.savedWraparoundMode));
+    ansi += cursorPosition(
+        buffer,
+        buffer.savedX,
+        Math.max(0, buffer.savedY - buffer.ybase),
+        Boolean(buffer.savedOriginMode),
+    );
+    ansi += attributes(buffer.savedCurAttrData);
+    ansi += charsets(buffer.savedCharsets, buffer.savedGlevel);
+    ansi += '\x1b7';
+
+    ansi += setPrivateMode(6, state.origin);
+    ansi += setPrivateMode(7, state.wraparound);
+    ansi += cursorPosition(buffer, buffer.x, buffer.y, state.origin);
+    ansi += attributes(state.attributes);
+    ansi += charsets(state.charsets, state.charsetLevel);
+
+    // xterm represents pending autowrap with x === cols. CUP cannot restore
+    // that state. Reprint the cell at the right margin under its own rendition
+    // to recreate the wrap-pending cursor without changing the visible cell.
+    if (state.wraparound && buffer.x >= term.cols) {
+        const line = bufferView.getLine(buffer.ybase + buffer.y);
+        let col = term.cols - 1;
+        let cell = line?.getCell(col);
+        if (cell?.getWidth() === 0) cell = line.getCell(--col);
+        const chars = cell?.getChars();
+        if (!chars) throw new Error('cannot restore empty pending-wrap cell');
+        ansi += cursorPosition(buffer, col, buffer.y, state.origin);
+        ansi += attributes(cell);
+        ansi += charsets(undefined, 0);
+        ansi += chars;
+        ansi += attributes(state.attributes);
+        ansi += charsets(state.charsets, state.charsetLevel);
+    }
+    return ansi;
+}
+
+export function terminalContinuation(term) {
+    const core = term._core;
+    const input = core?._inputHandler;
+    const buffers = core?._bufferService?.buffers;
+    // Lightweight terminal doubles do not expose the parser. Real xterm does.
+    if (!buffers || !input?._parser) return '';
+    const normal = buffers.normal;
+    const alternate = buffers.alt;
+    const isAlternate = buffers.active === alternate;
+    const activeState = {
+        origin: Boolean(term.modes.originMode),
+        wraparound: Boolean(term.modes.wraparoundMode),
+        attributes: input._curAttrData,
+        charsets: core._charsetService._charsets,
+        charsetLevel: core._charsetService.glevel,
+    };
+    const normalState = {
+        origin: Boolean(normal.savedOriginMode),
+        wraparound: Boolean(normal.savedWraparoundMode),
+        attributes: normal.savedCurAttrData,
+        charsets: normal.savedCharsets,
+        charsetLevel: normal.savedGlevel,
+    };
+
+    let ansi = '';
+    if (isAlternate) {
+        // Preserve the already-serialized alternate contents with DEC mode 47.
+        // First enter normal mode to restore state that belongs to its buffer.
+        ansi += `${CSI}?1049l`;
+        ansi += restoreBufferState(term, normal, term.buffer.normal, normalState);
+        ansi += `${CSI}?47h`;
+        ansi += restoreBufferState(term, alternate, term.buffer.alternate, activeState);
+    } else {
+        ansi += restoreBufferState(term, normal, term.buffer.normal, activeState);
+    }
     // An unfinished command must be the very last bytes of the snapshot.
     return ansi + pending(input._parser);
 }

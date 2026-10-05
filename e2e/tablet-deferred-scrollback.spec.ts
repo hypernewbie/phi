@@ -13,7 +13,7 @@ const LIVE_ROWS = 10000;
 const HISTORY_LINES = 120000;
 const HISTORY_BUDGET_BYTES = 2 * 1024 * 1024;
 const NEWEST = 'DEFERRED_NEWEST';
-const IMMEDIATE_OLDER = `ARCHIVE ${String(HISTORY_LINES - 1).padStart(7, '0')}`;
+const FIRST_PAGE_MARKER = 'ARCHIVE 0106700';
 
 interface Observed {
     element?: HTMLElement;
@@ -30,13 +30,14 @@ interface Observed {
         };
     };
     write(data: string | Uint8Array, callback?: () => void): void;
+    scrollToTop?(): void;
 }
 
 for (const checkpoint of [false, true]) {
     test(`tablet history stays bounded on ${checkpoint ? 'one older-page gesture' : 'cold attach'}`, async ({
         browser,
     }, info) => {
-        test.setTimeout(45000);
+        test.setTimeout(120000);
         const context = await browser.newContext({
             viewport: { width: 834, height: 1194 },
             isMobile: true,
@@ -59,10 +60,12 @@ for (const checkpoint of [false, true]) {
             const w = window as unknown as {
                 deferredTerms: Observed[];
                 pendingWrites: number;
+                inputBytes: number;
                 lastWriteAt: number;
             };
             w.deferredTerms = [];
             w.pendingWrites = 0;
+            w.inputBytes = 0;
             w.lastWriteAt = performance.now();
             let ctor: Constructor;
             Object.defineProperty(window, 'Terminal', {
@@ -86,6 +89,11 @@ for (const checkpoint of [false, true]) {
                                 return;
                             }
                             w.pendingWrites++;
+                            w.inputBytes += new TextEncoder().encode(
+                                typeof data === 'string'
+                                    ? data
+                                    : new TextDecoder().decode(data),
+                            ).length;
                             w.lastWriteAt = performance.now();
                             super.write(data, () => {
                                 w.pendingWrites--;
@@ -183,6 +191,7 @@ for (const checkpoint of [false, true]) {
                 const w = window as unknown as {
                     deferredTerms: Observed[];
                     pendingWrites: number;
+                    inputBytes: number;
                     lastWriteAt: number;
                 };
                 const term = w.deferredTerms.find(
@@ -197,6 +206,7 @@ for (const checkpoint of [false, true]) {
                         rows: 0,
                         visible: [] as string[],
                         pendingWrites: w.pendingWrites,
+                        inputBytes: w.inputBytes,
                         lastWriteAt: w.lastWriteAt,
                         now: performance.now(),
                         coarse: false,
@@ -216,6 +226,7 @@ for (const checkpoint of [false, true]) {
                     rows: term.rows,
                     visible,
                     pendingWrites: w.pendingWrites,
+                    inputBytes: w.inputBytes,
                     lastWriteAt: w.lastWriteAt,
                     now: performance.now(),
                     coarse: matchMedia('(pointer: coarse)').matches,
@@ -241,13 +252,26 @@ for (const checkpoint of [false, true]) {
             const beforeGesture = await stats();
             expect(beforeGesture.coarse).toBe(true);
 
+            let firstPage: Awaited<ReturnType<typeof stats>> | undefined;
+            let secondPage: Awaited<ReturnType<typeof stats>> | undefined;
+            let latestAfterReturn:
+                | Awaited<ReturnType<typeof stats>>
+                | undefined;
+            const actionBytes: number[] = [];
+            const pageRanges: { from: number; through: number }[][] = [];
+            let oldestHistoryLine: number | undefined;
             if (checkpoint) {
                 expect(requests).toHaveLength(0);
+                await page.evaluate(() => {
+                    (window as unknown as { inputBytes: number }).inputBytes =
+                        0;
+                });
                 const box = await page
                     .locator(`#term-${pane} .xterm-screen`)
                     .boundingBox();
                 if (!box) throw new Error('xterm viewport is not visible');
                 const cdp = await context.newCDPSession(page);
+                let requestIndex = requests.length;
                 await cdp.send('Input.synthesizeScrollGesture', {
                     x: box.x + 80,
                     y: box.y + 80,
@@ -255,24 +279,183 @@ for (const checkpoint of [false, true]) {
                     gestureSourceType: 'touch',
                     speed: 400,
                 });
-                await expect.poll(() => requests.length).toBeGreaterThan(0);
+                await expect
+                    .poll(() => requests.length)
+                    .toBeGreaterThan(requestIndex);
+                const firstActionBytes = requests
+                    .slice(requestIndex)
+                    .reduce((sum, r) => sum + r.through - r.from, 0);
                 await expect
                     .poll(async () => {
                         const current = await stats();
                         return (
                             activeRequests === 0 &&
                             current.pendingWrites === 0 &&
+                            current.inputBytes === firstActionBytes &&
                             current.now - current.lastWriteAt >= 250
                         );
                     })
                     .toBe(true);
+                firstPage = await stats();
+                actionBytes.push(firstActionBytes);
+                pageRanges.push(requests.slice(requestIndex));
+
+                // Move to the top of the loaded window. The next bounded
+                // recording page must move the visible anchor further back.
+                requestIndex = requests.length;
+                await page.evaluate(() => {
+                    (window as unknown as { inputBytes: number }).inputBytes =
+                        0;
+                });
+                await page.evaluate((id) => {
+                    const w = window as unknown as {
+                        deferredTerms: Observed[];
+                    };
+                    const term = w.deferredTerms.find(
+                        (candidate) =>
+                            candidate.element?.closest('.term-container')
+                                ?.id === `term-${id}`,
+                    );
+                    term?.scrollToTop?.();
+                    term?.element?.closest('.term-container')?.dispatchEvent(
+                        new WheelEvent('wheel', {
+                            deltaY: -100,
+                            bubbles: true,
+                        }),
+                    );
+                }, pane);
+                await expect
+                    .poll(() => requests.length)
+                    .toBeGreaterThan(requestIndex);
+                const secondActionBytes = requests
+                    .slice(requestIndex)
+                    .reduce((sum, r) => sum + r.through - r.from, 0);
+                await expect
+                    .poll(async () => {
+                        const current = await stats();
+                        return (
+                            activeRequests === 0 &&
+                            current.pendingWrites === 0 &&
+                            current.inputBytes === secondActionBytes &&
+                            current.now - current.lastWriteAt >= 250
+                        );
+                    })
+                    .toBe(true);
+                secondPage = await stats();
+                actionBytes.push(secondActionBytes);
+                pageRanges.push(requests.slice(requestIndex));
+                const visibleArchiveIds = (
+                    current: Awaited<ReturnType<typeof stats>>,
+                ) =>
+                    current.visible
+                        .map((line) => line.match(/^ARCHIVE (\d{7})/))
+                        .filter((match): match is RegExpMatchArray =>
+                            Boolean(match),
+                        )
+                        .map((match) => Number(match[1]));
+                let olderFrontier = Math.min(...visibleArchiveIds(secondPage));
+                for (
+                    let pageNumber = 0;
+                    olderFrontier > 0 && pageNumber < 50;
+                    pageNumber++
+                ) {
+                    requestIndex = requests.length;
+                    await page.evaluate(() => {
+                        (
+                            window as unknown as { inputBytes: number }
+                        ).inputBytes = 0;
+                    });
+                    await page.evaluate((id) => {
+                        const w = window as unknown as {
+                            deferredTerms: Observed[];
+                        };
+                        const term = w.deferredTerms.find(
+                            (candidate) =>
+                                candidate.element?.closest('.term-container')
+                                    ?.id === `term-${id}`,
+                        );
+                        term?.scrollToTop?.();
+                        term?.element
+                            ?.closest('.term-container')
+                            ?.dispatchEvent(
+                                new WheelEvent('wheel', {
+                                    deltaY: -100,
+                                    bubbles: true,
+                                }),
+                            );
+                    }, pane);
+                    await expect
+                        .poll(() => requests.length)
+                        .toBeGreaterThan(requestIndex);
+                    const pageBytes = requests
+                        .slice(requestIndex)
+                        .reduce((sum, r) => sum + r.through - r.from, 0);
+                    await expect
+                        .poll(async () => {
+                            const current = await stats();
+                            return (
+                                activeRequests === 0 &&
+                                current.pendingWrites === 0 &&
+                                current.inputBytes === pageBytes &&
+                                current.now - current.lastWriteAt >= 250
+                            );
+                        })
+                        .toBe(true);
+                    const olderPage = await stats();
+                    const ids = visibleArchiveIds(olderPage);
+                    const nextFrontier = Math.min(...ids);
+                    if (
+                        !Number.isFinite(nextFrontier) ||
+                        nextFrontier >= olderFrontier ||
+                        olderFrontier - nextFrontier > LIVE_ROWS
+                    ) {
+                        throw new Error(
+                            `older paging skipped retained rows: ${olderFrontier} -> ${nextFrontier}`,
+                        );
+                    }
+                    olderFrontier = nextFrontier;
+                    oldestHistoryLine = nextFrontier;
+                    actionBytes.push(pageBytes);
+                    pageRanges.push(requests.slice(requestIndex));
+                }
+                if (olderFrontier !== 0) {
+                    throw new Error(
+                        `paging did not reach oldest retained line; stopped at ${olderFrontier}`,
+                    );
+                }
+                await page.locator('.scroll-to-bottom-btn').click();
+                await expect
+                    .poll(
+                        async () => (await stats()).visible.includes(NEWEST),
+                        {
+                            timeout: 15000,
+                        },
+                    )
+                    .toBe(true);
+                latestAfterReturn = await stats();
             }
 
-            const actual = await stats();
-            const requestedBytes = requests.reduce(
+            const actual = secondPage || firstPage || (await stats());
+            const coldAttachBytes = requests.reduce(
                 (sum, request) => sum + request.through - request.from,
                 0,
             );
+            const requestedBytes = checkpoint
+                ? Math.max(0, ...actionBytes)
+                : coldAttachBytes;
+            const archiveIds = (
+                page: Awaited<ReturnType<typeof stats>> | undefined,
+            ) =>
+                (page?.visible ?? [])
+                    .map((line) => line.match(/^ARCHIVE (\d{7})/))
+                    .filter((match): match is RegExpMatchArray =>
+                        Boolean(match),
+                    )
+                    .map((match) => Number(match[1]));
+            const firstPageIds = archiveIds(firstPage);
+            const secondPageIds = archiveIds(secondPage);
+            const firstPageOldest = Math.min(...firstPageIds);
+            const secondPageOldest = Math.min(...secondPageIds);
             await info.attach('bounded-history-evidence', {
                 body: JSON.stringify(
                     {
@@ -281,7 +464,15 @@ for (const checkpoint of [false, true]) {
                         actual,
                         requests,
                         requestedBytes,
-                        immediateOlderMarker: IMMEDIATE_OLDER,
+                        actionBytes,
+                        pageRanges,
+                        firstPage,
+                        secondPage,
+                        firstPageOldest,
+                        secondPageOldest,
+                        latestAfterReturn,
+                        firstPageMarker: FIRST_PAGE_MARKER,
+                        oldestHistoryLine,
                     },
                     null,
                     2,
@@ -312,10 +503,30 @@ for (const checkpoint of [false, true]) {
                 );
             if (
                 checkpoint &&
-                !actual.visible.some((line) => line.startsWith(IMMEDIATE_OLDER))
+                !firstPage?.visible.some((line) =>
+                    line.startsWith(FIRST_PAGE_MARKER),
+                )
             )
                 violations.push(
-                    `first older page does not show exact archive line ${IMMEDIATE_OLDER}`,
+                    `first older page does not show exact archive line ${FIRST_PAGE_MARKER}`,
+                );
+            const pageAdvance = firstPageOldest - secondPageOldest;
+            if (
+                checkpoint &&
+                (!Number.isFinite(pageAdvance) ||
+                    pageAdvance <= 0 ||
+                    pageAdvance > LIVE_ROWS)
+            )
+                violations.push(
+                    `second page skips beyond the retained overlap (${pageAdvance} lines)`,
+                );
+            if (checkpoint && !latestAfterReturn?.visible.includes(NEWEST))
+                violations.push(
+                    'jumping to latest did not restore the live tail',
+                );
+            if (actionBytes.some((n) => n > HISTORY_BUDGET_BYTES))
+                violations.push(
+                    'a single older-page action exceeded its byte budget',
                 );
             expect(violations).toEqual([]);
         } finally {
