@@ -13,7 +13,7 @@ const LIVE_ROWS = 10000;
 const HISTORY_LINES = 120000;
 const HISTORY_BUDGET_BYTES = 2 * 1024 * 1024;
 const NEWEST = 'DEFERRED_NEWEST';
-const FIRST_PAGE_MARKER = 'ARCHIVE 0106700';
+const IMMEDIATE_OLDER = `ARCHIVE ${String(HISTORY_LINES - 1).padStart(7, '0')}`;
 
 interface Observed {
     element?: HTMLElement;
@@ -31,6 +31,7 @@ interface Observed {
     };
     write(data: string | Uint8Array, callback?: () => void): void;
     scrollToTop?(): void;
+    scrollToBottom?(): void;
 }
 
 for (const checkpoint of [false, true]) {
@@ -163,6 +164,18 @@ for (const checkpoint of [false, true]) {
                 epoch: 7,
                 oldest: 0,
                 head: bytes.length,
+                // Same certificate as the real journal: this fixture is ASCII
+                // CRLF text, with far more than a live buffer after this reset.
+                ...(!checkpoint
+                    ? {
+                          replay_from:
+                              bytes.indexOf(
+                                  '\r\n',
+                                  bytes.length -
+                                      (HISTORY_BUDGET_BYTES - 128 * 1024),
+                              ) + 2,
+                      }
+                    : {}),
                 ...(checkpoint
                     ? {
                           ckpt: {
@@ -254,6 +267,7 @@ for (const checkpoint of [false, true]) {
 
             let firstPage: Awaited<ReturnType<typeof stats>> | undefined;
             let secondPage: Awaited<ReturnType<typeof stats>> | undefined;
+            let firstPageTail: Awaited<ReturnType<typeof stats>> | undefined;
             let latestAfterReturn:
                 | Awaited<ReturnType<typeof stats>>
                 | undefined;
@@ -299,6 +313,21 @@ for (const checkpoint of [false, true]) {
                 firstPage = await stats();
                 actionBytes.push(firstActionBytes);
                 pageRanges.push(requests.slice(requestIndex));
+                // Read only visible rows at the page's bottom too. The page
+                // must contain the immediate older line, not merely any old text.
+                await page.evaluate((id) => {
+                    const w = window as unknown as {
+                        deferredTerms: Observed[];
+                    };
+                    w.deferredTerms
+                        .find(
+                            (t) =>
+                                t.element?.closest('.term-container')?.id ===
+                                `term-${id}`,
+                        )
+                        ?.scrollToBottom?.();
+                }, pane);
+                firstPageTail = await stats();
 
                 // Move to the top of the loaded window. The next bounded
                 // recording page must move the visible anchor further back.
@@ -407,7 +436,7 @@ for (const checkpoint of [false, true]) {
                     if (
                         !Number.isFinite(nextFrontier) ||
                         nextFrontier >= olderFrontier ||
-                        olderFrontier - nextFrontier > LIVE_ROWS
+                        olderFrontier - nextFrontier >= olderPage.length
                     ) {
                         throw new Error(
                             `older paging skipped retained rows: ${olderFrontier} -> ${nextFrontier}`,
@@ -467,11 +496,12 @@ for (const checkpoint of [false, true]) {
                         actionBytes,
                         pageRanges,
                         firstPage,
+                        firstPageTail,
                         secondPage,
                         firstPageOldest,
                         secondPageOldest,
                         latestAfterReturn,
-                        firstPageMarker: FIRST_PAGE_MARKER,
+                        immediateOlderMarker: IMMEDIATE_OLDER,
                         oldestHistoryLine,
                     },
                     null,
@@ -503,19 +533,19 @@ for (const checkpoint of [false, true]) {
                 );
             if (
                 checkpoint &&
-                !firstPage?.visible.some((line) =>
-                    line.startsWith(FIRST_PAGE_MARKER),
+                !firstPageTail?.visible.some((line) =>
+                    line.startsWith(IMMEDIATE_OLDER),
                 )
             )
                 violations.push(
-                    `first older page does not show exact archive line ${FIRST_PAGE_MARKER}`,
+                    `first older page does not retain immediate older line ${IMMEDIATE_OLDER}`,
                 );
             const pageAdvance = firstPageOldest - secondPageOldest;
             if (
                 checkpoint &&
                 (!Number.isFinite(pageAdvance) ||
                     pageAdvance <= 0 ||
-                    pageAdvance > LIVE_ROWS)
+                    pageAdvance >= (firstPage?.length ?? 0))
             )
                 violations.push(
                     `second page skips beyond the retained overlap (${pageAdvance} lines)`,

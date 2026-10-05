@@ -216,7 +216,18 @@ export class PTYWebSocket {
                 ansi: new TextDecoder().decode(parsed.extra),
             };
         }
-        this._notify(this.onAttachHead, { epoch, oldest, head, ckpt });
+        const replayFrom = parsed.hdr.replay_from;
+        this._notify(this.onAttachHead, {
+            epoch,
+            oldest,
+            head,
+            ckpt,
+            ...(validSeq(replayFrom) &&
+                replayFrom >= oldest &&
+                replayFrom <= head
+                ? { replayFrom }
+                : {}),
+        });
     }
     _handleLiveOutput(payload) {
         if (this.mode !== 'hot' ||
