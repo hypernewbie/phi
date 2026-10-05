@@ -39,6 +39,7 @@ type Relay struct {
 	written uint64
 	epoch   uint64
 	fresh   bool
+	repaint *repaintFilter
 	pane    string
 	cancel  context.CancelFunc
 }
@@ -163,16 +164,16 @@ func (r *Relay) Run(ctx context.Context) error {
 	if r.header.Header.Oldest != 0 {
 		return errors.New("phic: recording prefix unavailable; cannot reconstruct terminal")
 	}
-	// Fresh launches need startup terminal replies. Existing recordings must
-	// pass the query/geometry guard before any historical output is written.
+	// New processes need their startup replies. A reused pane is a display
+	// rebuild: suppress old queries, not native keys or new live queries.
 	if r.fresh {
 		close(ready)
+	} else {
+		r.repaint = &repaintFilter{}
 	}
-	if err = r.preflight(ctx, r.pane, r.header.Header.Head, cols, rows); err == nil {
-		err = r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
-		if err == nil {
-			err = r.recover(ctx, r.pane, r.header.Header.Head)
-		}
+	err = r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+	if err == nil {
+		err = r.recoverOutput(ctx, r.pane, r.header.Header.Head, !r.fresh)
 	}
 	if !r.fresh {
 		close(ready)
@@ -237,7 +238,7 @@ func (r *Relay) live(ctx context.Context, pane string) error {
 				continue
 			}
 			data = data[r.written-start:]
-			if err := r.write(ctx, data); err != nil {
+			if err := r.output(ctx, data, false); err != nil {
 				return err
 			}
 		case wireproto.FrameExit:
