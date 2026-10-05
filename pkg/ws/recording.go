@@ -38,6 +38,10 @@ func openRecording(path string) (*coldRecording, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("secure recording permissions: %w", err)
+	}
 	r := &coldRecording{file: f, path: f.Name(), ephemeral: ephemeral}
 	info, err := f.Stat()
 	if err != nil {
@@ -51,6 +55,10 @@ func openRecording(path string) (*coldRecording, error) {
 		}
 		n := binary.BigEndian.Uint32(hdr[1:])
 		if n > 64*1024*1024 || r.offset+5+int64(n) > info.Size() {
+			if hasValidRecordSuffix(f, r.offset+5, info.Size()) {
+				f.Close()
+				return nil, fmt.Errorf("corrupt recording record at offset %d before retained suffix", r.offset)
+			}
 			break
 		}
 		switch hdr[0] {
@@ -86,6 +94,61 @@ func openRecording(path string) (*coldRecording, error) {
 		}
 	})
 	return r, nil
+}
+
+// hasValidRecordSuffix distinguishes a torn final append from a damaged
+// middle header with later committed records. The journal predates checksums,
+// so recovery accepts a suffix only when a complete chain of framed records
+// reaches EOF; otherwise it truncates only the incomplete tail.
+func hasValidRecordChain(file *os.File, start, end int64) bool {
+	position := start
+	records := 0
+	for position < end {
+		if position+5 > end {
+			return false
+		}
+		var header [5]byte
+		if _, err := file.ReadAt(header[:], position); err != nil {
+			return false
+		}
+		length := binary.BigEndian.Uint32(header[1:])
+		if length > 64*1024*1024 || position+5+int64(length) > end ||
+			(header[0] == 2 && length != 4) || (header[0] != 1 && header[0] != 2) {
+			return false
+		}
+		position += 5 + int64(length)
+		records++
+	}
+	return records > 0 && position == end
+}
+
+func hasValidRecordSuffix(file *os.File, start, end int64) bool {
+	const blockSize = 64 * 1024
+	block := make([]byte, blockSize+4)
+	for base := start; base+5 <= end; {
+		length := min(int64(len(block)), end-base)
+		n, err := file.ReadAt(block[:length], base)
+		for i := 0; i+5 <= n; i++ {
+			kind := block[i]
+			if kind != 1 && kind != 2 {
+				continue
+			}
+			declared := binary.BigEndian.Uint32(block[i+1 : i+5])
+			candidate := base + int64(i)
+			if declared > 64*1024*1024 || candidate+5+int64(declared) > end ||
+				(kind == 2 && declared != 4) {
+				continue
+			}
+			if hasValidRecordChain(file, candidate, end) {
+				return true
+			}
+		}
+		if err != nil || n <= 4 {
+			break
+		}
+		base += int64(n - 4)
+	}
+	return false
 }
 
 func (r *coldRecording) append(kind byte, data []byte) error {

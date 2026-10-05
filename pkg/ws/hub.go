@@ -96,6 +96,8 @@ type PaneHub struct {
 
 	// resizes is a bounded FIFO of resize markers ordered by AtSeq.
 	resizes []ResizeMarker
+	// pendingResize blocks output admission until its geometry is durable.
+	pendingResize *ResizeMarker
 
 	// ckpt is the newest accepted client checkpoint, if any.
 	ckpt *paneCheckpoint
@@ -125,7 +127,10 @@ func (h *Hub) SetRecordingDirectory(dir string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordingDirectory = dir
-	return os.MkdirAll(dir, 0700)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0700)
 }
 
 func (h *Hub) recordingPath(paneID string) string {
@@ -324,29 +329,46 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 // Called from ReadPump when the client resizes; the marker orders resizes
 // against output for archive replay. Idempotent for consecutive
 // same-size resizes (TUI redraw nudges) to keep the ring small.
+func (ph *PaneHub) appendResizeLocked(marker ResizeMarker) error {
+	if ph.recording == nil {
+		return fmt.Errorf("recording unavailable for resize")
+	}
+	marker.AtSeq = ph.total
+	var geometry [4]byte
+	binary.BigEndian.PutUint16(geometry[:2], marker.Cols)
+	binary.BigEndian.PutUint16(geometry[2:], marker.Rows)
+	if err := ph.recording.append(2, geometry[:]); err != nil {
+		return err
+	}
+	ph.resizes = append(ph.resizes, marker)
+	if len(ph.resizes) > maxResizeMarkers {
+		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
+	}
+	ph.pendingResize = nil
+	return nil
+}
+
 func (h *Hub) RecordResize(paneID string, cols, rows uint16) {
+	if cols == 0 || rows == 0 {
+		return
+	}
 	ph := h.GetOrCreatePaneHub(paneID)
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
-	if n := len(ph.resizes); n > 0 {
+	if ph.pendingResize != nil {
+		if ph.pendingResize.Cols == cols && ph.pendingResize.Rows == rows {
+			return
+		}
+	} else if n := len(ph.resizes); n > 0 {
 		last := ph.resizes[n-1]
 		if last.Cols == cols && last.Rows == rows {
 			return
 		}
 	}
-	if ph.recording == nil {
-		return
-	}
-	var geometry [4]byte
-	binary.BigEndian.PutUint16(geometry[:2], cols)
-	binary.BigEndian.PutUint16(geometry[2:], rows)
-	if err := ph.recording.append(2, geometry[:]); err != nil {
+	marker := ResizeMarker{AtSeq: ph.total, Cols: cols, Rows: rows}
+	if err := ph.appendResizeLocked(marker); err != nil {
+		ph.pendingResize = &marker
 		log.Printf("[recording] resize: %v", err)
-		return
-	}
-	ph.resizes = append(ph.resizes, ResizeMarker{AtSeq: ph.total, Cols: cols, Rows: rows})
-	if len(ph.resizes) > maxResizeMarkers {
-		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
 	}
 }
 
@@ -362,15 +384,50 @@ type Recording struct {
 	Resizes []ResizeMarker
 }
 
-func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
-	ph, ok := h.LookupPane(paneID)
-	if !ok {
-		h.mu.RLock()
+func (h *Hub) recordingForRead(paneID string) *PaneHub {
+	h.mu.RLock()
+	ph := h.panes[paneID]
+	if ph == nil {
 		ph = h.archives[paneID]
-		h.mu.RUnlock()
-		if ph == nil {
-			return Recording{}, false
-		}
+	}
+	path := h.recordingPath(paneID)
+	h.mu.RUnlock()
+	if ph != nil || path == "" {
+		return ph
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	recording, err := openRecording(path)
+	if err != nil {
+		return nil
+	}
+	cold := &PaneHub{
+		clients:   make(map[*Client]bool),
+		recording: recording,
+		epoch:     randomEpoch(),
+		total:     recording.head,
+	}
+	h.mu.Lock()
+	if live := h.panes[paneID]; live != nil {
+		ph = live
+	} else if archived := h.archives[paneID]; archived != nil {
+		ph = archived
+	} else {
+		h.archives[paneID] = cold
+		ph = cold
+	}
+	h.mu.Unlock()
+	if ph != cold {
+		_ = recording.file.Close()
+	}
+	return ph
+}
+
+func (h *Hub) Recording(paneID string, from, through uint64) (Recording, bool) {
+	ph := h.recordingForRead(paneID)
+	if ph == nil {
+		return Recording{}, false
 	}
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -622,6 +679,11 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 			return ph.recordingErr
 		}
 		ph.total = ph.recording.head
+	}
+	if ph.pendingResize != nil {
+		if err := ph.appendResizeLocked(*ph.pendingResize); err != nil {
+			return err
+		}
 	}
 	if err := ph.recording.append(1, payload); err != nil {
 		return err
