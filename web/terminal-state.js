@@ -152,12 +152,12 @@ function restoreBufferState(term, buffer, bufferView, state) {
     return ansi;
 }
 
-export function terminalContinuation(term) {
+function continuationState(term) {
     const core = term._core;
     const input = core?._inputHandler;
     const buffers = core?._bufferService?.buffers;
     // Lightweight terminal doubles do not expose the parser. Real xterm does.
-    if (!buffers || !input?._parser) return '';
+    if (!buffers || !input?._parser) return null;
     const normal = buffers.normal;
     const alternate = buffers.alt;
     const isAlternate = buffers.active === alternate;
@@ -176,17 +176,33 @@ export function terminalContinuation(term) {
         charsetLevel: normal.savedGlevel,
     };
 
-    let ansi = '';
-    if (isAlternate) {
-        // Preserve the already-serialized alternate contents with DEC mode 47.
-        // First enter normal mode to restore state that belongs to its buffer.
-        ansi += `${CSI}?1049l`;
-        ansi += restoreBufferState(term, normal, term.buffer.normal, normalState);
-        ansi += `${CSI}?47h`;
-        ansi += restoreBufferState(term, alternate, term.buffer.alternate, activeState);
-    } else {
-        ansi += restoreBufferState(term, normal, term.buffer.normal, activeState);
+    return { normal, alternate, isAlternate, activeState, normalState, parser: input._parser };
+}
+
+// Restore buffer metadata before entering alternate mode, not by leaving it
+// after its cells were painted. xterm clears those cells on *every* exit.
+export function terminalSnapshot(term, addon, options) {
+    const state = continuationState(term);
+    if (!state) return addon.serialize(options);
+    const { normal, alternate, isAlternate, activeState, normalState, parser } = state;
+    if (!isAlternate) {
+        return addon.serialize(options) +
+            restoreBufferState(term, normal, term.buffer.normal, activeState) + pending(parser);
     }
-    // An unfinished command must be the very last bytes of the snapshot.
-    return ansi + pending(input._parser);
+    // Use only the addon's public serializer. Its normal/alternate split is
+    // version-pinned; fail closed if the upstream framing ever changes.
+    const normalCells = addon.serialize({ ...options, excludeModes: true, excludeAltBuffer: true });
+    const cells = addon.serialize({ ...options, excludeModes: true });
+    const full = addon.serialize(options);
+    const prefix = normalCells + `${CSI}?1049h${CSI}H`;
+    if (!cells.startsWith(prefix) || !full.startsWith(cells)) {
+        throw new Error('unsupported alternate checkpoint framing');
+    }
+    const altCells = cells.slice(prefix.length);
+    const modes = full.slice(cells.length);
+    return normalCells +
+        restoreBufferState(term, normal, term.buffer.normal, normalState) +
+        `${CSI}?6l${CSI}?7h${CSI}4l${CSI}0m` + charsets(undefined, 0) +
+        `${CSI}?47h${CSI}H` + altCells + modes +
+        restoreBufferState(term, alternate, term.buffer.alternate, activeState) + pending(parser);
 }

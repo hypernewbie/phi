@@ -62,6 +62,8 @@ export interface AttachHeadInfo {
     oldest: number;
     head: number;
     ckpt: AttachCheckpoint | null;
+    // Server-certified plain-text line reset; unknown servers provide none.
+    replayFrom?: number;
 }
 
 export interface PTYWebSocketOptions {
@@ -318,7 +320,18 @@ export class PTYWebSocket {
                 ansi: new TextDecoder().decode(parsed.extra),
             };
         }
-        this._notify(this.onAttachHead, { epoch, oldest, head, ckpt });
+        const replayFrom = parsed.hdr.replay_from;
+        this._notify(this.onAttachHead, {
+            epoch,
+            oldest,
+            head,
+            ckpt,
+            ...(validSeq(replayFrom) &&
+            replayFrom >= oldest &&
+            replayFrom <= head
+                ? { replayFrom }
+                : {}),
+        });
     }
 
     private _handleLiveOutput(payload: ArrayBuffer) {

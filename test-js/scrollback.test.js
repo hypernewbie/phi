@@ -49,7 +49,9 @@ describe('xterm scrollback configuration', () => {
         // are what keep attach fast without a 1 MiB replay.
         expect(src).toContain('_onAttachHead');
         expect(src).toContain('let scrollback = LIVE_SCROLLBACK_ROWS');
-        expect(src).toContain('serialize({ scrollback })');
+        expect(src).toContain(
+            'terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback })',
+        );
         expect(src).toContain('/checkpoint');
     });
 });

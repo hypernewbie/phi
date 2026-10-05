@@ -1,7 +1,7 @@
 /* Φ phi — Terminal & Tab Manager */
 
 import { PTYWebSocket } from './ws.js';
-import { terminalContinuation } from './terminal-state.js';
+import { terminalSnapshot } from './terminal-state.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
@@ -220,9 +220,10 @@ const LIVE_SCROLLBACK_ROWS = 10000;
 // Coarse-pointer terminals paint a recent byte window, then replace it with
 // adjacent recording windows on scroll. Both the request and resident xterm
 // buffer stay bounded independently of session age.
-const HISTORY_PAGE_BYTES = 128 * 1024;
 const HISTORY_WINDOW_BYTES = MAX_DELTA_BYTES;
-const HISTORY_TAIL_BYTES = HISTORY_WINDOW_BYTES - HISTORY_PAGE_BYTES;
+// An anchor batch covers at most this many rows even for one-byte lines.
+// xterm markers follow trim/reflow, so adjacent pages overlap resident rows.
+const HISTORY_ANCHOR_BYTES = 4 * 1024;
 // Bounded in-memory recording-chunk cache backing hash-cache
 // negotiation (concept 4): Map preserves insertion order, so the oldest
 // entry is evicted first. 16 entries x <=64 KiB mirrors the ring cap.
@@ -1961,10 +1962,21 @@ export class TabManager {
         if (pty?.mode !== 'hot') return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
-        if (!samePane && tabInfo._bootstrapGate) {
-            // A different pane lifetime owns a different byte stream. Stop
-            // its pending bootstrap before resetting this terminal.
+        if (!samePane) {
+            // A different pane lifetime owns a different byte stream.
+            pty.hold?.();
             tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
+        }
+        if (!samePane && tabInfo._termOpened) {
+            // Finish admitted old-epoch writes before resetting the screen.
+            // Cancel their owners before awaiting the parser callbacks.
+            tabInfo.paneEpoch = info.epoch;
+            const drain = this._drainSettled(tabInfo);
+            tabInfo._bootstrapGate = drain;
+            await drain;
+            if (tabInfo.ws !== pty || tabInfo.paneEpoch !== info.epoch || tabInfo.finalizing) return;
+            if (tabInfo._bootstrapGate === drain) tabInfo._bootstrapGate = null;
+            this._clearHistoryState(tabInfo);
         }
         if (!samePane || !tabInfo._termOpened) tabInfo._historyOmitted = Boolean(info.ckpt?.through);
 
@@ -1988,8 +2000,8 @@ export class TabManager {
             // frontier. Only the checkpoint is already represented locally;
             // bootstrap ranges advance these watermarks after xterm parses them.
             let from = info.ckpt ? info.ckpt.through : info.oldest;
-            if (!info.ckpt && isCoarseViewport()) {
-                from = Math.max(info.oldest, info.head - HISTORY_TAIL_BYTES);
+            if (!info.ckpt && isCoarseViewport() && info.replayFrom !== undefined) {
+                from = info.replayFrom;
             }
             tabInfo._historyOmitted = Boolean(info.ckpt?.through) || from > info.oldest;
             tabInfo._historyWindowStart = info.ckpt ? info.head : from;
@@ -2006,17 +2018,24 @@ export class TabManager {
         }
 
         if (samePane) {
-            // A same-epoch recording bootstrap is independent of the socket
-            // that requested it. Let it finish admitted bytes first; then the
-            // new head resumes from its parser-confirmed frontier.
-            const pendingBootstrap = tabInfo._bootstrapGate;
-            if (pendingBootstrap) {
+            // Same-epoch replay belongs to the terminal, not its old socket.
+            // Wait for successor gates too (bootstrap can hand off to paging).
+            while (tabInfo._bootstrapGate) {
+                const pendingBootstrap = tabInfo._bootstrapGate;
                 await pendingBootstrap.catch(() => {});
                 if (
                     tabInfo.isDead ||
                     tabInfo.ws !== pty ||
                     tabInfo.paneEpoch !== info.epoch
                 ) return;
+                if (tabInfo._bootstrapGate === pendingBootstrap) break;
+            }
+            if (tabInfo._historyBrowsing) {
+                // Freeze this historical view. The new head is a source
+                // frontier; latest restoration replays the saved live state.
+                tabInfo.paneOldest = info.oldest;
+                pty.release();
+                return;
             }
             // Finish old-socket writes before choosing the resume point.
             // Fetching from a stale drainedSeq while those writes are still
@@ -2091,8 +2110,8 @@ export class TabManager {
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
         let from = info.ckpt ? info.ckpt.through : info.oldest;
-        if (!info.ckpt && isCoarseViewport()) {
-            from = Math.max(info.oldest, info.head - HISTORY_TAIL_BYTES);
+        if (!info.ckpt && isCoarseViewport() && info.replayFrom !== undefined) {
+            from = info.replayFrom;
         }
         tabInfo._historyOmitted = Boolean(info.ckpt?.through) || from > info.oldest;
         tabInfo._historyWindowStart = info.ckpt ? info.head : from;
@@ -2170,24 +2189,55 @@ export class TabManager {
             });
     }
 
+    _clearHistoryAnchors(tabInfo) {
+        for (const anchor of tabInfo._historyAnchors || []) anchor.marker.dispose();
+        tabInfo._historyAnchors = [];
+    }
+
+    _clearHistoryState(tabInfo) {
+        this._clearHistoryAnchors(tabInfo);
+        tabInfo._historyBrowsing = false;
+        tabInfo._historyLiveState = null;
+        tabInfo._historyWindowStart = undefined;
+        tabInfo._historyWindowEnd = undefined;
+        tabInfo._historyLoading = false;
+        tabInfo._historyParsing = false;
+        tabInfo._gapInFlight = false;
+    }
+
+    _recordHistoryAnchor(tabInfo, through) {
+        const buffer = tabInfo.term?._core?._bufferService?.buffers?.normal;
+        if (!buffer?.addMarker || tabInfo.term.buffer.active.type !== 'normal') return;
+        const anchors = (tabInfo._historyAnchors || []).filter(a => !a.marker.isDisposed);
+        anchors.push({ through, marker: buffer.addMarker(buffer.ybase + buffer.y) });
+        tabInfo._historyAnchors = anchors;
+    }
+
+    _oldestHistoryAnchor(tabInfo) {
+        return (tabInfo._historyAnchors || []).find(a => !a.marker.isDisposed);
+    }
+
     _captureLiveHistoryState(tabInfo) {
         const term = tabInfo.term;
         const pty = tabInfo.ws;
-        if (!term || !tabInfo.serializeAddon || !pty) return null;
+        if (!term || !pty) return null;
         const encoding = term._core?.mouseStateService?.activeEncoding;
         const mouseMode = encoding === 'SGR' ? '\x1b[?1006h'
             : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
-        const ansi = tabInfo.serializeAddon.serialize({
+        const ansi = tabInfo.serializeAddon ? mouseMode + terminalSnapshot(term, tabInfo.serializeAddon, {
             scrollback: LIVE_SCROLLBACK_ROWS,
-        }) + mouseMode + terminalContinuation(term);
+        }) : '';
         const queued = tabInfo.queuedSeq ?? tabInfo.drainedSeq ?? 0;
         const drained = tabInfo.drainedSeq ?? queued;
         return {
             ansi,
             cols: term.cols,
             rows: term.rows,
-            through: Math.max(0, drained - (pty.pendingUTF8Bytes ?? 0)),
+            through: tabInfo.serializeAddon
+                ? Math.max(0, drained - (pty.pendingUTF8Bytes ?? 0))
+                : (tabInfo.paneOldest ?? 0),
             head: queued,
+            epoch: tabInfo.paneEpoch,
         };
     }
 
@@ -2201,7 +2251,7 @@ export class TabManager {
         let finishGate;
         let gate;
         const epoch = tabInfo.paneEpoch;
-        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo.paneEpoch === epoch;
+        const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch;
         let reset = false;
         try {
             if (tabInfo._bootstrapGate) await tabInfo._bootstrapGate;
@@ -2214,23 +2264,21 @@ export class TabManager {
             const liveState = tabInfo._historyLiveState;
             const windowHead = liveState?.head ?? tabInfo.drainedSeq;
             const oldest = tabInfo.paneOldest ?? 0;
-            const previousStart = tabInfo._historyWindowStart ?? windowHead;
             const previousEnd = tabInfo._historyWindowEnd ?? windowHead;
-            let from;
-            let end = windowHead;
-            if (previousStart >= previousEnd) {
-                if (windowHead - oldest > HISTORY_PAGE_BYTES) {
-                    end = windowHead - HISTORY_PAGE_BYTES;
-                }
-                from = Math.max(oldest, end - HISTORY_WINDOW_BYTES);
-            } else {
-                from = Math.max(oldest, previousStart - HISTORY_PAGE_BYTES);
-                if (end - from > HISTORY_WINDOW_BYTES) {
-                    end = Math.max(from, previousEnd - HISTORY_PAGE_BYTES);
-                    from = Math.max(oldest, end - HISTORY_WINDOW_BYTES);
-                }
-            }
-            if (end < windowHead && !liveState) {
+            const anchor = this._oldestHistoryAnchor(tabInfo);
+            // End inside the previous page's retained rows, not before an
+            // assumed byte budget. This overlap works for short lines too.
+            const wholeHistoryFits = !tabInfo._historyBrowsing &&
+                windowHead - oldest <= HISTORY_WINDOW_BYTES &&
+                (tabInfo.term.buffer.active.baseY ?? 0) < LIVE_SCROLLBACK_ROWS;
+            const end = wholeHistoryFits ? windowHead
+                : anchor && anchor.through > oldest && anchor.through < previousEnd
+                    ? anchor.through
+                    : tabInfo._historyBrowsing
+                        ? Math.max(oldest, previousEnd - HISTORY_ANCHOR_BYTES)
+                        : windowHead;
+            const from = Math.max(oldest, end - HISTORY_WINDOW_BYTES);
+            if (!liveState) {
                 tabInfo._historyLiveState = this._captureLiveHistoryState(tabInfo);
                 if (!tabInfo._historyLiveState) {
                     throw new Error('cannot page history without a live-state checkpoint');
@@ -2240,6 +2288,7 @@ export class TabManager {
             if (!current()) return;
             if (!range) throw new Error('terminal history temporarily unavailable');
             tabInfo._historyParsing = true;
+            this._clearHistoryAnchors(tabInfo);
             tabInfo.term.reset();
             reset = true;
             pty.decoder = new TextDecoder('utf-8');
@@ -2247,7 +2296,7 @@ export class TabManager {
             tabInfo.queuedSeq = from;
             tabInfo.drainedSeq = from;
             tabInfo.userFollowBottom = false;
-            if (!await this._parseRecordingRange(tabInfo, range, current)) return;
+            if (!await this._parseRecordingRange(tabInfo, range, current, undefined, undefined, pty)) return;
             tabInfo._historyWindowStart = from;
             tabInfo._historyWindowEnd = range.end;
             // This flag means older bytes remain before the visible window.
@@ -2255,7 +2304,7 @@ export class TabManager {
             const retainedRows = tabInfo.term.buffer.active?.baseY ?? 0;
             tabInfo._historyOmitted = from > oldest ||
                 (from === oldest && retainedRows >= LIVE_SCROLLBACK_ROWS);
-            if (range.end < windowHead) {
+            if (range.end < windowHead || tabInfo._historyOmitted) {
                 tabInfo._historyBrowsing = true;
                 tabInfo.queuedSeq = pty.lastFrameEnd ?? windowHead;
                 tabInfo.drainedSeq = tabInfo._historyLiveState?.through ?? windowHead;
@@ -2265,35 +2314,40 @@ export class TabManager {
                 tabInfo._historyLiveState = null;
                 tabInfo.queuedSeq = range.end;
                 tabInfo.drainedSeq = range.end;
-                tabInfo.term.scrollToBottom();
+                // Scroll-up still asks for the oldest row when the entire
+                // archive fits in this window. Live writes preserve that view.
+                tabInfo.term.scrollToTop();
             }
         } catch (error) {
             console.warn('[term] cold history:', error);
             if (reset && current()) pty.ws.close();
         } finally {
-            tabInfo._historyLoading = false;
-            tabInfo._historyParsing = false;
+            if (current()) {
+                tabInfo._historyLoading = false;
+                tabInfo._historyParsing = false;
+            }
             if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
             finishGate?.();
-            if (current()) pty.release();
+            if (current() && tabInfo.ws === pty) pty.release();
         }
     }
 
     async _restoreLatestHistory(tabInfo) {
         const pty = tabInfo.ws;
         const saved = tabInfo._historyLiveState;
-        if (!tabInfo._historyBrowsing || !saved || tabInfo._historyLoading ||
+        if (!tabInfo._historyBrowsing || !saved || saved.epoch !== tabInfo.paneEpoch || tabInfo._historyLoading ||
             tabInfo.finalizing || pty?.mode !== 'hot') return;
         tabInfo._historyLoading = true;
         let finishGate;
         let gate;
         const epoch = tabInfo.paneEpoch;
-        const current = () => !tabInfo.finalizing && tabInfo.ws === pty && tabInfo.paneEpoch === epoch;
+        const current = () => !tabInfo.finalizing && tabInfo.paneEpoch === epoch;
         try {
             pty.hold();
             gate = new Promise(resolve => { finishGate = resolve; });
             tabInfo._bootstrapGate = gate;
             const head = Math.max(saved.head, pty.lastFrameEnd ?? 0);
+            this._clearHistoryAnchors(tabInfo);
             tabInfo.term.reset();
             tabInfo.term.resize(saved.cols, saved.rows);
             pty.decoder = new TextDecoder('utf-8');
@@ -2313,15 +2367,16 @@ export class TabManager {
                 );
                 if (!current()) return;
                 if (!range) throw new Error('latest terminal output temporarily unavailable');
-                if (!await this._parseRecordingRange(tabInfo, range, current)) return;
+                if (!await this._parseRecordingRange(tabInfo, range, current, undefined, undefined, pty)) return;
                 from = end;
                 tabInfo.queuedSeq = end;
                 tabInfo.drainedSeq = end;
             }
             const oldest = tabInfo.paneOldest ?? 0;
-            tabInfo._historyWindowStart = Math.max(oldest, head - HISTORY_TAIL_BYTES);
+            tabInfo.fitAddon?.fit?.();
+            tabInfo._historyWindowStart = this._oldestHistoryAnchor(tabInfo)?.through ?? head;
             tabInfo._historyWindowEnd = head;
-            tabInfo._historyOmitted = tabInfo._historyWindowStart > oldest;
+            tabInfo._historyOmitted = saved.through > oldest || tabInfo._historyWindowStart > oldest;
             tabInfo._historyBrowsing = false;
             tabInfo._historyLiveState = null;
             tabInfo.userFollowBottom = true;
@@ -2330,11 +2385,13 @@ export class TabManager {
             console.warn('[term] restore latest history:', error);
             try { pty.ws?.close(); } catch (_e) {}
         } finally {
-            tabInfo._historyLoading = false;
-            tabInfo._historyParsing = false;
+            if (current()) {
+                tabInfo._historyLoading = false;
+                tabInfo._historyParsing = false;
+            }
             if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
             finishGate?.();
-            if (current()) pty.release();
+            if (current() && tabInfo.ws === pty) pty.release();
         }
     }
 
@@ -2352,25 +2409,29 @@ export class TabManager {
         }
         if (prior) changes.unshift(prior);
         let cursor = range.start;
+        const capture = !deliver && (!tabInfo._historyBrowsing || tabInfo._historyParsing) &&
+            Boolean(tabInfo.term?._core?._bufferService?.buffers?.normal?.addMarker);
         const parse = async (end) => {
-            if (end <= cursor) return true;
-            const bytes = range.bytes.subarray(cursor - range.start, end - range.start);
-            if (deliver) {
-                // The socket owns the streaming decoder and sequence
-                // frontier for a gap patch. Decode only there, exactly once.
-                deliver(bytes);
-            } else {
-                const text = decodeSocket?.decodeOutput ? decodeSocket.decodeOutput(bytes)
-                    : decodeSocket?.decoder ? decodeSocket.decoder.decode(bytes, { stream: true })
-                    : new TextDecoder().decode(bytes);
-                this.writeToTerminal(tabInfo, text);
+            while (cursor < end) {
+                const stop = capture ? Math.min(end, cursor + HISTORY_ANCHOR_BYTES) : end;
+                const bytes = range.bytes.subarray(cursor - range.start, stop - range.start);
+                if (deliver) {
+                    // The socket alone owns decoding and gap sequencing.
+                    deliver(bytes);
+                } else {
+                    const text = decodeSocket?.decodeOutput ? decodeSocket.decodeOutput(bytes)
+                        : decodeSocket?.decoder ? decodeSocket.decoder.decode(bytes, { stream: true })
+                        : new TextDecoder().decode(bytes);
+                    this.writeToTerminal(tabInfo, text);
+                }
+                if (!capture && !markers.length && stop === range.end) onEnqueued?.();
+                await this._drainSettled(tabInfo);
+                if (!current()) return false;
+                if (capture) this._recordHistoryAnchor(tabInfo, stop - (decodeSocket?.pendingUTF8Bytes ?? 0));
+                cursor = stop;
+                // Capture the source/row frontier before live frames can move it.
+                if (capture && !markers.length && stop === range.end) onEnqueued?.();
             }
-            // Without geometry changes, preserve enqueue-before-live
-            // acceleration. With changes, live waits for the matching grid.
-            if (!markers.length && end === range.end) onEnqueued?.();
-            await this._drainSettled(tabInfo);
-            if (!current()) return false;
-            cursor = end;
             return true;
         };
         for (const [at, cols, rows] of changes) {
@@ -2464,14 +2525,18 @@ export class TabManager {
                     try { pty.ws?.close(); } catch (_e) {}
                     return;
                 }
-                if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes))) return;
+                if (tabInfo._historyBrowsing) {
+                    // Gap bytes remain authoritative in the recording. Consume
+                    // socket sequencing without resizing or painting this view.
+                    pty.applyGapPatch(d.bytes);
+                } else if (!await this._parseRecordingRange(tabInfo, d, current, bytes => pty.applyGapPatch(bytes))) return;
                 tabInfo.queuedSeq = pty.lastFrameEnd;
                 cursor = end;
             }
-            tabInfo.fitAddon?.fit?.();
+            if (!tabInfo._historyBrowsing) tabInfo.fitAddon?.fit?.();
             recovered = true;
         } finally {
-            tabInfo._gapInFlight = false;
+            if (tabInfo._bootstrapGen === bootGen) tabInfo._gapInFlight = false;
             // applyGapPatch may encounter the next hole while this handler
             // owns the gate. Re-fire after relinquishing it, not before.
             if (recovered && tabInfo.ws === pty && !tabInfo.finalizing) pty.release?.();
@@ -2517,12 +2582,13 @@ export class TabManager {
             : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
         let ansi = '';
         try {
-            const continuation = terminalContinuation(tabInfo.term);
             let scrollback = LIVE_SCROLLBACK_ROWS;
             for (let attempt = 0; ; attempt++) {
-                const cells = tabInfo.serializeAddon.serialize({ scrollback });
-                if (!cells && !mouseMode && !continuation) return;
-                ansi = cells + mouseMode + continuation;
+                const snapshot = terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback });
+                if (!snapshot && !mouseMode) return;
+                // Pending parser bytes must remain last, including after the
+                // mouse encoding that SerializeAddon does not carry.
+                ansi = mouseMode + snapshot;
                 // The server bounds UTF-8 bytes, not UTF-16 string length.
                 const bytes = new TextEncoder().encode(ansi).byteLength;
                 if (bytes <= MAX_CHECKPOINT_BYTES) break;
