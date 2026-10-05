@@ -24,7 +24,7 @@ The operator approved a practical recording-rebuild scope: raw backend output, t
 
 Ctrl-] s/d/w/? transfers ownership after both relay workers stop. Menus and the native pager do not race with backend output. Phi keeps recording while the client view is open. On return, the controller neutralizes terminal input modes, unwinds observed backend keyboard pushes, initializes both native buffers, reconnects, and rebuilds from the recording.
 
-The client ignores opaque browser checkpoints. Repaint suppresses historical reply-producing queries and clipboard writes without changing Phi's recording. New live controls remain raw, including replies and ambiguous legacy keys. An incomplete historical control keeps its old policy until complete, including across the live boundary. Work is bounded by recording pages and a 1 MiB unfinished-control limit.
+The client ignores opaque browser checkpoints. Repaint suppresses historical reply-producing queries and clipboard writes without changing Phi's recording. New live controls remain raw, including replies and ambiguous legacy keys. The client remembers a source frontier per origin and pane, without retaining output. Requests issued while away are processed live after input ownership resumes. A request incomplete at the frontier has not produced a reply yet, so its prefix resumes live too. Work is bounded by recording pages and a 1 MiB unfinished-control limit.
 
 Fresh launches receive their initial terminal dimensions before the process starts. Their startup query replies can reach the new application.
 
@@ -38,7 +38,7 @@ This proves a parser boundary for that terminal. It does not prove screen restor
 
 A parser barrier alone also cannot establish that every asynchronous terminal service has sent its reply. Do not use it as permission to forward later clipboard or color replies into a live application.
 
-`scripts/test-phic-native.py` runs actual installed backends through Phi and phic in an isolated native tmux terminal. It checks a rendered startup screen, detach acknowledgment, and backend survival. The local run covered Shell, Pi 1.0.1, Codex 0.160.0, Claude 2.1.289, and OpenCode 2.0.21 in full TUI and Mini modes. Codex and Claude reached onboarding screens without user credentials. These checks do not claim successful model access, historical reattachment, or menu restoration.
+`scripts/test-phic-native.py` runs actual installed backends through Phi and phic in an isolated native tmux terminal. It checks rendered startup, six view returns (help, sessions, worktrees, diff, servers, help again), styled cells, cursor and buffer state, historical reattachment, detach acknowledgment, and backend survival. Shell retains an unfinished input line. The local run covered Shell, Pi 1.0.1, Codex 0.160.0, Claude 2.1.289, and OpenCode 2.0.21 in full TUI and Mini modes. All six backends passed. Codex and Claude reached onboarding screens without user credentials; these checks do not claim successful model access.
 
 The OpenCode fixture assigns an isolated service port. A separate HOME alone does not isolate its default port. The runner never stops or changes a service in the user's HOME.
 
@@ -48,4 +48,8 @@ The OpenCode fixture assigns an isolated service port. A separate HOME alone doe
 
 `TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss` runs the CLI in a controlling PTY. It proves help/session/worktree cancellation, pager return, output recorded while a menu is open, same-read menu responses, exact pane switching, old-query suppression, and unchanged legacy Shift-F3 plus bracketed paste. It uses isolated HTTP/WS fixtures, not installed provider processes.
 
-Installed-backend menu restoration and multi-server behavior still require the native smoke pass. The existing startup checks and headless tests do not substitute for that pass.
+`TestReturningDeliversQueriesIssuedWhileAwayButNotSeenQueries` reproduces and checks cursor/color queries issued while away, including a request incomplete at the old frontier. The CLI PTY fixture confirms that a menu-time query reaches the native terminal once, its reply reaches the backend, and later reconstruction does not repeat it.
+
+`TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane` checks same-host, different-port origins with identical pane IDs, distinct paths/colors/cookies, per-server pane return, failed-switch rollback, and raw input. The config file is byte-identical after the run.
+
+The installed-backend native pass is now separate evidence from both the Go PTY fixtures and headless oracle. Linux CI also runs the credential-free native Shell views/reattachment fixture. Exact reconstruction across historical resizes, asynchronous native services in flight during handoff, and arbitrary terminal extensions remain compatibility limits, not a universal emulator claim.

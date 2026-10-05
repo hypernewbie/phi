@@ -70,7 +70,9 @@ Client views take ownership only after both relay workers stop. Menus print inli
 
 Fixed-geometry rebuilds are tested against a development-only terminal oracle, including normal/alternate buffers, cursor/style continuation, tabs, scroll regions, and repeated returns. See `internal/termproof/PROOF.md` for the distinction from arbitrary screen snapshotting.
 
-Reused panes replay from the beginning of Phi's recording in bounded requests. Repaint suppresses historical terminal queries and clipboard writes; live output and new queries remain unchanged. A control split between replay and live retains its replay policy until complete. The original recording is never changed.
+Reused panes replay from the beginning of Phi's recording in bounded requests. Repaint suppresses already-seen terminal queries and clipboard writes. A small per-origin/per-pane frontier distinguishes this history from bytes emitted while a menu or another server was open: those bytes are delivered as live, so new terminal queries receive their replies. An unfinished request could not have been answered before its terminator existed; it resumes live at that frontier. The original recording is never changed, and the client keeps no output copy.
+
+For a pane first attached by this client, complete requests in its existing recording are treated as historical. Fresh launches and saved-session launches receive their startup replies normally.
 
 Replay uses the current native terminal size. Output originally drawn at another size can wrap or position differently. The client sends the current PTY dimensions but does not resize the user's terminal window or inject backend redraw keys. It is not an exact historical screen emulator. Repaint rejects an escape longer than 1 MiB rather than silently truncate it.
 
@@ -92,6 +94,8 @@ Run installed backends without user credentials or model prompts:
 python3 scripts/test-phic-native.py --opencode2 /absolute/path/to/opencode2
 ```
 
-Use `--coders bash,pi` for a smaller installed set. The runner requires tmux as a test dependency; phic does not. It uses an isolated HOME, service port, and tmux socket. It prints the evidence directory. A blank screen or failure to detach makes the command fail.
+Use `--coders bash,pi` for a smaller installed set. The runner requires tmux as a test dependency; phic does not. It uses an isolated HOME, service port, Git fixture, and tmux socket. Shell startup files and user Git configuration are excluded. It prints the evidence directory.
 
-This tests startup and detach, not historical reattachment or live screen restoration.
+For each backend, the runner compares native styled cells and cursor/buffer state after six view returns, then detaches and checks historical reattachment and backend survival. Shell also retains an unfinished command. A blank screen or failure to detach makes the command fail. No model prompts are sent. Codex and Claude onboarding checks do not claim paid-model access.
+
+The Linux CI job runs this native Shell check in addition to the Go PTY tests and the development-only screen oracle.
