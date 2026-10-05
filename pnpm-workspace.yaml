@@ -43,10 +43,14 @@ overrides:
   js-yaml: 4.3.2
 
 allowBuilds:
+  # Pi's test CLI dependencies already ship their runtime artifacts.
+  # genai's preinstall is a no-op; protobufjs only prints version advice.
+  '@google/genai': false
   core-js: false
   esbuild: false
   electron: true
   electron-winstaller: false
+  protobufjs: false
 minimumReleaseAgeExclude:
   - electron@44.4.3
   - html-encoding-sniffer@7.0.0
