@@ -2,6 +2,21 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.23.0 — 2026-10-05
+
+### Added
+- **Native terminal client `phic`** (`42c5ce9`, `ff00232`, `2f37c0f`, `926a078`, `39b116f`). Raw backend terminal with inline Phi-colored server, session, project, worktree, diff, and help views. No Charm libraries, TUI framework, or terminal emulator. Reads desktop `profiles.json` in saved sidebar order, per-origin auth and pane state, remote project lists, and `less -R` diff pager.
+- **Multi-server client views** (`945eac0`). Shared desktop profiles, colored server bar, portable `Ctrl-]` plus enhanced `Ctrl-1..9` server shortcuts, transactional server switching with rollback, and origin-isolated cookies, panes, and directories.
+- **Inline view return without loss** (`38eb60e`, `3e39371`). Bounded recording rebuilds on menu return, unseen query delivery on pane return, and native cleanup. Repeated view returns and historical reattachment verified on all six installed backends (`6ca5a07`).
+- **npm `phic` distribution** (`8b29f44`). The npm package installs the separate Unix client archive into `phic-native`, exposes a `phic` launcher with signal and exit propagation, and leaves `phi` server archives and Windows installation unchanged.
+
+### Fixed
+- **Client attachment and replay safety** (`957286a`, `948b2ef`). Authenticated attachments, safe recording recovery, single recording owner, certified replay starts, and no historical terminal replies on reused panes.
+- **Resumed startup and enhanced keys** (`a7aa3fc`, `6534b20`). Saved-session launches stay live, unknown enhanced prefix press and release pairs are preserved, exact `--diff` pane identity is kept, and absolute server paths survive local containers and proxies.
+- **Binary mouse reports** (`da350cb`). Classic binary mouse-report bytes stay opaque to client shortcuts, including detach after a mouse payload.
+- **Release archives** (`21a1962`). Unix-only `phic` archives stay isolated without disabling Windows `phi` builds.
+- **PTY shutdown race** (`b0557ad`). Straggler cleanup waits on a closed barrier instead of racing shutdown return.
+
 ## v0.22.2 — 2026-10-04
 
 ### Added
