@@ -35,24 +35,22 @@ func TestNativeBarrierHelper(t *testing.T) {
 	var received []byte
 	buffer := make([]byte, 4096)
 	// Parsers that predate DECRQM (tmux 3.4) answer unknown modes with
-	// silence, not an echo. Report that verdict instead of hanging until
-	// the test timeout destroys the evidence.
-	echoDeadline := time.Now().Add(12 * time.Second)
+	// silence, not an echo. Report that verdict on a timer: a blocked PTY
+	// read is not interruptible by deadlines on every platform, so the
+	// timer must live on its own goroutine, ahead of -test.timeout.
+	verdict := func() {
+		evidence, _ := json.Marshal(map[string]string{"timeout": "true", "received": string(received)})
+		_ = os.WriteFile(os.Getenv("PHIC_NATIVE_BARRIER_RESULT"), evidence, 0600)
+		os.Exit(7)
+	}
+	timer := time.AfterFunc(12*time.Second, verdict)
+	defer timer.Stop()
 	for !bytes.Contains(received, reply) {
-		if time.Now().After(echoDeadline) {
-			evidence, _ := json.Marshal(map[string]string{"timeout": "true", "received": string(received)})
-			_ = os.WriteFile(os.Getenv("PHIC_NATIVE_BARRIER_RESULT"), evidence, 0600)
-			os.Exit(7)
-		}
-		_ = os.Stdin.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		n, err := os.Stdin.Read(buffer)
 		if n > 0 {
 			received = append(received, buffer[:n]...)
 		}
-		if len(received) > maxReplayInput {
-			os.Exit(5)
-		}
-		if err != nil && !os.IsTimeout(err) {
+		if err != nil || len(received) > maxReplayInput {
 			os.Exit(5)
 		}
 	}
