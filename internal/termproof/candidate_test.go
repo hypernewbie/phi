@@ -36,16 +36,20 @@ func printfBackend(t *testing.T) *Backend {
 // screen, draws a frame, and waits for input. Case 2 measures what
 // the client sees while this is "running".
 func tuiBackend(t *testing.T) *Backend {
+	// Octal escapes: dash (Ubuntu /bin/sh) does not implement \xHH in
+	// printf, so hex escapes would arrive as literal backslash text.
 	return mustStart(t, "/bin/sh", "-c",
-		"printf '\\x1b[?1049h\\x1b[2J\\x1b[HREADY-TUI\\n'; cat")
+		"printf '\\033[?1049h\\033[2J\\033[HREADY-TUI\\n'; cat")
 }
 
 // m6Backend replies to DSR cursor queries. The fixture's case 6
 // writes the query into the PTY and checks that the reply never
 // reaches a live application's input.
 func m6Backend(t *testing.T) *Backend {
+	// Octal escapes: dash (Ubuntu /bin/sh) does not implement \xHH in
+	// printf, so hex escapes would arrive as literal backslash text.
 	return mustStart(t, "/bin/sh", "-c",
-		"printf 'READY\\n'; printf '\\x1b[1;1R' ; cat")
+		"printf 'READY\\n'; printf '\\033[1;1R' ; cat")
 }
 
 // m7Backend advertises the kitty keyboard protocol. The fixture's

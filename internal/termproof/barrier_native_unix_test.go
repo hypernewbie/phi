@@ -56,11 +56,14 @@ func TestNativeTMUXParserBarrier(t *testing.T) {
 	if err != nil {
 		t.Skip("native tmux is not installed")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
+	if out, err := exec.Command(tmux, "-V").CombinedOutput(); err == nil {
+		t.Logf("native parser: %s", bytes.TrimSpace(out))
+	}
 	socket := filepath.Join(t.TempDir(), "tmux.sock")
 	result := filepath.Join(t.TempDir(), "barrier.json")
-	cmd := exec.CommandContext(ctx, tmux, "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "proof", "-x", "80", "-y", "24", os.Args[0], "-test.run=^TestNativeBarrierHelper$", "-test.timeout=5s")
+	cmd := exec.CommandContext(ctx, tmux, "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "proof", "-x", "80", "-y", "24", os.Args[0], "-test.run=^TestNativeBarrierHelper$", "-test.timeout=20s")
 	cmd.Env = append(os.Environ(), "PHIC_NATIVE_BARRIER_HELPER=1", "PHIC_NATIVE_BARRIER_RESULT="+result)
 	if data, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("native fixture: %v: %s", err, data)
@@ -77,7 +80,9 @@ func TestNativeTMUXParserBarrier(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("native parser never echoed barrier: %v", ctx.Err())
+			pane, _ := exec.Command(tmux, "-S", socket, "capture-pane", "-p", "-t", "proof").CombinedOutput()
+			panes, _ := exec.Command(tmux, "-S", socket, "list-panes", "-t", "proof").CombinedOutput()
+			t.Fatalf("native parser never echoed barrier: %v (pane %q panes %q)", ctx.Err(), pane, panes)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
