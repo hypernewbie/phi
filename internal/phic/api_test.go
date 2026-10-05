@@ -11,16 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// TestAPIClientAuthStatusNoServer pings a local httptest
-// server for the auth/status shape. The fixture also covers
-// the password derivation path.
-func TestAPIClientAuthStatusNoServer(t *testing.T) {
+// TestAPIClientAuthStatusDisabled covers the no-auth path.
+func TestAPIClientAuthStatusDisabled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/status" {
 			http.NotFound(w, r)
@@ -42,13 +39,12 @@ func TestAPIClientAuthStatusNoServer(t *testing.T) {
 		t.Fatalf("AuthStatus: %v", err)
 	}
 	if st.Enabled {
-		t.Fatalf("expected disabled, got enabled")
+		t.Fatalf("expected disabled")
 	}
 }
 
-// TestAPIClientLoginSendsProof is the wire-level proof that
-// the client posts a {challenge, proof} body and that the
-// cookie set by the server is preserved in the jar.
+// TestAPIClientLoginSendsProof pins the {challenge, proof}
+// body and the cookie jar round-trip.
 func TestAPIClientLoginSendsProof(t *testing.T) {
 	password := "pw-1234"
 	salt := []byte("0123456789abcdef")
@@ -108,23 +104,18 @@ func TestAPIClientLoginSendsProof(t *testing.T) {
 	if err := api.Login(context.Background(), st, password); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	// Cookie jar must now hold the session cookie.
 	u, _ := url.Parse(srv.URL)
 	cookies := api.http.Jar.Cookies(u)
-	if len(cookies) == 0 {
-		t.Fatalf("no cookies in jar for %s", srv.URL)
-	}
 	for _, c := range cookies {
 		if c.Name == "phi_access_session" && c.Value == "session-token" {
 			return
 		}
 	}
-	t.Fatalf("session cookie not stored: got %v", cookies)
+	t.Fatalf("session cookie not stored: %v", cookies)
 }
 
 // TestDeriveVerifierMatchesPBKDF2 is the unit-level proof
-// that deriveVerifier uses the same KDF parameters the
-// server advertises.
+// that deriveVerifier uses the advertised KDF.
 func TestDeriveVerifierMatchesPBKDF2(t *testing.T) {
 	pw := "x"
 	salt := []byte("y")
@@ -140,6 +131,3 @@ func TestDeriveVerifierMatchesPBKDF2(t *testing.T) {
 		t.Fatalf("expected error on bad algorithm")
 	}
 }
-
-// silence unused import warnings if the file shrinks.
-var _ = strings.TrimSpace

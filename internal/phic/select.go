@@ -3,9 +3,9 @@ package phic
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // SelectResult is the outcome of the plan's startup selection.
@@ -17,12 +17,21 @@ type SelectResult struct {
 
 // Select implements PHIC_PLAN.md section 2's startup algorithm.
 func (c *client) Select(ctx context.Context) (SelectResult, error) {
+	if c.cfg.Pane != "" {
+		panes, err := c.api.ListTerminals(ctx, "")
+		if err != nil {
+			return SelectResult{}, err
+		}
+		for _, p := range panes {
+			if p.ID == c.cfg.Pane {
+				return SelectResult{PaneID: p.ID, Existing: &p}, nil
+			}
+		}
+		return SelectResult{}, fmt.Errorf("phic: pane %s is not live", QuotedID(c.cfg.Pane))
+	}
 	dir, err := normalizePath(c.cfg.Dir)
 	if err != nil {
 		return SelectResult{}, err
-	}
-	if c.cfg.Pane != "" {
-		return SelectResult{PaneID: c.cfg.Pane}, nil
 	}
 	panes, err := c.api.ListTerminals(ctx, dir)
 	if err != nil {
@@ -33,24 +42,18 @@ func (c *client) Select(ctx context.Context) (SelectResult, error) {
 		if c.cfg.Coder == "" {
 			return SelectResult{}, fmt.Errorf("phic: --new requires --coder")
 		}
-		return SelectResult{NewSpawn: &SpawnRequest{
-			Coder: c.cfg.Coder,
-			Dir:   dir,
-		}}, nil
+		return c.chooseSpawn(ctx, dir, c.cfg.Coder)
 	}
 	switch len(matched) {
 	case 1:
 		return SelectResult{PaneID: matched[0].ID, Existing: &matched[0]}, nil
 	case 0:
 		if c.cfg.Coder != "" {
-			return SelectResult{NewSpawn: &SpawnRequest{
-				Coder: c.cfg.Coder,
-				Dir:   dir,
-			}}, nil
+			return c.chooseSpawn(ctx, dir, c.cfg.Coder)
 		}
-		return SelectResult{}, fmt.Errorf("phic: no matching pane and no --coder")
+		return c.chooseStartup(ctx, dir, panes)
 	default:
-		return SelectResult{}, fmt.Errorf("phic: ambiguous (%d matching panes)", len(matched))
+		return c.chooseStartup(ctx, dir, panes)
 	}
 }
 
@@ -87,6 +90,17 @@ func resolveDir(s string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	abs, err = filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("phic: %s is not a directory", QuotedID(abs))
+	}
 	return filepath.Clean(abs), nil
 }
 
@@ -98,8 +112,8 @@ func formatPaneRow(i int, p TerminalView) string {
 	}
 	title := p.Title
 	if title == "" {
-		title = strings.TrimSuffix(filepath.Base(p.Dir), "")
+		title = filepath.Base(p.Dir)
 	}
-	return fmt.Sprintf("  %d  %-10s  %-7s  %s  %s",
-		i+1, p.Coder, status, QuotedID(p.ID), title)
+	return fmt.Sprintf("  %d  %s  %s  %s  %s",
+		i+1, QuotedID(p.Coder), status, QuotedID(p.ID), QuotedID(title))
 }

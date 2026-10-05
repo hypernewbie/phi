@@ -2,8 +2,6 @@ package phic
 
 import (
 	"bytes"
-	"encoding/binary"
-	"io"
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
@@ -87,37 +85,12 @@ func TestEncodeInputFrame(t *testing.T) {
 	}
 }
 
-// TestDrainStream reads the length-prefixed wire format and
-// returns each frame in arrival order. The fake stream writes
-// two back-to-back frames; the test pins the byte shape and
-// the no-frame contract on EOF.
-func TestDrainStream(t *testing.T) {
-	buf := &bytes.Buffer{}
-	writeFrame := func(b []byte) {
-		var hdr [2]byte
-		binary.BigEndian.PutUint16(hdr[:], uint16(len(b)))
-		buf.Write(hdr[:])
-		buf.Write(b)
-	}
-	writeFrame([]byte{0x01, 0x02})
-	writeFrame([]byte{0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 'h'})
-
-	d := NewDrainStream(buf)
-	a, err := d.ReadFrame()
-	if err != nil {
-		t.Fatalf("read a: %v", err)
-	}
-	if !bytes.Equal(a, []byte{0x01, 0x02}) {
-		t.Fatalf("a = %v", a)
-	}
-	b, err := d.ReadFrame()
-	if err != nil {
-		t.Fatalf("read b: %v", err)
-	}
-	if !bytes.Equal(b, []byte{0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 'h'}) {
-		t.Fatalf("b = %v", b)
-	}
-	if _, err := d.ReadFrame(); err != io.EOF {
-		t.Fatalf("expected EOF, got %v", err)
-	}
+func FuzzWireParsersNeverPanic(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{8, 0, 0, 0, 0})
+	f.Add([]byte{9, 255, 255, 255, 255, 255, 255, 255, 255, 'x'})
+	f.Fuzz(func(t *testing.T, frame []byte) {
+		_, _, _ = ParseAttachHead(frame)
+		_, _, _ = ParseLiveOutput(frame)
+	})
 }

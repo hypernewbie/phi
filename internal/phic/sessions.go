@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path"
+	"sort"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // TerminalView mirrors GET /api/terminals. Only the fields
@@ -14,12 +16,12 @@ import (
 type TerminalView struct {
 	ID            string `json:"id"`
 	Title         string `json:"title,omitempty"`
-	Dir           string `json:"dir,omitempty"`
+	Dir           string `json:"cwd,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	Coder         string `json:"coder"`
 	SessionID     string `json:"session_id,omitempty"`
 	OpenCodeMode  string `json:"opencode_mode,omitempty"`
-	ActiveWSCount int    `json:"active_ws_count"`
+	ActiveWSCount int    `json:"ActiveWSCount"`
 	CreatedAt     string `json:"created_at,omitempty"`
 	LastOutputSeq uint64 `json:"last_output_seq"`
 }
@@ -28,21 +30,16 @@ type TerminalView struct {
 type Session struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
-	Workspace   string    `json:"workspace"`
+	Workspace   string    `json:"cwd"`
+	SessionPath string    `json:"session_path,omitempty"`
 	Coder       string    `json:"coder"`
 	TimeUpdated time.Time `json:"time_updated"`
 }
 
 // ListTerminals returns the live panes.
 func (a *apiClient) ListTerminals(ctx context.Context, dir string) ([]TerminalView, error) {
-	v := url.Values{}
-	if dir != "" {
-		v.Set("dir", dir)
-	}
+	// The server returns all panes. Directory filtering is client-side.
 	p := "/api/terminals"
-	if len(v) > 0 {
-		p += "?" + v.Encode()
-	}
 	var out []TerminalView
 	if err := a.getJSON(ctx, p, &out); err != nil {
 		return nil, err
@@ -70,7 +67,9 @@ func (a *apiClient) ListSessions(ctx context.Context, coder, dir string) ([]Sess
 // SpawnRequest is the body of POST /api/terminals.
 type SpawnRequest struct {
 	Coder        string   `json:"coder"`
-	Dir          string   `json:"dir"`
+	Dir          string   `json:"cwd"`
+	Cols         uint16   `json:"cols,omitempty"`
+	Rows         uint16   `json:"rows,omitempty"`
 	SessionID    string   `json:"session_id,omitempty"`
 	Title        string   `json:"title,omitempty"`
 	ExtraArgs    []string `json:"extra_args,omitempty"`
@@ -99,26 +98,36 @@ func (a *apiClient) Spawn(ctx context.Context, req SpawnRequest) (SpawnResponse,
 
 // ListCoders returns the available backend descriptors.
 func (a *apiClient) ListCoders(ctx context.Context) ([]CoderDescriptor, error) {
-	var out []CoderDescriptor
-	if err := a.getJSON(ctx, "/api/coders", &out); err != nil {
+	var registry map[string]CoderDescriptor
+	if err := a.getJSON(ctx, "/api/coders", &registry); err != nil {
 		return nil, err
 	}
+	out := make([]CoderDescriptor, 0, len(registry))
+	for id, descriptor := range registry {
+		if descriptor.ID != id {
+			return nil, fmt.Errorf("phic: inconsistent backend ID")
+		}
+		out = append(out, descriptor)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Order == out[j].Order {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Order < out[j].Order
+	})
 	return out, nil
 }
 
 // CoderDescriptor mirrors /api/coders.
 type CoderDescriptor struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Category string `json:"category"`
-	Mode     string `json:"mode,omitempty"`
-}
-
-// CoderChoices returns the selectable backend IDs. The user-
-// supplied --coder flag is checked against this set so the
-// client never sends a name Phi does not advertise.
-func CoderChoices() []string {
-	return []string{"pi", "opencode", "bash", "claude", "codex"}
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Order        int    `json:"order"`
+	IsShell      bool   `json:"is_shell"`
+	Mode         string `json:"opencode_mode,omitempty"`
+	Capabilities struct {
+		List bool `json:"list"`
+	} `json:"capabilities"`
 }
 
 // QuotedID returns a control-character-safe view of an
@@ -136,6 +145,9 @@ func QuotedID(s string) string {
 			safe = append(safe, '\\', 'x', rune(hex[r>>4]), rune(hex[r&0xf]))
 			continue
 		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return fmt.Sprintf("%+q", s)
+		}
 		if r == '"' || r == '\\' {
 			safe = append(safe, '\\')
 		}
@@ -150,7 +162,7 @@ func normalizePath(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("phic: empty path")
 	}
-	return path.Clean(p), nil
+	return resolveDir(p)
 }
 
 // MatchDir returns true if viewDir matches the wanted dir.
@@ -159,5 +171,5 @@ func MatchDir(viewDir, want string) bool {
 	if want == "" {
 		return true
 	}
-	return viewDir == want
+	return strings.TrimRight(viewDir, "/") == strings.TrimRight(want, "/")
 }

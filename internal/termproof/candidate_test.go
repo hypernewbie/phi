@@ -1,16 +1,12 @@
 package termproof
 
-// The seven proof cases from the plan, evaluated against the four
-// candidate mechanisms. Each test is small on purpose: the goal is a
-// comparison, not a screen oracle. Without an emulator, a passing
-// assertion only proves the bytes line up — the plan's gate is the
-// native terminal check, which is the human step at the end of this
-// commit.
+// Byte fixtures for the candidate operations. They do not prove screen
+// restoration. The development-only oracle supplies measured counterexamples;
+// live overlays remain disabled pending the actual compatibility proof.
 
 import (
 	"bytes"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 )
@@ -26,7 +22,9 @@ func requireUnix(t *testing.T) {
 
 // catBackend is a child program that copies its stdin to its stdout
 // after a one-line prefix. Useful for case 1 (raw bytes round-trip).
-func catBackend(t *testing.T) *Backend { return mustStart(t, "/bin/sh", "-c", "printf 'READY\\n'; cat") }
+func catBackend(t *testing.T) *Backend {
+	return mustStart(t, "/bin/sh", "-c", "printf 'READY\\n'; cat")
+}
 
 // printfBackend echoes a fixed prefix and a fixed suffix with a
 // controllable gap. Useful for case 5 (output that stops mid-sequence).
@@ -65,11 +63,11 @@ func mustStart(t *testing.T, name string, args ...string) *Backend {
 	requireUnix(t)
 	b, err := StartBackend(t.Context(), 80, 24, name, args...)
 	if err != nil {
-		t.Skipf("termproof: cannot start PTY backend: %v", err)
+		t.Fatalf("termproof: cannot start PTY backend: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
 	if out := waitAndCollect(b, 500*time.Millisecond); !bytes.Contains(out, []byte("READY")) {
-		t.Skipf("termproof: backend did not produce READY in 500ms: %q", out)
+		t.Fatalf("termproof: backend did not produce READY in 500ms: %q", out)
 	}
 	return b
 }
@@ -248,11 +246,11 @@ func TestCase5OutputSplitInsideEscape(t *testing.T) {
 	pre := b.LogOffset()
 	// Send a 4-byte UTF-8 char, an OSC, and a DCS in three writes.
 	parts := [][]byte{
-		[]byte("foo "),                         // plain
-		[]byte("\x1b]0;tit"),                   // OSC partial
-		[]byte("le\x07 bar "),                  // OSC terminator
-		[]byte("\x1bP+1;2;3"),                  // DCS partial
-		[]byte(";end\x1b\\ baz"),               // DCS terminator
+		[]byte("foo "),                        // plain
+		[]byte("\x1b]0;tit"),                  // OSC partial
+		[]byte("le\x07 bar "),                 // OSC terminator
+		[]byte("\x1bP+1;2;3"),                 // DCS partial
+		[]byte(";end\x1b\\ baz"),              // DCS terminator
 		[]byte(" \xE6\x97\xA5\xE6\x9C\xAC\n"), // 4-byte UTF-8
 	}
 	for _, p := range parts {
@@ -292,19 +290,13 @@ func TestCase6TerminalQueriesDuringReplay(t *testing.T) {
 	}
 }
 
-// TestCase7KittyKeyboardProtocol checks the prefix key still
-// arrives as the right byte under the kitty protocol. The plan
-// requires prefix detection to "survive read boundaries" and to
-// work "under supported enhanced encodings". The fixture here
-// only confirms the byte the client writes reaches the master
-// end; the host's terminal emulator is what actually decodes the
-// kitty sequence.
-func TestCase7KittyKeyboardProtocol(t *testing.T) {
+// This fixture proves only literal C0 delivery. Enhanced-keyboard prefix
+// decoding is exercised by the production parser tests in internal/phic.
+func TestLiteralPrefixPTYRoundTrip(t *testing.T) {
 	b := newBackend(t, m7Backend)
 	pre := b.LogOffset()
-	// The phic plan prefix is 0x1d. Under kitty, a literal press of
-	// Ctrl-] still arrives as 0x1d on the master side; the protocol
-	// only changes keys that the application has opted in for.
+	// A host terminal can encode Ctrl-] as CSI 93;5u instead of C0.
+	// This byte fixture does not simulate that host protocol.
 	if _, err := b.Write([]byte{0x1d}); err != nil {
 		t.Fatalf("write prefix: %v", err)
 	}
@@ -336,141 +328,4 @@ func scanResizeMarkers(rec []byte) []int {
 		}
 	}
 	return offsets
-}
-
-// TestProofReport consolidates the seven-case result. The plan's
-// stop condition says: "If no mechanism passes the proof cases,
-// record the exact unsupported cases. Get approval for a smaller
-// compatibility scope before continuing." The report is the
-// machine-readable version of that.
-func TestProofReport(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("termproof: unix-only first version")
-	}
-	report := proofReport{
-		Mechanism1AltBuffer: mechanismResult{
-			Passes: []int{1, 2, 4},
-			Fails: []int{
-				3, // a backend that retains content in both buffers
-				5, // mid-sequence stop in alt screen leaves partial state
-				6, // the alt-screen toggle itself can race with queries
-				7, // protocol switching is opaque to the alt buffer
-			},
-		},
-		Mechanism2Checkpoint: mechanismResult{
-			Passes: []int{1, 2, 4, 5},
-			Fails: []int{
-				6, // the snapshot replays historical query replies
-				7, // the snapshot was captured under a different protocol
-			},
-			Blocked: "the shipped client cannot produce a snapshot without a real terminal oracle; a captured payload is a payload, not a proof",
-		},
-		Mechanism3Redraw: mechanismResult{
-			Passes:  []int{2}, // backends with a documented redraw only
-			Fails:   []int{1, 3, 4, 5, 6, 7},
-			Blocked: "no general redraw contract; SIGWINCH nudges are out (plan); Ctrl-L is not universal (plan); a backend-specific signal is not portable",
-		},
-		Mechanism4Replay: mechanismResult{
-			Passes: []int{1, 2, 4, 5, 7},
-			Fails:  []int{3, 6},
-			Blocked: "historical geometry cannot be reproduced; terminal-query replies race live queries",
-		},
-	}
-	if !report.compatible() {
-		t.Logf("proof: no mechanism passes all seven cases; report = %s", report.format())
-		// The test itself does not fail: the plan's stop condition
-		// is a recorded report and a smaller-scope approval, not a
-		// failing test. The operator reads the log and decides.
-	}
-}
-
-// mechanismResult is the per-mechanism tally from the seven cases.
-type mechanismResult struct {
-	Passes  []int
-	Fails   []int
-	Blocked string
-}
-
-// proofReport is the seven-case evaluation across the four candidate
-// mechanisms. The plan's "smaller compatibility scope" lives here.
-type proofReport struct {
-	Mechanism1AltBuffer  mechanismResult
-	Mechanism2Checkpoint mechanismResult
-	Mechanism3Redraw     mechanismResult
-	Mechanism4Replay     mechanismResult
-}
-
-func (p proofReport) compatible() bool {
-	for _, m := range []mechanismResult{
-		p.Mechanism1AltBuffer,
-		p.Mechanism2Checkpoint,
-		p.Mechanism3Redraw,
-		p.Mechanism4Replay,
-	} {
-		if len(m.Fails) == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (p proofReport) format() string {
-	var b strings.Builder
-	for name, m := range map[string]mechanismResult{
-		"alt-buffer": p.Mechanism1AltBuffer,
-		"checkpoint": p.Mechanism2Checkpoint,
-		"redraw":     p.Mechanism3Redraw,
-		"replay":     p.Mechanism4Replay,
-	} {
-		b.WriteString(name)
-		b.WriteString(": passes=")
-		b.WriteString(joinInts(m.Passes))
-		b.WriteString(" fails=")
-		b.WriteString(joinInts(m.Fails))
-		if m.Blocked != "" {
-			b.WriteString(" blocked=")
-			b.WriteString(m.Blocked)
-		}
-		b.WriteString("; ")
-	}
-	return b.String()
-}
-
-func joinInts(in []int) string {
-	if len(in) == 0 {
-		return "[]"
-	}
-	var b strings.Builder
-	b.WriteByte('[')
-	for i, v := range in {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(itoa(v))
-	}
-	b.WriteByte(']')
-	return b.String()
-}
-
-// itoa is a local strconv-free formatter to keep imports tight.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

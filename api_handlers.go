@@ -340,6 +340,8 @@ type SpawnRequest struct {
 	Title        string   `json:"title"`
 	Workspace    string   `json:"workspace"`
 	OpenCodeMini bool     `json:"opencode_mini,omitempty"`
+	Cols         uint16   `json:"cols,omitempty"`
+	Rows         uint16   `json:"rows,omitempty"`
 }
 
 func terminalOpenCodeMode(inst *pty.PTYInstance) string {
@@ -385,6 +387,10 @@ func handleSpawnTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if (req.Cols == 0) != (req.Rows == 0) {
+		http.Error(w, "cols and rows must both be supplied", http.StatusBadRequest)
+		return
+	}
 	c, ok := coderManager.Get(req.Coder)
 	if req.OpenCodeMini {
 		var err error

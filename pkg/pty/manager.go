@@ -272,6 +272,7 @@ type SpawnOptions struct {
 	ID, Title, Workspace, OpenCodeMode string
 	Pinned, Marked                     bool
 	ExtraArgs                          []string
+	Cols, Rows                         uint16
 	ObserveOutput                      func([]byte)
 }
 
@@ -285,7 +286,7 @@ func (m *Manager) SpawnWithOptions(ctx context.Context, dir, command string, arg
 	// accepts but never uses to cancel the process (see Start's doc
 	// comment) — the span ends here; the terminal's own lifetime runs on.
 	spanCtx, end := obs.Span(ctx, "pty.spawn", "coder", coder, "command", command, "cwd", dir)
-	p, err := Start(spanCtx, dir, command, args, envOverrides...)
+	p, err := startWithSize(spanCtx, dir, command, args, opts.Cols, opts.Rows, envOverrides...)
 	end(err)
 	if err != nil {
 		return nil, err

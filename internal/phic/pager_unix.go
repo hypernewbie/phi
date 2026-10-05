@@ -5,7 +5,7 @@ package phic
 import (
 	"context"
 	"errors"
-	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/exec"
@@ -76,26 +76,36 @@ func (p *Pager) Close() error {
 	return err
 }
 
-// RunPager closes the TTY, runs the pager on the temp file,
-// and reopens the TTY. The plan: "Restore the terminal input
-// mode before the pager owns the terminal. Restore the client
-// mode after the pager exits."
-func RunPager(ctx context.Context, tty *TTY, file string) error {
+// RunPager lends the existing TTY to a child. It must be called only when
+// no relay reader owns that TTY; live overlays remain disabled.
+func RunPager(ctx context.Context, tty *TTY, file string) (runErr error) {
 	if tty == nil {
 		return errors.New("phic: pager needs a TTY")
 	}
-	if err := tty.Close(); err != nil {
+	wasRaw := tty.raw
+	if err := tty.Restore(); err != nil {
 		return err
 	}
+	defer func() {
+		err := tty.Restore()
+		if wasRaw {
+			err = tty.EnterRaw()
+		}
+		if runErr == nil {
+			runErr = err
+		}
+	}()
+	fd, err := unix.Dup(tty.fd)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "phic-pager-tty")
+	defer f.Close()
 	bin := PagerBinary()
 	args := append(PagerArgs(), file)
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
-	if _, restoreErr := OpenTTY(); restoreErr != nil && runErr == nil {
-		return fmt.Errorf("phic: tty restore failed: %w", restoreErr)
-	}
-	return runErr
+	cmd.Stdin = f
+	cmd.Stdout = f
+	cmd.Stderr = f
+	return cmd.Run()
 }

@@ -49,8 +49,8 @@ type Mechanism3Redraw struct {
 	RedrawBytes []byte
 }
 
-func (Mechanism3Redraw) Open() []byte      { return nil }
-func (m Mechanism3Redraw) Close() []byte   { return m.RedrawBytes }
+func (Mechanism3Redraw) Open() []byte    { return nil }
+func (m Mechanism3Redraw) Close() []byte { return m.RedrawBytes }
 
 // Mechanism4Replay: replay the entire recording. Only
 // correct where geometry and terminal-query behavior match.

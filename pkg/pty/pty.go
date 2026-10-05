@@ -113,6 +113,10 @@ func validateWorkingDir(dir string) error {
 // override them. On Windows the SHELL-strip is bypassed when the
 // override map explicitly carries a SHELL key.
 func Start(ctx context.Context, dir string, command string, args []string, envOverrides ...map[string]string) (*Pty, error) {
+	return startWithSize(ctx, dir, command, args, 0, 0, envOverrides...)
+}
+
+func startWithSize(ctx context.Context, dir string, command string, args []string, cols, rows uint16, envOverrides ...map[string]string) (*Pty, error) {
 	resolvedCmd := ResolveCommand(command)
 
 	// Resolve the full path before creating the command — go-pty's Windows
@@ -131,6 +135,13 @@ func Start(ctx context.Context, dir string, command string, args []string, envOv
 	pt, err := gopty.New()
 	if err != nil {
 		return nil, err
+	}
+
+	if cols != 0 && rows != 0 {
+		if err := pt.Resize(int(cols), int(rows)); err != nil {
+			_ = pt.Close()
+			return nil, err
+		}
 	}
 
 	// Create session-isolated temporary directory for clipboard shims

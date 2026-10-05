@@ -2,16 +2,19 @@
 package phic
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
-func Run(args []string) error {
+func Run(args []string) error { return RunWithVersion(args, "phic dev (commit unreleased)") }
+
+func RunWithVersion(args []string, version string) error {
 	cfg, err := parseFlags(args)
 	if err != nil {
 		return err
@@ -39,6 +42,7 @@ func Run(args []string) error {
 
 func parseFlags(args []string) (config, error) {
 	fs := flag.NewFlagSet("phic", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	var c config
 	fs.StringVar(&c.Server, "server", "http://127.0.0.1:7070", "Phi server URL")
 	fs.StringVar(&c.Pane, "pane", "", "exact live pane ID to attach to")
@@ -46,23 +50,38 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&c.NewPane, "new", false, "create a fresh pane rather than reattaching")
 	fs.BoolVar(&c.Help, "help", false, "show usage")
 	fs.BoolVar(&c.Version, "version", false, "show version")
+	fs.BoolVar(&c.Diff, "diff", false, "show diff in the native pager and exit")
+	fs.BoolVar(&c.Worktrees, "worktrees", false, "select a worktree before opening a pane")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			c.Help = true
+			return c, nil
+		}
 		return c, err
 	}
+	c.Dir = "."
 	if rest := fs.Args(); len(rest) > 0 {
+		if len(rest) > 1 {
+			return c, fmt.Errorf("phic: expected at most one directory")
+		}
 		c.Dir = rest[0]
+	}
+	if c.Pane != "" && (c.NewPane || c.Coder != "" || c.Worktrees) {
+		return c, fmt.Errorf("phic: --pane cannot be combined with --new, --coder, or --worktrees")
 	}
 	return c, nil
 }
 
 type config struct {
-	Server  string
-	Pane    string
-	Coder   string
-	Dir     string
-	NewPane bool
-	Help    bool
-	Version bool
+	Server    string
+	Pane      string
+	Coder     string
+	Dir       string
+	NewPane   bool
+	Help      bool
+	Version   bool
+	Diff      bool
+	Worktrees bool
 }
 
 func printUsage(w *os.File) {
@@ -72,12 +91,16 @@ Options:
   --server URL    Phi server URL (default http://127.0.0.1:7070)
   --pane ID       attach to an exact live pane ID
   --coder NAME    backend name (e.g. pi, opencode, bash)
-  --new           create a fresh pane rather than reattaching
+  --new           create a fresh pane rather than reattaching (requires --coder)
+  --diff          show current diff in less -R and exit
+  --worktrees     select an existing worktree before startup
   --help          show this message
-  --version       show version`)
-}
+  --version       show version
 
-const version = "phic dev (commit unreleased)"
+Relay keys: Ctrl-] q detaches; Ctrl-] Ctrl-] sends a literal prefix.
+Live menus are disabled until screen restoration is proved. Startup
+selection and --diff do not overwrite an attached backend screen.`)
+}
 
 type client struct {
 	cfg config
@@ -109,22 +132,86 @@ func (c *client) Run(ctx context.Context) error {
 	if err := c.authenticate(ctx); err != nil {
 		return err
 	}
+	if c.cfg.Worktrees {
+		dir, err := resolveDir(c.cfg.Dir)
+		if err != nil {
+			return err
+		}
+		items, err := c.api.Worktrees(ctx, dir)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return fmt.Errorf("phic: no worktrees")
+		}
+		labels := make([]string, len(items))
+		for i, w := range items {
+			labels[i] = fmt.Sprintf("%+q", w.Path)
+		}
+		i, err := c.choose(ctx, "Worktrees", labels)
+		if err != nil {
+			return err
+		}
+		c.cfg.Dir = items[i].Path
+	}
+	if c.cfg.Diff {
+		dir, err := resolveDir(c.cfg.Dir)
+		if c.cfg.Pane != "" {
+			selection, selectErr := c.Select(ctx)
+			err = selectErr
+			if err == nil {
+				dir = selection.Existing.Dir
+			}
+		}
+		if err != nil {
+			return err
+		}
+		text, err := c.api.RawDiff(ctx, dir, true)
+		if err != nil {
+			return err
+		}
+		pager, err := NewPager(text)
+		if err != nil {
+			return err
+		}
+		defer pager.Close()
+		return RunPager(ctx, c.tty, pager.Path())
+	}
 	sel, err := c.Select(ctx)
 	if err != nil {
+		if errors.Is(err, errDetach) {
+			return nil
+		}
 		return err
 	}
 	pane := sel.PaneID
 	if pane == "" && sel.NewSpawn != nil {
+		cols, rows, err := c.tty.Size()
+		if err != nil {
+			return err
+		}
+		if cols <= 0 || rows <= 0 || cols > 65535 || rows > 65535 {
+			return fmt.Errorf("phic: unusable terminal size")
+		}
+		sel.NewSpawn.Cols, sel.NewSpawn.Rows = uint16(cols), uint16(rows)
 		sp, err := c.api.Spawn(ctx, *sel.NewSpawn)
 		if err != nil {
 			return err
 		}
 		pane = sp.PaneID
 	}
+	if pane == "" {
+		return fmt.Errorf("phic: server returned an empty pane ID")
+	}
+	if err := c.tty.EnterRaw(); err != nil {
+		return err
+	}
 	relay := NewRelay(c.tty, c.api)
+	relay.fresh = sel.NewSpawn != nil && sel.NewSpawn.SessionID == ""
 	if _, err := relay.Connect(ctx, pane); err != nil {
 		return err
 	}
+	defer relay.Close()
 	return relay.Run(ctx)
 }
 
@@ -138,32 +225,9 @@ func (c *client) authenticate(ctx context.Context) error {
 	if !status.Enabled || status.Authenticated {
 		return nil
 	}
-	pw, err := readPassword("Phi server password: ")
+	pw, err := c.tty.Password(ctx, "Phi server password: ")
 	if err != nil {
 		return err
 	}
 	return c.api.Login(ctx, status, pw)
-}
-
-// readPassword reads a line from /dev/tty without echo.
-func readPassword(prompt string) (string, error) {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	fmt.Fprint(f, prompt)
-	line, err := bufio.NewReader(f).ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	fmt.Fprintln(f)
-	return trimCRLF(line), nil
-}
-
-func trimCRLF(s string) string {
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
-	return s
 }

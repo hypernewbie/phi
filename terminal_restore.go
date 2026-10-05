@@ -46,6 +46,7 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 		return bad(err)
 	}
 	opts.Title, opts.Workspace, opts.OpenCodeMode = req.Title, req.Workspace, c.OpenCodeMode
+	opts.Cols, opts.Rows = req.Cols, req.Rows
 	opts.ExtraArgs = req.ExtraArgs
 	var inst *pty.PTYInstance
 	nativeObserver := session.ResumeReferenceObserver(c, func(nativeID string) { ptyManager.BindSession(inst, nativeID) })
@@ -63,6 +64,9 @@ func spawnTerminal(ctx context.Context, c coders.Coder, req SpawnRequest, cfg Co
 	inst, err = ptyManager.SpawnWithOptions(ctx, plan.Cwd, plan.Command, plan.Args, c.ID, id, opts, plan.Env)
 	if err != nil {
 		return nil, terminalLaunchError{http.StatusInternalServerError, err}
+	}
+	if req.Cols != 0 && req.Rows != 0 {
+		wsHub.RecordResize(inst.ID, req.Cols, req.Rows)
 	}
 	ws.StartPTYReadLoop(inst, wsHub)
 	if probe {

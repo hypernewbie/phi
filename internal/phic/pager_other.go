@@ -14,10 +14,10 @@ func NewPager(_ string) (*Pager, error) {
 	return nil, errors.New("phic: pager not supported on Windows")
 }
 
-func (p *Pager) Path() string     { return "" }
-func (p *Pager) Close() error     { return nil }
-func PagerBinary() string         { return "" }
-func PagerArgs() []string         { return nil }
+func (p *Pager) Path() string { return "" }
+func (p *Pager) Close() error { return nil }
+func PagerBinary() string     { return "" }
+func PagerArgs() []string     { return nil }
 func RunPager(_ any, _ any, _ string) error {
 	return errors.New("phic: pager not supported on Windows")
 }
