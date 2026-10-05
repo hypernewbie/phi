@@ -32,7 +32,10 @@ func newParserBarrier() (request, response []byte, err error) {
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return nil, nil, err
 	}
-	mode := uint32(0x10000000) | (binary.BigEndian.Uint32(nonce[:]) & 0x3fffffff)
+	// Six-digit unassigned private-mode space. Large enough to avoid every
+	// real mode, small enough for parsers (older tmux) that cap CSI
+	// parameters and silently drop larger values instead of echoing them.
+	mode := 400000 + (binary.BigEndian.Uint32(nonce[:]) % 100000)
 	return []byte(fmt.Sprintf("\x1b[?%d$p", mode)), []byte(fmt.Sprintf("\x1b[?%d;0$y", mode)), nil
 }
 
