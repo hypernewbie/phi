@@ -83,6 +83,26 @@ describe('phic native-buffer candidate is not a general screen restoration', () 
         }
     });
 
+    it('a nonce mode query fences the parser without changing screen state', async () => {
+        const term = new Terminal({
+            cols: 40,
+            rows: 8,
+            allowProposedApi: true,
+        });
+        const replies = [];
+        const listener = term.onData((data) => replies.push(data));
+        try {
+            await parse(term, '\x1b[?1049h\x1b[31mCONTENT\x1b[2;3H');
+            const before = terminalState(term);
+            await parse(term, operations.barrier_request);
+            expect(replies).toEqual([operations.barrier_reply]);
+            expect(terminalState(term)).toEqual(before);
+        } finally {
+            listener.dispose();
+            term.dispose();
+        }
+    });
+
     it('replaying an old query produces another input reply', async () => {
         const term = new Terminal({
             cols: 40,
