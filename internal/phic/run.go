@@ -207,7 +207,9 @@ func (c *client) Run(ctx context.Context) error {
 		return err
 	}
 	relay := NewRelay(c.tty, c.api)
-	relay.fresh = sel.NewSpawn != nil && sel.NewSpawn.SessionID == ""
+	// Resuming a saved session still starts a new process and recording. Its
+	// startup terminal queries are live, not replies from an older attachment.
+	relay.fresh = sel.NewSpawn != nil
 	if _, err := relay.Connect(ctx, pane); err != nil {
 		return err
 	}

@@ -112,7 +112,7 @@ func (g *queryGuard) control(b byte) bool {
 		ended := b == 0x9c || (g.escape && b == '\\') || (g.state == 'o' && b == 7)
 		if ended {
 			s := string(g.text)
-			query := g.state == 'd' && strings.HasPrefix(s, "+q")
+			query := g.state == 'd' && (strings.HasPrefix(s, "+q") || strings.HasPrefix(s, "$q"))
 			if g.state == 'o' && g.question {
 				for _, prefix := range []string{"4;", "10;", "11;", "12;", "52;"} {
 					query = query || strings.HasPrefix(s, prefix)
