@@ -79,6 +79,22 @@ func TestRememberedPaneDoesNotAliasControllerVariable(t *testing.T) {
 	}
 }
 
+func TestAbsoluteServerPathsDoNotRequireClientFilesystem(t *testing.T) {
+	for _, origin := range []string{"http://127.0.0.1:7070", "https://remote.invalid"} {
+		api, err := newAPIClient(origin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := client{api: api}
+		for _, dir := range []string{"/phic-nonexistent-server/project", `C:\server\project`} {
+			got, err := c.directory(t.Context(), dir)
+			if err != nil || got != dir {
+				t.Fatalf("server directory changed: %s %q %v", origin, got, err)
+			}
+		}
+	}
+}
+
 func TestThemeOracleInput(t *testing.T) {
 	data, _ := json.Marshal(phiAccents)
 	t.Log("PHIC_PALETTE " + string(data))
