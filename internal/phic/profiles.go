@@ -24,6 +24,7 @@ type serverState struct {
 	api       *apiClient
 	identity  serverIdentity
 	selection *SelectResult
+	frontiers map[string]recordingCursor
 }
 
 func (s *serverState) remember(sel SelectResult) {

@@ -2,6 +2,7 @@ package phic
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -52,6 +53,26 @@ func TestRepaintControlEndingInLiveFrameKeepsItsOriginalPolicy(t *testing.T) {
 		}
 		if got := string(append(a, b...)); got != tc.want {
 			t.Fatalf("%q + %q = %q want %q", tc.old, tc.live, got, tc.want)
+		}
+	}
+}
+
+func TestRepaintEscapeRestartsDoNotLeakHistoricalQueries(t *testing.T) {
+	for _, source := range []string{"\x1b\x1b[6n", "\x1b[31;\x1b[6n"} {
+		for split := 0; split <= len(source); split++ {
+			var f repaintFilter
+			a, err := f.Feed([]byte(source[:split]), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := f.Feed([]byte(source[split:]), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(append(a, b...))
+			if strings.Contains(got, "6n") || len(f.pending) != 0 {
+				t.Fatalf("escape restart leaked query at split %d: %q", split, got)
+			}
 		}
 	}
 }

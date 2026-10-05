@@ -73,6 +73,16 @@ func (f *repaintFilter) Feed(data []byte, historical bool) ([]byte, error) {
 			out = append(out, b)
 			continue
 		}
+		if b == 0x1b && (f.kind == 'e' || f.kind == 'c') {
+			// ESC aborts an unfinished escape/CSI and starts a new command.
+			// Preserve any embedded C0 effects, then cancel the aborted prefix
+			// so suppressing the successor query cannot leave native CSI state.
+			out = append(out, f.pending...)
+			out = append(out, 0x18)
+			f.pending = []byte{b}
+			f.kind = 'e'
+			continue
+		}
 		f.pending = append(f.pending, b)
 		if len(f.pending) > maxRepaintControl {
 			return nil, errors.New("phic: repaint escape exceeds 1 MiB; recording remains in Phi")
@@ -120,6 +130,18 @@ func (f *repaintFilter) Feed(data []byte, historical bool) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// ResumeLive releases an unfinished control at the observed frontier. It
+// could not have produced a reply before its terminator existed, so its first
+// completion is live, even when the prefix was emitted before the menu.
+func (f *repaintFilter) ResumeLive() []byte {
+	pending := f.pending
+	f.pending = nil
+	f.kind = 0
+	f.escaped = false
+	f.utf8Left = 0
+	return pending
 }
 
 func repaintQuery(seq []byte) bool {

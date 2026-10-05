@@ -16,6 +16,13 @@ import (
 
 var errProtocol = errors.New("phic: invalid terminal protocol")
 
+// recordingCursor is attachment metadata, not a client recording. It marks
+// output already presented before a menu or a switch to another pane.
+type recordingCursor struct {
+	epoch   uint64
+	through uint64
+}
+
 type wireAttach struct {
 	Header     wireproto.AttachHeadHeader
 	Checkpoint []byte
@@ -42,6 +49,7 @@ type Relay struct {
 	repaint   *repaintFilter
 	viewInput []byte
 	keys      *inputParser
+	previous  *recordingCursor
 	pane      string
 	cancel    context.CancelFunc
 }
@@ -174,11 +182,37 @@ func (r *Relay) Run(ctx context.Context) error {
 		r.repaint = &repaintFilter{}
 	}
 	err = r.send(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+	seen := r.header.Header.Head
+	if r.previous != nil {
+		if r.previous.epoch != r.epoch {
+			seen = 0
+		} else {
+			seen = r.previous.through
+			if seen > r.header.Header.Head {
+				err = fmt.Errorf("%w: remembered frontier exceeds head", errProtocol)
+			}
+		}
+	}
+	if r.fresh {
+		seen = r.header.Header.Head
+	}
 	if err == nil {
-		err = r.recoverOutput(ctx, r.pane, r.header.Header.Head, !r.fresh)
+		err = r.recoverOutput(ctx, r.pane, seen, !r.fresh)
 	}
 	if !r.fresh {
 		close(ready)
+	}
+	if err == nil && r.repaint != nil {
+		// This prefix was already admitted into the source frontier, but the
+		// lexer held it until the historical/live boundary was established.
+		before := r.written
+		err = r.write(ctx, r.repaint.ResumeLive())
+		r.written = before
+	}
+	// Bytes emitted while the view was open have never reached this native
+	// terminal. Process them as live, with input enabled for new query replies.
+	if err == nil {
+		err = r.recoverOutput(ctx, r.pane, r.header.Header.Head, false)
 	}
 	if err == nil {
 		err = r.live(ctx, r.pane)
