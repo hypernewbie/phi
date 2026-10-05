@@ -48,7 +48,9 @@ macOS and Linux are the supported client platforms. Windows still supports the e
 
 Live session, diff, and worktree overlays remain disabled. The original screen fixture did not prove safe restoration. See `internal/termproof/PROOF.md` for the measured counterexamples.
 
-Initial replay of a reused pane rejects incompatible historical geometry and known terminal queries. The client does not delete bytes or replay stale query replies into the application. Use a fresh pane when those cases prevent attachment.
+Reused panes replay from the beginning of Phi's recording in bounded requests. Repaint suppresses historical terminal queries and clipboard writes; live output and new queries remain unchanged. A control split between replay and live retains its replay policy until complete. The original recording is never changed.
+
+Replay uses the current native terminal size. Output originally drawn at another size can wrap or position differently. The client sends the current PTY dimensions but does not resize the user's terminal window or inject backend redraw keys. It is not an exact historical screen emulator. Repaint rejects an escape longer than 1 MiB rather than silently truncate it.
 
 Native scrollback capacity depends on the terminal. The full recording remains in Phi; this client does not implement a deferred history viewer.
 

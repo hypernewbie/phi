@@ -45,7 +45,7 @@ func TestInvalidRecordingNeverAdvancesWrittenFrontier(t *testing.T) {
 		})
 	}
 }
-func TestPreflightRejectsHistoricalQueriesAndGeometryBeforePainting(t *testing.T) {
+func TestRepaintReusedPaneSuppressesQueriesAndAcceptsChangedGeometry(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		cols       uint64
@@ -67,11 +67,18 @@ func TestPreflightRejectsHistoricalQueriesAndGeometryBeforePainting(t *testing.T
 			output := &shortTerminal{}
 			relay := NewRelay(output, mustAPI(t, srv.URL))
 			relay.epoch = 7
-			if err := relay.preflight(context.Background(), "p", uint64(len(tc.body)), 80, 24); err == nil {
-				t.Fatal("unsafe replay admitted")
+			relay.repaint = &repaintFilter{}
+			if err := relay.recoverOutput(context.Background(), "p", uint64(len(tc.body)), true); err != nil {
+				t.Fatal(err)
 			}
-			if relay.written != 0 || output.Len() != 0 {
-				t.Fatal("guard painted historical bytes before rejecting")
+			if relay.written != uint64(len(tc.body)) || string(output.Bytes()) != "screen" {
+				t.Fatalf("repaint failed: source frontier=%d display=%q", relay.written, output.Bytes())
+			}
+			if err := relay.output(context.Background(), []byte("\x1b[6n"), false); err != nil {
+				t.Fatal(err)
+			}
+			if string(output.Bytes()) != "screen\x1b[6n" {
+				t.Fatal("live query did not reach the terminal")
 			}
 		})
 	}

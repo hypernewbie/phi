@@ -91,6 +91,10 @@ func pageEnd(from, head uint64) uint64 {
 	return head
 }
 func (r *Relay) recover(ctx context.Context, pane string, head uint64) error {
+	return r.recoverOutput(ctx, pane, head, false)
+}
+
+func (r *Relay) recoverOutput(ctx context.Context, pane string, head uint64, historical bool) error {
 	for r.written < head {
 		end := pageEnd(r.written, head)
 		_, data, err := r.fetch(ctx, pane, r.written, end)
@@ -100,35 +104,31 @@ func (r *Relay) recover(ctx context.Context, pane string, head uint64) error {
 		if uint64(len(data)) != end-r.written {
 			return fmt.Errorf("%w: unavailable interval", errInvalidRecording)
 		}
-		if err := r.write(ctx, data); err != nil {
+		if err := r.output(ctx, data, historical); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *Relay) preflight(ctx context.Context, pane string, head uint64, cols, rows int) error {
-	guard := queryGuard{}
-	for at := uint64(0); at < head; {
-		end := pageEnd(at, head)
-		hdr, data, err := r.fetch(ctx, pane, at, end)
-		if err != nil {
-			return err
-		}
-		if uint64(len(data)) != end-at {
-			return errInvalidRecording
-		}
-		for _, m := range hdr.Resizes {
-			if m[0] < head && (m[1] != uint64(cols) || m[2] != uint64(rows)) {
-				return errors.New("phic: historical terminal geometry differs; native replay cannot restore this pane safely")
-			}
-		}
-		if !r.fresh && guard.Feed(data) {
-			return errors.New("phic: history contains terminal queries; use a fresh pane rather than inject historical replies into the application")
-		}
-		at = end
+// output advances a SOURCE frontier. Repaint-only controls may be omitted or
+// held in the bounded lexer, but the source recording is never changed. A new
+// live control is written verbatim. Failed writes stop attachment; they cannot
+// authorize skipping a later source span.
+func (r *Relay) output(ctx context.Context, data []byte, historical bool) error {
+	if r.repaint == nil {
+		return r.write(ctx, data)
 	}
-	return nil
+	paint, err := r.repaint.Feed(data, historical)
+	if err != nil {
+		return err
+	}
+	before := r.written
+	err = r.write(ctx, paint)
+	if err == nil {
+		r.written = before + uint64(len(data))
+	}
+	return err
 }
 func (r *Relay) drainExit(ctx context.Context, pane string) error {
 	for {
@@ -139,7 +139,7 @@ func (r *Relay) drainExit(ctx context.Context, pane string) error {
 		if err != nil {
 			return err
 		}
-		if err := r.write(ctx, data); err != nil {
+		if err := r.output(ctx, data, false); err != nil {
 			return err
 		}
 		if len(data) < recordingPageBytes {
