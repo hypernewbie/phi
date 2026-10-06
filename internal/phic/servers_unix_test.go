@@ -182,8 +182,14 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 	pos = len(tape.snapshot())
 	_, _ = master.Write([]byte("\x1d3"))
 	await("503", pos)
-	_, _ = master.Write([]byte("\r"))
-	await("SOURCE_BETA", pos)
+	// Server shortcuts from an error acknowledgement still belong to the
+	// live controller. Canceling the picker must return to the same pane,
+	// not bubble to the startup loop and exit the client.
+	viewPos := len(tape.snapshot())
+	_, _ = master.Write([]byte("\x1db"))
+	await("Servers", viewPos)
+	_, _ = master.Write([]byte("q"))
+	await("SOURCE_BETA", viewPos)
 	pos = len(tape.snapshot())
 	_, _ = master.Write([]byte("\x1d1"))
 	await("SOURCE_ALPHA", pos)
