@@ -39,3 +39,6 @@ native/libghostty-vt/*/libghostty-vt.lib
 native/libghostty-vt/*/ghostty-vt-static.lib
 native/libghostty-vt/*/*.dylib
 native/libghostty-vt/*/*.dll
+
+# darwin phic archives downloaded for goreleaser (release CI only)
+/prebuilt/
