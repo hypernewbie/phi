@@ -33,6 +33,13 @@ func TestPhicProcessHelper(t *testing.T) {
 	if err := json.Unmarshal([]byte(os.Getenv("PHIC_PROCESS_ARGS")), &args); err != nil {
 		os.Exit(2)
 	}
+	if origins := os.Getenv("PHIC_PROCESS_ALLOWED_ORIGINS"); origins != "" {
+		var allowed []string
+		if json.Unmarshal([]byte(origins), &allowed) != nil {
+			os.Exit(2)
+		}
+		http.DefaultTransport = testOriginTransport{allowed: allowed, base: http.DefaultTransport}
+	}
 	if err := Run(args); err != nil {
 		fmt.Fprintf(os.Stderr, "helper error: %q\n", err.Error())
 		os.Exit(1)

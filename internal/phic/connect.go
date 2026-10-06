@@ -11,6 +11,10 @@ import (
 // profiles or an unreachable localhost. It does not implicitly rewrite the
 // shared desktop preferences or establish a second server database.
 func (c *client) connectServer(ctx context.Context) (int, error) {
+	if err := writeAll(c.tty, []byte("\x1b[?2004h")); err != nil {
+		return 0, err
+	}
+	defer func() { _ = writeAll(c.tty, []byte("\x1b[?2004l")) }()
 	reader := menuReader{allowPaste: true, claimed: c.menuClaims()}
 	address := ""
 	if err := writeAll(c.tty, []byte("\r\n"+c.heading("Connect to server")+"\r\n  HTTP(S) origin · Enter Connect · Esc Back\r\n")); err != nil {

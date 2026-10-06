@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,24 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
+
+// The bare-client fixture must not even read a caller's real localhost Phi.
+// API clients use the default HTTP transport; this test-only wrapper confines
+// the child to the fixtures' randomly allocated origins.
+type testOriginTransport struct {
+	allowed []string
+	base    http.RoundTripper
+}
+
+func (t testOriginTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	origin := r.URL.Scheme + "://" + r.URL.Host
+	for _, allowed := range t.allowed {
+		if origin == allowed {
+			return t.base.RoundTrip(r)
+		}
+	}
+	return nil, fmt.Errorf("hermetic phic test: unowned origin refused")
+}
 
 // No --server or --profiles: exercise what the user actually runs, including
 // desktop legacy discovery and first run without any local Phi service.
@@ -94,15 +113,18 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
 			args := []string{"."}
+			allowed := []string{server.URL}
 			if mode == "offline" {
 				down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "offline", 503) }))
 				defer down.Close()
 				args = []string{"--server", down.URL, "."}
+				allowed = append(allowed, down.URL)
 			}
 			encodedArgs, _ := json.Marshal(args)
+			encodedAllowed, _ := json.Marshal(allowed)
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPhicProcessHelper$")
 			cmd.Dir = home
-			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "PHIC_PROCESS_HELPER=1", "PHIC_PROCESS_ARGS="+string(encodedArgs), "NO_COLOR=", "TERM=xterm-256color")
+			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "PHIC_PROCESS_HELPER=1", "PHIC_PROCESS_ARGS="+string(encodedArgs), "PHIC_PROCESS_ALLOWED_ORIGINS="+string(encodedAllowed), "NO_COLOR=", "TERM=xterm-256color")
 			master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 100, Rows: 24})
 			if err != nil {
 				t.Fatal(err)
@@ -122,13 +144,23 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 				}
 				t.Fatalf("missing %q: %q", marker, tape.snapshot())
 			}
+			assertPasteMode := func(want bool) {
+				t.Helper()
+				output := tape.snapshot()
+				on := bytes.LastIndex(output, []byte("\x1b[?2004h")) > bytes.LastIndex(output, []byte("\x1b[?2004l"))
+				if on != want {
+					t.Fatalf("client paste ownership: got %v want %v", on, want)
+				}
+			}
 			await("Connect to another server", 0)
+			assertPasteMode(true)
 			if authCalls.Load() != 0 {
 				t.Fatal("startup authenticated before letting the user choose")
 			}
 			if !saved {
 				master.Write([]byte("\x1b[F\r"))
 				await("Server URL", 0)
+				assertPasteMode(true)
 				pos := len(tape.snapshot())
 				master.Write([]byte("\x1b"))
 				await("Servers", pos)
@@ -140,10 +172,12 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 				master.Write([]byte("\x1b[13;1u\x1b[13;1:3u"))
 			}
 			await("CONNECTED WITHOUT LOCALHOST", 0)
+			assertPasteMode(false)
 			pos := len(tape.snapshot())
 			master.Write([]byte("\x1db"))
 			await("Servers", pos)
 			await("↑↓ Select", pos)
+			assertPasteMode(true)
 			master.Write([]byte("q"))
 			await("CONNECTED WITHOUT LOCALHOST", pos)
 			master.Write([]byte("\x1dq"))

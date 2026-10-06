@@ -188,6 +188,13 @@ def main():
                     tmux("send-keys", "-t", name, "C-]", key)
                     wait_view(name, marker)
                     view = snapshot(name)
+                    if key == "s":
+                        plain = re.sub(r"\x1b\[[0-9;]*m", "", view["cells"])
+                        for backend in api("/api/coders").values():
+                            action = "Sessions / New pane" if backend.get("capabilities", {}).get("list") else "New pane"
+                            label = f"+ {backend['name']} · {action}"
+                            if label not in plain:
+                                raise RuntimeError(f"menu advertises the wrong backend action: {label!r}")
                     (run / f"{coder}.{key if key != '?' else 'help'}.{len(views)}.view.json").write_text(json.dumps(view, indent=2))
                     tmux("send-keys", "-t", name, leave)
                     restored = settled(name)
