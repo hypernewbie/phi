@@ -104,9 +104,12 @@ func TestTUIRawPrefixByteArmsTheApplication(t *testing.T) {
 }
 
 // TestTUIResizeCollapsesPanels covers UX-08: narrow and wide geometry keeps a
-// valid widget and never renders clipped controls.
+// valid widget; tiny windows keep normal input/rendering rather than a size gate.
 func TestTUIResizeCollapsesPanels(t *testing.T) {
-	m := newModelWithServer(t, httptest.NewServer(http.NotFoundHandler()))
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	m := newModelWithServer(t, srv)
+	defer m.closeAll()
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	if !m.showSidebar() {
 		t.Fatal("wide layout dropped the sidebar")
@@ -129,8 +132,11 @@ func TestTUIResizeCollapsesPanels(t *testing.T) {
 	}
 
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
-	if out := m.render(); !strings.Contains(out, "terminal too small") {
-		t.Fatalf("undersized layout did not warn:\n%s", out)
+	if out := m.render(); strings.Contains(out, "terminal too small") || out == "phic" {
+		t.Fatalf("tiny layout did not render the normal console:\n%s", out)
+	}
+	if c, r := m.terminalSize(); c < 1 || r < 1 {
+		t.Fatal("tiny layout blocked the backend geometry")
 	}
 }
 
