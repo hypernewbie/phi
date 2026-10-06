@@ -993,10 +993,23 @@ func (m *tuiModel) applyReloadedProfiles(msg reloadedProfilesMsg) (tea.Model, te
 		}
 		next = append(next, state)
 	}
+	if selected < 0 && msg.selected >= 0 && msg.selected < len(next) {
+		// The outgoing origin disappeared (removed or renamed). Follow the
+		// shared last-used selection instead of leaving no active server.
+		selected = msg.selected
+	}
 	if selected >= 0 {
 		m.active = selected
 	}
 	m.servers = next
+	// A freshly added server has no loaded data; connect to it immediately
+	// so the rail never shows an inert entry.
+	origin := m.currentOrigin()
+	if origin != "" {
+		if d := m.data[origin]; d == nil || !d.loaded {
+			return m, m.loadServerCmd(m.active)
+		}
+	}
 	return m, nil
 }
 

@@ -419,6 +419,46 @@ func TestTUIServersIsolateDuplicatePaneIDs(t *testing.T) {
 	}
 }
 
+// TestTUIReloadConnectsFreshServers covers the add-server flow: a rail
+// reload that introduces or selects an unloaded server starts its load.
+func TestTUIReloadConnectsFreshServers(t *testing.T) {
+	empty := newTUIModel("test", config{}, nil, nil, -1, stubBuild)
+	empty.active = -1
+	cmd := func() tea.Cmd {
+		_, c := empty.Update(reloadedProfilesMsg{
+			gen:      empty.gen,
+			profiles: []desktopProfile{{ID: "new", Name: "new", Origin: "http://127.0.0.1:7070"}},
+			selected: 0,
+		})
+		return c
+	}()
+	if empty.active != 0 {
+		t.Fatalf("fresh server not selected: %d", empty.active)
+	}
+	if cmd == nil {
+		t.Fatal("fresh server was not loaded")
+	}
+
+	// Removing the active server follows the shared last-used selection.
+	apiA := mustAPI(t, "http://127.0.0.1:7071")
+	apiB := mustAPI(t, "http://127.0.0.1:7072")
+	m := newTUIModel("test", config{}, nil, []*serverState{
+		{profile: desktopProfile{ID: "a", Name: "a", Origin: "http://127.0.0.1:7071"}, api: apiA},
+		{profile: desktopProfile{ID: "b", Name: "b", Origin: "http://127.0.0.1:7072"}, api: apiB},
+	}, 0, stubBuild)
+	_, cmd = m.Update(reloadedProfilesMsg{
+		gen:      m.gen,
+		profiles: []desktopProfile{{ID: "b", Name: "b", Origin: "http://127.0.0.1:7072"}},
+		selected: 0,
+	})
+	if m.active != 0 || m.currentOrigin() != "http://127.0.0.1:7072" {
+		t.Fatalf("removal did not follow the shared selection: active=%d origin=%s", m.active, m.currentOrigin())
+	}
+	if cmd == nil {
+		t.Fatal("replacement server was not loaded")
+	}
+}
+
 // TestTUIExitSendsNoDelete proves quitting detaches without terminating any
 // backend process.
 func TestTUIExitSendsNoDelete(t *testing.T) {
