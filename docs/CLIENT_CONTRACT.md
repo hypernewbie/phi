@@ -12,7 +12,18 @@ Latest statements:
 - "ifwe going tui I want basically a console version of the website - lite ofc, not full featured."
 - "yes we need a termemu library find a good one"
 
-These statements supersede the earlier raw-only, no-persistent-panels, no-Charm, and no-emulator architecture exclusions below for the redesign. The website is the product-flow reference; desktop remains the shared server-store reference. Existing transport, authentication boundaries, recording integrity, build/install semantics, and server ownership still matter. The current installed client has not been replaced. Library evaluation and isolated prototypes are recorded in `temp/phic-tui-evaluation/REPORT.md`; they are not proof of a finished replacement.
+These statements supersede the earlier raw-only, no-persistent-panels, no-Charm, and no-emulator architecture exclusions below for the redesign. The website is the product-flow reference; desktop remains the shared server-store reference. Existing transport, authentication boundaries, recording integrity, build/install semantics, and server ownership still matter. The console replacement is implemented and installed. Library evaluation is recorded in `temp/phic-tui-evaluation/REPORT.md`; implementation review and native evidence are in `temp/PHIC_PLAN2_REVIEW.md`.
+
+## Console spin feedback — 2026-10-06
+
+- Close-button clicks must work; terminal-focus plain `x` must remain backend input.
+- Tab titles need a short cell limit. The operator suggested 18 or 20; the implemented limit is 20 cells, including ellipsis, without changing saved names.
+- Remember login across launches, without storing the password. The operator explicitly rejected Keychain use. The implementation stores the server-issued session token in a private per-origin file, not the password or derived verifier/hash. It does not use an OS credential manager.
+- Add a read-only Markdown tab beside Diff: the website's configured Markdown directories, including `./temp`, with list and view only. No copy/paste controls.
+- Connected status must fit the chrome palette instead of using a separate green. Backend colors are not changed.
+- Opening a server must sync its existing live panes, including other projects and worktrees.
+
+Implementation and evidence: `temp/PHIC_SPIN_FIXES.md`.
 
 ## Earlier requirements and current implementation
 

@@ -181,6 +181,7 @@ type serverData struct {
 	err           string
 	loaded        bool
 	needAuth      bool
+	loginWarning  string
 	auth          authStatus
 	sessionsCoder string
 	sessionsDir   string
@@ -192,9 +193,10 @@ type serverData struct {
 // tuiModel is the Bubble Tea application model. It owns focus, selection,
 // dialogs, layout, and action state; network work runs in commands.
 type tuiModel struct {
-	version string
-	cfg     config
-	store   *desktopStore
+	version          string
+	cfg              config
+	store            *desktopStore
+	rememberSessions *sessionPersistence
 
 	servers []*serverState
 	active  int
@@ -220,8 +222,9 @@ type tuiModel struct {
 	actors       map[paneKey]*paneActor
 	pendingSpawn map[string]bool
 
-	diff    diffState
-	history historyState
+	diff     diffState
+	markdown markdownState
+	history  historyState
 
 	sessionCursor int
 	sessionSearch textField
@@ -355,12 +358,14 @@ type serverLoadedMsg struct {
 	needAuth bool
 	auth     authStatus
 	err      string
+	warning  string
 }
 
 type loginDoneMsg struct {
-	gen   int
-	index int
-	err   string
+	gen     int
+	index   int
+	err     string
+	warning string
 }
 
 type spawnDoneMsg struct {
@@ -446,6 +451,7 @@ func (m *tuiModel) waitEvent() tea.Cmd {
 
 func (m *tuiModel) loadServerCmd(index int) tea.Cmd {
 	gen := m.gen
+	remember := m.rememberSessions
 	var s *serverState
 	if index >= 0 && index < len(m.servers) {
 		s = m.servers[index]
@@ -456,6 +462,7 @@ func (m *tuiModel) loadServerCmd(index int) tea.Cmd {
 			out.err = "server profile has an invalid origin"
 			return out
 		}
+		s.api.enableRememberedSession(remember)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		out.health = probeHealth(ctx, s)
@@ -465,6 +472,7 @@ func (m *tuiModel) loadServerCmd(index int) tea.Cmd {
 			return out
 		}
 		out.auth = st
+		out.warning = s.api.rememberWarning()
 		if st.Enabled && !st.Authenticated {
 			out.needAuth = true
 			return out
@@ -531,6 +539,7 @@ func (m *tuiModel) loginCmd(index int, status authStatus, password string) tea.C
 		if err := s.api.Login(ctx, status, password); err != nil {
 			out.err = err.Error()
 		}
+		out.warning = s.api.rememberWarning()
 		return out
 	}
 }
@@ -640,9 +649,13 @@ func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 
 // ---- Update ----
 
-func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	oldCols, oldRows := m.terminalSize()
+	oldReaderOrigin, oldReaderDir := m.currentOrigin(), m.markdownDir()
 	defer func() {
+		if m.diff.open && m.diff.markdown && (m.currentOrigin() != oldReaderOrigin || m.markdownDir() != oldReaderDir) {
+			cmd = tea.Batch(cmd, m.refreshMarkdownList())
+		}
 		if c, r := m.terminalSize(); c != oldCols || r != oldRows {
 			m.relayout()
 		}
@@ -664,6 +677,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		if d := m.current(); d != nil && d.loaded && !d.needAuth && d.err == "" && !m.cliApplied {
 			return m.applyServerLoaded(serverLoadedMsg{gen: m.gen, index: m.active, identity: d.identity, coders: d.coders, panes: d.panes, health: d.health})
+		}
+		if m.diff.open && m.diff.markdown {
+			return m, m.reflowMarkdown()
 		}
 		return m, nil
 	case msgPaint:
@@ -693,6 +709,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySessionsLoaded(msg)
 	case diffLoadedMsg:
 		return m.applyDiffLoaded(msg)
+	case markdownLoadedMsg:
+		return m.applyMarkdownLoaded(msg)
 	case storeDoneMsg:
 		return m.applyStoreDone(msg)
 	case paneActionDoneMsg:
@@ -728,6 +746,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 	d.err = msg.err
 	d.needAuth = msg.needAuth
 	d.auth = msg.auth
+	d.loginWarning = msg.warning
 	if msg.err != "" {
 		m.setStatus(msg.err, true)
 		return m, nil
@@ -808,6 +827,9 @@ func (m *tuiModel) applyLoginDone(msg loginDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.closeModal()
 	m.setStatus("signed in", false)
+	if msg.warning != "" {
+		m.setStatus("signed in; could not remember login: "+msg.warning, true)
+	}
 	return m, m.loadServerCmd(msg.index)
 }
 
@@ -1197,9 +1219,7 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 		if seen[p.ID] {
 			continue
 		}
-		if !MatchDir(p.Dir, m.project) {
-			continue
-		}
+		// Live panes belong to the server, not the selected sidebar project.
 		next = append(next, &paneTab{
 			key:   paneKey{Origin: origin, ID: p.ID},
 			view:  p,
@@ -1558,7 +1578,8 @@ func (m *tuiModel) openHelp() {
   Ctrl-] t        focus tabs
   Ctrl-] x        close active terminal (3s Undo)
   Ctrl-] u        undo the most recent close
-  Ctrl-] d        toggle diff
+  Ctrl-] d        toggle reader panel (Diff / Markdown)
+  Ctrl-] M        Markdown file list and viewer
   Ctrl-] h        history browser
   Ctrl-] p        project context
   Ctrl-] w        worktree context

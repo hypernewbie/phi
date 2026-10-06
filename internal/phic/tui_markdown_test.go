@@ -1,0 +1,158 @@
+package phic
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
+	var writes atomic.Int32
+	const dir = "/remote/feature tree"
+	const path = dir + "/temp/notes #1.md"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writes.Add(1)
+			http.Error(w, "read only", 405)
+			return
+		}
+		if r.URL.Query().Get("cwd") != dir {
+			t.Errorf("Markdown cwd is not active remote pane: %q", r.URL.Query().Get("cwd"))
+		}
+		switch r.URL.Path {
+		case "/api/markdown/files":
+			json.NewEncoder(w).Encode([]markdownFile{{Path: path, Name: "notes #1.md", Dir: "./temp"}})
+		case "/api/markdown/file":
+			if r.URL.Query().Get("path") != path {
+				t.Error("file path lost encoding")
+			}
+			fmt.Fprint(w, "# Native Markdown\n\nHello **Phi**.\n\n- one\n- two\n\n```go\nfmt.Println(\"hi\")\n```\n\x1b]52;c;ZXZpbA==\x07")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	m := newModelWithServer(t, srv)
+	defer m.closeAll()
+	m.project = "/wrong-local-project"
+	m.ensureTab(m.currentOrigin(), "p", spawnCapture{title: "remote", project: dir, coder: "shell"})
+	m.diff.open = true
+	m.diff.markdown = true
+	m.focus = focusDiff
+	m.Update(m.refreshMarkdownList()())
+	if len(m.markdown.files) != 1 {
+		t.Fatalf("failed remote list: %+v", m.markdown)
+	}
+	m.Update(m.openMarkdownFile(0)())
+	rendered := m.renderMarkdownPanel()
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, "Native Markdown") || !strings.Contains(plain, "Hello Phi") || m.markdown.err != "" {
+		t.Fatalf("Markdown was not rendered: %q, %s", plain, m.markdown.err)
+	}
+	if strings.Contains(rendered, "\x1b]52;") || strings.Contains(m.markdown.raw, "\x1b") {
+		t.Fatal("source control sequence escaped into client chrome")
+	}
+	if _, cmd := m.handleMarkdownKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd != nil {
+		t.Fatal("Markdown offered clipboard copy")
+	}
+	if m.copyActiveText() != nil {
+		t.Fatal("global copy copied Markdown")
+	}
+	m.handlePaste(tea.PasteMsg{Content: "do not edit or paste"})
+	if strings.Contains(m.markdown.raw, "do not edit") {
+		t.Fatal("Markdown paste mutated content")
+	}
+	if writes.Load() != 0 {
+		t.Fatal("Markdown viewer wrote server state")
+	}
+	m.handleMarkdownKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.markdown.reading {
+		t.Fatal("back did not restore file list")
+	}
+}
+func TestMarkdownResultsAreBoundToOriginCwdAndRequest(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	m.markdown = markdownState{ticket: 2, origin: m.currentOrigin(), dir: m.markdownDir(), loading: true}
+	m.diff.markdown = true
+	valid := markdownLoadedMsg{gen: m.gen, ticket: 2, origin: m.currentOrigin(), dir: m.markdownDir(), files: []markdownFile{{Name: "correct.md"}}}
+	wrong := valid
+	wrong.ticket = 1
+	m.Update(wrong)
+	if !m.markdown.loading {
+		t.Fatal("stale request painted")
+	}
+	wrong = valid
+	wrong.origin = "http://another:7070"
+	m.Update(wrong)
+	if !m.markdown.loading {
+		t.Fatal("other origin painted")
+	}
+	wrong = valid
+	wrong.dir = "/other-project"
+	m.Update(wrong)
+	if !m.markdown.loading {
+		t.Fatal("other cwd painted")
+	}
+	m.Update(valid)
+	if m.markdown.loading || len(m.markdown.files) != 1 {
+		t.Fatal("current list was not applied")
+	}
+}
+func TestMarkdownShiftedPrefixAndTabSwitch(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	m.Update(tea.KeyPressMsg{Code: 0x1d})
+	m.Update(tea.KeyPressMsg{Code: 'm', Text: "M", Mod: tea.ModShift})
+	if m.modal.kind != modalNone || !m.diff.markdown || m.focus != focusDiff {
+		t.Fatal("normalized Shift+M opened Rename instead of Markdown")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.diff.markdown || m.focus != focusDiff {
+		t.Fatal("Tab did not switch to Diff")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.diff.markdown || m.focus != focusDiff {
+		t.Fatal("Tab did not switch back to Markdown")
+	}
+}
+
+func TestMarkdownResizeCannotPaintPreviousFileUnderNewName(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	m.diff.open = true
+	m.diff.markdown = true
+	m.focus = focusDiff
+	m.markdown = markdownState{origin: m.currentOrigin(), dir: m.markdownDir(), raw: "old document", reading: true, path: "/work/temp/old.md", files: []markdownFile{{Path: "/work/temp/new.md"}}}
+	m.openMarkdownFile(0)
+	ticket := m.markdown.ticket
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	if m.markdown.raw != "" || len(m.markdown.lines) != 0 || m.markdown.ticket != ticket {
+		t.Fatal("resize admitted a reflow of the previous file")
+	}
+}
+
+func TestMarkdownHeaderAndRowsAreClickable(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	m.diff.open = true
+	m.focus = focusDiff
+	r := m.diffRect()
+	m.handleReaderClick(r.X+12, r.Y+1)
+	if !m.diff.markdown {
+		t.Fatal("Markdown header click did nothing")
+	}
+	m.markdown.loading = false
+	m.markdown.files = []markdownFile{{Name: "one.md", Path: "/work/temp/one.md"}, {Name: "two.md", Path: "/work/temp/two.md"}}
+	_, cmd := m.handleReaderClick(r.X+3, r.Y+4)
+	if cmd == nil || m.markdown.path != "/work/temp/two.md" {
+		t.Fatal("click did not open selected Markdown row")
+	}
+	m.handleReaderClick(r.X+2, r.Y+1)
+	if m.diff.markdown {
+		t.Fatal("Diff header click did nothing")
+	}
+}

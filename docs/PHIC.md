@@ -41,7 +41,9 @@ Profiles come from the shared desktop file; Go preserves desktop preferences and
 
 The development app's `phi-desktop-electron` and legacy `Phi` files migrate to the same location. Use `--profiles FILE` when desktop userData is elsewhere. `--server URL` selects or adds that server in the same saved list. Desktop edits, including rename, removal, and reordering, load at startup and on reload.
 
-Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored. Each origin owns a separate cookie jar, even for servers on the same host at different ports. A server switch leaves the old backend running. An unavailable server shows an error and keeps the old tabs available.
+Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored. The server-issued session token is saved per origin in `phic-access-sessions/`, beside the selected profiles file. On Unix, the directory is `0700` and each file is `0600`; Windows uses the user-data directory's inherited access permissions. These are private token files, not encrypted files. There is no Keychain, credential-manager dependency, saved password, or saved password hash/verifier. Delete the token directory to forget saved logins. Expiry or a confirmed server rejection prompts again; a network outage does not erase a saved token. Changing the server password invalidates old tokens.
+
+Each origin owns a separate cookie jar, even for servers on the same host at different ports. A server switch leaves the old backend running. An unavailable server shows an error and keeps the old tabs available.
 Selecting the outgoing server returns to its retained terminal state.
 
 An explicit directory argument is the captured launch target and outranks remembered UI state. Absolute remote paths are server paths, not local filesystem checks. A server switch never carries the outgoing server's directory into the next server's context.
@@ -51,9 +53,9 @@ An explicit directory argument is the captured launch target and outranks rememb
 - Server rail with identity glyphs, theme accent, health, and the active server.
 - Context row: project, worktree, coder, New Session, and the diff toggle.
 - Sessions sidebar: New Session, saved sessions for the selected coder/project, then live panes not yet open as tabs. `/` filters; `r` refreshes.
-- Terminal tabs: attached panes, listed live panes, unread marks, exited panes, and `+N` overflow.
+- Terminal tabs: all live panes on the selected server, across projects, with unread marks, exited panes, and `+N` overflow. Titles use at most 20 terminal cells, including an ellipsis; saved titles remain complete.
 - Embedded terminal: copied cells with RGB/indexed colors, attributes, cursor position, and client-side selection.
-- Optional diff panel with refresh, search (`/`, `n`/`N`), and explicit copy (`y`).
+- Optional reader panel with Diff and Markdown tabs. Diff has refresh, search (`/`, `n`/`N`), and explicit copy (`y`); Markdown is list-and-view only.
 - Footer: status, errors, and contextual hints.
 
 Chrome stays intact during cursor movement, clear-screen, scrolling, and alternate-screen output because the application renders a copied frame rather than passing bytes through.
@@ -69,7 +71,8 @@ Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys
 | `Ctrl-] s` | focus sessions (`Enter` open/resume, `n` new, `c` coder, `p` project, `w` worktree) |
 | `Ctrl-] t` | focus tabs (`x` soft close, `X` final close, `u` undo, `r` rename, `p` pin, `m` mark) |
 | `Ctrl-] x` / `u` | close the active terminal / Undo within 3 seconds |
-| `Ctrl-] d` | toggle diff panel |
+| `Ctrl-] d` | toggle reader panel |
+| `Ctrl-] M` | open Markdown list (uppercase `M`) |
 | `Ctrl-] h` | recording browser: `[` earlier page, `]` later page, `x` text/hex |
 | `Ctrl-] p` / `w` / `c` | project / worktree / coder dialogs |
 | `Ctrl-] n` | New Session |
@@ -79,7 +82,13 @@ Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys
 | `Ctrl-] D` | detach the selected tab without DELETE |
 | `Ctrl-] ?` / `q` | help / quit |
 
-Tab cycles chrome regions; Esc returns to the terminal. New Session sends exactly one fresh spawn request with an empty resume identity and the captured project, worktree, coder, and widget geometry. A saved-session row sends its exact resume identity, preferring `session_path` when present, without another picker. `--pane` attaches the exact live pane with no project, coder, or session picker.
+Tab cycles chrome regions; in the reader, it switches Diff/Markdown. Esc returns to the terminal. New Session sends exactly one fresh spawn request with an empty resume identity and the captured project, worktree, coder, and widget geometry. A saved-session row sends its exact resume identity, preferring `session_path` when present, without another picker. `--pane` attaches the exact live pane with no project, coder, or session picker.
+
+## Markdown reader
+
+Click the Markdown tab beside Diff, or press `Ctrl-] M`. Discovery uses the website's existing `/api/markdown/files` endpoint and the active pane's remote cwd. The server's configured Markdown directories apply, including `./temp`; the client does not scan local folders or maintain another directory list.
+
+Click a file or press Enter to view it with Glamour v2. Use arrows, Page Up/Down, or the wheel to navigate. Left/Backspace returns to the list; `r` refreshes. Resize reflows the document. The viewer accepts files up to 1 MiB and strips source terminal commands before rendering. There are no copy/paste, edit, delete, or directory-management controls.
 
 ## Terminal fidelity
 
@@ -93,7 +102,7 @@ Tab cycles chrome regions; Esc returns to the terminal. New Session sends exactl
 
 ## Sessions, tabs, and lifecycle
 
-- Live panes are listed without being seized. Selecting one attaches through Phi's recording at the current widget geometry; it never spawns or resumes a process.
+- Opening a server refreshes its live pane list, including panes from other projects and worktrees. Live panes are listed without being seized. Selecting one attaches through Phi's recording at the current widget geometry; it never spawns or resumes a process.
 - Click `[x] close`, or press `Ctrl-] x`, to close the active terminal with a 3-second Undo grace.
 - Click `[u] undo`, or press `Ctrl-] u`, to restore the same pane during that grace.
 - In tab focus, plain `x` and `u` also work. In terminal focus, plain `x` remains backend input.

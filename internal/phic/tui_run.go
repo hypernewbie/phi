@@ -35,6 +35,7 @@ func RunTUI(ctx context.Context, cfg config, version string) error {
 	}
 	_ = probe.Close()
 	m := newTUIModel(version, cfg, store, servers, selected, termemu.NewGhostty)
+	m.rememberSessions = newSessionPersistence(store.path)
 	defer m.closeAll()
 
 	program := tea.NewProgram(m, tea.WithContext(ctx))
