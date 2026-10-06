@@ -41,7 +41,7 @@ func (m *tuiModel) View() tea.View {
 	v.KeyboardEnhancements.ReportEventTypes = true
 	label := "phic"
 	if s := m.currentServer(); s != nil {
-		label = s.label() + " · phic"
+		label = m.railLabel(s) + " · phic"
 	}
 	v.WindowTitle = sanitizeMetadata(label)
 	if m.focus == focusTerminal && m.modal.kind == modalNone {
@@ -58,11 +58,8 @@ func (m *tuiModel) View() tea.View {
 }
 
 func (m *tuiModel) render() string {
-	if m.width <= 0 || m.height <= 0 {
-		return "phic"
-	}
-	if m.width < 40 || m.height < 10 {
-		return fmt.Sprintf("phic: terminal too small (%d×%d). Need at least 40×10.\nEnlarge the window or press Ctrl-] q to quit.", m.width, m.height)
+	if m.modal.kind == modalMarkdown {
+		return fitScreen(m.renderMarkdownModal(), m.width, m.height)
 	}
 	rail := m.renderRail()
 	context := m.renderContext()
@@ -71,7 +68,7 @@ func (m *tuiModel) render() string {
 	footer := m.renderFooter()
 	base := strings.Join([]string{rail, context, tabs, body, footer}, "\n")
 	if m.modal.kind == modalNone {
-		if m.width < 80 && m.focus == focusSessions {
+		if !m.showSidebar() && m.focus == focusSessions {
 			base = lg.NewCompositor(lg.NewLayer(base), lg.NewLayer(m.renderSidebar()).X(0).Y(3).Z(1)).Render()
 		} else if m.width < 120 && m.diff.open && m.focus == focusDiff {
 			r := m.diffRect()
@@ -92,7 +89,7 @@ func (m *tuiModel) renderRail() string {
 	b.WriteString(lg.NewStyle().Foreground(accent).Bold(true).Render(" Φ "))
 	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
-		label := menuLabel(s.label())
+		label := m.railLabel(s)
 		if i == m.active {
 			b.WriteString(lg.NewStyle().
 				Foreground(accent).Bold(true).
@@ -108,7 +105,7 @@ func (m *tuiModel) renderRail() string {
 	}
 	b.WriteString(lg.NewStyle().Foreground(accent).Render(" [+]"))
 	left := b.String()
-	right := m.connectionLabel()
+	right := lg.NewStyle().Foreground(accent).Render("[▥] [↻]") + " " + m.connectionLabel()
 	gap := m.width - lg.Width(left) - lg.Width(right) - 2
 	if gap < 1 {
 		gap = 1
@@ -119,23 +116,23 @@ func (m *tuiModel) renderRail() string {
 func (m *tuiModel) connectionLabel() string {
 	s := m.currentServer()
 	if s == nil {
-		return lg.NewStyle().Foreground(tuiMuted).Render("no server")
+		return lg.NewStyle().Foreground(tuiMuted).Render("○")
 	}
 	d := m.current()
 	if d != nil && d.needAuth {
-		return lg.NewStyle().Foreground(lg.Color("#fbbf24")).Render("sign in required")
+		return lg.NewStyle().Foreground(lg.Color("#fbbf24")).Render("◇")
 	}
 	if d != nil && d.err != "" {
-		return lg.NewStyle().Foreground(tuiError).Render("error")
+		return lg.NewStyle().Foreground(tuiError).Render("!")
 	}
 	if d != nil && !d.loaded {
-		return lg.NewStyle().Foreground(tuiMuted).Render("connecting…")
+		return lg.NewStyle().Foreground(tuiMuted).Render("◌")
 	}
 	switch s.health {
 	case "up":
-		return lg.NewStyle().Foreground(m.accentColor()).Render("connected")
+		return lg.NewStyle().Foreground(m.accentColor()).Render("●")
 	default:
-		return lg.NewStyle().Foreground(lg.Color("#fbbf24")).Render("unreachable")
+		return lg.NewStyle().Foreground(lg.Color("#fbbf24")).Render("○")
 	}
 }
 
@@ -199,7 +196,7 @@ func (m *tuiModel) renderTabs() string {
 	muted := lg.NewStyle().Foreground(tuiMuted)
 	origin := m.currentOrigin()
 	tabs := m.tabs[origin]
-	prefix := muted.Render(" TERMINALS ")
+	prefix := muted.Render(" ▣ ")
 	suffix := muted.Render(tabControls)
 	if len(tabs) == 0 {
 		return prefix + muted.Render("no open panes — [n] New Session")
@@ -373,7 +370,7 @@ func (m *tuiModel) renderTerminalPanel() string {
 	tab := m.activeTabModel()
 	var lines []string
 	if tab == nil {
-		lines = m.placeholderLines(innerW, innerH, "No pane open. [n] New Session, [s] Sessions.")
+		lines = m.renderEmptyTerminal(innerW, innerH)
 	} else if tab.exited {
 		lines = m.placeholderLines(innerW, innerH, fmt.Sprintf("%s exited (%d). The tab keeps its history; [x] closes it.", tab.label(), tab.exitCode))
 		if frame, ok := tab.actorSnapshot(); ok {
@@ -682,7 +679,10 @@ func (m *tuiModel) renderFooter() string {
 	left := style.Render(" " + status)
 	hints := "Ctrl-] commands  Tab focus  [n] new  [d] diff  [?] help"
 	if m.focus == focusDiff {
-		hints = "Tab Diff/Markdown  ↑↓ scroll  Esc terminal  Ctrl-] commands"
+		hints = "Tab Diff/Markdown  [ ] width  ↑↓ scroll  Esc terminal"
+	}
+	if !m.chromeEscAt.IsZero() {
+		hints = "Esc again: Quit dialog · any other key cancels"
 	}
 	if m.prefix {
 		hints = "prefix: 1-9 servers  b rail  s sessions  t tabs  x close  u undo  d reader  M Markdown  q quit  ? help"
@@ -726,6 +726,8 @@ func (m *tuiModel) renderModal() string {
 			body.WriteString("\n\n")
 			body.WriteString(lg.NewStyle().Foreground(tuiMuted).Render(m.modal.help))
 		}
+	case modalQuit:
+		body.WriteString("Close this console? Server panes are not deleted.\n\n[q] Quit client    [Esc] Cancel\n\nEnter cancels. Nothing closes without confirmation.")
 	case modalPassword:
 		body.WriteString(m.renderField(true))
 	case modalProject:
