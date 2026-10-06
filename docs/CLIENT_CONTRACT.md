@@ -2,7 +2,19 @@
 
 Source of authority: the user's raw journal, not assistant summaries or passing tests.
 
-## What the user asked for
+## TUI redesign direction — 2026-10-06
+
+The user rejected the project → coder → session wizard as unusable, reopened Charm/Bubble Tea, and requested a console version of the website, with a lighter feature set. The user then explicitly requested a terminal-emulator library.
+
+Latest statements:
+
+- "maybe we jut have to go charm / bubble tea. urghh, if so might as well give it a shot. fuck."
+- "ifwe going tui I want basically a console version of the website - lite ofc, not full featured."
+- "yes we need a termemu library find a good one"
+
+These statements supersede the earlier raw-only, no-persistent-panels, no-Charm, and no-emulator architecture exclusions below for the redesign. The website is the product-flow reference; desktop remains the shared server-store reference. Existing transport, authentication boundaries, recording integrity, build/install semantics, and server ownership still matter. The current installed client has not been replaced. Library evaluation and isolated prototypes are recorded in `temp/phic-tui-evaluation/REPORT.md`; they are not proof of a finished replacement.
+
+## Earlier requirements and current implementation
 
 1. Browser terminal output must be correct and lossless, with extremely fast interaction on phones. A terminal that eventually catches up but locks the phone is not acceptable. The user subsequently clarified that the latest server has decent performance and the earlier observation may have used an outdated server. Do not claim a current-version lockup without reproducing it. Test current performance; do not make a speculative terminal rewrite.
 2. Keep complete output in Phi's recording. Bound the resident terminal and defer older history. Do not obtain speed by dropping bytes, skipping arbitrary ANSI prefixes, or making history inaccessible.

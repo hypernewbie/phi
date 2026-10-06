@@ -1,0 +1,65 @@
+{
+  "source": {
+    "name": "libghostty-vt",
+    "upstream": "https://github.com/ghostty-org/ghostty",
+    "commit": "c3203ea4b169a18eb2ccfe92847e426d8afea858",
+    "license": "MIT",
+    "zig_version": "0.16.0",
+    "build": "zig build -Demit-lib-vt -Doptimize=ReleaseSafe",
+    "notes": "Reproduces the artifacts that the TUI evaluation compared against Phi's xterm reference. Building requires Zig 0.16.0; the produced static library does not."
+  },
+  "targets": [
+    {
+      "id": "darwin-arm64",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "static_archive": "darwin-arm64/libghostty-vt.a",
+      "include_dir": "include",
+      "linker_flags": ["-lm", "-lpthread"],
+      "cflags": ["-DGHOSTTY_STATIC"],
+      "artifact": {
+        "sha256": "923dd2f08f119883ef99f0132f0d50cf0a3fb13520d4148b4824ac18bb35fac6",
+        "size": 11022512,
+        "built": "2026-10-06",
+        "host": "macOS arm64 (Zig 0.16.0)",
+        "verified_by": "internal/termemu tests with -tags=termemu_ghostty"
+      }
+    },
+    {
+      "id": "darwin-amd64",
+      "goos": "darwin",
+      "goarch": "amd64",
+      "static_archive": "darwin-amd64/libghostty-vt.a",
+      "include_dir": "include",
+      "linker_flags": ["-lm", "-lpthread"],
+      "cflags": ["-DGHOSTTY_STATIC"]
+    },
+    {
+      "id": "linux-amd64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "static_archive": "linux-amd64/libghostty-vt.a",
+      "include_dir": "include",
+      "linker_flags": ["-lm", "-lpthread", "-ldl"],
+      "cflags": ["-DGHOSTTY_STATIC"]
+    },
+    {
+      "id": "linux-arm64",
+      "goos": "linux",
+      "goarch": "arm64",
+      "static_archive": "linux-arm64/libghostty-vt.a",
+      "include_dir": "include",
+      "linker_flags": ["-lm", "-lpthread", "-ldl"],
+      "cflags": ["-DGHOSTTY_STATIC"]
+    },
+    {
+      "id": "windows-amd64",
+      "goos": "windows",
+      "goarch": "amd64",
+      "static_archive": "windows-amd64/ghostty-vt-static.lib",
+      "include_dir": "include",
+      "linker_flags": [],
+      "cflags": ["-DGHOSTTY_STATIC"]
+    }
+  ]
+}
