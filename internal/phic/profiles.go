@@ -31,6 +31,7 @@ type serverIdentity struct {
 	Hostname   string   `json:"hostname"`
 	Theme      string   `json:"theme_color"`
 	Workspaces []string `json:"workspaces"`
+	ActiveCwd  string   `json:"active_cwd"`
 }
 
 func desktopProfilePaths(configDir string) []string {

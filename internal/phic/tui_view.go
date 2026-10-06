@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lg "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hypernewbie/phi/internal/termemu"
 )
 
@@ -42,7 +43,17 @@ func (m *tuiModel) View() tea.View {
 	if s := m.currentServer(); s != nil {
 		label = s.label() + " · phic"
 	}
-	v.WindowTitle = label
+	v.WindowTitle = sanitizeMetadata(label)
+	if m.focus == focusTerminal && m.modal.kind == modalNone {
+		if tab := m.activeTabModel(); tab != nil && !tab.exited {
+			if frame, ok := tab.actorSnapshot(); ok && !frame.Cursor.Hidden {
+				r := m.terminalInner()
+				if frame.Cursor.X >= 0 && frame.Cursor.X < r.W && frame.Cursor.Y >= 0 && frame.Cursor.Y < r.H {
+					v.Cursor = tea.NewCursor(r.X+frame.Cursor.X, r.Y+frame.Cursor.Y)
+				}
+			}
+		}
+	}
 	return v
 }
 
@@ -59,10 +70,18 @@ func (m *tuiModel) render() string {
 	body := m.renderBody()
 	footer := m.renderFooter()
 	base := strings.Join([]string{rail, context, tabs, body, footer}, "\n")
-	if m.modal.kind != modalNone {
-		return m.overlayModal(base)
+	if m.modal.kind == modalNone {
+		if m.width < 80 && m.focus == focusSessions {
+			base = lg.NewCompositor(lg.NewLayer(base), lg.NewLayer(m.renderSidebar()).X(0).Y(3).Z(1)).Render()
+		} else if m.width < 120 && m.diff.open && m.focus == focusDiff {
+			r := m.diffRect()
+			base = lg.NewCompositor(lg.NewLayer(base), lg.NewLayer(m.renderDiffPanel()).X(r.X).Y(r.Y).Z(1)).Render()
+		}
 	}
-	return base
+	if m.modal.kind != modalNone {
+		base = m.overlayModal(base)
+	}
+	return fitScreen(base, m.width, m.height)
 }
 
 // ---- chrome ----
@@ -73,7 +92,7 @@ func (m *tuiModel) renderRail() string {
 	b.WriteString(lg.NewStyle().Foreground(accent).Bold(true).Render(" Φ "))
 	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
-		label := s.label()
+		label := menuLabel(s.label())
 		if i == m.active {
 			b.WriteString(lg.NewStyle().
 				Foreground(accent).Bold(true).
@@ -129,17 +148,17 @@ func (m *tuiModel) renderContext() string {
 		}
 		return lg.NewStyle().Foreground(accent).Render(s)
 	}
-	project := menuLabel(m.project)
+	project := compactContextPath(m.project, 14)
 	if project == "" {
 		project = "(choose project)"
 	}
-	worktree := menuLabel(m.worktree)
+	worktree := compactContextPath(m.worktree, 10)
 	if worktree == "" {
 		worktree = "default"
 	}
 	coder := "—"
 	if c, ok := m.selectedCoder(); ok {
-		coder = menuLabel(c.Name)
+		coder = truncateCells(menuLabel(c.Name), 12)
 	}
 	parts := []string{
 		muted.Render("Project:") + " " + focus(project) + muted.Render(" [p]"),
@@ -147,7 +166,13 @@ func (m *tuiModel) renderContext() string {
 		muted.Render("Coder:") + " " + focus(coder) + muted.Render(" [c]"),
 		lg.NewStyle().Foreground(accent).Render("[n] New Session"),
 	}
-	line := " " + strings.Join(parts, "   ")
+	if m.width < 100 {
+		parts = []string{"P: " + project + " [p]", "W: " + worktree + " [w]", "C: " + coder + " [c]", "[n] New"}
+	}
+	if m.width < 70 {
+		parts = []string{"P: " + truncateCells(project, 8) + " [p]", "C: " + truncateCells(coder, 8) + " [c]", "[n] New"}
+	}
+	line := " " + strings.Join(parts, "  ")
 	diffLabel := "Diff [d]"
 	if m.diff.open {
 		diffLabel = "Diff ● [d]"
@@ -185,12 +210,13 @@ func (m *tuiModel) renderTabs() string {
 		if t.closing {
 			mark = "✕"
 		}
-		label := " " + mark + " " + t.label() + " "
+		title := truncateCells(t.label(), max(8, m.width-48))
+		label := " " + mark + " " + title + " "
 		if t.unread && i != active {
-			label = " " + mark + " " + t.label() + "• "
+			label = " " + mark + " " + title + "• "
 		}
 		if t.view.Pinned {
-			label = " " + mark + " " + t.label() + " ⌂ "
+			label = " " + mark + " " + title + " ⌂ "
 		}
 		labels[i] = label
 		widths[i] = lg.Width(label)
@@ -258,8 +284,8 @@ func (m *tuiModel) panelStyle(w, h int, focused bool) lg.Style {
 	return lg.NewStyle().
 		Border(lg.NormalBorder()).
 		BorderForeground(border).
-		Width(w).
-		Height(h)
+		Width(w + 2).
+		Height(h + 2)
 }
 
 // ---- sidebar ----
@@ -278,8 +304,10 @@ func (m *tuiModel) renderSidebar() string {
 	lines = append(lines, lg.NewStyle().Foreground(accent).Bold(true).Render(title))
 	lines = append(lines, "")
 	rows := m.sidebarRows()
-	for i, row := range rows {
-		if i >= innerH-3 {
+	start := m.sidebarStart()
+	for i := start; i < len(rows); i++ {
+		row := rows[i]
+		if i-start >= innerH-3 {
 			lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("…"))
 			break
 		}
@@ -289,13 +317,13 @@ func (m *tuiModel) renderSidebar() string {
 			text = "+ New Session"
 		case rowSession:
 			when := row.session.TimeUpdated.Format("01-02")
-			text = "↩ " + row.label + "  " + when
+			text = "↩ " + menuLabel(row.label) + "  " + when
 		case rowLivePane:
 			attached := ""
 			if row.pane.ActiveWSCount > 0 {
 				attached = fmt.Sprintf(" (attached x%d)", row.pane.ActiveWSCount)
 			}
-			text = "● " + row.label + attached
+			text = "● " + menuLabel(row.label) + attached
 		}
 		if i == m.sessionCursor && m.focus == focusSessions {
 			lines = append(lines, lg.NewStyle().Foreground(accent).Background(lg.Color("#1d1f27")).Render("› "+text))
@@ -312,10 +340,18 @@ func (m *tuiModel) renderSidebar() string {
 		lines = lines[:innerH]
 	}
 	content := strings.Join(lines, "\n")
-	return m.panelStyle(innerW, innerH, m.focus == focusSessions).Render(content)
+	return m.panelStyle(innerW, innerH, m.focus == focusSessions).Render(fitScreen(content, innerW, innerH))
 }
 
 func tuiFgColor() color.Color { return lg.Color(tuiFgDefault) }
+
+func compactContextPath(path string, width int) string {
+	path = strings.TrimRight(menuLabel(path), "/\\")
+	if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
+		path = path[i+1:]
+	}
+	return truncateCells(path, width)
+}
 
 // ---- terminal ----
 
@@ -354,7 +390,7 @@ func (t *paneTab) actorSnapshot() (termemu.Frame, bool) {
 
 func (m *tuiModel) placeholderLines(w, h int, text string) []string {
 	lines := make([]string, 0, h)
-	lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render(text))
+	lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render(truncateCells(text, w)))
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
@@ -368,7 +404,7 @@ type cellStyleKey struct {
 	bold      bool
 	faint     bool
 	italic    bool
-	underline bool
+	underline termemu.Underline
 	strike    bool
 	inverse   bool
 	selected  bool
@@ -416,8 +452,8 @@ func styleForKey(k cellStyleKey) lg.Style {
 	if k.italic {
 		st = st.Italic(true)
 	}
-	if k.underline {
-		st = st.Underline(true)
+	if k.underline != termemu.UnderlineNone {
+		st = st.UnderlineStyle(lg.Underline(k.underline))
 	}
 	if k.strike {
 		st = st.Strikethrough(true)
@@ -438,6 +474,7 @@ func (m *tuiModel) renderFrameLines(tab *paneTab, frame termemu.Frame, w, h int)
 		row := frame.Cells[y]
 		var b strings.Builder
 		width := 0
+		endCol := 0
 		runStart := 0
 		var runKey cellStyleKey
 		flush := func(end int) {
@@ -476,7 +513,7 @@ func (m *tuiModel) renderFrameLines(tab *paneTab, frame termemu.Frame, w, h int)
 				fg: c.Fg.Value, bg: c.Bg.Value,
 				fgKind: c.Fg.Kind, bgKind: c.Bg.Kind,
 				bold: c.Bold, faint: c.Faint, italic: c.Italic,
-				underline: c.Underline != termemu.UnderlineNone,
+				underline: c.Underline,
 				strike:    c.Strikethrough, inverse: c.Inverse,
 				selected: selected,
 			}
@@ -488,18 +525,22 @@ func (m *tuiModel) renderFrameLines(tab *paneTab, frame termemu.Frame, w, h int)
 					styles[key] = styleForKey(key)
 				}
 			}
+			if width+c.Width > w {
+				break
+			}
 			width += max(1, c.Width)
+			endCol = x + 1
 			if width >= w {
 				break
 			}
 		}
-		flush(len(row))
+		flush(endCol)
 		rendered := b.String()
 		lineWidth := lg.Width(rendered)
 		if lineWidth < w {
 			rendered += strings.Repeat(" ", w-lineWidth)
 		}
-		lines = append(lines, rendered)
+		lines = append(lines, truncateCells(rendered, w))
 	}
 	return lines
 }
@@ -566,7 +607,7 @@ func (m *tuiModel) renderDiffPanel() string {
 			start = max(0, len(m.diff.lines)-1)
 		}
 		for i := 0; i < visible && start+i < len(m.diff.lines); i++ {
-			line := m.diff.lines[start+i]
+			line := strings.ReplaceAll(menuLabel(ansi.Strip(m.diff.lines[start+i])), "\\t", "    ")
 			style := lg.NewStyle().Foreground(tuiFgColor())
 			switch {
 			case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
@@ -597,27 +638,28 @@ func (m *tuiModel) renderDiffPanel() string {
 }
 
 func truncateCells(s string, w int) string {
-	var b strings.Builder
-	width := 0
-	for _, r := range s {
-		rw := 1
-		if r > 0x1100 {
-			rw = 2
-		}
-		if width+rw > w {
-			break
-		}
-		b.WriteRune(r)
-		width += rw
+	return ansi.Truncate(s, max(0, w), "")
+}
+
+func fitScreen(s string, w, h int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > h {
+		lines = lines[:h]
 	}
-	return b.String()
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	for i := range lines {
+		lines[i] = truncateCells(lines[i], w)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ---- footer ----
 
 func (m *tuiModel) renderFooter() string {
 	accent := m.accentColor()
-	status := m.status
+	status := menuLabel(m.status)
 	style := lg.NewStyle().Foreground(tuiMuted)
 	if m.statusErr {
 		style = lg.NewStyle().Foreground(tuiError)
@@ -693,7 +735,7 @@ func (m *tuiModel) renderModal() string {
 	}
 	footer := "\n\n" + lg.NewStyle().Foreground(tuiMuted).Render("Enter confirm   Esc cancel")
 	if m.modal.kind == modalHistory {
-		footer = "\n\n" + lg.NewStyle().Foreground(tuiMuted).Render("↑↓ scroll   [y] copy   Esc close")
+		footer = "\n\n" + lg.NewStyle().Foreground(tuiMuted).Render("↑↓ scroll  [/] earlier/later  x hex  y copy  Esc close")
 	}
 	content := body.String() + footer
 	return lg.NewStyle().
@@ -714,8 +756,8 @@ func (m *tuiModel) renderField(masked bool) string {
 	if cursor > len(runes) {
 		cursor = len(runes)
 	}
-	before := string(runes[:cursor])
-	after := string(runes[cursor:])
+	before := menuLabel(string(runes[:cursor]))
+	after := menuLabel(string(runes[cursor:]))
 	return lg.NewStyle().Foreground(tuiFgColor()).Render("  "+before) +
 		lg.NewStyle().Reverse(true).Render(" ") +
 		lg.NewStyle().Foreground(tuiFgColor()).Render(after)
@@ -760,6 +802,7 @@ func (m *tuiModel) renderHistory() string {
 		start = max(0, len(m.history.lines)-1)
 	}
 	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Source bytes [%d,%d) of %d · text/hex\n", m.history.start, m.history.end, m.history.head))
 	for i := 0; i < height && start+i < len(m.history.lines); i++ {
 		line := m.history.lines[start+i]
 		if lg.Width(line) > width {

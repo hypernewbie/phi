@@ -60,7 +60,8 @@ func TestTUIBackendFocusReceivesControlKeys(t *testing.T) {
 		}
 		return st, nil
 	}
-	attachPaneForTest(t, m)
+	tab := attachPaneForTest(t, m)
+	waitFor(t, "backend input connection", func() bool { return tab.actor.getConn() != nil })
 
 	keys := []tea.Key{
 		{Code: 'c', Mod: tea.ModCtrl, BaseCode: 'c'},

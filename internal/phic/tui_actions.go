@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hypernewbie/phi/internal/termemu"
 )
 
@@ -75,6 +76,19 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.prefix {
 		return m.handlePrefixKey(msg)
+	}
+	k := msg.Key()
+	if (k.Code == ']' && k.Mod.Contains(tea.ModCtrl)) || k.Code == 0x1d {
+		m.prefix = true
+		return m, nil
+	}
+	if k.Code == tea.KeyTab && m.focus != focusTerminal {
+		delta := 1
+		if k.Mod.Contains(tea.ModShift) {
+			delta = -1
+		}
+		m.cycleFocus(delta)
+		return m, nil
 	}
 	switch m.focus {
 	case focusTerminal:
@@ -176,6 +190,15 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.persistIntent()
 	case 'h':
 		return m, m.openHistory()
+	case 'D':
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.close()
+			tab.actor = nil
+			tab.attached = false
+			delete(m.actors, tab.key)
+			m.setStatus("detached; the server's normal disconnect grace applies", false)
+		}
+		return m, nil
 	case 'p':
 		m.openProjectModal()
 	case 'w':
@@ -351,6 +374,7 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.activateCurrentTab()
 		}
 	case tea.KeyEnter:
+		m.activateCurrentTab()
 		m.focus = focusTerminal
 	case tea.KeyEscape:
 		m.focus = focusTerminal
@@ -485,6 +509,16 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.history.scroll < len(m.history.lines)-1 {
 				m.history.scroll++
 			}
+		case '[':
+			if m.history.start > 0 {
+				return m, m.historyPage(m.history.start)
+			}
+		case ']':
+			if m.history.end < m.history.head {
+				return m, m.historyPage(min(m.history.head, m.history.end+historyWindowBytes))
+			}
+		case 'x':
+			m.toggleHistoryHex()
 		case tea.KeyPgUp:
 			m.history.scroll = max(0, m.history.scroll-10)
 		case tea.KeyPgDown:
@@ -510,6 +544,19 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.modal.busy {
 		return m, nil
 	}
+	if k.Mod.Contains(tea.ModCtrl) {
+		switch k.Code {
+		case 'u':
+			m.modal.field = textField{}
+			return m, nil
+		case 'a':
+			m.modal.field.home()
+			return m, nil
+		case 'e':
+			m.modal.field.end()
+			return m, nil
+		}
+	}
 	switch k.Code {
 	case tea.KeyEnter:
 		return m.submitModal()
@@ -518,12 +565,12 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.modal.cursor = (m.modal.cursor + 1) % len(m.modal.items)
 		}
 		return m, nil
-	case tea.KeyUp, 'k':
+	case tea.KeyUp:
 		if len(m.modal.items) > 0 && m.modal.cursor > 0 {
 			m.modal.cursor--
 		}
 		return m, nil
-	case tea.KeyDown, 'j':
+	case tea.KeyDown:
 		if len(m.modal.items) > 0 && m.modal.cursor < len(m.modal.items)-1 {
 			m.modal.cursor++
 		}
@@ -549,6 +596,9 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if k.Text != "" && (m.modal.kind == modalAddServer || m.modal.kind == modalRenameServer || m.modal.kind == modalRenamePane || m.modal.kind == modalPassword || m.modal.kind == modalProject) {
 		m.modal.field.insert(k.Text)
+		if m.modal.kind == modalProject {
+			m.modal.cursor = -1
+		}
 	}
 	return m, nil
 }
@@ -602,7 +652,12 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 			m.modal.err = "choose a project or enter an absolute server path"
 			return m, nil
 		}
+		if !serverAbsolutePath(value) {
+			m.modal.err = "enter an absolute server path"
+			return m, nil
+		}
 		m.project = value
+		m.worktree = ""
 		m.closeModal()
 		m.focus = focusTerminal
 		m.setStatus("project: "+menuLabel(value), false)
@@ -613,7 +668,7 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 			m.setStatus("worktree: "+menuLabel(m.worktree), false)
 		}
 		m.closeModal()
-		return m, m.persistIntent()
+		return m, tea.Batch(m.persistIntent(), m.refreshSessions(), m.refreshDiff())
 	case modalCoder:
 		if m.modal.cursor >= 0 && m.modal.cursor < len(m.modal.items) {
 			m.coderIdx = m.modal.cursor
@@ -635,8 +690,11 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	if m.modal.kind != modalNone {
 		switch m.modal.kind {
-		case modalAddServer, modalRenameServer, modalPassword, modalProject:
+		case modalAddServer, modalRenameServer, modalRenamePane, modalPassword, modalProject:
 			m.modal.field.insert(msg.Content)
+			if m.modal.kind == modalProject {
+				m.modal.cursor = -1
+			}
 		}
 		return m, nil
 	}
@@ -676,12 +734,23 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					action = termemu.MouseWheelDown
 				}
 				tab.actor.sendMouse(action, termemu.MouseNone, teaMods(mouse.Mod), mouse.X-inner.X, mouse.Y-inner.Y)
+			} else if tab != nil && tab.actor != nil {
+				delta := -3
+				if mouse.Button == tea.MouseWheelDown {
+					delta = 3
+				}
+				tab.actor.scroll(delta)
 			}
 		}
 		return m, nil
 	}
 
 	if _, isMotion := msg.(tea.MouseMotionMsg); isMotion {
+		if m.mouseCapture || (inTerminal && !m.selection.active) {
+			if tab := m.activeTabModel(); tab != nil && tab.actor != nil && tab.actor.mouseOwned() {
+				tab.actor.sendMouse(termemu.MouseMotion, m.mouseButton, teaMods(mouse.Mod), mouse.X-inner.X, mouse.Y-inner.Y)
+			}
+		}
 		if m.selection.active {
 			m.selection.end = cellPos{X: mouse.X - inner.X, Y: mouse.Y - inner.Y}
 			return m, nil
@@ -689,12 +758,18 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if _, isRelease := msg.(tea.MouseReleaseMsg); isRelease {
+		if m.mouseCapture {
+			if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+				tab.actor.sendMouse(termemu.MouseRelease, m.mouseButton, teaMods(mouse.Mod), mouse.X-inner.X, mouse.Y-inner.Y)
+			}
+			m.mouseCapture = false
+		}
 		if m.selection.active {
 			m.selection.end = cellPos{X: mouse.X - inner.X, Y: mouse.Y - inner.Y}
 			text := m.selectionText()
 			m.selection = selectionState{}
 			if text != "" {
-				m.setStatus(fmt.Sprintf("copied %d characters", len([]rune(text))), false)
+				m.setStatus(fmt.Sprintf("copy requested for %d characters", len([]rune(text))), false)
 				return m, tea.SetClipboard(text)
 			}
 			return m, nil
@@ -707,12 +782,24 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case mouse.Y == 0:
+		plain := ansi.Strip(m.renderRail())
+		if at := strings.Index(plain, "[+]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+3 {
+			m.openAddServer()
+			return m, nil
+		}
 		m.focus = focusRail
 		if index, ok := m.railHit(mouse.X); ok {
 			return m, m.switchServer(index)
 		}
 		return m, nil
 	case mouse.Y == 1:
+		plain := ansi.Strip(m.renderContext())
+		if at := strings.Index(plain, "[n]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+len("[n] New Session") {
+			return m, m.newSession()
+		}
+		if at := strings.Index(plain, "[w]"); at >= 0 && mouse.X >= max(0, ansi.StringWidth(plain[:at])-15) && mouse.X <= ansi.StringWidth(plain[:at])+3 {
+			return m, m.openWorktreeModal()
+		}
 		if mouse.X >= m.width-10 {
 			m.diff.open = !m.diff.open
 			if m.diff.open {
@@ -738,9 +825,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.showSidebar() && mouse.X < 27 {
+	if (m.showSidebar() || (m.width < 80 && m.focus == focusSessions)) && mouse.X < 27 {
 		m.focus = focusSessions
-		row := mouse.Y - 4 // body starts at row 3; sidebar content starts one row lower
+		row := mouse.Y - 6 + m.sidebarStart() // border, heading, blank row
 		rows := m.sidebarRows()
 		if row >= 0 && row < len(rows) {
 			m.sessionCursor = row
@@ -758,8 +845,16 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if tab == nil || tab.actor == nil {
 			return m, nil
 		}
-		if tab.actor.mouseOwned() {
-			tab.actor.sendMouse(termemu.MousePress, termemu.MouseLeft, teaMods(mouse.Mod), mouse.X-inner.X, mouse.Y-inner.Y)
+		if tab.actor.mouseOwned() && !mouse.Mod.Contains(tea.ModShift) {
+			button := termemu.MouseLeft
+			if mouse.Button == tea.MouseRight {
+				button = termemu.MouseRight
+			}
+			if mouse.Button == tea.MouseMiddle {
+				button = termemu.MouseMiddle
+			}
+			m.mouseCapture, m.mouseButton = true, button
+			tab.actor.sendMouse(termemu.MousePress, button, teaMods(mouse.Mod), mouse.X-inner.X, mouse.Y-inner.Y)
 			return m, nil
 		}
 		m.selection = selectionState{active: true, start: cellPos{X: mouse.X - inner.X, Y: mouse.Y - inner.Y}, end: cellPos{X: mouse.X - inner.X, Y: mouse.Y - inner.Y}}
@@ -769,10 +864,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) railHit(x int) (int, bool) {
-	offset := 2 // "Φ "
+	offset := 3 // " Φ "
+	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
-		label := " " + s.label() + " "
-		w := len([]rune(label)) + 1
+		label := " " + glyphs[i] + " " + s.label() + " "
+		w := ansi.StringWidth(label)
 		if x >= offset && x < offset+w {
 			return i, true
 		}
@@ -782,14 +878,51 @@ func (m *tuiModel) railHit(x int) (int, bool) {
 }
 
 func (m *tuiModel) tabHit(x int) (int, bool) {
-	offset := 1
-	for i, t := range m.tabs[m.currentOrigin()] {
-		label := " " + t.label() + " "
-		w := len([]rune(label)) + 2
-		if x >= offset && x < offset+w {
+	tabs := m.tabs[m.currentOrigin()]
+	if len(tabs) == 0 {
+		return 0, false
+	}
+	active := m.activeTab[m.currentOrigin()]
+	if active < 0 || active >= len(tabs) {
+		active = 0
+	}
+	widths := make([]int, len(tabs))
+	total := 0
+	for i, t := range tabs {
+		title := truncateCells(t.label(), max(8, m.width-48))
+		label := " ● " + title + " "
+		if t.unread && i != active {
+			label = " ● " + title + "• "
+		}
+		if t.view.Pinned {
+			label = " ● " + title + " ⌂ "
+		}
+		widths[i] = ansi.StringWidth(label)
+		total += widths[i]
+	}
+	avail := m.width - ansi.StringWidth(" TERMINALS ") - ansi.StringWidth(" [x] close  [u] undo") - 6
+	start, end := 0, len(tabs)
+	if total > avail {
+		start, end = active, active+1
+		used := widths[active]
+		for end < len(tabs) && used+widths[end] <= avail-4 {
+			used += widths[end]
+			end++
+		}
+		for start > 0 && used+widths[start-1] <= avail-4 {
+			start--
+			used += widths[start]
+		}
+	}
+	offset := ansi.StringWidth(" TERMINALS ")
+	if start > 0 {
+		offset += ansi.StringWidth(fmt.Sprintf("+%d ", start))
+	}
+	for i := start; i < end; i++ {
+		if x >= offset && x < offset+widths[i] {
 			return i, true
 		}
-		offset += w
+		offset += widths[i]
 	}
 	return 0, false
 }
@@ -848,7 +981,7 @@ func (m *tuiModel) selectionText() string {
 }
 
 func (m *tuiModel) copyActiveText() tea.Cmd {
-	if m.focus == focusDiff || (m.diff.open && m.diff.text != "") {
+	if m.focus == focusDiff {
 		if m.diff.text != "" {
 			return tea.SetClipboard(m.diff.text)
 		}
@@ -914,10 +1047,27 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 	}
 	if m.active == index {
 		m.focus = focusTerminal
+		if d := m.current(); d != nil && d.needAuth {
+			m.openPassword(index, d.auth)
+			return nil
+		}
+		if d := m.current(); d == nil || d.err != "" || !d.loaded {
+			return m.loadServerCmd(index)
+		}
+		m.activateCurrentTab()
 		return nil
 	}
 	persist := m.persistIntent()
+	if d := m.current(); d != nil {
+		d.project, d.worktree, d.coderID = m.project, m.worktree, m.selectedCoderID()
+	}
+	m.gen++
 	m.active = index
+	m.project, m.worktree = "", ""
+	if d := m.current(); d != nil {
+		m.project, m.worktree = d.project, d.worktree
+	}
+	m.quitOnce = false
 	m.focus = focusTerminal
 	m.diff = diffState{open: m.diff.open}
 	m.coderIdx = 0
@@ -974,15 +1124,9 @@ func (m *tuiModel) shellCoderID() string {
 // and refreshes the pane list afterward.
 func (m *tuiModel) paneActionCmd(key paneKey, status string, fn func(ctx context.Context, api *apiClient) error) tea.Cmd {
 	gen := m.gen
+	s := m.serverForOrigin(key.Origin)
 	return func() tea.Msg {
 		out := paneActionDoneMsg{gen: gen, status: status}
-		var s *serverState
-		for _, candidate := range m.servers {
-			if candidate.api != nil && candidate.api.base.String() == key.Origin {
-				s = candidate
-				break
-			}
-		}
 		if s == nil {
 			out.err = "the pane origin is no longer available"
 			return out
@@ -999,7 +1143,7 @@ func (m *tuiModel) paneActionCmd(key paneKey, status string, fn func(ctx context
 // spawnForCoder captures origin, project, worktree, coder, presentation, and
 // widget geometry at activation. One POST creates a fresh pane with an empty
 // resume identity.
-func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.Cmd {
+func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string, titles ...string) tea.Cmd {
 	origin := m.currentOrigin()
 	if origin == "" {
 		m.setStatus("select a server first", true)
@@ -1020,6 +1164,10 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.
 		return nil
 	}
 	cols, rows := m.terminalSize()
+	if cols <= 0 || rows <= 0 {
+		m.setStatus("enlarge the terminal before starting a pane", true)
+		return nil
+	}
 	cap := spawnCapture{
 		origin:    origin,
 		index:     m.active,
@@ -1030,6 +1178,20 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.
 		sessionID: sessionID,
 		cols:      cols,
 		rows:      rows,
+	}
+	if len(titles) > 0 {
+		cap.title = titles[0]
+	} else if sessionID == "" {
+		name := coder
+		if d := m.current(); d != nil {
+			for _, c := range d.coders {
+				if c.ID == coder {
+					name = c.Name
+					break
+				}
+			}
+		}
+		cap.title = "+ " + name
 	}
 	m.pendingSpawn[origin] = true
 	m.setStatus("starting "+coder+"…", false)
@@ -1051,7 +1213,7 @@ func (m *tuiModel) resumeSession(s Session) tea.Cmd {
 		m.setStatus("saved session has no resume identity", true)
 		return nil
 	}
-	return m.spawnForCoder(coder, false, resumeID)
+	return m.spawnForCoder(coder, false, resumeID, s.Title)
 }
 
 // openPaneDirect implements --pane: attach the exact pane without a project,

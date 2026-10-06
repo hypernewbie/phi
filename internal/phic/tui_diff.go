@@ -1,28 +1,28 @@
 package phic
 
 import (
-	"context"
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
+	"context"
+	"encoding/hex"
+	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hypernewbie/phi/internal/termemu"
+	"strings"
+	"time"
 )
 
-// diffState is the optional diff/status panel. It never replaces the terminal
-// emulator and a failed request leaves the terminal usable.
 type diffState struct {
-	open         bool
-	text         string
-	lines        []string
-	loading      bool
-	err          string
-	scroll       int
-	origin       string
-	project      string
-	search       textField
-	searchActive bool
-	matches      []int
-	matchCursor  int
+	open            bool
+	text            string
+	lines           []string
+	loading         bool
+	err             string
+	scroll          int
+	origin, project string
+	search          textField
+	searchActive    bool
+	matches         []int
+	matchCursor     int
 }
 
 func (d *diffState) recomputeMatches() {
@@ -30,9 +30,7 @@ func (d *diffState) recomputeMatches() {
 	d.matches = nil
 	query := strings.ToLower(d.search.value)
 	if query == "" {
-		if d.scroll >= len(d.lines) {
-			d.scroll = max(0, len(d.lines)-1)
-		}
+		d.scroll = min(d.scroll, max(0, len(d.lines)-1))
 		return
 	}
 	for i, line := range d.lines {
@@ -45,7 +43,6 @@ func (d *diffState) recomputeMatches() {
 		d.scroll = d.matches[0]
 	}
 }
-
 func (d *diffState) nextMatch(delta int) {
 	if len(d.matches) == 0 {
 		return
@@ -53,9 +50,6 @@ func (d *diffState) nextMatch(delta int) {
 	d.matchCursor = (d.matchCursor + delta + len(d.matches)) % len(d.matches)
 	d.scroll = d.matches[d.matchCursor]
 }
-
-// refreshDiff requests the raw diff for the captured origin and project. A
-// late result for another origin or project cannot overwrite this one.
 func (m *tuiModel) refreshDiff() tea.Cmd {
 	if !m.diff.open {
 		return nil
@@ -69,31 +63,35 @@ func (m *tuiModel) refreshDiff() tea.Cmd {
 	return m.diffCmd(origin, m.project)
 }
 
-// historyState is a bounded recording browser. It uses its own emulator so
-// opening history cannot reset a live alternate-screen application.
+// The retained live core supplies normal scrollback. The archive drawer is a
+// bounded source-byte browser, not a fake VT screen initialized mid-sequence.
+// Hex view and contiguous earlier/later pages keep every source byte inspectable.
 type historyState struct {
-	open    bool
-	loading bool
-	err     string
-	text    string
-	lines   []string
-	scroll  int
-	key     paneKey
+	open, loading    bool
+	err, text        string
+	lines            []string
+	scroll           int
+	key              paneKey
+	start, end, head uint64
+	ticket           int
+	raw              []byte
+	hex              bool
 }
-
 type historyLoadedMsg struct {
-	gen  int
-	key  paneKey
-	text string
-	err  string
+	gen        int
+	key        paneKey
+	text, err  string
+	start, end uint64
+	ticket     int
+	raw        []byte
 }
 
 func (m *tuiModel) applyHistoryLoaded(msg historyLoadedMsg) (tea.Model, tea.Cmd) {
-	if msg.gen != m.gen {
+	if msg.gen != m.gen || m.modal.kind != modalHistory || m.history.key != msg.key || m.history.ticket != msg.ticket {
 		return m, nil
 	}
 	m.history.loading = false
-	m.history.key = msg.key
+	m.history.start, m.history.end, m.history.raw = msg.start, msg.end, msg.raw
 	if msg.err != "" {
 		m.history.err = msg.err
 		return m, nil
@@ -101,10 +99,13 @@ func (m *tuiModel) applyHistoryLoaded(msg historyLoadedMsg) (tea.Model, tea.Cmd)
 	m.history.err = ""
 	m.history.text = msg.text
 	m.history.lines = splitLines(msg.text)
-	m.history.scroll = max(0, len(m.history.lines)-1)
+	m.history.scroll = 0
+	if m.history.hex {
+		m.history.hex = false
+		m.toggleHistoryHex()
+	}
 	return m, nil
 }
-
 func (m *tuiModel) applyWorktrees(msg worktreesMsg) (tea.Model, tea.Cmd) {
 	if msg.gen != m.gen || msg.origin != m.currentOrigin() || msg.project != m.project {
 		return m, nil
@@ -124,13 +125,10 @@ func (m *tuiModel) applyWorktrees(msg worktreesMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// historyWindowBytes bounds a history fetch so browsing cannot parse an
-// unbounded recording or fill an unbounded client cache.
-const historyWindowBytes = 4 << 20
+// At most 8192 newline bytes => at most 8193 text rows. No archive copy on disk.
+const historyWindowBytes = 8 << 10
 
-// fetchHistoryText replays a bounded tail of the recording into a separate
-// browsing emulator and returns its visible text.
-func fetchHistoryText(ctx context.Context, api *apiClient, paneID string, epoch, head uint64, build func(termemu.Options) (termemu.Terminal, error)) (string, error) {
+func fetchHistoryText(ctx context.Context, api *apiClient, paneID string, epoch, head uint64, _ func(termemu.Options) (termemu.Terminal, error)) (string, error) {
 	if head == 0 {
 		return "", nil
 	}
@@ -138,52 +136,68 @@ func fetchHistoryText(ctx context.Context, api *apiClient, paneID string, epoch,
 	if head > historyWindowBytes {
 		start = head - historyWindowBytes
 	}
-	if build == nil {
-		build = termemu.NewGhostty
-	}
-	emu, err := build(termemu.Options{
-		Cols:            120,
-		Rows:            40,
-		ScrollbackBytes: 8 << 20,
-		ScrollbackLines: 2000,
-	})
+	h, b, err := api.recording(ctx, paneID, epoch, start, head)
 	if err != nil {
 		return "", err
 	}
-	defer emu.Close()
-	from := start
-	for from < head {
-		end := pageEnd(from, head)
-		h, data, err := api.recording(ctx, paneID, epoch, from, end)
+	if h.End != head {
+		return "", errInvalidRecording
+	}
+	return recordingText(b), nil
+}
+func recordingText(b []byte) string {
+	// Text is an explicitly lossy presentation. Hex view retains exact source
+	// bytes, including partial UTF-8, escape commands, and control characters.
+	text := ansi.Strip(string(b))
+	var out strings.Builder
+	for _, r := range text {
+		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f && !(r >= 0x80 && r <= 0x9f) {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+func (m *tuiModel) historyPage(end uint64) tea.Cmd {
+	key := m.history.key
+	s := m.serverForOrigin(key.Origin)
+	if s == nil || s.api == nil {
+		return nil
+	}
+	tab := m.findTab(key)
+	if tab == nil || tab.actor == nil {
+		return nil
+	}
+	_, _, epoch, _, _, _ := tab.actor.state()
+	start := uint64(0)
+	if end > historyWindowBytes {
+		start = end - historyWindowBytes
+	}
+	m.history.ticket++
+	ticket, gen := m.history.ticket, m.gen
+	m.history.loading = true
+	api := s.api
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		h, b, err := api.recording(ctx, key.ID, epoch, start, end)
+		out := historyLoadedMsg{gen: gen, key: key, start: start, end: end, ticket: ticket, raw: b}
 		if err != nil {
-			return "", err
+			out.err = err.Error()
+		} else if h.End != end {
+			out.err = errInvalidRecording.Error()
+		} else {
+			out.text = recordingText(b)
 		}
-		if h.End != end || uint64(len(data)) != end-from {
-			return "", errInvalidRecording
-		}
-		// Historical bytes never emit replies or host effects.
-		if err := emu.Feed(data, termemu.SourceReplay); err != nil {
-			return "", err
-		}
-		from = end
+		return out
 	}
-	frame, err := emu.Snapshot()
-	if err != nil {
-		return "", err
+}
+func (m *tuiModel) toggleHistoryHex() {
+	m.history.hex = !m.history.hex
+	if m.history.hex {
+		m.history.text = fmt.Sprintf("Source offset %d\n", m.history.start) + hex.Dump(m.history.raw)
+	} else {
+		m.history.text = recordingText(m.history.raw)
 	}
-	var b strings.Builder
-	for _, row := range frame.Cells {
-		for _, c := range row {
-			if c.Width == 0 {
-				continue
-			}
-			if c.Text == "" {
-				b.WriteByte(' ')
-			} else {
-				b.WriteString(c.Text)
-			}
-		}
-		b.WriteByte('\n')
-	}
-	return strings.TrimRight(b.String(), "\n"), nil
+	m.history.lines = splitLines(m.history.text)
+	m.history.scroll = 0
 }

@@ -94,10 +94,11 @@ func TestTeaKeyEventRejectsUnidentified(t *testing.T) {
 	if _, ok := teaKeyEvent(tea.Key{}, termemu.KeyPress); ok {
 		t.Fatal("unidentified key accepted")
 	}
-	// Raw C0 bytes that are not Ctrl-<letter> must not become wrong text.
+	// FS/GS/RS/US have real control-key identities, not unidentified junk.
 	for _, code := range []rune{0x1c, 0x1d, 0x1e, 0x1f} {
-		if _, ok := teaKeyEvent(tea.Key{Code: code}, termemu.KeyPress); ok {
-			t.Fatalf("raw control byte 0x%x accepted", code)
+		ev, ok := teaKeyEvent(tea.Key{Code: code}, termemu.KeyPress)
+		if !ok || ev.Mods&termemu.ModCtrl == 0 || ev.Text != string(rune('\\'+code-0x1c)) {
+			t.Fatalf("raw control byte 0x%x lost: %+v", code, ev)
 		}
 	}
 }

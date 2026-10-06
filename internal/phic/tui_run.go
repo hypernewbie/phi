@@ -28,12 +28,23 @@ func RunTUI(ctx context.Context, cfg config, version string) error {
 		api, _ := newAPIClient(profile.Origin)
 		servers = append(servers, &serverState{profile: profile, api: api})
 	}
+	// Fail before entering fullscreen, not as an inert forever-attaching tab.
+	probe, err := termemu.NewGhostty(termemu.Options{Cols: 80, Rows: 24, ScrollbackBytes: 1 << 20, ScrollbackLines: 100})
+	if err != nil {
+		return err
+	}
+	_ = probe.Close()
 	m := newTUIModel(version, cfg, store, servers, selected, termemu.NewGhostty)
 	defer m.closeAll()
 
 	program := tea.NewProgram(m, tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("phic: %w", err)
+	}
+	if m.directExit {
+		if tab := m.activeTabModel(); tab != nil && tab.exited && tab.exitCode != 0 {
+			return &ExitError{Code: tab.exitCode}
+		}
 	}
 	return nil
 }
@@ -50,4 +61,5 @@ func (m *tuiModel) closeAll() {
 		}
 	}
 	m.actors = map[paneKey]*paneActor{}
+	close(m.events) // Release the pending waitEvent command at shutdown.
 }
