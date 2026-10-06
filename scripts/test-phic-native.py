@@ -84,8 +84,18 @@ def main():
     socket_path = str(run / "tmux.sock")
 
     def tmux(*argv, check=True):
-        return subprocess.run([tmux_bin, "-S", socket_path, "-f", "/dev/null", *argv],
-                              env=env, capture_output=True, check=check, timeout=5)
+        proc = subprocess.run([tmux_bin, "-S", socket_path, "-f", "/dev/null", *argv],
+                              env=env, capture_output=True, timeout=5)
+        if check and proc.returncode:
+            detail = proc.stderr.decode("utf-8", "replace").strip() or proc.stdout.decode("utf-8", "replace").strip()
+            raise RuntimeError(f"tmux {' '.join(argv)} failed ({proc.returncode}): {detail}")
+        return proc
+
+    # Keep a persistent anchor session alive so the tmux server does not
+    # asynchronously exit when client sessions detach between views and reattach.
+    tmux("start-server")
+    tmux("set-option", "-s", "exit-empty", "off", check=False)
+    tmux("new-session", "-d", "-s", "_anchor", "sleep", "86400")
 
     def api(path):
         with urllib.request.urlopen(url + path, timeout=3) as response:
