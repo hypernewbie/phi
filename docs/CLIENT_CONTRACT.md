@@ -19,9 +19,16 @@ These statements supersede the earlier raw-only, no-persistent-panels, no-Charm,
 - Close-button clicks must work; terminal-focus plain `x` must remain backend input.
 - Tab titles need a short cell limit. The operator suggested 18 or 20; the implemented limit is 20 cells, including ellipsis, without changing saved names.
 - Remember login across launches, without storing the password. The operator explicitly rejected Keychain use. The implementation stores the server-issued session token in a private per-origin file, not the password or derived verifier/hash. It does not use an OS credential manager.
-- Add a read-only Markdown tab beside Diff: the website's configured Markdown directories, including `./temp`, with list and view only. No copy/paste controls.
+- Add a Markdown tab beside Diff using the website's configured directories, including `./temp`, `./tmp`, and added directories. The later spin feedback supersedes the initial no-copy request: files open in a wide/fullscreen modal, with a top-right Unicode `[×]`, Copy Markdown, and Copy Filename. No paste/edit/delete controls.
 - Connected status must fit the chrome palette instead of using a separate green. Backend colors are not changed.
-- Opening a server must sync its existing live panes, including other projects and worktrees.
+- Opening a server must sync its existing live panes, including other projects and worktrees. The later Charon report was withdrawn: the user confirmed that server was empty.
+- Use compact connection and terminal-strip glyphs, not wordy labels or routine login/switching status chatter.
+- Offer a Sessions hide/show shortcut, whole-console refresh/redraw, keyboard width controls, and draggable Sessions/Diff dividers.
+- Esc must not directly close the client. Double Esc outside terminal focus opens a Quit confirmation; modal Esc closes only that modal. Backend Escape input is unchanged.
+- An empty terminal area uses a styled Phi logo and launch/help text, without Egyptian artwork.
+- Add an icon-only btop launch action using the website's fresh server-shell then `btop` behavior.
+- Show uppercase PC names without ports in the rail, without rewriting shared profiles or connection origins.
+- Never enter a minimum-size blocking mode. Tiny windows retain normal startup, rendering, and input, even if controls clip. This includes initial attachment and launching a new pane.
 
 Implementation and evidence: `temp/PHIC_SPIN_FIXES.md`.
 

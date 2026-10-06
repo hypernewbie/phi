@@ -50,15 +50,15 @@ An explicit directory argument is the captured launch target and outranks rememb
 
 ## Console layout
 
-- Server rail with identity glyphs, theme accent, health, and the active server.
+- Server rail with uppercase PC names without ports (saved profiles/addresses are unchanged), identity glyphs, theme accent, active server, `[▥]` system-monitor and refresh buttons, and compact health glyph: `●` connected, `◌` connecting, `◇` sign-in needed, `○` unavailable, `!` error.
 - Context row: project, worktree, coder, New Session, and the diff toggle.
 - Sessions sidebar: New Session, saved sessions for the selected coder/project, then live panes not yet open as tabs. `/` filters; `r` refreshes.
 - Terminal tabs: all live panes on the selected server, across projects, with unread marks, exited panes, and `+N` overflow. Titles use at most 20 terminal cells, including an ellipsis; saved titles remain complete.
 - Embedded terminal: copied cells with RGB/indexed colors, attributes, cursor position, and client-side selection.
-- Optional reader panel with Diff and Markdown tabs. Diff has refresh, search (`/`, `n`/`N`), and explicit copy (`y`); Markdown is list-and-view only.
-- Footer: status, errors, and contextual hints.
+- Optional reader panel with Diff and Markdown tabs. Diff has refresh, search (`/`, `n`/`N`), and explicit copy (`y`). Markdown lists files here, then opens them in a fullscreen reader.
+- Footer: errors, useful action feedback, and contextual hints. Routine sign-in/server-switch chatter is omitted. An empty terminal area shows a centered Phi logo and launch/help keys.
 
-Chrome stays intact during cursor movement, clear-screen, scrolling, and alternate-screen output because the application renders a copied frame rather than passing bytes through.
+Chrome stays intact during cursor movement, clear-screen, scrolling, and alternate-screen output because the application renders a copied frame rather than passing bytes through. Tiny terminals still run the normal console and route input; controls can clip, but there is no minimum-size blocking mode. Backend geometry stays at least 1×1, including initial attachment and new launches.
 
 ## Keys
 
@@ -68,6 +68,9 @@ Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys
 | --- | --- |
 | `Ctrl-] 1`–`9` | switch server |
 | `Ctrl-] b` | focus server rail (`a` add, `m` rename, `x` remove, `r` reload, `K`/`J` reorder, `c` copy URL) |
+| `Ctrl-] B` | hide/show Sessions sidebar |
+| `Ctrl-] R` / rail `↻` | refresh server data and redraw the console; no backend reset |
+| `Ctrl-] T` / rail `▥` | launch btop through a fresh server-side shell, like the website |
 | `Ctrl-] s` | focus sessions (`Enter` open/resume, `n` new, `c` coder, `p` project, `w` worktree) |
 | `Ctrl-] t` | focus tabs (`x` soft close, `X` final close, `u` undo, `r` rename, `p` pin, `m` mark) |
 | `Ctrl-] x` / `u` | close the active terminal / Undo within 3 seconds |
@@ -82,13 +85,13 @@ Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys
 | `Ctrl-] D` | detach the selected tab without DELETE |
 | `Ctrl-] ?` / `q` | help / quit |
 
-Tab cycles chrome regions; in the reader, it switches Diff/Markdown. Esc returns to the terminal. New Session sends exactly one fresh spawn request with an empty resume identity and the captured project, worktree, coder, and widget geometry. A saved-session row sends its exact resume identity, preferring `session_path` when present, without another picker. `--pane` attaches the exact live pane with no project, coder, or session picker.
+Tab cycles chrome regions; in the reader, it switches Diff/Markdown. Single Esc in client chrome returns to terminal focus after the short double-Esc window. Double Esc opens a Quit dialog, where `q` confirms and Esc/Enter cancel. Neither Esc directly quits `phic`. In terminal focus, Esc stays backend input. Use `[`/`]` in Sessions or reader focus to adjust that panel's width, or drag its divider. Sidebar visibility and panel widths persist per server. New Session sends exactly one fresh spawn request with an empty resume identity and the captured project, worktree, coder, and widget geometry. A saved-session row sends its exact resume identity, preferring `session_path` when present, without another picker. `--pane` attaches the exact live pane with no project, coder, or session picker.
 
 ## Markdown reader
 
 Click the Markdown tab beside Diff, or press `Ctrl-] M`. Discovery uses the website's existing `/api/markdown/files` endpoint and the active pane's remote cwd. The server's configured Markdown directories apply, including `./temp`; the client does not scan local folders or maintain another directory list.
 
-Click a file or press Enter to view it with Glamour v2. Use arrows, Page Up/Down, or the wheel to navigate. Left/Backspace returns to the list; `r` refreshes. Resize reflows the document. The viewer accepts files up to 1 MiB and strips source terminal commands before rendering. There are no copy/paste, edit, delete, or directory-management controls.
+Click a file or press Enter to open a fullscreen Glamour v2 reader. The document uses the terminal's width, not the Diff column. The top-right `[×]` button or Esc closes it and returns to the file list. Use arrows, Page Up/Down, or the wheel to scroll; `r` refreshes. Resize reflows the document. **Copy Markdown** (`y`) requests a clipboard copy of the exact file source, including whitespace; **Copy Filename** (`f`) copies its filename. The terminal can refuse clipboard requests. There are no paste, edit, delete, or directory-management controls. The viewer accepts files up to 1 MiB and strips source terminal commands from the rendered view.
 
 ## Terminal fidelity
 
