@@ -114,13 +114,14 @@ Connect to another server. Backend output stays raw. Returning rebuilds from Phi
 }
 
 type client struct {
-	cfg         config
-	tty         *TTY
-	api         *apiClient
-	servers     []*serverState
-	serverIndex int
-	keys        inputParser
-	store       *desktopStore
+	cfg           config
+	tty           *TTY
+	api           *apiClient
+	servers       []*serverState
+	serverIndex   int
+	keys          inputParser
+	store         *desktopStore
+	currentServer *serverState
 }
 
 func newClient(_ context.Context, cfg config) (*client, error) {
@@ -144,7 +145,7 @@ func newClient(_ context.Context, cfg config) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected, store: store}, nil
+	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected, store: store, currentServer: servers[selected]}, nil
 }
 
 func (c *client) Close() error {
@@ -155,6 +156,7 @@ func (c *client) Close() error {
 }
 
 func (c *client) Run(ctx context.Context) error {
+	sessions := false
 	// Normal startup is a client surface, not an implicit localhost probe.
 	// Explicit CLI operations retain their direct-attachment semantics.
 	if !c.cfg.ServerExplicit && c.cfg.Pane == "" && c.cfg.Coder == "" && !c.cfg.Diff && !c.cfg.NewPane {
@@ -164,7 +166,9 @@ func (c *client) Run(ctx context.Context) error {
 		if err := c.tty.PrepareMenu(); err != nil {
 			return err
 		}
-		index, err := c.serverPicker(ctx)
+		choice, err := c.serverPicker(ctx)
+		index := choice.Index
+		sessions = choice.Sessions
 		var shortcut viewCommand
 		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
 			index, err = int(byte(shortcut)-'1'), nil
@@ -180,7 +184,8 @@ func (c *client) Run(ctx context.Context) error {
 		}
 	}
 	for {
-		err := c.start(ctx)
+		err := c.start(ctx, sessions)
+		sessions = false
 		if ctx.Err() != nil || errors.Is(err, errDetach) {
 			return nil
 		}
@@ -203,7 +208,9 @@ func (c *client) Run(ctx context.Context) error {
 				return e
 			}
 			var e error
-			index, e = c.serverPicker(ctx)
+			choice, pickErr := c.serverPicker(ctx)
+			index, e = choice.Index, pickErr
+			sessions = choice.Sessions
 			if errors.As(e, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
 				index = int(byte(shortcut) - '1')
 			} else if errors.Is(e, errDetach) {
@@ -228,7 +235,7 @@ func (c *client) Run(ctx context.Context) error {
 	}
 }
 
-func (c *client) start(ctx context.Context) error {
+func (c *client) start(ctx context.Context, sessions bool) error {
 	if c.api == nil {
 		return fmt.Errorf("phic: selected desktop profile has an invalid server origin")
 	}
@@ -238,7 +245,7 @@ func (c *client) start(ctx context.Context) error {
 	if err := c.authenticate(ctx); err != nil {
 		return err
 	}
-	c.refreshIdentity(ctx, c.servers[c.serverIndex])
+	c.refreshIdentity(ctx, c.activeServer())
 	if c.cfg.Worktrees {
 		dir, err := c.directory(ctx, c.cfg.Dir)
 		if err != nil {
@@ -287,7 +294,17 @@ func (c *client) start(ctx context.Context) error {
 		defer pager.Close()
 		return RunPager(ctx, c.tty, pager.Path())
 	}
-	sel, err := c.Select(ctx)
+	var sel SelectResult
+	var err error
+	if sessions {
+		var dir string
+		dir, err = c.directory(ctx, c.cfg.Dir)
+		if err == nil {
+			sel, err = c.pickSessions(ctx, dir)
+		}
+	} else {
+		sel, err = c.Select(ctx)
+	}
 	if err != nil {
 		if errors.Is(err, errDetach) {
 			return nil

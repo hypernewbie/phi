@@ -181,6 +181,40 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			assertPasteMode(true)
 			master.Write([]byte("q"))
 			await("CONNECTED WITHOUT LOCALHOST", pos)
+			if mode == "legacy" {
+				shared := filepath.Join(configDir, "phi-client", "profiles.json")
+				pos = len(tape.snapshot())
+				master.Write([]byte("\x1db"))
+				await("m More", pos)
+				pos = len(tape.snapshot())
+				master.Write([]byte("r"))
+				await("Rename", pos)
+				master.Write([]byte("\x15Renamed in console\r"))
+				await("Renamed in console", pos)
+				// Removal defaults to Keep; cancel must not change either client.
+				pos = len(tape.snapshot())
+				master.Write([]byte("x"))
+				await("Keep server", pos)
+				master.Write([]byte("\r"))
+				await("m More", pos)
+				rows, _ := readDesktopProfiles(shared)
+				if len(rows) != 1 || rows[0].Name != "Renamed in console" {
+					t.Fatal("rename/removal cancellation failed")
+				}
+				pos = len(tape.snapshot())
+				master.Write([]byte("x"))
+				await("Keep server", pos)
+				master.Write([]byte("\x1b[B\r"))
+				await("Connect to another server", pos)
+				// Removing the active profile removes only config, not its pane.
+				pos = len(tape.snapshot())
+				master.Write([]byte("q"))
+				await("CONNECTED WITHOUT LOCALHOST", pos)
+				rows, _ = readDesktopProfiles(shared)
+				if len(rows) != 0 {
+					t.Fatal("active profile removal was resurrected")
+				}
+			}
 			master.Write([]byte("\x1dq"))
 			if err := cmd.Wait(); err != nil {
 				t.Fatalf("bare client failed: %v %q", err, tape.snapshot())
@@ -190,7 +224,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			}
 			shared := filepath.Join(configDir, "phi-client", "profiles.json")
 			profiles, err := readDesktopProfiles(shared)
-			if err != nil || len(profiles) == 0 {
+			if err != nil || (len(profiles) == 0 && mode != "legacy") {
 				t.Fatalf("connection not saved for desktop: %v", err)
 			}
 			found := false
@@ -199,7 +233,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 					found = true
 				}
 			}
-			if !found {
+			if !found && mode != "legacy" {
 				t.Fatal("shared connection or active stamp missing")
 			}
 			if saved {

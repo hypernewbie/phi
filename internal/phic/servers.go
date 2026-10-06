@@ -11,18 +11,31 @@ import (
 )
 
 func (c *client) refreshIdentity(ctx context.Context, s *serverState) {
-	if s == nil || s.api == nil {
+	if s == nil {
+		return
+	}
+	if s.api == nil {
+		s.health = "Invalid address"
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	var identity serverIdentity
-	if s.api.getJSON(ctx, "/api/config", &identity) == nil {
+	err := s.api.getJSON(ctx, "/api/config", &identity)
+	if err == nil {
 		s.identity = identity
+		s.health = "Online"
+		return
+	}
+	var apiErr *apiError
+	if errors.As(err, &apiErr) && (apiErr.Code == 401 || apiErr.Code == 403) {
+		s.health = "Sign in"
+	} else {
+		s.health = "Offline"
 	}
 }
 
-func (c *client) serverPicker(ctx context.Context) (int, error) {
+func (c *client) observeServers(ctx context.Context) {
 	// Observe identities without sending login proofs to unselected servers.
 	// Separate jars prevent same-host, different-port cookie collisions.
 	observe, cancel := context.WithTimeout(ctx, time.Second)
@@ -43,40 +56,14 @@ func (c *client) serverPicker(ctx context.Context) (int, error) {
 		}(s)
 	}
 	wg.Wait()
-	labels := make([]string, len(c.servers))
-	for i, s := range c.servers {
-		marker := " "
-		if i == c.serverIndex {
-			marker = "*"
-		}
-		labels[i] = fmt.Sprintf("%s %s  ·  %s", marker, s.label(), menuLabel(s.profile.Origin))
-	}
-	labels = append(labels, "+ Connect to another server…")
-	for {
-		i, err := c.chooseStyled(ctx, "Servers", labels, func(i int, line string, focused bool) string {
-			if i == len(c.servers) {
-				return themeText(c.activeServer().identity.Theme, line, focused)
-			}
-			return themeText(c.servers[i].identity.Theme, line, focused)
-		})
-		var shortcut viewCommand
-		if errors.As(err, &shortcut) && shortcut == 'b' {
-			continue
-		}
-		if err != nil || i < len(c.servers) {
-			return i, err
-		}
-		i, err = c.connectServer(ctx)
-		if errors.Is(err, errDetach) || (errors.As(err, &shortcut) && shortcut == 'b') {
-			continue
-		}
-		return i, err
-	}
 }
 
 // switchServer is transactional. The old pane remains selected if login,
 // directory selection, or spawn fails. The origin owns its API jar and pane.
 func (c *client) switchServer(ctx context.Context, index int, current SelectResult) (SelectResult, bool, error) {
+	return c.switchServerView(ctx, index, current, false)
+}
+func (c *client) switchServerView(ctx context.Context, index int, current SelectResult, sessions bool) (SelectResult, bool, error) {
 	if index < 0 || index >= len(c.servers) {
 		return current, false, fmt.Errorf("phic: server number is not in the desktop profile list")
 	}
@@ -84,17 +71,25 @@ func (c *client) switchServer(ctx context.Context, index int, current SelectResu
 		return current, false, fmt.Errorf("phic: desktop profile has an invalid server origin")
 	}
 	if index == c.serverIndex {
-		return current, false, nil
+		if !sessions {
+			return current, false, nil
+		}
+		sel, err := c.pickSessions(ctx, current.Existing.Dir)
+		if err != nil {
+			return current, false, err
+		}
+		return c.materialize(ctx, sel)
 	}
-	oldIndex, oldAPI, oldCfg := c.serverIndex, c.api, c.cfg
+	oldIndex, oldAPI, oldCfg, oldCurrent := c.serverIndex, c.api, c.cfg, c.currentServer
 	old := c.activeServer()
 	old.remember(current)
 	c.serverIndex = index
 	c.api = c.servers[index].api
+	c.currentServer = c.servers[index]
 	committed := false
 	defer func() {
 		if !committed {
-			c.serverIndex, c.api, c.cfg = oldIndex, oldAPI, oldCfg
+			c.serverIndex, c.api, c.cfg, c.currentServer = oldIndex, oldAPI, oldCfg, oldCurrent
 		}
 	}()
 	if err := c.authenticate(ctx); err != nil {
@@ -116,7 +111,21 @@ func (c *client) switchServer(ctx context.Context, index int, current SelectResu
 			}
 		}
 	}
-	if sel.PaneID == "" {
+	if sessions {
+		want := ""
+		if sel.Existing != nil {
+			want = sel.Existing.Dir
+		}
+		var dir string
+		dir, err = c.directory(ctx, want)
+		if err != nil {
+			return current, false, err
+		}
+		sel, err = c.pickSessions(ctx, dir)
+		if err != nil {
+			return current, false, err
+		}
+	} else if sel.PaneID == "" {
 		c.cfg.Pane = ""
 		c.cfg.NewPane = false
 		c.cfg.Coder = ""
