@@ -1,9 +1,11 @@
 package phic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -24,6 +26,8 @@ type TerminalView struct {
 	ActiveWSCount int    `json:"ActiveWSCount"`
 	CreatedAt     string `json:"created_at,omitempty"`
 	LastOutputSeq uint64 `json:"last_output_seq"`
+	Pinned        bool   `json:"pinned,omitempty"`
+	Marked        bool   `json:"marked,omitempty"`
 }
 
 // Session is the saved-session view returned by /api/sessions.
@@ -72,6 +76,7 @@ type SpawnRequest struct {
 	Rows         uint16   `json:"rows,omitempty"`
 	SessionID    string   `json:"session_id,omitempty"`
 	Title        string   `json:"title,omitempty"`
+	Workspace    string   `json:"workspace,omitempty"`
 	ExtraArgs    []string `json:"extra_args,omitempty"`
 	OpenCodeMini bool     `json:"opencode_mini,omitempty"`
 }
@@ -94,6 +99,62 @@ func (a *apiClient) Spawn(ctx context.Context, req SpawnRequest) (SpawnResponse,
 		return SpawnResponse{}, fmt.Errorf("phic: spawn: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteTerminal terminates a pane process. A 404 is treated as already gone
+// so a double close cannot fail the UI.
+func (a *apiClient) DeleteTerminal(ctx context.Context, id string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, a.base.String()+"/api/terminals/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return &apiError{Code: resp.StatusCode, Message: "DELETE /api/terminals/" + id + ": " + resp.Status}
+	}
+	return nil
+}
+
+// SetPaneTitle, SetPanePinned, and SetPaneMarked mirror the website's tab
+// actions. They change server-side metadata only and never touch pane output.
+func (a *apiClient) SetPaneTitle(ctx context.Context, id, title string) error {
+	return a.postPaneAction(ctx, id, "title", map[string]string{"title": title})
+}
+
+func (a *apiClient) SetPanePinned(ctx context.Context, id string, pinned bool) error {
+	return a.postPaneAction(ctx, id, "pin", map[string]bool{"pinned": pinned})
+}
+
+func (a *apiClient) SetPaneMarked(ctx context.Context, id string, marked bool) error {
+	return a.postPaneAction(ctx, id, "mark", map[string]bool{"marked": marked})
+}
+
+func (a *apiClient) postPaneAction(ctx context.Context, id, action string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base.String()+"/api/terminals/"+url.PathEscape(id)+"/"+action, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return &apiError{Code: resp.StatusCode, Message: "POST /api/terminals/" + id + "/" + action + ": " + resp.Status}
+	}
+	return nil
 }
 
 // ListCoders returns the available backend descriptors.
