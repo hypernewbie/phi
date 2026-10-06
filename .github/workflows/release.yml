@@ -17,7 +17,53 @@ permissions:
   id-token: write
 
 jobs:
+  # Darwin phic needs Apple toolchains (zig cannot cross-link macOS system
+  # libraries), so both darwin architectures are compiled here, archived in
+  # the exact goreleaser naming (binary at tar root), and uploaded to the
+  # draft release by the goreleaser job after its own assets succeed.
+  phic-darwin-build:
+    name: Build darwin phic archives
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and archive both darwin architectures
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          commit=${GITHUB_SHA}
+          date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          ldflags="-s -w -X main.Version=$version -X main.Commit=$commit -X main.Date=$date"
+          mkdir -p prebuilt staging
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath \
+            -ldflags "$ldflags" -o staging/phic ./cmd/phic
+          cp README.md staging/README.md
+          tar -czf "prebuilt/phi_${version}_darwin_arm64_phic.tar.gz" -C staging phic README.md
+          rm staging/phic
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath \
+            -ldflags "$ldflags" -o staging/phic ./cmd/phic
+          tar -czf "prebuilt/phi_${version}_darwin_amd64_phic.tar.gz" -C staging phic README.md
+          file prebuilt/*.tar.gz
+          tar -tzf prebuilt/phi_${version}_darwin_arm64_phic.tar.gz
+          staging/phic --version
+
+      - name: Upload darwin phic archives
+        uses: >- # v4
+          actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phic-darwin-prebuilt
+          path: prebuilt/*.tar.gz
+          if-no-files-found: error
+
   goreleaser:
+    needs: phic-darwin-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,6 +97,24 @@ jobs:
           pnpm run build:web
           go run ./tools/webdist
 
+      - name: Download prebuilt darwin phic
+        uses: >- # v4
+          actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: phic-darwin-prebuilt
+          path: prebuilt
+
+      # phic CGO linux targets cross-compile through pinned zig; the sha256
+      # gate keeps the compiler supply chain fixed.
+      - name: Set up Zig cross compiler
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
+          echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum --check
+          mkdir -p "$HOME/.local/zig-0.16.0"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig-0.16.0" --strip-components=1
+          echo "$HOME/.local/zig-0.16.0" >> "$GITHUB_PATH"
+
       - name: Run GoReleaser
         uses: >- # v7
           goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
@@ -60,6 +124,16 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Uploaded only after goreleaser published its own assets, so a failed
+      # goreleaser never leaves a half release; checksums.txt already covers
+      # these via checksum.extra_files.
+      - name: Upload darwin phic archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release upload --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          prebuilt/*.tar.gz --clobber
 
   pet-package:
     name: Pet package
