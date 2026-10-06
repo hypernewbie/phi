@@ -39,7 +39,7 @@ type serverIdentity struct {
 }
 
 func desktopProfilePaths(configDir string) []string {
-	return []string{filepath.Join(configDir, "phi-client", "profiles.json"), filepath.Join(configDir, "phi-desktop-electron", "profiles.json")}
+	return []string{filepath.Join(configDir, "phi-client", "profiles.json"), filepath.Join(configDir, "phi-desktop-electron", "profiles.json"), filepath.Join(configDir, "Phi", "profiles.json")}
 }
 
 func readDesktopProfiles(file string) ([]desktopProfile, error) {
@@ -101,13 +101,14 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 		}
 		for _, file := range paths {
 			p, err := readDesktopProfiles(file)
-			if errors.Is(err, os.ErrNotExist) && cfg.Profiles == "" {
-				continue
-			}
 			if err != nil {
 				// Desktop keeps an atomic-write backup. Recover read-only: never rename
 				// or overwrite either of its files from the native client.
+				missing := errors.Is(err, os.ErrNotExist)
 				p, err = readDesktopProfiles(file + ".bak")
+				if missing && errors.Is(err, os.ErrNotExist) && cfg.Profiles == "" {
+					continue
+				}
 				if err != nil {
 					return nil, 0, fmt.Errorf("phic: cannot read desktop profiles %s: %w", QuotedID(file), err)
 				}

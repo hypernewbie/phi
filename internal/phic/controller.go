@@ -88,7 +88,7 @@ func (c *client) dispatchView(ctx context.Context, current SelectResult, key byt
 			next, err = c.liveView(ctx, current, key)
 		}
 		var shortcut viewCommand
-		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
+		if errors.As(err, &shortcut) && (byte(shortcut) == 'b' || (byte(shortcut) >= '1' && byte(shortcut) <= '9')) {
 			key = byte(shortcut)
 			continue
 		}
@@ -131,7 +131,7 @@ func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (
 	case '?':
 		err := writeAll(c.tty, []byte(c.color("Φ  Shortcuts\r\n\r\nCtrl-] b   Server bar\r\nCtrl-] 1..9 or enhanced Ctrl-1..9 switches server\r\nCtrl-] s   Sessions / new pane\r\nCtrl-] d   Diff\r\nCtrl-] w   Worktrees\r\nCtrl-] q   Detach (backend keeps running)\r\nCtrl-] ?   Help\r\nCtrl-] twice sends the prefix to the backend\r\n\r\nEnter or Esc/q to return: ")))
 		if err == nil {
-			_, err = readMenuInput(ctx, c.tty, len(c.servers))
+			_, err = c.acknowledgeView(ctx)
 		}
 		return nil, err
 	case 'd':
@@ -181,7 +181,7 @@ func (c *client) viewError(ctx context.Context, err error) error {
 	if e := writeAll(c.tty, []byte(fmt.Sprintf("\r\n%s\r\nEnter or Esc/q to return: ", c.heading(QuotedID(err.Error()))))); e != nil {
 		return e
 	}
-	_, e := readMenuInput(ctx, c.tty)
+	_, e := c.acknowledgeView(ctx)
 	if errors.Is(e, errDetach) {
 		return nil
 	}

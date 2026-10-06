@@ -13,8 +13,10 @@ var phiAccents = map[string]string{
 	"purple": "7c6af7", "blue": "38bdf8", "green": "10b981", "amber": "fbbf24", "red": "f87171", "pink": "ec4899", "teal": "14b8a6", "indigo": "6366f1", "orange": "f97316", "cyan": "06b6d4", "rose": "f43f5e", "lime": "84cc16", "white": "ffffff", "gold": "d4af37", "violet": "a78bfa", "emerald": "059669", "neon": "00f0ff", "coral": "e07a5f", "fuchsia": "d946ef", "canary": "ffee10", "copper": "d35400", "mint": "2ed573", "arc": "00d4ff", "ember": "ff4500", "fog": "94a3b8", "ash": "a8a29e", "dusk": "b8a9c9", "pine": "84a59d", "fern": "9caf88",
 }
 
+func osColorEnabled() bool { return os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb" }
+
 func themeText(theme, text string, selected bool) string {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+	if !osColorEnabled() {
 		return text
 	}
 	hex := phiAccents[theme]
@@ -47,10 +49,15 @@ func (c *client) color(text string) string {
 	return themeText(theme, text, false)
 }
 func (s *serverState) label() string {
-	if s.identity.Hostname != "" {
-		return fmt.Sprintf("%+q", s.identity.Hostname)
+	// A saved desktop label is user-owned. Hostname enriches identity; it
+	// must not silently replace a named rail entry after config loads.
+	if s.profile.Name != "" && s.profile.Name != s.profile.Origin && (s.api == nil || s.profile.Name != s.api.base.Host) {
+		return menuLabel(s.profile.Name)
 	}
-	return fmt.Sprintf("%+q", s.profile.Name)
+	if s.identity.Hostname != "" {
+		return menuLabel(s.identity.Hostname)
+	}
+	return menuLabel(s.profile.Name)
 }
 func (c *client) heading(title string) string {
 	server := ""
@@ -63,17 +70,18 @@ func (c *client) serverBar(cols int) string {
 	var out strings.Builder
 	used := 0
 	for i, s := range c.servers {
-		label := s.label()
-		if len(label) > 14 {
-			label = label[:11] + "..."
-		}
+		label := clipMenu(s.label(), max(0, min(14, cols-len(strconv.Itoa(i+1))-6)))
 		box := fmt.Sprintf(" [%d %s] ", i+1, label)
-		if used > 0 && used+len(box) > cols {
+		cells := 0
+		for _, r := range box {
+			cells += cellWidth(r)
+		}
+		if used > 0 && used+cells > cols {
 			out.WriteString("\r\n")
 			used = 0
 		}
 		out.WriteString(themeText(s.identity.Theme, box, i == c.serverIndex))
-		used += len(box)
+		used += cells
 	}
 	out.WriteString("\r\n")
 	return out.String()
