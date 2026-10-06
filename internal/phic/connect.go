@@ -8,8 +8,8 @@ import (
 )
 
 // Connecting from the client is always available, even with no desktop
-// profiles or an unreachable localhost. It does not implicitly rewrite the
-// shared desktop preferences or establish a second server database.
+// profiles or an unreachable localhost. Adding a connection updates the
+// exact desktop store, preserving unrelated desktop preferences.
 func (c *client) connectServer(ctx context.Context) (int, error) {
 	if err := writeAll(c.tty, []byte("\x1b[?2004h")); err != nil {
 		return 0, err
@@ -41,7 +41,14 @@ func (c *client) connectServer(ctx context.Context) (int, error) {
 				address = address[:len(address)-n]
 			}
 		case "enter":
-			api, err := newAPIClient(strings.TrimSpace(address))
+			profile, err := c.store.add(strings.TrimSpace(address))
+			if err != nil {
+				if e := writeAll(c.tty, []byte("\r\n"+c.color(menuLabel(err.Error()))+"\r\n")); e != nil {
+					return 0, e
+				}
+				continue
+			}
+			api, err := newAPIClient(profile.Origin)
 			if err != nil {
 				if e := writeAll(c.tty, []byte("\r\n"+c.color(menuLabel(err.Error()))+"\r\n")); e != nil {
 					return 0, e
@@ -49,12 +56,12 @@ func (c *client) connectServer(ctx context.Context) (int, error) {
 				continue
 			}
 			for i, s := range c.servers {
-				if s.profile.Origin == api.base.String() {
+				if s.api != nil && s.api.base.String() == api.base.String() {
+					s.profile = profile
 					return i, nil
 				}
 			}
-			origin := api.base.String()
-			c.servers = append(c.servers, &serverState{profile: desktopProfile{ID: origin, Name: api.base.Host, Origin: origin}, api: api})
+			c.servers = append(c.servers, &serverState{profile: profile, api: api})
 			return len(c.servers) - 1, nil
 		case "up", "down", "home", "end", "pageup", "pagedown":
 		default:

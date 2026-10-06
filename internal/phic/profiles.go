@@ -1,22 +1,18 @@
 package phic
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// desktopProfile is the desktop controller's non-secret profiles.json row.
-// The client reads it, in rail order, and never writes desktop preferences.
+// desktopProfile is the same non-secret row read and written by desktop.
+// IDs, names, origins and rail order are preserved, including legacy aliases.
 type desktopProfile struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Origin   string `json:"origin"`
-	LastUsed string `json:"lastUsed"`
+	LastUsed string `json:"lastUsed,omitempty"`
 }
 
 type serverState struct {
@@ -27,10 +23,7 @@ type serverState struct {
 	frontiers map[string]recordingCursor
 }
 
-func (s *serverState) remember(sel SelectResult) {
-	copy := sel
-	s.selection = &copy
-}
+func (s *serverState) remember(sel SelectResult) { copy := sel; s.selection = &copy }
 
 type serverIdentity struct {
 	Hostname   string   `json:"hostname"`
@@ -43,97 +36,48 @@ func desktopProfilePaths(configDir string) []string {
 }
 
 func readDesktopProfiles(file string) ([]desktopProfile, error) {
-	f, err := os.Open(file)
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
+	d, err := parseDesktopDocument(data)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > 1<<20 {
-		return nil, fmt.Errorf("phic: desktop profiles file exceeds 1 MiB")
-	}
-	var store struct {
-		Profiles []json.RawMessage `json:"profiles"`
-	}
-	if err = json.Unmarshal(data, &store); err != nil || store.Profiles == nil {
-		return nil, fmt.Errorf("phic: invalid desktop profiles file %s", QuotedID(file))
-	}
-	var profiles []desktopProfile
-	seenID := map[string]bool{}
-	seenOrigin := map[string]bool{}
-	for _, row := range store.Profiles {
-		var p desktopProfile
-		if json.Unmarshal(row, &p) != nil || p.ID == "" || p.Origin == "" || seenID[p.ID] {
-			continue
-		}
-		api, err := newAPIClient(p.Origin)
-		if err != nil {
-			continue
-		}
-		p.Origin = api.base.String()
-		if seenOrigin[p.Origin] {
-			continue
-		}
-		if p.Name == "" {
-			p.Name = p.Origin
-		}
-		seenID[p.ID] = true
-		seenOrigin[p.Origin] = true
-		profiles = append(profiles, p)
-	}
-	return profiles, nil
+	return d.profiles(), nil
 }
 
 func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
-	var profiles []desktopProfile
-	// --server is an isolated override unless a profiles file is also explicit.
-	if cfg.Profiles != "" || !cfg.ServerExplicit {
-		paths := []string{cfg.Profiles}
-		if cfg.Profiles == "" {
-			dir, err := os.UserConfigDir()
-			if err != nil {
-				return nil, 0, err
-			}
-			paths = desktopProfilePaths(dir)
-		}
-		for _, file := range paths {
-			p, err := readDesktopProfiles(file)
-			if err != nil {
-				// Desktop keeps an atomic-write backup. Recover read-only: never rename
-				// or overwrite either of its files from the native client.
-				missing := errors.Is(err, os.ErrNotExist)
-				p, err = readDesktopProfiles(file + ".bak")
-				if missing && errors.Is(err, os.ErrNotExist) && cfg.Profiles == "" {
-					continue
-				}
-				if err != nil {
-					return nil, 0, fmt.Errorf("phic: cannot read desktop profiles %s: %w", QuotedID(file), err)
-				}
-			}
-			profiles = p
-			break
-		}
+	store, err := desktopStoreFor(cfg)
+	if err != nil {
+		return nil, 0, err
 	}
+	d, err := store.read()
+	if err != nil {
+		return nil, 0, err
+	}
+	profiles := d.profiles()
 	selected := 0
-	if cfg.ServerExplicit || len(profiles) == 0 {
-		api, err := newAPIClient(cfg.Server)
+	if cfg.ServerExplicit {
+		p, err := store.add(cfg.Server)
 		if err != nil {
 			return nil, 0, err
 		}
-		origin := api.base.String()
-		for i, p := range profiles {
-			if p.Origin == origin {
+		for i, old := range profiles {
+			if old.ID == p.ID {
 				return profiles, i, nil
 			}
 		}
-		profiles = append(profiles, desktopProfile{ID: origin, Name: api.base.Host, Origin: origin})
+		profiles = append(profiles, p)
 		selected = len(profiles) - 1
+	} else if len(profiles) == 0 {
+		origin, host, err := desktopEndpoint(cfg.Server)
+		if err != nil {
+			return nil, 0, err
+		}
+		// Offer localhost without requiring or saving it before the user chooses.
+		profiles = append(profiles, desktopProfile{Name: host, Origin: origin})
 	} else {
-		// This mirrors the desktop's most-recently-used startup selection without
-		// modifying lastUsed (the desktop owns the file).
 		for i, p := range profiles {
 			if strings.Compare(p.LastUsed, profiles[selected].LastUsed) > 0 {
 				selected = i
@@ -141,4 +85,19 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 		}
 	}
 	return profiles, selected, nil
+}
+
+func (c *client) persistActiveProfile() error {
+	if c.store == nil {
+		return nil
+	}
+	s := c.activeServer()
+	if s.profile.ID == "" {
+		p, err := c.store.add(s.profile.Origin)
+		if err != nil {
+			return err
+		}
+		s.profile = p
+	}
+	return c.store.setLastUsed(s.profile.ID)
 }

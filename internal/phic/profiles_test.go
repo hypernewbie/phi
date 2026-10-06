@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDesktopProfilesRailOrderMRUAndReadOnlyBackup(t *testing.T) {
+func TestDesktopProfilesRailOrderMRUAndSharedBackup(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "profiles.json")
 	data := []byte(`{"profiles":[{"id":"a","name":"A","origin":"http://a:7070/","lastUsed":"2026-09-01T00:00:00Z"},{"id":"invalid","origin":"http://user:secret@b/"},{"id":"a","origin":"http://duplicate/"},{"id":"b","name":"B","origin":"https://b/","lastUsed":"2026-10-01T00:00:00Z"},{"id":"c","origin":"https://b/"}],"closeToTray":true,"syncAlerts":false,"petEnabled":true}`)
 	if err := os.WriteFile(file, data, 0600); err != nil {
@@ -19,13 +19,13 @@ func TestDesktopProfilesRailOrderMRUAndReadOnlyBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) != 2 || profiles[0].ID != "a" || profiles[1].ID != "b" || index != 1 {
+	if len(profiles) != 4 || profiles[0].ID != "a" || profiles[2].ID != "b" || profiles[3].ID != "c" || index != 2 {
 		t.Fatalf("desktop rail/MRU mismatch: %+v %d", profiles, index)
 	}
 	cfg.ServerExplicit = true
 	cfg.Server = "http://a:7070"
 	profiles, index, err = loadServerProfiles(cfg)
-	if err != nil || len(profiles) != 2 || index != 0 {
+	if err != nil || len(profiles) != 4 || index != 0 {
 		t.Fatalf("explicit matching origin duplicated: %+v %d %v", profiles, index, err)
 	}
 	original, _ := os.ReadFile(file)
@@ -39,16 +39,23 @@ func TestDesktopProfilesRailOrderMRUAndReadOnlyBackup(t *testing.T) {
 	_ = os.WriteFile(file, corrupt, 0600)
 	cfg.ServerExplicit = false
 	profiles, index, err = loadServerProfiles(cfg)
-	if err != nil || len(profiles) != 2 || index != 1 {
-		t.Fatalf("read-only backup recovery failed: %+v %d %v", profiles, index, err)
+	if err != nil || len(profiles) != 4 || index != 2 {
+		t.Fatalf("shared backup recovery failed: %+v %d %v", profiles, index, err)
 	}
 	original, _ = os.ReadFile(file)
-	if !bytes.Equal(original, corrupt) {
-		t.Fatal("recovery rewrote the desktop's file")
+	if !json.Valid(original) {
+		t.Fatal("recovered file not readable by desktop")
+	}
+	aside, _ := filepath.Glob(file + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatal("corrupt input not preserved")
 	}
 }
 
-func TestExplicitServerIgnoresDesktopConfigurationAndFlagBindsProfiles(t *testing.T) {
+func TestExplicitServerSharesDesktopConfigurationAndFlagBindsProfiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
 	cfg, err := parseFlags([]string{"--server", "https://example:7443", "--profiles", "some/file.json", "."})
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +65,16 @@ func TestExplicitServerIgnoresDesktopConfigurationAndFlagBindsProfiles(t *testin
 	}
 	cfg.Profiles = ""
 	profiles, index, err := loadServerProfiles(cfg)
-	if err != nil || len(profiles) != 1 || index != 0 || profiles[0].Origin != cfg.Server {
-		t.Fatalf("explicit origin not isolated: %+v %d %v", profiles, index, err)
+	if err != nil || len(profiles) != 1 || index != 0 || profiles[0].Origin != cfg.Server+"/" {
+		t.Fatalf("explicit origin not persisted: %+v %d %v", profiles, index, err)
+	}
+	store, err := desktopStoreFor(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := readDesktopProfiles(store.path)
+	if err != nil || len(saved) != 1 || saved[0].ID != profiles[0].ID {
+		t.Fatal("explicit connection not saved for desktop")
 	}
 	paths := desktopProfilePaths("/config")
 	if paths[0] != filepath.Join("/config", "phi-client", "profiles.json") || paths[1] != filepath.Join("/config", "phi-desktop-electron", "profiles.json") {

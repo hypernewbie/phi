@@ -120,26 +120,31 @@ type client struct {
 	servers     []*serverState
 	serverIndex int
 	keys        inputParser
+	store       *desktopStore
 }
 
 func newClient(_ context.Context, cfg config) (*client, error) {
+	store, err := desktopStoreFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Profiles = store.path
 	profiles, selected, err := loadServerProfiles(cfg)
 	if err != nil {
 		return nil, err
 	}
 	var servers []*serverState
 	for _, profile := range profiles {
-		api, err := newAPIClient(profile.Origin)
-		if err != nil {
-			return nil, err
-		}
+		// Desktop retains legacy rows, even if their endpoint is unusable.
+		// Show the same list; reject an invalid endpoint only when selected.
+		api, _ := newAPIClient(profile.Origin)
 		servers = append(servers, &serverState{profile: profile, api: api})
 	}
 	tty, err := OpenTTY()
 	if err != nil {
 		return nil, err
 	}
-	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected}, nil
+	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected, store: store}, nil
 }
 
 func (c *client) Close() error {
@@ -224,6 +229,12 @@ func (c *client) Run(ctx context.Context) error {
 }
 
 func (c *client) start(ctx context.Context) error {
+	if c.api == nil {
+		return fmt.Errorf("phic: selected desktop profile has an invalid server origin")
+	}
+	if err := c.persistActiveProfile(); err != nil {
+		return err
+	}
 	if err := c.authenticate(ctx); err != nil {
 		return err
 	}

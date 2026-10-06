@@ -11,7 +11,7 @@ import (
 )
 
 func (c *client) refreshIdentity(ctx context.Context, s *serverState) {
-	if s == nil {
+	if s == nil || s.api == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
@@ -80,6 +80,9 @@ func (c *client) switchServer(ctx context.Context, index int, current SelectResu
 	if index < 0 || index >= len(c.servers) {
 		return current, false, fmt.Errorf("phic: server number is not in the desktop profile list")
 	}
+	if c.servers[index].api == nil {
+		return current, false, fmt.Errorf("phic: desktop profile has an invalid server origin")
+	}
 	if index == c.serverIndex {
 		return current, false, nil
 	}
@@ -122,6 +125,9 @@ func (c *client) switchServer(ctx context.Context, index int, current SelectResu
 		if err != nil {
 			return current, false, err
 		}
+	}
+	if err := c.persistActiveProfile(); err != nil {
+		return current, false, err
 	}
 	next, fresh, err := c.materialize(ctx, sel)
 	if err != nil {

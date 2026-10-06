@@ -125,7 +125,7 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 	defer b.Close()
 	down := makeServer("DOWN", "green", "/not-local/down", true)
 	defer down.Close()
-	profiles := []desktopProfile{{ID: "a", Name: "Alpha", Origin: a.URL}, {ID: "b", Name: "Beta", Origin: b.URL}, {ID: "c", Name: "Down", Origin: down.URL}}
+	profiles := []desktopProfile{{ID: "a", Name: "Alpha", Origin: a.URL + "/"}, {ID: "b", Name: "Beta", Origin: b.URL + "/"}, {ID: "c", Name: "Down", Origin: down.URL + "/"}}
 	file := filepath.Join(t.TempDir(), "profiles.json")
 	original, _ := json.Marshal(map[string]any{"profiles": profiles, "closeToTray": true, "petEnabled": true})
 	_ = os.WriteFile(file, original, 0600)
@@ -222,8 +222,21 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 		t.Fatalf("switches not exercised: %#v", connects)
 	}
 	saved, _ := os.ReadFile(file)
-	if !bytes.Equal(saved, original) {
-		t.Fatal("native client changed desktop's config")
+	var preferences map[string]any
+	if json.Unmarshal(saved, &preferences) != nil || preferences["closeToTray"] != true || preferences["petEnabled"] != true {
+		t.Fatal("desktop preferences changed")
+	}
+	shared, err := readDesktopProfiles(file)
+	if err != nil || len(shared) != len(profiles) {
+		t.Fatalf("shared server list changed: %+v %v", shared, err)
+	}
+	for i, p := range shared {
+		if p.ID != profiles[i].ID || p.Name != profiles[i].Name || p.Origin != profiles[i].Origin {
+			t.Fatal("desktop order/identity changed")
+		}
+	}
+	if shared[1].LastUsed == "" || shared[2].LastUsed != "" {
+		t.Fatal("active stamp missing or failed switch persisted")
 	}
 	for _, pw := range []string{" password-ALPHA ", " password-BETA "} {
 		if bytes.Contains(tape.snapshot(), []byte(pw)) {

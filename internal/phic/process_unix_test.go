@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -29,6 +30,12 @@ func TestPhicProcessHelper(t *testing.T) {
 	if os.Getenv("PHIC_PROCESS_HELPER") != "1" {
 		return
 	}
+	home := os.Getenv("PHIC_PROCESS_HOME")
+	if home == "" {
+		home = t.TempDir()
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	var args []string
 	if err := json.Unmarshal([]byte(os.Getenv("PHIC_PROCESS_ARGS")), &args); err != nil {
 		os.Exit(2)
