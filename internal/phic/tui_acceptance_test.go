@@ -88,6 +88,20 @@ func TestTUIBackendFocusReceivesControlKeys(t *testing.T) {
 	}
 }
 
+// TestTUIRawPrefixByteArmsTheApplication keeps Ctrl-] usable on terminals
+// that deliver it as a raw 0x1d control byte.
+func TestTUIRawPrefixByteArmsTheApplication(t *testing.T) {
+	m := newModelWithServer(t, httptest.NewServer(http.NotFoundHandler()))
+	m.Update(tea.KeyPressMsg(tea.Key{Code: 0x1d}))
+	if !m.prefix {
+		t.Fatal("raw Ctrl-] did not arm the prefix")
+	}
+	m.Update(tea.KeyPressMsg(tea.Key{Code: '?'}))
+	if m.prefix || m.modal.kind != modalHelp {
+		t.Fatalf("prefix key after raw Ctrl-] failed: prefix=%v modal=%v", m.prefix, m.modal.kind)
+	}
+}
+
 // TestTUIResizeCollapsesPanels covers UX-08: narrow and wide geometry keeps a
 // valid widget and never renders clipped controls.
 func TestTUIResizeCollapsesPanels(t *testing.T) {

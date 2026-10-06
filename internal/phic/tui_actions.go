@@ -117,7 +117,9 @@ func (m *tuiModel) activeTabModel() *paneTab {
 // backend. Tab, arrows, digits, Escape, and Ctrl-C keep their backend meaning.
 func (m *tuiModel) handleTerminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.Key()
-	if k.Code == ']' && k.Mod.Contains(tea.ModCtrl) {
+	// Ctrl-] is either normalized (Code ']' + Ctrl) or still a raw 0x1d
+	// control byte on legacy terminals.
+	if (k.Code == ']' && k.Mod.Contains(tea.ModCtrl)) || k.Code == 0x1d {
 		m.prefix = true
 		m.setStatus("prefix: press a command key (Ctrl-] again sends a literal prefix)", false)
 		return m, nil
@@ -142,7 +144,7 @@ func (m *tuiModel) handleTerminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.prefix = false
 	k := msg.Key()
-	if k.Code == ']' && k.Mod.Contains(tea.ModCtrl) {
+	if (k.Code == ']' && k.Mod.Contains(tea.ModCtrl)) || k.Code == 0x1d {
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			tab.actor.sendKey(termemu.KeyEvent{Action: termemu.KeyPress, Key: termemu.KeyRune, Text: "\x1d"})
 		}

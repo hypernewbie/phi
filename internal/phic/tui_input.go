@@ -118,7 +118,7 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 		case k.Code >= 0x20 && unicode.IsPrint(k.Code):
 			ev.Text = string(k.Code)
 			printable = true
-		case k.Code > 0 && k.Code < 0x20:
+		case k.Code >= 1 && k.Code <= 26:
 			// A control byte means Ctrl-<letter> in terminals without
 			// enhanced disambiguation. Reconstruct the logical key so the
 			// emulator can encode it for the backend's current protocol.
@@ -129,6 +129,8 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 			ev.Unshifted = firstTextRune(ev.Text)
 			return ev, true
 		default:
+			// Other raw C0 bytes (FS/GS/RS/US...) have no logical key here.
+			// Dropping them is safer than inventing a wrong character.
 			return ev, false
 		}
 	}
