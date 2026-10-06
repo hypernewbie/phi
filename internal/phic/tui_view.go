@@ -163,7 +163,8 @@ func (m *tuiModel) renderContext() string {
 func (m *tuiModel) renderTabs() string {
 	accent := m.accentColor()
 	muted := lg.NewStyle().Foreground(tuiMuted)
-	tabs := m.tabs[m.active]
+	origin := m.currentOrigin()
+	tabs := m.tabs[origin]
 	prefix := muted.Render(" TERMINALS ")
 	suffix := muted.Render(" [x] close  [u] undo")
 	if len(tabs) == 0 {
@@ -172,7 +173,7 @@ func (m *tuiModel) renderTabs() string {
 	labels := make([]string, len(tabs))
 	widths := make([]int, len(tabs))
 	total := 0
-	active := m.activeTab[m.active]
+	active := m.activeTab[origin]
 	for i, t := range tabs {
 		mark := "◌"
 		if t.attached {

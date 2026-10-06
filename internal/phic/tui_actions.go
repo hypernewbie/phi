@@ -39,7 +39,7 @@ func (m *tuiModel) sidebarRows() []sidebarRow {
 	items := append([]Session{}, d.sessions...)
 	sortSessions(items)
 	tabIDs := map[string]bool{}
-	for _, t := range m.tabs[m.active] {
+	for _, t := range m.tabs[m.currentOrigin()] {
 		tabIDs[t.key.ID] = true
 	}
 	for _, s := range items {
@@ -318,14 +318,15 @@ func (m *tuiModel) activateSidebarRow(row sidebarRow) tea.Cmd {
 		return m.resumeSession(row.session)
 	case rowLivePane:
 		p := row.pane
-		tab := m.ensureTab(m.active, m.currentOrigin(), p.ID, spawnCapture{
-			origin: m.currentOrigin(), index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
+		origin := m.currentOrigin()
+		tab := m.ensureTab(origin, p.ID, spawnCapture{
+			origin: origin, index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
 		})
 		tab.view = p
 		tab.title = p.Title
 		tab.coder = p.Coder
 		tab.dir = p.Dir
-		m.activateTab(m.active, tab)
+		m.activateTab(origin, tab)
 		m.focus = focusTerminal
 		return m.persistIntent()
 	}
@@ -333,17 +334,18 @@ func (m *tuiModel) activateSidebarRow(row sidebarRow) tea.Cmd {
 }
 
 func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	tabs := m.tabs[m.active]
+	origin := m.currentOrigin()
+	tabs := m.tabs[origin]
 	k := msg.Key()
 	switch k.Code {
 	case tea.KeyLeft, 'h':
-		if m.activeTab[m.active] > 0 {
-			m.activeTab[m.active]--
+		if m.activeTab[origin] > 0 {
+			m.activeTab[origin]--
 			m.activateCurrentTab()
 		}
 	case tea.KeyRight, 'l':
-		if m.activeTab[m.active] < len(tabs)-1 {
-			m.activeTab[m.active]++
+		if m.activeTab[origin] < len(tabs)-1 {
+			m.activeTab[origin]++
 			m.activateCurrentTab()
 		}
 	case tea.KeyEnter:
@@ -725,7 +727,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case mouse.Y == 2:
 		m.focus = focusTabs
 		if index, ok := m.tabHit(mouse.X); ok {
-			m.activeTab[m.active] = index
+			m.activeTab[m.currentOrigin()] = index
 			m.activateCurrentTab()
 			m.focus = focusTerminal
 		}
@@ -779,7 +781,7 @@ func (m *tuiModel) railHit(x int) (int, bool) {
 
 func (m *tuiModel) tabHit(x int) (int, bool) {
 	offset := 1
-	for i, t := range m.tabs[m.active] {
+	for i, t := range m.tabs[m.currentOrigin()] {
 		label := " " + t.label() + " "
 		w := len([]rune(label)) + 2
 		if x >= offset && x < offset+w {
@@ -885,7 +887,7 @@ func (m *tuiModel) activateCurrentTab() {
 	if tab == nil {
 		return
 	}
-	m.activateTab(m.active, tab)
+	m.activateTab(m.currentOrigin(), tab)
 }
 
 func (m *tuiModel) cycleFocus(delta int) {
@@ -919,8 +921,9 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 	m.coderIdx = 0
 	m.sessionCursor = 0
 	m.sessionSearch = textField{}
-	if m.data[index] == nil {
-		m.data[index] = &serverData{}
+	origin := m.originFor(index)
+	if origin != "" && m.data[origin] == nil {
+		m.data[origin] = &serverData{}
 	}
 	m.setStatus("switching to "+m.servers[index].label(), false)
 	cmds := []tea.Cmd{persist, m.loadServerCmd(index)}
@@ -995,7 +998,12 @@ func (m *tuiModel) paneActionCmd(key paneKey, status string, fn func(ctx context
 // widget geometry at activation. One POST creates a fresh pane with an empty
 // resume identity.
 func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.Cmd {
-	if m.pendingSpawn[m.active] {
+	origin := m.currentOrigin()
+	if origin == "" {
+		m.setStatus("select a server first", true)
+		return nil
+	}
+	if m.pendingSpawn[origin] {
 		m.setStatus("a spawn is already pending for this server", false)
 		return nil
 	}
@@ -1011,7 +1019,7 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.
 	}
 	cols, rows := m.terminalSize()
 	cap := spawnCapture{
-		origin:    s.api.base.String(),
+		origin:    origin,
 		index:     m.active,
 		project:   m.project,
 		worktree:  m.worktree,
@@ -1021,7 +1029,7 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string) tea.
 		cols:      cols,
 		rows:      rows,
 	}
-	m.pendingSpawn[m.active] = true
+	m.pendingSpawn[origin] = true
 	m.setStatus("starting "+coder+"…", false)
 	return m.spawnCmd(cap)
 }
@@ -1053,11 +1061,12 @@ func (m *tuiModel) openPaneDirect(id string) tea.Cmd {
 	}
 	for _, p := range d.panes {
 		if p.ID == id {
-			tab := m.ensureTab(m.active, m.currentOrigin(), p.ID, spawnCapture{
-				origin: m.currentOrigin(), index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
+			origin := m.currentOrigin()
+			tab := m.ensureTab(origin, p.ID, spawnCapture{
+				origin: origin, index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
 			})
 			tab.view = p
-			m.activateTab(m.active, tab)
+			m.activateTab(origin, tab)
 			m.focus = focusTerminal
 			return nil
 		}
