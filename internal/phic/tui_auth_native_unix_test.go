@@ -132,7 +132,7 @@ func TestConsoleRelaunchKeepsLoginWithoutKeychainOrPasswordFile(t *testing.T) {
 			await("Phi server password")
 			master.Write([]byte(password + "\r"))
 		}
-		await("connected")
+		await("already live")
 		if launch == 1 && bytes.Contains(tape.snapshot(), []byte("Phi server password")) {
 			t.Fatal("console relaunch prompted despite remembered login")
 		}

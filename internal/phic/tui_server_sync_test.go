@@ -43,7 +43,7 @@ func TestConnectedChromeUsesAccentInsteadOfGreen(t *testing.T) {
 	m.currentServer().health = "up"
 	// Check the styled connection label; backend ANSI and diff colors are untouched.
 	text := m.connectionLabel()
-	if ansi.Strip(text) != "connected" {
+	if ansi.Strip(text) != "●" {
 		t.Fatalf("unexpected status label %q", text)
 	}
 }

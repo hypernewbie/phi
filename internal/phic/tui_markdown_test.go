@@ -51,7 +51,7 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 		t.Fatalf("failed remote list: %+v", m.markdown)
 	}
 	m.Update(m.openMarkdownFile(0)())
-	rendered := m.renderMarkdownPanel()
+	rendered := m.renderMarkdownModal()
 	plain := ansi.Strip(rendered)
 	if !strings.Contains(plain, "Native Markdown") || !strings.Contains(plain, "Hello Phi") || m.markdown.err != "" {
 		t.Fatalf("Markdown was not rendered: %q, %s", plain, m.markdown.err)
@@ -59,11 +59,11 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 	if strings.Contains(rendered, "\x1b]52;") || strings.Contains(m.markdown.raw, "\x1b") {
 		t.Fatal("source control sequence escaped into client chrome")
 	}
-	if _, cmd := m.handleMarkdownKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd != nil {
-		t.Fatal("Markdown offered clipboard copy")
+	if _, cmd := m.handleModalKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil || fmt.Sprintf("%s", cmd()) != m.markdown.source {
+		t.Fatal("explicit Markdown copy did not use the exact source")
 	}
-	if m.copyActiveText() != nil {
-		t.Fatal("global copy copied Markdown")
+	if _, cmd := m.handleModalKey(tea.KeyPressMsg{Code: 'f', Text: "f"}); cmd == nil || fmt.Sprintf("%s", cmd()) != "notes #1.md" {
+		t.Fatal("filename copy did not copy the filename")
 	}
 	m.handlePaste(tea.PasteMsg{Content: "do not edit or paste"})
 	if strings.Contains(m.markdown.raw, "do not edit") {
@@ -72,7 +72,7 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 	if writes.Load() != 0 {
 		t.Fatal("Markdown viewer wrote server state")
 	}
-	m.handleMarkdownKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m.handleModalKey(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.markdown.reading {
 		t.Fatal("back did not restore file list")
 	}

@@ -38,7 +38,7 @@ def main():
     (home / ".phi" / "backends").mkdir(parents=True)
     work.mkdir()
     (work / "temp").mkdir()
-    (work / "temp" / "native.md").write_text("# PHIC_MD_NATIVE_VIEW\n\n**Phi** Markdown works.\n\n- one\n- two\n")
+    (work / "temp" / "native.md").write_text("# PHIC_MD_NATIVE_VIEW\n\nThis paragraph remains readable across the full terminal viewport rather than a narrow side panel.\n\n**Phi** Markdown works.\n\n- one\n- two\n")
     # No provider credentials, SSH agent, or caller backend state is inherited.
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL")}
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
@@ -198,7 +198,7 @@ def main():
                     view = snapshot(name)
                     if key == "s":
                         plain = re.sub(r"\x1b\[[0-9;]*m", "", view["cells"])
-                        if "New Session" not in plain or "TERMINALS" not in plain:
+                        if "New Session" not in plain or "▣" not in plain:
                             raise RuntimeError("console lost its persistent session/tab controls")
                     (run / f"{coder}.{key if key != '?' else 'help'}.{len(views)}.view.json").write_text(json.dumps(view, indent=2))
                     tmux("send-keys", "-t", name, leave)
@@ -211,6 +211,11 @@ def main():
                 except (RuntimeError, subprocess.CalledProcessError) as error:
                     views.append({"key": key, "restored": False, "error": str(error)})
                     break
+            redraw = None
+            if ready and coder == "bash" and all(v["restored"] for v in views):
+                tmux("send-keys", "-t", name, "C-]", "R")
+                wait_view(name, "PHIC_UNSUBMITTED")
+                redraw = terminal_equal(settled(name), reference)
             markdown_view = None
             if ready and coder == "bash" and all(v["restored"] for v in views):
                 try:
@@ -218,8 +223,13 @@ def main():
                     wait_view(name, "native.md")
                     tmux("send-keys", "-t", name, "Enter")
                     wait_view(name, "PHIC_MD_NATIVE_VIEW")
-                    (run / "markdown.view.json").write_text(json.dumps(snapshot(name), indent=2))
-                    tmux("send-keys", "-t", name, "Left")
+                    md_view = snapshot(name)
+                    (run / "markdown.view.json").write_text(json.dumps(md_view, indent=2))
+                    plain = re.sub(r"\x1b\[[0-9;]*m", "", md_view["cells"])
+                    if "the full terminal viewport rather than a narrow side panel." not in plain:
+                        raise RuntimeError("Markdown still wraps in a thin side panel")
+                    # Click the actual Unicode close glyph in the real client TTY.
+                    tmux("send-keys", "-t", name, "-l", "\x1b[<0;118;2M\x1b[<0;118;2m")
                     wait_view(name, "Enter view")
                     tmux("send-keys", "-t", name, "C-]", "d")
                     wait_view(name, "PHIC_UNSUBMITTED")
@@ -289,7 +299,7 @@ def main():
                     (run / f"{coder}.reattach-error.txt").write_text(str(error))
             row = {"coder": coder, "elapsed": round(time.monotonic() - started, 3), "ready": ready,
                    "views": views, "reattached": reattached,
-                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "markdown_view": markdown_view, "pane": pane}
+                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "markdown_view": markdown_view, "redraw": redraw, "pane": pane}
             report.append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
     finally:
@@ -311,7 +321,7 @@ def main():
     return 0 if len(report) == len(coders) and all(
         r["ready"] and len(r["views"]) == 6 and all(v["restored"] for v in r["views"])
         and r["reattached"] and r["detached"] and r["backend_survives_detach"]
-        and (r["coder"] != "bash" or (r["close_click_undo"] is True and r["markdown_view"] is True)) for r in report) else 1
+        and (r["coder"] != "bash" or (r["close_click_undo"] is True and r["markdown_view"] is True and r["redraw"] is True)) for r in report) else 1
 
 
 if __name__ == "__main__":

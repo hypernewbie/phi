@@ -304,7 +304,7 @@ func TestTUIViewRendersEmbeddedFrame(t *testing.T) {
 	if !strings.Contains(screen, "framed content") {
 		t.Fatalf("rendered screen does not embed pane content:\n%s", screen)
 	}
-	if !strings.Contains(screen, "TERMINALS") || !strings.Contains(screen, "SESSIONS") {
+	if !strings.Contains(screen, "▣") || !strings.Contains(screen, "SESSIONS") {
 		t.Fatal("persistent chrome missing from render")
 	}
 }
