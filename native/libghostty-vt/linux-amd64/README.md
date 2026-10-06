@@ -1,3 +1,4 @@
-# linux amd64
+# Linux amd64
 
-Run `zig build -Demit-lib-vt -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe` from the pinned Ghostty source and place the resulting `libghostty-vt.a` here.
+`libghostty-vt.a` is the pinned static archive. The native CGO client cross-links with Zig C.
+The checksum and source pin are in `../manifest.json`. Local runtime remains unverified.

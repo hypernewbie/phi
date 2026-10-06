@@ -31,14 +31,15 @@ builds:
         -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}}
         -X main.Date={{.Date}} -X main.BuildSource=release
 
-  # Native client build. No embedded assets; the binary is
-  # a thin terminal client. The build id is "phic" so the
+  # Native VT console: CGO is mandatory. The cross-target release compiler
+  # must be configured before publication; never ship an emulator-less stub.
+  # The build id is "phic" so the
   # archive is phi_<version>_<os>_<arch>_phic.tar.gz.
   - id: phic
     main: ./cmd/phic
     binary: phic
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - linux
       - darwin

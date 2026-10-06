@@ -1,36 +1,52 @@
-# libghostty-vt artifacts
+# Pinned libghostty-vt archives
 
-Source pin: https://github.com/ghostty-org/ghostty @ `c3203ea4b169a18eb2ccfe92847e426d8afea858`.
-License: MIT.
+Source: https://github.com/ghostty-org/ghostty at `c3203ea4b169a18eb2ccfe92847e426d8afea858`.
+License: MIT. The upstream license is in `LICENSE`.
 
-Per-target static archives live in this directory. The Go adapter (`internal/termemu`) compiles against the headers in `include/` and links the matching archive through the cgo directives in `internal/termemu/ghostty_cgo.go`.
+The module includes the static archives, headers, and `manifest.json`.
+A normal CGO build links the archive for its target. No special build tag is necessary.
+Source installation requires Go and a supported C compiler. It does not require Zig or an external Ghostty installation.
+The root `phi` server retains its pure-Go build path.
 
-## Build contract
+```sh
+go build .
+go build -o phic ./cmd/phic
+go install ./cmd/phic
+```
 
-- Default `go build ./...` and `go test ./...` do not link the native library. The TUI then reports a precise error instead of substituting another parser.
-- Native builds use `-tags=termemu_ghostty`. The linker reads the archive path for the current `GOOS/GOARCH`; a missing archive fails the link with that exact path. There is no runtime downloader and no hidden build step.
-- The archives are maintainer-built and are intentionally not committed (see the repository `.gitignore`). The headers, this README, and `manifest.json` are committed. `manifest.json` records the source revision, flags, license, and the local artifact checksum for each verified target.
-- Reproducing an archive requires Zig 0.16.0. Using an archive does not.
+A client built with `CGO_ENABLED=0` cannot run the console.
+That client reports the missing build requirement before it enters fullscreen.
+Help and version commands remain available.
+The client never downloads a native library at runtime or substitutes another emulator.
 
-Reproduce with:
+## Maintainer reproduction
+
+Library reproduction requires Zig `0.16.0`. Application builds use the committed archives.
 
 ```sh
 git clone https://github.com/ghostty-org/ghostty
 cd ghostty
 git checkout c3203ea4b169a18eb2ccfe92847e426d8afea858
-zig build -Demit-lib-vt -Doptimize=ReleaseSafe
+zig build -Demit-lib-vt -Demit-xcframework=false -Doptimize=ReleaseSafe
 ```
 
-That emits `zig-out/lib/libghostty-vt.a` and copies the public headers under `include/ghostty/`. Move the resulting archive into this directory under the matching target subfolder (`darwin-arm64/`, `linux-amd64/`, and so on). CGO consumers then read it directly through the relative path declared in the adapter.
+Cross-target builds add `-Dtarget=TARGET -Dcpu=baseline`.
+The targets are `x86_64-macos`, `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `x86_64-windows`.
+The Windows archive keeps its COFF contents under the `.a` suffix that CGO accepts.
+Headers and archives must come from the same pin.
+The manifest records each checksum, compiler, target, and build flags.
 
-The Windows static consumer is `ghostty-vt-static.lib`. Building it on macOS/Linux requires Zig targeting `x86_64-windows`; the existing lab build in `temp/phic-tui-evaluation/ghostty-windows/` shows the resulting layout.
+## Build evidence
 
-## Verified targets
-
-| Target | Archive | Status |
+| Target | Native client links | Runtime evidence |
 |---|---|---|
-| darwin-arm64 | `libghostty-vt.a` | Built and verified by `internal/termemu` conformance tests |
-| darwin-amd64 | `libghostty-vt.a` | Declared; archive not yet built on this machine |
-| linux-amd64 | `libghostty-vt.a` | Declared; archive not yet built on this machine |
-| linux-arm64 | `libghostty-vt.a` | Declared; archive not yet built on this machine |
-| windows-amd64 | `ghostty-vt-static.lib` | Declared; cross-build evaluated, runtime not verified |
+| macOS arm64 | Yes, default Go build | Six installed backend presentations in an isolated native console |
+| macOS amd64 | Yes, Apple Clang cross-build | Not run |
+| Linux amd64 | Yes, Zig C cross-build | Not run locally |
+| Linux arm64 | Yes, Zig C cross-build | Not run locally |
+| Windows amd64 | Yes, Zig C cross-build | Windows Terminal runtime remains open |
+
+The former CGO-disabled cross-builds only proved the unsupported-adapter path.
+They did not prove a usable console binary.
+Windows arm64 has no archive or runtime proof.
+Release packaging remains a separate gate. In particular, the old CGO-disabled release job must not publish this console.
