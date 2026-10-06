@@ -37,6 +37,8 @@ def main():
     home, work = run / "home", run / "work"
     (home / ".phi" / "backends").mkdir(parents=True)
     work.mkdir()
+    (work / "temp").mkdir()
+    (work / "temp" / "native.md").write_text("# PHIC_MD_NATIVE_VIEW\n\n**Phi** Markdown works.\n\n- one\n- two\n")
     # No provider credentials, SSH agent, or caller backend state is inherited.
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL")}
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
@@ -209,6 +211,23 @@ def main():
                 except (RuntimeError, subprocess.CalledProcessError) as error:
                     views.append({"key": key, "restored": False, "error": str(error)})
                     break
+            markdown_view = None
+            if ready and coder == "bash" and all(v["restored"] for v in views):
+                try:
+                    tmux("send-keys", "-t", name, "C-]", "M")
+                    wait_view(name, "native.md")
+                    tmux("send-keys", "-t", name, "Enter")
+                    wait_view(name, "PHIC_MD_NATIVE_VIEW")
+                    (run / "markdown.view.json").write_text(json.dumps(snapshot(name), indent=2))
+                    tmux("send-keys", "-t", name, "Left")
+                    wait_view(name, "Enter view")
+                    tmux("send-keys", "-t", name, "C-]", "d")
+                    wait_view(name, "PHIC_UNSUBMITTED")
+                    markdown_view = terminal_equal(settled(name), reference)
+                except (RuntimeError, subprocess.CalledProcessError) as error:
+                    markdown_view = False
+                    (run / "markdown.failed.json").write_text(json.dumps(snapshot(name), indent=2))
+                    (run / "markdown-error.txt").write_text(str(error))
             close_click_undo = None
             if ready and coder == "bash" and all(v["restored"] for v in views):
                 def click_control(label):
@@ -270,7 +289,7 @@ def main():
                     (run / f"{coder}.reattach-error.txt").write_text(str(error))
             row = {"coder": coder, "elapsed": round(time.monotonic() - started, 3), "ready": ready,
                    "views": views, "reattached": reattached,
-                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "pane": pane}
+                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "markdown_view": markdown_view, "pane": pane}
             report.append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
     finally:
@@ -292,7 +311,7 @@ def main():
     return 0 if len(report) == len(coders) and all(
         r["ready"] and len(r["views"]) == 6 and all(v["restored"] for v in r["views"])
         and r["reattached"] and r["detached"] and r["backend_survives_detach"]
-        and (r["coder"] != "bash" or r["close_click_undo"] is True) for r in report) else 1
+        and (r["coder"] != "bash" or (r["close_click_undo"] is True and r["markdown_view"] is True)) for r in report) else 1
 
 
 if __name__ == "__main__":

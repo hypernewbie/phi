@@ -12,6 +12,7 @@ import (
 )
 
 type diffState struct {
+	markdown        bool
 	open            bool
 	text            string
 	lines           []string
@@ -53,6 +54,9 @@ func (d *diffState) nextMatch(delta int) {
 func (m *tuiModel) refreshDiff() tea.Cmd {
 	if !m.diff.open {
 		return nil
+	}
+	if m.diff.markdown {
+		return m.refreshMarkdownList()
 	}
 	origin := m.currentOrigin()
 	if origin == "" || m.project == "" {

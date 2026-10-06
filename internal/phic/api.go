@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,8 +34,11 @@ type loginResponse struct {
 
 // apiClient wraps a *http.Client with the cookie jar and base URL.
 type apiClient struct {
-	base *url.URL
-	http *http.Client
+	base          *url.URL
+	http          *http.Client
+	rememberMu    sync.Mutex
+	remember      *sessionPersistence
+	rememberError string
 }
 
 func newAPIClient(server string) (*apiClient, error) {
@@ -69,8 +73,23 @@ func newAPIClient(server string) (*apiClient, error) {
 // AuthStatus returns the parsed /api/auth/status body.
 func (a *apiClient) AuthStatus(ctx context.Context) (authStatus, error) {
 	var s authStatus
-	if err := a.getJSON(ctx, "/api/auth/status", &s); err != nil {
+	var raw json.RawMessage
+	if err := a.getJSON(ctx, "/api/auth/status", &raw); err != nil {
 		return s, err
+	}
+	var presence struct {
+		Enabled       *bool `json:"enabled"`
+		Authenticated *bool `json:"authenticated"`
+	}
+	if err := json.Unmarshal(raw, &presence); err != nil || presence.Enabled == nil {
+		return s, fmt.Errorf("phic: malformed auth status")
+	}
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return s, err
+	}
+	// Only an explicit server rejection/disable clears a remembered login.
+	if !s.Enabled || (presence.Authenticated != nil && !s.Authenticated) {
+		a.forgetRememberedSession()
 	}
 	return s, nil
 }
@@ -92,6 +111,7 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	if err != nil {
 		return err
 	}
+	defer clear(verifier)
 	mac := hmac.New(sha256.New, verifier)
 	mac.Write([]byte(status.Challenge))
 	proof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -107,6 +127,7 @@ func (a *apiClient) Login(ctx context.Context, status authStatus, password strin
 	if !resp.OK {
 		return fmt.Errorf("phic: login failed")
 	}
+	a.saveRememberedSession()
 	return nil
 }
 

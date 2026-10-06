@@ -133,7 +133,7 @@ func (m *tuiModel) connectionLabel() string {
 	}
 	switch s.health {
 	case "up":
-		return lg.NewStyle().Foreground(tuiOK).Render("connected")
+		return lg.NewStyle().Foreground(m.accentColor()).Render("connected")
 	default:
 		return lg.NewStyle().Foreground(lg.Color("#fbbf24")).Render("unreachable")
 	}
@@ -582,6 +582,9 @@ func inSelection(sel selectionState, x, y int) bool {
 // ---- diff ----
 
 func (m *tuiModel) renderDiffPanel() string {
+	if m.diff.markdown {
+		return m.renderMarkdownPanel()
+	}
 	r := m.diffRect()
 	if r.empty() {
 		return ""
@@ -589,7 +592,7 @@ func (m *tuiModel) renderDiffPanel() string {
 	innerW, innerH := r.W-2, r.H-2
 	accent := m.accentColor()
 	var lines []string
-	header := "DIFF"
+	header := m.renderReaderTabs()
 	if m.diff.project != "" {
 		header += " · " + menuLabel(m.diff.project)
 	}
@@ -669,14 +672,20 @@ func fitScreen(s string, w, h int) string {
 func (m *tuiModel) renderFooter() string {
 	accent := m.accentColor()
 	status := menuLabel(m.status)
+	if d := m.current(); d != nil && d.loginWarning != "" {
+		status += " · login not saved: " + menuLabel(d.loginWarning)
+	}
 	style := lg.NewStyle().Foreground(tuiMuted)
 	if m.statusErr {
 		style = lg.NewStyle().Foreground(tuiError)
 	}
 	left := style.Render(" " + status)
 	hints := "Ctrl-] commands  Tab focus  [n] new  [d] diff  [?] help"
+	if m.focus == focusDiff {
+		hints = "Tab Diff/Markdown  ↑↓ scroll  Esc terminal  Ctrl-] commands"
+	}
 	if m.prefix {
-		hints = "prefix: 1-9 servers  b rail  s sessions  t tabs  d diff  h history  n new  q quit  ? help"
+		hints = "prefix: 1-9 servers  b rail  s sessions  t tabs  x close  u undo  d reader  M Markdown  q quit  ? help"
 	}
 	right := lg.NewStyle().Foreground(accent).Render(hints + " ")
 	gap := m.width - lg.Width(left) - lg.Width(right)

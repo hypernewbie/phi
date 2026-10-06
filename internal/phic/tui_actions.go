@@ -82,7 +82,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.prefix = true
 		return m, nil
 	}
-	if k.Code == tea.KeyTab && m.focus != focusTerminal {
+	if k.Code == tea.KeyTab && m.focus != focusTerminal && m.focus != focusDiff {
 		delta := 1
 		if k.Mod.Contains(tea.ModShift) {
 			delta = -1
@@ -155,9 +155,19 @@ func (m *tuiModel) handleTerminalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // handlePrefixKey performs documented second-key actions. Unknown keys cancel
 // the prefix without reaching the backend, so an accidental prefix cannot
 // inject bytes.
+func chromeKeyCode(k tea.Key) rune {
+	// Bubble Tea normalizes ASCII Shift+letter to lowercase Code + ModShift.
+	// This applies only to chrome commands, never backend key encoding.
+	if k.Mod.Contains(tea.ModShift) && k.Code >= 'a' && k.Code <= 'z' {
+		return k.Code - 'a' + 'A'
+	}
+	return k.Code
+}
+
 func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.prefix = false
 	k := msg.Key()
+	k.Code = chromeKeyCode(k)
 	if (k.Code == ']' && k.Mod.Contains(tea.ModCtrl)) || k.Code == 0x1d {
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			tab.actor.sendKey(termemu.KeyEvent{Action: termemu.KeyPress, Key: termemu.KeyRune, Text: "\x1d"})
@@ -194,6 +204,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.focus = focusTerminal
 		return m, m.persistIntent()
+	case 'M':
+		return m, m.showMarkdown()
 	case 'h':
 		return m, m.openHistory()
 	case 'D':
@@ -368,6 +380,7 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	origin := m.currentOrigin()
 	tabs := m.tabs[origin]
 	k := msg.Key()
+	k.Code = chromeKeyCode(k)
 	switch k.Code {
 	case tea.KeyLeft, 'h':
 		if m.activeTab[origin] > 0 {
@@ -433,7 +446,11 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.diff.markdown {
+		return m.handleMarkdownKey(msg)
+	}
 	k := msg.Key()
+	k.Code = chromeKeyCode(k)
 	if m.diff.searchActive {
 		switch k.Code {
 		case tea.KeyEscape:
@@ -472,6 +489,8 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.diff.scroll = 0
 	case tea.KeyEnd:
 		m.diff.scroll = max(0, len(m.diff.lines)-1)
+	case 'm', tea.KeyTab:
+		return m, m.showMarkdown()
 	case 'r':
 		return m, m.refreshDiff()
 	case '/':
@@ -485,8 +504,6 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.SetClipboard(m.diff.text)
 		}
 	case tea.KeyEscape:
-		m.focus = focusTerminal
-	case tea.KeyTab:
 		m.focus = focusTerminal
 	case 'd':
 		m.diff.open = false
@@ -703,7 +720,7 @@ func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		m.sessionSearch.insert(msg.Content)
 		return m, nil
 	}
-	if m.focus == focusDiff && m.diff.searchActive {
+	if m.focus == focusDiff && !m.diff.markdown && m.diff.searchActive {
 		m.diff.search.insert(msg.Content)
 		m.diff.recomputeMatches()
 		return m, nil
@@ -727,6 +744,23 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch mouse.Button {
 	case tea.MouseWheelUp, tea.MouseWheelDown:
+		if r := m.diffRect(); !r.empty() && mouse.X >= r.X && mouse.X < r.X+r.W && mouse.Y >= r.Y && mouse.Y < r.Y+r.H {
+			m.focus = focusDiff
+			delta := -3
+			if mouse.Button == tea.MouseWheelDown {
+				delta = 3
+			}
+			if m.diff.markdown {
+				if m.markdown.reading {
+					m.markdown.scroll = max(0, min(len(m.markdown.lines)-1, m.markdown.scroll+delta))
+				} else {
+					m.markdown.cursor = max(0, min(len(m.markdown.files)-1, m.markdown.cursor+delta))
+				}
+			} else {
+				m.diff.scroll = max(0, min(len(m.diff.lines)-1, m.diff.scroll+delta))
+			}
+			return m, nil
+		}
 		if inTerminal {
 			tab := m.activeTabModel()
 			if tab != nil && tab.actor != nil && tab.actor.mouseOwned() {
@@ -850,6 +884,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	if r := m.diffRect(); !r.empty() && mouse.X >= r.X {
 		m.focus = focusDiff
+		if mouse.Button == tea.MouseLeft {
+			return m.handleReaderClick(mouse.X, mouse.Y)
+		}
 		return m, nil
 	}
 	if inTerminal {
@@ -1025,6 +1062,9 @@ func (m *tuiModel) selectionText() string {
 
 func (m *tuiModel) copyActiveText() tea.Cmd {
 	if m.focus == focusDiff {
+		if m.diff.markdown {
+			return nil
+		}
 		if m.diff.text != "" {
 			return tea.SetClipboard(m.diff.text)
 		}
@@ -1098,7 +1138,8 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 			return m.loadServerCmd(index)
 		}
 		m.activateCurrentTab()
-		return nil
+		// Opening a server is also an explicit live-pane refresh.
+		return m.loadServerCmd(index)
 	}
 	persist := m.persistIntent()
 	if d := m.current(); d != nil {
@@ -1112,7 +1153,8 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 	}
 	m.quitOnce = false
 	m.focus = focusTerminal
-	m.diff = diffState{open: m.diff.open}
+	m.diff = diffState{open: m.diff.open, markdown: m.diff.markdown}
+	m.markdown = markdownState{}
 	m.coderIdx = 0
 	m.sessionCursor = 0
 	m.sessionSearch = textField{}
