@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gorilla/websocket"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
@@ -48,9 +49,14 @@ func TestBtopMatchesWebsiteFreshShellThenInputOnce(t *testing.T) {
 	m := newModelWithServer(t, srv)
 	defer m.closeAll()
 	m.worktree = "/work/feature"
-	cmd := m.spawnBtop()
+	rail := ansi.Strip(m.renderRail())
+	at := strings.Index(rail, "[▥]")
+	if at < 0 {
+		t.Fatal("btop button not rendered")
+	}
+	_, cmd := m.handleMouse(tea.MouseClickMsg{X: ansi.StringWidth(rail[:at]), Y: 0, Button: tea.MouseLeft})
 	if cmd == nil {
-		t.Fatal("no btop spawn command")
+		t.Fatal("click on btop icon did not launch")
 	}
 	m.worktree = "/different" // Dispatch owns the old server/cwd, like New Session.
 	msg := cmd()
