@@ -1,3 +1,4 @@
-# darwin amd64
+# macOS amd64
 
-Run `zig build -Demit-lib-vt -Dtarget=x86_64-macos -Doptimize=ReleaseSafe` from the pinned Ghostty source and place the resulting `libghostty-vt.a` here.
+`libghostty-vt.a` is the pinned static archive. The native CGO client cross-links with Apple Clang.
+The checksum and source pin are in `../manifest.json`. Runtime on this architecture remains unverified.

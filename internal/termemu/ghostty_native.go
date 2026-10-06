@@ -1,4 +1,4 @@
-//go:build termemu_ghostty
+//go:build cgo && (((darwin || linux) && (amd64 || arm64)) || (windows && amd64))
 
 package termemu
 
@@ -116,6 +116,8 @@ static PhiTerminal *phi_new(int cols, int rows, size_t max_bytes, size_t max_lin
 	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_BELL, phi_bell);
 	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes);
 	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &max_lines);
+	uint64_t no_graphics = 0;
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &no_graphics);
 	if (ghostty_render_state_new(NULL, &p->render) != GHOSTTY_SUCCESS ||
 	    ghostty_render_state_row_iterator_new(NULL, &p->rows) != GHOSTTY_SUCCESS ||
 	    ghostty_render_state_row_cells_new(NULL, &p->cells) != GHOSTTY_SUCCESS) {
@@ -152,6 +154,14 @@ static int phi_resize(PhiTerminal *p, int cols, int rows) {
 // parser reaches ground so the completion of a historical query cannot leak a
 // duplicate reply into the live stream.
 static void phi_feed(PhiTerminal *p, const uint8_t *data, size_t len, int source) {
+	if (source == 0 && p->pending_boundary) {
+		// Only an explicit boundary keeps the already-seen partial command suppressed.
+		while (len > 0 && p->pending_boundary) {
+			ghostty_terminal_vt_write(p->terminal, data++, 1);
+			len--;
+			if (phi_at_ground(p)) p->pending_boundary = 0;
+		}
+	}
 	if (source != 0) {
 		p->suppress = 1;
 		if (source == 2) {
@@ -163,18 +173,24 @@ static void phi_feed(PhiTerminal *p, const uint8_t *data, size_t len, int source
 	}
 	if (source != 0) {
 		p->suppress = 0;
-		if (!p->pending_boundary && !phi_at_ground(p)) {
-			p->pending_boundary = 1;
-		}
+		// Ordinary recording replay does not suppress an unseen query terminator.
+		// Only SourceBoundary explicitly suppresses that completion.
 	}
 	if (p->pending_boundary && phi_at_ground(p)) {
 		p->pending_boundary = 0;
 	}
 }
 
+static void phi_scroll(PhiTerminal *p, intptr_t delta) {
+	GhosttyTerminalScrollViewport s = {0};
+	s.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA;
+	s.value.delta = delta;
+	ghostty_terminal_scroll_viewport(p->terminal, s);
+}
+
 typedef struct {
 	uint16_t cols, rows, x, y;
-	uint8_t alt, pending_wrap;
+	uint8_t alt, pending_wrap, hidden;
 	uint64_t history;
 	uint64_t revision;
 } PhiInfo;
@@ -189,6 +205,9 @@ static int phi_info(PhiTerminal *p, PhiInfo *out) {
 	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_X, &out->x);
 	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &out->y);
 	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP, &out->pending_wrap);
+	bool visible = true;
+	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE, &visible);
+	out->hidden = !visible;
 	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen);
 	out->alt = (screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE) ? 1 : 0;
 	ghostty_terminal_get(p->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &out->history);
@@ -576,7 +595,7 @@ func (g *ghosttyTerminal) Snapshot() (Frame, error) {
 	frame := Frame{
 		Cols:    cols,
 		Rows:    rows,
-		Cursor:  Cursor{X: int(info.x), Y: int(info.y), PendingWrap: info.pending_wrap != 0},
+		Cursor:  Cursor{X: int(info.x), Y: int(info.y), PendingWrap: info.pending_wrap != 0, Hidden: info.hidden != 0},
 		Alt:     info.alt != 0,
 		History: int(info.history),
 		PageID:  uint64(info.revision),
@@ -1000,6 +1019,33 @@ func (g *ghosttyTerminal) NativeMemory() (uint64, error) {
 		return 0, &Error{Op: "ghostty.memory", Err: fmt.Sprintf("memory query failed (%d)", int(rc))}
 	}
 	return uint64(resident), nil
+}
+
+// ScrollViewport changes only the retained normal-screen viewport.
+func (g *ghosttyTerminal) ScrollViewport(delta int) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return &Error{Op: "ghostty.scroll", Err: "terminal is closed"}
+	}
+	C.phi_scroll(g.c, C.intptr_t(delta))
+	return nil
+}
+
+func (g *ghosttyTerminal) EncodeFocus(focused bool) ([]byte, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return nil, &Error{Op: "ghostty.focus", Err: "terminal is closed"}
+	}
+	var enabled C.int
+	if C.phi_mode(g.c, 1004, 0, &enabled) != C.GHOSTTY_SUCCESS || enabled == 0 {
+		return nil, nil
+	}
+	if focused {
+		return []byte("\x1b[I"), nil
+	}
+	return []byte("\x1b[O"), nil
 }
 
 func (g *ghosttyTerminal) Close() error {

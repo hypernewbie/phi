@@ -33,11 +33,8 @@ PLAN.md
 phi_bin
 .antigravitycli/
 
-# Maintainer-built native artifacts (see native/libghostty-vt/manifest.json).
-# Headers and README/manifest files are committed; the per-target static
-# archives and runtime libraries are produced via the maintainer rebuild
-# described in native/libghostty-vt/README.md and arrive locally.
-native/libghostty-vt/*/libghostty-vt.a
+# Pinned .a archives are committed source-install dependencies.
+# Unused library formats and shared libraries stay out of the module.
 native/libghostty-vt/*/libghostty-vt.lib
 native/libghostty-vt/*/ghostty-vt-static.lib
 native/libghostty-vt/*/*.dylib

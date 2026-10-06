@@ -15,14 +15,19 @@
       "goarch": "arm64",
       "static_archive": "darwin-arm64/libghostty-vt.a",
       "include_dir": "include",
-      "linker_flags": ["-lm", "-lpthread"],
-      "cflags": ["-DGHOSTTY_STATIC"],
+      "linker_flags": [
+        "-lm",
+        "-lpthread"
+      ],
+      "cflags": [
+        "-DGHOSTTY_STATIC"
+      ],
       "artifact": {
         "sha256": "923dd2f08f119883ef99f0132f0d50cf0a3fb13520d4148b4824ac18bb35fac6",
         "size": 11022512,
         "built": "2026-10-06",
         "host": "macOS arm64 (Zig 0.16.0)",
-        "verified_by": "internal/termemu tests with -tags=termemu_ghostty"
+        "verified_by": "native runtime cohort and adapter tests"
       }
     },
     {
@@ -31,8 +36,27 @@
       "goarch": "amd64",
       "static_archive": "darwin-amd64/libghostty-vt.a",
       "include_dir": "include",
-      "linker_flags": ["-lm", "-lpthread"],
-      "cflags": ["-DGHOSTTY_STATIC"]
+      "linker_flags": [
+        "-lm",
+        "-lpthread"
+      ],
+      "cflags": [
+        "-DGHOSTTY_STATIC"
+      ],
+      "artifact": {
+        "sha256": "51c91ed33d762d74634b1e57f6de1a891e20fb45efafadba501dbeabba9fa457",
+        "size": 14610616,
+        "built": "2026-10-06",
+        "host": "macOS arm64 (Zig 0.16.0)",
+        "verified_by": "CGO-enabled client link; runtime not run"
+      },
+      "build_flags": [
+        "-Demit-lib-vt",
+        "-Demit-xcframework=false",
+        "-Doptimize=ReleaseSafe",
+        "-Dcpu=baseline",
+        "-Dtarget=x86_64-macos"
+      ]
     },
     {
       "id": "linux-amd64",
@@ -40,8 +64,28 @@
       "goarch": "amd64",
       "static_archive": "linux-amd64/libghostty-vt.a",
       "include_dir": "include",
-      "linker_flags": ["-lm", "-lpthread", "-ldl"],
-      "cflags": ["-DGHOSTTY_STATIC"]
+      "linker_flags": [
+        "-lm",
+        "-lpthread",
+        "-ldl"
+      ],
+      "cflags": [
+        "-DGHOSTTY_STATIC"
+      ],
+      "artifact": {
+        "sha256": "4f7d9954974c537450fba34858e1dbefd1985eb9d836274bc58dfb5b2502afc6",
+        "size": 21622082,
+        "built": "2026-10-06",
+        "host": "macOS arm64 (Zig 0.16.0)",
+        "verified_by": "CGO-enabled client link; runtime not run"
+      },
+      "build_flags": [
+        "-Demit-lib-vt",
+        "-Demit-xcframework=false",
+        "-Doptimize=ReleaseSafe",
+        "-Dcpu=baseline",
+        "-Dtarget=x86_64-linux-gnu"
+      ]
     },
     {
       "id": "linux-arm64",
@@ -49,17 +93,46 @@
       "goarch": "arm64",
       "static_archive": "linux-arm64/libghostty-vt.a",
       "include_dir": "include",
-      "linker_flags": ["-lm", "-lpthread", "-ldl"],
-      "cflags": ["-DGHOSTTY_STATIC"]
+      "linker_flags": [
+        "-lm",
+        "-lpthread",
+        "-ldl"
+      ],
+      "cflags": [
+        "-DGHOSTTY_STATIC"
+      ],
+      "artifact": {
+        "sha256": "bc0347cd0cbf10343e510e3b403010bd04d40b0ede86dd211318f51df03ee4db",
+        "size": 21898954,
+        "built": "2026-10-06",
+        "host": "macOS arm64 (Zig 0.16.0)",
+        "verified_by": "CGO-enabled client link; runtime not run"
+      },
+      "build_flags": [
+        "-Demit-lib-vt",
+        "-Demit-xcframework=false",
+        "-Doptimize=ReleaseSafe",
+        "-Dcpu=baseline",
+        "-Dtarget=aarch64-linux-gnu"
+      ]
     },
     {
       "id": "windows-amd64",
       "goos": "windows",
       "goarch": "amd64",
-      "static_archive": "windows-amd64/ghostty-vt-static.lib",
+      "static_archive": "windows-amd64/libghostty-vt.a",
       "include_dir": "include",
       "linker_flags": [],
-      "cflags": ["-DGHOSTTY_STATIC"]
+      "cflags": [
+        "-DGHOSTTY_STATIC"
+      ],
+      "artifact": {
+        "sha256": "e592e94d31f17834e5ed63404b337d23b767ddaf7a057d35a19f015472b849d7",
+        "size": 11194808,
+        "built": "2026-10-06",
+        "host": "macOS arm64 (Zig 0.16.0)",
+        "verified_by": "CGO-enabled client link; runtime not run"
+      }
     }
   ]
 }

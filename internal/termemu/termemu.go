@@ -82,6 +82,7 @@ type Cursor struct {
 	X           int
 	Y           int
 	PendingWrap bool
+	Hidden      bool
 }
 
 // Mode describes an emulator mode the application may need to inspect or
