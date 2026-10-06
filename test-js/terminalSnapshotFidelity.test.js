@@ -78,6 +78,53 @@ const cases = [
 // Same real parser and same future bytes, with and without the optimization.
 // A checkpoint must preserve machine state, not just an attractive screenshot.
 describe('checkpoint continuation is equivalent to uninterrupted xterm', () => {
+    it('alternate snapshot scans history once and preserves both buffers', async () => {
+        const baseline = new Terminal({
+            cols: 40,
+            rows: 12,
+            scrollback: 10000,
+            allowProposedApi: true,
+        });
+        const restored = new Terminal({
+            cols: 40,
+            rows: 12,
+            scrollback: 10000,
+            allowProposedApi: true,
+        });
+        const addon = new SerializeAddon();
+        baseline.loadAddon(addon);
+        const serialize = vi.spyOn(addon, 'serialize');
+        const fetcher = vi.fn(async () => ({ ok: true }));
+        vi.stubGlobal('fetch', fetcher);
+        try {
+            await write(
+                baseline,
+                'NORMAL HISTORY\r\n'.repeat(1000) +
+                    '\x1b[?1049hALT SCREEN\x1b[3;5H\x1b[4:3;58:2::10:20:30m',
+            );
+            Object.create(TabManager.prototype)._uploadCheckpoint({
+                paneId: 'p',
+                paneEpoch: 7,
+                drainedSeq: 100,
+                ws: { mode: 'hot' },
+                term: baseline,
+                serializeAddon: addon,
+            });
+            expect(serialize).toHaveBeenCalledTimes(1);
+            const checkpoint = JSON.parse(fetcher.mock.calls[0][1].body);
+            await write(restored, checkpoint.ansi);
+            expect(state(restored)).toEqual(state(baseline));
+            for (const future of ['FUTURE ALT', '\x1b[?1049lFUTURE NORMAL']) {
+                await write(baseline, future);
+                await write(restored, future);
+                expect(state(restored)).toEqual(state(baseline));
+            }
+        } finally {
+            baseline.dispose();
+            restored.dispose();
+        }
+    });
+
     it.each(cases)('%s', async (_name, prefix, suffix) => {
         const baseline = new Terminal({
             cols: 40,

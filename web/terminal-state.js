@@ -189,20 +189,21 @@ export function terminalSnapshot(term, addon, options) {
         return addon.serialize(options) +
             restoreBufferState(term, normal, term.buffer.normal, activeState) + pending(parser);
     }
-    // Use only the addon's public serializer. Its normal/alternate split is
-    // version-pinned; fail closed if the upstream framing ever changes.
-    const normalCells = addon.serialize({ ...options, excludeModes: true, excludeAltBuffer: true });
-    const cells = addon.serialize({ ...options, excludeModes: true });
+    // The public serializer emits exactly one alternate-buffer boundary.
+    // Split that one result instead of rescanning normal scrollback three
+    // times on the UI thread. Cell output cannot contain this mode switch;
+    // reject absent/ambiguous framing if the pinned addon ever changes it.
     const full = addon.serialize(options);
-    const prefix = normalCells + `${CSI}?1049h${CSI}H`;
-    if (!cells.startsWith(prefix) || !full.startsWith(cells)) {
+    const boundary = `${CSI}?1049h${CSI}H`;
+    const at = full.indexOf(boundary);
+    if (at < 0 || at !== full.lastIndexOf(boundary)) {
         throw new Error('unsupported alternate checkpoint framing');
     }
-    const altCells = cells.slice(prefix.length);
-    const modes = full.slice(cells.length);
+    const normalCells = full.slice(0, at);
+    const alternateAndModes = full.slice(at + boundary.length);
     return normalCells +
         restoreBufferState(term, normal, term.buffer.normal, normalState) +
         `${CSI}?6l${CSI}?7h${CSI}4l${CSI}0m` + charsets(undefined, 0) +
-        `${CSI}?47h${CSI}H` + altCells + modes +
+        `${CSI}?47h${CSI}H` + alternateAndModes +
         restoreBufferState(term, alternate, term.buffer.alternate, activeState) + pending(parser);
 }
