@@ -46,4 +46,26 @@ describe('Codex native model selection', () => {
         buttons.find((button) => button.innerText === '/model').click();
         expect(tm.sendSlashCommand).toHaveBeenLastCalledWith(tab, '/model');
     });
+
+    it('wraps staged input in bracketed paste for codex even when short', () => {
+        const tab = { coder: 'codex', directMode: false };
+        const tm = Object.assign(Object.create(TabManager.prototype), {
+            app: {
+                sessionsManager: {},
+            },
+            inputTextArea: { value: 'short prompt', focus: vi.fn() },
+            stagedAttachments: [],
+            attachmentStrip: { classList: { add: vi.fn(), remove: vi.fn() } },
+            getActiveTab: () => tab,
+            sendInput: vi.fn().mockReturnValue(true),
+            saveActiveDraft: vi.fn(),
+            adjustInputHeight: vi.fn(),
+            _spamScrollToBottom: vi.fn(),
+        });
+        tm.sendStagedInput();
+        expect(tm.sendInput).toHaveBeenCalledWith(
+            tab,
+            '\x1b[200~short prompt\x1b[201~\r',
+        );
+    });
 });

@@ -217,6 +217,7 @@ func parseRawTime(val interface{}) time.Time {
 
 // NormalisePath cleans and standardises a workspace path for OS-agnostic comparisons.
 func NormalisePath(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
 	p = filepath.ToSlash(filepath.Clean(p))
 	p = strings.TrimSuffix(p, "/")
 	return strings.ToLower(p)

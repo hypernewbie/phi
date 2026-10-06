@@ -6750,7 +6750,13 @@ export class TabManager {
         } else {
             // Wrap in bracketed paste markers for large prompts or multiline text
             // to prevent TUI trickle-rendering / autocomplete lagging.
-            if (payload.length > 16 || payload.includes('\n')) {
+            // Codex requires bracketed paste even for short prompts so that
+            // inline autocomplete does not intercept keystrokes / Enter.
+            if (
+                coder === 'codex' ||
+                payload.length > 16 ||
+                payload.includes('\n')
+            ) {
                 payload = `\x1b[200~${payload}\x1b[201~`;
             }
 
@@ -9200,7 +9206,11 @@ export class TabManager {
                           ? `${prefix} ${cmd.command}`
                           : cmd.command;
                 let payload = combined;
-                if (combined.length > 16 || combined.includes('\n')) {
+                if (
+                    activeTab.coder === 'codex' ||
+                    combined.length > 16 ||
+                    combined.includes('\n')
+                ) {
                     payload = `\x1b[200~${combined}\x1b[201~`;
                 }
                 this.sendInput(activeTab, `${payload}\r`);

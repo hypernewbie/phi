@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,13 +51,7 @@ func codexDB(ctx context.Context, c coders.Coder) (*sql.DB, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("Codex thread index is not a regular file")
 	}
-	uriPath := filepath.ToSlash(path)
-	if filepath.VolumeName(path) != "" && !strings.HasPrefix(uriPath, "/") {
-		uriPath = "/" + uriPath
-	}
-	uri := url.URL{Scheme: "file", Path: uriPath}
-	uri.RawQuery = url.Values{"mode": {"ro"}, "_pragma": {"query_only=true", "busy_timeout=5000"}}.Encode()
-	db, err := openDB(uri.String())
+	db, err := openDB(path + "?_pragma=query_only=true&_pragma=busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +70,8 @@ func (a codexAdapterImpl) List(ctx context.Context, cwd string) ([]Session, erro
 	defer db.Close()
 	// Child-agent records have a structured source; do not offer them as
 	// independent user conversations. Archived threads stay archived.
-	rows, err := db.QueryContext(ctx, `SELECT id, title, cwd, updated_at FROM threads
-		WHERE archived = 0 AND source IN ('cli', 'vscode', 'exec', 'app', 'app-server')
+	rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(title, ''), COALESCE(cwd, ''), COALESCE(updated_at, 0) FROM threads
+		WHERE archived = 0 AND (source IN ('cli', 'vscode', 'exec', 'app', 'app-server') OR (source NOT LIKE '{%' AND source NOT LIKE '%subagent%'))
 		ORDER BY updated_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
