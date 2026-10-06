@@ -15,9 +15,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,11 +49,32 @@ func TestPhicProcessHelper(t *testing.T) {
 		}
 		http.DefaultTransport = testOriginTransport{allowed: allowed, base: http.DefaultTransport}
 	}
-	if err := Run(args); err != nil {
+	if err := runLegacyClient(args); err != nil {
 		fmt.Fprintf(os.Stderr, "helper error: %q\n", err.Error())
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// runLegacyClient drives the retired inline menu/relay client directly. The
+// console is the production entry point; these PTY tests keep the legacy
+// transport contracts covered until their deletion is staged.
+func runLegacyClient(args []string) error {
+	cfg, err := parseFlags(args)
+	if err != nil {
+		return err
+	}
+	if cfg.Help || cfg.Version {
+		return nil
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	cl, err := newClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	return cl.Run(ctx)
 }
 
 // This runs the actual CLI controller in a controlling PTY. The server uses

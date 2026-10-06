@@ -32,12 +32,10 @@ func RunWithVersion(args []string, version string) error {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	cl, err := newClient(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer cl.Close()
-	return cl.Run(ctx)
+	// The Bubble Tea console is the client surface. The legacy inline
+	// menu/relay client remains only as library code for its transport
+	// tests and is no longer reachable from the entry point.
+	return RunTUI(ctx, cfg, version)
 }
 
 func parseFlags(args []string) (config, error) {
@@ -101,16 +99,27 @@ Options:
   --pane ID       attach to an exact live pane ID
   --coder NAME    backend name (e.g. pi, opencode, bash)
   --new           create a fresh pane rather than reattaching (requires --coder)
-  --diff          show current diff in less -R and exit
-  --worktrees     select an existing worktree before startup
+  --diff          open the console with the diff panel visible
+  --worktrees     choose a worktree before startup
   --help          show this message
   --version       show version
 
-Relay keys: Ctrl-] then b servers, 1-9 switch server, s sessions, d diff,
-w worktrees, ? help, q detach. Enhanced terminals also support Ctrl-1..9.
-Ctrl-] Ctrl-] sends a literal prefix. Inline menus use arrows, Enter,
-/ search, and Esc to return. Normal startup shows the server bar, including
-Connect to another server. Backend output stays raw. Returning rebuilds from Phi's recording at current size.`)
+Console keys:
+  Prefix: Ctrl-]   (Ctrl-] Ctrl-] sends a literal prefix)
+  Ctrl-] 1..9     switch server      Ctrl-] b  server rail
+  Ctrl-] s        sessions sidebar   Ctrl-] t  terminal tabs
+  Ctrl-] d        diff panel         Ctrl-] h  bounded history browser
+  Ctrl-] p        project context    Ctrl-] w  worktree context
+  Ctrl-] c        coder selector     Ctrl-] n  new session
+  Ctrl-] o        OpenCode Mini      Ctrl-] S  Shell session
+  Ctrl-] m        rename server      Ctrl-] a  add server
+  Ctrl-] r        reload servers     Ctrl-] y  copy text
+  Ctrl-] ?        help               Ctrl-] q  quit
+
+In terminal focus, keys go to the backend unchanged: Ctrl-C, Tab, arrows,
+digits, Escape, and paste. Tab cycles chrome regions; Esc returns to the
+terminal. Tabs: [x] soft close with a 3-second [u] undo, [X] final close,
+[r] rename, [p] pin, [m] mark.`)
 }
 
 type client struct {
