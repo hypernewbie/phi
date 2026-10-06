@@ -78,6 +78,11 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handlePrefixKey(msg)
 	}
 	k := msg.Key()
+	if k.Code == tea.KeyEscape && m.focus != focusTerminal && !m.searchActive && !m.diff.searchActive {
+		return m.chromeEscape()
+	}
+	m.chromeEscAt = time.Time{}
+	m.chromeEscToken++
 	if (k.Code == ']' && k.Mod.Contains(tea.ModCtrl)) || k.Code == 0x1d {
 		m.prefix = true
 		return m, nil
@@ -184,6 +189,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.switchServer(index)
 		}
 		return m, nil
+	case 'T':
+		return m, m.spawnBtop()
+	case 'B':
+		return m, m.toggleSidebar()
+	case 'R':
+		return m, m.refreshConsole()
 	case 'b':
 		m.focus = focusRail
 	case 's':
@@ -291,6 +302,14 @@ func (m *tuiModel) handleRailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) handleSessionsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.Key()
+	if !m.searchActive {
+		if k.Code == '[' {
+			return m, m.resizePanel(true, -4)
+		}
+		if k.Code == ']' {
+			return m, m.resizePanel(true, 4)
+		}
+	}
 	if m.searchActive {
 		switch k.Code {
 		case tea.KeyEscape:
@@ -451,6 +470,14 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	k := msg.Key()
 	k.Code = chromeKeyCode(k)
+	if !m.diff.searchActive {
+		if k.Code == '[' {
+			return m, m.resizePanel(false, -4)
+		}
+		if k.Code == ']' {
+			return m, m.resizePanel(false, 4)
+		}
+	}
 	if m.diff.searchActive {
 		switch k.Code {
 		case tea.KeyEscape:
@@ -516,6 +543,12 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // ---- modal input ----
 
 func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.modal.kind == modalMarkdown {
+		return m.handleMarkdownModalKey(msg)
+	}
+	if m.modal.kind == modalQuit {
+		return m.handleQuitKey(msg)
+	}
 	k := msg.Key()
 	if m.modal.kind == modalHistory {
 		switch k.Code {
@@ -734,9 +767,22 @@ func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.modal.kind == modalMarkdown {
+		return m.handleMarkdownModalMouse(msg)
+	}
+	if m.modal.kind == modalQuit {
+		mouse := msg.Mouse()
+		if _, ok := msg.(tea.MouseClickMsg); ok && mouse.Button == tea.MouseLeft {
+			return m.handleQuitMouse(mouse.X, mouse.Y)
+		}
+		return m, nil
+	}
 	mouse := msg.Mouse()
 	if m.modal.kind != modalNone {
 		return m, nil
+	}
+	if handled, cmd := m.handlePanelDrag(msg); handled {
+		return m, cmd
 	}
 	inner := m.terminalInner()
 	inTerminal := mouse.X >= inner.X && mouse.X < inner.X+inner.W &&
@@ -818,6 +864,12 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case mouse.Y == 0:
 		plain := ansi.Strip(m.renderRail())
+		if at := strings.LastIndex(plain, "[▥]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+3 {
+			return m, m.spawnBtop()
+		}
+		if at := strings.LastIndex(plain, "[↻]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+3 {
+			return m, m.refreshConsole()
+		}
 		if at := strings.Index(plain, "[+]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+3 {
 			m.openAddServer()
 			return m, nil
@@ -872,7 +924,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if (m.showSidebar() || (m.width < 80 && m.focus == focusSessions)) && mouse.X < 27 {
+	if (m.showSidebar() || (!m.showSidebar() && m.focus == focusSessions)) && mouse.X < m.sessionPanelWidth() {
 		m.focus = focusSessions
 		row := mouse.Y - 6 + m.sidebarStart() // border, heading, blank row
 		rows := m.sidebarRows()
@@ -947,7 +999,7 @@ func (m *tuiModel) railHit(x int) (int, bool) {
 	offset := 3 // " Φ "
 	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
-		label := " " + glyphs[i] + " " + s.label() + " "
+		label := " " + glyphs[i] + " " + m.railLabel(s) + " "
 		w := ansi.StringWidth(label)
 		if x >= offset && x < offset+w {
 			return i, true
@@ -1162,7 +1214,7 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 	if origin != "" && m.data[origin] == nil {
 		m.data[origin] = &serverData{}
 	}
-	m.setStatus("switching to "+m.servers[index].label(), false)
+	m.setStatus("", false)
 	cmds := []tea.Cmd{persist, m.loadServerCmd(index)}
 	if s := m.servers[index]; s != nil {
 		cmds = append(cmds, m.touchLastUsed(s.profile.ID))
@@ -1249,10 +1301,6 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string, titl
 		return nil
 	}
 	cols, rows := m.terminalSize()
-	if cols <= 0 || rows <= 0 {
-		m.setStatus("enlarge the terminal before starting a pane", true)
-		return nil
-	}
 	cap := spawnCapture{
 		origin:    origin,
 		index:     m.active,
@@ -1279,7 +1327,6 @@ func (m *tuiModel) spawnForCoder(coder string, mini bool, sessionID string, titl
 		cap.title = "+ " + name
 	}
 	m.pendingSpawn[origin] = true
-	m.setStatus("starting "+coder+"…", false)
 	return m.spawnCmd(cap)
 }
 

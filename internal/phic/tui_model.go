@@ -38,6 +38,8 @@ const (
 	modalCoder
 	modalHelp
 	modalHistory
+	modalMarkdown
+	modalQuit
 )
 
 type modalItem struct {
@@ -139,22 +141,23 @@ func (m *modalState) open(kind modalKind, title string) {
 // paneTab is one terminal tab. It may exist before its actor attaches: live
 // panes listed by the server stay metadata-only until the user selects them.
 type paneTab struct {
-	key        paneKey
-	view       TerminalView
-	actor      *paneActor
-	attached   bool
-	exited     bool
-	exitCode   int
-	unread     bool
-	status     string
-	title      string
-	coder      string
-	dir        string
-	closeAt    time.Time
-	closing    bool
-	finalizing bool
-	fresh      bool
-	token      int
+	key          paneKey
+	view         TerminalView
+	actor        *paneActor
+	attached     bool
+	exited       bool
+	exitCode     int
+	unread       bool
+	status       string
+	startupInput string
+	title        string
+	coder        string
+	dir          string
+	closeAt      time.Time
+	closing      bool
+	finalizing   bool
+	fresh        bool
+	token        int
 }
 
 func (t *paneTab) label() string {
@@ -202,8 +205,13 @@ type tuiModel struct {
 	active  int
 	data    map[string]*serverData
 
-	width, height int
-	ready         bool
+	width, height             int
+	ready                     bool
+	sidebarHidden             bool
+	sidebarWidth, readerWidth int
+	panelDrag                 int
+	chromeEscAt               time.Time
+	chromeEscToken            int
 
 	focus  focusRegion
 	prefix bool // Ctrl-] was pressed; the next key is an application command
@@ -265,6 +273,8 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 		pendingSpawn: map[string]bool{},
 		events:       make(chan paneEvent, 1024),
 		build:        build,
+		sidebarWidth: 27,
+		readerWidth:  44,
 	}
 	if active < 0 && len(servers) > 0 {
 		m.active = 0
@@ -411,16 +421,17 @@ type paneActionDoneMsg struct {
 }
 
 type spawnCapture struct {
-	origin    string
-	index     int
-	project   string
-	worktree  string
-	coder     string
-	mini      bool
-	sessionID string
-	title     string
-	cols      int
-	rows      int
+	origin       string
+	index        int
+	project      string
+	worktree     string
+	coder        string
+	mini         bool
+	sessionID    string
+	title        string
+	startupInput string
+	cols         int
+	rows         int
 }
 
 // ---- Init ----
@@ -682,6 +693,14 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, m.reflowMarkdown()
 		}
 		return m, nil
+	case chromeEscapeExpiredMsg:
+		if msg.token == m.chromeEscToken && !m.chromeEscAt.IsZero() {
+			if m.modal.kind == modalNone && m.focus != focusTerminal {
+				m.focus = focusTerminal
+			}
+			m.chromeEscAt = time.Time{}
+		}
+		return m, nil
 	case msgPaint:
 		m.tickArmed = false
 		m.lastPaint = time.Now()
@@ -826,7 +845,7 @@ func (m *tuiModel) applyLoginDone(msg loginDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.closeModal()
-	m.setStatus("signed in", false)
+	m.setStatus("", false)
 	if msg.warning != "" {
 		m.setStatus("signed in; could not remember login: "+msg.warning, true)
 	}
@@ -859,6 +878,7 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	tab := m.ensureTab(msg.capture.origin, msg.resp.PaneID, msg.capture)
+	tab.startupInput = msg.capture.startupInput
 	tab.fresh = msg.capture.sessionID == ""
 	if msg.resp.OpenCodeMode != "" {
 		tab.view.OpenCodeMode = msg.resp.OpenCodeMode
@@ -869,7 +889,7 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusTerminal
 	}
 	if msg.gen == m.gen {
-		m.setStatus("opened "+tab.label(), false)
+		m.setStatus("", false)
 	}
 	// Refresh the sidebar without changing the captured launch target.
 	return m, tea.Batch(m.loadServerCmd(index), m.refreshDiff())
@@ -1013,6 +1033,11 @@ func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 		tab.status = ev.Status
 		if ev.Status == "connected" {
 			tab.status = ""
+			if tab.startupInput != "" && tab.actor != nil {
+				input := tab.startupInput
+				tab.startupInput = ""
+				tab.actor.enqueue(EncodeInputFrame([]byte(input)))
+			}
 		}
 	case paneError:
 		m.setStatus(ev.Status, true)
@@ -1575,6 +1600,12 @@ func (m *tuiModel) openHelp() {
   Ctrl-] 1..9     switch server
   Ctrl-] b        focus server rail
   Ctrl-] s        focus sessions
+  Ctrl-] B        hide/show Sessions sidebar
+  Ctrl-] T        launch btop in a fresh Shell pane
+  Ctrl-] R        refresh/redraw console
+  [ / ]           resize the focused Sessions/reader panel
+  Drag divider    resize Sessions/reader
+  Esc twice       Quit dialog in client chrome (q confirms)
   Ctrl-] t        focus tabs
   Ctrl-] x        close active terminal (3s Undo)
   Ctrl-] u        undo the most recent close
@@ -1630,7 +1661,7 @@ type rect struct{ X, Y, W, H int }
 
 func (r rect) empty() bool { return r.W <= 0 || r.H <= 0 }
 
-func (m *tuiModel) showSidebar() bool { return m.width >= 80 }
+func (m *tuiModel) showSidebar() bool { return m.width >= 80 && !m.sidebarHidden }
 
 func (m *tuiModel) showDiffPanel() bool {
 	if !m.diff.open {
@@ -1662,31 +1693,26 @@ func (m *tuiModel) relayout() {
 
 // terminalSize computes the inner widget geometry for the terminal panel.
 func (m *tuiModel) terminalSize() (int, int) {
-	if m.width < 40 || m.height < 10 {
-		return 0, 0
-	}
 	sidebar := 0
 	if m.showSidebar() {
-		sidebar = 27
+		sidebar = m.sessionPanelWidth()
 	}
 	diff := 0
 	if m.showDiffPanel() {
-		diff = min(44, m.width/3)
+		diff = m.readerPanelWidth()
 	}
 	w := m.width - sidebar - diff - 2 // terminal border
 	h := m.height - 6                 // rail, context, tabs, footer + border
-	if w < 1 || h < 1 {
-		return 0, 0
-	}
-	return w, h
+	// Small host sizes never introduce an inert mode or block input/spawn.
+	return max(1, w), max(1, h)
 }
 
 func (m *tuiModel) bodyRect() rect {
-	return rect{X: 0, Y: 3, W: m.width, H: m.height - 4}
+	return rect{X: 0, Y: 3, W: max(3, m.width), H: max(3, m.height-4)}
 }
 
 func (m *tuiModel) sidebarRect() rect {
-	return rect{X: 0, Y: 3, W: min(27, m.width), H: m.height - 4}
+	return rect{X: 0, Y: 3, W: m.sessionPanelWidth(), H: max(3, m.height-4)}
 }
 
 func (m *tuiModel) terminalRect() rect {
@@ -1694,25 +1720,22 @@ func (m *tuiModel) terminalRect() rect {
 	x := 0
 	w := m.width
 	if m.showSidebar() {
-		x += 27
-		w -= 27
+		x += m.sessionPanelWidth()
+		w -= m.sessionPanelWidth()
 	}
 	if m.showDiffPanel() {
-		dw := min(44, m.width/3)
+		dw := m.readerPanelWidth()
 		w -= dw
 	}
-	return rect{X: x, Y: b.Y, W: w, H: b.H}
+	return rect{X: x, Y: b.Y, W: max(3, w), H: b.H}
 }
 
 func (m *tuiModel) diffRect() rect {
 	if !m.diff.open || (!m.showDiffPanel() && m.focus != focusDiff) {
 		return rect{}
 	}
-	dw := min(44, m.width/3)
-	if m.width < 120 {
-		dw = min(60, m.width)
-	}
-	return rect{X: m.width - dw, Y: m.bodyRect().Y, W: dw, H: m.bodyRect().H}
+	dw := m.readerPanelWidth()
+	return rect{X: max(0, m.width-dw), Y: m.bodyRect().Y, W: max(3, dw), H: m.bodyRect().H}
 }
 
 func (m *tuiModel) terminalInner() rect {

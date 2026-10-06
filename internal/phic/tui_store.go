@@ -17,12 +17,15 @@ type uiIntent struct {
 }
 
 type uiServerIntent struct {
-	Origin   string   `json:"origin,omitempty"`
-	Project  string   `json:"project,omitempty"`
-	Worktree string   `json:"worktree,omitempty"`
-	Tabs     []string `json:"tabs,omitempty"`
-	Active   string   `json:"active,omitempty"`
-	DiffOpen bool     `json:"diff_open,omitempty"`
+	Origin        string   `json:"origin,omitempty"`
+	Project       string   `json:"project,omitempty"`
+	Worktree      string   `json:"worktree,omitempty"`
+	Tabs          []string `json:"tabs,omitempty"`
+	Active        string   `json:"active,omitempty"`
+	DiffOpen      bool     `json:"diff_open,omitempty"`
+	SidebarHidden bool     `json:"sidebar_hidden,omitempty"`
+	SidebarWidth  int      `json:"sidebar_width,omitempty"`
+	ReaderWidth   int      `json:"reader_width,omitempty"`
 }
 
 const uiIntentKey = "phicUI"
@@ -109,6 +112,13 @@ func (m *tuiModel) restoreIntent() {
 	if intent.DiffOpen {
 		m.diff.open = true
 	}
+	m.sidebarHidden = intent.SidebarHidden
+	if intent.SidebarWidth > 0 {
+		m.sidebarWidth = intent.SidebarWidth
+	}
+	if intent.ReaderWidth > 0 {
+		m.readerWidth = intent.ReaderWidth
+	}
 	origin := m.currentOrigin()
 	tabs := m.tabs[origin]
 	if len(intent.Tabs) > 0 && len(tabs) > 1 {
@@ -161,7 +171,7 @@ func (m *tuiModel) persistIntent() tea.Cmd {
 	if id == "" {
 		return nil
 	}
-	intent := uiServerIntent{Origin: m.currentOrigin(), Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open}
+	intent := uiServerIntent{Origin: m.currentOrigin(), Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open, SidebarHidden: m.sidebarHidden, SidebarWidth: m.sidebarWidth, ReaderWidth: m.readerWidth}
 	for _, t := range m.tabs[m.currentOrigin()] {
 		if t.closing || t.exited {
 			continue

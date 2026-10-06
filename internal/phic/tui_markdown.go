@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Read-only website-lite Markdown. Discovery and confinement remain server-owned.
+// Website-lite Markdown. Discovery and confinement remain server-owned.
 type markdownFile struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
@@ -26,16 +26,16 @@ type markdownState struct {
 	origin, dir               string
 	files                     []markdownFile
 	cursor, listStart, scroll int
-	path, raw, err            string
+	path, raw, source, err    string
 	lines                     []string
 	reading, loading          bool
 	ticket                    int
 }
 type markdownLoadedMsg struct {
-	gen, ticket, width          int
-	origin, dir, path, raw, err string
-	files                       []markdownFile
-	lines                       []string
+	gen, ticket, width                  int
+	origin, dir, path, raw, source, err string
+	files                               []markdownFile
+	lines                               []string
 }
 
 func (m *tuiModel) markdownDir() string {
@@ -47,7 +47,7 @@ func (m *tuiModel) markdownDir() string {
 	}
 	return m.project
 }
-func (m *tuiModel) markdownWidth() int { return max(1, m.diffRect().W-2) }
+func (m *tuiModel) markdownWidth() int { return max(1, m.width-4) }
 func (m *tuiModel) showMarkdown() tea.Cmd {
 	m.diff.open = true
 	m.diff.markdown = true
@@ -91,9 +91,11 @@ func (m *tuiModel) openMarkdownFile(index int) tea.Cmd {
 	file := m.markdown.files[index]
 	m.markdown.path = file.Path
 	m.markdown.reading = true
+	m.modal.open(modalMarkdown, "Markdown")
 	m.markdown.scroll = 0
 	m.markdown.lines = nil
 	m.markdown.raw = ""
+	m.markdown.source = ""
 	m.markdown.err = ""
 	m.markdown.loading = true
 	m.markdown.ticket++
@@ -134,6 +136,7 @@ func (m *tuiModel) openMarkdownFile(index int) tea.Cmd {
 			out.err = "Markdown file exceeds the 1 MiB console viewer limit"
 			return out
 		}
+		out.source = string(data)     // Explicit clipboard actions copy the file, not rendered text.
 		out.raw = recordingText(data) // Strip control sequences before invoking the renderer.
 		out.lines, err = renderMarkdownText(out.raw, width, accent)
 		if err != nil {
@@ -179,9 +182,10 @@ func (m *tuiModel) reflowMarkdown() tea.Cmd {
 	gen, ticket, width := m.gen, m.markdown.ticket, m.markdownWidth()
 	origin, dir, path, raw := m.markdown.origin, m.markdown.dir, m.markdown.path, m.markdown.raw
 	accent := m.markdownAccent()
+	source := m.markdown.source
 	return func() tea.Msg {
 		lines, err := renderMarkdownText(raw, width, accent)
-		out := markdownLoadedMsg{gen: gen, ticket: ticket, width: width, origin: origin, dir: dir, path: path, raw: raw, lines: lines}
+		out := markdownLoadedMsg{gen: gen, ticket: ticket, width: width, origin: origin, dir: dir, path: path, raw: raw, source: source, lines: lines}
 		if err != nil {
 			out.err = err.Error()
 		}
@@ -208,6 +212,7 @@ func (m *tuiModel) applyMarkdownLoaded(msg markdownLoadedMsg) (tea.Model, tea.Cm
 		return m, nil
 	}
 	m.markdown.raw = msg.raw
+	m.markdown.source = msg.source
 	m.markdown.lines = msg.lines
 	if m.diff.open && m.diff.markdown && msg.width != m.markdownWidth() {
 		return m, m.reflowMarkdown()
@@ -217,6 +222,12 @@ func (m *tuiModel) applyMarkdownLoaded(msg markdownLoadedMsg) (tea.Model, tea.Cm
 }
 func (m *tuiModel) handleMarkdownKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.Key()
+	if k.Code == '[' {
+		return m, m.resizePanel(false, -4)
+	}
+	if k.Code == ']' {
+		return m, m.resizePanel(false, 4)
+	}
 	d := &m.markdown
 	switch k.Code {
 	case 'm', 'd':
