@@ -23,14 +23,14 @@ phic --coder pi .
 phic --pane <pane-id>
 ```
 
-Normal `phic .` startup opens the colored server selector before authentication. It reads the desktop client's `profiles.json` in saved sidebar order and focuses the most recently used server. Use arrows and Enter to connect, or choose **Connect to another server** and enter an HTTP(S) origin. This works without a localhost service or a saved profiles file. Standard locations are:
+Normal `phic .` startup opens the colored server selector before authentication. It reads and writes the desktop client's exact `profiles.json` in saved sidebar order and focuses the most recently used server. Use arrows and Enter to connect, or choose **Connect to another server** and enter an HTTP(S) origin. This works without a localhost service or a saved profiles file. Standard locations are:
 
 - macOS: `~/Library/Application Support/phi-client/profiles.json`
 - Linux: `$XDG_CONFIG_HOME/phi-client/profiles.json`, or `~/.config/phi-client/profiles.json`
 
-The development app's `phi-desktop-electron` and legacy `Phi` directories are also recognized. Use `--profiles FILE` if desktop userData is elsewhere. The client reads the backup when necessary, but never writes or renames either desktop file.
+The development app's `phi-desktop-electron` and legacy `Phi` files migrate to the same `phi-client` location that desktop uses. Use `--profiles FILE` if desktop userData is elsewhere. Both clients use the same non-secret profile schema. Go preserves desktop preferences and unknown fields, keeps a `.bak`, and saves through a synced temporary file and atomic rename. Corrupt files are kept aside for recovery.
 
-With no saved profiles, the selector offers `http://127.0.0.1:7070` and **Connect to another server**; it does not authenticate localhost before you choose. Connections added through the form last for this client run and do not implicitly rewrite desktop preferences. `--server URL` uses one explicit server; combine it with `--profiles FILE` to retain that saved list and select or add the explicit origin for this run. No server configuration is duplicated or persisted by phic.
+With no saved profiles, the selector offers `http://127.0.0.1:7070` and **Connect to another server**; it does not authenticate localhost before you choose. Connections added through the form are saved in the shared file and appear in desktop. `--server URL` selects or adds that server in the same saved list; `--profiles FILE` changes the shared file location. Server activation updates the shared last-used timestamp. Desktop edits, including rename, removal, and reordering, load in phic on its next start. No separate native-client server configuration exists.
 
 Without an unambiguous free pane, the client shows a focused session/backend selector with arrow navigation and search. A live pane with another attached client requires explicit selection. Shared clients can change the same backend terminal size.
 

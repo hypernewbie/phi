@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -124,7 +125,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			encodedAllowed, _ := json.Marshal(allowed)
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPhicProcessHelper$")
 			cmd.Dir = home
-			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "PHIC_PROCESS_HELPER=1", "PHIC_PROCESS_ARGS="+string(encodedArgs), "PHIC_PROCESS_ALLOWED_ORIGINS="+string(encodedAllowed), "NO_COLOR=", "TERM=xterm-256color")
+			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "PHIC_PROCESS_HELPER=1", "PHIC_PROCESS_HOME="+home, "PHIC_PROCESS_ARGS="+string(encodedArgs), "PHIC_PROCESS_ALLOWED_ORIGINS="+string(encodedAllowed), "NO_COLOR=", "TERM=xterm-256color")
 			master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 100, Rows: 24})
 			if err != nil {
 				t.Fatal(err)
@@ -187,10 +188,25 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			if menuInputs.Load() != 0 {
 				t.Fatal("menu key releases reached backend input")
 			}
+			shared := filepath.Join(configDir, "phi-client", "profiles.json")
+			profiles, err := readDesktopProfiles(shared)
+			if err != nil || len(profiles) == 0 {
+				t.Fatalf("connection not saved for desktop: %v", err)
+			}
+			found := false
+			for _, p := range profiles {
+				if strings.TrimSuffix(p.Origin, "/") == server.URL && p.LastUsed != "" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("shared connection or active stamp missing")
+			}
 			if saved {
-				got, _ := os.ReadFile(file)
-				if !bytes.Equal(got, original) {
-					t.Fatal("client rewrote shared desktop preferences")
+				var prefs map[string]any
+				data, _ := os.ReadFile(shared)
+				if json.Unmarshal(data, &prefs) != nil || prefs["petEnabled"] != true {
+					t.Fatal("desktop preference lost")
 				}
 			}
 		})

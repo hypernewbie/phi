@@ -489,6 +489,13 @@ function readStore(
   try {
     data = readFileSync(filePath, 'utf8');
   } catch (err) {
+    if (
+      (err as NodeJS.ErrnoException).code === 'ENOENT' &&
+      !isBackup &&
+      existsSync(`${filePath}.bak`)
+    ) {
+      return readStore(`${filePath}.bak`, true, log);
+    }
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       log(`controller: cannot read ${filePath}: ${String(err)}`);
     }
@@ -781,6 +788,48 @@ export class Controller {
     }
   }
 
+  /** Reload shared metadata before a mutation; phic may have saved since launch. */
+  private refreshSharedStore(): void {
+    try {
+      const parsed: unknown = JSON.parse(
+        readFileSync(this.persistPath, 'utf8'),
+      );
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        !Array.isArray((parsed as { profiles?: unknown }).profiles)
+      )
+        return;
+    } catch {
+      // Preserve the existing mutation/error contract for missing/unreadable
+      // files. Constructor recovery handles corrupt stores on startup.
+      return;
+    }
+    const store = readStore(this.persistPath, false, this.log);
+    const changed =
+      JSON.stringify(store.profiles) !== JSON.stringify(this.profiles);
+    this.profiles = store.profiles;
+    this.byID = new Map(this.profiles.map((p) => [p.id, p]));
+    this.health = new Map(
+      this.profiles.map((p) => [p.id, this.health.get(p.id) ?? 'unknown']),
+    );
+    this.unread = new Map(
+      this.profiles.map((p) => [p.id, this.unread.get(p.id) ?? 0]),
+    );
+    this.closeToTray = store.closeToTray;
+    this.syncAlerts = store.syncAlerts;
+    this.lowMemoryMode = store.lowMemoryMode;
+    this.petEnabled = store.petEnabled;
+    this.petZoomPercent = store.petZoomPercent;
+    this.contentZoomPercent = store.contentZoomPercent;
+    this.petIdleDwellSeconds = store.petIdleDwellSeconds;
+    if (this.activeId !== '' && !this.byID.has(this.activeId)) {
+      this.activeId = mostRecentlyUsed(this.profiles);
+      this.emit({ kind: 'active-changed', id: this.activeId });
+    }
+    if (changed) this.emit({ kind: 'profiles-changed' });
+  }
+
   /**
    * Adds (or reuses) a profile for rawUrl and persists. Validation is the
    * endpoint.Parse-equivalent (see parseEndpoint); re-adding the exact
@@ -790,6 +839,7 @@ export class Controller {
    * rolls the in-memory change back.
    */
   add(rawUrl: string): ProfileMeta {
+    this.refreshSharedStore();
     const parsed = parseEndpoint(rawUrl);
     const existing =
       this.profiles.find((p) => p.origin === parsed.origin) ?? null;
@@ -836,6 +886,7 @@ export class Controller {
    * failed write rolls the removal back.
    */
   remove(id: string): void {
+    this.refreshSharedStore();
     const idx = this.profiles.findIndex((p) => p.id === id);
     if (idx < 0)
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
@@ -879,6 +930,7 @@ export class Controller {
    * failed write is thrown without rolling the in-memory name back.
    */
   rename(id: string, name: string): void {
+    this.refreshSharedStore();
     const p = this.byID.get(id);
     if (!p)
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
@@ -906,6 +958,7 @@ export class Controller {
    * in-memory move back.
    */
   reorder(id: string, beforeId: string | null): void {
+    this.refreshSharedStore();
     if (!this.byID.has(id))
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
     if (beforeId !== null && !this.byID.has(beforeId)) {
@@ -948,6 +1001,7 @@ export class Controller {
 
   /** Stamps the profile's last-used timestamp and persists. */
   setLastUsed(id: string): void {
+    this.refreshSharedStore();
     const p = this.byID.get(id);
     if (!p)
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
@@ -973,6 +1027,7 @@ export class Controller {
    * tray picks it up via subscribe.
    */
   setActive(id: string): void {
+    this.refreshSharedStore();
     const p = this.byID.get(id);
     if (!p)
       throw new UnknownProfileError(`controller: unknown profile "${id}"`);
@@ -1025,6 +1080,7 @@ export class Controller {
    * unchanged.
    */
   setCloseToTray(value: boolean): void {
+    this.refreshSharedStore();
     if (value === this.closeToTray) return;
     this.closeToTray = value;
     saveStore(
@@ -1057,6 +1113,7 @@ export class Controller {
    * unchanged.
    */
   setSyncAlerts(value: boolean): void {
+    this.refreshSharedStore();
     if (value === this.syncAlerts) return;
     this.syncAlerts = value;
     saveStore(
@@ -1078,6 +1135,7 @@ export class Controller {
   }
 
   setLowMemoryMode(value: boolean): void {
+    this.refreshSharedStore();
     if (value === this.lowMemoryMode) return;
     this.lowMemoryMode = value;
     saveStore(
@@ -1108,6 +1166,7 @@ export class Controller {
    * checkbox and mirrors the window state). A no-op when unchanged.
    */
   setPetEnabled(value: boolean): void {
+    this.refreshSharedStore();
     if (value === this.petEnabled) return;
     this.petEnabled = value;
     saveStore(
@@ -1135,6 +1194,7 @@ export class Controller {
    * rethrow.
    */
   setPetZoomPercent(percent: number): boolean {
+    this.refreshSharedStore();
     if (!isPetZoomPercent(percent)) return false;
     if (percent === this.petZoomPercent) return true;
     const oldPercent = this.petZoomPercent;
@@ -1170,6 +1230,7 @@ export class Controller {
    * percentage and rethrow.
    */
   setContentZoomPercent(percent: number): boolean {
+    this.refreshSharedStore();
     if (!isContentZoomPercent(percent)) return false;
     if (percent === this.contentZoomPercent) return true;
     const oldPercent = this.contentZoomPercent;
@@ -1199,6 +1260,7 @@ export class Controller {
   }
 
   setPetIdleDwellSeconds(value: number): boolean {
+    this.refreshSharedStore();
     if (!isPetIdleDwellSeconds(value)) return false;
     if (value === this.petIdleDwellSeconds) return true;
     const oldValue = this.petIdleDwellSeconds;
