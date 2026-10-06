@@ -217,6 +217,9 @@ const MAX_WRITE_CHARS = 64 * 1024;
 // Full live scrollback, desktop and unset-mobile alike. The mobile lane
 // below references this — never a second literal.
 const LIVE_SCROLLBACK_ROWS = 10000;
+// A phone checkpoint is an instant screen restore, not an archive copy.
+// Older output remains in the recording and uses the existing history pager.
+const PHONE_CHECKPOINT_ROWS = 256;
 // Coarse-pointer terminals paint a recent byte window, then replace it with
 // adjacent recording windows on scroll. Both the request and resident xterm
 // buffer stay bounded independently of session age.
@@ -2227,7 +2230,7 @@ export class TabManager {
         const mouseMode = encoding === 'SGR' ? '\x1b[?1006h'
             : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
         const ansi = tabInfo.serializeAddon ? mouseMode + terminalSnapshot(term, tabInfo.serializeAddon, {
-            scrollback: LIVE_SCROLLBACK_ROWS,
+            scrollback: isCoarseViewport() ? PHONE_CHECKPOINT_ROWS : LIVE_SCROLLBACK_ROWS,
         }) : '';
         const queued = tabInfo.queuedSeq ?? tabInfo.drainedSeq ?? 0;
         const drained = tabInfo.drainedSeq ?? queued;
@@ -2479,6 +2482,9 @@ export class TabManager {
         // size. Fit without sending a historical resize to the backend.
         tabInfo.fitAddon?.fit?.();
         enqueued();
+        // A quiet raw attach must also leave a checkpoint; otherwise every
+        // refresh repeats the whole prefix until the backend emits again.
+        this._scheduleCheckpointUpload(tabInfo);
         return true;
     }
 
@@ -2584,7 +2590,7 @@ export class TabManager {
             : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
         let ansi = '';
         try {
-            let scrollback = LIVE_SCROLLBACK_ROWS;
+            let scrollback = isCoarseViewport() ? PHONE_CHECKPOINT_ROWS : LIVE_SCROLLBACK_ROWS;
             for (let attempt = 0; ; attempt++) {
                 const snapshot = terminalSnapshot(tabInfo.term, tabInfo.serializeAddon, { scrollback });
                 if (!snapshot && !mouseMode) return;
