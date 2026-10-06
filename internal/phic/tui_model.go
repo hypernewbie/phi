@@ -268,6 +268,11 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 	if cfg.NewPane || cfg.Coder != "" {
 		m.directExit = true
 	}
+	// An explicit CLI directory is the captured launch target and outranks
+	// remembered UI intent for this run.
+	if cfg.Dir != "" && cfg.Dir != "." {
+		m.project = cfg.Dir
+	}
 	return m
 }
 

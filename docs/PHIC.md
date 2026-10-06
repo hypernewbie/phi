@@ -1,111 +1,97 @@
-# Native terminal client
+# Native console client
 
-`phic` is a native multi-server Phi client. Backend output is raw; client menus are inline TUIs. It uses no Charm libraries, TUI framework, or terminal emulator.
+`phic` is Phi Desktop Lite: a native multi-server Phi client built on Bubble Tea v2 with an embedded libghostty-vt terminal emulator. It renders backend output inside persistent application chrome instead of passing bytes through. Phi still owns processes, sessions, and durable recordings; the console owns the displayed frame and its bounded scrollback.
 
-Phi owns the processes, sessions, and durable recordings. The native terminal owns the displayed buffers and its scrollback limit.
-
-## Start
-
-For a local connection, start Phi on this machine. Remote connections do not require a local Phi service. To build the client from this checkout:
+## Build
 
 ```sh
 go build -o phic ./cmd/phic
 ```
 
-Place it on your PATH or use `./phic`. Release builds provide a separate `phi_<version>_<os>_<arch>_phic.tar.gz` archive. The npm package installs `phic` on macOS/Linux; Windows retains a clear unsupported-client message without breaking `phi`.
-
-Then run:
+The default build has no emulator and reports a precise error when a pane is opened. Enable the pinned native adapter with its build tag:
 
 ```sh
-phic .
-phic --new --coder bash .
-phic --coder pi .
-phic --pane <pane-id>
+go build -tags termemu_ghostty -o phic ./cmd/phic
 ```
 
-`phic` is Phi Desktop Lite. Desktop behavior and terminology are the reference, not a separate native-client design.
+The adapter links the per-target archive under `native/libghostty-vt/<os>-<arch>/`; see `native/libghostty-vt/README.md` for the provenance manifest and rebuild contract. No runtime downloader, external Ghostty installation, or separate shared library is required. Unsupported targets keep the precise `native emulator not built in this binary` error rather than substituting another parser.
 
-Normal startup restores the most recently used saved server, as desktop does. An empty server list shows **Add Phi server**. The form accepts bare hostnames and HTTP(S) URLs. It adds `http://` and port `7070` when desktop does. Spaces or pasted newlines separate multiple servers. Browser URL normalization occurs before the desktop origin checks. The form rejects credentials, non-root paths, query strings, and fragments after normalization. This works without a localhost service. Standard locations are:
+## Start
+
+```sh
+phic
+phic --server http://host:7070
+phic --pane <pane-id>
+phic --new --coder bash /srv/project
+phic --coder pi .
+phic --diff
+phic --worktrees
+```
+
+Normal startup restores the most recently used saved server. An empty server list opens **Add Phi server**, which accepts bare hostnames and HTTP(S) URLs, adds `http://` and port `7070` when desktop does, and splits spaces or pasted newlines into multiple servers. Credentials, non-root paths, query strings, and fragments are rejected after normalization. An empty list contains no invented localhost entry.
+
+Profiles come from the shared desktop file; Go preserves desktop preferences and unknown fields, keeps a `.bak`, and saves through a synced temporary file and atomic rename. Standard locations:
 
 - macOS: `~/Library/Application Support/phi-client/profiles.json`
 - Linux: `$XDG_CONFIG_HOME/phi-client/profiles.json`, or `~/.config/phi-client/profiles.json`
 
-The development app's `phi-desktop-electron` and legacy `Phi` files migrate to the same `phi-client` location that desktop uses. Use `--profiles FILE` if desktop userData is elsewhere. Both clients use the same non-secret profile schema. Go preserves desktop preferences and unknown fields, keeps a `.bak`, and saves through a synced temporary file and atomic rename. Corrupt files are kept aside for recovery.
+The development app's `phi-desktop-electron` and legacy `Phi` files migrate to the same location. Use `--profiles FILE` when desktop userData is elsewhere. `--server URL` selects or adds that server in the same saved list. Desktop edits, including rename, removal, and reordering, load at startup and on reload.
 
-An empty list contains no invented localhost entry. **Add Phi server** uses the desktop form title, placeholder, and Add action. Connections added through the form are saved in the shared file and appear in desktop. `--server URL` selects or adds that server in the same saved list; `--profiles FILE` changes the shared file location. Server activation updates the shared last-used timestamp. Desktop edits, including rename, removal, and reordering, load in phic at startup and whenever the server sidebar opens. No separate native-client server configuration exists.
+Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored. Each origin owns a separate cookie jar, even for servers on the same host at different ports. Switching servers leaves the old backend running; a failed switch returns to the outgoing tab.
 
-Without an unambiguous free pane, the client shows a focused session/backend selector with arrow navigation and search. A live pane with another attached client requires explicit selection. Shared clients can change the same backend terminal size.
+An explicit directory argument is the captured launch target and outranks remembered UI state. Absolute remote paths are server paths, not local filesystem checks. A server switch never carries the outgoing server's directory into the next server's context.
 
-`--pane` uses the server's exact pane identity and directory. It does not change the existing OpenCode launch mode.
+## Console layout
 
-Authentication uses the existing password challenge and cookie. Passwords are not echoed or stored by the client. Each origin owns a separate cookie jar, even for servers on the same host at different ports. Changing servers leaves the old backend running and remembers its exact pane for return during this client run.
+- Server rail with identity glyphs, theme accent, health, and the active server.
+- Context row: project, worktree, coder, New Session, and the diff toggle.
+- Sessions sidebar: New Session, saved sessions for the selected coder/project, then live panes not yet open as tabs. `/` filters; `r` refreshes.
+- Terminal tabs: attached panes, listed live panes, unread marks, exited panes, and `+N` overflow.
+- Embedded terminal: copied cells with RGB/indexed colors, attributes, cursor position, and client-side selection.
+- Optional diff panel with refresh, search (`/`, `n`/`N`), and explicit copy (`y`).
+- Footer: status, errors, and contextual hints.
 
-Remote `phic .` opens the server's project list. Absolute remote paths are server paths, not local filesystem checks. A server switch never carries the outgoing server's directory into the next server's project selection. An unavailable server can be skipped from the startup picker; a failed live switch returns to the outgoing pane.
+Chrome stays intact during cursor movement, clear-screen, scrolling, and alternate-screen output because the application renders a copied frame rather than passing bytes through.
 
-## Other operations
+## Keys
 
-```sh
-phic --diff .
-phic --worktrees .
-```
+Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys go to the backend unchanged: Ctrl-C, Tab, arrows, digits, Escape, and bracketed paste.
 
-`--diff` opens the current server diff in `less -R`, then exits. It retains the existing diff endpoint's whitespace policy.
+| Key | Action |
+| --- | --- |
+| `Ctrl-] 1`–`9` | switch server |
+| `Ctrl-] b` | focus server rail (`a` add, `m` rename, `x` remove, `r` reload, `K`/`J` reorder, `c` copy URL) |
+| `Ctrl-] s` | focus sessions (`Enter` open/resume, `n` new, `c` coder, `p` project, `w` worktree) |
+| `Ctrl-] t` | focus tabs (`x` soft close, `X` final close, `u` undo, `r` rename, `p` pin, `m` mark) |
+| `Ctrl-] d` | toggle diff panel |
+| `Ctrl-] h` | bounded history browser |
+| `Ctrl-] p` / `w` / `c` | project / worktree / coder dialogs |
+| `Ctrl-] n` | New Session |
+| `Ctrl-] o` / `S` | OpenCode Mini / Shell session |
+| `Ctrl-] a` / `m` / `r` | add / rename / reload servers |
+| `Ctrl-] y` | copy diff text or the terminal selection |
+| `Ctrl-] ?` / `q` | help / quit |
 
-`--worktrees` selects an existing worktree before startup. It does not change the browser's global workspace or create a worktree.
+Tab cycles chrome regions; Esc returns to the terminal. New Session sends exactly one fresh spawn request with an empty resume identity and the captured project, worktree, coder, and widget geometry. A saved-session row sends its exact resume identity, preferring `session_path` when present, without another picker. `--pane` attaches the exact live pane with no project, coder, or session picker.
 
-## Relay keys
+## Terminal fidelity
 
-- Press Ctrl-], then `b`, for the colored server bar.
-- Press Ctrl-], then `1`–`9`, to switch servers in desktop sidebar order.
-- On terminals with Kitty or modifyOtherKeys reporting, Ctrl-1 through Ctrl-9 also switch servers. Plain digits are never interpreted as shortcuts.
-- Press Ctrl-], then `s`, for sessions and new panes.
-- Press Ctrl-], then `d`, for the current pane's diff.
-- Press Ctrl-], then `w`, for worktrees.
-- Press Ctrl-], then `?`, for help.
-- Press Ctrl-], then `q`, to detach.
-- Press Ctrl-] twice to send one original prefix sequence.
-- Other application input stays unchanged, including delimited paste.
+- Full key press/repeat/release, paste, and mouse routing. Modified Enter, Ctrl-digit, application-cursor arrows, and Kitty-style disambiguation are encoded by the adapter from the backend's current modes, not guessed by the UI.
+- Normal and alternate buffers, RGB and indexed colors, graphemes with explicit width, synchronized output, and cursor state come from copied frames.
+- The emulator runs on one owner goroutine per pane. The UI only reads copied frames and enqueues input requests, so no native call leaves the owner.
+- Mouse is forwarded when the backend claims it; otherwise drag selects text and the release copies it. Denied host effects (clipboard writes, desktop notifications, file-backed graphics) never reach the application.
 
-The server bar shows colored boxes and highlights the active server. Session, project, worktree, help, error, and diff headings use the selected server's reported Phi accent. Backend output is not recolored. Unobserved servers use neutral desktop colors. Offline entries stay muted. The liveness check uses `/healthz`, independently of password authentication. `NO_COLOR` and `TERM=dumb` disable client colors.
+## Sessions, tabs, and lifecycle
 
-The console views use the desktop dark colors, bordered cards, accent-tinted focus highlights, and editable input forms. Server identities use the desktop hostname normalization and Greek glyphs. The context header retains the saved profile name. Use ↑/↓ to select, Enter to open, `/` to search, Page Up/Down or n/p for pages, and Esc/q to return. Esc first clears an active search. Home/End jump within the filtered list. Number + Enter remains available. The focused row is highlighted in the server's theme; metadata keeps readable Unicode but cannot inject terminal controls. Ctrl-] b and enhanced Ctrl-digit shortcuts also work in client menus. In the server sidebar, `a` adds a server, `r` renames the focused server, `x` asks before removing it, and `[` / `]` move it up or down in the shared desktop order. `m` or Right opens the desktop action menu: Open sessions, Reload server, Reload all servers, Copy server URL, Copy all server URLs, Rename, and Remove server. The actions retain the Server, Clipboard, and Profile groups. Input forms support paste, cursor movement, Home/End, Delete, Backspace, Ctrl-A, and Ctrl-U. Rename selects the existing name and trims the submitted name. OpenCode has an explicit Open Mini action. Normal OpenCode launch remains full TUI. Copy uses an explicit OSC 52 request where supported and also shows the URLs for manual selection. Removal never kills a backend. Removing the active server selects the most recently used remaining server. Removing the last saved server clears the attachment view and leaves Add available. Inside the external pager, use its own keys and exit it before switching servers. Holding Ctrl alone is not observable on legacy terminals; use Ctrl-] b.
-
-The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodings. Kitty alternate-key identities, associated text, and Caps/Num Lock state bits are supported. Undelimited pasted control bytes cannot be distinguished from typed control bytes.
+- Live panes are listed without being seized. Selecting one attaches through Phi's recording at the current widget geometry; it never spawns or resumes a process.
+- Soft close (`x`) marks the tab and arms a 3-second Undo (`u`). Final close (`X`, or a second close) sends exactly one DELETE to the captured origin.
+- Quitting detaches every pane and sends no DELETE; server policy and pinned panes are unchanged.
+- Reconnect keeps the retained core and replays the recording gap. A changed recording epoch rebuilds the emulator instead of merging two terminal states.
+- History browsing replays a bounded tail of the recording into a separate emulator, so it cannot reset a live fullscreen application. Pane scrollback is bounded at 64 MiB / 10,000 lines; history windows are bounded at 4 MiB.
+- UI intent (project, worktree, tab order, active tab, diff visibility) is stored in the shared desktop document under the versioned `phicUI` key. It never contains output, cookies, passwords, prompts, or emulator memory.
 
 ## Compatibility limits
 
-macOS and Linux are the supported client platforms. Windows still supports the existing `phi` server command. The native `phic` relay is not supported there.
+macOS and Linux are the supported console platforms. Windows keeps the `phi` server command and cross-builds the client, but runtime Windows testing is not part of this change; the native adapter archive for Windows x64 must be produced by the documented rebuild contract. A build without `-tags termemu_ghostty` starts the console but reports the precise unsupported-adapter error when a pane is opened.
 
-Client views take ownership only after both relay workers stop. Menus update a bounded inline region, with focused selection, search, pagination, and Esc/q cancellation. They do not enter a client-owned alternate screen or add permanent panels. Backend output continues into Phi's recording, not a client queue. Returning reconnects to the selected pane and rebuilds the native display. The diff pager runs with `LESSSECURE=1` and does not run shell commands or input filters.
-
-Fixed-geometry rebuilds are tested against a development-only terminal oracle, including normal/alternate buffers, cursor/style continuation, tabs, scroll regions, and repeated returns. See `internal/termproof/PROOF.md` for the distinction from arbitrary screen snapshotting.
-
-Reused panes replay from the beginning of Phi's recording in bounded requests. Repaint suppresses already-seen terminal queries and clipboard writes. A small per-origin/per-pane frontier distinguishes this history from bytes emitted while a menu or another server was open: those bytes are delivered as live, so new terminal queries receive their replies. An unfinished request could not have been answered before its terminator existed; it resumes live at that frontier. The original recording is never changed, and the client keeps no output copy.
-
-For a pane first attached by this client, complete requests in its existing recording are treated as historical. Fresh launches and saved-session launches receive their startup replies normally.
-
-Replay uses the current native terminal size. Output originally drawn at another size can wrap or position differently. The client sends the current PTY dimensions but does not resize the user's terminal window or inject backend redraw keys. It is not an exact historical screen emulator. Repaint rejects an escape longer than 1 MiB rather than silently truncate it.
-
-Native scrollback capacity depends on the terminal. The full recording remains in Phi; this client does not implement a deferred history viewer.
-
-A saved-session resume starts a new process and recording. Its startup terminal replies are live, even though its conversation already exists.
-
-On an input socket-write failure, the client exits instead of retrying an input frame whose delivery is ambiguous. Output reconnects recover missed recording bytes without moving the written frontier over a failed range.
-
-Detach does not kill or pin a backend. Existing server policy applies: an unpinned pane with no attached clients has a 30-minute grace timer.
-
-Terminal cleanup is best effort. SIGKILL cannot run cleanup.
-
-## Native test
-
-Run installed backends without user credentials or model prompts:
-
-```sh
-python3 scripts/test-phic-native.py --opencode2 /absolute/path/to/opencode2
-```
-
-Use `--coders bash,pi` for a smaller installed set. The runner requires tmux as a test dependency; phic does not. It uses an isolated HOME, service port, Git fixture, and tmux socket. Shell startup files and user Git configuration are excluded. It prints the evidence directory.
-
-For each backend, the runner compares native styled cells and cursor/buffer state after six view returns, then detaches and checks historical reattachment and backend survival. Shell also retains an unfinished command. A blank screen or failure to detach makes the command fail. No model prompts are sent. Codex and Claude onboarding checks do not claim paid-model access.
-
-The Linux CI job runs this native Shell check in addition to the Go PTY tests and the development-only screen oracle.
+The legacy inline menu/relay client is no longer the entry point. Its code and tests remain temporarily because shared transport helpers and store-interoperability tests still depend on them; deletion is staged after the console contracts finish replacing them.
