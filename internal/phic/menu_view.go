@@ -20,7 +20,8 @@ func menuLabel(text string) string {
 	var out strings.Builder
 	for _, r := range text {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			out.WriteString(strconv.QuoteRuneToASCII(r)[1 : len(strconv.QuoteRuneToASCII(r))-1])
+			quoted := strconv.QuoteRuneToASCII(r)
+			out.WriteString(quoted[1 : len(quoted)-1])
 		} else {
 			out.WriteRune(r)
 		}
@@ -64,10 +65,6 @@ type menuReader struct {
 	mouse      int
 	control    byte
 	controlEsc bool
-}
-
-func readMenuKey(ctx context.Context, t lineTerminal, servers int) (string, error) {
-	return (&menuReader{}).read(ctx, t, servers)
 }
 
 func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int) (string, error) {
@@ -288,10 +285,17 @@ func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() 
 		if cursor >= len(visible) {
 			cursor = max(0, len(visible)-1)
 		}
-		bar := strings.Split(strings.TrimSuffix(c.serverBar(cols-1), "\r\n"), "\r\n")
-		// Keep navigation and choices visible even in short terminals.
-		if len(bar) > rows-5 {
-			bar = bar[:max(0, rows-5)]
+		bar, selectedRow := c.serverBarRows(cols - 1)
+		// A mini bar must not consume the menu, or hide the active server
+		// when its box lies beyond the visible rows. The picker still lists
+		// every saved server in desktop order.
+		barRows := max(0, min(2, rows-5))
+		if len(bar) > barRows {
+			visibleBar := append([]string{}, bar[:barRows]...)
+			if barRows > 0 && selectedRow >= barRows {
+				visibleBar[barRows-1] = bar[selectedRow]
+			}
+			bar = visibleBar
 		}
 		perPage := max(1, rows-len(bar)-4)
 		if cursor < top {

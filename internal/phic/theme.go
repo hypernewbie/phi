@@ -67,8 +67,14 @@ func (c *client) heading(title string) string {
 	return c.color("Φ  " + server + title)
 }
 func (c *client) serverBar(cols int) string {
+	rows, _ := c.serverBarRows(cols)
+	return strings.Join(rows, "\r\n") + "\r\n"
+}
+
+func (c *client) serverBarRows(cols int) ([]string, int) {
 	var out strings.Builder
-	used := 0
+	var lines []string
+	used, selectedRow := 0, 0
 	for i, s := range c.servers {
 		label := clipMenu(s.label(), max(0, min(14, cols-len(strconv.Itoa(i+1))-6)))
 		box := fmt.Sprintf(" [%d %s] ", i+1, label)
@@ -77,14 +83,20 @@ func (c *client) serverBar(cols int) string {
 			cells += cellWidth(r)
 		}
 		if used > 0 && used+cells > cols {
-			out.WriteString("\r\n")
+			lines = append(lines, out.String())
+			out.Reset()
 			used = 0
+		}
+		if i == c.serverIndex {
+			selectedRow = len(lines)
 		}
 		out.WriteString(themeText(s.identity.Theme, box, i == c.serverIndex))
 		used += cells
 	}
-	out.WriteString("\r\n")
-	return out.String()
+	if out.Len() > 0 {
+		lines = append(lines, out.String())
+	}
+	return lines, selectedRow
 }
 
 func (c *client) diffText(dir, text string) string {
