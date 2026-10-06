@@ -27,7 +27,7 @@ let file: string;
 type GoProfile = ProfileMeta & { lastUsed?: string };
 function go(
   operation: string,
-  extra: { URL?: string; ID?: string } = {},
+  extra: { URL?: string; ID?: string; Name?: string; BeforeID?: string } = {},
   target = file,
 ) {
   const output = execFileSync(
@@ -203,6 +203,30 @@ describe('the desktop and phic use the same profiles.json', () => {
       first,
     ]);
     expect(prefs(disk())).toEqual(prefs(data));
+  });
+
+  it('Go rename, reorder and remove round-trip through the same desktop sidebar', () => {
+    const desktop = new Controller({ persistPath: file });
+    const a = desktop.add('http://a.example/');
+    const b = desktop.add('http://b.example/');
+    const c = desktop.add('http://c.example/');
+    desktop.setPetEnabled(true);
+    const before = prefs(disk());
+    go('rename', { ID: b.id, Name: '東京 Phi' });
+    go('reorder', { ID: c.id, BeforeID: a.id });
+    go('remove', { ID: a.id });
+    expect(new Controller({ persistPath: file }).state().profiles).toEqual([
+      c,
+      { ...b, name: '東京 Phi' },
+    ]);
+    expect(prefs(disk())).toEqual(before);
+    desktop.reorder(b.id, c.id); // still-running desktop adopts native edits
+    expect(go('load').Profiles).toEqual([{ ...b, name: '東京 Phi' }, c]);
+    go('reorder', { ID: b.id }); // move to end
+    expect(new Controller({ persistPath: file }).state().profiles).toEqual([
+      c,
+      { ...b, name: '東京 Phi' },
+    ]);
   });
 
   it('desktop recovers a missing Go-written primary from the shared backup', () => {

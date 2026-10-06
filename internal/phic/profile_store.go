@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/net/idna"
 )
@@ -228,6 +229,82 @@ func (s *desktopStore) add(raw string) (desktopProfile, error) {
 		return desktopProfile{}, err
 	}
 	return p, nil
+}
+
+func validateServerName(name string) error {
+	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 64 {
+		return fmt.Errorf("phic: server name must contain 1–64 characters")
+	}
+	for _, r := range name {
+		if r < 0x20 {
+			return fmt.Errorf("phic: server name must not contain control characters")
+		}
+	}
+	return nil
+}
+
+func (s *desktopStore) rename(id, name string) error {
+	if err := validateServerName(name); err != nil {
+		return err
+	}
+	d, err := s.read()
+	if err != nil {
+		return err
+	}
+	for _, row := range d.rows {
+		if jsonString(row["id"]) == id {
+			row["name"], _ = json.Marshal(name)
+			return s.save(d)
+		}
+	}
+	return fmt.Errorf("phic: unknown saved server")
+}
+
+func (s *desktopStore) remove(id string) error {
+	d, err := s.read()
+	if err != nil {
+		return err
+	}
+	for i, row := range d.rows {
+		if jsonString(row["id"]) == id {
+			d.rows = append(d.rows[:i], d.rows[i+1:]...)
+			return s.save(d)
+		}
+	}
+	return fmt.Errorf("phic: unknown saved server")
+}
+
+// Same rail semantics as desktop: move immediately before beforeID, or to
+// the end when empty. Reordering changes no IDs, origins or runtime panes.
+func (s *desktopStore) reorder(id, beforeID string) error {
+	d, err := s.read()
+	if err != nil {
+		return err
+	}
+	from, to := -1, len(d.rows)
+	for i, row := range d.rows {
+		if jsonString(row["id"]) == id {
+			from = i
+		}
+		if beforeID != "" && jsonString(row["id"]) == beforeID {
+			to = i
+		}
+	}
+	if from < 0 || (beforeID != "" && to == len(d.rows)) {
+		return fmt.Errorf("phic: unknown saved server")
+	}
+	if from == to || from+1 == to {
+		return nil
+	}
+	row := d.rows[from]
+	d.rows = append(d.rows[:from], d.rows[from+1:]...)
+	if from < to {
+		to--
+	}
+	d.rows = append(d.rows, nil)
+	copy(d.rows[to+1:], d.rows[to:])
+	d.rows[to] = row
+	return s.save(d)
 }
 
 func (s *desktopStore) setLastUsed(id string) error {
