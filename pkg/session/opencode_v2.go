@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,14 +44,7 @@ func openCodeV2DB(ctx context.Context, c coders.Coder) (*sql.DB, error) {
 	if info.IsDir() {
 		return nil, fmt.Errorf("OpenCode session database is a directory")
 	}
-	uriPath := filepath.ToSlash(path)
-	if filepath.VolumeName(path) != "" && !strings.HasPrefix(uriPath, "/") {
-		uriPath = "/" + uriPath // file:///C:/... on Windows
-	}
-	uri := url.URL{Scheme: "file", Path: uriPath}
-	query := url.Values{"mode": {"ro"}, "_pragma": {"query_only=true", "busy_timeout=5000"}}
-	uri.RawQuery = query.Encode()
-	db, err := openDB(uri.String())
+	db, err := openDB(path + "?_pragma=query_only=true&_pragma=busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}

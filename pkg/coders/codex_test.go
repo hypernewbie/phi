@@ -28,10 +28,17 @@ func TestCodexLaunchResumeAndSafetyDefaults(t *testing.T) {
 			t.Fatalf("unsafe or stale default: %q", arg)
 		}
 	}
+	var hasConfirm bool
 	for _, preset := range c.Presets {
+		if preset.Name == "y↵" && preset.Value == "y\r" {
+			hasConfirm = true
+		}
 		if strings.HasPrefix(preset.Value, "/model ") {
 			t.Fatal("/model has no inline arguments")
 		}
+	}
+	if !hasConfirm {
+		t.Fatal("missing y↵ confirmation preset")
 	}
 	if !IsKnownSessionSource(c.SessionSource) {
 		t.Fatal("adapter not registered")

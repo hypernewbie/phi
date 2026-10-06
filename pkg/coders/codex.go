@@ -21,6 +21,7 @@ func defaultCodex() Coder {
 			{Name: "/copy", Value: "/copy\r"},
 			{Name: "/quit", Value: "/quit\r"},
 			{Name: "ctrl+c", Value: "\x03"},
+			{Name: "y↵", Value: "y\r"},
 			{Name: "esc", Value: "\x1b"},
 		},
 	}

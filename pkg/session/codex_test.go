@@ -63,3 +63,40 @@ func TestCodexMissingHistoryDoesNotCreateOrMigrateFiles(t *testing.T) {
 		t.Fatalf("reader created files: %v %v", entries, err)
 	}
 }
+
+func TestCodexWindowsPathsAndNormalisation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state_5.sqlite")
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE threads (id TEXT, title TEXT, cwd TEXT, updated_at INTEGER, source TEXT, archived INTEGER);
+	INSERT INTO threads VALUES ('win-1','Windows project','C:\\Users\\dev\\project',1790000000,'cli',0),
+	('win-2','Forward slash project','C:/Users/dev/other',1790000001,'vscode',0);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	c := coders.NewManager().MustGet("codex")
+	c.Env = map[string]string{"CODEX_HOME": root, "CODEX_SQLITE_HOME": root}
+
+	// Should match when queried with forward slashes
+	items, err := ListSessions(context.Background(), c, "c:/users/dev/project")
+	if err != nil || len(items) != 1 || items[0].ID != "win-1" {
+		t.Fatalf("expected win-1 for forward slash query: %+v, err: %v", items, err)
+	}
+
+	// Should match when queried with backslashes
+	items, err = ListSessions(context.Background(), c, `C:\Users\dev\project`)
+	if err != nil || len(items) != 1 || items[0].ID != "win-1" {
+		t.Fatalf("expected win-1 for backslash query: %+v, err: %v", items, err)
+	}
+
+	// Should match forward slash stored path with backslash query
+	items, err = ListSessions(context.Background(), c, `c:\users\dev\other`)
+	if err != nil || len(items) != 1 || items[0].ID != "win-2" {
+		t.Fatalf("expected win-2 for backslash query on forward path: %+v, err: %v", items, err)
+	}
+}
