@@ -11,6 +11,10 @@ import (
 	"unicode/utf8"
 )
 
+func readMenuKey(ctx context.Context, t lineTerminal, servers int) (string, error) {
+	return (&menuReader{}).read(ctx, t, servers)
+}
+
 type viewTerminal struct {
 	input  *bytes.Reader
 	output bytes.Buffer
