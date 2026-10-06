@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -21,6 +22,16 @@ import (
 // store. Each mutation reads the latest file so desktop edits and preferences
 // are not replaced with an old in-memory snapshot.
 type desktopStore struct{ path string }
+
+var desktopMutationLocks sync.Map
+
+func (s *desktopStore) lockMutation() func() {
+	path, _ := filepath.Abs(s.path)
+	v, _ := desktopMutationLocks.LoadOrStore(path, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 type desktopDocument struct {
 	fields map[string]json.RawMessage
@@ -217,6 +228,7 @@ func desktopEndpoint(raw string) (origin, host string, err error) {
 }
 
 func (s *desktopStore) add(raw string) (desktopProfile, error) {
+	defer s.lockMutation()()
 	origin, host, err := desktopEndpoint(raw)
 	if err != nil {
 		return desktopProfile{}, err
@@ -268,6 +280,7 @@ func validateServerName(name string) error {
 }
 
 func (s *desktopStore) rename(id, name string) error {
+	defer s.lockMutation()()
 	if err := validateServerName(name); err != nil {
 		return err
 	}
@@ -285,6 +298,7 @@ func (s *desktopStore) rename(id, name string) error {
 }
 
 func (s *desktopStore) remove(id string) error {
+	defer s.lockMutation()()
 	d, err := s.read()
 	if err != nil {
 		return err
@@ -301,6 +315,7 @@ func (s *desktopStore) remove(id string) error {
 // Same rail semantics as desktop: move immediately before beforeID, or to
 // the end when empty. Reordering changes no IDs, origins or runtime panes.
 func (s *desktopStore) reorder(id, beforeID string) error {
+	defer s.lockMutation()()
 	d, err := s.read()
 	if err != nil {
 		return err
@@ -332,6 +347,7 @@ func (s *desktopStore) reorder(id, beforeID string) error {
 }
 
 func (s *desktopStore) setLastUsed(id string) error {
+	defer s.lockMutation()()
 	d, err := s.read()
 	if err != nil {
 		return err

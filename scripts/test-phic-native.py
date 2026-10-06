@@ -110,6 +110,12 @@ def main():
         return {"cells": cells.stdout.decode("utf-8", "replace"),
                 "cursor": cursor.stdout.decode("utf-8", "replace").strip()}
 
+    def terminal_equal(actual, expected):
+        result = subprocess.run(["node", str(root / "scripts/phic-native-screen-compare.mjs")],
+                                input=json.dumps([actual, expected]), text=True, capture_output=True,
+                                cwd=root, check=True, timeout=10)
+        return json.loads(result.stdout)["equal"]
+
     def settled(name, timeout=10):
         previous, stable = None, 0
         deadline = time.monotonic() + timeout
@@ -132,7 +138,7 @@ def main():
         raise RuntimeError(f"{name} never displayed {marker}")
 
     expected = {
-        "bash": r"work [%$#]", "pi": r"unknown",
+        "bash": r"work [%$#]", "pi": r"(?i)(no models available|ctrl.c/ctrl.d|v1\.)",
         "codex": r"(?i)(welcome to codex|sign in|openai codex|select.*account|login)",
         "claude": r"(?i)(choose the text style|claude code)",
         "opencode": r"(?i)(ask anything|opencode|sign in|provider)",
@@ -179,9 +185,9 @@ def main():
                 tmux("send-keys", "-t", name, "-l", "printf PHIC_UNSUBMITTED")
                 wait_view(name, "PHIC_UNSUBMITTED")
             reference = settled(name) if ready else None
-            for key, marker, leave in [("?", "Shortcuts", "Enter"), ("s", "Sessions", "Escape"),
-                                       ("w", "Worktrees", "q"), ("d", "Diff", "q"),
-                                       ("b", "Servers", "q"), ("?", "Shortcuts", "Enter")]:
+            for key, marker, leave in [("?", "phic help", "Escape"), ("s", "SESSIONS", "Escape"),
+                                       ("w", "Worktree", "Escape"), ("h", "Recording", "Escape"),
+                                       ("b", "Φ", "Escape"), ("?", "phic help", "Escape")]:
                 if reference is None:
                     break
                 try:
@@ -190,15 +196,12 @@ def main():
                     view = snapshot(name)
                     if key == "s":
                         plain = re.sub(r"\x1b\[[0-9;]*m", "", view["cells"])
-                        for backend in api("/api/coders").values():
-                            action = "Sessions / New Session" if backend.get("capabilities", {}).get("list") else "New Session"
-                            label = f"+ {backend['name']} · {action}"
-                            if label not in plain:
-                                raise RuntimeError(f"menu advertises the wrong backend action: {label!r}")
+                        if "New Session" not in plain or "TERMINALS" not in plain:
+                            raise RuntimeError("console lost its persistent session/tab controls")
                     (run / f"{coder}.{key if key != '?' else 'help'}.{len(views)}.view.json").write_text(json.dumps(view, indent=2))
                     tmux("send-keys", "-t", name, leave)
                     restored = settled(name)
-                    equal = restored == reference
+                    equal = terminal_equal(restored, reference)
                     views.append({"key": key, "restored": equal})
                     (run / f"{coder}.return.{len(views)}.json").write_text(json.dumps({"expected": reference, "actual": restored}, indent=2))
                     if not equal:
@@ -233,7 +236,7 @@ def main():
                     else:
                         raise RuntimeError("reattachment never painted the backend marker")
                     restored = settled(resumed_name, timeout=20)
-                    reattached = restored == reference
+                    reattached = terminal_equal(restored, reference)
                     (run / f"{coder}.reattach.json").write_text(json.dumps({"expected": reference, "actual": restored}, indent=2))
                     tmux("send-keys", "-t", resumed_name, "C-]", "q", check=False)
                     deadline = time.monotonic() + 3

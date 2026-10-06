@@ -128,9 +128,12 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 			ev.Text = string(rune('a' + k.Code - 1))
 			ev.Unshifted = firstTextRune(ev.Text)
 			return ev, true
+		case k.Code >= 0x1c && k.Code <= 0x1f:
+			ev.Mods |= termemu.ModCtrl
+			ev.Text = string(rune('\\' + k.Code - 0x1c))
+			ev.Unshifted = firstTextRune(ev.Text)
+			return ev, true
 		default:
-			// Other raw C0 bytes (FS/GS/RS/US...) have no logical key here.
-			// Dropping them is safer than inventing a wrong character.
 			return ev, false
 		}
 	}
@@ -140,7 +143,7 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 		return ev, true
 	}
 	if ev.Unshifted == 0 {
-		ev.Unshifted = firstRune(k.ShiftedCode, k.BaseCode)
+		ev.Unshifted = firstRune(k.BaseCode, k.Code)
 		if ev.Unshifted == 0 && ev.Text != "" {
 			ev.Unshifted = firstTextRune(ev.Text)
 		}

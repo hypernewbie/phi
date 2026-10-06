@@ -17,6 +17,7 @@ type uiIntent struct {
 }
 
 type uiServerIntent struct {
+	Origin   string   `json:"origin,omitempty"`
 	Project  string   `json:"project,omitempty"`
 	Worktree string   `json:"worktree,omitempty"`
 	Tabs     []string `json:"tabs,omitempty"`
@@ -51,6 +52,7 @@ func (s *desktopStore) saveUI(ui *uiIntent) error {
 	if s == nil {
 		return nil
 	}
+	defer s.lockMutation()()
 	d, err := s.read()
 	if err != nil {
 		return err
@@ -89,6 +91,9 @@ func (m *tuiModel) intentFor(index int) *uiServerIntent {
 		return nil
 	}
 	if intent, ok := m.uiIntent.Servers[id]; ok {
+		if intent.Origin != "" && intent.Origin != m.originFor(index) {
+			return nil
+		}
 		return &intent
 	}
 	return nil
@@ -156,7 +161,7 @@ func (m *tuiModel) persistIntent() tea.Cmd {
 	if id == "" {
 		return nil
 	}
-	intent := uiServerIntent{Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open}
+	intent := uiServerIntent{Origin: m.currentOrigin(), Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open}
 	for _, t := range m.tabs[m.currentOrigin()] {
 		if t.closing || t.exited {
 			continue
@@ -168,7 +173,12 @@ func (m *tuiModel) persistIntent() tea.Cmd {
 	}
 	m.uiIntent.Servers[id] = intent
 	store := m.store
-	ui := m.uiIntent
+	// Commands run concurrently with Update. Never hand them the mutable map.
+	ui := &uiIntent{Version: 1, Servers: map[string]uiServerIntent{}}
+	for id, intent := range m.uiIntent.Servers {
+		intent.Tabs = append([]string(nil), intent.Tabs...)
+		ui.Servers[id] = intent
+	}
 	return func() tea.Msg {
 		if err := store.saveUI(ui); err != nil {
 			return storeDoneMsg{err: "save UI state: " + err.Error()}

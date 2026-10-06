@@ -139,20 +139,22 @@ func (m *modalState) open(kind modalKind, title string) {
 // paneTab is one terminal tab. It may exist before its actor attaches: live
 // panes listed by the server stay metadata-only until the user selects them.
 type paneTab struct {
-	key      paneKey
-	view     TerminalView
-	actor    *paneActor
-	attached bool
-	exited   bool
-	exitCode int
-	unread   bool
-	status   string
-	title    string
-	coder    string
-	dir      string
-	closeAt  time.Time
-	closing  bool
-	token    int
+	key        paneKey
+	view       TerminalView
+	actor      *paneActor
+	attached   bool
+	exited     bool
+	exitCode   int
+	unread     bool
+	status     string
+	title      string
+	coder      string
+	dir        string
+	closeAt    time.Time
+	closing    bool
+	finalizing bool
+	fresh      bool
+	token      int
 }
 
 func (t *paneTab) label() string {
@@ -166,7 +168,7 @@ func (t *paneTab) label() string {
 	if title == "" {
 		title = t.key.ID
 	}
-	return title
+	return menuLabel(title)
 }
 
 // serverData is the asynchronously loaded view of one saved server.
@@ -182,6 +184,9 @@ type serverData struct {
 	auth          authStatus
 	sessionsCoder string
 	sessionsDir   string
+	project       string
+	worktree      string
+	coderID       string
 }
 
 // tuiModel is the Bubble Tea application model. It owns focus, selection,
@@ -228,13 +233,16 @@ type tuiModel struct {
 	lastPaint time.Time
 	tickArmed bool
 
-	selection selectionState
+	selection    selectionState
+	mouseCapture bool
+	mouseButton  termemu.MouseButton
 
 	uiIntent *uiIntent
 
 	directPane string
 	directExit bool
 	quitOnce   bool
+	cliApplied bool
 
 	build func(termemu.Options) (termemu.Terminal, error)
 }
@@ -317,6 +325,16 @@ func (m *tuiModel) currentOrigin() string {
 	return m.originFor(m.active)
 }
 
+// Capture before starting a command: background work must not read mutable rail state.
+func (m *tuiModel) serverForOrigin(origin string) *serverState {
+	for _, s := range m.servers {
+		if s.api != nil && s.api.base.String() == origin {
+			return s
+		}
+	}
+	return nil
+}
+
 // ---- messages ----
 
 type msgPaneEvent struct{ ev paneEvent }
@@ -324,6 +342,7 @@ type msgPaint struct{}
 type msgCloseExpired struct {
 	key   paneKey
 	token int
+	api   *apiClient
 }
 
 type serverLoadedMsg struct {
@@ -518,15 +537,9 @@ func (m *tuiModel) loginCmd(index int, status authStatus, password string) tea.C
 
 func (m *tuiModel) spawnCmd(cap spawnCapture) tea.Cmd {
 	gen := m.gen
+	s := m.serverForOrigin(cap.origin)
 	return func() tea.Msg {
 		out := spawnDoneMsg{gen: gen, capture: cap}
-		var s *serverState
-		for _, candidate := range m.servers {
-			if candidate.api != nil && candidate.api.base.String() == cap.origin {
-				s = candidate
-				break
-			}
-		}
 		if s == nil {
 			out.err = "the captured server is no longer available"
 			return out
@@ -535,8 +548,8 @@ func (m *tuiModel) spawnCmd(cap spawnCapture) tea.Cmd {
 		defer cancel()
 		req := SpawnRequest{
 			Coder:        cap.coder,
-			Dir:          cap.project,
-			Workspace:    cap.worktree,
+			Dir:          launchDir(cap),
+			Workspace:    cap.project,
 			SessionID:    cap.sessionID,
 			Title:        cap.title,
 			OpenCodeMini: cap.mini,
@@ -553,16 +566,20 @@ func (m *tuiModel) spawnCmd(cap spawnCapture) tea.Cmd {
 	}
 }
 
-func (m *tuiModel) deletePaneCmd(key paneKey) tea.Cmd {
+func launchDir(cap spawnCapture) string {
+	if cap.worktree != "" {
+		return cap.worktree
+	}
+	return cap.project
+}
+
+func (m *tuiModel) deletePaneCmd(key paneKey, captured ...*apiClient) tea.Cmd {
+	s := m.serverForOrigin(key.Origin)
+	if len(captured) > 0 && captured[0] != nil {
+		s = &serverState{api: captured[0]}
+	}
 	return func() tea.Msg {
 		out := deleteDoneMsg{key: key}
-		var s *serverState
-		for _, candidate := range m.servers {
-			if candidate.api != nil && candidate.api.base.String() == key.Origin {
-				s = candidate
-				break
-			}
-		}
 		if s == nil {
 			out.err = "the pane origin is no longer available"
 			return out
@@ -602,15 +619,9 @@ func (m *tuiModel) sessionsCmd(index int, coder, dir string) tea.Cmd {
 
 func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 	gen := m.gen
+	s := m.serverForOrigin(origin)
 	return func() tea.Msg {
 		out := diffLoadedMsg{gen: gen, origin: origin, project: project}
-		var s *serverState
-		for _, candidate := range m.servers {
-			if candidate.api != nil && candidate.api.base.String() == origin {
-				s = candidate
-				break
-			}
-		}
 		if s == nil {
 			out.err = "the diff origin is no longer available"
 			return out
@@ -630,11 +641,30 @@ func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 // ---- Update ----
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	oldCols, oldRows := m.terminalSize()
+	defer func() {
+		if c, r := m.terminalSize(); c != oldCols || r != oldRows {
+			m.relayout()
+		}
+	}()
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.sendFocus(true)
+		}
+		return m, nil
+	case tea.BlurMsg:
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.sendFocus(false)
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 		m.relayout()
+		if d := m.current(); d != nil && d.loaded && !d.needAuth && d.err == "" && !m.cliApplied {
+			return m.applyServerLoaded(serverLoadedMsg{gen: m.gen, index: m.active, identity: d.identity, coders: d.coders, panes: d.panes, health: d.health})
+		}
 		return m, nil
 	case msgPaint:
 		m.tickArmed = false
@@ -693,6 +723,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 		m.data[origin] = d
 	}
 	d.health = msg.health
+	m.servers[msg.index].health = msg.health
 	d.loaded = true
 	d.err = msg.err
 	d.needAuth = msg.needAuth
@@ -714,11 +745,34 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.index != m.active {
 		return m, nil
 	}
-	m.reconcileTabs(msg.panes)
-	m.restoreIntent()
 	m.chooseStartupProject()
+	m.reconcileTabs(msg.panes)
+	if !m.quitOnce {
+		m.restoreIntent()
+		m.quitOnce = true
+	}
+	if !m.cliApplied && (m.cfg.NewPane || m.cfg.Pane != "") {
+		m.activeTab[origin] = -1 // No input may reach an incidental pane during direct entry.
+	} else {
+		m.activateCurrentTab()
+	}
+	if !m.cliApplied && m.cfg.Coder != "" {
+		for i, c := range d.coders {
+			if c.ID == m.cfg.Coder {
+				m.coderIdx = i
+				break
+			}
+		}
+	}
 	var cmds []tea.Cmd
 	cmds = append(cmds, m.refreshSessions())
+	if m.cliApplied {
+		return m, tea.Batch(cmds...)
+	}
+	if c, r := m.terminalSize(); c <= 0 || r <= 0 {
+		return m, tea.Batch(cmds...)
+	}
+	m.cliApplied = true
 	if m.cfg.Diff {
 		m.diff.open = true
 		cmds = append(cmds, m.refreshDiff())
@@ -740,6 +794,9 @@ func (m *tuiModel) applyLoginDone(msg loginDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.gen != m.gen {
 		return m, nil
 	}
+	if msg.index != m.active || m.modal.kind != modalPassword || m.modal.index != msg.index {
+		return m, nil
+	}
 	if msg.err != "" {
 		if m.modal.kind == modalPassword {
 			m.modal.err = msg.err
@@ -755,9 +812,8 @@ func (m *tuiModel) applyLoginDone(msg loginDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
-	if msg.gen != m.gen {
-		return m, nil
-	}
+	// The process already exists even if the user switched context during POST.
+	// Retain it under the captured origin, but never steal focus with a stale result.
 	index := -1
 	for i, s := range m.servers {
 		if s.api != nil && s.api.base.String() == msg.capture.origin {
@@ -781,18 +837,27 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	tab := m.ensureTab(msg.capture.origin, msg.resp.PaneID, msg.capture)
+	tab.fresh = msg.capture.sessionID == ""
+	if msg.resp.OpenCodeMode != "" {
+		tab.view.OpenCodeMode = msg.resp.OpenCodeMode
+	}
 	// Focus only when the capture still belongs to the active server.
-	if index == m.active {
+	if index == m.active && msg.gen == m.gen {
 		m.activateTab(msg.capture.origin, tab)
 		m.focus = focusTerminal
 	}
-	m.setStatus("opened "+tab.label(), false)
+	if msg.gen == m.gen {
+		m.setStatus("opened "+tab.label(), false)
+	}
 	// Refresh the sidebar without changing the captured launch target.
 	return m, tea.Batch(m.loadServerCmd(index), m.refreshDiff())
 }
 
 func (m *tuiModel) applyDeleteDone(msg deleteDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != "" {
+		if tab := m.findTab(msg.key); tab != nil {
+			tab.finalizing = false
+		}
 		m.setStatus("final close failed; the server process may still be alive: "+msg.err, true)
 		return m, nil
 	}
@@ -837,6 +902,8 @@ func (m *tuiModel) applyDiffLoaded(msg diffLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != "" {
 		m.diff.err = msg.err
 		m.diff.text = ""
+		m.diff.lines = nil
+		m.diff.matches = nil
 		return m, nil
 	}
 	m.diff.err = ""
@@ -900,7 +967,8 @@ func (m *tuiModel) applyCloseExpired(msg msgCloseExpired) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	tab.closing = false
-	return m, m.deletePaneCmd(msg.key)
+	tab.finalizing = true
+	return m, m.deletePaneCmd(msg.key, msg.api)
 }
 
 func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
@@ -927,11 +995,12 @@ func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 	case paneError:
 		m.setStatus(ev.Status, true)
 	case paneExited:
+		delete(m.actors, tab.key)
 		tab.exited = true
 		tab.exitCode = ev.Code
 		tab.unread = true
 		m.setStatus(fmt.Sprintf("%s exited (%d)", tab.label(), ev.Code), ev.Code != 0)
-		if m.directExit && m.directPane != "" && tab.key.ID == m.directPane {
+		if m.directExit && tab.key == m.activeTabKeyOrZero() {
 			return tea.Quit
 		}
 	case paneMetadata:
@@ -998,17 +1067,19 @@ func (m *tuiModel) applyReloadedProfiles(msg reloadedProfilesMsg) (tea.Model, te
 		// shared last-used selection instead of leaving no active server.
 		selected = msg.selected
 	}
-	if selected >= 0 {
-		m.active = selected
-	}
+	m.gen++ // Reject index-addressed results from the outgoing rail snapshot.
+	m.active = selected
 	m.servers = next
+	if m.currentOrigin() != currentOrigin {
+		m.project, m.worktree = "", ""
+		m.coderIdx = 0
+		m.quitOnce = false
+	}
 	// A freshly added server has no loaded data; connect to it immediately
 	// so the rail never shows an inert entry.
 	origin := m.currentOrigin()
 	if origin != "" {
-		if d := m.data[origin]; d == nil || !d.loaded {
-			return m, m.loadServerCmd(m.active)
-		}
+		return m, m.loadServerCmd(m.active)
 	}
 	return m, nil
 }
@@ -1042,10 +1113,10 @@ func (m *tuiModel) ensureTab(origin, paneID string, cap spawnCapture) *paneTab {
 		key:   paneKey{Origin: origin, ID: paneID},
 		title: cap.title,
 		coder: cap.coder,
-		dir:   cap.project,
+		dir:   launchDir(cap),
 		view: TerminalView{
-			ID: paneID, Dir: cap.project, Coder: cap.coder, Title: cap.title,
-			Workspace: cap.worktree, OpenCodeMode: modeForMini(cap.mini),
+			ID: paneID, Dir: launchDir(cap), Coder: cap.coder, Title: cap.title,
+			Workspace: cap.project, OpenCodeMode: modeForMini(cap.mini),
 		},
 	}
 	m.tabs[origin] = append(m.tabs[origin], tab)
@@ -1088,6 +1159,7 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 	if origin == "" {
 		return
 	}
+	activeKey, hadActive := m.activeTabKey()
 	existing := m.tabs[origin]
 	seen := map[string]bool{}
 	var next []*paneTab
@@ -1101,9 +1173,7 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 			if p.ID == t.key.ID {
 				found = true
 				t.view = p
-				if t.title == "" {
-					t.title = p.Title
-				}
+				t.title = p.Title
 				if t.coder == "" {
 					t.coder = p.Coder
 				}
@@ -1140,9 +1210,9 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 	}
 	m.tabs[origin] = next
 	// Keep the active index pointing at the same pane where possible.
-	if key, ok := m.activeTabKey(); ok {
+	if hadActive {
 		for i, t := range next {
-			if t.key == key {
+			if t.key == activeKey {
 				m.activeTab[origin] = i
 				return
 			}
@@ -1157,13 +1227,23 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 }
 
 func (m *tuiModel) activateTab(origin string, tab *paneTab) {
+	if tab.actor != nil && !tab.exited {
+		select {
+		case <-tab.actor.done:
+			tab.actor.close()
+			tab.actor = nil
+			tab.attached = false
+			delete(m.actors, tab.key)
+		default:
+		}
+	}
 	for i, t := range m.tabs[origin] {
 		if t == tab {
 			m.activeTab[origin] = i
 			break
 		}
 	}
-	if tab.actor == nil {
+	if tab.actor == nil && !tab.exited {
 		m.attachTab(tab)
 	} else {
 		m.resizeActivePane()
@@ -1188,8 +1268,13 @@ func (m *tuiModel) attachTab(tab *paneTab) {
 		Dir:          tab.dir,
 		Workspace:    tab.view.Workspace,
 		OpenCodeMode: tab.view.OpenCodeMode,
+		Fresh:        tab.fresh,
 		Cols:         cols,
 		Rows:         rows,
+	}
+	if len(m.actors) >= 16 {
+		m.setStatus("16 attached panes: detach an inactive tab with Ctrl-] D before attaching another", true)
+		return
 	}
 	actor, err := newPaneActor(context.Background(), s.api, spec, m.events, m.build)
 	if err != nil {
@@ -1203,6 +1288,9 @@ func (m *tuiModel) attachTab(tab *paneTab) {
 }
 
 func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
+	if tab.finalizing {
+		return nil
+	}
 	if tab.closing && !final {
 		// A second explicit close terminates the process immediately.
 		final = true
@@ -1211,24 +1299,38 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 		tab.closing = true
 		tab.token++
 		tab.closeAt = time.Now().Add(3 * time.Second)
+		if tab.key == m.activeTabKeyOrZero() {
+			m.activeTab[tab.key.Origin] = -1
+			for i, candidate := range m.tabs[tab.key.Origin] {
+				if candidate != tab && !candidate.closing && !candidate.finalizing {
+					m.activeTab[tab.key.Origin] = i
+					break
+				}
+			}
+			m.activateCurrentTab()
+		}
+		m.setStatus("closed tab; Ctrl-] t then u restores it within 3 seconds", false)
 		token := tab.token
 		key := tab.key
+		var api *apiClient
+		if s := m.serverForOrigin(key.Origin); s != nil {
+			api = s.api
+		}
 		return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-			return msgCloseExpired{key: key, token: token}
+			return msgCloseExpired{key: key, token: token, api: api}
 		})
 	}
 	tab.closing = false
-	tab.exited = true
-	if tab.actor != nil {
-		// Detach from the UI immediately; DELETE is the final process action.
-		delete(m.actors, tab.key)
-	}
+	tab.finalizing = true
+	// Retain the actor during the request: a failed DELETE must not pretend
+	// that the server process or its connection has disappeared.
 	return m.deletePaneCmd(tab.key)
 }
 
 func (m *tuiModel) undoClose(tab *paneTab) {
 	tab.closing = false
 	tab.token++
+	m.activateTab(tab.key.Origin, tab)
 	m.setStatus("restored "+tab.label(), false)
 }
 
@@ -1291,6 +1393,10 @@ func (m *tuiModel) chooseStartupProject() {
 			m.worktree = intent.Worktree
 			return
 		}
+	}
+	if d.identity.ActiveCwd != "" {
+		m.project = d.identity.ActiveCwd
+		return
 	}
 	if len(d.identity.Workspaces) > 0 {
 		m.project = d.identity.Workspaces[0]
@@ -1377,6 +1483,7 @@ func (m *tuiModel) openProjectModal() {
 		return
 	}
 	m.modal.open(modalProject, "Project")
+	m.modal.cursor = -1
 	m.modal.items = nil
 	for _, w := range d.identity.Workspaces {
 		m.modal.items = append(m.modal.items, modalItem{label: menuLabel(w), value: w})
@@ -1488,28 +1595,10 @@ func (m *tuiModel) openHistory() tea.Cmd {
 	if s == nil || s.api == nil {
 		return nil
 	}
-	_, head, epoch, _, _, _ := tab.actor.state()
-	m.history.open = true
-	m.history.loading = true
-	m.history.err = ""
-	m.history.text = ""
-	m.history.lines = nil
-	m.history.scroll = 0
-	m.modal.open(modalHistory, "History · "+tab.label())
-	api := s.api
-	paneID := key.ID
-	build := m.build
-	gen := m.gen
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		text, err := fetchHistoryText(ctx, api, paneID, epoch, head, build)
-		out := historyLoadedMsg{gen: gen, key: key, text: text}
-		if err != nil {
-			out.err = err.Error()
-		}
-		return out
-	}
+	_, head, _, _, _, _ := tab.actor.state()
+	m.history = historyState{open: true, key: key, head: head, ticket: m.history.ticket + 1}
+	m.modal.open(modalHistory, "Recording · "+tab.label())
+	return m.historyPage(head)
 }
 
 // ---- layout ----
@@ -1518,21 +1607,13 @@ type rect struct{ X, Y, W, H int }
 
 func (r rect) empty() bool { return r.W <= 0 || r.H <= 0 }
 
-func (m *tuiModel) showSidebar() bool {
-	if m.width >= 80 {
-		return true
-	}
-	return m.focus == focusSessions && m.modal.kind == modalNone
-}
+func (m *tuiModel) showSidebar() bool { return m.width >= 80 }
 
 func (m *tuiModel) showDiffPanel() bool {
 	if !m.diff.open {
 		return false
 	}
-	if m.width >= 120 {
-		return true
-	}
-	return m.focus == focusDiff && m.modal.kind == modalNone
+	return m.width >= 120
 }
 
 func (m *tuiModel) relayout() {
@@ -1545,7 +1626,12 @@ func (m *tuiModel) relayout() {
 		return
 	}
 	tab := m.findTab(key)
-	if tab == nil || tab.actor == nil {
+	if tab == nil {
+		m.activateCurrentTab()
+		return
+	}
+	if tab.actor == nil {
+		m.attachTab(tab)
 		return
 	}
 	tab.actor.resize(cols, rows)
@@ -1565,7 +1651,7 @@ func (m *tuiModel) terminalSize() (int, int) {
 		diff = min(44, m.width/3)
 	}
 	w := m.width - sidebar - diff - 2 // terminal border
-	h := m.height - 5                 // rail, context, tabs, footer + border
+	h := m.height - 6                 // rail, context, tabs, footer + border
 	if w < 1 || h < 1 {
 		return 0, 0
 	}
@@ -1577,10 +1663,7 @@ func (m *tuiModel) bodyRect() rect {
 }
 
 func (m *tuiModel) sidebarRect() rect {
-	if !m.showSidebar() {
-		return rect{}
-	}
-	return rect{X: 0, Y: 3, W: 27, H: m.height - 4}
+	return rect{X: 0, Y: 3, W: min(27, m.width), H: m.height - 4}
 }
 
 func (m *tuiModel) terminalRect() rect {
@@ -1599,10 +1682,13 @@ func (m *tuiModel) terminalRect() rect {
 }
 
 func (m *tuiModel) diffRect() rect {
-	if !m.showDiffPanel() {
+	if !m.diff.open || (!m.showDiffPanel() && m.focus != focusDiff) {
 		return rect{}
 	}
 	dw := min(44, m.width/3)
+	if m.width < 120 {
+		dw = min(60, m.width)
+	}
 	return rect{X: m.width - dw, Y: m.bodyRect().Y, W: dw, H: m.bodyRect().H}
 }
 
@@ -1625,6 +1711,11 @@ func sortSessions(items []Session) {
 	})
 }
 
+func (m *tuiModel) sidebarStart() int {
+	visible := max(1, m.sidebarRect().H-5)
+	return max(0, m.sessionCursor-visible+1)
+}
+
 func sanitizeMetadata(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -1633,8 +1724,9 @@ func sanitizeMetadata(s string) string {
 		}
 		b.WriteRune(r)
 	}
-	if b.Len() > 120 {
-		return b.String()[:120]
+	runes := []rune(b.String())
+	if len(runes) > 120 {
+		return string(runes[:120])
 	}
 	return b.String()
 }

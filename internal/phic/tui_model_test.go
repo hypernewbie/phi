@@ -183,7 +183,7 @@ func TestTUISpawnCaptureEmptyResumeIdentity(t *testing.T) {
 	}
 	select {
 	case c := <-got:
-		if c.body["cwd"] != "/work" || c.body["workspace"] != "/work/wt" || c.body["coder"] != "shell" {
+		if c.body["cwd"] != "/work/wt" || c.body["workspace"] != "/work" || c.body["coder"] != "shell" {
 			t.Fatalf("captured context = %v", c.body)
 		}
 		if _, present := c.body["session_id"]; present {
