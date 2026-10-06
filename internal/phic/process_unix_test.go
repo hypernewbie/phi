@@ -192,9 +192,9 @@ func TestCLIAuthenticatedFreshPaneRawReplayAndDetach(t *testing.T) {
 			await([]byte("Phi server password: "))
 			_, _ = master.Write([]byte(password + "\r"))
 			if resume {
-				await([]byte("Phi sessions"))
+				await([]byte("Sessions"))
 				_, _ = master.Write([]byte("1\r"))
-				await([]byte("Saved sessions"))
+				await([]byte("Custom sessions"))
 				_, _ = master.Write([]byte("2\r"))
 				await([]byte("\x1b[6n"))
 				_, _ = master.Write([]byte("\x1b[1;1R"))

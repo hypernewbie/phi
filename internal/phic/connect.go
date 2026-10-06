@@ -6,19 +6,37 @@ import (
 	"strings"
 )
 
+// Same form and partial-success bulk-add flow as picker.html → DesktopHost.
+func joinAddErrors(errors []string) string {
+	if len(errors) == 0 {
+		return "Invalid server URL"
+	}
+	return strings.Join(errors, "; ")
+}
+
 // Connecting is a shared desktop-store edit, not a run-local connection.
 func (c *client) connectServer(ctx context.Context) (int, error) {
-	address, err := c.textPrompt(ctx, "Add server", "Server URL", "", 2048, func(value string) error {
-		_, _, err := desktopEndpoint(strings.TrimSpace(value))
-		return err
-	})
+	var added addServersResult
+	_, err := c.textPromptWith(ctx, "Add Phi server", "Server URL", "", maxMetadataBytes, func(value string) error {
+		if err := validateServerInput(value); err != nil {
+			return err
+		}
+		added = c.store.addServerInput(value)
+		if len(added.Profiles) == 0 {
+			return fmt.Errorf("%s", joinAddErrors(added.Errors))
+		}
+		return nil
+	}, formOptions{placeholder: "https://server.example.com", pasteSpaces: true, submit: func(value string) string {
+		n := len(parseServerURLs(value))
+		if n > 1 {
+			return fmt.Sprintf("Add %d servers", n)
+		}
+		return "Add"
+	}})
 	if err != nil {
 		return 0, err
 	}
-	profile, err := c.store.add(strings.TrimSpace(address))
-	if err != nil {
-		return 0, err
-	}
+	profile := added.Profiles[len(added.Profiles)-1]
 	if err := c.reloadServerProfiles(); err != nil {
 		return 0, err
 	}

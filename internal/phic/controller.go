@@ -62,6 +62,9 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 				current, fresh = next, isFresh
 				break
 			}
+			if errors.Is(viewErr, errNoServer) {
+				return viewErr
+			}
 			if errors.Is(viewErr, errDetach) {
 				break
 			}

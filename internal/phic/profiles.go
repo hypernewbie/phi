@@ -1,6 +1,7 @@
 package phic
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,11 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 	profiles := d.profiles()
 	selected := 0
 	if cfg.ServerExplicit {
-		p, err := store.add(cfg.Server)
+		urls := parseServerURLs(cfg.Server)
+		if len(urls) != 1 {
+			return nil, 0, fmt.Errorf("Invalid server URL")
+		}
+		p, err := store.add(urls[0])
 		if err != nil {
 			return nil, 0, err
 		}
@@ -72,12 +77,7 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 		profiles = append(profiles, p)
 		selected = len(profiles) - 1
 	} else if len(profiles) == 0 {
-		origin, host, err := desktopEndpoint(cfg.Server)
-		if err != nil {
-			return nil, 0, err
-		}
-		// Offer localhost without requiring or saving it before the user chooses.
-		profiles = append(profiles, desktopProfile{Name: host, Origin: origin})
+		selected = -1 // Desktop's empty rail has Add, not an invented localhost profile.
 	} else {
 		for i, p := range profiles {
 			if strings.Compare(p.LastUsed, profiles[selected].LastUsed) > 0 {
@@ -124,10 +124,6 @@ func (c *client) reloadServerProfiles() error {
 		}
 		next = append(next, state)
 	}
-	if len(next) == 0 && current != nil && current.profile.ID == "" {
-		next = append(next, current)
-		selected = 0
-	}
 	c.currentServer = current
 	c.servers, c.serverIndex = next, selected
 	c.keys.servers = len(next)
@@ -139,6 +135,9 @@ func (c *client) persistActiveProfile() error {
 		return nil
 	}
 	s := c.activeServer()
+	if s == nil {
+		return nil
+	}
 	if s.profile.ID == "" {
 		p, err := c.store.add(s.profile.Origin)
 		if err != nil {

@@ -21,16 +21,17 @@ func themeText(theme, text string, selected bool) string {
 	}
 	hex := phiAccents[theme]
 	if hex == "" {
-		hex = phiAccents["purple"]
+		if theme == "" {
+			hex = "e4e3e9"
+		} else {
+			hex = phiAccents["purple"]
+		}
 	}
 	value, _ := strconv.ParseUint(hex, 16, 32)
 	r, g, b := (value>>16)&255, (value>>8)&255, value&255
 	if selected {
-		fg := 255
-		if 299*r+587*g+114*b > 150000 {
-			fg = 0
-		}
-		return fmt.Sprintf("\x1b[1;38;2;%d;%d;%d;48;2;%d;%d;%dm%s\x1b[0m", fg, fg, fg, r, g, b, text)
+		// rail-menu.css uses a 14% accent wash, not a solid accent slab.
+		return fmt.Sprintf("\x1b[1;38;2;%d;%d;%d;48;2;%d;%d;%dm%s\x1b[0m", r, g, b, (14*r+86*23)/100, (14*g+86*23)/100, (14*b+86*29)/100, text)
 	}
 	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm%s\x1b[0m", r, g, b, text)
 }
@@ -52,15 +53,36 @@ func (c *client) color(text string) string {
 	return themeText(theme, text, false)
 }
 func (s *serverState) label() string {
-	// A saved desktop label is user-owned. Hostname enriches identity; it
-	// must not silently replace a named rail entry after config loads.
-	if s.profile.Name != "" && s.profile.Name != s.profile.Origin && (s.api == nil || s.profile.Name != s.api.base.Host) {
-		return menuLabel(s.profile.Name)
-	}
-	if s.identity.Hostname != "" {
-		return menuLabel(s.identity.Hostname)
+	// renderer.identityLabel: observed canonical identity on rail; saved
+	// profile name is still shown in its context header and rename form.
+	if hostname := canonicalHostname(s.identity.Hostname); hostname != "" {
+		return menuLabel(hostname)
 	}
 	return menuLabel(s.profile.Name)
+}
+func dangerText(text string, selected bool) string {
+	if !osColorEnabled() {
+		return text
+	}
+	if selected {
+		return "\x1b[38;2;255;143;154;48;2;44;31;38m" + text + "\x1b[0m"
+	}
+	return "\x1b[38;2;255;143;154m" + text + "\x1b[0m"
+}
+func pickerText(text string) string {
+	if !osColorEnabled() {
+		return text
+	}
+	return "\x1b[38;2;79;70;229m" + text + "\x1b[0m"
+}
+func (s *serverState) railText(text string, selected bool) string {
+	if s.health != "up" {
+		if !osColorEnabled() {
+			return text
+		}
+		return "\x1b[38;2;120;118;138m" + text + "\x1b[0m"
+	}
+	return themeText(s.identity.Theme, text, selected)
 }
 func (c *client) heading(title string) string {
 	server := ""
@@ -78,9 +100,10 @@ func (c *client) serverBarRows(cols int) ([]string, int) {
 	var out strings.Builder
 	var lines []string
 	used, selectedRow := 0, 0
+	glyphs := serverGlyphs(c.servers)
 	for i, s := range c.servers {
-		label := clipMenu(s.label(), max(0, min(14, cols-len(strconv.Itoa(i+1))-6)))
-		box := fmt.Sprintf(" [%d %s] ", i+1, label)
+		label := clipMenu(s.label(), max(0, min(14, cols-len(strconv.Itoa(i+1))-8)))
+		box := fmt.Sprintf(" [%s %d %s] ", glyphs[i], i+1, label)
 		cells := 0
 		for _, r := range box {
 			cells += cellWidth(r)
@@ -93,7 +116,7 @@ func (c *client) serverBarRows(cols int) ([]string, int) {
 		if i == c.serverIndex {
 			selectedRow = len(lines)
 		}
-		out.WriteString(themeText(s.identity.Theme, box, i == c.serverIndex))
+		out.WriteString(s.railText(box, i == c.serverIndex))
 		used += cells
 	}
 	if out.Len() > 0 {

@@ -18,7 +18,7 @@ func TestCompactMenuBarDoesNotHideSelectedServerOrConsumeChoices(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := v.output.String()
-	if !strings.Contains(out, "[20 Server20]") || !strings.Contains(out, "3  Three") {
+	if !strings.Contains(out, "20 Server20]") || !strings.Contains(out, "3  Three") {
 		t.Fatalf("compact bar lost active identity or crowded out choices: %q", out)
 	}
 }

@@ -179,7 +179,7 @@ def main():
                 tmux("send-keys", "-t", name, "-l", "printf PHIC_UNSUBMITTED")
                 wait_view(name, "PHIC_UNSUBMITTED")
             reference = settled(name) if ready else None
-            for key, marker, leave in [("?", "Shortcuts", "Enter"), ("s", "Phi sessions", "Escape"),
+            for key, marker, leave in [("?", "Shortcuts", "Enter"), ("s", "Sessions", "Escape"),
                                        ("w", "Worktrees", "q"), ("d", "Diff", "q"),
                                        ("b", "Servers", "q"), ("?", "Shortcuts", "Enter")]:
                 if reference is None:
@@ -191,7 +191,7 @@ def main():
                     if key == "s":
                         plain = re.sub(r"\x1b\[[0-9;]*m", "", view["cells"])
                         for backend in api("/api/coders").values():
-                            action = "Sessions / New pane" if backend.get("capabilities", {}).get("list") else "New pane"
+                            action = "Sessions / New Session" if backend.get("capabilities", {}).get("list") else "New Session"
                             label = f"+ {backend['name']} · {action}"
                             if label not in plain:
                                 raise RuntimeError(f"menu advertises the wrong backend action: {label!r}")

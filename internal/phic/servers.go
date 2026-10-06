@@ -2,9 +2,9 @@ package phic
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,30 +15,37 @@ func (c *client) refreshIdentity(ctx context.Context, s *serverState) {
 		return
 	}
 	if s.api == nil {
-		s.health = "Invalid address"
+		s.health = "down"
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	var identity serverIdentity
-	err := s.api.getJSON(ctx, "/api/config", &identity)
+	// DesktopHost.realHealthChecker is /healthz, not authenticated config.
+	// Never classify a password-locked server as offline or send its cookie
+	// to a liveness probe. A failed identity read retains known metadata.
+	s.health = "down"
+	probe := *s.api.http
+	probe.Jar = nil
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api.base.String()+"/healthz", nil)
 	if err == nil {
-		s.identity = identity
-		s.health = "Online"
-		return
+		resp, e := probe.Do(req)
+		if e == nil {
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				s.health = "up"
+			}
+			_ = resp.Body.Close()
+		}
 	}
-	var apiErr *apiError
-	if errors.As(err, &apiErr) && (apiErr.Code == 401 || apiErr.Code == 403) {
-		s.health = "Sign in"
-	} else {
-		s.health = "Offline"
+	var identity serverIdentity
+	if s.api.getJSON(ctx, "/api/config", &identity) == nil {
+		s.identity = identity
 	}
 }
 
 func (c *client) observeServers(ctx context.Context) {
 	// Observe identities without sending login proofs to unselected servers.
 	// Separate jars prevent same-host, different-port cookie collisions.
-	observe, cancel := context.WithTimeout(ctx, time.Second)
+	observe, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 4)
