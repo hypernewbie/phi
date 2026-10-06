@@ -180,6 +180,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusSessions
 	case 't':
 		m.focus = focusTabs
+	case 'x':
+		if tab := m.activeTabModel(); tab != nil {
+			return m, m.closeTab(tab, false)
+		}
+	case 'u':
+		m.undoLastClose()
 	case 'd':
 		m.diff.open = !m.diff.open
 		if m.diff.open {
@@ -393,12 +399,7 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.closeTab(tab, true)
 		}
 	case 'u':
-		for _, t := range tabs {
-			if t.closing {
-				m.undoClose(t)
-				break
-			}
-		}
+		m.undoLastClose()
 	case 'r':
 		m.openRenamePane()
 	case 'p':
@@ -814,6 +815,18 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case mouse.Y == 2:
+		if mouse.Button == tea.MouseLeft {
+			switch m.tabControlHit(mouse.X) {
+			case "close":
+				if tab := m.activeTabModel(); tab != nil {
+					return m, m.closeTab(tab, false)
+				}
+				return m, nil
+			case "undo":
+				m.undoLastClose()
+				return m, nil
+			}
+		}
 		m.focus = focusTabs
 		if index, ok := m.tabHit(mouse.X); ok {
 			m.activeTab[m.currentOrigin()] = index
@@ -863,6 +876,36 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Hit only the rendered suffix, never a button-like string inside a tab title.
+func (m *tuiModel) tabControlHit(x int) string {
+	plain := ansi.Strip(m.renderTabs())
+	at := strings.LastIndex(plain, tabControls)
+	if at < 0 || x < 0 || x >= m.width {
+		return ""
+	}
+	start := ansi.StringWidth(plain[:at])
+	if x >= start+1 && x < start+1+len("[x] close") {
+		return "close"
+	}
+	undo := start + len(" [x] close  ")
+	if x >= undo && x < undo+len("[u] undo") {
+		return "undo"
+	}
+	return ""
+}
+
+func (m *tuiModel) undoLastClose() {
+	var latest *paneTab
+	for _, tab := range m.tabs[m.currentOrigin()] {
+		if tab.closing && (latest == nil || tab.closeAt.After(latest.closeAt)) {
+			latest = tab
+		}
+	}
+	if latest != nil {
+		m.undoClose(latest)
+	}
+}
+
 func (m *tuiModel) railHit(x int) (int, bool) {
 	offset := 3 // " Φ "
 	glyphs := serverGlyphs(m.servers)
@@ -889,7 +932,7 @@ func (m *tuiModel) tabHit(x int) (int, bool) {
 	widths := make([]int, len(tabs))
 	total := 0
 	for i, t := range tabs {
-		title := truncateCells(t.label(), max(8, m.width-48))
+		title := m.tabTitle(t)
 		label := " ● " + title + " "
 		if t.unread && i != active {
 			label = " ● " + title + "• "

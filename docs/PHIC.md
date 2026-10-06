@@ -68,6 +68,7 @@ Prefix: Ctrl-] (`Ctrl-] Ctrl-]` sends a literal prefix). In terminal focus, keys
 | `Ctrl-] b` | focus server rail (`a` add, `m` rename, `x` remove, `r` reload, `K`/`J` reorder, `c` copy URL) |
 | `Ctrl-] s` | focus sessions (`Enter` open/resume, `n` new, `c` coder, `p` project, `w` worktree) |
 | `Ctrl-] t` | focus tabs (`x` soft close, `X` final close, `u` undo, `r` rename, `p` pin, `m` mark) |
+| `Ctrl-] x` / `u` | close the active terminal / Undo within 3 seconds |
 | `Ctrl-] d` | toggle diff panel |
 | `Ctrl-] h` | recording browser: `[` earlier page, `]` later page, `x` text/hex |
 | `Ctrl-] p` / `w` / `c` | project / worktree / coder dialogs |
@@ -93,7 +94,10 @@ Tab cycles chrome regions; Esc returns to the terminal. New Session sends exactl
 ## Sessions, tabs, and lifecycle
 
 - Live panes are listed without being seized. Selecting one attaches through Phi's recording at the current widget geometry; it never spawns or resumes a process.
-- Soft close (`x`) marks the tab and arms a 3-second Undo (`u`). Final close (`X`, or a second close) sends exactly one DELETE to the captured origin.
+- Click `[x] close`, or press `Ctrl-] x`, to close the active terminal with a 3-second Undo grace.
+- Click `[u] undo`, or press `Ctrl-] u`, to restore the same pane during that grace.
+- In tab focus, plain `x` and `u` also work. In terminal focus, plain `x` remains backend input.
+- Final close (`X` in tab focus, or a second close of the same tab) sends exactly one DELETE to the captured origin.
 - Quitting detaches every pane and sends no DELETE; server policy and pinned panes are unchanged.
 - Reconnect keeps the retained core and replays the recording gap. A changed recording epoch rebuilds the emulator instead of merging two terminal states.
 - Each pane requests 64 MiB and 10,000 lines of native scrollback. Ghostty prunes pages, so the retained row count can be smaller.

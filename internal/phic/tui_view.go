@@ -185,13 +185,22 @@ func (m *tuiModel) renderContext() string {
 	return line + strings.Repeat(" ", gap) + right
 }
 
+const tabControls = " [x] close  [u] undo"
+const tabTitleMaxCells = 20
+
+// Rendering and mouse hits share the same cell-bounded title, including ellipsis.
+func (m *tuiModel) tabTitle(t *paneTab) string {
+	limit := min(tabTitleMaxCells, max(3, m.width-48))
+	return ansi.Truncate(t.label(), limit, "…")
+}
+
 func (m *tuiModel) renderTabs() string {
 	accent := m.accentColor()
 	muted := lg.NewStyle().Foreground(tuiMuted)
 	origin := m.currentOrigin()
 	tabs := m.tabs[origin]
 	prefix := muted.Render(" TERMINALS ")
-	suffix := muted.Render(" [x] close  [u] undo")
+	suffix := muted.Render(tabControls)
 	if len(tabs) == 0 {
 		return prefix + muted.Render("no open panes — [n] New Session")
 	}
@@ -210,7 +219,7 @@ func (m *tuiModel) renderTabs() string {
 		if t.closing {
 			mark = "✕"
 		}
-		title := truncateCells(t.label(), max(8, m.width-48))
+		title := m.tabTitle(t)
 		label := " " + mark + " " + title + " "
 		if t.unread && i != active {
 			label = " " + mark + " " + title + "• "

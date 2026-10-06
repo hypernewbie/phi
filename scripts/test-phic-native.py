@@ -209,6 +209,25 @@ def main():
                 except (RuntimeError, subprocess.CalledProcessError) as error:
                     views.append({"key": key, "restored": False, "error": str(error)})
                     break
+            close_click_undo = None
+            if ready and coder == "bash" and all(v["restored"] for v in views):
+                def click_control(label):
+                    line = tmux("capture-pane", "-p", "-t", name).stdout.decode("utf-8", "replace").splitlines()[2]
+                    column = line.rfind(label)
+                    if column < 0:
+                        raise RuntimeError(f"missing clickable control {label}")
+                    # SGR mouse packets enter the real client TTY, not its model.
+                    x = column + 2
+                    tmux("send-keys", "-t", name, "-l", f"\x1b[<0;{x};3M\x1b[<0;{x};3m")
+                try:
+                    click_control("[x] close")
+                    wait_view(name, "closed tab;")
+                    click_control("[u] undo")
+                    wait_view(name, "PHIC_UNSUBMITTED")
+                    close_click_undo = terminal_equal(settled(name), reference)
+                except (RuntimeError, subprocess.CalledProcessError) as error:
+                    close_click_undo = False
+                    (run / "close-click-error.txt").write_text(str(error))
             tmux("send-keys", "-t", name, "C-]", "q", check=False)
             detached, alive = False, False
             deadline = time.monotonic() + 3
@@ -251,7 +270,7 @@ def main():
                     (run / f"{coder}.reattach-error.txt").write_text(str(error))
             row = {"coder": coder, "elapsed": round(time.monotonic() - started, 3), "ready": ready,
                    "views": views, "reattached": reattached,
-                   "detached": detached, "backend_survives_detach": alive, "pane": pane}
+                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "pane": pane}
             report.append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
     finally:
@@ -272,7 +291,8 @@ def main():
         print("Evidence:", run)
     return 0 if len(report) == len(coders) and all(
         r["ready"] and len(r["views"]) == 6 and all(v["restored"] for v in r["views"])
-        and r["reattached"] and r["detached"] and r["backend_survives_detach"] for r in report) else 1
+        and r["reattached"] and r["detached"] and r["backend_survives_detach"]
+        and (r["coder"] != "bash" or r["close_click_undo"] is True) for r in report) else 1
 
 
 if __name__ == "__main__":
