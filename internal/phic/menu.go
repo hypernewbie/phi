@@ -43,6 +43,9 @@ func (c *client) choose(ctx context.Context, title string, items []string) (int,
 }
 
 func (c *client) chooseStyled(ctx context.Context, title string, items []string, paint func(int, string, bool) string) (int, error) {
+	return c.chooseView(ctx, title, items, paint, menuOptions{})
+}
+func (c *client) chooseView(ctx context.Context, title string, items []string, paint func(int, string, bool) string, options menuOptions) (int, error) {
 	if c.tty == nil {
 		return 0, fmt.Errorf("phic: selection requires a terminal")
 	}
@@ -55,7 +58,7 @@ func (c *client) chooseStyled(ctx context.Context, title string, items []string,
 		return 0, err
 	}
 	defer func() { _ = writeAll(c.tty, []byte("\x1b[?2004l")) }()
-	return c.selectionView(ctx, c.tty, c.tty.Size, title, items, paint)
+	return c.selectionViewWith(ctx, c.tty, c.tty.Size, title, items, paint, options)
 }
 
 func (c *client) chooseSpawn(ctx context.Context, dir, coder string) (SelectResult, error) {

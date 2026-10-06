@@ -92,10 +92,10 @@ func (c *client) dispatchView(ctx context.Context, current SelectResult, key byt
 		var next *SelectResult
 		var err error
 		if key == 'b' {
-			var i int
-			i, err = c.serverPicker(ctx)
+			var choice serverChoice
+			choice, err = c.serverPicker(ctx)
 			if err == nil {
-				return c.switchServer(ctx, i, current)
+				return c.switchServerView(ctx, choice.Index, current, choice.Sessions)
 			}
 		} else {
 			next, err = c.liveView(ctx, current, key)
@@ -138,11 +138,22 @@ func (c *client) materialize(ctx context.Context, sel SelectResult) (SelectResul
 	return SelectResult{PaneID: sp.PaneID, Existing: &TerminalView{ID: sp.PaneID, Dir: req.Dir, Coder: req.Coder, SessionID: sp.SessionID, OpenCodeMode: sp.OpenCodeMode}}, true, nil
 }
 
+func (c *client) pickSessions(ctx context.Context, dir string) (SelectResult, error) {
+	panes, err := c.api.ListTerminals(ctx, dir)
+	if err != nil {
+		return SelectResult{}, err
+	}
+	coder := c.cfg.Coder
+	c.cfg.Coder = ""
+	defer func() { c.cfg.Coder = coder }()
+	return c.chooseStartup(ctx, dir, panes)
+}
+
 func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (*SelectResult, error) {
 	dir := current.Existing.Dir
 	switch key {
 	case '?':
-		err := writeAll(c.tty, []byte(c.color("Φ  Shortcuts\r\n\r\nCtrl-] b   Server bar\r\nCtrl-] 1..9 or enhanced Ctrl-1..9 switches server\r\nCtrl-] s   Sessions / new pane\r\nCtrl-] d   Diff\r\nCtrl-] w   Worktrees\r\nCtrl-] q   Detach (backend keeps running)\r\nCtrl-] ?   Help\r\nCtrl-] twice sends the prefix to the backend\r\n\r\nEnter or Esc/q to return: ")))
+		err := writeAll(c.tty, []byte(c.color("Φ  Shortcuts\r\n\r\nCtrl-] b   Server sidebar (a add, r rename, x remove, [ ] move, m actions)\r\nCtrl-] 1..9 or enhanced Ctrl-1..9 switches server\r\nCtrl-] s   Sessions / new pane\r\nCtrl-] d   Diff\r\nCtrl-] w   Worktrees\r\nCtrl-] q   Detach (backend keeps running)\r\nCtrl-] ?   Help\r\nCtrl-] twice sends the prefix to the backend\r\n\r\nEnter or Esc/q to return: ")))
 		if err == nil {
 			_, err = c.acknowledgeView(ctx)
 		}
@@ -179,14 +190,7 @@ func (c *client) liveView(ctx context.Context, current SelectResult, key byte) (
 	default:
 		return nil, fmt.Errorf("phic: unknown client view")
 	}
-	panes, err := c.api.ListTerminals(ctx, dir)
-	if err != nil {
-		return nil, err
-	}
-	coder := c.cfg.Coder
-	c.cfg.Coder = ""
-	defer func() { c.cfg.Coder = coder }()
-	next, err := c.chooseStartup(ctx, dir, panes)
+	next, err := c.pickSessions(ctx, dir)
 	return &next, err
 }
 

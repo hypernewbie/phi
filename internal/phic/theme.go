@@ -36,6 +36,9 @@ func themeText(theme, text string, selected bool) string {
 }
 
 func (c *client) activeServer() *serverState {
+	if c.currentServer != nil {
+		return c.currentServer
+	}
 	if c.serverIndex < 0 || c.serverIndex >= len(c.servers) {
 		return nil
 	}

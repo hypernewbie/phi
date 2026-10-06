@@ -155,6 +155,10 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 				return "up", nil
 			case "\x1b[B", "\x1bOB":
 				return "down", nil
+			case "\x1b[C", "\x1bOC":
+				return "right", nil
+			case "\x1b[D", "\x1bOD":
+				return "left", nil
 			case "\x1b[5~":
 				return "pageup", nil
 			case "\x1b[6~":
@@ -187,6 +191,10 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 				continue
 			}
 			switch code {
+			case 57350:
+				return "left", nil
+			case 57351:
+				return "right", nil
 			case 57352:
 				return "up", nil
 			case 57353:
@@ -244,6 +252,8 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 			return "back", nil
 		case '\r', '\n':
 			return "enter", nil
+		case 21:
+			return "clear", nil
 		case 8, 127:
 			return "erase", nil
 		case '\t':
@@ -259,10 +269,42 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 	}
 }
 
+type menuOptions struct {
+	cursor  *int
+	actions []string
+	help    string
+}
+type menuAction struct{ key string }
+
+func (a menuAction) Error() string { return "phic: menu action " + a.key }
+
+func menuCells(text string) int {
+	n := 0
+	for _, r := range text {
+		n += cellWidth(r)
+	}
+	return n
+}
+func menuPad(text string, columns int) string {
+	text = clipMenu(text, columns)
+	return text + strings.Repeat(" ", max(0, columns-menuCells(text)))
+}
+func menuRule(left, text, right string, columns int) string {
+	text = clipMenu(menuLabel(text), max(0, columns-menuCells(left+right)-2))
+	line := left + " " + text + " "
+	return clipMenu(line+strings.Repeat("─", max(0, columns-menuCells(line+right)))+right, columns)
+}
+
 func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() (int, int, error), title string, items []string, paint func(int, string, bool) string) (int, error) {
+	return c.selectionViewWith(ctx, t, size, title, items, paint, menuOptions{})
+}
+func (c *client) selectionViewWith(ctx context.Context, t lineTerminal, size func() (int, int, error), title string, items []string, paint func(int, string, bool) string, options menuOptions) (int, error) {
 	cursor, top, drawn := 0, 0, 0
 	if title == "Servers" {
-		cursor = c.serverIndex
+		cursor = max(0, c.serverIndex)
+	}
+	if options.cursor != nil {
+		cursor = max(0, *options.cursor)
 	}
 	reader := menuReader{claimed: c.menuClaims()}
 	dirty, lastCols, lastRows := true, 0, 0
@@ -314,15 +356,15 @@ func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() 
 		for _, line := range bar {
 			out.WriteString(line + "\r\n")
 		}
-		out.WriteString(c.color(clipMenu("Φ  "+title, cols-1)) + "\r\n")
-		filter := "  / Search   ·   Ctrl-] b Servers"
+		out.WriteString(c.color(menuRule("╭─", "Φ  "+title, "╮", cols-1)) + "\r\n")
+		filter := "  ↑↓ Select · Enter Open · / Search · Ctrl-] b Servers"
 		if search || query != "" {
 			filter = "  Search: " + query
 		}
 		if number != "" {
 			filter = "  Choose: " + number
 		}
-		out.WriteString(clipMenu(filter, cols-1) + "\r\n")
+		out.WriteString("│" + menuPad(filter, cols-3) + "│\r\n")
 		end := min(len(visible), top+perPage)
 		for pos := top; pos < end; pos++ {
 			i := visible[pos]
@@ -330,7 +372,7 @@ func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() 
 			if pos == cursor {
 				marker = "› "
 			}
-			line := clipMenu(fmt.Sprintf("%s%d  %s", marker, i+1, items[i]), cols-1)
+			line := "│" + menuPad(fmt.Sprintf(" %s%d  %s", marker, i+1, menuLabel(items[i])), cols-3) + "│"
 			if paint != nil {
 				line = paint(i, line, pos == cursor)
 			} else if s := c.activeServer(); s != nil {
@@ -339,9 +381,13 @@ func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() 
 			out.WriteString(line + "\r\n")
 		}
 		if len(visible) == 0 {
-			out.WriteString("  No matches\r\n")
+			out.WriteString("│" + menuPad("  No matches", cols-3) + "│\r\n")
 		}
-		out.WriteString(c.color(clipMenu("  ↑↓ Select · Enter Open · / Search · Esc Back", cols-1)) + "\r\n")
+		help := "↑↓ Select · Enter Open · / Search · Esc Back"
+		if options.help != "" {
+			help = options.help
+		}
+		out.WriteString(c.color(menuRule("╰─", help, "╯", cols-1)) + "\r\n")
 		drawn = len(bar) + 3 + max(1, end-top)
 		if dirty || cols != lastCols || rows != lastRows {
 			if err := writeAll(t, []byte(out.String())); err != nil {
@@ -361,9 +407,32 @@ func (c *client) selectionView(ctx context.Context, t lineTerminal, size func() 
 			return 0, err
 		}
 		dirty = true
+		if !search {
+			for _, action := range options.actions {
+				if key == action {
+					index := -1
+					if len(visible) > 0 {
+						index = visible[cursor]
+					}
+					return index, menuAction{key: key}
+				}
+			}
+		}
 		switch key {
 		case "back":
+			if search || query != "" {
+				search = false
+				query = ""
+				cursor = 0
+				number = ""
+				continue
+			}
 			return 0, errDetach
+		case "left":
+			return 0, errDetach
+		case "clear":
+			query, number = "", ""
+			cursor = 0
 		case "up":
 			cursor = max(0, cursor-1)
 			number = ""

@@ -19,6 +19,7 @@ type serverState struct {
 	profile   desktopProfile
 	api       *apiClient
 	identity  serverIdentity
+	health    string
 	selection *SelectResult
 	frontiers map[string]recordingCursor
 }
@@ -85,6 +86,52 @@ func loadServerProfiles(cfg config) ([]desktopProfile, int, error) {
 		}
 	}
 	return profiles, selected, nil
+}
+
+// Reload the shared rail without replacing authentication or pane ownership.
+// A removed active server may keep its attachment until the user switches;
+// it is no longer a saved rail entry and is never implicitly re-added.
+func (c *client) reloadServerProfiles() error {
+	if c.store == nil {
+		return nil
+	}
+	d, err := c.store.read()
+	if err != nil {
+		return err
+	}
+	current := c.activeServer()
+	old := append([]*serverState{}, c.servers...)
+	if current != nil {
+		old = append(old, current)
+	}
+	var next []*serverState
+	selected := -1
+	for _, p := range d.profiles() {
+		api, _ := newAPIClient(p.Origin)
+		var state *serverState
+		for _, prev := range old {
+			if prev.profile.ID == p.ID && ((prev.api != nil && api != nil && prev.api.base.String() == api.base.String()) || (prev.profile.Origin == p.Origin)) {
+				state = prev
+				break
+			}
+		}
+		if state == nil {
+			state = &serverState{api: api}
+		}
+		state.profile = p
+		if state == current {
+			selected = len(next)
+		}
+		next = append(next, state)
+	}
+	if len(next) == 0 && current != nil && current.profile.ID == "" {
+		next = append(next, current)
+		selected = 0
+	}
+	c.currentServer = current
+	c.servers, c.serverIndex = next, selected
+	c.keys.servers = len(next)
+	return nil
 }
 
 func (c *client) persistActiveProfile() error {
