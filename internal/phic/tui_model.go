@@ -1309,7 +1309,7 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 			}
 			m.activateCurrentTab()
 		}
-		m.setStatus("closed tab; Ctrl-] t then u restores it within 3 seconds", false)
+		m.setStatus("closed tab; click [u] undo or press Ctrl-] u within 3 seconds", false)
 		token := tab.token
 		key := tab.key
 		var api *apiClient
@@ -1556,6 +1556,8 @@ func (m *tuiModel) openHelp() {
   Ctrl-] b        focus server rail
   Ctrl-] s        focus sessions
   Ctrl-] t        focus tabs
+  Ctrl-] x        close active terminal (3s Undo)
+  Ctrl-] u        undo the most recent close
   Ctrl-] d        toggle diff
   Ctrl-] h        history browser
   Ctrl-] p        project context
