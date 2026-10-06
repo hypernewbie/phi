@@ -114,11 +114,15 @@ Console keys:
   Ctrl-] o        OpenCode Mini      Ctrl-] S  Shell session
   Ctrl-] m        rename server      Ctrl-] a  add server
   Ctrl-] r        reload servers     Ctrl-] y  copy text
-  Ctrl-] ?        help               Ctrl-] q  quit
+  Ctrl-] T        launch btop        Ctrl-] B  hide/show Sessions
+  Ctrl-] R        refresh/redraw     Ctrl-] [/] resize Sessions/reader
+  Ctrl-] ?        help               Ctrl-] q  quit confirmation
 
 In terminal focus, keys go to the backend unchanged: Ctrl-C, Tab, arrows,
-digits, Escape, and paste. Tab cycles chrome regions; Esc returns to the
-terminal. Tabs: [x] soft close with a 3-second [u] undo, [X] final close,
+digits, Escape, and paste. Esc never directly quits: double Esc in client
+chrome opens a quit confirmation. Drag either panel divider to resize. Very
+small windows keep normal input and startup even if the layout clips. Tabs:
+[x] soft close with a 3-second [u] undo, [X] final close,
 [r] rename, [p] pin, [m] mark.`)
 }
 
