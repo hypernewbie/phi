@@ -1630,7 +1630,7 @@ Tab strip: [x] soft close with 3s [u] undo, [X] final close,
 
 In terminal focus: Tab, arrows, digits, Escape, and Ctrl-C go to the
 backend. Application chrome: Tab cycles regions, Enter activates,
-Esc returns to the terminal.`
+Esc returns to terminal focus; Esc twice in chrome opens the Quit dialog.`
 
 	m.modal.help = strings.TrimRight(m.modal.help, "\n")
 }
