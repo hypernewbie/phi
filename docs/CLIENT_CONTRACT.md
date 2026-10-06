@@ -6,7 +6,7 @@ Source of authority: the user's raw journal, not assistant summaries or passing 
 
 1. Browser terminal output must be correct and lossless, with extremely fast interaction on phones. A terminal that eventually catches up but locks the phone is not acceptable. The user subsequently clarified that the latest server has decent performance and the earlier observation may have used an outdated server. Do not claim a current-version lockup without reproducing it. Test current performance; do not make a speculative terminal rewrite.
 2. Keep complete output in Phi's recording. Bound the resident terminal and defer older history. Do not obtain speed by dropping bytes, skipping arbitrary ANSI prefixes, or making history inaccessible.
-3. `phic` is a Phi client, like the desktop client. Read AND write the exact same desktop `profiles.json` server list, with compatible IDs, names, origins, order, and last-used timestamps. Connections added in either client must load in the other. Preserve desktop preferences while changing server metadata. Isolate authentication and pane state by origin.
+3. `phic` is Phi Desktop Lite. Desktop is the reference for behavior, form flow, labels, theme, identity, and server management. An internal desktop helper is not sufficient evidence. Trace the complete user action through the desktop form and host handler. Read AND write the exact same desktop `profiles.json` server list, with compatible IDs, names, origins, order, and last-used timestamps. Connections added in either client must load in the other. Preserve desktop preferences while changing server metadata. Isolate authentication and pane state by origin.
 4. `phic` must not depend on a running localhost server before offering server selection. It must offer a connection path when no saved servers exist.
 5. Backend terminal mode is raw, full-terminal passthrough. Client menus are temporary inline TUIs, with Phi aesthetics and useful controls. A numbered DOS prompt is not the requested interface.
 6. Show a compact, per-server colored bar and highlighted current server. Session and diff client chrome use the active server's theme. Do not recolor backend bytes.
@@ -20,9 +20,12 @@ Source of authority: the user's raw journal, not assistant summaries or passing 
 - `166061a5`: native Go `phic`; avoid Charm; full-terminal raw output; special keys for sessions/diff.
 - `b864e2c1`: the buffer/printf menu is a mental-model example; explicitly asks for something "10000x better than that slop" without a terminal emulator.
 - `ca93eed5`: "like phi desktop client"; same server configuration; colored server bar and shortcuts; "the menus don't have to be minimal they can have tui etc and phi aesthetics"; "terminal mode raw dog, menus inline tui."
-- Current request: phone performance is unacceptable; the DOS menu and localhost-only experience violate intent; write requirements and perform 10 positive and 100 negative checks.
+- Earlier request: phone performance is unacceptable; the DOS menu and localhost-only experience violate intent; write requirements and perform 10 positive and 100 negative checks.
+- Desktop Lite correction: "phic is phi desktop lite" and "if desktop does it by X, and phic does not do it by X, thats banned." The user includes form aesthetics, terminology, and theme in this requirement.
 
 ## Where the implementation drifted
+
+- I compared the internal desktop origin validator with raw form input. The actual desktop form adds the scheme and Phi port, supports bulk paste, and uses browser URL normalization first. Tests of canonical origins missed this error. Assistant-authored identity, color, removal, and form rules also differed from desktop.
 
 - I imposed read-only access and run-local additions on a request for a shared server configuration. That restriction was not the user's instruction. The initial correction and its 100 exclusion checks missed this and must not be treated as proof that the requested sharing was complete.
 

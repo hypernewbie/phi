@@ -171,7 +171,7 @@ func TestCLIInlineViewsReplayOutputAndSwitchPaneWithoutInputLoss(t *testing.T) {
 	await("OUTPUT WHILE MENU OPEN", pos)
 	pos = len(tape.snapshot())
 	_, _ = master.Write([]byte("\x1ds"))
-	await("Phi sessions", pos)
+	await("Sessions", pos)
 	_, _ = master.Write([]byte("\x1b"))
 	await("OUTPUT WHILE MENU OPEN", pos)
 	pos = len(tape.snapshot())

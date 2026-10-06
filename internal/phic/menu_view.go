@@ -57,14 +57,15 @@ func clipMenu(text string, columns int) string {
 // A complete key is decoded before it can act on a view. Terminal replies,
 // releases, and bracketed-paste contents are never navigation commands.
 type menuReader struct {
-	seq        []byte
-	paste      bool
-	allowPaste bool
-	prefix     bool
-	claimed    map[[2]int]bool
-	mouse      int
-	control    byte
-	controlEsc bool
+	seq         []byte
+	paste       bool
+	allowPaste  bool
+	pasteSpaces bool
+	prefix      bool
+	claimed     map[[2]int]bool
+	mouse       int
+	control     byte
+	controlEsc  bool
 }
 
 func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int) (string, error) {
@@ -159,6 +160,8 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 				return "right", nil
 			case "\x1b[D", "\x1bOD":
 				return "left", nil
+			case "\x1b[3~":
+				return "delete", nil
 			case "\x1b[5~":
 				return "pageup", nil
 			case "\x1b[6~":
@@ -187,10 +190,18 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 				reader.prefix = true
 				continue
 			}
+			if mods == 5 && code == 'a' {
+				return "select-all", nil
+			}
+			if mods == 5 && code == 'u' {
+				return "clear", nil
+			}
 			if mods != 1 {
 				continue
 			}
 			switch code {
+			case 57349:
+				return "delete", nil
 			case 57350:
 				return "left", nil
 			case 57351:
@@ -239,6 +250,9 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 			}
 		}
 		if paste {
+			if reader.allowPaste && reader.pasteSpaces && (key == '\r' || key == '\n' || key == '\t') {
+				return " ", nil
+			}
 			if reader.allowPaste && key >= 32 && key < utf8.RuneSelf {
 				return string(key), nil
 			}
@@ -248,6 +262,8 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 			continue
 		}
 		switch key {
+		case 1:
+			return "select-all", nil
 		case 3, 4, 27:
 			return "back", nil
 		case '\r', '\n':
@@ -270,9 +286,12 @@ func (reader *menuReader) read(ctx context.Context, t lineTerminal, servers int)
 }
 
 type menuOptions struct {
-	cursor  *int
-	actions []string
-	help    string
+	cursor      *int
+	actions     []string
+	help        string
+	description []string
+	section     func(int) string
+	chrome      func(string) string
 }
 type menuAction struct{ key string }
 
@@ -339,7 +358,8 @@ func (c *client) selectionViewWith(ctx context.Context, t lineTerminal, size fun
 			}
 			bar = visibleBar
 		}
-		perPage := max(1, rows-len(bar)-4)
+		descriptions := options.description[:min(len(options.description), max(0, rows-len(bar)-5))]
+		perPage := max(1, rows-len(bar)-4-len(descriptions))
 		if cursor < top {
 			top = cursor
 		}
@@ -356,7 +376,14 @@ func (c *client) selectionViewWith(ctx context.Context, t lineTerminal, size fun
 		for _, line := range bar {
 			out.WriteString(line + "\r\n")
 		}
-		out.WriteString(c.color(menuRule("╭─", "Φ  "+title, "╮", cols-1)) + "\r\n")
+		chrome := c.color
+		if options.chrome != nil {
+			chrome = options.chrome
+		}
+		out.WriteString(chrome(menuRule("╭─", title, "╮", cols-1)) + "\r\n")
+		for _, description := range descriptions {
+			out.WriteString("│" + menuPad("  "+menuLabel(description), cols-3) + "│\r\n")
+		}
 		filter := "  ↑↓ Select · Enter Open · / Search · Ctrl-] b Servers"
 		if search || query != "" {
 			filter = "  Search: " + query
@@ -372,7 +399,11 @@ func (c *client) selectionViewWith(ctx context.Context, t lineTerminal, size fun
 			if pos == cursor {
 				marker = "› "
 			}
-			line := "│" + menuPad(fmt.Sprintf(" %s%d  %s", marker, i+1, menuLabel(items[i])), cols-3) + "│"
+			label := menuLabel(items[i])
+			if options.section != nil {
+				label = options.section(i) + " · " + label
+			}
+			line := "│" + menuPad(fmt.Sprintf(" %s%d  %s", marker, i+1, label), cols-3) + "│"
 			if paint != nil {
 				line = paint(i, line, pos == cursor)
 			} else if s := c.activeServer(); s != nil {
@@ -387,8 +418,8 @@ func (c *client) selectionViewWith(ctx context.Context, t lineTerminal, size fun
 		if options.help != "" {
 			help = options.help
 		}
-		out.WriteString(c.color(menuRule("╰─", help, "╯", cols-1)) + "\r\n")
-		drawn = len(bar) + 3 + max(1, end-top)
+		out.WriteString(chrome(menuRule("╰─", help, "╯", cols-1)) + "\r\n")
+		drawn = len(bar) + 3 + len(descriptions) + max(1, end-top)
 		if dirty || cols != lastCols || rows != lastRows {
 			if err := writeAll(t, []byte(out.String())); err != nil {
 				return 0, err

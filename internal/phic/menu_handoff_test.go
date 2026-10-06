@@ -49,10 +49,11 @@ func TestServerBarClipsByCellsAtNarrowWidths(t *testing.T) {
 			}
 		}
 	}
-	// Palette coloring must not accidentally hide the user-owned profile name.
-	c.servers[0].identity.Hostname = "server-reported hostname"
-	if c.servers[0].label() != "東京 server with long name" {
-		t.Fatal("hostname replaced saved profile name")
+	// Desktop rail uses canonical observed identity; profile name remains
+	// untouched for the context header and rename form.
+	c.servers[0].identity.Hostname = "server-reported hostname.local"
+	if c.servers[0].label() != "SERVER-REPORTED HOSTNAME" || c.servers[0].profile.Name != "東京 server with long name" {
+		t.Fatal("desktop rail identity/profile name semantics diverged")
 	}
 	if regexp.MustCompile(`\x1b\[[0-9;]*m`).MatchString(c.serverBar(40)) {
 		t.Fatal("NO_COLOR ignored")

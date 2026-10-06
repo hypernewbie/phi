@@ -59,7 +59,7 @@ func TestInlineViewNavigationAndSearch(t *testing.T) {
 				t.Fatalf("choice %d, %v; want %d", got, err, tc.want)
 			}
 			out := v.output.String()
-			if !strings.Contains(out, "↑↓ Select") || !strings.Contains(out, "48;2;56;189;248m") || !strings.Contains(out, "› 1") {
+			if !strings.Contains(out, "↑↓ Select") || !strings.Contains(out, "48;2;27;46;59m") || !strings.Contains(out, "› 1") {
 				t.Fatalf("no focused themed selection: %q", out)
 			}
 			if strings.Contains(out, "number + Enter") || strings.Contains(out, "\x1b[?1049h") {

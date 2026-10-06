@@ -48,6 +48,13 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 			}
 			authed := cookieErr == nil && cookie.Value == name
 			switch r.URL.Path {
+			case "/healthz":
+				if fail {
+					http.Error(w, "offline", 503)
+				} else {
+					fmt.Fprint(w, "ok")
+				}
+				return
 			case "/api/auth/status":
 				if fail {
 					http.Error(w, "offline", 503)
@@ -159,7 +166,7 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 	pos := len(tape.snapshot())
 	_, _ = master.Write([]byte("\x1db"))
 	await("Servers", pos)
-	if !bytes.Contains(tape.snapshot()[pos:], []byte("48;2;248;113;113m")) {
+	if !bytes.Contains(tape.snapshot()[pos:], []byte("48;2;54;35;40m")) {
 		t.Fatal("active server box did not use Phi red")
 	}
 	_, _ = master.Write([]byte("q"))
@@ -173,7 +180,7 @@ func TestCLIDesktopProfilesColoredServerSwitchOriginIsolationAndRememberedPane(t
 	_, _ = master.Write([]byte("\x1db"))
 	await("Servers", pos)
 	after := tape.snapshot()[pos:]
-	if !bytes.Contains(after, []byte("38;2;248;113;113m")) || !bytes.Contains(after, []byte("48;2;56;189;248m")) {
+	if !bytes.Contains(after, []byte("38;2;248;113;113m")) || !bytes.Contains(after, []byte("48;2;27;46;59m")) {
 		t.Fatal("server bar colors were not origin-bound")
 	}
 	_, _ = master.Write([]byte("q"))

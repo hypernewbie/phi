@@ -145,7 +145,12 @@ func newClient(_ context.Context, cfg config) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{cfg: cfg, tty: tty, api: servers[selected].api, servers: servers, serverIndex: selected, store: store, currentServer: servers[selected]}, nil
+	c := &client{cfg: cfg, tty: tty, servers: servers, serverIndex: selected, store: store}
+	if selected >= 0 {
+		c.currentServer = servers[selected]
+		c.api = c.currentServer.api
+	}
+	return c, nil
 }
 
 func (c *client) Close() error {
@@ -159,7 +164,7 @@ func (c *client) Run(ctx context.Context) error {
 	sessions := false
 	// Normal startup is a client surface, not an implicit localhost probe.
 	// Explicit CLI operations retain their direct-attachment semantics.
-	if !c.cfg.ServerExplicit && c.cfg.Pane == "" && c.cfg.Coder == "" && !c.cfg.Diff && !c.cfg.NewPane {
+	if len(c.servers) == 0 {
 		if err := c.tty.EnterRaw(); err != nil {
 			return err
 		}
@@ -189,6 +194,12 @@ func (c *client) Run(ctx context.Context) error {
 		if ctx.Err() != nil || errors.Is(err, errDetach) {
 			return nil
 		}
+		if errors.Is(err, errNoServer) {
+			c.cfg.Pane = ""
+			c.cfg.Coder = ""
+			c.cfg.NewPane = false
+			c.cfg.Diff = false
+		}
 		var exit *ExitError
 		if err == nil || errors.As(err, &exit) || c.cfg.Pane != "" || c.cfg.NewPane || c.cfg.Coder != "" || c.cfg.Diff {
 			return err
@@ -204,8 +215,10 @@ func (c *client) Run(ctx context.Context) error {
 		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
 			index = int(byte(shortcut) - '1')
 		} else {
-			if e := writeAll(c.tty, []byte(c.heading(QuotedID(err.Error()))+"\r\n")); e != nil {
-				return e
+			if !errors.Is(err, errNoServer) {
+				if e := writeAll(c.tty, []byte(c.heading(QuotedID(err.Error()))+"\r\n")); e != nil {
+					return e
+				}
 			}
 			var e error
 			choice, pickErr := c.serverPicker(ctx)

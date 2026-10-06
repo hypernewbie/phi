@@ -59,6 +59,8 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 			upgrade := websocket.Upgrader{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
+				case "/healthz":
+					fmt.Fprint(w, "ok")
 				case "/api/auth/status":
 					authCalls.Add(1)
 					json.NewEncoder(w).Encode(authStatus{})
@@ -153,12 +155,12 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 					t.Fatalf("client paste ownership: got %v want %v", on, want)
 				}
 			}
-			await("Connect to another server", 0)
-			assertPasteMode(true)
-			if authCalls.Load() != 0 {
-				t.Fatal("startup authenticated before letting the user choose")
-			}
 			if !saved {
+				await("Add Phi server", 0)
+				assertPasteMode(true)
+				if authCalls.Load() != 0 {
+					t.Fatal("empty startup authenticated before Add")
+				}
 				master.Write([]byte("\x1b[F\r"))
 				await("Server URL", 0)
 				assertPasteMode(true)
@@ -168,10 +170,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 				master.Write([]byte("\x1b[F\r"))
 				await("Server URL", pos)
 				master.Write([]byte("\x1b[200~" + server.URL + "\x1b[201~\x1b[13;1u\x1b[13;1:3u"))
-			} else {
-				await("Shared desktop", 0)
-				master.Write([]byte("\x1b[13;1u\x1b[13;1:3u"))
-			}
+			} // Saved desktop profiles restore MRU without an extra picker.
 			await("CONNECTED WITHOUT LOCALHOST", 0)
 			assertPasteMode(false)
 			pos := len(tape.snapshot())
@@ -188,7 +187,7 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 				await("m More", pos)
 				pos = len(tape.snapshot())
 				master.Write([]byte("r"))
-				await("Rename", pos)
+				await("Rename profile", pos)
 				master.Write([]byte("\x15Renamed in console\r"))
 				await("Renamed in console", pos)
 				// Removal defaults to Keep; cancel must not change either client.
@@ -205,17 +204,26 @@ func TestCLIBareStartupShowsServersBeforeAuthAndCanConnectWithoutProfiles(t *tes
 				master.Write([]byte("x"))
 				await("Keep server", pos)
 				master.Write([]byte("\x1b[B\r"))
-				await("Connect to another server", pos)
-				// Removing the active profile removes only config, not its pane.
+				deadline := time.Now().Add(4 * time.Second)
+				for time.Now().Before(deadline) {
+					rows, e := readDesktopProfiles(shared)
+					if e == nil && len(rows) == 0 {
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				await("Add Phi server", pos)
+				// Desktop removal clears the view; never reattach a deleted profile.
 				pos = len(tape.snapshot())
 				master.Write([]byte("q"))
-				await("CONNECTED WITHOUT LOCALHOST", pos)
 				rows, _ = readDesktopProfiles(shared)
 				if len(rows) != 0 {
-					t.Fatal("active profile removal was resurrected")
+					t.Fatalf("active profile removal was resurrected: %+v output %q", rows, tape.snapshot())
 				}
 			}
-			master.Write([]byte("\x1dq"))
+			if mode != "legacy" {
+				master.Write([]byte("\x1dq"))
+			}
 			if err := cmd.Wait(); err != nil {
 				t.Fatalf("bare client failed: %v %q", err, tape.snapshot())
 			}

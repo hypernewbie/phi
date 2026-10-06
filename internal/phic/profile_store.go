@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/net/idna"
+	whatwg "github.com/nlnwa/whatwg-url/url"
 )
 
 // desktopStore edits the desktop's actual document, not a second native-client
@@ -159,40 +158,62 @@ var profileIDSeparators = regexp.MustCompile(`[^a-z0-9]+`)
 // Desktop endpoint.Parse form: lowercase host, preserved explicit port,
 // trailing root slash, and no credentials, query, fragment or non-root path.
 func desktopEndpoint(raw string) (origin, host string, err error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", "", err
+	u, parseErr := whatwg.Parse(raw)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid server URL %q", raw)
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || !strings.Contains(raw, "://") || u.Host == "" || u.User != nil || strings.ContainsAny(raw, "?#") || (u.Path != "" && u.Path != "/") {
-		return "", "", fmt.Errorf("phic: server must be an HTTP(S) origin without credentials, path, query, or fragment")
+	fail := func(message string) (string, string, error) {
+		return "", "", fmt.Errorf("server URL \"%s\" %s", raw, message)
 	}
-	hostname := strings.ToLower(u.Hostname())
+	if u.Scheme() != "http" && u.Scheme() != "https" {
+		return fail("must use the http or https scheme")
+	}
+	authority := serverScheme.FindString(raw)
+	if authority != "" {
+		authority = raw[len(authority):]
+		if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+			authority = authority[:i]
+		}
+	}
+	if u.Hostname() == "" || authority == "" {
+		return fail("has no hostname")
+	}
+	hostname := u.Hostname()
+	valid := desktopHostname.MatchString(hostname)
 	if strings.Contains(hostname, ":") {
-		ip := net.ParseIP(hostname)
-		if ip == nil {
-			return "", "", fmt.Errorf("phic: invalid server hostname")
-		}
-		hostname = "[" + ip.String() + "]"
-	} else {
-		if !desktopHostname.MatchString(hostname) {
-			hostname, err = idna.Lookup.ToASCII(hostname)
-		}
-		if err != nil || !desktopHostname.MatchString(hostname) {
-			return "", "", fmt.Errorf("phic: invalid server hostname")
-		}
+		valid = net.ParseIP(strings.Trim(hostname, "[]")) != nil
+	}
+	if !valid {
+		return fail("has an invalid hostname")
+	}
+	if u.Username() != "" || u.Password() != "" {
+		return fail("must not contain userinfo")
+	}
+	if strings.Contains(raw, "?") {
+		return fail("must not contain a query string")
+	}
+	if strings.Contains(raw, "#") {
+		return fail("must not contain a fragment")
+	}
+	if u.Pathname() != "/" {
+		return fail("must use the root path (Phi serves /api and /ws at the origin)")
 	}
 	host = hostname
-	if strings.HasSuffix(u.Host, ":") {
-		return "", "", fmt.Errorf("phic: empty server port")
+	if strings.HasSuffix(authority, ":") {
+		return fail("has an empty port")
 	}
-	if port := u.Port(); port != "" {
-		n, e := strconv.Atoi(port)
-		if e != nil || n < 1 || n > 65535 {
-			return "", "", fmt.Errorf("phic: invalid server port")
+	colon, bracket := strings.LastIndex(authority, ":"), strings.LastIndex(authority, "]")
+	if colon > bracket {
+		port := authority[colon+1:]
+		if decimalPort.MatchString(port) {
+			n, e := strconv.Atoi(port)
+			if e != nil || n < 1 || n > 65535 {
+				return fail("has an invalid port \"" + port + "\"")
+			}
+			host += ":" + port
 		}
-		host += ":" + port
 	}
-	return u.Scheme + "://" + host + "/", host, nil
+	return u.Scheme() + "://" + host + "/", host, nil
 }
 
 func (s *desktopStore) add(raw string) (desktopProfile, error) {
@@ -232,12 +253,15 @@ func (s *desktopStore) add(raw string) (desktopProfile, error) {
 }
 
 func validateServerName(name string) error {
-	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 64 {
-		return fmt.Errorf("phic: server name must contain 1–64 characters")
+	if jsTrim(name) == "" {
+		return fmt.Errorf("profile name must not be empty")
+	}
+	if utf8.RuneCountInString(name) > 64 {
+		return fmt.Errorf("profile name must be at most 64 runes")
 	}
 	for _, r := range name {
 		if r < 0x20 {
-			return fmt.Errorf("phic: server name must not contain control characters")
+			return fmt.Errorf("profile name must not contain control characters")
 		}
 	}
 	return nil

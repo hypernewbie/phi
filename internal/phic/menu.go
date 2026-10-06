@@ -2,6 +2,7 @@ package phic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -87,27 +88,50 @@ func (c *client) chooseStartup(ctx context.Context, dir string, panes []Terminal
 		}
 		copy := p
 		choices = append(choices, SelectResult{PaneID: p.ID, Existing: &copy})
-		labels = append(labels, fmt.Sprintf("● %s · %s  (%d other clients)", menuLabel(p.Coder), menuLabel(p.Title), p.ActiveWSCount))
+		name := p.Coder
+		for _, d := range registry {
+			if d.ID == p.Coder {
+				name = d.Name
+				break
+			}
+		}
+		labels = append(labels, fmt.Sprintf("● %s · %s", menuLabel(name), menuLabel(p.Title)))
 	}
 	for _, d := range registry {
 		if c.cfg.Coder != "" && d.ID != c.cfg.Coder {
 			continue
 		}
 		choices = append(choices, SelectResult{NewSpawn: &SpawnRequest{Coder: d.ID, Dir: dir}})
-		action := "New pane"
+		action := "New Session"
 		if d.Capabilities.List {
-			action = "Sessions / New pane"
+			action = "Sessions / New Session"
 		}
 		labels = append(labels, fmt.Sprintf("+ %s · %s", menuLabel(d.Name), action))
 	}
 	if len(choices) == 0 {
 		return SelectResult{}, fmt.Errorf("phic: no selectable backend or pane")
 	}
-	i, err := c.choose(ctx, "Phi sessions", labels)
-	if err != nil {
+	i, err := c.chooseView(ctx, "Sessions", labels, nil, menuOptions{actions: []string{"m", "right"}})
+	var action menuAction
+	if err != nil && !errors.As(err, &action) {
 		return SelectResult{}, err
 	}
+	if i < 0 || i >= len(choices) {
+		return SelectResult{}, errDetach
+	}
 	choice := choices[i]
+	if errors.As(err, &action) {
+		if choice.NewSpawn != nil && choice.NewSpawn.Coder == "opencode" {
+			variant, e := c.choose(ctx, "OpenCode", []string{"Open", "Open Mini"})
+			if e != nil {
+				return SelectResult{}, e
+			}
+			if variant == 1 {
+				choice.NewSpawn.OpenCodeMini = true
+				return choice, nil
+			}
+		}
+	}
 	if choice.NewSpawn == nil {
 		return choice, nil
 	}
@@ -125,17 +149,25 @@ func (c *client) chooseStartup(ctx context.Context, dir string, panes []Terminal
 	if err != nil {
 		return SelectResult{}, err
 	}
-	labels = []string{"+ New pane"}
+	labels = []string{"+ New Session"}
 	for _, s := range saved {
 		labels = append(labels, fmt.Sprintf("↩ %s  ·  %s", menuLabel(s.Title), s.TimeUpdated.Format("2006-01-02")))
 	}
-	i, err = c.choose(ctx, "Saved sessions", labels)
-	if err != nil {
+	i, err = c.chooseView(ctx, descriptor.Name+" sessions", labels, nil, menuOptions{actions: []string{"m", "right"}})
+	if err != nil && !errors.As(err, &action) {
 		return SelectResult{}, err
+	}
+	if errors.As(err, &action) && descriptor.ID == "opencode" {
+		variant, e := c.choose(ctx, "OpenCode", []string{"Open", "Open Mini"})
+		if e != nil {
+			return SelectResult{}, e
+		}
+		choice.NewSpawn.OpenCodeMini = variant == 1
 	}
 	if i > 0 {
 		selected := saved[i-1]
 		choice.NewSpawn.SessionID = selected.ID
+		choice.NewSpawn.Title = selected.Title
 		if selected.SessionPath != "" {
 			choice.NewSpawn.SessionID = selected.SessionPath
 		}

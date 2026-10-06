@@ -38,12 +38,13 @@ type apiClient struct {
 }
 
 func newAPIClient(server string) (*apiClient, error) {
-	u, err := url.Parse(server)
+	origin, _, err := desktopEndpoint(server)
 	if err != nil {
-		return nil, fmt.Errorf("phic: bad server URL %q: %w", server, err)
+		return nil, err
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, fmt.Errorf("phic: server must be an HTTP(S) origin without credentials, path, query, or fragment")
+	u, err := url.Parse(origin)
+	if err != nil {
+		return nil, err
 	}
 	u.Path = ""
 	jar, err := cookiejar.New(nil)
