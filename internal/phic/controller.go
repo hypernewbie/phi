@@ -52,17 +52,30 @@ func (c *client) attachSelected(ctx context.Context, sel SelectResult) error {
 			return err
 		}
 		c.refreshIdentity(ctx, c.activeServer())
-		next, isFresh, viewErr := c.dispatchView(ctx, current, byte(command))
 		fresh = false
-		if ctx.Err() != nil {
-			return nil
-		}
-		if viewErr == nil {
-			current, fresh = next, isFresh
-		} else if !errors.Is(viewErr, errDetach) {
-			if err := c.viewError(ctx, viewErr); err != nil {
+		for {
+			next, isFresh, viewErr := c.dispatchView(ctx, current, byte(command))
+			if ctx.Err() != nil {
+				return nil
+			}
+			if viewErr == nil {
+				current, fresh = next, isFresh
+				break
+			}
+			if errors.Is(viewErr, errDetach) {
+				break
+			}
+			// Error acknowledgements are client views too. Keep their
+			// shortcuts inside the same controller and ownership barrier;
+			// bubbling one to Run would discard the current pane context.
+			err := c.viewError(ctx, viewErr)
+			if errors.As(err, &command) {
+				continue
+			}
+			if err != nil {
 				return err
 			}
+			break
 		}
 	}
 }
