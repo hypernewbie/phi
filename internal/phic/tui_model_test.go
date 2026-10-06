@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func newModelWithServer(t *testing.T, srv *httptest.Server) *tuiModel {
 		api:     mustAPI(t, srv.URL),
 	}}, 0, stubBuild)
 	m.width, m.height = 100, 30
-	m.data[0] = &serverData{
+	m.data[m.currentOrigin()] = &serverData{
 		loaded:   true,
 		identity: serverIdentity{Workspaces: []string{"/work"}},
 		coders:   []CoderDescriptor{{ID: "shell", Name: "Shell", IsShell: true}, {ID: "opencode", Name: "OpenCode"}},
@@ -47,9 +48,10 @@ func newModelWithServer(t *testing.T, srv *httptest.Server) *tuiModel {
 // attachPaneForTest attaches the pane tab through the model and returns it.
 func attachPaneForTest(t *testing.T, m *tuiModel) *paneTab {
 	t.Helper()
-	tab := m.ensureTab(0, m.currentOrigin(), "p", spawnCapture{origin: m.currentOrigin(), index: 0, project: "/work", coder: "shell"})
-	m.tabs[0] = []*paneTab{tab}
-	m.activateTab(0, tab)
+	origin := m.currentOrigin()
+	tab := m.ensureTab(origin, "p", spawnCapture{origin: origin, index: 0, project: "/work", coder: "shell"})
+	m.tabs[origin] = []*paneTab{tab}
+	m.activateTab(origin, tab)
 	if tab.actor == nil {
 		t.Fatal("tab did not attach")
 	}
@@ -86,7 +88,11 @@ func TestTUIKeyRoutingTerminalVersusChrome(t *testing.T) {
 	defer srv.Close()
 
 	m := newModelWithServer(t, srv)
-	attachPaneForTest(t, m)
+	tab := attachPaneForTest(t, m)
+	waitFor(t, "initial pane frame", func() bool {
+		_, ok := tab.actor.snapshotCopy()
+		return ok
+	})
 
 	// Terminal focus: a printable key reaches the backend.
 	m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
@@ -226,7 +232,7 @@ func TestTUIResumeUsesExactSessionIdentity(t *testing.T) {
 
 	// A session without a path uses its ID. Clear the pending-spawn guard the
 	// first capture left behind, exactly as applying its result would.
-	m.pendingSpawn[0] = false
+	m.pendingSpawn[m.currentOrigin()] = false
 	if cmd := m.resumeSession(Session{ID: "plain", Coder: "opencode"}); cmd != nil {
 		_ = cmd()
 	}
@@ -245,20 +251,21 @@ func TestTUIResumeUsesExactSessionIdentity(t *testing.T) {
 func TestTUIStaleResultsCannotChangeContext(t *testing.T) {
 	m := newModelWithServer(t, httptest.NewServer(http.NotFoundHandler()))
 	m.gen = 5
-	m.data[0].sessionsCoder = "shell"
-	m.data[0].sessionsDir = "/work"
-	m.data[0].sessions = []Session{{ID: "keep"}}
+	d := m.data[m.currentOrigin()]
+	d.sessionsCoder = "shell"
+	d.sessionsDir = "/work"
+	d.sessions = []Session{{ID: "keep"}}
 
 	m.Update(serverLoadedMsg{gen: 4, index: 0, coders: []CoderDescriptor{{ID: "evil"}}})
-	if m.data[0].coders[0].ID != "shell" {
+	if d.coders[0].ID != "shell" {
 		t.Fatal("stale server result changed the coder list")
 	}
 	m.Update(sessionsLoadedMsg{gen: 5, index: 0, coder: "other", dir: "/work", items: []Session{{ID: "evil"}}})
-	if len(m.data[0].sessions) != 1 || m.data[0].sessions[0].ID != "keep" {
+	if len(d.sessions) != 1 || d.sessions[0].ID != "keep" {
 		t.Fatal("stale sessions result changed the sidebar")
 	}
 	m.Update(sessionsLoadedMsg{gen: 5, index: 0, coder: "shell", dir: "/elsewhere", items: []Session{{ID: "evil"}}})
-	if m.data[0].sessions[0].ID != "keep" {
+	if d.sessions[0].ID != "keep" {
 		t.Fatal("wrong-project sessions result changed the sidebar")
 	}
 }
@@ -345,18 +352,126 @@ func TestTUICloseIsSoftThenFinal(t *testing.T) {
 	}
 }
 
+// TestTUIServersIsolateDuplicatePaneIDs proves two same-host servers with
+// different ports and duplicate pane IDs keep separate tabs and cores.
+func TestTUIServersIsolateDuplicatePaneIDs(t *testing.T) {
+	paneServer := func(text string) *httptest.Server {
+		up := wsUpgrader()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/ws/pane/p" {
+				http.NotFound(w, r)
+				return
+			}
+			ws, err := up.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+			_ = ws.WriteMessage(websocket.BinaryMessage, attachHeadFrame(7, 0))
+			_ = ws.WriteMessage(websocket.BinaryMessage, liveFrame(0, []byte(text)))
+			for {
+				if _, _, err := ws.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}))
+	}
+	first, second := paneServer("alpha"), paneServer("beta")
+	defer first.Close()
+	defer second.Close()
+
+	m := newTUIModel("test", config{}, nil, []*serverState{
+		{profile: desktopProfile{ID: "s1", Name: "one", Origin: first.URL}, api: mustAPI(t, first.URL)},
+		{profile: desktopProfile{ID: "s2", Name: "two", Origin: second.URL}, api: mustAPI(t, second.URL)},
+	}, 0, stubBuild)
+	m.width, m.height = 100, 30
+	m.project = "/work"
+	o1, o2 := first.URL, second.URL
+	m.data[o1] = &serverData{loaded: true, identity: serverIdentity{Workspaces: []string{"/work"}}, coders: []CoderDescriptor{{ID: "shell", Name: "Shell", IsShell: true}}, panes: []TerminalView{{ID: "p", Coder: "shell", Dir: "/work"}}}
+	m.data[o2] = &serverData{loaded: true, identity: serverIdentity{Workspaces: []string{"/work"}}, coders: []CoderDescriptor{{ID: "shell", Name: "Shell", IsShell: true}}, panes: []TerminalView{{ID: "p", Coder: "shell", Dir: "/work"}}}
+
+	tab1 := m.ensureTab(o1, "p", spawnCapture{origin: o1, index: 0, project: "/work", coder: "shell"})
+	m.activateTab(o1, tab1)
+	waitFor(t, "first server frame", func() bool {
+		frame, ok := tab1.actor.snapshotCopy()
+		return ok && strings.Contains(frameText(frame), "alpha")
+	})
+
+	m.active = 1
+	tab2 := m.ensureTab(o2, "p", spawnCapture{origin: o2, index: 1, project: "/work", coder: "shell"})
+	m.activateTab(o2, tab2)
+	waitFor(t, "second server frame", func() bool {
+		frame, ok := tab2.actor.snapshotCopy()
+		return ok && strings.Contains(frameText(frame), "beta")
+	})
+
+	// The first server's core still shows its own output and its tab was not
+	// replaced by the duplicate pane ID on the second server.
+	frame1, _ := tab1.actor.snapshotCopy()
+	if strings.Contains(frameText(frame1), "beta") {
+		t.Fatal("duplicate pane ID leaked across servers")
+	}
+	if len(m.tabs[o1]) != 1 || len(m.tabs[o2]) != 1 {
+		t.Fatalf("tabs mixed across servers: %d and %d", len(m.tabs[o1]), len(m.tabs[o2]))
+	}
+	if m.tabs[o1][0] == m.tabs[o2][0] {
+		t.Fatal("servers share one tab")
+	}
+}
+
+// TestTUIExitSendsNoDelete proves quitting detaches without terminating any
+// backend process.
+func TestTUIExitSendsNoDelete(t *testing.T) {
+	var deletes atomic.Int32
+	up := wsUpgrader()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletes.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path != "/ws/pane/p" {
+			http.NotFound(w, r)
+			return
+		}
+		ws, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		_ = ws.WriteMessage(websocket.BinaryMessage, attachHeadFrame(7, 0))
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	m := newModelWithServer(t, srv)
+	attachPaneForTest(t, m)
+	m.closeAll()
+	if deletes.Load() != 0 {
+		t.Fatalf("exit sent %d DELETE requests", deletes.Load())
+	}
+	if len(m.actors) != 0 {
+		t.Fatal("actors left behind after exit")
+	}
+}
+
 // TestTUIIntentRoundTrip persists and restores tab order, active tab, and
 // panel state without touching secrets.
 func TestTUIIntentRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	store := &desktopStore{path: dir + "/profiles.json"}
-	m := newTUIModel("test", config{}, store, []*serverState{{profile: desktopProfile{ID: "s1", Name: "fake", Origin: "http://localhost:1"}}}, 0, stubBuild)
+	api := mustAPI(t, "http://localhost:1")
+	m := newTUIModel("test", config{}, store, []*serverState{{profile: desktopProfile{ID: "s1", Name: "fake", Origin: "http://localhost:1"}, api: api}}, 0, stubBuild)
 	m.width, m.height = 100, 30
-	m.tabs[0] = []*paneTab{
+	m.tabs["http://localhost:1"] = []*paneTab{
 		{key: paneKey{Origin: "http://localhost:1", ID: "a"}, title: "A"},
 		{key: paneKey{Origin: "http://localhost:1", ID: "b"}, title: "B"},
 	}
-	m.activeTab[0] = 1
+	m.activeTab["http://localhost:1"] = 1
 	m.project = "/work"
 	m.worktree = "/work/wt"
 	m.diff.open = true
@@ -364,8 +479,8 @@ func TestTUIIntentRoundTrip(t *testing.T) {
 		_ = cmd()
 	}
 
-	restored := newTUIModel("test", config{}, store, []*serverState{{profile: desktopProfile{ID: "s1", Name: "fake", Origin: "http://localhost:1"}}}, 0, stubBuild)
-	restored.tabs[0] = []*paneTab{
+	restored := newTUIModel("test", config{}, store, []*serverState{{profile: desktopProfile{ID: "s1", Name: "fake", Origin: "http://localhost:1"}, api: api}}, 0, stubBuild)
+	restored.tabs["http://localhost:1"] = []*paneTab{
 		{key: paneKey{Origin: "http://localhost:1", ID: "b"}, title: "B"},
 		{key: paneKey{Origin: "http://localhost:1", ID: "a"}, title: "A"},
 	}
@@ -373,11 +488,11 @@ func TestTUIIntentRoundTrip(t *testing.T) {
 	if !restored.diff.open {
 		t.Fatal("diff panel state not restored")
 	}
-	if restored.tabs[0][0].key.ID != "a" || restored.tabs[0][1].key.ID != "b" {
-		t.Fatalf("tab order not restored: %v", restored.tabs[0])
+	if restored.tabs["http://localhost:1"][0].key.ID != "a" || restored.tabs["http://localhost:1"][1].key.ID != "b" {
+		t.Fatalf("tab order not restored: %v", restored.tabs["http://localhost:1"])
 	}
-	if restored.activeTab[0] != 1 {
-		t.Fatalf("active tab = %d, want 1", restored.activeTab[0])
+	if restored.activeTab["http://localhost:1"] != 1 {
+		t.Fatalf("active tab = %d, want 1", restored.activeTab["http://localhost:1"])
 	}
 	ui, err := store.readUI()
 	if err != nil {

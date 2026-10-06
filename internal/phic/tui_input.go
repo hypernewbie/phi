@@ -47,6 +47,7 @@ func firstTextRune(s string) rune {
 // example an unidentified key with no text).
 func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 	ev := termemu.KeyEvent{Action: action, Mods: teaMods(k.Mod)}
+	printable := false
 	switch k.Code {
 	case tea.KeyEnter:
 		ev.Key = termemu.KeyEnter
@@ -102,6 +103,7 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 		ev.Key = termemu.KeyF12
 	case tea.KeySpace:
 		ev.Key = termemu.KeySpace
+		printable = true
 		if k.Text == "" {
 			ev.Text = " "
 		} else {
@@ -112,8 +114,10 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 		switch {
 		case k.Text != "":
 			ev.Text = k.Text
+			printable = true
 		case k.Code >= 0x20 && unicode.IsPrint(k.Code):
 			ev.Text = string(k.Code)
+			printable = true
 		case k.Code > 0 && k.Code < 0x20:
 			// A control byte means Ctrl-<letter> in terminals without
 			// enhanced disambiguation. Reconstruct the logical key so the
@@ -122,9 +126,16 @@ func teaKeyEvent(k tea.Key, action termemu.KeyAction) (termemu.KeyEvent, bool) {
 				ev.Mods |= termemu.ModCtrl
 			}
 			ev.Text = string(rune('a' + k.Code - 1))
+			ev.Unshifted = firstTextRune(ev.Text)
+			return ev, true
 		default:
 			return ev, false
 		}
+	}
+	if !printable {
+		// Special keys have no unshifted codepoint for alternate-key
+		// reporting; leaving it zero keeps the adapter from inventing one.
+		return ev, true
 	}
 	if ev.Unshifted == 0 {
 		ev.Unshifted = firstRune(k.ShiftedCode, k.BaseCode)

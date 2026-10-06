@@ -104,7 +104,8 @@ func (m *tuiModel) restoreIntent() {
 	if intent.DiffOpen {
 		m.diff.open = true
 	}
-	tabs := m.tabs[m.active]
+	origin := m.currentOrigin()
+	tabs := m.tabs[origin]
 	if len(intent.Tabs) > 0 && len(tabs) > 1 {
 		rank := map[string]int{}
 		for i, id := range intent.Tabs {
@@ -126,12 +127,12 @@ func (m *tuiModel) restoreIntent() {
 				}
 			}
 		}
-		m.tabs[m.active] = ordered
+		m.tabs[origin] = ordered
 	}
 	if intent.Active != "" {
-		for i, t := range m.tabs[m.active] {
+		for i, t := range m.tabs[origin] {
 			if t.key.ID == intent.Active {
-				m.activeTab[m.active] = i
+				m.activeTab[origin] = i
 				break
 			}
 		}
@@ -156,7 +157,7 @@ func (m *tuiModel) persistIntent() tea.Cmd {
 		return nil
 	}
 	intent := uiServerIntent{Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open}
-	for _, t := range m.tabs[index] {
+	for _, t := range m.tabs[m.currentOrigin()] {
 		if t.closing || t.exited {
 			continue
 		}

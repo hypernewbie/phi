@@ -193,7 +193,7 @@ type tuiModel struct {
 
 	servers []*serverState
 	active  int
-	data    map[int]*serverData
+	data    map[string]*serverData
 
 	width, height int
 	ready         bool
@@ -210,10 +210,10 @@ type tuiModel struct {
 	worktree string
 	coderIdx int
 
-	tabs         map[int][]*paneTab
-	activeTab    map[int]int
+	tabs         map[string][]*paneTab
+	activeTab    map[string]int
 	actors       map[paneKey]*paneActor
-	pendingSpawn map[int]bool
+	pendingSpawn map[string]bool
 
 	diff    diffState
 	history historyState
@@ -246,12 +246,12 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 		store:        store,
 		servers:      servers,
 		active:       active,
-		data:         map[int]*serverData{},
+		data:         map[string]*serverData{},
 		focus:        focusTerminal,
-		tabs:         map[int][]*paneTab{},
-		activeTab:    map[int]int{},
+		tabs:         map[string][]*paneTab{},
+		activeTab:    map[string]int{},
 		actors:       map[paneKey]*paneActor{},
-		pendingSpawn: map[int]bool{},
+		pendingSpawn: map[string]bool{},
 		events:       make(chan paneEvent, 1024),
 		build:        build,
 	}
@@ -259,7 +259,7 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 		m.active = 0
 	}
 	if active >= 0 && active < len(servers) {
-		m.data[active] = &serverData{}
+		m.data[m.originFor(active)] = &serverData{}
 	}
 	if cfg.Pane != "" {
 		m.directPane = cfg.Pane
@@ -271,14 +271,32 @@ func newTUIModel(version string, cfg config, store *desktopStore, servers []*ser
 	return m
 }
 
+// originFor maps a server index to its origin key. Tabs, caches, and pending
+// actions key on the origin so reordering or reloading the rail never moves
+// state between servers.
+func (m *tuiModel) originFor(index int) string {
+	if index < 0 || index >= len(m.servers) {
+		return ""
+	}
+	s := m.servers[index]
+	if s == nil || s.api == nil {
+		return ""
+	}
+	return s.api.base.String()
+}
+
 func (m *tuiModel) current() *serverData {
 	if m.active < 0 || m.active >= len(m.servers) {
 		return nil
 	}
-	d := m.data[m.active]
+	origin := m.currentOrigin()
+	if origin == "" {
+		return nil
+	}
+	d := m.data[origin]
 	if d == nil {
 		d = &serverData{}
-		m.data[m.active] = d
+		m.data[origin] = d
 	}
 	return d
 }
@@ -291,11 +309,7 @@ func (m *tuiModel) currentServer() *serverState {
 }
 
 func (m *tuiModel) currentOrigin() string {
-	s := m.currentServer()
-	if s == nil || s.api == nil {
-		return ""
-	}
-	return s.api.base.String()
+	return m.originFor(m.active)
 }
 
 // ---- messages ----
@@ -664,10 +678,14 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.gen != m.gen {
 		return m, nil
 	}
-	d := m.data[msg.index]
+	origin := m.originFor(msg.index)
+	if origin == "" {
+		return m, nil
+	}
+	d := m.data[origin]
 	if d == nil {
 		d = &serverData{}
-		m.data[msg.index] = d
+		m.data[origin] = d
 	}
 	d.health = msg.health
 	d.loaded = true
@@ -743,7 +761,7 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if index >= 0 {
-		m.pendingSpawn[index] = false
+		m.pendingSpawn[msg.capture.origin] = false
 	}
 	if msg.err != "" {
 		m.setStatus("spawn failed: "+msg.err, true)
@@ -757,10 +775,10 @@ func (m *tuiModel) applySpawnDone(msg spawnDoneMsg) (tea.Model, tea.Cmd) {
 		m.setStatus("pane spawned on a server that is no longer listed", false)
 		return m, nil
 	}
-	tab := m.ensureTab(index, msg.capture.origin, msg.resp.PaneID, msg.capture)
+	tab := m.ensureTab(msg.capture.origin, msg.resp.PaneID, msg.capture)
 	// Focus only when the capture still belongs to the active server.
 	if index == m.active {
-		m.activateTab(index, tab)
+		m.activateTab(msg.capture.origin, tab)
 		m.focus = focusTerminal
 	}
 	m.setStatus("opened "+tab.label(), false)
@@ -782,7 +800,7 @@ func (m *tuiModel) applySessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cm
 	if msg.gen != m.gen || msg.index != m.active {
 		return m, nil
 	}
-	d := m.data[msg.index]
+	d := m.data[m.originFor(msg.index)]
 	if d == nil {
 		return m, nil
 	}
@@ -996,8 +1014,8 @@ func (m *tuiModel) resizeActivePane() {
 
 // ---- tabs ----
 
-func (m *tuiModel) ensureTab(index int, origin, paneID string, cap spawnCapture) *paneTab {
-	for _, t := range m.tabs[index] {
+func (m *tuiModel) ensureTab(origin, paneID string, cap spawnCapture) *paneTab {
+	for _, t := range m.tabs[origin] {
 		if t.key.ID == paneID && t.key.Origin == origin {
 			return t
 		}
@@ -1012,7 +1030,7 @@ func (m *tuiModel) ensureTab(index int, origin, paneID string, cap spawnCapture)
 			Workspace: cap.worktree, OpenCodeMode: modeForMini(cap.mini),
 		},
 	}
-	m.tabs[index] = append(m.tabs[index], tab)
+	m.tabs[origin] = append(m.tabs[origin], tab)
 	return tab
 }
 
@@ -1035,8 +1053,9 @@ func (m *tuiModel) findTab(key paneKey) *paneTab {
 }
 
 func (m *tuiModel) activeTabKey() (paneKey, bool) {
-	tabs := m.tabs[m.active]
-	i := m.activeTab[m.active]
+	origin := m.currentOrigin()
+	tabs := m.tabs[origin]
+	i := m.activeTab[origin]
 	if i < 0 || i >= len(tabs) {
 		return paneKey{}, false
 	}
@@ -1051,7 +1070,7 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 	if origin == "" {
 		return
 	}
-	existing := m.tabs[m.active]
+	existing := m.tabs[origin]
 	seen := map[string]bool{}
 	var next []*paneTab
 	for _, t := range existing {
@@ -1101,28 +1120,28 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 			dir:   p.Dir,
 		})
 	}
-	m.tabs[m.active] = next
+	m.tabs[origin] = next
 	// Keep the active index pointing at the same pane where possible.
 	if key, ok := m.activeTabKey(); ok {
 		for i, t := range next {
 			if t.key == key {
-				m.activeTab[m.active] = i
+				m.activeTab[origin] = i
 				return
 			}
 		}
 	}
-	if m.activeTab[m.active] >= len(next) {
-		m.activeTab[m.active] = len(next) - 1
+	if m.activeTab[origin] >= len(next) {
+		m.activeTab[origin] = len(next) - 1
 	}
-	if m.activeTab[m.active] < 0 && len(next) > 0 {
-		m.activeTab[m.active] = 0
+	if m.activeTab[origin] < 0 && len(next) > 0 {
+		m.activeTab[origin] = 0
 	}
 }
 
-func (m *tuiModel) activateTab(index int, tab *paneTab) {
-	for i, t := range m.tabs[index] {
+func (m *tuiModel) activateTab(origin string, tab *paneTab) {
+	for i, t := range m.tabs[origin] {
 		if t == tab {
-			m.activeTab[index] = i
+			m.activeTab[origin] = i
 			break
 		}
 	}
@@ -1196,21 +1215,21 @@ func (m *tuiModel) undoClose(tab *paneTab) {
 }
 
 func (m *tuiModel) removeTabEverywhere(key paneKey) {
-	for index, tabs := range m.tabs {
-		for i, t := range tabs {
-			if t.key != key {
-				continue
-			}
-			if t.actor != nil {
-				t.actor.close()
-			}
-			delete(m.actors, key)
-			m.tabs[index] = append(tabs[:i], tabs[i+1:]...)
-			if m.activeTab[index] >= len(m.tabs[index]) {
-				m.activeTab[index] = len(m.tabs[index]) - 1
-			}
-			break
+	origin := key.Origin
+	tabs := m.tabs[origin]
+	for i, t := range tabs {
+		if t.key != key {
+			continue
 		}
+		if t.actor != nil {
+			t.actor.close()
+		}
+		delete(m.actors, key)
+		m.tabs[origin] = append(tabs[:i], tabs[i+1:]...)
+		if m.activeTab[origin] >= len(m.tabs[origin]) {
+			m.activeTab[origin] = len(m.tabs[origin]) - 1
+		}
+		break
 	}
 }
 
