@@ -1,4 +1,4 @@
-// Package phic is the minimal native terminal client for Phi.
+// Package phic provides Phi's native multi-server terminal client.
 package phic
 
 import (

@@ -13,7 +13,7 @@ Source of authority: the user's raw journal, not assistant summaries or passing 
 7. Support terminal-friendly server shortcuts: Ctrl-1..9 where the terminal reports them distinctly, and a portable prefix shortcut elsewhere. Make the portable shortcut visible. Do not infer Ctrl-digit from plain digits or claim that holding Ctrl is universally observable.
 8. Keep backend processes alive during menus and switching. Join relay workers before menus take terminal ownership. Return to the exact pane safely, preserving keyboard state, terminal modes, authentication boundaries, and source frontiers.
 9. Keep sessions, new/resumed backends, projects, worktrees, diff, help, and detach usable. Menus may have TUI controls; no permanent panel renderer over raw backend output.
-10. Use Go and the existing Phi HTTP/WebSocket/recording paths. No Charm/Bubble Tea, runtime terminal emulator, output sidecar, second server database, or Makefile build system.
+10. `phic` uses Go and the existing Phi HTTP/WebSocket/recording paths. No Charm/Bubble Tea, runtime terminal emulator in `phic`, output sidecar, second server database, or new Makefile/build system for `phic`.
 
 ## Raw evidence
 
@@ -36,4 +36,4 @@ Fix browser terminal responsiveness and the `phic` connection/menu experience. P
 
 ## Acceptance evidence
 
-Record reproduction, baseline timings, regression tests, corrected timings, visual/native menu evidence, and residual limitations in `temp/CLIENT_CORRECTION_AUDIT.md`. At the end, perform 10 distinct positive conformance reviews and 100 distinct exclusion/regression checks. Mark an unverified claim as unverified; never convert eventual correctness or a green suite into a claim of universal perfection.
+Record the relevant user statements verbatim, reproduction, baseline timings, regression tests, corrected timings, visual/native menu evidence, and residual limitations in `temp/CLIENT_CORRECTION_AUDIT.md`. At the end, perform 10 distinct positive conformance reviews and 100 distinct exclusion/regression checks. Mark an unverified claim as unverified; never convert eventual correctness or a green suite into a claim of universal perfection.
