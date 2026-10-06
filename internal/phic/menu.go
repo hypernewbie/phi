@@ -2,12 +2,7 @@ package phic
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type lineTerminal interface {
@@ -15,173 +10,45 @@ type lineTerminal interface {
 	Write([]byte) (int, error)
 }
 
-// readMenuInput handles menu keys in raw mode. Escape does not require Enter
-// and backend reports are not choices.
-func readMenuInput(ctx context.Context, t lineTerminal, servers ...int) (string, error) {
-	var line, sequence []byte
-	var b [1]byte
-	for len(line) < 4096 {
-		readCtx := ctx
-		cancel := func() {}
-		if len(sequence) > 0 {
-			readCtx, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
-		}
-		n, err := t.ReadContext(readCtx, b[:])
-		cancel()
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			if len(sequence) == 1 {
-				return "", errDetach
-			}
-			sequence = nil
-			continue
-		}
+// Help/error views wait for acknowledgement using the same key decoder as
+// selections. No second numeric-line protocol or shortcut implementation.
+func (c *client) menuClaims() map[[2]int]bool {
+	if c.keys.claimed == nil {
+		c.keys.claimed = make(map[[2]int]bool)
+	}
+	return c.keys.claimed
+}
+
+func (c *client) acknowledgeView(ctx context.Context) (string, error) {
+	reader := menuReader{claimed: c.menuClaims()}
+	for {
+		key, err := reader.read(ctx, c.tty, len(c.servers))
 		if err != nil {
 			return "", err
 		}
-		if n == 0 {
-			return "", io.EOF
-		}
-		key := b[0]
-		if len(sequence) > 0 {
-			sequence = append(sequence, key)
-			if len(sequence) == 2 && key != '[' && key != 'O' {
-				sequence = nil
-				continue
-			}
-			if len(sequence) == 2 {
-				continue
-			}
-			if key < 0x40 || key > 0x7e {
-				if len(sequence) > 128 {
-					sequence = nil
-				}
-				continue
-			}
-			code, mods, event, ok := encodedKey(sequence)
-			sequence = nil
-			if !ok || event == 3 || (mods != 1 && mods != 5) {
-				continue
-			}
-			if code == 27 {
-				return "", errDetach
-			}
-			if mods == 5 && event == 1 && code >= '1' && code <= '9' && len(servers) > 0 && code-'0' <= servers[0] {
-				return "", viewCommand(byte(code))
-			}
-			if code > 127 {
-				continue
-			}
-			key = byte(code)
-		}
-		if key == 0x1b {
-			sequence = []byte{key}
-			continue
-		}
-		if key == 3 || key == 4 {
+		switch key {
+		case "enter":
+			return "", nil
+		case "back", "q":
 			return "", errDetach
 		}
-		if key == '\r' || key == '\n' {
-			if err := writeAll(t, []byte("\r\n")); err != nil {
-				return "", err
-			}
-			return string(line), nil
-		}
-		if key == 8 || key == 127 {
-			if len(line) > 0 {
-				line = line[:len(line)-1]
-				if err := writeAll(t, []byte("\b \b")); err != nil {
-					return "", err
-				}
-			}
-			continue
-		}
-		if len(line) == 0 && (key == 'q' || key == 'n' || key == 'p') {
-			if err := writeAll(t, []byte{key, '\r', '\n'}); err != nil {
-				return "", err
-			}
-			return string(key), nil
-		}
-		if key >= '0' && key <= '9' {
-			line = append(line, key)
-			if err := writeAll(t, []byte{key}); err != nil {
-				return "", err
-			}
-		}
 	}
-	return "", fmt.Errorf("phic: menu input too long")
 }
 
 func (c *client) choose(ctx context.Context, title string, items []string) (int, error) {
 	return c.chooseStyled(ctx, title, items, nil)
 }
 
-func (c *client) chooseStyled(ctx context.Context, title string, items []string, paint func(int, string) string) (int, error) {
+func (c *client) chooseStyled(ctx context.Context, title string, items []string, paint func(int, string, bool) string) (int, error) {
 	if c.tty == nil {
 		return 0, fmt.Errorf("phic: selection requires a terminal")
 	}
 	if err := c.tty.EnterRaw(); err != nil {
 		return 0, err
 	}
-	cols, rows, err := c.tty.Size()
-	if err != nil {
-		return 0, err
-	}
-	perPage := rows - 4
-	if perPage < 1 {
-		perPage = 1
-	}
-	if cols < 8 {
-		return 0, fmt.Errorf("phic: terminal too narrow for selection")
-	}
-	page := 0
-	for {
-		var out strings.Builder
-		fmt.Fprintf(&out, "%s\r\n", c.heading(title))
-		start, end := page*perPage, (page+1)*perPage
-		if end > len(items) {
-			end = len(items)
-		}
-		for i := start; i < end; i++ {
-			// Metadata is already quoted. ASCII quoting keeps width predictable.
-			line := fmt.Sprintf("%d  %s", i+1, items[i])
-			if len(line) > cols-1 {
-				line = line[:cols-4] + "..."
-			}
-			if paint != nil {
-				line = paint(i, line)
-			} else {
-				line = c.color(line)
-			}
-			fmt.Fprintf(&out, "%s\r\n", line)
-		}
-		fmt.Fprint(&out, c.color("number + Enter · n/p page · Esc/q back: "))
-		if err := writeAll(c.tty, []byte(out.String())); err != nil {
-			return 0, err
-		}
-		line, err := readMenuInput(ctx, c.tty, len(c.servers))
-		if err != nil {
-			return 0, err
-		}
-		switch strings.TrimSpace(line) {
-		case "q", "\x1b":
-			return 0, errDetach
-		case "n":
-			if end < len(items) {
-				page++
-			}
-			continue
-		case "p":
-			if page > 0 {
-				page--
-			}
-			continue
-		}
-		n, err := strconv.Atoi(strings.TrimSpace(line))
-		if err == nil && n >= start+1 && n <= end {
-			return n - 1, nil
-		}
-	}
+	return c.selectionView(ctx, c.tty, c.tty.Size, title, items, paint)
 }
+
 func (c *client) chooseSpawn(ctx context.Context, dir, coder string) (SelectResult, error) {
 	registry, err := c.api.ListCoders(ctx)
 	if err != nil {
@@ -194,6 +61,7 @@ func (c *client) chooseSpawn(ctx context.Context, dir, coder string) (SelectResu
 	}
 	return SelectResult{}, fmt.Errorf("phic: backend %s is not advertised by Phi", QuotedID(coder))
 }
+
 func (c *client) chooseStartup(ctx context.Context, dir string, panes []TerminalView) (SelectResult, error) {
 	registry, err := c.api.ListCoders(ctx)
 	if err != nil {
@@ -207,14 +75,14 @@ func (c *client) chooseStartup(ctx context.Context, dir string, panes []Terminal
 		}
 		copy := p
 		choices = append(choices, SelectResult{PaneID: p.ID, Existing: &copy})
-		labels = append(labels, fmt.Sprintf("live %s %s (other clients: %d)", fmt.Sprintf("%+q", p.Coder), fmt.Sprintf("%+q", p.Title), p.ActiveWSCount))
+		labels = append(labels, fmt.Sprintf("● %s · %s  (%d other clients)", menuLabel(p.Coder), menuLabel(p.Title), p.ActiveWSCount))
 	}
 	for _, d := range registry {
 		if c.cfg.Coder != "" && d.ID != c.cfg.Coder {
 			continue
 		}
 		choices = append(choices, SelectResult{NewSpawn: &SpawnRequest{Coder: d.ID, Dir: dir}})
-		labels = append(labels, fmt.Sprintf("%+q sessions / new pane", d.Name))
+		labels = append(labels, fmt.Sprintf("+ %s · Sessions / New pane", menuLabel(d.Name)))
 	}
 	if len(choices) == 0 {
 		return SelectResult{}, fmt.Errorf("phic: no selectable backend or pane")
@@ -241,9 +109,9 @@ func (c *client) chooseStartup(ctx context.Context, dir string, panes []Terminal
 	if err != nil {
 		return SelectResult{}, err
 	}
-	labels = []string{"new pane"}
+	labels = []string{"+ New pane"}
 	for _, s := range saved {
-		labels = append(labels, fmt.Sprintf("resume %+q (%s)", s.Title, s.TimeUpdated.Format("2006-01-02")))
+		labels = append(labels, fmt.Sprintf("↩ %s  ·  %s", menuLabel(s.Title), s.TimeUpdated.Format("2006-01-02")))
 	}
 	i, err = c.choose(ctx, "Saved sessions", labels)
 	if err != nil {

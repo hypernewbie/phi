@@ -2,6 +2,7 @@ package phic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -48,18 +49,29 @@ func (c *client) serverPicker(ctx context.Context) (int, error) {
 		if i == c.serverIndex {
 			marker = "*"
 		}
-		labels[i] = fmt.Sprintf("%s [%d %s]  %+q", marker, i+1, s.label(), s.profile.Origin)
+		labels[i] = fmt.Sprintf("%s %s  ·  %s", marker, s.label(), menuLabel(s.profile.Origin))
 	}
-	cols, _, err := c.tty.Size()
-	if err != nil {
-		return 0, err
+	labels = append(labels, "+ Connect to another server…")
+	for {
+		i, err := c.chooseStyled(ctx, "Servers", labels, func(i int, line string, focused bool) string {
+			if i == len(c.servers) {
+				return themeText(c.activeServer().identity.Theme, line, focused)
+			}
+			return themeText(c.servers[i].identity.Theme, line, focused)
+		})
+		var shortcut viewCommand
+		if errors.As(err, &shortcut) && shortcut == 'b' {
+			continue
+		}
+		if err != nil || i < len(c.servers) {
+			return i, err
+		}
+		i, err = c.connectServer(ctx)
+		if errors.Is(err, errDetach) || (errors.As(err, &shortcut) && shortcut == 'b') {
+			continue
+		}
+		return i, err
 	}
-	if err := writeAll(c.tty, []byte(c.serverBar(cols))); err != nil {
-		return 0, err
-	}
-	return c.chooseStyled(ctx, "Servers", labels, func(i int, line string) string {
-		return themeText(c.servers[i].identity.Theme, line, i == c.serverIndex)
-	})
 }
 
 // switchServer is transactional. The old pane remains selected if login,
@@ -165,7 +177,7 @@ func (c *client) directory(ctx context.Context, want string) (string, error) {
 		}
 		seen[dir] = true
 		dirs = append(dirs, dir)
-		labels = append(labels, fmt.Sprintf("%+q", dir))
+		labels = append(labels, menuLabel(dir))
 	}
 	if len(dirs) == 0 {
 		panes, err := c.api.ListTerminals(ctx, "")
@@ -176,7 +188,7 @@ func (c *client) directory(ctx context.Context, want string) (string, error) {
 			if serverAbsolutePath(p.Dir) && !seen[p.Dir] {
 				seen[p.Dir] = true
 				dirs = append(dirs, p.Dir)
-				labels = append(labels, fmt.Sprintf("%+q", p.Dir))
+				labels = append(labels, menuLabel(p.Dir))
 			}
 		}
 	}

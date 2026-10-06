@@ -108,8 +108,9 @@ Options:
 
 Relay keys: Ctrl-] then b servers, 1-9 switch server, s sessions, d diff,
 w worktrees, ? help, q detach. Enhanced terminals also support Ctrl-1..9.
-Ctrl-] Ctrl-] sends a literal prefix. Client menus are inline; backend
-output stays raw. Returning rebuilds from Phi's recording at current size.`)
+Ctrl-] Ctrl-] sends a literal prefix. Inline menus use arrows, Enter,
+/ search, and Esc to return. Normal startup shows the server bar, including
+Connect to another server. Backend output stays raw. Returning rebuilds from Phi's recording at current size.`)
 }
 
 type client struct {
@@ -149,13 +150,37 @@ func (c *client) Close() error {
 }
 
 func (c *client) Run(ctx context.Context) error {
+	// Normal startup is a client surface, not an implicit localhost probe.
+	// Explicit CLI operations retain their direct-attachment semantics.
+	if !c.cfg.ServerExplicit && c.cfg.Pane == "" && c.cfg.Coder == "" && !c.cfg.Diff && !c.cfg.NewPane {
+		if err := c.tty.EnterRaw(); err != nil {
+			return err
+		}
+		if err := c.tty.PrepareMenu(); err != nil {
+			return err
+		}
+		index, err := c.serverPicker(ctx)
+		var shortcut viewCommand
+		if errors.As(err, &shortcut) && byte(shortcut) >= '1' && byte(shortcut) <= '9' {
+			index, err = int(byte(shortcut)-'1'), nil
+		}
+		if errors.Is(err, errDetach) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := c.selectServer(ctx, index); err != nil {
+			return err
+		}
+	}
 	for {
 		err := c.start(ctx)
 		if ctx.Err() != nil || errors.Is(err, errDetach) {
 			return nil
 		}
 		var exit *ExitError
-		if err == nil || len(c.servers) < 2 || errors.As(err, &exit) {
+		if err == nil || errors.As(err, &exit) || c.cfg.Pane != "" || c.cfg.NewPane || c.cfg.Coder != "" || c.cfg.Diff {
 			return err
 		}
 		if e := c.tty.EnterRaw(); e != nil {
@@ -182,8 +207,8 @@ func (c *client) Run(ctx context.Context) error {
 				return e
 			}
 		}
-		if index < 0 || index >= len(c.servers) {
-			return fmt.Errorf("phic: unknown server shortcut")
+		if err := c.selectServer(ctx, index); err != nil {
+			return err
 		}
 		if c.keys.claimed == nil {
 			c.keys.claimed = make(map[[2]int]bool)
@@ -191,8 +216,6 @@ func (c *client) Run(ctx context.Context) error {
 		if index < 9 {
 			c.keys.claimed[[2]int{int('1') + index, 5}] = true
 		}
-		c.serverIndex = index
-		c.api = c.servers[index].api
 		c.cfg.Pane = ""
 		c.cfg.NewPane = false
 		c.cfg.Coder = ""

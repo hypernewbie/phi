@@ -6,13 +6,13 @@ Phi owns the processes, sessions, and durable recordings. The native terminal ow
 
 ## Start
 
-Start Phi first. To build the client from this checkout:
+For a local connection, start Phi on this machine. Remote connections do not require a local Phi service. To build the client from this checkout:
 
 ```sh
 go build -o phic ./cmd/phic
 ```
 
-Place it on your PATH or use `./phic`. Release builds provide a separate `phi_<version>_<os>_<arch>_phic.tar.gz` archive. The next npm release that includes this client installs `phic` on macOS/Linux; Windows retains a clear unsupported-client message without breaking `phi`.
+Place it on your PATH or use `./phic`. Release builds provide a separate `phi_<version>_<os>_<arch>_phic.tar.gz` archive. The npm package installs `phic` on macOS/Linux; Windows retains a clear unsupported-client message without breaking `phi`.
 
 Then run:
 
@@ -23,16 +23,16 @@ phic --coder pi .
 phic --pane <pane-id>
 ```
 
-By default, phic reads the desktop client's `profiles.json` in saved sidebar order and starts with the most recently used server. Standard locations are:
+Normal `phic .` startup opens the colored server selector before authentication. It reads the desktop client's `profiles.json` in saved sidebar order and focuses the most recently used server. Use arrows and Enter to connect, or choose **Connect to another server** and enter an HTTP(S) origin. This works without a localhost service or a saved profiles file. Standard locations are:
 
 - macOS: `~/Library/Application Support/phi-client/profiles.json`
 - Linux: `$XDG_CONFIG_HOME/phi-client/profiles.json`, or `~/.config/phi-client/profiles.json`
 
-The development app's `phi-desktop-electron` directory is also recognized. Use `--profiles FILE` if desktop userData is elsewhere. The client reads the backup when necessary, but never writes or renames either desktop file.
+The development app's `phi-desktop-electron` and legacy `Phi` directories are also recognized. Use `--profiles FILE` if desktop userData is elsewhere. The client reads the backup when necessary, but never writes or renames either desktop file.
 
-With no saved profiles, the default is `http://127.0.0.1:7070`. `--server URL` uses one explicit server; combine it with `--profiles FILE` to retain that saved list and select or add the explicit origin for this run. No server configuration is duplicated or persisted by phic.
+With no saved profiles, the selector offers `http://127.0.0.1:7070` and **Connect to another server**; it does not authenticate localhost before you choose. Connections added through the form last for this client run and do not implicitly rewrite desktop preferences. `--server URL` uses one explicit server; combine it with `--profiles FILE` to retain that saved list and select or add the explicit origin for this run. No server configuration is duplicated or persisted by phic.
 
-Without an unambiguous free pane, the client shows a numbered startup list. A live pane with another attached client requires explicit selection. Shared clients can change the same backend terminal size.
+Without an unambiguous free pane, the client shows a focused session/backend selector with arrow navigation and search. A live pane with another attached client requires explicit selection. Shared clients can change the same backend terminal size.
 
 `--pane` uses the server's exact pane identity and directory. It does not change the existing OpenCode launch mode.
 
@@ -66,7 +66,7 @@ phic --worktrees .
 
 The server bar shows colored boxes and highlights the active server. Session, project, worktree, help, error, and diff headings use the selected server's reported Phi accent. Backend output is not recolored. Unobserved or login-protected servers use the default accent until their identity is available. `NO_COLOR` and `TERM=dumb` disable client colors.
 
-Use numbered choices, Enter, n/p for pages, and Esc/q to return. Enhanced Ctrl-digit shortcuts also work in client selection menus. Inside the external pager, use its own keys and exit it before switching servers. Holding Ctrl alone is not observable on legacy terminals; use Ctrl-] b.
+Use ↑/↓ to select, Enter to open, `/` to search, Page Up/Down or n/p for pages, and Esc/q to return. Home/End jump within the filtered list. Number + Enter remains available. The focused row is highlighted in the server's theme; metadata keeps readable Unicode but cannot inject terminal controls. Ctrl-] b and enhanced Ctrl-digit shortcuts also work in client menus. Inside the external pager, use its own keys and exit it before switching servers. Holding Ctrl alone is not observable on legacy terminals; use Ctrl-] b.
 
 The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodings. Kitty alternate-key identities, associated text, and Caps/Num Lock state bits are supported. Undelimited pasted control bytes cannot be distinguished from typed control bytes.
 
@@ -74,7 +74,7 @@ The client recognizes the prefix under legacy, Kitty, and modifyOtherKeys encodi
 
 macOS and Linux are the supported client platforms. Windows still supports the existing `phi` server command. The native `phic` relay is not supported there.
 
-Client views take ownership only after both relay workers stop. Menus print inline, with numbered choices, pagination, and Esc/q cancellation. Backend output continues into Phi's recording, not a client queue. Returning reconnects to the selected pane and rebuilds the native display. The diff pager runs with `LESSSECURE=1` and does not run shell commands or input filters.
+Client views take ownership only after both relay workers stop. Menus update a bounded inline region, with focused selection, search, pagination, and Esc/q cancellation. They do not enter a client-owned alternate screen or add permanent panels. Backend output continues into Phi's recording, not a client queue. Returning reconnects to the selected pane and rebuilds the native display. The diff pager runs with `LESSSECURE=1` and does not run shell commands or input filters.
 
 Fixed-geometry rebuilds are tested against a development-only terminal oracle, including normal/alternate buffers, cursor/style continuation, tabs, scroll regions, and repeated returns. See `internal/termproof/PROOF.md` for the distinction from arbitrary screen snapshotting.
 
