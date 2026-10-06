@@ -14,7 +14,7 @@ func TestDesktopProfileInteropHelper(t *testing.T) {
 	if input == "" {
 		return
 	}
-	var request struct{ Path, Operation, URL, ID string }
+	var request struct{ Path, Operation, URL, ID, Name, BeforeID string }
 	if err := json.Unmarshal([]byte(input), &request); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,18 @@ func TestDesktopProfileInteropHelper(t *testing.T) {
 		}
 	case "used":
 		if err := store.setLastUsed(request.ID); err != nil {
+			t.Fatal(err)
+		}
+	case "rename":
+		if err := store.rename(request.ID, request.Name); err != nil {
+			t.Fatal(err)
+		}
+	case "remove":
+		if err := store.remove(request.ID); err != nil {
+			t.Fatal(err)
+		}
+	case "reorder":
+		if err := store.reorder(request.ID, request.BeforeID); err != nil {
 			t.Fatal(err)
 		}
 	case "load":
