@@ -2,6 +2,25 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.24.0 — 2026-10-06
+
+### Added
+- **TUI console client** (`2f59c41`, `226c3a3`, `f707bd1`). `phic` is now a lite console version of the website built on Bubble Tea v2 + Lip Gloss v2. Tabs, sessions sidebar, project/worktree/coder context, diff reader, and help — with raw backend bytes rendered from a copied frame, never passed through.
+- **Native terminal emulator** (`82ddef2`, `98c593d`). Pinned `libghostty-vt` adapter ships static archives for darwin/linux/windows amd64+arm64 and links through normal CGO builds without tags or runtime downloads. Screen/cursor/resize fidelity, Kitty keyboards, and mouse proven against an xterm-headless oracle (48/48).
+- **Shared server sidebar management** (`e587ffa`, `2c42954`). Add, rename, remove, and reorder servers in the exact desktop `profiles.json` with atomic writes, backup recovery, and concurrent-desktop adoption, plus themed inline cards and health states.
+- **Remembered logins** (`e952876`). Server-issued session tokens persist per origin in `0700/0600` files. No passwords, verifiers, Keychain, or DPAPI. One password entry survives relaunch; expiry and server refusal clear cleanly.
+- **Fullscreen Markdown reader** (`e952876`, `6edea17`). Server Markdown directories (`./temp`, `./tmp`, and configured) list beside Diff; files open in a viewport-wide Glamour v2 reader with Unicode `[×]` close, Copy Markdown (exact source bytes), and Copy Filename.
+- **btop launch and compact chrome** (`6edea17`). Website-parity `[▥]`/`Ctrl-] T` launches btop through a fresh server Shell pane with exactly one startup command. Uppercase port-free PC names, connection glyphs, `▣` tab strip, refresh/redraw button, hide/show Sessions, and draggable or `[`/`]`-resizable panels.
+- **Close and undo controls** (`e3b2ce0`). Clickable `[x] close`/`[u] undo` with a 3-second grace; tab titles cap at twenty cells with matching click targets.
+
+### Fixed
+- **Console lifecycle and replay safety** (`5f210eb`, `775b164`, `f7a438e`). Pane replay respects resize markers and recorded geometry, fresh/replacement servers connect without restart, and raw `0x1d` keeps `Ctrl-]` portable on legacy terminals.
+- **Shared config and input scoping** (`72b3689`, `b1a153a`, `9721377`, `1b360bc`, `74b5f38`). Desktop profile writes round-trip with the desktop app, pasted input never leaks across panes, error-view shortcuts keep pane ownership, and forms follow desktop normalization.
+- **Tiny terminals stay live** (`6edea17`). No minimum-size mode: 1×1 windows attach, launch, and forward input normally; controls may clip but never deadlock.
+- **Phone scroll stalls** (`fd8fd05`). Alternate-screen checkpoints serialize once and coarse viewport rows bound them, cutting 200ms stalls to ~75ms under 6× CPU throttle without losing bytes or history.
+- **Codex on Windows** (`6c3759a`). Session listing uses a Windows-safe path probe and staged bracketed input submits correctly.
+- **Native test teardown** (`69096d2`). A persistent tmux anchor session prevents server teardown races during reattachment checks.
+
 ## v0.23.0 — 2026-10-05
 
 ### Added
