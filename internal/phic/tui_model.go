@@ -248,6 +248,12 @@ type tuiModel struct {
 	sessionSearch textField
 	searchActive  bool
 
+	// cpuTiers is the last CPU tier per server origin for the brand logo;
+	// a missing entry means unseen (first classification never pulses).
+	// cpuPulseUntil bounds the finite tier-change pulse window.
+	cpuTiers      map[string]cpuTier
+	cpuPulseUntil time.Time
+
 	events chan paneEvent
 	gen    int
 
@@ -447,7 +453,7 @@ type spawnCapture struct {
 // ---- Init ----
 
 func (m *tuiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.waitEvent()}
+	cmds := []tea.Cmd{m.waitEvent(), m.cpuPollTick()}
 	if len(m.servers) == 0 {
 		m.openAddServer()
 		return tea.Batch(cmds...)
@@ -714,6 +720,15 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case msgPaint:
 		m.tickArmed = false
 		m.lastPaint = time.Now()
+		return m, nil
+	case msgCPUPoll:
+		return m, tea.Batch(m.cpuPollCmd(), m.cpuPollTick())
+	case msgCPUResult:
+		return m, m.applyCPUResult(msg)
+	case msgCPUPulse:
+		if time.Now().Before(m.cpuPulseUntil) {
+			return m, tea.Tick(cpuPulseStep, func(time.Time) tea.Msg { return msgCPUPulse{} })
+		}
 		return m, nil
 	case msgPaneEvent:
 		cmd := m.handlePaneEvent(msg.ev)

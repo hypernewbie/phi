@@ -24,13 +24,7 @@ var (
 )
 
 func (m *tuiModel) accentColor() color.Color {
-	d := m.current()
-	if d != nil {
-		if hex := phiAccents[d.identity.Theme]; hex != "" {
-			return lg.Color("#" + hex)
-		}
-	}
-	return lg.Color("#82aaff")
+	return lg.Color("#" + m.accentHex())
 }
 
 func (m *tuiModel) View() tea.View {
@@ -84,9 +78,11 @@ func (m *tuiModel) render() string {
 // ---- chrome ----
 
 func (m *tuiModel) renderRail() string {
-	accent := m.accentColor()
+	logo, name := m.brandStyles(m.cpuTiers[m.currentOrigin()])
 	var b strings.Builder
-	b.WriteString(lg.NewStyle().Foreground(accent).Bold(true).Render(" Φ "))
+	b.WriteString(logo.Render(" Φ"))
+	b.WriteString(name.Render(" Phi "))
+	accent := m.accentColor()
 	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
 		label := m.railLabel(s)
