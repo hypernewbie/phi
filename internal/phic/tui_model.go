@@ -36,6 +36,10 @@ const (
 	modalProject
 	modalWorktree
 	modalCoder
+	// modalOpenCode is the per-launch Open/Open Mini choice for OpenCode,
+	// mirroring the web right-click opt-in: full TUI by default, Mini only
+	// by explicit choice, retained per tab afterwards.
+	modalOpenCode
 	modalHelp
 	modalHistory
 	modalMarkdown
@@ -1621,7 +1625,7 @@ func (m *tuiModel) openHelp() {
   Ctrl-] p        project context
   Ctrl-] w        worktree context
   Ctrl-] c        coder selector
-  Ctrl-] n        new session
+  Ctrl-] n        new session (OpenCode offers Open Mini)
   Ctrl-] o        new OpenCode Mini session
   Ctrl-] S        new Shell session
   Ctrl-] m        rename server
