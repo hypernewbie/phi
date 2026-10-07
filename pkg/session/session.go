@@ -215,8 +215,29 @@ func parseRawTime(val interface{}) time.Time {
 	return time.Now()
 }
 
+// PlainPath removes the Windows extended-length ("verbatim") prefix from
+// a path: `\\?\C:\work` -> `C:\work`, `\\?\UNC\srv\share` -> `\\srv\share`.
+// Windows tools record this form when they path-resolve through the OS
+// (Codex writes thread cwds via GetFinalPathNameByHandle) while the rest
+// of phi works in ordinary paths. Strip it at the boundary so values
+// that leave an adapter — session cwd, resume cwd — are the path a user
+// would type. Both separators are accepted; non-verbatim inputs pass
+// through untouched.
+func PlainPath(p string) string {
+	if len(p) < 4 || p[1] != p[0] || (p[0] != '\\' && p[0] != '/') || p[2] != '?' || p[3] != p[0] {
+		return p
+	}
+	sep := string(p[0])
+	rest := p[4:]
+	if len(rest) >= 4 && strings.EqualFold(rest[:4], "UNC"+sep) {
+		return sep + sep + rest[4:]
+	}
+	return rest
+}
+
 // NormalisePath cleans and standardises a workspace path for OS-agnostic comparisons.
 func NormalisePath(p string) string {
+	p = PlainPath(p)
 	p = strings.ReplaceAll(p, "\\", "/")
 	p = filepath.ToSlash(filepath.Clean(p))
 	p = strings.TrimSuffix(p, "/")
