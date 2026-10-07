@@ -467,88 +467,101 @@ func styleForKey(k cellStyleKey) lg.Style {
 	return st
 }
 
+// renderFrameLines returns one final string per visible row. Rows whose
+// emulator cells are exactly unchanged reuse the cached string from the
+// last render through the shared termemu row delta: a single changed
+// character re-renders one row, not the screen. Reuse is gated on
+// cell-for-cell equality (plus viewport width and selection generation),
+// so cached output is byte-identical to a full render. The pane actor is
+// deliberately untouched: it keeps full snapshots every paint, and the
+// selection generation derives from m.selection here, so no mutation site
+// can forget to invalidate the cache.
 func (m *tuiModel) renderFrameLines(tab *paneTab, frame termemu.Frame, w, h int) []string {
-	lines := make([]string, 0, h)
-	styles := map[cellStyleKey]lg.Style{}
 	sel := m.selection
+	if sel != tab.lastSel {
+		tab.selGen++
+		tab.lastSel = sel
+	}
 	selectionOn := sel.active && tab.key == m.activeTabKeyOrZero()
-	for y := 0; y < h; y++ {
-		if y >= len(frame.Cells) {
-			lines = append(lines, "")
-			continue
+	styles := map[cellStyleKey]lg.Style{}
+	return tab.rows.Update(frame, h, w, tab.selGen, func(y int, row []termemu.Cell) string {
+		return m.renderOneFrameRow(row, y, w, styles, selectionOn, sel)
+	})
+}
+
+func (m *tuiModel) renderOneFrameRow(row []termemu.Cell, y, w int, styles map[cellStyleKey]lg.Style, selectionOn bool, sel selectionState) string {
+	if row == nil {
+		return ""
+	}
+	var b strings.Builder
+	width := 0
+	endCol := 0
+	runStart := 0
+	var runKey cellStyleKey
+	flush := func(end int) {
+		if end <= runStart {
+			return
 		}
-		row := frame.Cells[y]
-		var b strings.Builder
-		width := 0
-		endCol := 0
-		runStart := 0
-		var runKey cellStyleKey
-		flush := func(end int) {
-			if end <= runStart {
-				return
-			}
-			var text strings.Builder
-			for x := runStart; x < end && x < len(row); x++ {
-				c := row[x]
-				if c.Width == 0 {
-					continue
-				}
-				if c.Text == "" {
-					text.WriteByte(' ')
-				} else {
-					text.WriteString(c.Text)
-				}
-			}
-			st, ok := styles[runKey]
-			if !ok {
-				st = styleForKey(runKey)
-				styles[runKey] = st
-			}
-			b.WriteString(st.Render(text.String()))
-		}
-		for x := 0; x < len(row); x++ {
+		var text strings.Builder
+		for x := runStart; x < end && x < len(row); x++ {
 			c := row[x]
 			if c.Width == 0 {
 				continue
 			}
-			selected := false
-			if selectionOn {
-				selected = inSelection(sel, x, y)
-			}
-			key := cellStyleKey{
-				fg: c.Fg.Value, bg: c.Bg.Value,
-				fgKind: c.Fg.Kind, bgKind: c.Bg.Kind,
-				bold: c.Bold, faint: c.Faint, italic: c.Italic,
-				underline: c.Underline,
-				strike:    c.Strikethrough, inverse: c.Inverse,
-				selected: selected,
-			}
-			if key != runKey {
-				flush(x)
-				runStart = x
-				runKey = key
-				if _, ok := styles[key]; !ok {
-					styles[key] = styleForKey(key)
-				}
-			}
-			if width+c.Width > w {
-				break
-			}
-			width += max(1, c.Width)
-			endCol = x + 1
-			if width >= w {
-				break
+			if c.Text == "" {
+				text.WriteByte(' ')
+			} else {
+				text.WriteString(c.Text)
 			}
 		}
-		flush(endCol)
-		rendered := b.String()
-		lineWidth := lg.Width(rendered)
-		if lineWidth < w {
-			rendered += strings.Repeat(" ", w-lineWidth)
+		st, ok := styles[runKey]
+		if !ok {
+			st = styleForKey(runKey)
+			styles[runKey] = st
 		}
-		lines = append(lines, truncateCells(rendered, w))
+		b.WriteString(st.Render(text.String()))
 	}
-	return lines
+	for x := 0; x < len(row); x++ {
+		c := row[x]
+		if c.Width == 0 {
+			continue
+		}
+		selected := false
+		if selectionOn {
+			selected = inSelection(sel, x, y)
+		}
+		key := cellStyleKey{
+			fg: c.Fg.Value, bg: c.Bg.Value,
+			fgKind: c.Fg.Kind, bgKind: c.Bg.Kind,
+			bold: c.Bold, faint: c.Faint, italic: c.Italic,
+			underline: c.Underline,
+			strike:    c.Strikethrough, inverse: c.Inverse,
+			selected: selected,
+		}
+		if key != runKey {
+			flush(x)
+			runStart = x
+			runKey = key
+			if _, ok := styles[key]; !ok {
+				styles[key] = styleForKey(key)
+			}
+		}
+		if width+c.Width > w {
+			break
+		}
+		width += max(1, c.Width)
+		endCol = x + 1
+		if width >= w {
+			break
+		}
+	}
+	flush(endCol)
+	rendered := b.String()
+	lineWidth := lg.Width(rendered)
+	if lineWidth < w {
+		rendered += strings.Repeat(" ", w-lineWidth)
+	}
+	return truncateCells(rendered, w)
 }
 
 func (m *tuiModel) activeTabKeyOrZero() paneKey {
