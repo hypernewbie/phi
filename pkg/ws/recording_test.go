@@ -101,3 +101,110 @@ func TestRecordingWriteFailureDoesNotAdvanceFrontier(t *testing.T) {
 		t.Fatalf("failure advanced head to %d", ph.total)
 	}
 }
+
+func TestRecordingRecoversTrailingZeroBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recording")
+	r, err := openRecording(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.append(1, []byte("retained")); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate unwritten preallocated zeroes from a hard crash / unclean reboot.
+	zeros := make([]byte, 260)
+	if _, err = r.file.WriteAt(zeros, r.offset); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := openRecording(path)
+	if err != nil {
+		t.Fatalf("openRecording failed on trailing zeros: %v", err)
+	}
+	defer recovered.file.Close()
+	if recovered.head != 8 {
+		t.Fatalf("head=%d want 8", recovered.head)
+	}
+	if err = recovered.append(1, []byte(" tail")); err != nil {
+		t.Fatal(err)
+	}
+	data, _, err := recovered.read(0, recovered.head)
+	if err != nil || string(data) != "retained tail" {
+		t.Fatalf("data=%q err=%v", data, err)
+	}
+}
+
+func TestRecordingRecoversTornInvalidHeaderAtTail(t *testing.T) {
+	for _, badHeader := range [][]byte{
+		{99, 0, 0, 0, 0},      // invalid kind != 1, 2
+		{2, 0, 0, 0, 5},       // resize with length != 4
+		{1, 0, 0, 0, 20, 'x'}, // declared length exceeding file size
+	} {
+		path := filepath.Join(t.TempDir(), "recording")
+		r, err := openRecording(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = r.append(1, []byte("retained")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = r.file.WriteAt(badHeader, r.offset); err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := openRecording(path)
+		if err != nil {
+			t.Fatalf("openRecording failed on badHeader %v: %v", badHeader, err)
+		}
+		if recovered.head != 8 {
+			t.Fatalf("head=%d want 8", recovered.head)
+		}
+		if err = recovered.append(1, []byte(" tail")); err != nil {
+			t.Fatal(err)
+		}
+		data, _, err := recovered.read(0, recovered.head)
+		if err != nil || string(data) != "retained tail" {
+			t.Fatalf("data=%q err=%v", data, err)
+		}
+		_ = recovered.file.Close()
+	}
+}
+
+func TestRecordingCorruptMiddleInvalidKindPreservesSuffix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recording")
+	r, err := openRecording(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.file.Close()
+	if err = r.append(1, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	middle := r.offset
+	if err = r.append(1, []byte("second committed")); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.append(1, []byte("third committed")); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt middle record header kind to an invalid type 99.
+	if _, err = r.file.WriteAt([]byte{99}, middle); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, openErr := openRecording(path)
+	if recovered != nil {
+		defer recovered.file.Close()
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openErr == nil {
+		t.Error("corrupt middle invalid kind must fail closed")
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("recovery deleted %d retained bytes", len(before)-len(after))
+	}
+}

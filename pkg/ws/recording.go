@@ -58,15 +58,20 @@ func openRecording(path string) (*coldRecording, error) {
 		if _, err = f.ReadAt(hdr[:], r.offset); err != nil {
 			break
 		}
+		kind := hdr[0]
 		n := binary.BigEndian.Uint32(hdr[1:])
-		if n > 64*1024*1024 || r.offset+5+int64(n) > info.Size() {
-			if hasValidRecordSuffix(f, r.offset+5, info.Size()) {
+		suffixStart := r.offset + 5
+		if kind != 1 && kind != 2 {
+			suffixStart = r.offset + 1
+		}
+		if (kind != 1 && kind != 2) || (kind == 2 && n != 4) || n > 64*1024*1024 || r.offset+5+int64(n) > info.Size() {
+			if hasValidRecordSuffix(f, suffixStart, info.Size()) {
 				f.Close()
 				return nil, fmt.Errorf("corrupt recording record at offset %d before retained suffix", r.offset)
 			}
 			break
 		}
-		switch hdr[0] {
+		switch kind {
 		case 1:
 			if err := r.inspectPlain(r.offset+5, n); err != nil {
 				f.Close()
@@ -75,19 +80,12 @@ func openRecording(path string) (*coldRecording, error) {
 			r.chunks = append(r.chunks, recordingChunk{r.head, r.offset + 5, n})
 			r.head += uint64(n)
 		case 2:
-			if n != 4 {
-				f.Close()
-				return nil, fmt.Errorf("invalid resize record")
-			}
 			var geometry [4]byte
 			if _, err = f.ReadAt(geometry[:], r.offset+5); err != nil {
 				f.Close()
 				return nil, err
 			}
 			r.resizes = append(r.resizes, ResizeMarker{r.head, binary.BigEndian.Uint16(geometry[:2]), binary.BigEndian.Uint16(geometry[2:])})
-		default:
-			f.Close()
-			return nil, fmt.Errorf("invalid recording entry")
 		}
 		r.offset += 5 + int64(n)
 	}
