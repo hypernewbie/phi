@@ -2481,6 +2481,9 @@ export class TabManager {
         // Historical geometry must not leave the live terminal at an old
         // size. Fit without sending a historical resize to the backend.
         tabInfo.fitAddon?.fit?.();
+        // The fit restores geometry, not necessarily the viewport's derived
+        // scroll position; re-derive it now that the replay is painted.
+        this._resyncViewportScroll(tabInfo);
         enqueued();
         // A quiet raw attach must also leave a checkpoint; otherwise every
         // refresh repeats the whole prefix until the backend emits again.
@@ -7932,8 +7935,36 @@ export class TabManager {
         tabInfo.userFollowBottom = false;
     }
 
+    // xterm derives its scrollable position from buffer-level scroll
+    // events (`Viewport._sync`). A bootstrap screen checkpoint resizes the
+    // terminal while the buffer is still empty, which syncs that position
+    // to 0; the replay that follows fills the buffer without a programmatic
+    // scroll, so the internal position stays stale at the top. From there
+    // every viewport-path scroll is clamped — including wheel, PageUp, and
+    // `scrollToBottom()` itself, which short-circuits (disp 0) before it can
+    // fire the scroll event that would re-derive the position — leaving the
+    // user unable to reach scrollback after a reload. A synchronous
+    // top→bottom round trip re-derives the position from the buffer; nothing
+    // paints between the two calls, so it is visually inert.
+    _resyncViewportScroll(tabInfo) {
+        const term = tabInfo?.term;
+        const buffer = term?.buffer?.active;
+        if (!term || !buffer || tabInfo._historyBrowsing) return;
+        // Alternate-screen apps own the visible screen; normal scrollback is
+        // not what their viewport is showing.
+        if (buffer.baseY <= 0 || buffer.viewportY < buffer.baseY) return;
+        try {
+            term.scrollToTop();
+            term.scrollToBottom();
+        } catch (_e) {
+            /* xterm not open yet; a later fit resyncs */
+        }
+    }
+
     _spamScroll(tabInfo, isAtBottom, scrollY = null) {
         if (!tabInfo || tabInfo.isDead) return;
+
+        this._resyncViewportScroll(tabInfo);
 
         clearInterval(tabInfo.spamInterval);
         clearTimeout(tabInfo.stopSpamTimeout);
