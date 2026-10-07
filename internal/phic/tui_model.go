@@ -261,6 +261,10 @@ type tuiModel struct {
 	cpuTiers      map[string]cpuTier
 	cpuPulseUntil time.Time
 
+	// Local device battery, independent of the selected server.
+	batteryPercent int
+	batteryKnown   bool
+
 	events chan paneEvent
 	gen    int
 
@@ -456,7 +460,7 @@ type spawnCapture struct {
 // ---- Init ----
 
 func (m *tuiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.waitEvent(), m.cpuPollTick()}
+	cmds := []tea.Cmd{m.waitEvent(), m.cpuPollTick(), batteryPollTick(time.Second)}
 	if len(m.servers) == 0 {
 		m.openAddServer()
 		return tea.Batch(cmds...)
@@ -730,6 +734,11 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.chromeEscAt = time.Time{}
 		}
+		return m, nil
+	case msgBatteryPoll:
+		return m, tea.Batch(batteryPollCmd(), batteryPollTick(batteryPollInterval))
+	case msgBatteryResult:
+		m.batteryPercent, m.batteryKnown = msg.percent, msg.known
 		return m, nil
 	case msgCPUPoll:
 		return m, tea.Batch(m.cpuPollCmd(), m.cpuPollTick())
