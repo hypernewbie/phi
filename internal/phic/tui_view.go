@@ -71,6 +71,8 @@ func (m *tuiModel) render() string {
 	}
 	if m.modal.kind != modalNone {
 		base = m.overlayModal(base)
+	} else if box, bx, by := m.composeBox(); box != "" {
+		base = lg.NewCompositor(lg.NewLayer(base), lg.NewLayer(box).X(bx).Y(by).Z(1)).Render()
 	}
 	return fitScreen(base, m.width, m.height)
 }

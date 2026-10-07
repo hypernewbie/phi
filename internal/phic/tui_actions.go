@@ -71,6 +71,9 @@ func (m *tuiModel) sidebarRows() []sidebarRow {
 // ---- key dispatch ----
 
 func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.compose.open {
+		return m.handleComposeKey(msg)
+	}
 	if m.modal.kind != modalNone {
 		return m.handleModalKey(msg)
 	}
@@ -111,7 +114,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) handleKeyRelease(msg tea.KeyReleaseMsg) (tea.Model, tea.Cmd) {
-	if m.modal.kind != modalNone || m.focus != focusTerminal {
+	if m.compose.open || m.modal.kind != modalNone || m.focus != focusTerminal {
 		return m, nil
 	}
 	ev, ok := teaKeyEvent(msg.Key(), termemu.KeyRelease)
@@ -215,6 +218,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.focus = focusTerminal
 		return m, m.persistIntent()
+	case 'e':
+		return m, m.openCompose()
 	case 'M':
 		return m, m.showMarkdown()
 	case 'h':
@@ -745,6 +750,11 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 // ---- paste and mouse ----
 
 func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if m.compose.open && m.compose.area != nil {
+		next, cmd := m.compose.area.Update(msg)
+		m.compose.area = &next
+		return m, cmd
+	}
 	if m.modal.kind != modalNone {
 		switch m.modal.kind {
 		case modalAddServer, modalRenameServer, modalRenamePane, modalPassword, modalProject:
@@ -811,6 +821,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	mouse := msg.Mouse()
+	if m.compose.open {
+		return m, nil
+	}
 	if m.modal.kind != modalNone {
 		return m, nil
 	}
