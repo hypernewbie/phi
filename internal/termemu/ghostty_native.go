@@ -644,13 +644,13 @@ func expandCells(meta []C.PhiCellMeta, text []byte, cols int) [][]Cell {
 	if cols <= 0 {
 		return nil
 	}
-	rows := make([][]Cell, 0, (len(meta)+cols-1)/cols)
+	rows := make([][]Cell, (len(meta)+cols-1)/cols)
+	for row := range rows {
+		rows[row] = make([]Cell, min(cols, len(meta)-row*cols))
+	}
 	for i := range meta {
 		m := &meta[i]
 		row := i / cols
-		for len(rows) <= row {
-			rows = append(rows, nil)
-		}
 		cell := Cell{
 			Width:         int(m.width),
 			Bold:          m.bold != 0,
@@ -667,7 +667,7 @@ func expandCells(meta []C.PhiCellMeta, text []byte, cols int) [][]Cell {
 		if off >= 0 && ln > 0 && off+ln <= len(text) {
 			cell.Text = string(text[off : off+ln])
 		}
-		rows[row] = append(rows[row], cell)
+		rows[row][i%cols] = cell
 	}
 	return rows
 }
