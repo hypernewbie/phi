@@ -264,9 +264,6 @@ type tuiModel struct {
 	events chan paneEvent
 	gen    int
 
-	lastPaint time.Time
-	tickArmed bool
-
 	selection    selectionState
 	mouseCapture bool
 	mouseButton  termemu.MouseButton
@@ -374,7 +371,6 @@ func (m *tuiModel) serverForOrigin(origin string) *serverState {
 // ---- messages ----
 
 type msgPaneEvent struct{ ev paneEvent }
-type msgPaint struct{}
 type msgCloseExpired struct {
 	key   paneKey
 	token int
@@ -684,6 +680,14 @@ func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 // ---- Update ----
 
 func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	// Real interaction wakes the active pane's presentation rate, including
+	// chrome/compose input. Mere pointer motion and backend output do not.
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseWheelMsg, tea.FocusMsg, tea.WindowSizeMsg:
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.noteInteraction(time.Now())
+		}
+	}
 	if cmd := m.forwardComposeMsg(msg); cmd != nil {
 		return m, cmd
 	}
@@ -726,10 +730,6 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.chromeEscAt = time.Time{}
 		}
-		return m, nil
-	case msgPaint:
-		m.tickArmed = false
-		m.lastPaint = time.Now()
 		return m, nil
 	case msgCPUPoll:
 		return m, tea.Batch(m.cpuPollCmd(), m.cpuPollTick())
@@ -1056,14 +1056,9 @@ func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 	switch ev.Kind {
 	case paneOutput:
 		tab.unread = tab.key != m.activeTabKeyOrZero()
-		if time.Since(m.lastPaint) < 33*time.Millisecond {
-			if !m.tickArmed {
-				m.tickArmed = true
-				return tea.Tick(33*time.Millisecond, func(time.Time) tea.Msg { return msgPaint{} })
-			}
-			return nil
-		}
-		m.lastPaint = time.Now()
+		// Snapshot notifications are already paced by the pane actor. A
+		// delayed model tick does not throttle View (Tea calls it after every
+		// Update); it only adds an extra redraw and wakeup.
 	case paneStatus:
 		tab.status = ev.Status
 		if ev.Status == "connected" {
