@@ -168,6 +168,9 @@ type paneTab struct {
 	rows    termemu.RowCache
 	selGen  uint64
 	lastSel selectionState
+	// composeDraft is the unsent staged input for this tab, restored
+	// when the compose box reopens.
+	composeDraft string
 }
 
 func (t *paneTab) label() string {
@@ -247,6 +250,10 @@ type tuiModel struct {
 	sessionCursor int
 	sessionSearch textField
 	searchActive  bool
+
+	// compose is the staged native input box (Ctrl-] e). Typing still
+	// goes straight to the terminal by default; the box is opt-in.
+	compose composeState
 
 	// cpuTiers is the last CPU tier per server origin for the brand logo;
 	// a missing entry means unseen (first classification never pulses).
@@ -677,6 +684,9 @@ func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 // ---- Update ----
 
 func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	if cmd := m.forwardComposeMsg(msg); cmd != nil {
+		return m, cmd
+	}
 	oldCols, oldRows := m.terminalSize()
 	oldReaderOrigin, oldReaderDir := m.currentOrigin(), m.markdownDir()
 	defer func() {
@@ -1297,6 +1307,9 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 }
 
 func (m *tuiModel) activateTab(origin string, tab *paneTab) {
+	if m.compose.open && m.compose.tab != tab.key {
+		m.closeCompose() // draft kept on the old tab
+	}
 	if tab.actor != nil && !tab.exited {
 		select {
 		case <-tab.actor.done:
@@ -1641,6 +1654,7 @@ func (m *tuiModel) openHelp() {
   Ctrl-] w        worktree context
   Ctrl-] c        coder selector
   Ctrl-] n        new session (OpenCode offers Open Mini)
+  Ctrl-] e        compose input box (Enter sends)
   Ctrl-] o        new OpenCode Mini session
   Ctrl-] S        new Shell session
   Ctrl-] m        rename server
