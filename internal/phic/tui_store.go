@@ -20,6 +20,7 @@ type uiServerIntent struct {
 	Origin        string   `json:"origin,omitempty"`
 	Project       string   `json:"project,omitempty"`
 	Worktree      string   `json:"worktree,omitempty"`
+	Coder         string   `json:"coder,omitempty"`
 	Tabs          []string `json:"tabs,omitempty"`
 	Active        string   `json:"active,omitempty"`
 	DiffOpen      bool     `json:"diff_open,omitempty"`
@@ -171,7 +172,7 @@ func (m *tuiModel) persistIntent() tea.Cmd {
 	if id == "" {
 		return nil
 	}
-	intent := uiServerIntent{Origin: m.currentOrigin(), Project: m.project, Worktree: m.worktree, DiffOpen: m.diff.open, SidebarHidden: m.sidebarHidden, SidebarWidth: m.sidebarWidth, ReaderWidth: m.readerWidth}
+	intent := uiServerIntent{Origin: m.currentOrigin(), Project: m.project, Worktree: m.worktree, Coder: m.selectedCoderID(), DiffOpen: m.diff.open, SidebarHidden: m.sidebarHidden, SidebarWidth: m.sidebarWidth, ReaderWidth: m.readerWidth}
 	for _, t := range m.tabs[m.currentOrigin()] {
 		if t.closing || t.exited {
 			continue

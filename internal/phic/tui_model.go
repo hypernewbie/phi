@@ -833,6 +833,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 		m.restoreIntent()
 		m.quitOnce = true
 	}
+	m.restoreCoderSelection()
 	if !m.cliApplied && (m.cfg.NewPane || m.cfg.Pane != "") {
 		m.activeTab[origin] = -1 // No input may reach an incidental pane during direct entry.
 	} else {
@@ -842,6 +843,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 		for i, c := range d.coders {
 			if c.ID == m.cfg.Coder {
 				m.coderIdx = i
+				d.coderID = c.ID
 				break
 			}
 		}
@@ -1464,6 +1466,30 @@ func (m *tuiModel) selectedCoder() (CoderDescriptor, bool) {
 	return d.coders[m.coderIdx], true
 }
 
+// Restore by stable ID, including after the server reorders its catalog.
+// In-session state wins over older disk state. Missing coders use the current
+// advertised default rather than an unrelated remembered list index.
+func (m *tuiModel) restoreCoderSelection() {
+	d := m.current()
+	if d == nil {
+		return
+	}
+	id := d.coderID
+	if id == "" {
+		if intent := m.intentFor(m.active); intent != nil {
+			id = intent.Coder
+		}
+	}
+	m.coderIdx = 0
+	for i, coder := range d.coders {
+		if coder.ID == id {
+			m.coderIdx = i
+			break
+		}
+	}
+	d.coderID = m.selectedCoderID()
+}
+
 // chooseStartupProject follows the website fallback order without a blocking
 // project picker: remembered project, advertised active_cwd, first workspace.
 func (m *tuiModel) chooseStartupProject() {
@@ -1530,6 +1556,15 @@ func (m *tuiModel) refreshSessions() tea.Cmd {
 // ---- modal helpers ----
 
 func (m *tuiModel) closeModal() { m.modal = modalState{} }
+
+// Context pickers filter Sessions; accepting one is not a request to enter
+// the existing terminal (which may belong to a different project/coder).
+func (m *tuiModel) finishContextSelection() {
+	m.closeModal()
+	if m.focus == focusTerminal {
+		m.focus = focusSessions
+	}
+}
 
 func (m *tuiModel) openAddServer() {
 	m.modal.open(modalAddServer, "Add Phi server")
