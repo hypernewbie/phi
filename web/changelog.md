@@ -2,6 +2,21 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.24.1 — 2026-10-07
+
+### Added
+- **Staged native input box** (`5c282ee`). `Ctrl-] e` in `phic` opens a compose box at the bottom of the terminal: multiline, auto-growing up to ten lines or a third of the panel, `Enter` sends, `Alt+Enter` adds a line, `Esc` cancels. Unsent drafts survive per tab. Send semantics match the web staged bar byte for byte — bracketed paste for codex, long, and multiline payloads, then a carriage return.
+- **Server digits while composing shortcuts** (`acd903a`). While the `Ctrl-]` prefix is pending, the rail shows `1 2 3…` in place of the Greek glyphs so the target server needs no counting. Cached colors and the active-server highlight are untouched; servers past the ninth keep their glyph.
+- **Exact screen deltas** (`b5588ee`, `98bf479`). Shared `internal/termemu` row cache compares cells verbatim and re-renders only changed rows, about ten times faster on single-character updates without altering pane frames, selection, or width handling.
+
+### Fixed
+- **Scrollback after a page reload** (`581d3e3`). A bootstrap screen checkpoint resized the terminal while the buffer was still empty, leaving xterm's derived scroll position stale at the top; replay then filled the buffer without a programmatic scroll, and every wheel, PageUp, and `scrollToBottom()` was clamped — history was unreachable until something else forced a sync. The client now re-derives the position after the bootstrap fit and in the post-fit scroll restore. Reported by the native Pi history spec, which now passes in both fullscreen and regular mode.
+- **Torn recording journals** (`a14638a`). A crash mid-append can leave a zeroed or invalid tail header; recoverable frames before the tear are kept instead of discarding the archive.
+
+### Changed
+- **OpenCode TUI scrolling and Mini** (`70e06db`). Wheel input now mirrors the website hack byte for byte (`ESC EM`/`ESC ENQ` ×3 per notch, clamps, capture precedence) and the OpenCode chooser gained an in-TUI Mini option. Mini keeps normal scrollback and is per launch.
+- **Console look** (`3e63ff9`, `f0cde65`). The empty landing drops box art for the website's `Φ Phi` wordmark with the multiplexer tagline, and the brand glyph follows the same CPU tiers as the web header — white and glowing on load, a finite 480 ms pulse on tier change.
+
 ## v0.24.0 — 2026-10-06
 
 ### Added
