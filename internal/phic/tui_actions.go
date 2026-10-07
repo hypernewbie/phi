@@ -714,8 +714,7 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 		}
 		m.project = value
 		m.worktree = ""
-		m.closeModal()
-		m.focus = focusTerminal
+		m.finishContextSelection()
 		m.setStatus("project: "+menuLabel(value), false)
 		return m, tea.Batch(m.refreshSessions(), m.persistIntent(), m.refreshDiff())
 	case modalWorktree:
@@ -723,7 +722,7 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 			m.worktree = m.modal.items[m.modal.cursor].value
 			m.setStatus("worktree: "+menuLabel(m.worktree), false)
 		}
-		m.closeModal()
+		m.finishContextSelection()
 		return m, tea.Batch(m.persistIntent(), m.refreshSessions(), m.refreshDiff())
 	case modalOpenCode:
 		mini := m.modal.cursor >= 0 && m.modal.cursor < len(m.modal.items) &&
@@ -736,12 +735,12 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 			m.coderIdx = m.modal.cursor
 			d := m.current()
 			if d != nil {
+				d.coderID = m.selectedCoderID()
 				d.sessionsCoder = ""
 			}
 		}
-		m.closeModal()
-		m.focus = focusTerminal
-		return m, m.refreshSessions()
+		m.finishContextSelection()
+		return m, tea.Batch(m.refreshSessions(), m.persistIntent())
 	}
 	m.closeModal()
 	return m, nil
@@ -1262,6 +1261,7 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 	if origin != "" && m.data[origin] == nil {
 		m.data[origin] = &serverData{}
 	}
+	m.restoreCoderSelection()
 	m.setStatus("", false)
 	cmds := []tea.Cmd{persist, m.loadServerCmd(index)}
 	if s := m.servers[index]; s != nil {
