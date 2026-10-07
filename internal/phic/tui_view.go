@@ -88,17 +88,24 @@ func (m *tuiModel) renderRail() string {
 	glyphs := serverGlyphs(m.servers)
 	for i, s := range m.servers {
 		label := m.railLabel(s)
+		glyph := glyphs[i]
+		if m.prefix && i < 9 {
+			// Prefix mode: show the 1-9 digit that jumps to this server
+			// so the choice needs no counting. Colors stay exactly as
+			// cached; servers past 9 keep their Greek glyph.
+			glyph = string(rune('1' + i))
+		}
 		if i == m.active {
 			b.WriteString(lg.NewStyle().
 				Foreground(accent).Bold(true).
 				Background(lg.Color("#1d1f27")).
-				Render(" " + glyphs[i] + " " + label + " "))
+				Render(" " + glyph + " " + label + " "))
 		} else {
 			color := tuiMuted
 			if s.health != "up" {
 				color = lg.Color("#78768a")
 			}
-			b.WriteString(lg.NewStyle().Foreground(color).Render(" " + glyphs[i] + " " + label + " "))
+			b.WriteString(lg.NewStyle().Foreground(color).Render(" " + glyph + " " + label + " "))
 		}
 	}
 	b.WriteString(lg.NewStyle().Foreground(accent).Render(" [+]"))
