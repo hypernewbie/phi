@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"sync"
 	"time"
@@ -92,7 +93,7 @@ type paneActor struct {
 	frontier, head, epoch              uint64
 	frame                              termemu.Frame
 	frameOK                            bool
-	lastPaint                          time.Time
+	lastPaint, lastInteraction         time.Time
 	cols, rows                         int
 	dirty, exited, uncertainInput      bool
 	exitCode                           int
@@ -111,7 +112,7 @@ func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events 
 		return nil, fmt.Errorf("phic: pane geometry must be positive")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128)}
+	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128)}
 	go p.writeLoop()
 	go p.run()
 	return p, nil
@@ -422,19 +423,41 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	}
 	p.enqueue(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
 	p.dirty = true
-	p.refreshFrame()
-	return nil
+	return p.refreshFrame()
 }
 func (p *paneActor) consume(reads <-chan paneRead) error {
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
-	paint := time.NewTicker(16 * time.Millisecond)
+	// No periodic paint wakeup: arm one timer only while bytes have dirtied
+	// the screen. Parsing, recording frontiers, replies and input are never
+	// paced; only the copied screen and its UI notification are.
+	paint := time.NewTimer(time.Hour)
+	paint.Stop()
 	defer paint.Stop()
+	var paintC <-chan time.Time
+	var due time.Time
 	for {
+		if p.dirty {
+			now := time.Now()
+			p.mu.Lock()
+			next := p.lastPaint.Add(panePaintInterval(now, p.lastInteraction))
+			p.mu.Unlock()
+			if paintC == nil || next.Before(due) {
+				paint.Stop()
+				paint.Reset(max(time.Duration(0), next.Sub(now)))
+				paintC, due = paint.C, next
+			}
+		} else if paintC != nil {
+			paint.Stop()
+			paintC = nil
+		}
 		select {
 		case <-p.ctx.Done():
 			return p.ctx.Err()
-		case r := <-reads:
+		case r, ok := <-reads:
+			if !ok {
+				return io.EOF
+			}
 			if r.err != nil {
 				return r.err
 			}
@@ -445,9 +468,12 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 			if err := p.handleInput(in); err != nil {
 				return err
 			}
-		case <-paint.C:
+		case <-paintC:
+			paintC = nil
 			if p.dirty {
-				p.refreshFrame()
+				if err := p.refreshFrame(); err != nil {
+					return err
+				}
 			}
 		case <-ping.C:
 			p.enqueue([]byte{wireproto.FramePing})
@@ -498,7 +524,8 @@ func (p *paneActor) handleFrame(msg []byte) error {
 		p.exited = true
 		p.exitCode = int(msg[1])
 		p.mu.Unlock()
-		p.refreshFrame()
+		// Exit remains authoritative even if the final screen copy fails.
+		_ = p.refreshFrame()
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneExited, Code: int(msg[1])})
 		return errPaneExited
 	case 0x02:
@@ -606,6 +633,10 @@ func (p *paneActor) feed(b []byte, source termemu.Source) error {
 	return nil
 }
 func (p *paneActor) handleInput(in paneInput) error {
+	// Automatic geometry checks are not user interaction.
+	if in.Kind != paneInputResize && in.Kind != paneInputFocus {
+		p.noteInteraction(time.Now())
+	}
 	p.mu.Lock()
 	uncertain, exited := p.uncertainInput, p.exited
 	p.mu.Unlock()
@@ -668,11 +699,11 @@ func (p *paneActor) handleInput(in paneInput) error {
 	}
 	return nil
 }
-func (p *paneActor) refreshFrame() {
+func (p *paneActor) refreshFrame() error {
 	frame, err := p.emu.Snapshot()
 	if err != nil {
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: err.Error()})
-		return
+		return err
 	}
 	mb, _ := p.emu.Mode(termemu.ModeMouseButton)
 	mm, _ := p.emu.Mode(termemu.ModeMouseMotion)
@@ -685,4 +716,5 @@ func (p *paneActor) refreshFrame() {
 	p.mu.Unlock()
 	p.dirty = false
 	p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneOutput})
+	return nil
 }
