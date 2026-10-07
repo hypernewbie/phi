@@ -783,3 +783,31 @@ func TestGetPiSessionTranscript_KeepsLegacyNoIDTolerance(t *testing.T) {
 		t.Fatalf("legacy tolerance skipped the wrong rows: %+v", messages)
 	}
 }
+
+func TestPlainPathStripsWindowsVerbatimPrefix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`C:\Users\dev\project`, `C:\Users\dev\project`},
+		{`\\?\C:\Users\dev\project`, `C:\Users\dev\project`},
+		{`\\?\c:\Users\dev`, `c:\Users\dev`},
+		{`//?/C:/Users/dev`, `C:/Users/dev`},
+		{`\\?\UNC\srv\share\proj`, `\\srv\share\proj`},
+		{`\\?\unc\srv\share`, `\\srv\share`},
+		{`//?/UNC/srv/share`, `//srv/share`},
+		{`/usr/local/src`, `/usr/local/src`},
+		{``, ``},
+	}
+	for _, tc := range cases {
+		if got := PlainPath(tc.in); got != tc.want {
+			t.Errorf("PlainPath(%q): got %q want %q", tc.in, got, tc.want)
+		}
+	}
+	// The verbatim and plain forms of the same location must compare
+	// equal — this is the property that makes the codex index filter
+	// work on Windows.
+	if NormalisePath(`\\?\C:\code\ae`) != NormalisePath(`C:\code\ae`) {
+		t.Error("verbatim and plain paths did not normalise equal")
+	}
+	if NormalisePath(`\\?\UNC\srv\share\p`) != NormalisePath(`\\srv\share\p`) {
+		t.Error("verbatim UNC and plain UNC paths did not normalise equal")
+	}
+}

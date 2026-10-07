@@ -84,6 +84,10 @@ func (a codexAdapterImpl) List(ctx context.Context, cwd string) ([]Session, erro
 		if err := rows.Scan(&id, &title, &dir, &updated); err != nil {
 			return nil, err
 		}
+		// Codex records cwds through GetFinalPathNameByHandle, so Windows
+		// rows carry the `\\?\` verbatim prefix. Report the ordinary
+		// path: the UI groups sessions by it and resume spawns in it.
+		dir = PlainPath(dir)
 		if cwd != "" && NormalisePath(cwd) != NormalisePath(dir) {
 			continue
 		}

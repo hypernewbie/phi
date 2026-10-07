@@ -73,7 +73,9 @@ func TestCodexWindowsPathsAndNormalisation(t *testing.T) {
 	}
 	_, err = db.Exec(`CREATE TABLE threads (id TEXT, title TEXT, cwd TEXT, updated_at INTEGER, source TEXT, archived INTEGER);
 	INSERT INTO threads VALUES ('win-1','Windows project','C:\\Users\\dev\\project',1790000000,'cli',0),
-	('win-2','Forward slash project','C:/Users/dev/other',1790000001,'vscode',0);`)
+	('win-2','Forward slash project','C:/Users/dev/other',1790000001,'vscode',0),
+	('win-3','Verbatim project','\\?\C:\Users\dev\extended',1790000002,'cli',0),
+	('win-4','Verbatim UNC project','\\?\UNC\srv\share\proj',1790000003,'cli',0);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,5 +100,27 @@ func TestCodexWindowsPathsAndNormalisation(t *testing.T) {
 	items, err = ListSessions(context.Background(), c, `c:\users\dev\other`)
 	if err != nil || len(items) != 1 || items[0].ID != "win-2" {
 		t.Fatalf("expected win-2 for backslash query on forward path: %+v, err: %v", items, err)
+	}
+
+	// Codex writes cwds through GetFinalPathNameByHandle, so Windows
+	// rows carry the `\\?\` verbatim prefix. A plain query must match,
+	// and the cwd handed back to phi must be the plain form (the UI
+	// groups by it, resume spawns in it).
+	items, err = ListSessions(context.Background(), c, `C:\Users\dev\extended`)
+	if err != nil || len(items) != 1 || items[0].ID != "win-3" {
+		t.Fatalf("expected win-3 for verbatim stored path: %+v, err: %v", items, err)
+	}
+	if items[0].Cwd != `C:\Users\dev\extended` {
+		t.Fatalf("verbatim prefix leaked into cwd: %q", items[0].Cwd)
+	}
+
+	// Same for the verbatim UNC form: `\\?\UNC\srv\share` is
+	// `\\srv\share`.
+	items, err = ListSessions(context.Background(), c, `\\srv\share\proj`)
+	if err != nil || len(items) != 1 || items[0].ID != "win-4" {
+		t.Fatalf("expected win-4 for verbatim UNC stored path: %+v, err: %v", items, err)
+	}
+	if items[0].Cwd != `\\srv\share\proj` {
+		t.Fatalf("verbatim UNC prefix leaked into cwd: %q", items[0].Cwd)
 	}
 }

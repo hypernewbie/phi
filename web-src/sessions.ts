@@ -31,6 +31,14 @@ import {
 export function normalizePath(p: string): string {
     if (!p) return '';
     let normalized = p.replace(/\\/g, '/');
+    // Windows extended-length paths (`\\?\C:\work`,
+    // `\\?\UNC\srv\share`) denote the same locations as their plain
+    // forms. Codex records thread cwds this way, so collapse the
+    // prefix before comparing against workspace paths.
+    if (normalized.startsWith('//?/')) {
+        const rest = normalized.slice(4);
+        normalized = /^unc\//i.test(rest) ? `//${rest.slice(4)}` : rest;
+    }
     if (normalized.endsWith('/') && normalized.length > 1) {
         normalized = normalized.slice(0, -1);
     }

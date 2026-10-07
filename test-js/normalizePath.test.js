@@ -56,4 +56,26 @@ describe('normalizePath', () => {
         // normalizeCwd which strips a run. This documents the current behavior.
         expect(normalizePath('/home/user//')).toBe('/home/user/');
     });
+
+    // Codex records thread cwds through GetFinalPathNameByHandle, so
+    // Windows rows carry the extended-length (`\\?\`) prefix. It denotes
+    // the same location as the plain form and must compare equal — the
+    // sidebar groups sessions onto worktrees with this helper.
+    it('strips the Windows verbatim prefix', () => {
+        expect(normalizePath('\\\\?\\C:\\code\\ae')).toBe('c:/code/ae');
+        expect(normalizePath('//?/C:/code/ae')).toBe('c:/code/ae');
+        expect(normalizePath('\\\\?\\UNC\\srv\\share\\p')).toBe(
+            '//srv/share/p',
+        );
+        expect(normalizePath('//?/unc/srv/share')).toBe('//srv/share');
+    });
+
+    it('verbatim and plain forms of the same path are equal', () => {
+        expect(normalizePath('\\\\?\\C:\\code\\ae')).toBe(
+            normalizePath('C:\\code\\ae'),
+        );
+        expect(normalizePath('\\\\?\\UNC\\srv\\share')).toBe(
+            normalizePath('\\\\srv\\share'),
+        );
+    });
 });
