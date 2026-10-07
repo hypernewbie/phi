@@ -110,7 +110,7 @@ func (m *tuiModel) renderRail() string {
 	}
 	b.WriteString(lg.NewStyle().Foreground(accent).Render(" [+]"))
 	left := b.String()
-	right := lg.NewStyle().Foreground(accent).Render("[▥] [↻]") + " " + m.connectionLabel()
+	right := lg.NewStyle().Foreground(accent).Render("[▥] [↻]") + " " + m.connectionLabel() + m.batteryLabel()
 	gap := m.width - lg.Width(left) - lg.Width(right) - 2
 	if gap < 1 {
 		gap = 1
