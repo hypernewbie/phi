@@ -720,6 +720,12 @@ func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 		}
 		m.closeModal()
 		return m, tea.Batch(m.persistIntent(), m.refreshSessions(), m.refreshDiff())
+	case modalOpenCode:
+		mini := m.modal.cursor >= 0 && m.modal.cursor < len(m.modal.items) &&
+			m.modal.items[m.modal.cursor].value == "mini"
+		m.closeModal()
+		m.focus = focusTerminal
+		return m, m.spawnForCoder("opencode", mini, "")
 	case modalCoder:
 		if m.modal.cursor >= 0 && m.modal.cursor < len(m.modal.items) {
 			m.coderIdx = m.modal.cursor
@@ -766,6 +772,33 @@ func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openCodeScrollHack mirrors web isOpenCodeMini (web/terminal.js wheel and
+// touch handlers): legacy and v2-full OpenCode run a full-screen TUI that
+// scrolls via injected ESC Ctrl-Y (up) / ESC Ctrl-E (down) navigation keys,
+// while Mini uses normal scrollback. Like the web capture-phase handler,
+// the hack wins over backend mouse forwarding for these tabs.
+func openCodeScrollHack(tab *paneTab) bool {
+	if tab == nil {
+		return false
+	}
+	coder := tab.coder
+	if coder == "" {
+		coder = tab.view.Coder
+	}
+	return coder == "opencode" && tab.view.OpenCodeMode != "mini"
+}
+
+// openCodeScrollKeys repeats the web's per-line scroll sequence to match a
+// standard wheel notch: the web scales |deltaY|/40 clamped 1..8, and a
+// notch is ~100, so one notch is three lines.
+func openCodeScrollKeys(down bool) string {
+	seq := "\x1b\x19"
+	if down {
+		seq = "\x1b\x05"
+	}
+	return strings.Repeat(seq, 3)
+}
+
 func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.modal.kind == modalMarkdown {
 		return m.handleMarkdownModalMouse(msg)
@@ -809,7 +842,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if inTerminal {
 			tab := m.activeTabModel()
-			if tab != nil && tab.actor != nil && tab.actor.mouseOwned() {
+			if tab != nil && tab.actor != nil && tab.actor.getConn() != nil && openCodeScrollHack(tab) {
+				tab.actor.sendRaw([]byte(openCodeScrollKeys(mouse.Button == tea.MouseWheelDown)))
+			} else if tab != nil && tab.actor != nil && tab.actor.mouseOwned() {
 				action := termemu.MouseWheelUp
 				if mouse.Button == tea.MouseWheelDown {
 					action = termemu.MouseWheelDown
@@ -1241,7 +1276,20 @@ func (m *tuiModel) newSession() tea.Cmd {
 		m.setStatus("no coder is advertised by this server", true)
 		return nil
 	}
+	if coder == "opencode" {
+		m.openOpenCodeModal()
+		return nil
+	}
 	return m.spawnForCoder(coder, false, "")
+}
+
+// openOpenCodeModal offers the per-launch Open/Open Mini choice. Full TUI
+// stays the default (cursor starts on Open); Mini is an explicit opt-in
+// whose mode the tab then retains.
+func (m *tuiModel) openOpenCodeModal() {
+	m.modal.open(modalOpenCode, "OpenCode")
+	m.modal.items = []modalItem{{label: "Open", value: "full"}, {label: "Open Mini", value: "mini"}}
+	m.modal.cursor = 0
 }
 
 // shellCoderID resolves the server's advertised shell backend. The literal

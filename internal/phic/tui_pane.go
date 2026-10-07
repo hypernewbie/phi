@@ -50,6 +50,10 @@ const (
 	paneInputResize
 	paneInputFocus
 	paneInputScroll
+	// paneInputRaw carries already-encoded backend bytes (TUI navigation
+	// sequences the emulator must not reinterpret). Delivery goes through
+	// the same uncertain/exited/connection guards as keys.
+	paneInputRaw
 )
 
 type paneInput struct {
@@ -62,6 +66,7 @@ type paneInput struct {
 		X, Y   int
 	}
 	Paste      []byte
+	Raw        []byte
 	Cols, Rows int
 	Focused    bool
 	Scroll     int
@@ -194,7 +199,7 @@ func (p *paneActor) markUncertain(status string) {
 	}
 }
 func (p *paneActor) submit(in paneInput) {
-	if in.Kind == paneInputKey || in.Kind == paneInputMouse || in.Kind == paneInputPaste {
+	if in.Kind == paneInputKey || in.Kind == paneInputMouse || in.Kind == paneInputPaste || in.Kind == paneInputRaw {
 		p.mu.Lock()
 		blocked := p.uncertainInput || p.exited
 		p.mu.Unlock()
@@ -215,6 +220,9 @@ func (p *paneActor) submit(in paneInput) {
 	}
 }
 func (p *paneActor) sendKey(ev termemu.KeyEvent) { p.submit(paneInput{Kind: paneInputKey, Key: ev}) }
+func (p *paneActor) sendRaw(b []byte) {
+	p.submit(paneInput{Kind: paneInputRaw, Raw: append([]byte(nil), b...)})
+}
 func (p *paneActor) sendPaste(b []byte) {
 	p.submit(paneInput{Kind: paneInputPaste, Paste: append([]byte(nil), b...)})
 }
@@ -636,6 +644,11 @@ func (p *paneActor) handleInput(in paneInput) error {
 	var b []byte
 	var err error
 	switch in.Kind {
+	case paneInputRaw:
+		if len(in.Raw) > 0 {
+			p.enqueue(EncodeInputFrame(in.Raw))
+		}
+		return nil
 	case paneInputKey:
 		b, err = p.emu.EncodeKey(in.Key)
 	case paneInputMouse:
