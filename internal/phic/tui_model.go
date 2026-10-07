@@ -158,6 +158,12 @@ type paneTab struct {
 	finalizing   bool
 	fresh        bool
 	token        int
+	// rows caches the last rendered terminal row strings through the
+	// shared termemu row delta. selGen/lastSel derive the selection
+	// generation from m.selection at render time.
+	rows    termemu.RowCache
+	selGen  uint64
+	lastSel selectionState
 }
 
 func (t *paneTab) label() string {
