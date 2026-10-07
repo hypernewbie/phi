@@ -125,12 +125,12 @@ func TestEmptyPhiLandingAndCompactChrome(t *testing.T) {
 	defer m.closeAll()
 	m.width, m.height = 120, 36
 	view := ansi.Strip(m.render())
-	for _, text := range []string{"Φ", "Ready to code", "Ctrl-] n", "[↻]", "▣"} {
+	for _, text := range []string{"Φ", "Phi", "Terminal Multiplexer for AI Coding Agents", "Ctrl-] n", "[↻]", "▣"} {
 		if !strings.Contains(view, text) {
 			t.Fatalf("missing %q", text)
 		}
 	}
-	if strings.Contains(view, "TERMINALS") || strings.Contains(view, "switching to") || strings.Contains(view, "signed in") {
+	if strings.Contains(view, "TERMINALS") || strings.Contains(view, "switching to") || strings.Contains(view, "signed in") || strings.Contains(view, "Ready to code") || strings.Contains(view, "╭──") {
 		t.Fatal("routine verbose chrome remains")
 	}
 }

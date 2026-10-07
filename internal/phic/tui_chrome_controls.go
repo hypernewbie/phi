@@ -149,10 +149,15 @@ func (m *tuiModel) handlePanelDrag(msg tea.MouseMsg) (bool, tea.Cmd) {
 	}
 	return false, nil
 }
+
+// Empty terminal landing mirrors the web empty state (web/index.html
+// .empty-logo/.empty-title/.empty-subtitle): accent Phi glyph, default-fg
+// title, muted multiplexer tagline. No box border, no box-art logo.
 func (m *tuiModel) renderEmptyTerminal(w, h int) []string {
 	accent := lg.NewStyle().Foreground(m.accentColor()).Bold(true)
+	title := lg.NewStyle().Foreground(tuiFgColor()).Bold(true)
 	muted := lg.NewStyle().Foreground(tuiMuted)
-	content := []string{accent.Render("╭───────╮"), accent.Render("│   Φ   │"), accent.Render("╰───────╯"), "", accent.Render("Ready to code"), "", muted.Render("No terminal is open on this server."), "", accent.Render("Ctrl-] n   New Session"), muted.Render("Ctrl-] s   Sessions   ·   Ctrl-] ?   Help")}
+	content := []string{accent.Render("Φ"), "", title.Render("Phi"), "", muted.Render("Terminal Multiplexer for AI Coding Agents"), "", accent.Render("Ctrl-] n   New Session"), muted.Render("Ctrl-] s   Sessions   ·   Ctrl-] ?   Help")}
 	lines := make([]string, 0, h)
 	top := max(0, (h-len(content))/2)
 	for i := 0; i < top; i++ {
