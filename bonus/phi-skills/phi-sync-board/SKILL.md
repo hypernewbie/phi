@@ -97,7 +97,7 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 - `description` / `desc` *(string)*: Optional text or markdown explanation.
 - `preview` / `image` / `file` *(string)*: Workspace-relative path to a file or image on the Phi server (e.g. `screenshots/login_mockup.png`). If the file exists in the workspace on the Phi server, renders a clickable **Preview [filename]** button and inline thumbnail. If the file does not exist on the host machine (or if an agent passes client-local absolute paths like `C:\...`), no preview is shown to avoid broken UI. Never pass host-specific local absolute paths.
 - `url` / `link` *(string)*: External or local web URL (`http://` or `https://`). Renders a styled clickable chip opening the link in a new browser tab.
-- `diff` *(boolean, string, or object)*: A Git diff action. Use `{"commit":"<git-hash>"}` to show a commit card with **Show Diff [hash]** and **Open Pretty Diff** buttons. A hash string is shorthand. Hashes must contain 4–64 hexadecimal characters. `true` opens the current diff panel; `"modal"` or `{"modal":true}` opens its pretty viewer. Commit actions use the currently selected Phi project. They never execute terminal input or open automatically.
+- `diff` *(boolean, string, or object)*: A Git diff action. Use `{"commit":"<git-hash>"}` to show an **Open Pretty Diff [hash]** button. A hash string is shorthand. Hashes must contain 4–64 hexadecimal characters. `true` opens the current diff panel; `"modal"` or `{"modal":true}` opens its pretty viewer. Commit actions use the currently selected Phi project. They never execute terminal input or open automatically.
 - `actions` *(array of objects)*: List of buttons that send inputs to the terminal:
   - `label` *(string)*: Button text.
   - `command` *(string)*: Input string to send (automatically appends `\r` to execute if omitted).
@@ -123,10 +123,7 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" \
   -d "{\"key\":\"show:commit:$COMMIT\",\"value\":{\"title\":\"Commit $COMMIT\",\"diff\":{\"commit\":\"$COMMIT\"}}}"
 ```
 
-The card has two explicit actions:
-
-- **Show Diff [hash]** selects that commit in the diff panel.
-- **Open Pretty Diff** selects the same commit and opens the rich-diff modal.
+The card's **Open Pretty Diff [hash]** button selects that commit and opens the rich-diff modal.
 
 The selector retains the requested hash even when the recent commit list does not contain it.
 The user must select a Phi project that contains this commit.

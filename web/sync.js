@@ -365,21 +365,25 @@ export class SyncManager {
                         fileCount = diffTarget.files.length;
                     }
                     const commit = getSyncDiffCommit(diffTarget);
-                    const label = commit !== undefined
-                        ? `Show Diff ${commit.slice(0, 12)}`
-                        : fileCount > 0
+                    if (commit !== undefined) {
+                        const shortHash = this.escapeHtml(commit.slice(0, 12));
+                        diffChipHtml = `
+                            <div class="sync-pretty-diff-row">
+                                <button type="button" class="sync-chip-btn sync-pretty-diff-btn pretty-diff-btn" title="Open commit ${this.escapeHtml(commit)} in the pretty diff viewer">Open Pretty Diff · ${shortHash}</button>
+                            </div>
+                        `;
+                    }
+                    else {
+                        const label = fileCount > 0
                             ? `Review Diff (${fileCount} files)`
                             : 'Review Diff';
-                    const title = commit !== undefined
-                        ? `Show commit ${commit}`
-                        : 'Review Git Diff';
-                    diffChipHtml = `
-                        <button type="button" class="sync-chip-btn sync-diff-btn" title="${this.escapeHtml(title)}">
-                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
-                            <span>${this.escapeHtml(label)}</span>
-                        </button>
-                        ${commit !== undefined ? '<div class="sync-pretty-diff-row"><button type="button" class="sync-chip-btn sync-pretty-diff-btn pretty-diff-btn" title="Open this commit in the pretty diff viewer">Open Pretty Diff</button></div>' : ''}
-                    `;
+                        diffChipHtml = `
+                            <button type="button" class="sync-chip-btn sync-diff-btn" title="Review Git Diff">
+                                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+                                <span>${this.escapeHtml(label)}</span>
+                            </button>
+                        `;
+                    }
                 }
                 const checklist = Array.isArray(actionData.checklist)
                     ? actionData.checklist
@@ -562,16 +566,13 @@ export class SyncManager {
                     highlightCodeIn(card);
                 }
                 if (actionData.diff) {
-                    const diffBtn = card.querySelector('.sync-diff-btn');
+                    const commit = getSyncDiffCommit(actionData.diff);
+                    const diffBtn = card.querySelector(commit !== undefined
+                        ? '.sync-pretty-diff-btn'
+                        : '.sync-diff-btn');
                     diffBtn?.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        this.openDiffView(actionData.diff, getSyncDiffCommit(actionData.diff) !== undefined
-                            ? false
-                            : undefined);
-                    });
-                    card.querySelector('.sync-pretty-diff-btn')?.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.openDiffView(actionData.diff, true);
+                        this.openDiffView(actionData.diff, commit !== undefined ? true : undefined);
                     });
                 }
             }

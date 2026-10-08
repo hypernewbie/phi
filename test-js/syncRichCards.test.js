@@ -25,6 +25,7 @@ function buildAppStub() {
                 directMode: false,
             })),
             sendRawInput: vi.fn(),
+            copyTextRobustly: vi.fn(),
             inputTextArea: document.createElement('textarea'),
         },
         markdownManager: {
@@ -577,7 +578,7 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         diffTabBtn.remove();
     });
 
-    it('shows a commit hash with separate panel and pretty-viewer actions, without auto-opening', () => {
+    it('opens the pretty-diff modal from the commit hash button without copying or sending input', () => {
         const app = buildAppStub();
         const mgr = new SyncManager(app);
         const hash = '678d343';
@@ -592,27 +593,25 @@ describe('SyncManager rich action cards rendering and interaction', () => {
                 updated_at: new Date().toISOString(),
             },
         ]);
-        const panel = mgr.messagesList.querySelector('.sync-diff-btn');
         const pretty = mgr.messagesList.querySelector('.sync-pretty-diff-btn');
-        expect(panel.textContent).toContain(`Show Diff ${hash}`);
-        expect(pretty.textContent).toBe('Open Pretty Diff');
+        expect(mgr.messagesList.querySelector('.sync-diff-btn')).toBeNull();
+        expect(pretty.textContent).toContain(`Open Pretty Diff · ${hash}`);
+        expect(pretty.title).toBe(
+            `Open commit ${hash} in the pretty diff viewer`,
+        );
         expect(pretty.classList.contains('pretty-diff-btn')).toBe(true);
         expect(
             pretty.parentElement.classList.contains('sync-pretty-diff-row'),
         ).toBe(true);
         expect(pretty.parentElement.children).toHaveLength(1);
         expect(app.diffController.openCommitDiff).not.toHaveBeenCalled();
-        panel.click();
-        expect(app.diffController.openCommitDiff).toHaveBeenLastCalledWith(
-            hash,
-            false,
-        );
         pretty.click();
-        expect(app.diffController.openCommitDiff).toHaveBeenLastCalledWith(
+        expect(app.diffController.openCommitDiff).toHaveBeenCalledWith(
             hash,
             true,
         );
         expect(app.tabManager.sendRawInput).not.toHaveBeenCalled();
+        expect(app.tabManager.copyTextRobustly).not.toHaveBeenCalled();
     });
 
     it('accepts a hash string shorthand but rejects invalid commits instead of showing unstaged', () => {
