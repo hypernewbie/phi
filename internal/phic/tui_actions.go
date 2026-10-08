@@ -824,7 +824,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.modal.kind != modalNone {
-		return m, nil
+		return m.handlePickerMouse(msg)
 	}
 	if handled, cmd := m.handlePanelDrag(msg); handled {
 		return m, cmd
@@ -907,6 +907,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if _, isClick := msg.(tea.MouseClickMsg); !isClick {
 		return m, nil
 	}
+	if mouse.X < 0 || mouse.X >= m.width || mouse.Y < 0 || mouse.Y >= m.height {
+		return m, nil
+	}
 
 	switch {
 	case mouse.Y == 0:
@@ -927,24 +930,24 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case mouse.Y == 1:
-		plain := ansi.Strip(m.renderContext())
-		if at := strings.Index(plain, "[n]"); at >= 0 && mouse.X >= ansi.StringWidth(plain[:at]) && mouse.X < ansi.StringWidth(plain[:at])+len("[n] New Session") {
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
+		switch m.contextLayout().hit(mouse.X, m.width) {
+		case "new":
 			return m, m.newSession()
-		}
-		if at := strings.Index(plain, "[w]"); at >= 0 && mouse.X >= max(0, ansi.StringWidth(plain[:at])-15) && mouse.X <= ansi.StringWidth(plain[:at])+3 {
+		case "worktree":
 			return m, m.openWorktreeModal()
-		}
-		if mouse.X >= m.width-10 {
+		case "project":
+			m.openProjectModal()
+		case "coder":
+			m.openCoderModal()
+		case "diff":
 			m.diff.open = !m.diff.open
 			if m.diff.open {
 				return m, tea.Batch(m.refreshDiff(), m.persistIntent())
 			}
 			return m, m.persistIntent()
-		}
-		if mouse.X < m.width/3 {
-			m.openProjectModal()
-		} else if mouse.X < (2*m.width)/3 {
-			m.openCoderModal()
 		}
 		return m, nil
 	case mouse.Y == 2:

@@ -36,6 +36,7 @@ const (
 )
 
 type paneEvent struct {
+	Actor      *paneActor
 	Key        paneKey
 	Kind       paneEventKind
 	Status     string
@@ -128,6 +129,7 @@ func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events 
 	return p, nil
 }
 func (p *paneActor) sendEvent(ev paneEvent) {
+	ev.Actor = p
 	if p.events == nil {
 		return
 	}

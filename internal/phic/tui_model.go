@@ -265,8 +265,11 @@ type tuiModel struct {
 	batteryPercent int
 	batteryKnown   bool
 
-	events chan paneEvent
-	gen    int
+	refreshToken   int
+	refreshing     bool
+	retiringActors []*paneActor
+	events         chan paneEvent
+	gen            int
 
 	selection    selectionState
 	mouseCapture bool
@@ -782,6 +785,8 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.applyPaneActionDone(msg)
 	case reloadedProfilesMsg:
 		return m.applyReloadedProfiles(msg)
+	case consoleResetMsg:
+		return m.applyConsoleReset(msg)
 	case worktreesMsg:
 		return m.applyWorktrees(msg)
 	case historyLoadedMsg:
@@ -1063,7 +1068,7 @@ func (m *tuiModel) applyCloseExpired(msg msgCloseExpired) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) handlePaneEvent(ev paneEvent) tea.Cmd {
 	tab := m.findTab(ev.Key)
-	if tab == nil {
+	if tab == nil || (ev.Actor != nil && tab.actor != ev.Actor) {
 		return nil
 	}
 	switch ev.Kind {
@@ -1344,7 +1349,7 @@ func (m *tuiModel) activateTab(origin string, tab *paneTab) {
 // attachTab creates the pane actor for a listed live pane. Attaching replays
 // the recording at the widget geometry; it never spawns or resumes a process.
 func (m *tuiModel) attachTab(tab *paneTab) {
-	s := m.currentServer()
+	s := m.serverForOrigin(tab.key.Origin)
 	if s == nil || s.api == nil {
 		return
 	}

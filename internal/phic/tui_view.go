@@ -141,7 +141,9 @@ func (m *tuiModel) connectionLabel() string {
 	}
 }
 
-func (m *tuiModel) renderContext() string {
+func (m *tuiModel) renderContext() string { return m.contextLayout().text }
+
+func (m *tuiModel) contextLayout() chromeLine {
 	accent := m.accentColor()
 	muted := lg.NewStyle().Foreground(tuiMuted)
 	focus := func(s string) string {
@@ -174,17 +176,30 @@ func (m *tuiModel) renderContext() string {
 	if m.width < 70 {
 		parts = []string{"P: " + truncateCells(project, 8) + " [p]", "C: " + truncateCells(coder, 8) + " [c]", "[n] New"}
 	}
-	line := " " + strings.Join(parts, "  ")
+	actions := []string{"project", "worktree", "coder", "new"}
+	if m.width < 70 {
+		actions = []string{"project", "coder", "new"}
+	}
+	var line chromeLine
+	line.append(" ", "")
+	for i, part := range parts {
+		if i > 0 {
+			line.append("  ", "")
+		}
+		line.append(part, actions[i])
+	}
 	diffLabel := "Diff [d]"
 	if m.diff.open {
 		diffLabel = "Diff ● [d]"
 	}
 	right := lg.NewStyle().Foreground(accent).Render(diffLabel)
-	gap := m.width - lg.Width(line) - lg.Width(right) - 1
+	gap := m.width - lg.Width(line.text) - lg.Width(right) - 1
 	if gap < 1 {
 		gap = 1
 	}
-	return line + strings.Repeat(" ", gap) + right
+	line.append(strings.Repeat(" ", gap), "")
+	line.append(right, "diff")
+	return line
 }
 
 const tabControls = " [x] close  [u] undo"
@@ -756,7 +771,7 @@ func (m *tuiModel) renderModal() string {
 			body.WriteString("\n")
 			body.WriteString(lg.NewStyle().Foreground(tuiMuted).Render(m.modal.help))
 		}
-	case modalWorktree, modalCoder:
+	case modalWorktree, modalCoder, modalOpenCode:
 		body.WriteString(m.renderItems(14))
 	case modalHistory:
 		body.WriteString(m.renderHistory())
@@ -803,11 +818,8 @@ func (m *tuiModel) renderField(masked bool) string {
 
 func (m *tuiModel) renderItems(maxItems int) string {
 	var b strings.Builder
-	start := 0
-	if m.modal.cursor >= maxItems {
-		start = m.modal.cursor - maxItems + 1
-	}
-	for i := start; i < len(m.modal.items) && i < start+maxItems; i++ {
+	start, end := m.visibleModalItems(maxItems)
+	for i := start; i < end; i++ {
 		item := m.modal.items[i]
 		label := item.label
 		if lg.Width(label) > 70 {
