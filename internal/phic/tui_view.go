@@ -55,6 +55,9 @@ func (m *tuiModel) render() string {
 	if m.modal.kind == modalMarkdown {
 		return fitScreen(m.renderMarkdownModal(), m.width, m.height)
 	}
+	if m.modal.kind == modalDiff {
+		return m.renderDiffModal()
+	}
 	rail := m.renderRail()
 	context := m.renderContext()
 	tabs := m.renderTabs()
@@ -620,54 +623,36 @@ func (m *tuiModel) renderDiffPanel() string {
 		return ""
 	}
 	innerW, innerH := r.W-2, r.H-2
-	accent := m.accentColor()
-	var lines []string
+	accent := lg.NewStyle().Foreground(m.accentColor()).Bold(true)
 	header := m.renderReaderTabs()
 	if m.diff.project != "" {
 		header += " · " + menuLabel(m.diff.project)
 	}
-	if m.diff.searchActive {
-		header += " /" + m.diff.search.value
-	} else if m.diff.search.value != "" {
-		header += fmt.Sprintf(" /%s (%d)", m.diff.search.value, len(m.diff.matches))
-	}
-	lines = append(lines, lg.NewStyle().Foreground(accent).Bold(true).Render(header))
-	if m.diff.loading {
-		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("loading…"))
-	} else if m.diff.err != "" {
-		lines = append(lines, lg.NewStyle().Foreground(tuiError).Render("diff failed: "+m.diff.err))
-		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("[r] retry  [d] close"))
-	} else if len(m.diff.lines) == 0 {
-		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("no changes"))
-	} else {
-		visible := innerH - 1
-		if visible < 1 {
-			visible = 1
-		}
-		start := m.diff.scroll
-		if start > len(m.diff.lines)-1 {
-			start = max(0, len(m.diff.lines)-1)
-		}
-		for i := 0; i < visible && start+i < len(m.diff.lines); i++ {
-			line := strings.ReplaceAll(menuLabel(ansi.Strip(m.diff.lines[start+i])), "\\t", "    ")
+	lines := []string{accent.Render(header), ""}
+	visible := max(1, innerH-2)
+	switch {
+	case m.diff.loading:
+		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("loading commits…"))
+	case m.diff.err != "":
+		lines = append(lines, lg.NewStyle().Foreground(tuiError).Render(menuLabel(m.diff.err)))
+		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("[r] retry"))
+	case len(m.diff.commits) == 0:
+		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render("No commits"))
+	default:
+		start := m.diff.commitListStart(visible)
+		for i := start; i < len(m.diff.commits) && i < start+visible; i++ {
+			commit := m.diff.commits[i]
+			label := diffCommitOptionLabel(commit)
+			if lg.Width(label) > innerW-3 {
+				label = truncateCells(label, innerW-3)
+			}
 			style := lg.NewStyle().Foreground(tuiFgColor())
-			switch {
-			case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-				style = lg.NewStyle().Foreground(tuiMuted)
-			case strings.HasPrefix(line, "+"):
-				style = lg.NewStyle().Foreground(tuiOK)
-			case strings.HasPrefix(line, "-"):
-				style = lg.NewStyle().Foreground(tuiError)
-			case strings.HasPrefix(line, "@@"):
-				style = lg.NewStyle().Foreground(accent)
+			prefix := "  "
+			if i == m.diff.cursor {
+				prefix = "› "
+				style = style.Foreground(m.accentColor()).Bold(true).Background(lg.Color("#1d1f27"))
 			}
-			if m.diff.search.value != "" && strings.Contains(strings.ToLower(line), strings.ToLower(m.diff.search.value)) {
-				style = style.Background(lg.Color("#3a3f52"))
-			}
-			if lg.Width(line) > innerW {
-				line = truncateCells(line, innerW)
-			}
-			lines = append(lines, style.Render(line))
+			lines = append(lines, style.Render(prefix+label))
 		}
 	}
 	for len(lines) < innerH {
@@ -712,7 +697,7 @@ func (m *tuiModel) renderFooter() string {
 	left := style.Render(" " + status)
 	hints := "Ctrl-] commands  Tab focus  [n] new  [d] diff  [?] help"
 	if m.focus == focusDiff {
-		hints = "Tab Diff/Markdown  [ ] width  ↑↓ scroll  Esc terminal"
+		hints = "Enter pretty diff  ↑↓ commits  Tab Markdown  [ ] width  Esc terminal"
 	}
 	if !m.chromeEscAt.IsZero() {
 		hints = "Esc again: Quit dialog · any other key cancels"
@@ -775,6 +760,12 @@ func (m *tuiModel) renderModal() string {
 		body.WriteString(m.renderItems(14))
 	case modalHistory:
 		body.WriteString(m.renderHistory())
+	case modalDiffSelect:
+		body.WriteString(m.renderItems(14))
+		if m.modal.help != "" {
+			body.WriteString("\n\n")
+			body.WriteString(lg.NewStyle().Foreground(tuiMuted).Render(m.modal.help))
+		}
 	case modalHelp:
 		body.WriteString(lg.NewStyle().Foreground(tuiFgColor()).Render(m.modal.help))
 	}

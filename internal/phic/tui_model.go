@@ -43,6 +43,8 @@ const (
 	modalHelp
 	modalHistory
 	modalMarkdown
+	modalDiff
+	modalDiffSelect
 	modalQuit
 )
 
@@ -429,8 +431,18 @@ type diffLoadedMsg struct {
 	gen     int
 	origin  string
 	project string
-	text    string
+	commits []GitCommit
 	err     string
+}
+
+type diffContentLoadedMsg struct {
+	gen, ticket int
+	origin      string
+	project     string
+	commit      string
+	raw         string
+	lines       []string
+	err         string
 }
 
 type storeDoneMsg struct {
@@ -668,18 +680,18 @@ func (m *tuiModel) diffCmd(origin, project string) tea.Cmd {
 	s := m.serverForOrigin(origin)
 	return func() tea.Msg {
 		out := diffLoadedMsg{gen: gen, origin: origin, project: project}
-		if s == nil {
+		if s == nil || s.api == nil {
 			out.err = "the diff origin is no longer available"
 			return out
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		text, err := s.api.RawDiff(ctx, project, false)
+		commits, err := s.api.Commits(ctx, project)
 		if err != nil {
 			out.err = err.Error()
 			return out
 		}
-		out.text = text
+		out.commits = commits
 		return out
 	}
 }
@@ -777,6 +789,8 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.applySessionsLoaded(msg)
 	case diffLoadedMsg:
 		return m.applyDiffLoaded(msg)
+	case diffContentLoadedMsg:
+		return m.applyDiffContentLoaded(msg)
 	case markdownLoadedMsg:
 		return m.applyMarkdownLoaded(msg)
 	case storeDoneMsg:
@@ -996,15 +1010,13 @@ func (m *tuiModel) applyDiffLoaded(msg diffLoadedMsg) (tea.Model, tea.Cmd) {
 	m.diff.project = msg.project
 	if msg.err != "" {
 		m.diff.err = msg.err
-		m.diff.text = ""
-		m.diff.lines = nil
-		m.diff.matches = nil
+		m.diff.commits = nil
+		m.diff.cursor = 0
 		return m, nil
 	}
 	m.diff.err = ""
-	m.diff.text = msg.text
-	m.diff.scroll = 0
-	m.diff.recomputeMatches()
+	m.diff.commits = msg.commits
+	m.diff.cursor = min(m.diff.cursor, max(0, len(msg.commits)-1))
 	return m, nil
 }
 

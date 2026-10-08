@@ -30,7 +30,7 @@ func (m *tuiModel) handlePickerMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch m.modal.kind {
 	case modalProject:
 		limit, itemY = 10, oy+4 // project text field precedes its list
-	case modalCoder, modalWorktree, modalOpenCode:
+	case modalCoder, modalWorktree, modalOpenCode, modalDiffSelect:
 		limit = 14
 	}
 	if _, ok := msg.(tea.MouseWheelMsg); ok && limit > 0 {

@@ -81,7 +81,7 @@ func (m *tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handlePrefixKey(msg)
 	}
 	k := msg.Key()
-	if k.Code == tea.KeyEscape && m.focus != focusTerminal && !m.searchActive && !m.diff.searchActive {
+	if k.Code == tea.KeyEscape && m.focus != focusTerminal && !m.searchActive {
 		return m.chromeEscape()
 	}
 	m.chromeEscAt = time.Time{}
@@ -475,66 +475,31 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	k := msg.Key()
 	k.Code = chromeKeyCode(k)
-	if !m.diff.searchActive {
-		if k.Code == '[' {
-			return m, m.resizePanel(false, -4)
-		}
-		if k.Code == ']' {
-			return m, m.resizePanel(false, 4)
-		}
+	if k.Code == '[' {
+		return m, m.resizePanel(false, -4)
 	}
-	if m.diff.searchActive {
-		switch k.Code {
-		case tea.KeyEscape:
-			m.diff.searchActive = false
-		case tea.KeyEnter:
-			m.diff.searchActive = false
-		case tea.KeyBackspace:
-			m.diff.search.backspace()
-			m.diff.recomputeMatches()
-		case tea.KeyLeft:
-			m.diff.search.left()
-		case tea.KeyRight:
-			m.diff.search.right()
-		default:
-			if k.Text != "" {
-				m.diff.search.insert(k.Text)
-				m.diff.recomputeMatches()
-			}
-		}
-		return m, nil
+	if k.Code == ']' {
+		return m, m.resizePanel(false, 4)
 	}
 	switch k.Code {
 	case tea.KeyUp, 'k':
-		if m.diff.scroll > 0 {
-			m.diff.scroll--
+		if m.diff.cursor > 0 {
+			m.diff.cursor--
 		}
 	case tea.KeyDown, 'j':
-		if m.diff.scroll < len(m.diff.lines)-1 {
-			m.diff.scroll++
+		if m.diff.cursor < len(m.diff.commits)-1 {
+			m.diff.cursor++
 		}
-	case tea.KeyPgUp:
-		m.diff.scroll = max(0, m.diff.scroll-10)
-	case tea.KeyPgDown:
-		m.diff.scroll = min(max(0, len(m.diff.lines)-1), m.diff.scroll+10)
+	case tea.KeyEnter:
+		return m, m.openDiffCommit(m.diff.cursor)
 	case tea.KeyHome:
-		m.diff.scroll = 0
+		m.diff.cursor = 0
 	case tea.KeyEnd:
-		m.diff.scroll = max(0, len(m.diff.lines)-1)
+		m.diff.cursor = max(0, len(m.diff.commits)-1)
 	case 'm', tea.KeyTab:
 		return m, m.showMarkdown()
 	case 'r':
 		return m, m.refreshDiff()
-	case '/':
-		m.diff.searchActive = true
-	case 'n':
-		m.diff.nextMatch(1)
-	case 'N':
-		m.diff.nextMatch(-1)
-	case 'y':
-		if m.diff.text != "" {
-			return m, tea.SetClipboard(m.diff.text)
-		}
 	case tea.KeyEscape:
 		m.focus = focusTerminal
 	case 'd':
@@ -550,6 +515,13 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.modal.kind == modalMarkdown {
 		return m.handleMarkdownModalKey(msg)
+	}
+	if m.modal.kind == modalDiff {
+		return m.handlePrettyDiffKey(msg)
+	}
+	if m.modal.kind == modalDiffSelect && msg.Key().Code == tea.KeyEscape {
+		m.modal.open(modalDiff, "Pretty Diff")
+		return m, nil
 	}
 	if m.modal.kind == modalQuit {
 		return m.handleQuitKey(msg)
@@ -661,6 +633,8 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) submitModal() (tea.Model, tea.Cmd) {
 	switch m.modal.kind {
+	case modalDiffSelect:
+		return m, m.selectDiffCommit(m.modal.cursor)
 	case modalAddServer:
 		raw := strings.TrimSpace(m.modal.field.value)
 		if raw == "" {
@@ -768,11 +742,6 @@ func (m *tuiModel) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		m.sessionSearch.insert(msg.Content)
 		return m, nil
 	}
-	if m.focus == focusDiff && !m.diff.markdown && m.diff.searchActive {
-		m.diff.search.insert(msg.Content)
-		m.diff.recomputeMatches()
-		return m, nil
-	}
 	if m.focus == focusTerminal {
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			tab.actor.sendPaste([]byte(msg.Content))
@@ -812,6 +781,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.modal.kind == modalMarkdown {
 		return m.handleMarkdownModalMouse(msg)
 	}
+	if m.modal.kind == modalDiff {
+		return m.handleDiffModalMouse(msg)
+	}
 	if m.modal.kind == modalQuit {
 		mouse := msg.Mouse()
 		if _, ok := msg.(tea.MouseClickMsg); ok && mouse.Button == tea.MouseLeft {
@@ -848,7 +820,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.markdown.cursor = max(0, min(len(m.markdown.files)-1, m.markdown.cursor+delta))
 				}
 			} else {
-				m.diff.scroll = max(0, min(len(m.diff.lines)-1, m.diff.scroll+delta))
+				m.diff.cursor = max(0, min(len(m.diff.commits)-1, m.diff.cursor+delta))
 			}
 			return m, nil
 		}
@@ -1164,12 +1136,7 @@ func (m *tuiModel) selectionText() string {
 
 func (m *tuiModel) copyActiveText() tea.Cmd {
 	if m.focus == focusDiff {
-		if m.diff.markdown {
-			return nil
-		}
-		if m.diff.text != "" {
-			return tea.SetClipboard(m.diff.text)
-		}
+		return nil
 	}
 	if text := m.selectionText(); text != "" {
 		return tea.SetClipboard(text)
