@@ -11,13 +11,17 @@ import (
 )
 
 func (m *tuiModel) railLabel(s *serverState) string {
-	if d := m.data[s.profile.Origin]; d != nil && d.identity.Hostname != "" {
-		return strings.ToUpper(menuLabel(d.identity.Hostname))
+	if d := m.data[s.profile.Origin]; d != nil {
+		if hostname := displayHostname(d.identity.Hostname); hostname != "" {
+			return strings.ToUpper(menuLabel(hostname))
+		}
 	}
 	// API origins are canonical; profile origins can retain a root slash.
 	if s.api != nil {
-		if d := m.data[s.api.base.String()]; d != nil && d.identity.Hostname != "" {
-			return strings.ToUpper(menuLabel(d.identity.Hostname))
+		if d := m.data[s.api.base.String()]; d != nil {
+			if hostname := displayHostname(d.identity.Hostname); hostname != "" {
+				return strings.ToUpper(menuLabel(hostname))
+			}
 		}
 	}
 	label := s.label()
