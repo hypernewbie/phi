@@ -131,8 +131,40 @@ test('long archive attaches from bounded screen state and fetches older books on
         });
     });
     await page.route(`**/api/terminals/${id}/**`, (route) => {
-        if (route.request().url().includes('/recording?'))
-            return route.fallback();
+        const url = new URL(route.request().url());
+        if (url.pathname.endsWith('/recording')) return route.fallback();
+        if (url.pathname.endsWith('/state')) {
+            const latest = url.searchParams.get('through') === 'latest';
+            const through = latest
+                ? archive.length
+                : Number(url.searchParams.get('through'));
+            const bytes = latest
+                ? checkpoint
+                : Buffer.concat([
+                      Buffer.from('\x1b[2J\x1b[H'),
+                      line.subarray(0, through % line.length),
+                  ]);
+            const header = Buffer.from(
+                JSON.stringify({
+                    epoch,
+                    oldest: 0,
+                    head: through,
+                    ckpt: {
+                        kind: 'ansi-v1',
+                        through,
+                        cols,
+                        rows,
+                        len: bytes.length,
+                    },
+                }),
+            );
+            const prefix = Buffer.alloc(4);
+            prefix.writeUInt32BE(header.length);
+            return route.fulfill({
+                contentType: 'application/octet-stream',
+                body: Buffer.concat([prefix, header, bytes]),
+            });
+        }
         return route.fulfill({ json: {} });
     });
     await page.routeWebSocket(`**/ws/pane/${id}?*`, (socket) => {
@@ -212,7 +244,9 @@ test('long archive attaches from bounded screen state and fetches older books on
     if (!pageRequest) throw new Error('history request disappeared');
     expect(pageRequest.from).toBeGreaterThanOrEqual(0);
     expect(pageRequest.through).toBe(archive.length);
-    expect(pageRequest.through - pageRequest.from).toBeLessThanOrEqual(2 << 20);
+    expect(pageRequest.through - pageRequest.from).toBeLessThanOrEqual(
+        (2 << 20) / 20,
+    );
     await expect
         .poll(() =>
             page.evaluate(() => {

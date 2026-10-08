@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
@@ -30,6 +31,11 @@ func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 		{fmt.Sprintf("epoch=%d&through=%d", pos.Epoch, pos.Head+1), http.StatusConflict},
 		{fmt.Sprintf("epoch=%d&through=%d", pos.Epoch, pos.Head), http.StatusOK},
 		{fmt.Sprintf("epoch=%d&through=0", pos.Epoch), http.StatusOK},
+		{fmt.Sprintf("epoch=%d&through=%d&kind=ansi-v1", pos.Epoch, pos.Head), http.StatusOK},
+		{fmt.Sprintf("epoch=%d&through=latest&kind=ansi-v1", pos.Epoch), http.StatusOK},
+		{fmt.Sprintf("epoch=%d&through=latest", pos.Epoch), http.StatusBadRequest},
+		{fmt.Sprintf("epoch=%d&through=latest&kind=ansi-v1", pos.Epoch+1), http.StatusConflict},
+		{fmt.Sprintf("epoch=%d&through=0&kind=wrong", pos.Epoch), http.StatusBadRequest},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/terminals/state/state?"+tc.query, nil)
 		w := httptest.NewRecorder()
@@ -44,7 +50,11 @@ func TestStateEndpointValidatesEpochAndRequestedFrontier(t *testing.T) {
 			if err = json.Unmarshal(body[4:4+n], &header); err != nil {
 				t.Fatal(err)
 			}
-			if header.Epoch != pos.Epoch || header.Ckpt == nil || header.Ckpt.Through != header.Head || header.Ckpt.Kind != "ghostty-ready-v1" || header.Ckpt.Len != len(body)-4-n {
+			kind := "ghostty-ready-v1"
+			if strings.Contains(tc.query, "kind=ansi-v1") {
+				kind = "ansi-v1"
+			}
+			if header.Epoch != pos.Epoch || header.Ckpt == nil || header.Ckpt.Through != header.Head || header.Ckpt.Kind != kind || header.Ckpt.Len != len(body)-4-n {
 				t.Fatalf("bad state envelope: %+v", header)
 			}
 		}

@@ -19,7 +19,7 @@ function ctx(activeTab, resizeSent = true) {
 }
 
 function tab(cols, rows, proposed) {
-    return {
+    const t = {
         isDead: false,
         term: {
             cols,
@@ -29,9 +29,12 @@ function tab(cols, rows, proposed) {
         },
         fitAddon: {
             proposeDimensions: vi.fn(() => proposed),
-            fit: vi.fn(),
+            fit: vi.fn(() => {
+                if (proposed) Object.assign(t.term, proposed);
+            }),
         },
     };
+    return t;
 }
 
 describe('fitActiveTerminal skips same-geometry fits', () => {

@@ -43,6 +43,10 @@ function geometryHarness() {
             }),
         },
     };
+    tab.termContainer.getBoundingClientRect = () => ({
+        width: 800,
+        height: 480,
+    });
     tab._sizedWs = tab.ws;
     let active = tab;
     const m = Object.assign(Object.create(TabManager.prototype), {

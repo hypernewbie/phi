@@ -141,14 +141,19 @@ func (c *Client) ReadPump(inst *pty.PTYInstance, manager *pty.Manager, hub *Hub,
 			if len(payload) >= 4 && inst.Pty != nil {
 				cols := binary.BigEndian.Uint16(payload[0:2])
 				rows := binary.BigEndian.Uint16(payload[2:4])
+				if cols == 0 || rows == 0 {
+					return
+				}
 				// Record the resize marker at the pane's current output head
 				// so archive replay can order it against output.
 				// Recorded before the PTY takes the new size: bytes after the
 				// marker were produced under it.
-				hub.RecordResize(inst.ID, cols, rows)
-				resizeErr := inst.Pty.Resize(cols, rows)
+				resizeErr := inst.Pty.ResizeRecorded(cols, rows, func() { hub.RecordResize(inst.ID, cols, rows) })
 				if resizeErr != nil {
 					logger.Error("ws pty resize error", "err", resizeErr)
+					// A refused geometry/refresh is not success. Reattach with
+					// an authoritative state instead of leaving a stale TUI.
+					return
 				}
 			}
 		case 0x03: // Ping

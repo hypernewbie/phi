@@ -313,7 +313,9 @@ export class PTYWebSocket {
         if (
             c &&
             validSeq(c.through) &&
+            c.through >= oldest &&
             c.through <= head &&
+            parsed.extra.byteLength <= 2 * 1024 * 1024 &&
             Number.isInteger(c.cols) &&
             Number(c.cols) > 0 &&
             Number(c.cols) <= 65535 &&
@@ -331,6 +333,17 @@ export class PTYWebSocket {
                 ansi: new TextDecoder().decode(parsed.extra),
                 ...(c.kind === 'ansi-v1' ? { bytes: parsed.extra } : {}),
             };
+        }
+        if (
+            (c !== undefined && c !== null && !ckpt) ||
+            (!ckpt && parsed.extra.byteLength)
+        ) {
+            // A malformed snapshot is not permission to fetch the library
+            // from zero. Retry an authoritative attach instead.
+            try {
+                this.ws.close();
+            } catch (_e) {}
+            return;
         }
         const replayFrom = parsed.hdr.replay_from;
         this._notify(this.onAttachHead, {
@@ -477,6 +490,20 @@ export class PTYWebSocket {
     release() {
         this.holding = false;
         this._flushHeld();
+    }
+
+    /** Adopt an authoritative current-state snapshot, never an arbitrary skip.
+     * Older output stays available in the recording; frames covered by the
+     * snapshot are duplicates. Used only after its parser write has settled. */
+    adoptState(through: number) {
+        if (
+            this.mode !== 'hot' ||
+            !Number.isSafeInteger(through) ||
+            through < 0
+        )
+            return;
+        this.liveSeq = Math.max(this.liveSeq ?? 0, through);
+        this.lastFrameEnd = this.liveSeq;
     }
 
     /** applyGapPatch() supplies the missing recording bytes for a gap,

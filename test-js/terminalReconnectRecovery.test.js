@@ -42,7 +42,7 @@ it('every zero-delta resume sends current dimensions even when the grid is uncha
     }
 });
 
-it('history reconnect sizes the saved live grid, not the archive page', async () => {
+it('history reconnect remeasures the panel instead of using the archive or stale saved grid', async () => {
     const h = replayHarness(encode(''));
     try {
         h.term.resize(80, 24);
@@ -61,14 +61,17 @@ it('history reconnect sizes the saved live grid, not the archive page', async ()
         const fit = vi.fn(() => h.term.resize(100, 30));
         h.tab.fitAddon = { fit };
         h.manager.getActiveTab = () => h.tab;
+        h.manager.resolveTerminalFontSize = () => 14;
+        h.manager._spamScroll = vi.fn();
         const next = h.socket();
         const resize = vi.spyOn(next, 'sendResize');
         next.ws.head({ epoch: 7, oldest: 0, head: 0 });
         await h.settle();
-        expect(resize).toHaveBeenCalledExactlyOnceWith(80, 24);
-        h.manager.fitActiveTerminal();
-        expect(fit).not.toHaveBeenCalled();
-        expect(h.term.cols).toBe(30);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        expect(resize).toHaveBeenCalledExactlyOnceWith(100, 30);
+        expect(fit).toHaveBeenCalledOnce();
+        expect(h.term.cols).toBe(100);
+        expect(h.tab._historyLiveState.cols).toBe(100);
         await h.manager._restoreLatestHistory(h.tab);
         expect(resize).toHaveBeenLastCalledWith(100, 30);
         expect(h.tab._historyBrowsing).toBe(false);

@@ -47,13 +47,11 @@ describe('source guards', () => {
 
     it('revives dead active tab on window focus alongside online and pageshow', () => {
         expect(src).toContain(
-            "window.addEventListener('focus', () => this._reviveActiveTabIfDead());",
+            "['online', 'pageshow', 'focus', 'phi:desktop-wake']",
         );
-        expect(src).toContain(
-            "window.addEventListener('online', () => this._reviveActiveTabIfDead());",
-        );
+        expect(src).toContain('window.addEventListener(event, resumeViewport)');
         expect(src).toMatch(
-            /window\.addEventListener\(\s*'pageshow',\s*\(\) =>\s*this\._reviveActiveTabIfDead\(\),?\s*\)/,
+            /const resumeViewport = \(\) => \{ this\._reviveActiveTabIfDead\(\); this\._queueActiveRefresh\(\); \}/,
         );
     });
 });

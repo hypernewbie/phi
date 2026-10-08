@@ -37,6 +37,7 @@ type Pty struct {
 	Closed    chan struct{}
 	closeOnce sync.Once
 	exitCode  int
+	resizeMu  sync.Mutex
 
 	// clipFile is the path of this session's clipboard shim file
 	// (e.g. /tmp/phi-shims-XXXX/clipboard.txt). Used by the API handler
@@ -388,7 +389,18 @@ func (p *Pty) Write(b []byte) (int, error) {
 }
 
 func (p *Pty) Resize(cols, rows uint16) error {
-	return p.pt.Resize(int(cols), int(rows))
+	return p.ResizeRecorded(cols, rows, nil)
+}
+
+// ResizeRecorded orders the journal marker and physical resize together, so
+// concurrent clients cannot record A,B but apply the sizes in order B,A.
+func (p *Pty) ResizeRecorded(cols, rows uint16, record func()) error {
+	p.resizeMu.Lock()
+	defer p.resizeMu.Unlock()
+	if record != nil {
+		record()
+	}
+	return p.resizeAndRefresh(cols, rows)
 }
 
 func (p *Pty) Kill() error {
