@@ -117,6 +117,7 @@ export class DiffController {
     copyDiffBtn: HTMLElement | null;
     diffTermContainer: HTMLElement;
     commitSelect: HTMLSelectElement | null;
+    modalCommitSelect: HTMLSelectElement | null;
     actionBar: HTMLElement | null;
     richDiffBtn: HTMLElement | null;
     diffModal: HTMLElement | null;
@@ -186,6 +187,9 @@ export class DiffController {
         this.commitSelect = document.getElementById(
             'diff-commit-select',
         ) as HTMLSelectElement;
+        this.modalCommitSelect = document.getElementById(
+            'diff-modal-commit-select',
+        ) as HTMLSelectElement | null;
         this.actionBar = document.getElementById('diff-action-bar');
         this.richDiffBtn = document.getElementById('rich-diff-btn');
         this.diffModal = document.getElementById('diff-modal');
@@ -360,9 +364,23 @@ export class DiffController {
         if (this.commitSelect) {
             this.commitSelect.addEventListener('change', () => {
                 this.syncCommitTarget = null;
-                this.refreshDiff(true); // Don't reload the list when user just changes selection
+                this._syncModalCommitSelect();
+                void this.refreshDiff(true); // Don't reload the list when user just changes selection
+                if (
+                    this.diffModal &&
+                    !this.diffModal.classList.contains('hidden')
+                ) {
+                    void this.loadRichDiff();
+                }
             });
         }
+        this.modalCommitSelect?.addEventListener('change', () => {
+            if (!this.commitSelect || !this.modalCommitSelect) return;
+            this.syncCommitTarget = null;
+            this.commitSelect.value = this.modalCommitSelect.value;
+            void this.refreshDiff(true);
+            void this.loadRichDiff();
+        });
 
         // Debounced resize fitting — suppressed for software-keyboard
         // geometry (height-only change on touch shells) under the NEVER
@@ -719,17 +737,29 @@ export class DiffController {
         apply(this.vscodeRemoteBtn, remoteURI, true);
     }
 
+    _syncModalCommitSelect(): void {
+        if (!this.modalCommitSelect || !this.commitSelect) return;
+        this.modalCommitSelect.replaceChildren(
+            ...Array.from(this.commitSelect.options, (option) =>
+                option.cloneNode(true),
+            ),
+        );
+        this.modalCommitSelect.value = this.commitSelect.value;
+    }
+
     _ensureCommitOption(hash: string): void {
-        if (!this.commitSelect) return;
-        if (
-            !Array.from(this.commitSelect.options).some((o) => o.value === hash)
-        ) {
-            const option = document.createElement('option');
-            option.value = hash;
-            option.textContent = `${hash} — Sync Board commit`;
-            this.commitSelect.appendChild(option);
+        const selects = [this.commitSelect, this.modalCommitSelect].filter(
+            (select): select is HTMLSelectElement => select !== null,
+        );
+        for (const select of selects) {
+            if (!Array.from(select.options).some((o) => o.value === hash)) {
+                const option = document.createElement('option');
+                option.value = hash;
+                option.textContent = `${hash} — Sync Board commit`;
+                select.appendChild(option);
+            }
+            select.value = hash;
         }
-        this.commitSelect.value = hash;
     }
 
     async openCommitDiff(hash: string, modal = false): Promise<void> {
@@ -807,6 +837,7 @@ export class DiffController {
             } else {
                 this.commitSelect.value = 'unstaged';
             }
+            this._syncModalCommitSelect();
         } catch (e) {
             console.error('[diff] Failed to load commits list:', e);
         }
@@ -1750,6 +1781,8 @@ export class DiffController {
     async openRichDiffModal(): Promise<void> {
         if (this.diffModal) {
             this.diffModal.classList.remove('hidden');
+            await this.loadCommits();
+            this._syncModalCommitSelect();
             if (this.contextToggleBtn) {
                 this.contextToggleBtn.textContent =
                     this.currentContextLines === 3
