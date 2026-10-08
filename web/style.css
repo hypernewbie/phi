@@ -6385,6 +6385,17 @@ html[data-phi-config-page] .settings-modal {
     backdrop-filter: blur(8px);
 }
 
+/* Fixed drawers are intentionally above the page chrome. Modal overlays
+   must in turn sit above both drawers, so a preview can never be covered by
+   the Sessions panel on compact screens. Desktop docked panels are unchanged. */
+@media (max-width: 1023px),
+    (min-width: 1024px) and (max-aspect-ratio: 10 / 11) {
+    .modal-overlay,
+    .md-modal-overlay {
+        z-index: 1300;
+    }
+}
+
 .md-modal-content {
     background: rgba(13, 13, 16, 0.75);
     backdrop-filter: blur(24px) saturate(180%);
