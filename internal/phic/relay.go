@@ -99,10 +99,10 @@ func (r *Relay) Connect(ctx context.Context, pane string) (wireAttach, error) {
 		return wireAttach{}, err
 	}
 	// Only the socket reader touches read deadlines. Input cannot poison reads.
-	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
 	conn.SetPingHandler(func(data string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
-		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(10*time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(paneWriteTimeout))
 	})
 	r.mu.Lock()
 	r.conn = conn
@@ -118,7 +118,7 @@ func (r *Relay) send(frame []byte) error {
 	if r.conn == nil {
 		return errors.New("phic: input disconnected; not retried because delivery is ambiguous")
 	}
-	_ = r.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = r.conn.SetWriteDeadline(time.Now().Add(paneWriteTimeout))
 	return r.conn.WriteMessage(websocket.BinaryMessage, frame)
 }
 func (r *Relay) Close() {
