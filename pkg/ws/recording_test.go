@@ -44,15 +44,17 @@ func TestPersistentRecordingAcrossHubRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("files=%d", len(files))
+	if len(files) != 3 {
+		t.Fatalf("recording and bounded-state files=%d", len(files))
 	}
-	info, err := os.Stat(filepath.Join(dir, files[0].Name()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0077 != 0 {
-		t.Fatal("recording is readable by another user")
+	for _, entry := range files {
+		info, err := os.Stat(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0077 != 0 {
+			t.Fatalf("%s is readable by another user", entry.Name())
+		}
 	}
 }
 

@@ -345,9 +345,8 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         const { tab, callbacks } = drainTab();
         const p = c._bootstrapDelta(tab, 90, 100, undefined, released);
         await new Promise((r) => setTimeout(r, 0));
-        // Enqueued and released, but xterm has not parsed: watermarks
-        // must still show the honest pre-parse frontier.
-        expect(released).toHaveBeenCalledTimes(1);
+        // Neither live delivery nor sizing may run before replay parses.
+        expect(released).not.toHaveBeenCalled();
         expect(tab.drainedSeq).toBe(90);
         expect(tab.queuedSeq).toBe(90);
         expect(callbacks.length).toBe(1);
@@ -355,6 +354,7 @@ describe('_bootstrapDelta watermarks wait for parse', () => {
         await p;
         expect(tab.queuedSeq).toBe(100);
         expect(tab.drainedSeq).toBe(100);
+        expect(released).toHaveBeenCalledTimes(1);
     });
 
     it('a finalized tab with buffered data still settles bootstrap waiters', async () => {

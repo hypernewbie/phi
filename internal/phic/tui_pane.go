@@ -66,11 +66,12 @@ type paneInput struct {
 		Mods   termemu.Modifier
 		X, Y   int
 	}
-	Paste      []byte
-	Raw        []byte
-	Cols, Rows int
-	Focused    bool
-	Scroll     int
+	Paste       []byte
+	Raw         []byte
+	Cols, Rows  int
+	Focused     bool
+	ForceResize bool
+	Scroll      int
 }
 type paneWrite struct {
 	conn  *websocket.Conn
@@ -91,17 +92,26 @@ type paneActor struct {
 	events                             chan<- paneEvent
 	mu                                 sync.Mutex
 	frontier, head, epoch              uint64
+	epochSet                           bool
 	frame                              termemu.Frame
 	frameOK                            bool
 	lastPaint, lastInteraction         time.Time
 	cols, rows                         int
 	dirty, exited, uncertainInput      bool
+	emuCols, emuRows                   int // parser-owner geometry, distinct from desired panel size
 	exitCode                           int
 	mouseButton, mouseMotion, mouseAny bool
 	connMu                             sync.Mutex
 	conn                               *websocket.Conn
 	outbox                             chan paneWrite
 	inbox                              chan paneInput
+	resizes                            chan paneInput // latest geometry, separate from input backlog
+	histories                          chan historyResult
+	history                            termemu.Terminal
+	historyThrough, historyGen         uint64
+	historyPending                     bool
+	historyCancel                      context.CancelFunc
+	historyOffset                      int
 	ctx                                context.Context
 	cancel                             context.CancelFunc
 	done, writerDone                   chan struct{}
@@ -112,7 +122,7 @@ func newPaneActor(parent context.Context, api *apiClient, spec paneSpec, events 
 		return nil, fmt.Errorf("phic: pane geometry must be positive")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128)}
+	p := &paneActor{spec: spec, api: api, build: build, events: events, cols: spec.Cols, rows: spec.Rows, lastInteraction: time.Now(), ctx: ctx, cancel: cancel, done: make(chan struct{}), writerDone: make(chan struct{}), outbox: make(chan paneWrite, 256), inbox: make(chan paneInput, 128), resizes: make(chan paneInput, 1), histories: make(chan historyResult, 1)}
 	go p.writeLoop()
 	go p.run()
 	return p, nil
@@ -138,7 +148,7 @@ func (p *paneActor) newTerminal(cols, rows int) (termemu.Terminal, error) {
 	if build == nil {
 		build = termemu.NewGhostty
 	}
-	return build(termemu.Options{Cols: cols, Rows: rows, ScrollbackBytes: 64 << 20, ScrollbackLines: 10000, Events: termemu.EventOptions{
+	terminal, err := build(termemu.Options{Cols: cols, Rows: rows, ScrollbackBytes: 64 << 20, ScrollbackLines: 10000, Events: termemu.EventOptions{
 		OnReply: func(b []byte) {
 			if b == nil {
 				p.markUncertain("terminal reply buffer overflowed")
@@ -149,26 +159,45 @@ func (p *paneActor) newTerminal(cols, rows int) (termemu.Terminal, error) {
 		OnTitle: func(s string) { p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneMetadata, Title: s}) },
 		OnPWD:   func(s string) { p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneMetadata, PWD: s}) },
 	}})
+	if err == nil {
+		p.emuCols, p.emuRows = cols, rows
+	}
+	return terminal, err
 }
+
+func (p *paneActor) resizeEmulator(cols, rows int) error {
+	if p.emuCols == cols && p.emuRows == rows {
+		return nil
+	}
+	if err := p.emu.Resize(cols, rows); err != nil {
+		return err
+	}
+	p.emuCols, p.emuRows = cols, rows
+	p.dirty = true
+	return nil
+}
+
 func (p *paneActor) setConn(c *websocket.Conn) { p.connMu.Lock(); p.conn = c; p.connMu.Unlock() }
 func (p *paneActor) getConn() *websocket.Conn {
 	p.connMu.Lock()
 	defer p.connMu.Unlock()
 	return p.conn
 }
-func (p *paneActor) enqueue(b []byte) {
+func (p *paneActor) enqueue(b []byte) bool {
 	if len(b) == 0 {
-		return
+		return true
 	}
 	c := p.getConn()
 	if c == nil {
 		p.markUncertain("not connected; input was not sent")
-		return
+		return false
 	}
 	select {
 	case p.outbox <- paneWrite{conn: c, bytes: b}:
+		return true
 	default:
 		p.markUncertain("input queue full; input was not sent")
+		return false
 	}
 }
 func (p *paneActor) writeLoop() {
@@ -183,6 +212,7 @@ func (p *paneActor) writeLoop() {
 				continue
 			}
 			_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			w.conn.EnableWriteCompression(len(w.bytes) >= 1024)
 			if err := w.conn.WriteMessage(websocket.BinaryMessage, w.bytes); err != nil {
 				p.markUncertain("input write failed; delivery is uncertain (not retried)")
 				_ = w.conn.Close()
@@ -227,8 +257,37 @@ func (p *paneActor) sendRaw(b []byte) {
 func (p *paneActor) sendPaste(b []byte) {
 	p.submit(paneInput{Kind: paneInputPaste, Paste: append([]byte(nil), b...)})
 }
-func (p *paneActor) resize(cols, rows int) {
-	p.submit(paneInput{Kind: paneInputResize, Cols: cols, Rows: rows})
+func (p *paneActor) resize(cols, rows int)      { p.queueResize(cols, rows, false) }
+func (p *paneActor) forceResize(cols, rows int) { p.queueResize(cols, rows, true) }
+
+// The UI is the sole geometry producer. Coalesce drags to their latest size
+// without dropping the final request behind an input backlog. Keep any pending
+// activation/refresh force bit, even when a newer drag replaces its dimensions.
+func (p *paneActor) queueResize(cols, rows int, force bool) {
+	in := paneInput{Kind: paneInputResize, Cols: cols, Rows: rows, ForceResize: force}
+	if p.resizes == nil {
+		p.submit(in)
+		return
+	}
+	select {
+	case <-p.ctx.Done():
+		return
+	default:
+	}
+	select {
+	case p.resizes <- in:
+		return
+	default:
+	}
+	select {
+	case previous := <-p.resizes:
+		in.ForceResize = in.ForceResize || previous.ForceResize
+	default:
+	}
+	select {
+	case p.resizes <- in:
+	case <-p.ctx.Done():
+	}
 }
 func (p *paneActor) sendFocus(focused bool) {
 	p.submit(paneInput{Kind: paneInputFocus, Focused: focused})
@@ -266,11 +325,11 @@ func (p *paneActor) mouseOwned() bool {
 }
 
 func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, error) {
-	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID) + "?term_proto=hot-v1")
+	u, err := mustWebsocketURL(p.api.base.String() + "/ws/pane/" + url.PathEscape(p.spec.Key.ID) + "?term_proto=hot-v1&state=ghostty-ready-v1")
 	if err != nil {
 		return nil, wireAttach{}, err
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: p.api.http.Jar}
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second, Jar: p.api.http.Jar, EnableCompression: true}
 	conn, resp, err := dialer.DialContext(ctx, u, nil)
 	if err != nil {
 		if resp != nil {
@@ -328,7 +387,12 @@ func (p *paneActor) run() {
 		return
 	}
 	p.emu = emu
-	defer func() { _ = p.emu.Close() }() // Disposal stays on the parser owner.
+	defer func() {
+		_ = p.emu.Close()
+		if p.history != nil {
+			_ = p.history.Close()
+		}
+	}() // Disposal stays on the parser owner.
 	if err = p.attachAndRun(); err != nil && p.ctx.Err() == nil {
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: err.Error()})
 	}
@@ -379,16 +443,18 @@ func (p *paneActor) attachAndRun() error {
 }
 
 var errPaneExited = errors.New("phic: pane exited")
+var errPaneResize = errors.New("phic: resize could not be queued; reconnect required")
 
 func (p *paneActor) bootstrap(h wireAttach) error {
 	p.mu.Lock()
-	epoch, frontier, exited := p.epoch, p.frontier, p.exited
+	epoch, frontier, exited, attached := p.epoch, p.frontier, p.exited, p.epochSet
 	p.mu.Unlock()
 	if exited {
 		return errPaneExited
 	}
-	cold := epoch == 0
-	if epoch != 0 && epoch != h.Header.Epoch {
+	cold := !attached
+	if attached && epoch != h.Header.Epoch {
+		p.returnLive() // Historical views and in-flight pages belong to the old epoch.
 		cols, rows := p.geometry()
 		emu, err := p.newTerminal(cols, rows)
 		if err != nil {
@@ -404,6 +470,24 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 		p.frameOK = false
 		p.mu.Unlock()
 	}
+	if h.Header.Ckpt != nil && h.Header.Ckpt.Kind == "ghostty-ready-v1" {
+		restorer, ok := p.emu.(interface{ RestoreReady([]byte) error })
+		if !ok {
+			return fmt.Errorf("phic: emulator cannot restore bounded terminal state")
+		}
+		if err := restorer.RestoreReady(h.Checkpoint); err != nil {
+			return err
+		}
+		p.emuCols, p.emuRows = int(h.Header.Ckpt.Cols), int(h.Header.Ckpt.Rows)
+		if p.history == nil {
+			p.historyOffset = 0
+		}
+		frontier = h.Header.Ckpt.Through
+		p.mu.Lock()
+		p.frontier = frontier
+		p.frameOK = false
+		p.mu.Unlock()
+	}
 	if h.Header.Oldest > frontier {
 		return fmt.Errorf("%w: recording prefix unavailable", errInvalidRecording)
 	}
@@ -412,16 +496,19 @@ func (p *paneActor) bootstrap(h wireAttach) error {
 	}
 	p.mu.Lock()
 	p.epoch = h.Header.Epoch
+	p.epochSet = true
 	p.head = h.Header.Head
 	p.mu.Unlock()
 	if err := p.recover(p.ctx, frontier, h.Header.Head, cold && !p.spec.Fresh); err != nil {
 		return err
 	}
 	cols, rows := p.geometry()
-	if err := p.emu.Resize(cols, rows); err != nil {
+	if err := p.resizeEmulator(cols, rows); err != nil {
 		return err
 	}
-	p.enqueue(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows)))
+	if !p.enqueue(wireproto.EncodeResizeFrame(uint16(cols), uint16(rows))) {
+		return errPaneResize
+	}
 	p.dirty = true
 	return p.refreshFrame()
 }
@@ -465,6 +552,14 @@ func (p *paneActor) consume(reads <-chan paneRead) error {
 				return err
 			}
 		case in := <-p.inbox:
+			if err := p.handleInput(in); err != nil {
+				return err
+			}
+		case result := <-p.histories:
+			if err := p.applyHistory(result); err != nil {
+				p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: "history: " + err.Error()})
+			}
+		case in := <-p.resizes:
 			if err := p.handleInput(in); err != nil {
 				return err
 			}
@@ -611,7 +706,7 @@ func (p *paneActor) feedRecording(h wireproto.RecordingHeader, b []byte, source 
 			}
 			at = offset
 		}
-		if err := p.emu.Resize(int(r[1]), int(r[2])); err != nil {
+		if err := p.resizeEmulator(int(r[1]), int(r[2])); err != nil {
 			return err
 		}
 	}
@@ -651,23 +746,44 @@ func (p *paneActor) handleInput(in paneInput) error {
 		same := in.Cols == p.cols && in.Rows == p.rows
 		p.cols, p.rows = in.Cols, in.Rows
 		p.mu.Unlock()
-		if !same {
-			if err := p.emu.Resize(in.Cols, in.Rows); err != nil {
-				return err
+		localChange := in.Cols != p.emuCols || in.Rows != p.emuRows
+		if err := p.resizeEmulator(in.Cols, in.Rows); err != nil {
+			return err
+		}
+		if !same || localChange || in.ForceResize {
+			if !p.enqueue(wireproto.EncodeResizeFrame(uint16(in.Cols), uint16(in.Rows))) {
+				return errPaneResize
 			}
-			p.dirty = true
-			p.enqueue(wireproto.EncodeResizeFrame(uint16(in.Cols), uint16(in.Rows)))
 		}
 		return nil
 	}
 	if in.Kind == paneInputScroll {
-		if scroller, ok := p.emu.(interface{ ScrollViewport(int) error }); ok {
+		target := p.emu
+		if p.history != nil {
+			target = p.history
+		}
+		p.mu.Lock()
+		historyRows := p.frame.History
+		p.mu.Unlock()
+		if in.Scroll < 0 && p.historyOffset+in.Scroll < -historyRows {
+			p.requestHistory()
+			return nil
+		}
+		if p.history != nil && in.Scroll > 0 && p.historyOffset+in.Scroll >= 0 {
+			p.returnLive()
+			return nil
+		}
+		if scroller, ok := target.(interface{ ScrollViewport(int) error }); ok {
 			if err := scroller.ScrollViewport(in.Scroll); err != nil {
 				return err
 			}
+			p.historyOffset = min(0, max(-historyRows, p.historyOffset+in.Scroll))
 			p.dirty = true
 		}
 		return nil
+	}
+	if in.Kind != paneInputFocus {
+		p.returnLive()
 	}
 	if uncertain {
 		return nil
@@ -700,7 +816,11 @@ func (p *paneActor) handleInput(in paneInput) error {
 	return nil
 }
 func (p *paneActor) refreshFrame() error {
-	frame, err := p.emu.Snapshot()
+	target := p.emu
+	if p.history != nil {
+		target = p.history
+	}
+	frame, err := target.Snapshot()
 	if err != nil {
 		p.sendEvent(paneEvent{Key: p.spec.Key, Kind: paneError, Status: err.Error()})
 		return err

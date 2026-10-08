@@ -50,6 +50,10 @@ func (c *Client) WritePump() {
 			if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 				logger.Debug("frame", "dir", "hub->client", "bytes", len(msg))
 			}
+			// Negotiate once, then keep tiny frames on the raw fast path.
+			// Gorilla's negotiated deflate uses BestSpeed and native clients
+			// and browsers inflate below the terminal byte/sequence layer.
+			c.Ws.EnableWriteCompression(len(msg) >= 1024)
 			err := c.Ws.WriteMessage(websocket.BinaryMessage, msg)
 			if err != nil {
 				// Every write-side teardown used to return silently, so a
@@ -221,6 +225,8 @@ func HandleWS(w http.ResponseWriter, r *http.Request, inst *pty.PTYInstance, man
 	}
 
 	manager.RegisterWS(inst.ID, fmt.Sprintf("%p", client))
+	client.NativeState = r.URL.Query().Get("state") == "ghostty-ready-v1"
+	client.AnsiState = r.URL.Query().Get("state") == "ansi-v1"
 	if r.URL.Query().Get("term_proto") == "hot-v1" {
 		// Live-only attach: no replay enters the live terminal. The
 		// client bootstraps its screen from the opaque checkpoint in

@@ -51,7 +51,7 @@ func TestPaneSnapshotFailureDoesNotSpin(t *testing.T) {
 func TestPaneAutomaticInputDoesNotKeepHighRate(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-paneWatchingAfter)
-	p := &paneActor{cols: 40, rows: 10, lastInteraction: old, uncertainInput: true}
+	p := &paneActor{cols: 40, rows: 10, emuCols: 40, emuRows: 10, lastInteraction: old, uncertainInput: true}
 	if err := p.handleInput(paneInput{Kind: paneInputResize, Cols: 40, Rows: 10}); err != nil {
 		t.Fatal(err)
 	}

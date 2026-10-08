@@ -75,6 +75,7 @@ type AttachHeadHeader struct {
 // ATTACH_HEAD frame. The actual bytes are not part of the JSON;
 // they ride in the same frame.
 type CheckpointHeader struct {
+	Kind    string `json:"kind,omitempty"`
 	Through uint64 `json:"through"`
 	Cols    uint16 `json:"cols"`
 	Rows    uint16 `json:"rows"`

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,6 +156,11 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/state") {
+		handleTerminalState(w, r)
+		return
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/recording") {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/terminals/"), "/recording")
 		var from, through uint64
@@ -218,13 +222,7 @@ func handleFallback(w http.ResponseWriter, r *http.Request) {
 		hdr, _ := json.Marshal(ws.RecordingHeaderJSON{
 			Epoch: rec.Epoch, Start: rec.Start, End: rec.End, Resizes: resizes,
 		})
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		var lenb [4]byte
-		binary.BigEndian.PutUint32(lenb[:], uint32(len(hdr)))
-		_, _ = w.Write(lenb[:])
-		_, _ = w.Write(hdr)
-		_, _ = w.Write(rec.Data)
+		writeRecordingResponse(w, r, hdr, rec.Data)
 		return
 	}
 

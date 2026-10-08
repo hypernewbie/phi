@@ -143,6 +143,32 @@ static void phi_free(PhiTerminal *p) {
 	free(p);
 }
 
+static int phi_restore_ready(PhiTerminal *p, const uint8_t *data, size_t len) {
+	GhosttySnapshotDecoder decoder = NULL;
+	GhosttyTerminal replacement = NULL;
+	GhosttyResult result = ghostty_snapshot_decoder_new_buf(NULL, &decoder, data, len);
+	if (result != GHOSTTY_SUCCESS) return result;
+	bool retain = true;
+	result = ghostty_snapshot_decoder_set(decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION, &retain);
+	if (result == GHOSTTY_SUCCESS) result = ghostty_snapshot_decoder_ready(decoder, &replacement);
+	ghostty_snapshot_decoder_free(decoder);
+	if (result != GHOSTTY_SUCCESS) return result;
+	ghostty_terminal_free(p->terminal);
+	p->terminal = replacement;
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, p);
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, phi_reply);
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, phi_title_changed);
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_PWD_CHANGED, phi_pwd_changed);
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_BELL, phi_bell);
+	p->pending_boundary = !phi_at_ground(p);
+	return GHOSTTY_SUCCESS;
+}
+
+static void phi_limits(PhiTerminal *p, size_t bytes, size_t lines) {
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &bytes);
+	ghostty_terminal_set(p->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines);
+}
+
 static int phi_resize(PhiTerminal *p, int cols, int rows) {
 	return ghostty_terminal_resize(p->terminal, cols, rows, 0, 0);
 }
@@ -474,6 +500,30 @@ func newGhostty(opts Options) (Terminal, error) {
 		return nil, &Error{Op: "ghostty.new", Err: fmt.Sprintf("terminal allocation failed (%d)", int(cerr))}
 	}
 	return &ghosttyTerminal{c: c, opts: opts, cols: opts.Cols, rows: opts.Rows}, nil
+}
+
+// RestoreReady installs the exact bounded Ghostty snapshot prefix. Both
+// screens, modes, saved cursors and partial UTF-8/VT parser state are restored.
+func (g *ghosttyTerminal) RestoreReady(data []byte) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return &Error{Op: "restore", Err: "terminal closed"}
+	}
+	if len(data) == 0 {
+		return &Error{Op: "restore", Err: "empty snapshot"}
+	}
+	r := C.phi_restore_ready(g.c, (*C.uint8_t)(unsafe.Pointer(&data[0])), C.size_t(len(data)))
+	if r != C.GHOSTTY_SUCCESS {
+		return &Error{Op: "restore", Err: fmt.Sprintf("native status %d", r)}
+	}
+	var info C.PhiInfo
+	if C.phi_info(g.c, &info) != C.GHOSTTY_SUCCESS {
+		return &Error{Op: "restore", Err: "invalid restored geometry"}
+	}
+	g.cols, g.rows = int(info.cols), int(info.rows)
+	C.phi_limits(g.c, C.size_t(g.opts.ScrollbackBytes), C.size_t(g.opts.ScrollbackLines))
+	return nil
 }
 
 func (g *ghosttyTerminal) Feed(b []byte, source Source) error {

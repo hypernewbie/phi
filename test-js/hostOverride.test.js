@@ -38,17 +38,17 @@ describe('socket URLs ignore hostname_override', () => {
         setServerHostOverride('dusty_potato');
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
         );
-        pty.ws && pty.ws.close?.();
+        pty.ws?.close?.();
     });
     it('pane socket dials the page origin with the label unset', () => {
         stubSocket();
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
         );
-        pty.ws && pty.ws.close?.();
+        pty.ws?.close?.();
     });
     it('the label never appears in any socket URL, whatever it is', () => {
         stubSocket();
@@ -63,10 +63,10 @@ describe('socket URLs ignore hostname_override', () => {
             setServerHostOverride(label);
             const pty = new PTYWebSocket('p1', () => {});
             expect(pty.url).toBe(
-                `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+                `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
             );
             expect(pty.url).not.toContain(label);
-            pty.ws && pty.ws.close?.();
+            pty.ws?.close?.();
         }
     });
 });
@@ -102,9 +102,9 @@ describe('hostname_override is a free-form display label', () => {
         setServerHostOverride(HAIKU);
         const pty = new PTYWebSocket('p1', () => {});
         expect(pty.url).toBe(
-            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1`,
+            `${window.location.origin}/ws/pane/p1?term_proto=hot-v1&state=ansi-v1`,
         );
-        pty.ws && pty.ws.close?.();
+        pty.ws?.close?.();
     });
 
     it('a corp codename label reads back verbatim', () => {
