@@ -229,24 +229,9 @@ const HISTORY_WINDOW_BYTES = MAX_DELTA_BYTES;
 // That step cannot cross the entire resident buffer, even for one-byte lines.
 const HISTORY_ANCHOR_BYTES = MAX_WRITE_CHARS;
 const HISTORY_MIN_STEP_BYTES = 4 * 1024;
-// Bounded in-memory recording-chunk cache backing hash-cache
-// negotiation (concept 4): Map preserves insertion order, so the oldest
-// entry is evicted first. 16 entries x <=64 KiB mirrors the ring cap.
-const REC_CACHE_ENTRIES = 16;
-const REC_CACHE_ROUNDS = 68;
-
-// FNV-1a/64 over raw bytes, lowercase hex16. Must match pkg/ws
-// ChunkHash bit-for-bit (vectors pinned in hashcache_test.go and
-// test-js/hashCache.test.js). BigInt keeps the 64-bit multiply exact;
-// chunks are small and infrequent, so clarity beats bit-twiddling.
-export function fnv1a64Hex(bytes) {
-    let h = 0xcbf29ce484222325n;
-    for (let i = 0; i < bytes.length; i++) {
-        h ^= BigInt(bytes[i]);
-        h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
-    }
-    return h.toString(16).padStart(16, '0');
-}
+// A bounded recording span can arrive in several positive-progress parts.
+// No client byte/hash cache participates in recovery.
+const RECORDING_MAX_PARTS = 68;
 // After output stays quiet this long, the client uploads a screen
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
@@ -1727,10 +1712,22 @@ export class TabManager {
         // retained and sequenced by the backend but do not overwrite that view.
         // Jumping back to latest restores the saved live checkpoint and replays
         // the exact recording delta.
-        if (!tabInfo._historyBrowsing) this.writeToTerminal(tabInfo, data);
         if (pty && pty.mode === 'hot') {
             tabInfo._streamDecoder = pty.decoder;
             tabInfo.queuedSeq = pty.lastFrameEnd;
+        }
+        if (!tabInfo._historyBrowsing) {
+            this.writeToTerminal(tabInfo, data);
+            // Decoder-only frames have consumed source bytes but enqueue no
+            // xterm write/callback. At quiescence they still own a frontier,
+            // including the incomplete UTF-8 prefix retained by the decoder.
+            // Checkpoints subtract that prefix exactly once; reconnect keeps it.
+            if (pty?.mode === 'hot' && data.length === 0 &&
+                !tabInfo.writePending && !tabInfo.writeBuffer?.length &&
+                !tabInfo._bootstrapGate) {
+                tabInfo.drainedSeq = tabInfo.queuedSeq;
+                this._scheduleCheckpointUpload(tabInfo);
+            }
         }
     }
 
@@ -1738,12 +1735,8 @@ export class TabManager {
     // { text, bytes, start, end } or null. The caller checks start to
     // detect ring truncation.
     //
-    // Hash-cache assembly loop: cached chunks are declared via `have`;
-    // the server skips verified prefixes (204 when fully known) and the
-    // loop fills the rest round by round. The assembled span always
-    // starts at `from` or the call returns null, so callers keep their
-    // exact d.start === from contract. epoch scopes the cache: unknown
-    // epochs fetch plain, exactly as before.
+    // Recovery reads exact source spans with their current resize metadata.
+    // No negotiated cached prefix, hashes, or omitted response bodies.
     async _fetchRecordingRange(paneId, from, through, epoch) {
         for (let attempt = 0; attempt < 3; attempt++) {
             const range = await this._fetchRecordingRangeOnce(paneId, from, through, epoch);
@@ -1767,38 +1760,17 @@ export class TabManager {
             const parts = [];
             const resizes = [];
             let cursor = from;
-            let useCache = true;
-            for (let round = 0; round < REC_CACHE_ROUNDS; round++) {
+            for (let round = 0; round < RECORDING_MAX_PARTS; round++) {
                 if (cursor >= through) break;
-                const have = useCache ? this._recHave(paneId, epoch, cursor, through) : '';
                 // Epoch scopes the read server-side too: a pane rebirth
                 // between our attach and this fetch must 409, never serve
                 // another lifetime's bytes into this stream.
                 const epochParam = epoch !== undefined ? `&epoch=${epoch}` : '';
                 const res = await fetch(
-                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${have ? `&have=${have}` : ''}${epochParam}`,
+                    `/api/terminals/${encodeURIComponent(paneId)}/recording?from=${cursor}&through=${through}${epochParam}`,
                     { cache: 'no-store', signal },
                 );
-                if (res.status === 204) {
-                    // Server verified our declaration covers the rest.
-                    const tail = this._recCachedSpan(
-                        paneId,
-                        epoch,
-                        cursor,
-                        through,
-                    );
-                    if (!tail) {
-                        // Cache eviction can race a declaration. Retry the
-                        // same interval without negotiation, not without data.
-                        if (!useCache) return null;
-                        useCache = false;
-                        continue;
-                    }
-                    parts.push(tail.bytes);
-                    resizes.push(...tail.resizes);
-                    cursor = through;
-                    break;
-                }
+                if (res.status === 204) return null;
                 if (!res.ok) return null;
                 const buf = new Uint8Array(await res.arrayBuffer());
                 if (buf.byteLength < 4) return null;
@@ -1817,41 +1789,21 @@ export class TabManager {
                 } catch (_e) {
                     return null;
                 }
-                // The server skips have-verified prefixes, so its span may
-                // start past the cursor: fill [cursor, hdr.start) from the
-                // cache that justified the skip. Unfillable gaps (ring
-                // truncation, evicted cache) stay null, exactly as before.
+                // No skipped prefixes: validate bytes, lifetime and geometry
+                // before admitting any part into the terminal.
                 const data = buf.subarray(4 + jsonLen);
                 const seq = n => Number.isSafeInteger(n) && n >= 0;
                 if (!hdr || !seq(hdr.epoch) ||
                     (epoch !== undefined && hdr.epoch !== epoch) ||
                     !seq(hdr.start) || !seq(hdr.end) ||
-                    hdr.start < cursor || hdr.start > through ||
+                    hdr.start !== cursor || hdr.start > through ||
                     hdr.end <= hdr.start || hdr.end > through ||
                     data.byteLength !== hdr.end - hdr.start ||
                     (hdr.resizes !== undefined && (!Array.isArray(hdr.resizes) ||
-                        hdr.resizes.some(m => !Array.isArray(m) || m.length !== 3 ||
-                            !seq(m[0]) || m[0] > hdr.end || !Number.isInteger(m[1]) ||
-                            !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0)))) return null;
-                if (hdr.start > cursor) {
-                    const gap = this._recCachedSpan(
-                        paneId,
-                        epoch,
-                        cursor,
-                        hdr.start,
-                    );
-                    if (!gap) return null;
-                    parts.push(gap.bytes);
-                    resizes.push(...gap.resizes);
-                }
-                this._recCacheStore(
-                    paneId,
-                    epoch,
-                    hdr.start,
-                    hdr.end,
-                    data,
-                    hdr.resizes || [],
-                );
+                        hdr.resizes.some((m, i) => !Array.isArray(m) || m.length !== 3 ||
+                            !seq(m[0]) || m[0] > hdr.end || (i > 0 && m[0] < hdr.resizes[i - 1][0]) || !Number.isInteger(m[1]) ||
+                            !Number.isInteger(m[2]) || m[1] <= 0 || m[2] <= 0 || m[1] > 65535 || m[2] > 65535)))) return null;
+
                 parts.push(data);
                 resizes.push(...(hdr.resizes || []));
                 if (hdr.end <= cursor) return null;
@@ -1860,93 +1812,28 @@ export class TabManager {
             if (cursor < through) return null;
             let byteLength = 0;
             for (const p of parts) byteLength += p.byteLength;
-            const bytes = new Uint8Array(byteLength);
-            let off = 0;
-            for (const p of parts) {
-                bytes.set(p, off);
-                off += p.byteLength;
+            // The normal single-response path already owns an exact view.
+            // Assemble only when the server actually split the span.
+            const bytes = parts.length === 1 ? parts[0] : new Uint8Array(byteLength);
+            if (parts.length !== 1) {
+                let off = 0;
+                for (const p of parts) {
+                    bytes.set(p, off);
+                    off += p.byteLength;
+                }
             }
             return {
                 start: from,
                 end: through,
                 byteLength: bytes.byteLength,
                 bytes,
-                text: new TextDecoder().decode(bytes),
+                // Production replay consumes bytes through its stream decoder.
+                // Keep the text convenience without decoding the span twice.
+                get text() { return new TextDecoder().decode(bytes); },
                 resizes,
             };
         } catch (_e) {
             return null;
-        }
-    }
-
-    _recCacheKey(paneId, epoch, start) {
-        return `${paneId}|${epoch}|${start}`;
-    }
-
-    // Declares cached chunks intersecting [cursor, through) for this
-    // pane+epoch, oldest first. Empty when nothing is cached (cold URLs
-    // stay byte-identical to the pre-cache format).
-    _recHave(paneId, epoch, cursor, through) {
-        if (epoch === undefined || !this._recChunkCache) return '';
-        const decl = [];
-        for (const [key, c] of this._recChunkCache) {
-            const [pid, ep, st] = key.split('|');
-            if (pid !== paneId || Number(ep) !== epoch) continue;
-            const start = Number(st);
-            if (c.end > cursor && start < through && decl.length < 64) {
-                decl.push(`${start}:${c.end}:${c.hash}`);
-            }
-        }
-        return decl.join(',');
-    }
-
-    // Assembles [cursor, through) wholly from cache; null unless the
-    // cached chunks chain contiguously from the cursor.
-    _recCachedSpan(paneId, epoch, cursor, through) {
-        if (epoch === undefined || !this._recChunkCache) return null;
-        const bytes = [];
-        const resizes = [];
-        let at = cursor;
-        while (at < through) {
-            const c = this._recChunkCache.get(
-                this._recCacheKey(paneId, epoch, at),
-            );
-            if (!c || c.end <= at) return null;
-            const take = Math.min(c.end, through) - at;
-            bytes.push(c.bytes.subarray(0, take));
-            resizes.push(...c.resizes);
-            at += take;
-        }
-        let byteLength = 0;
-        for (const p of bytes) byteLength += p.byteLength;
-        const out = new Uint8Array(byteLength);
-        let off = 0;
-        for (const p of bytes) {
-            out.set(p, off);
-            off += p.byteLength;
-        }
-        return { bytes: out, resizes };
-    }
-
-    _recCacheStore(paneId, epoch, start, end, data, resizes) {
-        if (epoch === undefined || end <= start) return;
-        if (!this._recChunkCache) this._recChunkCache = new Map();
-        // One pane lifetime per id: drop other-epoch entries so a dead
-        // epoch can never satisfy a new one.
-        for (const key of this._recChunkCache.keys()) {
-            const [pid, ep] = key.split('|');
-            if (pid === paneId && Number(ep) !== epoch) {
-                this._recChunkCache.delete(key);
-            }
-        }
-        this._recChunkCache.set(this._recCacheKey(paneId, epoch, start), {
-            end,
-            hash: fnv1a64Hex(data),
-            bytes: data.slice(),
-            resizes: resizes || [],
-        });
-        while (this._recChunkCache.size > REC_CACHE_ENTRIES) {
-            this._recChunkCache.delete(this._recChunkCache.keys().next().value);
         }
     }
 
@@ -1997,7 +1884,7 @@ export class TabManager {
                 } catch (_e) {
                     /* default size; post-open fit corrects it */
                 }
-                this.writeToTerminal(tabInfo, info.ckpt.ansi);
+                this._writeAttachCheckpoint(tabInfo, pty, info.ckpt);
             }
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
@@ -2014,11 +1901,7 @@ export class TabManager {
             tabInfo.queuedSeq = from;
             tabInfo.drainedSeq = from;
             this._openTermAndViewport(tabInfo);
-            if (info.head > from) {
-                this._bootstrappedRelease(tabInfo, pty, from, info.head);
-            } else {
-                pty.release();
-            }
+            this._bootstrappedRelease(tabInfo, pty, from, info.head);
             return;
         }
 
@@ -2039,6 +1922,10 @@ export class TabManager {
                 // Freeze this historical view. The new head is a source
                 // frontier; latest restoration replays the saved live state.
                 tabInfo.paneOldest = info.oldest;
+                const live = tabInfo._historyLiveState;
+                // Size the live process, never the historical page's grid.
+                if (live?.cols && live.rows && typeof pty.sendResize === 'function' &&
+                    pty.sendResize(live.cols, live.rows) !== false) tabInfo._sizedWs = pty;
                 pty.release();
                 return;
             }
@@ -2085,13 +1972,12 @@ export class TabManager {
             tabInfo._streamDecoder = pty.decoder;
             tabInfo.paneEpoch = info.epoch;
             tabInfo.paneOldest = info.oldest;
-            if (info.head > from && from >= info.oldest) {
+            if (from >= info.oldest && from <= info.head) {
                 this._bootstrappedRelease(tabInfo, pty, from, info.head);
             } else {
-                pty.release();
-                if (info.head > from) {
-                    this._nudgeRedraw(tabInfo);
-                }
+                // A resize is not a repair for missing source bytes. Never
+                // release a socket across an unfilled or regressed frontier.
+                try { pty.ws?.close(); } catch (_e) {}
             }
             return;
         }
@@ -2110,7 +1996,10 @@ export class TabManager {
             tabInfo._pendingResetBanner = null;
         }
         if (info.ckpt) {
-            this.writeToTerminal(tabInfo, info.ckpt.ansi);
+            // A checkpoint's cursor coordinates and wrapping belong to its
+            // recorded grid, not the previous pane lifetime's fitted grid.
+            tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
+            this._writeAttachCheckpoint(tabInfo, pty, info.ckpt);
         }
         tabInfo.paneEpoch = info.epoch;
         tabInfo.paneOldest = info.oldest;
@@ -2123,22 +2012,26 @@ export class TabManager {
         tabInfo._historyWindowEnd = info.head;
         tabInfo.queuedSeq = from;
         tabInfo.drainedSeq = from;
-        if (info.head > from) {
-            this._bootstrappedRelease(tabInfo, pty, from, info.head);
-        } else {
-            pty.release();
-        }
+        this._bootstrappedRelease(tabInfo, pty, from, info.head);
+    }
+
+    _writeAttachCheckpoint(tabInfo, pty, checkpoint) {
+        // Keep any unfinished UTF-8 suffix in the same decoder that will
+        // consume live bytes. Merely receiving (but ignoring) a same-pane
+        // checkpoint must not change that decoder's retained prefix.
+        const text = checkpoint.bytes && typeof pty.decodeOutput === 'function'
+            ? pty.decodeOutput(checkpoint.bytes)
+            : checkpoint.ansi;
+        this.writeToTerminal(tabInfo, text);
     }
 
     // Fetches the bounded attach/reconnect delta in the background and
     // appends it to the live terminal after the network completes.
     // Aborted silently when the page is gone or the pane is dead; bounded
     // by HOT_DELTA_LIMIT_BYTES so we never silently flood scrollback.
-    // Ordered bootstrap: the delta must enqueue BEFORE live delivery
-    // starts, or older bytes land below newer ones and watermarks regress.
-    // Live frames stay held until the delta is queued (or definitively
-    // skipped); the checkpoint already painted, so first paint never waits
-    // on the network. The release targets the attach-time socket only: a
+    // Ordered bootstrap: finish parsing, restore live geometry, send its
+    // resize, then release live delivery. Historical sizes must never leak
+    // into newly delivered live bytes. The release targets the attach-time socket only: a
     // reconnect swaps tabInfo.ws, and releasing a stale socket would flush
     // its orphaned frames into the new stream.
     _bootstrappedRelease(tabInfo, pty, from, head) {
@@ -2150,9 +2043,8 @@ export class TabManager {
         // stale delta below newer bytes.
         const gen = (tabInfo._bootstrapGen ?? 0) + 1;
         tabInfo._bootstrapGen = gen;
-        // Release fires after enqueue (ordering) but never waits for
-        // parse; watermarks wait inside _bootstrapDelta instead. Both
-        // callbacks are idempotent, so double-invocation is harmless.
+        // One barrier owns replay and sizing. Release is idempotent and
+        // happens only after the parser and current geometry are settled.
         const releaseOnce = () => {
             if (tabInfo._bootstrapGate === boot) {
                 tabInfo._bootstrapGate = null;
@@ -2160,11 +2052,17 @@ export class TabManager {
                     try {
                         pty.release();
                     } catch (_e) {}
+                    if (tabInfo._pendingPanelFit) this._queuePanelFit(tabInfo);
                 }
             }
         };
         const boot = (async () => {
-            const complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce);
+            let complete = false;
+            try {
+                complete = await this._bootstrapDelta(tabInfo, from, head, gen, releaseOnce);
+            } catch (error) {
+                console.warn('[term] bootstrap failed:', error);
+            }
             if (complete) releaseOnce();
             else if (tabInfo.ws === pty && tabInfo._bootstrapGen === gen) {
                 // Never release held live frames across an unfilled interval.
@@ -2301,7 +2199,7 @@ export class TabManager {
             tabInfo.queuedSeq = from;
             tabInfo.drainedSeq = from;
             tabInfo.userFollowBottom = false;
-            if (!await this._parseRecordingRange(tabInfo, range, current, undefined, undefined, pty)) return;
+            if (!await this._parseRecordingRange(tabInfo, range, current, undefined, pty)) return;
             tabInfo._historyWindowStart = from;
             tabInfo._historyWindowEnd = range.end;
             // This flag means older bytes remain before the visible window.
@@ -2372,13 +2270,15 @@ export class TabManager {
                 );
                 if (!current()) return;
                 if (!range) throw new Error('latest terminal output temporarily unavailable');
-                if (!await this._parseRecordingRange(tabInfo, range, current, undefined, undefined, pty)) return;
+                if (!await this._parseRecordingRange(tabInfo, range, current, undefined, pty)) return;
                 from = end;
                 tabInfo.queuedSeq = end;
                 tabInfo.drainedSeq = end;
             }
             const oldest = tabInfo.paneOldest ?? 0;
             tabInfo.fitAddon?.fit?.();
+            if (tabInfo.ws === pty && typeof pty.sendResize === 'function' &&
+                pty.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) tabInfo._sizedWs = pty;
             tabInfo._historyWindowStart = this._oldestHistoryAnchor(tabInfo)?.through ?? head;
             tabInfo._historyWindowEnd = head;
             tabInfo._historyOmitted = saved.through > oldest || tabInfo._historyWindowStart > oldest;
@@ -2396,11 +2296,14 @@ export class TabManager {
             }
             if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
             finishGate?.();
-            if (current() && tabInfo.ws === pty) pty.release();
+            if (current() && tabInfo.ws === pty) {
+                pty.release();
+                if (!tabInfo._historyBrowsing && tabInfo._pendingPanelFit) this._queuePanelFit(tabInfo);
+            }
         }
     }
 
-    async _parseRecordingRange(tabInfo, range, current, deliver, onEnqueued, decodeSocket = tabInfo.ws) {
+    async _parseRecordingRange(tabInfo, range, current, deliver, decodeSocket = tabInfo.ws) {
         // Resize only after preceding bytes reach the parser. Applying
         // geometry to a queued write interprets that write in the new grid.
         await this._drainSettled(tabInfo);
@@ -2429,13 +2332,10 @@ export class TabManager {
                         : new TextDecoder().decode(bytes);
                     this.writeToTerminal(tabInfo, text);
                 }
-                if (!capture && !markers.length && stop === range.end) onEnqueued?.();
                 await this._drainSettled(tabInfo);
                 if (!current()) return false;
                 if (capture) this._recordHistoryAnchor(tabInfo, stop - (decodeSocket?.pendingUTF8Bytes ?? 0));
                 cursor = stop;
-                // Capture the source/row frontier before live frames can move it.
-                if (capture && !markers.length && stop === range.end) onEnqueued?.();
             }
             return true;
         };
@@ -2447,7 +2347,7 @@ export class TabManager {
         return parse(range.end);
     }
 
-    async _bootstrapDelta(tabInfo, from, head, expectGen, onEnqueued) {
+    async _bootstrapDelta(tabInfo, from, head, expectGen, onReady) {
         const ws = tabInfo.ws;
         const epoch = tabInfo.paneEpoch;
         let admitted = false;
@@ -2455,8 +2355,12 @@ export class TabManager {
             (tabInfo.ws === ws || admitted) &&
             (expectGen === undefined || tabInfo._bootstrapGen === expectGen);
         if (!current()) return false;
-        let released = false;
-        const enqueued = () => { if (!released && onEnqueued) { released = true; onEnqueued(); } };
+        // Even a zero-delta resume must finish its checkpoint write before
+        // fitting the live viewport and synchronizing backend dimensions.
+        if (from === head || tabInfo.writePending || tabInfo.writeBuffer?.length) {
+            await this._drainSettled(tabInfo);
+            if (!current()) return false;
+        }
         for (let cursor = from; cursor < head;) {
             const end = Math.min(head, cursor + MAX_DELTA_BYTES);
             const d = await this._fetchRecordingRange(tabInfo.paneId, cursor, end, tabInfo.paneEpoch);
@@ -2465,7 +2369,7 @@ export class TabManager {
                 (d.bytes && d.bytes.byteLength !== d.byteLength)) return false;
             admitted = true;
             if (d.bytes) {
-                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, end === head ? enqueued : undefined, ws)) return false;
+                if (!await this._parseRecordingRange(tabInfo, d, current, undefined, ws)) return false;
             } else {
                 this.writeToTerminal(tabInfo, d.text);
                 await this._drainSettled(tabInfo);
@@ -2484,7 +2388,13 @@ export class TabManager {
         // The fit restores geometry, not necessarily the viewport's derived
         // scroll position; re-derive it now that the replay is painted.
         this._resyncViewportScroll(tabInfo);
-        enqueued();
+        // Every attachment needs a real resize, including equal-size and
+        // zero-delta reconnects. Only the current socket may own this sizing.
+        if (tabInfo.ws === ws && typeof ws?.sendResize === 'function' &&
+            ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) {
+            tabInfo._sizedWs = ws;
+        }
+        onReady?.();
         // A quiet raw attach must also leave a checkpoint; otherwise every
         // refresh repeats the whole prefix until the backend emits again.
         this._scheduleCheckpointUpload(tabInfo);
@@ -2552,15 +2462,6 @@ export class TabManager {
             // owns the gate. Re-fire after relinquishing it, not before.
             if (recovered && tabInfo.ws === pty && !tabInfo.finalizing) pty.release?.();
         }
-    }
-
-    _nudgeRedraw(tabInfo) {
-        // A SIGWINCH-sized resize of the current grid makes full-screen
-        // TUIs repaint; line-oriented shells redraw their prompt line.
-        try {
-            const { cols, rows } = tabInfo.term;
-            tabInfo.ws?.sendResize(cols, rows);
-        } catch (_e) {}
     }
 
     _scheduleCheckpointUpload(tabInfo) {
@@ -2674,7 +2575,32 @@ export class TabManager {
             }
         }
         tabInfo._postOpenHooks = [];
+        this._observeTerminalPanel(tabInfo);
         if (tabInfo._pendingViewport) tabInfo._pendingViewport();
+    }
+
+    // FitAddon does not observe its container. Watch the actual panel so
+    // drawers, splitters, input bars and CSS changes share one resize path.
+    _observeTerminalPanel(tabInfo) {
+        if (typeof ResizeObserver !== 'function' || tabInfo._panelObserver || !tabInfo.termContainer) return;
+        tabInfo._panelObserver = new ResizeObserver(() => this._queuePanelFit(tabInfo));
+        tabInfo._panelObserver.observe(tabInfo.termContainer);
+    }
+
+    _queuePanelFit(tabInfo) {
+        if (tabInfo._panelFitRAF !== undefined && tabInfo._panelFitRAF !== null) return;
+        const fit = () => {
+            tabInfo._panelFitRAF = null;
+            if (tabInfo.finalizing || tabInfo.isDead || tabInfo !== this.getActiveTab()) return;
+            if (tabInfo._bootstrapGate || tabInfo._historyBrowsing) {
+                tabInfo._pendingPanelFit = true;
+                return;
+            }
+            tabInfo._pendingPanelFit = false;
+            this.fitActiveTerminal();
+        };
+        if (typeof requestAnimationFrame === 'function') tabInfo._panelFitRAF = requestAnimationFrame(fit);
+        else fit();
     }
 
     // Called from each socket's onOpen. Hot tabs wait briefly for
@@ -5571,6 +5497,9 @@ export class TabManager {
         // the fetch — the second caller would otherwise race the first.
         if (tab.finalizing) return;
         tab.finalizing = true;
+        tab._panelObserver?.disconnect();
+        if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tab._panelFitRAF);
+        tab._panelFitRAF = null;
 
         if (tab.softCloseTimer) {
             clearTimeout(tab.softCloseTimer);
@@ -8190,9 +8119,13 @@ export class TabManager {
         }, 100);
     }
 
-    fitActiveTerminal() {
+    fitActiveTerminal({ forceResize = false } = {}) {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead) return;
+        if (!activeTab || activeTab.isDead || activeTab._historyBrowsing) return;
+        if (activeTab._bootstrapGate) {
+            activeTab._pendingPanelFit = true;
+            return;
+        }
 
         try {
             // One DOM measurement per fit: the proposal feeds both font
@@ -8231,7 +8164,7 @@ export class TabManager {
                     // restore a stale viewport position (visible jump).
                     activeTab.isAtBottom = undefined;
                     activeTab.lastScrollY = undefined;
-                    if (activeTab._sizedWs !== activeTab.ws) {
+                    if (forceResize || activeTab._sizedWs !== activeTab.ws) {
                         // First fit on a fresh socket: the client reflow is
                         // correctly skipped, but the backend PTY still has
                         // its spawn size (not the grid the user sees).
@@ -8317,7 +8250,9 @@ export class TabManager {
 
         setTimeout(() => {
             if (tabInfo === this.getActiveTab()) {
-                this.fitActiveTerminal();
+                // Activation/refresh reasserts ownership of the panel grid,
+                // even when another client changed the shared PTY size.
+                this.fitActiveTerminal({ forceResize: true });
             }
         }, 50);
 

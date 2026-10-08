@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hypernewbie/phi/internal/termstate"
 	"github.com/hypernewbie/phi/pkg/ws/wireproto"
 )
 
@@ -40,7 +41,9 @@ type Client struct {
 	// on /ws/pane). Hot clients receive 0x08 ATTACH_HEAD at attach and
 	// 0x09 LIVE_OUTPUT frames thereafter, instead of the legacy 1 MiB
 	// replay + 0x01 frames.
-	Hot bool
+	Hot         bool
+	NativeState bool
+	AnsiState   bool
 
 	// Logger carries this client's comp=ws + conn+pane fields (set by
 	// HandleWS, built on componentLogger()) so every log line for its
@@ -101,7 +104,14 @@ type PaneHub struct {
 	pendingResize *ResizeMarker
 
 	// ckpt is the newest accepted client checkpoint, if any.
-	ckpt *paneCheckpoint
+	ckpt               *paneCheckpoint
+	state              *termstate.Terminal
+	stateHead          uint64
+	stateErr           error
+	stateAnchors       []stateAnchor
+	stateAnchorBytes   int
+	statePath          string
+	stateAnchorsLoaded bool
 }
 
 const maxResizeMarkers = 512
@@ -134,6 +144,13 @@ func (h *Hub) SetRecordingDirectory(dir string) error {
 	return os.Chmod(dir, 0700)
 }
 
+func (h *Hub) recordingEnabled() bool {
+	h.mu.RLock()
+	enabled := h.recordingDirectory != ""
+	h.mu.RUnlock()
+	return enabled
+}
+
 func (h *Hub) recordingPath(paneID string) string {
 	if h.recordingDirectory == "" {
 		return ""
@@ -164,7 +181,13 @@ func (h *Hub) GetOrCreatePaneHub(paneID string) *PaneHub {
 			delete(h.archives, paneID)
 		} else {
 			ph = &PaneHub{clients: make(map[*Client]bool)}
-			ph.recording, ph.recordingErr = openRecording(h.recordingPath(paneID))
+			path := h.recordingPath(paneID)
+			ph.recording, ph.recordingErr = openRecording(path)
+			if !ph.recording.ephemeral {
+				ph.statePath = path + ".state"
+				ph.stateAnchors, ph.stateAnchorBytes, _ = loadStateAnchors(ph.statePath)
+				ph.stateAnchorsLoaded = true
+			}
 		}
 		ph.mu.Lock()
 		defer ph.mu.Unlock()
@@ -293,7 +316,48 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 
 	hdr := attachHeadJSON{Epoch: pos.Epoch, Oldest: pos.Oldest, Head: pos.Head}
 	var extra []byte
-	if ph.ckpt != nil && ph.ckpt.Through <= pos.Head {
+	if client.NativeState || client.AnsiState {
+		if err := ph.prepareStateLocked(); err != nil {
+			ph.mu.Unlock()
+			if client.Ws != nil {
+				_ = client.Ws.Close()
+			}
+			return
+		}
+		var snapshot []byte
+		var err error
+		if client.NativeState {
+			snapshot, err = ph.state.ReadyWindow(256)
+		} else {
+			var screen, continuation []byte
+			screen, err = ph.state.FormatVTState()
+			if err == nil {
+				continuation, err = ph.state.Continuation()
+			}
+			snapshot = append(screen, continuation...)
+		}
+		if err != nil {
+			ph.mu.Unlock()
+			if client.Ws != nil {
+				_ = client.Ws.Close()
+			}
+			return
+		}
+		cols, rows := ph.state.Geometry()
+		kind := "ghostty-ready-v1"
+		if client.AnsiState {
+			kind = "ansi-v1"
+		}
+		if len(snapshot) > MaxCheckpointBytes {
+			ph.mu.Unlock()
+			if client.Ws != nil {
+				_ = client.Ws.Close()
+			}
+			return
+		}
+		hdr.Ckpt = &checkpointJSON{Through: pos.Head, Cols: uint16(cols), Rows: uint16(rows), Len: len(snapshot), Kind: kind}
+		extra = snapshot
+	} else if ph.ckpt != nil && ph.ckpt.Through <= pos.Head {
 		hdr.Ckpt = &checkpointJSON{
 			Through: ph.ckpt.Through,
 			Cols:    ph.ckpt.Cols,
@@ -302,7 +366,7 @@ func (h *Hub) AttachHot(paneID string, client *Client) {
 		}
 		extra = ph.ckpt.Ansi
 	}
-	if ph.ckpt == nil && ph.recording != nil {
+	if hdr.Ckpt == nil && ph.recording != nil {
 		hdr.ReplayFrom = ph.recording.replayStart()
 	}
 	frame := frameFramedJSON(0x08, hdr, extra)
@@ -336,6 +400,16 @@ func (ph *PaneHub) appendResizeLocked(marker ResizeMarker) error {
 		ph.resizes = ph.resizes[len(ph.resizes)-maxResizeMarkers:]
 	}
 	ph.pendingResize = nil
+	if ph.state != nil {
+		if err := ph.state.Resize(int(marker.Cols), int(marker.Rows)); err != nil {
+			_ = ph.state.Close()
+			ph.state = nil
+			ph.stateHead = 0
+			ph.stateErr = err
+		} else if n := len(ph.stateAnchors); n > 0 && ph.stateAnchors[n-1].through == ph.stateHead {
+			_ = ph.addStateAnchorLocked()
+		}
+	}
 	return nil
 }
 
@@ -411,6 +485,11 @@ func (h *Hub) recordingForRead(paneID string) *PaneHub {
 		recording: recording,
 		epoch:     randomEpoch(),
 		total:     recording.head,
+	}
+	if !recording.ephemeral {
+		ph.statePath = path + ".state"
+		ph.stateAnchors, ph.stateAnchorBytes, _ = loadStateAnchors(ph.statePath)
+		ph.stateAnchorsLoaded = true
 	}
 	h.archives[paneID] = ph
 	return ph
@@ -570,6 +649,14 @@ func (h *Hub) ClosePane(paneID string) {
 		}
 		ph.Ring = nil
 		ph.ckpt = nil
+		if ph.state != nil {
+			_ = ph.state.Close()
+			ph.state = nil
+			ph.stateHead = 0
+		}
+		ph.stateAnchors = nil
+		ph.stateAnchorBytes = 0
+		ph.stateAnchorsLoaded = false
 		h.archives[paneID] = ph
 		ph.mu.Unlock()
 	}
@@ -658,9 +745,16 @@ func (h *Hub) injectDropWarning(client *Client, now time.Time) {
 }
 
 func (h *Hub) Ingest(paneID string, payload []byte) error {
+	persistent := h.recordingEnabled()
 	ph := h.GetOrCreatePaneHub(paneID)
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+
+	// Begin parsing at the pane's first output. New sessions never replay
+	// their recording on attach; the recording remains the byte authority.
+	if persistent && ph.state == nil && ph.stateErr == nil {
+		ph.stateErr = ph.prepareStateLocked()
+	}
 
 	// Commit to the authoritative journal before publishing a frontier or
 	// admitting the bytes to the cache/live stream. A storage failure must
@@ -681,6 +775,19 @@ func (h *Hub) Ingest(paneID string, payload []byte) error {
 		return err
 	}
 	start := ph.total
+	if ph.state != nil {
+		if err := ph.state.Feed(payload); err != nil {
+			_ = ph.state.Close()
+			ph.state = nil
+			ph.stateHead = 0
+			ph.stateErr = err
+		} else {
+			ph.stateHead = start + uint64(len(payload))
+			if n := len(ph.stateAnchors); n > 0 && ph.stateHead-ph.stateAnchors[n-1].through >= stateAnchorInterval {
+				_ = ph.addStateAnchorLocked()
+			}
+		}
+	}
 	if ph.Ring != nil {
 		ph.Ring.Write(payload)
 	}

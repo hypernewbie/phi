@@ -248,6 +248,9 @@ for (const event of ['process exit', 'socket disconnect']) {
                     };
                     try {
                         h.pty.ws.head({ epoch: 7, oldest: 0, head: 0 });
+                        // Empty attachment still settles geometry before live
+                        // bytes enter the paused parser below.
+                        await h.settle();
                         h.pty.ws.output(0, source.slice(0, split));
                         h.pty.ws.output(split, source.slice(split));
                         if (event === 'process exit')

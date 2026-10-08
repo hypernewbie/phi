@@ -1262,6 +1262,9 @@ func (m *tuiModel) switchServer(index int) tea.Cmd {
 		m.data[origin] = &serverData{}
 	}
 	m.restoreCoderSelection()
+	// An already attached pane is visible immediately; its sizing must not
+	// wait for the slower server/session-list refresh to finish.
+	m.resizeActivePane()
 	m.setStatus("", false)
 	cmds := []tea.Cmd{persist, m.loadServerCmd(index)}
 	if s := m.servers[index]; s != nil {

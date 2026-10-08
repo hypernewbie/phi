@@ -165,13 +165,9 @@ for (const mode of ['tui', 'mini', 'legacy']) {
         await expect
             .poll(async () => (await buffer()).type)
             .toBe(mode === 'mini' ? 'normal' : 'alternate');
-        if (mode === 'mini') {
-            await expect
-                .poll(async () => (await buffer()).baseY)
-                .toBeGreaterThan(100);
-        }
         // Drive the real capture listener deterministically. For Mini,
-        // xterm owns scrolling; for legacy, Phi emits its TUI scroll keys.
+        // xterm owns scrolling; its first older page is fetched on demand.
+        // Legacy TUIs route wheel-up as navigation keys instead.
         const prevented = await terminal.evaluate((el) => {
             const event = new WheelEvent('wheel', {
                 deltaY: -120,
@@ -181,20 +177,25 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             el.dispatchEvent(event);
             return event.defaultPrevented;
         });
-        if (mode !== 'mini') {
-            expect(prevented).toBe(true);
-            await expect.poll(() => inputs.join('')).toContain('\x1b\x19');
-        } else {
+        if (mode === 'mini') {
+            await expect
+                .poll(async () => (await buffer()).baseY)
+                .toBeGreaterThan(100);
             expect(prevented).toBe(false);
             expect(inputs.join('')).not.toContain('\x1b\x19');
             expect(inputs.join('')).not.toContain('\x1b\x05');
             await expect(terminal.locator('.tab-loader')).toBeHidden();
             await terminal.locator('.xterm-screen').hover();
             const before = (await buffer()).viewportY;
-            await page.mouse.wheel(0, -240);
+            // The deterministic wheel-up above fetched and opened the older
+            // page at its top. A real wheel-down now scrolls within that book.
+            await page.mouse.wheel(0, 240);
             await expect
                 .poll(async () => (await buffer()).viewportY)
-                .toBeLessThan(before);
+                .toBeGreaterThan(before);
+        } else {
+            expect(prevented).toBe(true);
+            await expect.poll(() => inputs.join('')).toContain('\x1b\x19');
         }
     });
 }

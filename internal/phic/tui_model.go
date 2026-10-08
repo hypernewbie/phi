@@ -709,6 +709,7 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case tea.FocusMsg:
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			tab.actor.sendFocus(true)
+			m.resizeActivePane()
 		}
 		return m, nil
 	case tea.BlurMsg:
@@ -720,6 +721,7 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 		m.relayout()
+		m.resizeActivePane()
 		if d := m.current(); d != nil && d.loaded && !d.needAuth && d.err == "" && !m.cliApplied {
 			return m.applyServerLoaded(serverLoadedMsg{gen: m.gen, index: m.active, identity: d.identity, coders: d.coders, panes: d.panes, health: d.health})
 		}
@@ -1186,7 +1188,7 @@ func (m *tuiModel) resizeActivePane() {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
-	tab.actor.resize(cols, rows)
+	tab.actor.forceResize(cols, rows)
 }
 
 // ---- tabs ----

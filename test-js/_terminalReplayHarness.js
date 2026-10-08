@@ -21,11 +21,11 @@ export class ReplayWire {
         frame.set(payload, 1);
         this.onmessage?.({ data: frame.buffer });
     }
-    head(info) {
+    head(info, checkpointBytes) {
         const json = encode(JSON.stringify(info));
-        const extra = info.ckpt?.ansi
-            ? encode(info.ckpt.ansi)
-            : new Uint8Array();
+        const extra =
+            checkpointBytes ??
+            (info.ckpt?.ansi ? encode(info.ckpt.ansi) : new Uint8Array());
         const payload = new Uint8Array(4 + json.length + extra.length);
         new DataView(payload.buffer).setUint32(0, json.length);
         payload.set(json, 4);

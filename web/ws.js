@@ -73,7 +73,7 @@ export class PTYWebSocket {
         const origin = typeof window !== 'undefined' && window.location?.origin
             ? window.location.origin
             : '';
-        this.url = new URL(`/ws/pane/${paneId}?term_proto=hot-v1`, origin).href;
+        this.url = new URL(`/ws/pane/${paneId}?term_proto=hot-v1&state=ansi-v1`, origin).href;
         this.ws = new WebSocket(this.url);
         this.ws.binaryType = 'arraybuffer';
         this.decoder = new TextDecoder('utf-8');
@@ -206,14 +206,19 @@ export class PTYWebSocket {
             c.through <= head &&
             Number.isInteger(c.cols) &&
             Number(c.cols) > 0 &&
+            Number(c.cols) <= 65535 &&
             Number.isInteger(c.rows) &&
             Number(c.rows) > 0 &&
-            (c.len === undefined || c.len === parsed.extra.byteLength)) {
+            Number(c.rows) <= 65535 &&
+            (c.len === undefined || c.len === parsed.extra.byteLength) &&
+            (c.kind === undefined || c.kind === 'ansi-v1')) {
             ckpt = {
                 through: c.through,
+                kind: 'ansi-v1',
                 cols: Number(c.cols),
                 rows: Number(c.rows),
                 ansi: new TextDecoder().decode(parsed.extra),
+                ...(c.kind === 'ansi-v1' ? { bytes: parsed.extra } : {}),
             };
         }
         const replayFrom = parsed.hdr.replay_from;
