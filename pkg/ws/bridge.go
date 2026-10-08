@@ -18,8 +18,10 @@ import (
 )
 
 var (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
+	// Backgrounded browsers and sleeping devices can pause socket processing.
+	// Keep the existing ping cadence, but tolerate several missed replies.
+	writeWait  = time.Minute
+	pongWait   = 5 * time.Minute
 	pingPeriod = 50 * time.Second
 )
 

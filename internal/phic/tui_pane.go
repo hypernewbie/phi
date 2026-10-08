@@ -211,7 +211,7 @@ func (p *paneActor) writeLoop() {
 			if w.conn != p.getConn() {
 				continue
 			}
-			_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = w.conn.SetWriteDeadline(time.Now().Add(paneWriteTimeout))
 			w.conn.EnableWriteCompression(len(w.bytes) >= 1024)
 			if err := w.conn.WriteMessage(websocket.BinaryMessage, w.bytes); err != nil {
 				p.markUncertain("input write failed; delivery is uncertain (not retried)")
@@ -351,10 +351,10 @@ func (p *paneActor) dial(ctx context.Context) (*websocket.Conn, wireAttach, erro
 		_ = conn.Close()
 		return nil, h, err
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
 	conn.SetPingHandler(func(s string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
-		return conn.WriteControl(websocket.PongMessage, []byte(s), time.Now().Add(10*time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
+		return conn.WriteControl(websocket.PongMessage, []byte(s), time.Now().Add(paneWriteTimeout))
 	})
 	return conn, h, nil
 }
@@ -363,7 +363,7 @@ func (p *paneActor) readLoop(ctx context.Context, conn *websocket.Conn, reads ch
 	for {
 		mt, b, err := conn.ReadMessage()
 		if err == nil {
-			_ = conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(paneReadTimeout))
 			if mt != websocket.BinaryMessage {
 				err = fmt.Errorf("%w: nonbinary pane frame", errProtocol)
 			}
