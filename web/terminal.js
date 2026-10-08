@@ -4923,7 +4923,7 @@ export class TabManager {
         const quickCmdsButton = document.createElement('button');
         quickCmdsButton.type = 'button';
         quickCmdsButton.className = 'preset-btn model-trigger-btn';
-        quickCmdsButton.textContent = '⚡ Cmds ▾';
+        quickCmdsButton.textContent = 'Cmds ▾';
         quickCmdsButton.disabled = menuDisabled;
         quickCmdsButton.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -8576,7 +8576,7 @@ export class TabManager {
         // 3. Render QuickCmds trigger button
         const quickCmdsTriggerBtn = document.createElement('button');
         quickCmdsTriggerBtn.className = 'preset-btn model-trigger-btn';
-        quickCmdsTriggerBtn.innerText = '⚡ Cmds ▾';
+        quickCmdsTriggerBtn.innerText = 'Cmds ▾';
         quickCmdsTriggerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._toggleDropup(

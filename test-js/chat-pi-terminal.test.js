@@ -290,7 +290,7 @@ describe('Pi RPC TabManager boundaries', () => {
             'Compact',
             'Clear',
             'Show thinking',
-            '⚡ Cmds ▾',
+            'Cmds ▾',
             '🤖 Models ▾',
             'Thinking ▾',
         ]);
@@ -335,7 +335,7 @@ describe('Pi RPC TabManager boundaries', () => {
             'Compact',
             'Clear',
             'Show thinking',
-            '⚡ Cmds ▾',
+            'Cmds ▾',
             '🤖 Models ▾',
             'Thinking ▾',
         ]);
