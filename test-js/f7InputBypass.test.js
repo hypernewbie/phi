@@ -115,6 +115,18 @@ describe('sendRawInput on a live tab', () => {
     });
 });
 
+describe('mobile action icon distinction', () => {
+    it('labels quick commands without duplicating adjacent lightning actions', () => {
+        expect(terminalJsSrc).toContain(
+            "quickCmdsButton.textContent = 'Cmds ▾';",
+        );
+        expect(terminalJsSrc).toContain(
+            "quickCmdsTriggerBtn.innerText = 'Cmds ▾';",
+        );
+        expect(terminalJsSrc).not.toContain('⚡ Cmds ▾');
+    });
+});
+
 describe('Ctrl+T preset button regression guard', () => {
     it('does not pre-check isDead before delegating to sendRawInput', () => {
         const start = terminalJsSrc.indexOf('this.ctrlTBtn.addEventListener');

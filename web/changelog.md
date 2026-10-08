@@ -726,7 +726,7 @@ A content-density release: more visual information at glance, fewer file-finding
 
 ### Changed
 - **btop and shell tabs no longer pin the global "working" indicator.** The curly-Phi ϕ glyph in the browser title and the ▍ indicator in the header now reflect *agent* activity, not *terminal* activity. A running btop can no longer hold the chrome lit forever. Both the global indicator (`getTerminalActivityState` in `web-src/util.ts`) and the sidebar session-row ankh/djed glyph respect the exclusion.
-- **Pi Ctrl+Shift+X shortcut chip moved into the presets row.** Sits alongside /quit /resume /model /compact / ⚡ Cmds ▾ / 🤖 Models ▾ instead of crowding the primary Send ↵ button. Construction is now driven by `renderPresets()` keyed on the active tab's coder, so the chip appears exactly when the user is in a pi session.
+- **Pi Ctrl+Shift+X shortcut chip moved into the presets row.** Sits alongside /quit /resume /model /compact / Cmds ▾ / 🤖 Models ▾ instead of crowding the primary Send ↵ button. Construction is now driven by `renderPresets()` keyed on the active tab's coder, so the chip appears exactly when the user is in a pi session.
 - **Rich diff viewer wraps long lines on mobile.** Forced to `line-by-line` layout already (mobile-only); inside the `@media (max-width: 768px)` block each `.d2h-code-line` now wraps with `white-space: pre-wrap / word-break: break-word / overflow-wrap: anywhere`. The line-number column pins to `vertical-align: top` so wrapped rows stay aligned. Desktop CSS and JS untouched.
 
 ### Notes

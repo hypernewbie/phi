@@ -5,7 +5,7 @@ import { TabManager } from '../web/terminal.js';
 
 // The Ctrl+Shift+X chip is additive discoverability for the pi coder.
 // It lives in the presets-container row (the same row as /quit /resume
-// /model /compact / ⚡ Cmds ▾ / 🤖 Models ▾), NOT next to the primary
+// /model /compact / Cmds ▾ / 🤖 Models ▾), NOT next to the primary
 // Send ↵ button. The keyboard shortcut itself is global; the chip is
 // only rendered when the active tab's coder is pi.
 //
