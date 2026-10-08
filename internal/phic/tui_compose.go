@@ -3,9 +3,9 @@ package phic
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	lg "charm.land/lipgloss/v2"
+	"github.com/hypernewbie/phi/internal/phic/textarea"
 )
 
 // Staged native input box. Typing goes straight to the terminal by default;
@@ -46,6 +46,7 @@ func (m *tuiModel) openCompose() tea.Cmd {
 		return nil
 	}
 	ta := textarea.New()
+	ta.Windowed = true
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 	ta.Placeholder = "Type a message, Enter to send…"
@@ -157,7 +158,7 @@ func (m *tuiModel) composeBox() (box string, x, y int) {
 	accent := m.accentColor()
 	hint := lg.NewStyle().Foreground(tuiMuted).Render("Enter send · Alt+Enter newline · Esc cancel")
 	box = lg.NewStyle().Border(lg.RoundedBorder()).BorderForeground(accent).
-		Width(max(12, r.W-2)).Render(m.compose.area.View() + "\n" + hint)
+		Width(max(12, r.W-2)).Render(m.compose.area.ViewWindow() + "\n" + hint)
 	h := lg.Height(box)
 	y = r.Y + r.H - h
 	if y < r.Y {
