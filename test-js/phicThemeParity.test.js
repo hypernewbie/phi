@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { expect, it } from 'vitest';
 import { ACCENT_COLORS } from '../web/theme.js';
 
-it('native Phi client uses every canonical desktop/web accent', () => {
+it('native Phi client uses canonical web accents and Agy ANSI tokens', () => {
     const output = execFileSync(
         'go',
         [
@@ -19,11 +19,22 @@ it('native Phi client uses every canonical desktop/web accent', () => {
         .split('\n')
         .find((value) => value.includes('PHIC_PALETTE '));
     const native = JSON.parse(line.slice(line.indexOf('PHIC_PALETTE ') + 13));
-    expect(native).toEqual(
+    expect(native.accents).toEqual(
         Object.fromEntries(
             Object.entries(ACCENT_COLORS).map(([key, value]) => [
                 key,
                 value.accent.slice(1),
+            ]),
+        ),
+    );
+    expect(native.agyAnsi).toEqual(
+        Object.fromEntries(
+            Object.entries(ACCENT_COLORS).map(([key, value]) => [
+                key,
+                {
+                    dim: value.accentDim.slice(1),
+                    bright: value.accentBright.slice(1),
+                },
             ]),
         ),
     );

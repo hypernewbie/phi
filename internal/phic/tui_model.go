@@ -167,9 +167,10 @@ type paneTab struct {
 	// rows caches the last rendered terminal row strings through the
 	// shared termemu row delta. selGen/lastSel derive the selection
 	// generation from m.selection at render time.
-	rows    termemu.RowCache
-	selGen  uint64
-	lastSel selectionState
+	rows         termemu.RowCache
+	selGen       uint64
+	lastSel      selectionState
+	lastAgyTheme string
 	// composeDraft is the unsent staged input for this tab, restored
 	// when the compose box reopens.
 	composeDraft string

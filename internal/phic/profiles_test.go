@@ -111,7 +111,10 @@ func TestAbsoluteServerPathsDoNotRequireClientFilesystem(t *testing.T) {
 }
 
 func TestThemeOracleInput(t *testing.T) {
-	data, _ := json.Marshal(phiAccents)
+	data, _ := json.Marshal(struct {
+		Accents map[string]string       `json:"accents"`
+		AgyANSI map[string]agyAnsiTones `json:"agyAnsi"`
+	}{Accents: phiAccents, AgyANSI: phiAgyAnsiTones})
 	t.Log("PHIC_PALETTE " + string(data))
 }
 

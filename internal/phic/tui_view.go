@@ -450,9 +450,43 @@ func resolveColor(c termemu.Color, fallback string) string {
 	}
 }
 
-func styleForKey(k cellStyleKey) lg.Style {
-	fg := resolveColor(termemu.Color{Kind: k.fgKind, Value: k.fg}, tuiFgDefault)
-	bg := resolveColor(termemu.Color{Kind: k.bgKind, Value: k.bg}, "")
+// agyAnsiColor mirrors web/terminal.js getTerminalTheme for Agy's ANSI slots.
+// The native client always applies this mapping to Agy tabs; other coders keep
+// the user's terminal palette untouched.
+func agyAnsiColor(c termemu.Color, theme string) termemu.Color {
+	if c.Kind != termemu.ColorPalette {
+		return c
+	}
+	if _, ok := phiAccents[theme]; !ok {
+		theme = "purple"
+	}
+	hex := ""
+	switch c.Value {
+	case 4:
+		hex = phiAgyAnsiTones[theme].Dim
+	case 5, 6:
+		hex = phiAccents[theme]
+	case 12, 13, 14:
+		hex = phiAgyAnsiTones[theme].Bright
+	default:
+		return c
+	}
+	value, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return c
+	}
+	return termemu.Color{Kind: termemu.ColorRGB, Value: uint32(value)}
+}
+
+func styleForKey(k cellStyleKey, agyTheme string) lg.Style {
+	fgColor := termemu.Color{Kind: k.fgKind, Value: k.fg}
+	bgColor := termemu.Color{Kind: k.bgKind, Value: k.bg}
+	if agyTheme != "" {
+		fgColor = agyAnsiColor(fgColor, agyTheme)
+		bgColor = agyAnsiColor(bgColor, agyTheme)
+	}
+	fg := resolveColor(fgColor, tuiFgDefault)
+	bg := resolveColor(bgColor, "")
 	if k.inverse {
 		fg, bg = bg, fg
 		if fg == "" {
@@ -463,7 +497,11 @@ func styleForKey(k cellStyleKey) lg.Style {
 		}
 	}
 	if k.selected {
-		fg, bg = tuiBgDefault, "#82aaff"
+		selectionBg := "#82aaff"
+		if agyTheme != "" {
+			selectionBg = "#" + phiAccents[agyTheme]
+		}
+		fg, bg = tuiBgDefault, selectionBg
 	}
 	st := lg.NewStyle()
 	if fg != "" {
@@ -505,14 +543,27 @@ func (m *tuiModel) renderFrameLines(tab *paneTab, frame termemu.Frame, w, h int)
 		tab.selGen++
 		tab.lastSel = sel
 	}
+	agyTheme := ""
+	if tab.coder == "agy" {
+		agyTheme = "purple"
+		if data := m.data[tab.key.Origin]; data != nil {
+			if _, ok := phiAccents[data.identity.Theme]; ok {
+				agyTheme = data.identity.Theme
+			}
+		}
+		if tab.lastAgyTheme != agyTheme {
+			tab.rows.Reset()
+			tab.lastAgyTheme = agyTheme
+		}
+	}
 	selectionOn := sel.active && tab.key == m.activeTabKeyOrZero()
 	styles := map[cellStyleKey]lg.Style{}
 	return tab.rows.Update(frame, h, w, tab.selGen, func(y int, row []termemu.Cell) string {
-		return m.renderOneFrameRow(row, y, w, styles, selectionOn, sel)
+		return m.renderOneFrameRow(row, y, w, styles, selectionOn, sel, agyTheme)
 	})
 }
 
-func (m *tuiModel) renderOneFrameRow(row []termemu.Cell, y, w int, styles map[cellStyleKey]lg.Style, selectionOn bool, sel selectionState) string {
+func (m *tuiModel) renderOneFrameRow(row []termemu.Cell, y, w int, styles map[cellStyleKey]lg.Style, selectionOn bool, sel selectionState, agyTheme string) string {
 	if row == nil {
 		return ""
 	}
@@ -539,7 +590,7 @@ func (m *tuiModel) renderOneFrameRow(row []termemu.Cell, y, w int, styles map[ce
 		}
 		st, ok := styles[runKey]
 		if !ok {
-			st = styleForKey(runKey)
+			st = styleForKey(runKey, agyTheme)
 			styles[runKey] = st
 		}
 		b.WriteString(st.Render(text.String()))
@@ -566,7 +617,7 @@ func (m *tuiModel) renderOneFrameRow(row []termemu.Cell, y, w int, styles map[ce
 			runStart = x
 			runKey = key
 			if _, ok := styles[key]; !ok {
-				styles[key] = styleForKey(key)
+				styles[key] = styleForKey(key, agyTheme)
 			}
 		}
 		if width+c.Width > w {
