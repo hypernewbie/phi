@@ -359,6 +359,9 @@ func (m *tuiModel) renderReaderTabs() string {
 }
 func (m *tuiModel) handleReaderClick(x, y int) (tea.Model, tea.Cmd) {
 	r := m.diffRect()
+	if r.empty() || x < r.X || x >= r.X+r.W || y < r.Y || y >= r.Y+r.H {
+		return m, nil
+	}
 	if y == r.Y+1 {
 		if x >= r.X+1 && x < r.X+1+len("[d] Diff") {
 			m.diff.markdown = false
@@ -372,6 +375,13 @@ func (m *tuiModel) handleReaderClick(x, y int) (tea.Model, tea.Cmd) {
 		index := m.markdownListStart(max(1, r.H-5)) + y - (r.Y + 3)
 		if index < len(m.markdown.files) {
 			return m, m.openMarkdownFile(index)
+		}
+	}
+	if !m.diff.markdown && !m.diff.loading && m.diff.err == "" && y >= r.Y+3 && y < r.Y+r.H-1 {
+		visible := max(1, r.H-4)
+		index := m.diff.commitListStart(visible) + y - (r.Y + 3)
+		if index < len(m.diff.commits) {
+			return m, m.openDiffCommit(index)
 		}
 	}
 	return m, nil

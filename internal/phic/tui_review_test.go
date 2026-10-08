@@ -45,16 +45,16 @@ func TestReviewWidgetGeometryAndChromeBounds(t *testing.T) {
 	}
 }
 
-func TestReviewDiffRefreshActuallyBuildsLines(t *testing.T) {
+func TestReviewDiffRefreshReplacesCommitListAndClearsOnFailure(t *testing.T) {
 	m := newTUIModel("test", config{}, nil, nil, -1, stubBuild)
 	m.project = "/p"
-	m.applyDiffLoaded(diffLoadedMsg{gen: m.gen, project: "/p", text: "+new\t \n\n"})
-	if len(m.diff.lines) != 3 || m.diff.lines[0] != "+new\t " {
-		t.Fatalf("diff lines stale: %#v", m.diff.lines)
+	m.applyDiffLoaded(diffLoadedMsg{gen: m.gen, project: "/p", commits: []GitCommit{{Hash: "ab12cd3", Subject: "new commit"}}})
+	if len(m.diff.commits) != 1 || m.diff.commits[0].Hash != "ab12cd3" {
+		t.Fatalf("commit list stale: %#v", m.diff.commits)
 	}
 	m.applyDiffLoaded(diffLoadedMsg{gen: m.gen, project: "/p", err: "gone"})
-	if len(m.diff.lines) != 0 {
-		t.Fatal("failed diff retained previous lines")
+	if len(m.diff.commits) != 0 {
+		t.Fatal("failed commit-list refresh retained old entries")
 	}
 }
 

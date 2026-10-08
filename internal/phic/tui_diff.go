@@ -14,43 +14,27 @@ import (
 type diffState struct {
 	markdown        bool
 	open            bool
-	text            string
-	lines           []string
+	commits         []GitCommit
 	loading         bool
 	err             string
-	scroll          int
+	cursor          int
 	origin, project string
-	search          textField
-	searchActive    bool
-	matches         []int
-	matchCursor     int
+	selectedCommit  string
+	modalRaw        string
+	modalLines      []string
+	modalLoading    bool
+	modalErr        string
+	modalScroll     int
+	modalTicket     int
 }
 
-func (d *diffState) recomputeMatches() {
-	d.lines = splitLines(d.text)
-	d.matches = nil
-	query := strings.ToLower(d.search.value)
-	if query == "" {
-		d.scroll = min(d.scroll, max(0, len(d.lines)-1))
-		return
+func (d *diffState) commitListStart(visible int) int {
+	if visible <= 0 || len(d.commits) <= visible {
+		return 0
 	}
-	for i, line := range d.lines {
-		if strings.Contains(strings.ToLower(line), query) {
-			d.matches = append(d.matches, i)
-		}
-	}
-	if len(d.matches) > 0 {
-		d.matchCursor = 0
-		d.scroll = d.matches[0]
-	}
+	return min(max(0, d.cursor-visible+1), len(d.commits)-visible)
 }
-func (d *diffState) nextMatch(delta int) {
-	if len(d.matches) == 0 {
-		return
-	}
-	d.matchCursor = (d.matchCursor + delta + len(d.matches)) % len(d.matches)
-	d.scroll = d.matches[d.matchCursor]
-}
+
 func (m *tuiModel) refreshDiff() tea.Cmd {
 	if !m.diff.open {
 		return nil
@@ -58,13 +42,21 @@ func (m *tuiModel) refreshDiff() tea.Cmd {
 	if m.diff.markdown {
 		return m.refreshMarkdownList()
 	}
-	origin := m.currentOrigin()
-	if origin == "" || m.project == "" {
+	origin, project := m.currentOrigin(), m.project
+	if origin == "" || project == "" {
+		m.diff.commits = nil
+		m.diff.loading = false
+		m.diff.err = "Choose a project to view commits"
 		return nil
 	}
+	if m.diff.origin != origin || m.diff.project != project {
+		m.diff.commits = nil
+		m.diff.cursor = 0
+	}
+	m.diff.origin, m.diff.project = origin, project
 	m.diff.loading = true
 	m.diff.err = ""
-	return m.diffCmd(origin, m.project)
+	return m.diffCmd(origin, project)
 }
 
 // The retained live core supplies normal scrollback. The archive drawer is a

@@ -35,6 +35,36 @@ func TestAPIClientRawDiff(t *testing.T) {
 	}
 }
 
+func TestAPIClientRawDiffCommitAndCommits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/git/raw-diff":
+			if got := r.URL.Query().Get("commit"); got != "ab12cd3" {
+				t.Errorf("commit=%q", got)
+			}
+			_, _ = w.Write([]byte("pretty patch"))
+		case "/api/git/commits":
+			if got := r.URL.Query().Get("cwd"); got != "/work" {
+				t.Errorf("cwd=%q", got)
+			}
+			_ = json.NewEncoder(w).Encode([]GitCommit{{Hash: "ab12cd3", Subject: "Improve terminal"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	api := mustAPI(t, srv.URL)
+	patch, err := api.RawDiffCommit(context.Background(), "/work", "ab12cd3", false)
+	if err != nil || patch != "pretty patch" {
+		t.Fatalf("RawDiffCommit = %q, %v", patch, err)
+	}
+	commits, err := api.Commits(context.Background(), "/work")
+	if err != nil || len(commits) != 1 || commits[0].Subject != "Improve terminal" {
+		t.Fatalf("Commits = %+v, %v", commits, err)
+	}
+}
+
 // TestAPIClientWorktrees pins the worktree list shape.
 func TestAPIClientWorktrees(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
