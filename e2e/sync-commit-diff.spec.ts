@@ -65,15 +65,13 @@ test('a show-commit card selects an older hash and opens that hash in the pretty
     }
     await page.locator('.diff-tab-btn[data-tab="sync"]').click();
     const card = page.locator('.sync-card', { hasText: 'Review this commit' });
-    await expect(card.locator('.sync-diff-btn')).toHaveText(
-        `Show Diff ${HASH.slice(0, 12)}`,
-    );
+    await expect(card.locator('.sync-diff-btn')).toHaveCount(0);
     const prettyButton = card.locator('.sync-pretty-diff-btn');
-    await expect(prettyButton).toHaveAccessibleName('Open Pretty Diff');
+    await expect(prettyButton).toHaveAccessibleName(
+        `Open Pretty Diff · ${HASH.slice(0, 12)}`,
+    );
     const prettyBox = (await prettyButton.boundingBox())!;
-    const selectBox = (await card.locator('.sync-diff-btn').boundingBox())!;
     const rowBox = (await card.locator('.sync-pretty-diff-row').boundingBox())!;
-    expect(prettyBox.y).toBeGreaterThanOrEqual(selectBox.y + selectBox.height);
     expect(prettyBox.width).toBeCloseTo(rowBox.width, 0);
     expect(
         await prettyButton.evaluate(
@@ -83,27 +81,22 @@ test('a show-commit card selects an older hash and opens that hash in the pretty
     await expect(page.locator('#diff-modal')).toBeHidden();
     expect(requested).not.toContain(HASH);
 
-    await card.locator('.sync-diff-btn').click();
-    await expect(page.locator('.diff-tab-btn[data-tab="diff"]')).toHaveClass(
-        /active/,
-    );
-    await expect(page.locator('#diff-commit-select')).toHaveValue(HASH);
-    await expect.poll(() => requested.includes(HASH)).toBe(true);
-    await expect(page.locator('#diff-modal')).toBeHidden();
-
-    // A recent-list refresh must retain the requested old/full hash.
-    const reloaded = page.waitForResponse('**/api/git/commits?*');
-    await page.locator('#refresh-diff-btn').click();
-    await reloaded;
-    await expect(page.locator('#diff-commit-select')).toHaveValue(HASH);
-    await page.locator('.diff-tab-btn[data-tab="sync"]').click();
-    await card.locator('.sync-pretty-diff-btn').click();
+    await prettyButton.click();
     await expect(page.locator('#diff-modal')).toBeVisible();
+    await expect(page.locator('#diff-modal-commit-select')).toHaveValue(HASH);
+    await expect.poll(() => requested.includes(HASH)).toBe(true);
     await expect(
         page.locator('#diff-modal .d2h-code-line-ctn', {
             hasText: 'requested commit content',
         }),
     ).toBeVisible();
+    await expect(page.locator('#diff-commit-select')).toHaveValue(HASH);
+
+    // A recent-list refresh must retain the requested old/full hash.
+    await page.locator('#diff-modal-close').click();
+    const reloaded = page.waitForResponse('**/api/git/commits?*');
+    await page.locator('#refresh-diff-btn').click();
+    await reloaded;
     await expect(page.locator('#diff-commit-select')).toHaveValue(HASH);
     expect(requested.every((commit) => commit === HASH)).toBe(true);
 });
