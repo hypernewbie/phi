@@ -72,6 +72,18 @@ describe('parseActionPayload helper', () => {
         expect(parsed).toEqual(raw);
     });
 
+    it('parses compact completion messages without action-card fields', () => {
+        expect(
+            parseActionPayload({
+                done: 'Fixed the mobile layout.',
+                machine: 'JUPITER',
+            }),
+        ).toEqual({
+            done: 'Fixed the mobile layout.',
+            machine: 'JUPITER',
+        });
+    });
+
     it('returns null for plain strings or non-JSON text', () => {
         expect(parseActionPayload('hello world')).toBeNull();
         expect(parseActionPayload('not json at all')).toBeNull();
@@ -107,6 +119,49 @@ describe('SyncManager rich action cards rendering and interaction', () => {
         vi.spyOn(SyncManager.prototype, 'refreshMessages').mockImplementation(
             () => Promise.resolve(),
         );
+    });
+
+    it('renders a compact done card with a checkmark, a 10-word summary, and sender machine', () => {
+        const app = buildAppStub();
+        const mgr = new SyncManager(app);
+        mgr.renderMessages([
+            {
+                key: 'done:JUPITER:build',
+                value: {
+                    done: 'Shipped the compact completion card across desktop and mobile reliably today.',
+                    machine: 'JUPITER',
+                },
+                updated_at: new Date().toISOString(),
+            },
+        ]);
+
+        const card = mgr.messagesList.querySelector('.sync-card');
+        expect(card.classList.contains('sync-card-done')).toBe(true);
+        expect(card.querySelector('.sync-card-key').textContent).toBe('Done');
+        expect(card.querySelector('.sync-done-icon').textContent).toBe('✅');
+        expect(card.querySelector('.sync-done-summary').textContent).toBe(
+            'Shipped the compact completion card across desktop and mobile reliably…',
+        );
+        expect(card.querySelector('.sync-done-machine').textContent).toContain(
+            'JUPITER',
+        );
+        expect(card.querySelector('.sync-action-card')).toBeNull();
+        expect(card.querySelector('.sync-card-value')).toBeNull();
+    });
+
+    it('labels missing completion machine honestly instead of using the receiving host', () => {
+        const mgr = new SyncManager(buildAppStub());
+        mgr.renderMessages([
+            {
+                key: 'done:unknown',
+                value: { done: 'Tests pass.' },
+                updated_at: new Date().toISOString(),
+            },
+        ]);
+
+        expect(
+            mgr.messagesList.querySelector('.sync-done-machine').textContent,
+        ).toContain('Unknown machine');
     });
 
     it('renders rich action card elements (title, desc, preview button, link, command buttons)', async () => {

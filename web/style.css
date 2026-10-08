@@ -9874,6 +9874,74 @@ html[data-phi-config-page] .settings-modal {
     font-family: var(--font-ui);
 }
 
+/* Compact, glanceable completion updates from another machine. */
+.sync-card-done {
+    border-color: rgba(56, 189, 248, 0.35);
+    background: linear-gradient(
+        120deg,
+        rgba(56, 189, 248, 0.09),
+        var(--bg-sidebar) 72%
+    );
+}
+
+.sync-card-done:hover {
+    border-color: var(--green);
+}
+
+.sync-card-done .sync-card-key {
+    color: var(--green);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.sync-done-card {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+}
+
+.sync-done-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.sync-done-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.sync-done-machine {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 1 auto;
+    max-width: 38%;
+    min-width: 0;
+    padding: 4px 7px;
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 999px;
+    background: rgba(56, 189, 248, 0.08);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.sync-done-machine span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Interactive Sync Action Card */
 .sync-action-card {
     display: flex;
