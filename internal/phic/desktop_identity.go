@@ -11,6 +11,26 @@ import (
 var identityScheme = regexp.MustCompile(`^[A-Z][A-Z0-9+.-]*://`)
 var identityPort = regexp.MustCompile(`^\[?([^:\[\]]+):[0-9]+$`)
 
+// displayHostname mirrors the web display-only mDNS suffix cleanup. Keep the
+// raw hostname intact for server identity and network requests.
+func displayHostname(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	trimmed := raw
+	if strings.HasSuffix(lower, ".local.") {
+		trimmed = raw[:len(raw)-len(".local.")]
+	} else if strings.HasSuffix(lower, ".local") {
+		trimmed = raw[:len(raw)-len(".local")]
+	}
+	if trimmed == "" {
+		return raw
+	}
+	return trimmed
+}
+
 // Exact renderer.canonicalHostname ordering (including .LOCAL and port cases).
 func canonicalHostname(raw string) string {
 	s := cases.Upper(language.Und).String(jsTrim(raw))
