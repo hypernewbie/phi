@@ -10,10 +10,12 @@ function context() {
         <button class="diff-tab-btn active" data-tab="sync">sync</button>
         <button class="diff-tab-btn" data-tab="diff">diff</button>
         <select id="diff-commit-select"><option value="unstaged">Unstaged Changes</option></select>
+        <select id="diff-modal-commit-select"></select>
     `;
     return Object.assign(Object.create(DiffController.prototype), {
         app: { sessionsManager: { activeCWD: '/project' } },
         commitSelect: document.getElementById('diff-commit-select'),
+        modalCommitSelect: document.getElementById('diff-modal-commit-select'),
         syncCommitTarget: null,
         activeTab: 'sync',
         isPanelOpen: true,
@@ -49,6 +51,7 @@ describe('Sync Board commit selection', () => {
         expect(ctx.commitSelect.selectedOptions[0].textContent).toContain(
             '678d343',
         );
+        expect(ctx.modalCommitSelect.value).toBe('678d343');
     });
 
     it('keeps a requested commit selected across recent-list refreshes', async () => {
@@ -61,6 +64,12 @@ describe('Sync Board commit selection', () => {
         await ctx.loadCommits();
         await ctx.loadCommits();
         expect(ctx.commitSelect.value).toBe('678d343');
+        expect(ctx.modalCommitSelect.value).toBe('678d343');
+        expect(
+            Array.from(ctx.modalCommitSelect.options).filter(
+                (o) => o.value === '678d343',
+            ),
+        ).toHaveLength(1);
         expect(
             Array.from(ctx.commitSelect.options).filter(
                 (o) => o.value === '678d343',
