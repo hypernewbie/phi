@@ -119,11 +119,6 @@ func (m *tuiModel) resizePanel(left bool, delta int) tea.Cmd {
 	}
 	return m.persistIntent()
 }
-func (m *tuiModel) refreshConsole() tea.Cmd {
-	// Clear the host display, not the backend VT state or server process.
-	m.resizeActivePane()
-	return tea.Batch(tea.ClearScreen, m.reloadServersCmd())
-}
 func (m *tuiModel) handlePanelDrag(msg tea.MouseMsg) (bool, tea.Cmd) {
 	mouse := msg.Mouse()
 	if _, ok := msg.(tea.MouseReleaseMsg); ok && m.panelDrag != 0 {

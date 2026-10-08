@@ -70,7 +70,7 @@ func TestPanelLayoutChangesSendFinalWidgetGeometry(t *testing.T) {
 }
 
 func TestTabRefreshAndFocusReassertSameWidgetGeometry(t *testing.T) {
-	for _, action := range []string{"tab activation", "server round-trip", "refresh", "focus", "equal host geometry"} {
+	for _, action := range []string{"tab activation", "server round-trip", "focus", "equal host geometry"} {
 		t.Run(action, func(t *testing.T) {
 			m, p, tab := geometryModel(t)
 			switch action {
@@ -79,8 +79,6 @@ func TestTabRefreshAndFocusReassertSameWidgetGeometry(t *testing.T) {
 			case "server round-trip":
 				m.switchServer(1)
 				m.switchServer(0)
-			case "refresh":
-				m.refreshConsole()
 			case "focus":
 				m.Update(tea.FocusMsg{})
 			case "equal host geometry":

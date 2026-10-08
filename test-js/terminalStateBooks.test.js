@@ -174,6 +174,44 @@ it('same-epoch reconnect replaces a damaged current parser with authoritative st
     }
 });
 
+it('explicit Refresh replaces a historical or corrupt view with bounded authoritative state', async () => {
+    const h = await attached(encode('retained archive\r\n'.repeat(10000)));
+    try {
+        h.tab._historyBrowsing = true;
+        h.tab._historyLiveState = { through: h.tab.drainedSeq };
+        h.tab._forceStateRefresh = true;
+        await new Promise((resolve) =>
+            h.term.write('STALE BOOK\r\n'.repeat(100), resolve),
+        );
+        h.term.scrollToTop();
+        const next = h.socket(),
+            bytes = encode('REFRESHED LIVE');
+        next.ws.head(
+            {
+                epoch: 7,
+                oldest: 0,
+                head: h.tab.drainedSeq,
+                ckpt: {
+                    kind: 'ansi-v1',
+                    through: h.tab.drainedSeq,
+                    cols: 240,
+                    rows: 12,
+                    len: bytes.length,
+                },
+            },
+            bytes,
+        );
+        await h.settle();
+        expect(rows(h.term)).toContain('REFRESHED LIVE');
+        expect(rows(h.term).join('\n')).not.toContain('STALE BOOK');
+        expect(h.tab._historyBrowsing).toBe(false);
+        expect(h.tab._forceStateRefresh).toBe(false);
+        expect(h.requests).toHaveLength(0);
+    } finally {
+        h.dispose();
+    }
+});
+
 it('same-epoch reconnect preserves a visible local history book', async () => {
     const h = await attached(encode('retained archive\r\n'.repeat(10000)));
     try {

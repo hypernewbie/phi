@@ -211,11 +211,34 @@ def main():
                 except (RuntimeError, subprocess.CalledProcessError) as error:
                     views.append({"key": key, "restored": False, "error": str(error)})
                     break
+            coder_click = None
+            if ready and coder == "bash" and all(v["restored"] for v in views):
+                try:
+                    rows = tmux("capture-pane", "-p", "-t", name).stdout.decode("utf-8", "replace").splitlines()
+                    x = rows[1].index("[c]") + 1
+                    tmux("send-keys", "-t", name, "-l", f"\x1b[<0;{x};2M\x1b[<0;{x};2m")
+                    wait_view(name, "Enter confirm   Esc cancel")
+                    rows = tmux("capture-pane", "-p", "-t", name).stdout.decode("utf-8", "replace").splitlines()
+                    y, row = next((y, row) for y, row in enumerate(rows) if "› " in row)
+                    x = row.index("› ") + 3
+                    tmux("send-keys", "-t", name, "-l", f"\x1b[<0;{x};{y + 1}M\x1b[<0;{x};{y + 1}m")
+                    wait_view(name, "PHIC_UNSUBMITTED")
+                    # Context selection deliberately keeps chrome focus. Return
+                    # explicitly before comparing the backend cursor/display.
+                    tmux("send-keys", "-t", name, "C-]", "t", "Escape")
+                    actual = settled(name)
+                    (run / "coder-click.view.json").write_text(json.dumps({"expected": reference, "actual": actual}, indent=2))
+                    coder_click = terminal_equal(actual, reference)
+                except (RuntimeError, ValueError, StopIteration, subprocess.CalledProcessError) as error:
+                    coder_click = False
+                    (run / "coder-click-error.txt").write_text(str(error))
             redraw = None
             if ready and coder == "bash" and all(v["restored"] for v in views):
                 tmux("send-keys", "-t", name, "C-]", "R")
                 wait_view(name, "PHIC_UNSUBMITTED")
-                redraw = terminal_equal(settled(name), reference)
+                actual = settled(name)
+                (run / "refresh.view.json").write_text(json.dumps({"expected": reference, "actual": actual}, indent=2))
+                redraw = terminal_equal(actual, reference)
             markdown_view = None
             if ready and coder == "bash" and all(v["restored"] for v in views):
                 try:
@@ -299,7 +322,7 @@ def main():
                     (run / f"{coder}.reattach-error.txt").write_text(str(error))
             row = {"coder": coder, "elapsed": round(time.monotonic() - started, 3), "ready": ready,
                    "views": views, "reattached": reattached,
-                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "markdown_view": markdown_view, "redraw": redraw, "pane": pane}
+                   "detached": detached, "backend_survives_detach": alive, "close_click_undo": close_click_undo, "markdown_view": markdown_view, "redraw": redraw, "coder_click": coder_click, "pane": pane}
             report.append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "pane"}), flush=True)
     finally:
@@ -321,7 +344,7 @@ def main():
     return 0 if len(report) == len(coders) and all(
         r["ready"] and len(r["views"]) == 6 and all(v["restored"] for v in r["views"])
         and r["reattached"] and r["detached"] and r["backend_survives_detach"]
-        and (r["coder"] != "bash" or (r["close_click_undo"] is True and r["markdown_view"] is True and r["redraw"] is True)) for r in report) else 1
+        and (r["coder"] != "bash" or (r["close_click_undo"] is True and r["markdown_view"] is True and r["redraw"] is True and r["coder_click"] is True)) for r in report) else 1
 
 
 if __name__ == "__main__":

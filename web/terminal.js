@@ -1423,15 +1423,7 @@ export class TabManager {
         const mobileRefreshConsoleBtn = document.getElementById(
             'mobile-refresh-console-btn',
         );
-        const handleRefreshConsole = () => {
-            const activeTab = this.getActiveTab();
-            if (!activeTab?.term) return;
-            activeTab.term.refresh(0, activeTab.term.rows - 1);
-            this.activateTabViewport(activeTab, {
-                scrollToBottom: true,
-                autoReconnect: true,
-            });
-        };
+        const handleRefreshConsole = () => this.refreshConsole();
         refreshConsoleBtn?.addEventListener('click', handleRefreshConsole);
         mobileRefreshConsoleBtn?.addEventListener(
             'click',
@@ -1897,6 +1889,7 @@ export class TabManager {
             tabInfo._historyWindowEnd = info.head;
             tabInfo.queuedSeq = from;
             tabInfo.drainedSeq = from;
+            tabInfo._forceStateRefresh = false;
             this._openTermAndViewport(tabInfo);
             this._bootstrappedRelease(tabInfo, pty, from, info.head);
             return;
@@ -1914,6 +1907,10 @@ export class TabManager {
                     tabInfo.paneEpoch !== info.epoch
                 ) return;
                 if (tabInfo._bootstrapGate === pendingBootstrap) break;
+            }
+            if (tabInfo._forceStateRefresh) {
+                tabInfo._historyBrowsing = false;
+                tabInfo._historyLiveState = null;
             }
             if (tabInfo._historyBrowsing) {
                 // Freeze this historical view. The new head is a source
@@ -1950,7 +1947,7 @@ export class TabManager {
                 tabInfo._bootstrapGate = null;
             }
             const visible = tabInfo.term.buffer?.active;
-            const readingLocalHistory = visible?.type === 'normal' && visible.viewportY < visible.baseY;
+            const readingLocalHistory = !tabInfo._forceStateRefresh && visible?.type === 'normal' && visible.viewportY < visible.baseY;
             if (info.ckpt?.bytes && !readingLocalHistory) {
                 if (info.head < (tabInfo.drainedSeq ?? 0)) {
                     try { pty.ws?.close(); } catch (_e) {}
@@ -1965,6 +1962,7 @@ export class TabManager {
                 pty.decoder = new TextDecoder('utf-8');
                 tabInfo._streamDecoder = pty.decoder;
                 this._writeAttachCheckpoint(tabInfo, pty, info.ckpt);
+                tabInfo._forceStateRefresh = false;
                 tabInfo.paneOldest = info.oldest;
                 tabInfo._historyWindowStart = info.ckpt.through;
                 tabInfo._historyWindowEnd = info.head;
@@ -2033,6 +2031,7 @@ export class TabManager {
         tabInfo._historyWindowEnd = info.head;
         tabInfo.queuedSeq = from;
         tabInfo.drainedSeq = from;
+        tabInfo._forceStateRefresh = false;
         this._bootstrappedRelease(tabInfo, pty, from, info.head);
     }
 
@@ -2626,7 +2625,7 @@ export class TabManager {
     }
 
     _terminalPanelVisible(tabInfo) {
-        if (document.hidden) return false;
+        if (typeof document === 'undefined' || document.hidden) return false;
         const rect = tabInfo.termContainer?.getBoundingClientRect?.();
         return !rect || (rect.width > 0 && rect.height > 0);
     }
@@ -7063,6 +7062,18 @@ export class TabManager {
             setTimeout(poll, 1000);
         };
         setTimeout(poll, 1000);
+    }
+
+    // Explicit Refresh rebuilds terminal client connections/state. It never
+    // restarts backend processes, deletes panes or fetches the whole archive.
+    refreshConsole() {
+        for (const tab of this.tabs.values()) {
+            if (!tab.term || tab.finalizing || ['pi-rpc', 'review', 'kanban'].includes(tab.coder)) continue;
+            this._cancelHistoryRequest(tab);
+            tab._forceStateRefresh = true;
+            tab.userFollowBottom = true;
+            this.reconnectTab(tab);
+        }
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {

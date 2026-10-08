@@ -39,6 +39,26 @@ function harness() {
     });
     return { tab, term, ws, manager, frames };
 }
+it('explicit Refresh reconnects every terminal without restarting or losing tab identities', () => {
+    const h = harness();
+    const other = { term: {}, coder: 'shell', paneId: 'other' };
+    const rpc = { term: {}, coder: 'pi-rpc' };
+    h.manager.tabs = new Map([
+        ['main', h.tab],
+        ['other', other],
+        ['rpc', rpc],
+    ]);
+    h.manager.reconnectTab = vi.fn();
+    h.manager._cancelHistoryRequest = vi.fn();
+    h.manager.refreshConsole();
+    expect(h.manager.reconnectTab.mock.calls).toEqual([[h.tab], [other]]);
+    expect(h.manager._cancelHistoryRequest).toHaveBeenCalledTimes(2);
+    expect(h.tab._forceStateRefresh).toBe(true);
+    expect(other._forceStateRefresh).toBe(true);
+    expect(other.paneId).toBe('other');
+    expect(h.manager.tabs.size).toBe(3);
+});
+
 it('a same-size forced refresh repaints xterm, resyncs its viewport and resizes the backend', () => {
     const h = harness();
     h.manager.fitActiveTerminal({ forceResize: true });

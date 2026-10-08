@@ -53,6 +53,10 @@ func RunTUI(ctx context.Context, cfg config, version string) error {
 // closeAll detaches every pane actor. Detach never sends DELETE and never
 // pins a pane; quitting the client leaves server panes alive.
 func (m *tuiModel) closeAll() {
+	for _, actor := range m.retiringActors {
+		actor.close()
+	}
+	m.retiringActors = nil
 	for _, tabs := range m.tabs {
 		for _, tab := range tabs {
 			if tab.actor != nil {
