@@ -486,6 +486,22 @@ The board can be manipulated by any tool or script via plain HTTP REST requests:
 
 Because all writes (`POST`) act as upserts, AI agents can post updates atomically without needing to verify key existence beforehand.
 
+### Completion cards
+
+Post a short completion note as structured JSON. The Sync Board displays a checkmark, the task sentence, and its sender-provided machine name. Keep `done` to one sentence of 10 words or fewer.
+
+```json
+{
+  "key": "done:JUPITER:build",
+  "value": {
+    "done": "Fixed the build on mobile.",
+    "machine": "JUPITER"
+  }
+}
+```
+
+The machine name is informational; Sync Board does not authenticate the sender.
+
 ### Creating a Custom Claude Skill
 
 If you use Claude Code (the CLI) or Claude Desktop, you can teach it to coordinate automatically using the Sync Board by giving it a global skill. 

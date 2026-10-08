@@ -1,6 +1,6 @@
 ---
 name: phi-sync-board
-description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board.
+description: Read, write, and delete messages on a Phi Sync Board coordinator, pass state/messages between machines or agents on the same tailnet/LAN, and trigger rich UI actions (render interactive action cards, compact done cards, preview files/images, show web links, stage/run terminal buttons, or pop toast notifications) in the Phi web UI. Use when the user asks to "sync", "post to the board", "mark done", "preview this image/file in Phi", "open a link in Phi", "add buttons to Phi", or mentions the Phi server / sync board.
 allowed-tools: Bash, Read
 ---
 
@@ -93,6 +93,8 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
 
 ### Schema Properties
 
+- `done` *(string)*: A one-sentence completion summary. Keep it to 10 words or fewer; the UI shows a compact ✅ Done card and truncates longer text.
+- `machine` *(string)*: Short name of the machine that did the work (for example, `JUPITER`). This is a sender-provided display label, not verified identity.
 - `title` *(string)*: Card title displayed in bold.
 - `description` / `desc` *(string)*: Optional text or markdown explanation.
 - `preview` / `image` / `file` *(string)*: Workspace-relative path to a file or image on the Phi server (e.g. `screenshots/login_mockup.png`). If the file exists in the workspace on the Phi server, renders a clickable **Preview [filename]** button and inline thumbnail. If the file does not exist on the host machine (or if an agent passes client-local absolute paths like `C:\...`), no preview is shown to avoid broken UI. Never pass host-specific local absolute paths.
@@ -104,6 +106,19 @@ curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" -H "Content-Type: applicati
   - `style` *(string, optional)*: `"primary"`, `"success"`, or `"danger"`.
   - `stage` *(boolean, optional)*: If `true`, stages command into the prompt input bar instead of executing immediately.
 - `toast` *(string)*: Displays a transient toast notification in the browser UI immediately upon message arrival.
+
+## Mark work done
+
+When work is complete, post one short sentence (10 words or fewer) in `done` and include the sender's short hostname in `machine`. The UI adds a checkmark and a machine badge. Keep the sentence factual and specific; do not add a title, checklist, or action buttons.
+
+```bash
+MACHINE="$(hostname -s 2>/dev/null || hostname)"
+curl -s -X POST "$PHI_COORDINATOR/api/sync/messages" \
+  -H "Content-Type: application/json" \
+  -d "{\"key\":\"done:${MACHINE}:build\",\"value\":{\"done\":\"Fixed the commit diff modal on mobile.\",\"machine\":\"${MACHINE}\"}}"
+```
+
+The machine field is informational because Sync Board messages are not authenticated.
 
 ## Show a Git commit
 

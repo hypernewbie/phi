@@ -41,6 +41,8 @@ export interface SyncChecklistItem {
 }
 
 export interface SyncActionPayload {
+    done?: string;
+    machine?: string;
     title?: string;
     description?: string;
     desc?: string;
@@ -81,6 +83,7 @@ export function parseActionPayload(val: unknown): SyncActionPayload | null {
         'diff' in obj ||
         'checklist' in obj ||
         'actions' in obj ||
+        typeof obj.done === 'string' ||
         'title' in obj ||
         'description' in obj ||
         'desc' in obj ||
@@ -90,6 +93,12 @@ export function parseActionPayload(val: unknown): SyncActionPayload | null {
         return obj as SyncActionPayload;
     }
     return null;
+}
+
+export function formatDoneSummary(value: string): string {
+    const words = value.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+    if (words.length <= 10) return words.join(' ');
+    return `${words.slice(0, 10).join(' ')}…`;
 }
 
 // A string diff target is a commit hash, except for the legacy "modal"
@@ -442,6 +451,12 @@ export class SyncManager {
 
             const localTime = new Date(msg.updated_at).toLocaleTimeString();
             const actionData = parseActionPayload(msg.value);
+            const doneText =
+                typeof actionData?.done === 'string'
+                    ? actionData.done
+                    : undefined;
+            const displayKey = doneText === undefined ? msg.key : 'Done';
+            if (doneText !== undefined) card.classList.add('sync-card-done');
 
             // Handle toast for recent action messages (< 15 seconds)
             if (actionData) {
@@ -467,7 +482,7 @@ export class SyncManager {
 
             const headerHtml = `
                 <div class="sync-card-header">
-                    <span class="sync-card-key" title="${this.escapeHtml(msg.key)}">${this.escapeHtml(msg.key)}</span>
+                    <span class="sync-card-key" title="${this.escapeHtml(msg.key)}">${this.escapeHtml(displayKey)}</span>
                     <div class="sync-card-actions">
                         <button class="sync-card-btn sync-edit-btn" title="Edit message">
                             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
@@ -481,7 +496,24 @@ export class SyncManager {
 
             let bodyHtml = '';
             let descHtml = '';
-            if (actionData) {
+            if (doneText !== undefined && actionData) {
+                const summary = formatDoneSummary(doneText);
+                const sourceMachine =
+                    typeof actionData.machine === 'string' &&
+                    actionData.machine.trim()
+                        ? actionData.machine.trim().replace(/\s+/g, ' ')
+                        : 'Unknown machine';
+                bodyHtml = `
+                    <div class="sync-done-card" role="status" aria-label="Done: ${this.escapeHtml(summary || 'No summary provided')} — ${this.escapeHtml(sourceMachine)}">
+                        <span class="sync-done-icon" aria-hidden="true">✅</span>
+                        <span class="sync-done-summary" title="${this.escapeHtml(doneText.trim())}">${this.escapeHtml(summary || 'No summary provided.')}</span>
+                        <span class="sync-done-machine" title="From ${this.escapeHtml(sourceMachine)}">
+                            <span aria-hidden="true">🖥️</span>
+                            <span>${this.escapeHtml(sourceMachine)}</span>
+                        </span>
+                    </div>
+                `;
+            } else if (actionData) {
                 const desc =
                     actionData.description ||
                     actionData.desc ||
