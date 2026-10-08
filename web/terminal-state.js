@@ -2,6 +2,17 @@
 // vendored xterm version and checked against its real parser in regression tests.
 const CSI = '\x1b[';
 
+// The public reset clears screens/modes but retains the VT parser's pending
+// OSC/DCS/CSI and decoder prefixes. Replacing authoritative state must clear
+// those too, after the owning write queue has drained.
+export function resetTerminalState(term) {
+    const input = term._core?._inputHandler;
+    input?._parser?.reset?.();
+    input?._stringDecoder?.clear?.();
+    input?._utf8Decoder?.clear?.();
+    term.reset();
+}
+
 function charsetName(map) {
     if (!map) return 'B';
     if (map.q === '─' && map.l === '┌') return '0';

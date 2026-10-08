@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,10 @@ const stateAnchorInterval = 2 << 20
 const stateAnchorBudget = 32 << 20
 const stateAnchorCount = 32
 const historyCheckpointRows = 1024
+
+// ErrStatePositionMismatch distinguishes a different lifetime/frontier from
+// a retryable recording or parser reconstruction failure.
+var ErrStatePositionMismatch = errors.New("archive position mismatch")
 
 type stateAnchor struct {
 	through    uint64
@@ -337,6 +342,16 @@ func (h *Hub) HistoricalState(paneID string, epoch, through uint64) (PanePositio
 // history request cannot stall live ingestion. Request cancellation also
 // cancels its WASM work; disposing the parser stays on this owner.
 func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, through uint64) (PanePosition, []byte, int, int, error) {
+	return h.historicalStateContext(ctx, paneID, epoch, through, false)
+}
+
+// HistoricalANSIStateContext exports the same exact parser position for xterm.
+// It includes both screens and continuation, never the recording library.
+func (h *Hub) HistoricalANSIStateContext(ctx context.Context, paneID string, epoch, through uint64) (PanePosition, []byte, int, int, error) {
+	return h.historicalStateContext(ctx, paneID, epoch, through, true)
+}
+
+func (h *Hub) historicalStateContext(ctx context.Context, paneID string, epoch, through uint64, ansi bool) (PanePosition, []byte, int, int, error) {
 	ph := h.recordingForRead(paneID)
 	if ph == nil {
 		return PanePosition{}, nil, 0, 0, fmt.Errorf("pane recording unavailable")
@@ -349,7 +364,7 @@ func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, 
 	pos := ph.positionLocked()
 	if epoch != pos.Epoch || through > pos.Head {
 		ph.mu.Unlock()
-		return pos, nil, 0, 0, fmt.Errorf("archive position mismatch")
+		return pos, nil, 0, 0, ErrStatePositionMismatch
 	}
 	anchor, haveAnchor := ph.nearestStateAnchor(through)
 	ph.mu.Unlock()
@@ -387,7 +402,7 @@ func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, 
 		ph.mu.Lock()
 		if ph.epoch != epoch {
 			ph.mu.Unlock()
-			return pos, nil, 0, 0, fmt.Errorf("archive position mismatch")
+			return pos, nil, 0, 0, ErrStatePositionMismatch
 		}
 		data, resizes, e := ph.recording.read(from, end)
 		ph.mu.Unlock()
@@ -415,16 +430,42 @@ func (h *Hub) HistoricalStateContext(ctx context.Context, paneID string, epoch, 
 		}
 		from = end
 	}
-	snapshot, err := state.ReadyWindow(historyCheckpointRows)
+	var snapshot []byte
+	if ansi {
+		snapshot, err = state.FormatVTState()
+	} else {
+		snapshot, err = state.ReadyWindow(historyCheckpointRows)
+	}
 	cols, rows := state.Geometry()
 	ph.mu.Lock()
 	currentEpoch := ph.epoch
 	ph.mu.Unlock()
 	if currentEpoch != epoch {
-		return pos, nil, 0, 0, fmt.Errorf("archive position mismatch")
+		return pos, nil, 0, 0, ErrStatePositionMismatch
 	}
 	pos.Head = through
 	return pos, snapshot, cols, rows, err
+}
+
+// LiveANSIState returns an atomic current screen/continuation frontier for
+// xterm returning from an archive. It does not replay the time spent browsing.
+func (h *Hub) LiveANSIState(paneID string, epoch uint64) (PanePosition, []byte, int, int, error) {
+	ph := h.recordingForRead(paneID)
+	if ph == nil {
+		return PanePosition{}, nil, 0, 0, fmt.Errorf("pane recording unavailable")
+	}
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	pos := ph.positionLocked()
+	if pos.Epoch != epoch {
+		return pos, nil, 0, 0, ErrStatePositionMismatch
+	}
+	if err := ph.prepareStateLocked(); err != nil {
+		return pos, nil, 0, 0, err
+	}
+	data, err := ph.state.FormatVTState()
+	cols, rows := ph.state.Geometry()
+	return pos, data, cols, rows, err
 }
 
 // State returns a bounded live snapshot, not recording bytes.

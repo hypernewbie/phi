@@ -49,6 +49,25 @@ it('positive-progress response parts form an exact source interval', async () =>
     expect([range.start, range.end, range.byteLength]).toEqual([0, 20, 20]);
 });
 
+it('a requested book succeeds even when the server returns more than 68 positive-progress parts', async () => {
+    const data = encode('a'.repeat(90));
+    const fetcher = vi.fn(async (url) => {
+        const from = Number(
+            new URL(url, 'http://localhost').searchParams.get('from'),
+        );
+        return recordingEnvelope(data.slice(from, from + 1), from, from + 1);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const range = await manager()._fetchRecordingRangeOnce(
+        'p',
+        0,
+        data.length,
+        7,
+    );
+    expect(Array.from(range?.bytes || [])).toEqual(Array.from(data));
+    expect(fetcher).toHaveBeenCalledTimes(90);
+});
+
 it.each([
     ['skipped prefix', { start: 1 }],
     ['epoch mismatch', { epoch: 8 }],

@@ -54,6 +54,7 @@ export function recordingEnvelope(bytes, start, end, extra = {}) {
 export function replayHarness(source, fault = null) {
     vi.stubGlobal('WebSocket', ReplayWire);
     const manager = Object.assign(Object.create(TabManager.prototype), {
+        tabs: new Map(),
         updateDocumentTitle() {},
         syncBackendPin() {},
         _scheduleCheckpointUpload() {},

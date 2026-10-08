@@ -1,7 +1,8 @@
 /* Φ phi — Terminal & Tab Manager */
 
 import { PTYWebSocket } from './ws.js';
-import { terminalSnapshot } from './terminal-state.js';
+import { terminalSnapshot, resetTerminalState } from './terminal-state.js';
+import { terminalHistoryMethods } from './terminal-history.js';
 import { normalizePath } from './sessions.js';
 import {
     projectWorktreeLabel,
@@ -231,7 +232,6 @@ const HISTORY_ANCHOR_BYTES = MAX_WRITE_CHARS;
 const HISTORY_MIN_STEP_BYTES = 4 * 1024;
 // A bounded recording span can arrive in several positive-progress parts.
 // No client byte/hash cache participates in recovery.
-const RECORDING_MAX_PARTS = 68;
 // After output stays quiet this long, the client uploads a screen
 // checkpoint so the next attach restores instantly.
 const CHECKPOINT_QUIET_MS = 2000;
@@ -504,19 +504,16 @@ export class TabManager {
                     this.updateDocumentTitle();
                 }
                 this._reviveActiveTabIfDead();
+                this._queueActiveRefresh();
             }
         });
         // Network restore, bfcache restore and window focus are the "we may have
         // silently lost the socket" signals. The helper is idempotent (config
         // gate + reconnectInFlight guard), so overlapping firings are harmless.
-        window.addEventListener('online', () => this._reviveActiveTabIfDead());
-        window.addEventListener('pageshow', () =>
-            this._reviveActiveTabIfDead(),
-        );
-        window.addEventListener('focus', () => this._reviveActiveTabIfDead());
-        window.addEventListener('phi:desktop-wake', () =>
-            this._reviveActiveTabIfDead(),
-        );
+        const resumeViewport = () => { this._reviveActiveTabIfDead(); this._queueActiveRefresh(); };
+        for (const event of ['online', 'pageshow', 'focus', 'phi:desktop-wake']) window.addEventListener(event, resumeViewport);
+        document.fonts?.ready?.then(() => this._queueActiveRefresh());
+        document.fonts?.addEventListener?.('loadingdone', () => this._queueActiveRefresh());
 
         // Initialise the 1-second background visual idle and prompt detection loop.
         // Also poll CPU stats independently so a stats fetch failure cannot
@@ -1620,7 +1617,7 @@ export class TabManager {
     }
 
     getActiveTab() {
-        return this.tabs.get(this.activePaneId);
+        return this.tabs?.get(this.activePaneId);
     }
 
     // Browser chrome has a deliberately small, composable language:
@@ -1746,22 +1743,20 @@ export class TabManager {
         return null;
     }
 
-    async _fetchRecordingRangeOnce(paneId, from, through, epoch) {
+    async _fetchRecordingRangeOnce(paneId, from, through, epoch, requestSignal) {
         try {
             // Bound each attempt. Failure never authorizes skipping bytes:
             // callers keep the stream held and reconnect for a fresh head.
             // Old Chromium lacks AbortSignal.timeout: degrade to an
             // unbounded fetch there (as before) rather than failing
             // every delta closed.
-            const signal =
-                typeof AbortSignal.timeout === 'function'
-                    ? AbortSignal.timeout(10000)
-                    : undefined;
+            const timeout = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined;
+            const signal = requestSignal && timeout && typeof AbortSignal.any === 'function'
+                ? AbortSignal.any([requestSignal, timeout]) : requestSignal || timeout;
             const parts = [];
             const resizes = [];
             let cursor = from;
-            for (let round = 0; round < RECORDING_MAX_PARTS; round++) {
-                if (cursor >= through) break;
+            while (cursor < through) {
                 // Epoch scopes the read server-side too: a pane rebirth
                 // between our attach and this fetch must 409, never serve
                 // another lifetime's bytes into this stream.
@@ -1854,7 +1849,9 @@ export class TabManager {
         if (pty?.mode !== 'hot') return;
         const prevEpoch = tabInfo.paneEpoch;
         const samePane = prevEpoch !== undefined && prevEpoch === info.epoch;
+        if (!samePane || info.ckpt?.bytes) tabInfo._serverStateAvailable = Boolean(info.ckpt?.bytes);
         if (!samePane) {
+            this._cancelHistoryRequest(tabInfo);
             // A different pane lifetime owns a different byte stream.
             pty.hold?.();
             tabInfo._bootstrapGen = (tabInfo._bootstrapGen ?? 0) + 1;
@@ -1922,10 +1919,9 @@ export class TabManager {
                 // Freeze this historical view. The new head is a source
                 // frontier; latest restoration replays the saved live state.
                 tabInfo.paneOldest = info.oldest;
-                const live = tabInfo._historyLiveState;
-                // Size the live process, never the historical page's grid.
-                if (live?.cols && live.rows && typeof pty.sendResize === 'function' &&
-                    pty.sendResize(live.cols, live.rows) !== false) tabInfo._sizedWs = pty;
+                // Re-measure the actual panel, not the saved book's grid.
+                // A hidden pane must not steal geometry from another client.
+                this._queuePanelFit(tabInfo, { forceResize: true });
                 pty.release();
                 return;
             }
@@ -1953,8 +1949,33 @@ export class TabManager {
                 tabInfo.drainedSeq = tabInfo.queuedSeq ?? tabInfo.drainedSeq;
                 tabInfo._bootstrapGate = null;
             }
-            // Reconnect to the same pane: resume from our watermark. Apply the
-            // retained delta; never reset, never drop output unnecessarily.
+            const visible = tabInfo.term.buffer?.active;
+            const readingLocalHistory = visible?.type === 'normal' && visible.viewportY < visible.baseY;
+            if (info.ckpt?.bytes && !readingLocalHistory) {
+                if (info.head < (tabInfo.drainedSeq ?? 0)) {
+                    try { pty.ws?.close(); } catch (_e) {}
+                    return;
+                }
+                // Current state is authoritative on reconnect too. Retaining a
+                // damaged local parser and repainting it just repaints garbage.
+                // Older books remain in the archive; a reader's view stays put.
+                this._clearHistoryAnchors(tabInfo);
+                resetTerminalState(tabInfo.term);
+                tabInfo.term.resize(info.ckpt.cols, info.ckpt.rows);
+                pty.decoder = new TextDecoder('utf-8');
+                tabInfo._streamDecoder = pty.decoder;
+                this._writeAttachCheckpoint(tabInfo, pty, info.ckpt);
+                tabInfo.paneOldest = info.oldest;
+                tabInfo._historyWindowStart = info.ckpt.through;
+                tabInfo._historyWindowEnd = info.head;
+                tabInfo._historyOmitted = info.ckpt.through > info.oldest;
+                tabInfo.queuedSeq = info.ckpt.through;
+                tabInfo.drainedSeq = info.ckpt.through;
+                this._bootstrappedRelease(tabInfo, pty, info.ckpt.through, info.head);
+                return;
+            }
+            // Legacy or a visible local history book: resume without replacing
+            // the reader's view, then refresh the live process at panel geometry.
             const from = tabInfo.drainedSeq ?? info.head;
             // A parsed batch can end with an incomplete UTF-8 prefix in
             // the decoder, even though no glyph reached xterm yet. Keep
@@ -1987,7 +2008,7 @@ export class TabManager {
         pty.decoder = new TextDecoder('utf-8');
         tabInfo._streamDecoder = pty.decoder;
         try {
-            tabInfo.term.reset();
+            resetTerminalState(tabInfo.term);
         } catch (e) {
             console.error('[term] reset on epoch change failed:', e);
         }
@@ -2043,6 +2064,7 @@ export class TabManager {
         // stale delta below newer bytes.
         const gen = (tabInfo._bootstrapGen ?? 0) + 1;
         tabInfo._bootstrapGen = gen;
+        tabInfo._gapInFlight = false;
         // One barrier owns replay and sizing. Release is idempotent and
         // happens only after the parser and current geometry are settled.
         const releaseOnce = () => {
@@ -2098,6 +2120,7 @@ export class TabManager {
     }
 
     _clearHistoryState(tabInfo) {
+        this._cancelHistoryRequest(tabInfo);
         this._clearHistoryAnchors(tabInfo);
         tabInfo._historyBrowsing = false;
         tabInfo._historyLiveState = null;
@@ -2145,6 +2168,10 @@ export class TabManager {
     }
 
     async _loadColdHistory(tabInfo) {
+        if (tabInfo._serverStateAvailable) {
+            if ((!tabInfo._historyBrowsing && tabInfo.term?.buffer?.active?.type !== 'normal') || !tabInfo._historyOmitted || tabInfo.ws?.mode !== 'hot') return;
+            return this._loadStateHistory(tabInfo);
+        }
         const pty = tabInfo.ws;
         // Alternate-screen scroll belongs to the live application, not
         // xterm scrollback. Never reset a TUI in response to its wheel input.
@@ -2192,7 +2219,7 @@ export class TabManager {
             if (!range) throw new Error('terminal history temporarily unavailable');
             tabInfo._historyParsing = true;
             this._clearHistoryAnchors(tabInfo);
-            tabInfo.term.reset();
+            resetTerminalState(tabInfo.term);
             reset = true;
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -2236,6 +2263,7 @@ export class TabManager {
     }
 
     async _restoreLatestHistory(tabInfo) {
+        if (tabInfo._serverStateAvailable) return this._loadStateHistory(tabInfo, true);
         const pty = tabInfo.ws;
         const saved = tabInfo._historyLiveState;
         if (!tabInfo._historyBrowsing || !saved || saved.epoch !== tabInfo.paneEpoch || tabInfo._historyLoading ||
@@ -2251,7 +2279,7 @@ export class TabManager {
             tabInfo._bootstrapGate = gate;
             const head = Math.max(saved.head, pty.lastFrameEnd ?? 0);
             this._clearHistoryAnchors(tabInfo);
-            tabInfo.term.reset();
+            resetTerminalState(tabInfo.term);
             tabInfo.term.resize(saved.cols, saved.rows);
             pty.decoder = new TextDecoder('utf-8');
             tabInfo._streamDecoder = pty.decoder;
@@ -2277,7 +2305,7 @@ export class TabManager {
             }
             const oldest = tabInfo.paneOldest ?? 0;
             tabInfo.fitAddon?.fit?.();
-            if (tabInfo.ws === pty && typeof pty.sendResize === 'function' &&
+            if (this._terminalPanelVisible?.(tabInfo) !== false && tabInfo.ws === pty && typeof pty.sendResize === 'function' &&
                 pty.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) tabInfo._sizedWs = pty;
             tabInfo._historyWindowStart = this._oldestHistoryAnchor(tabInfo)?.through ?? head;
             tabInfo._historyWindowEnd = head;
@@ -2387,12 +2415,15 @@ export class TabManager {
         tabInfo.fitAddon?.fit?.();
         // The fit restores geometry, not necessarily the viewport's derived
         // scroll position; re-derive it now that the replay is painted.
-        this._resyncViewportScroll(tabInfo);
+        this._refreshTerminalScreen(tabInfo);
         // Every attachment needs a real resize, including equal-size and
         // zero-delta reconnects. Only the current socket may own this sizing.
-        if (tabInfo.ws === ws && typeof ws?.sendResize === 'function' &&
+        if (this._terminalPanelVisible?.(tabInfo) !== false && tabInfo.ws === ws && typeof ws?.sendResize === 'function' &&
             ws.sendResize(tabInfo.term.cols, tabInfo.term.rows) !== false) {
             tabInfo._sizedWs = ws;
+        } else {
+            tabInfo._pendingPanelFit = true;
+            tabInfo._pendingForceResize = true;
         }
         onReady?.();
         // A quiet raw attach must also leave a checkpoint; otherwise every
@@ -2465,6 +2496,7 @@ export class TabManager {
     }
 
     _scheduleCheckpointUpload(tabInfo) {
+        if (tabInfo._serverStateAvailable) return;
         if (!tabInfo.serializeAddon || !tabInfo._ckptEnabled) return;
         clearTimeout(tabInfo._ckptTimer);
         tabInfo._ckptTimer = setTimeout(() => {
@@ -2474,6 +2506,7 @@ export class TabManager {
     }
 
     _uploadCheckpoint(tabInfo) {
+        if (tabInfo._serverStateAvailable) return;
         const pty = tabInfo.ws;
         if (
             !tabInfo.serializeAddon ||
@@ -2583,21 +2616,47 @@ export class TabManager {
     // drawers, splitters, input bars and CSS changes share one resize path.
     _observeTerminalPanel(tabInfo) {
         if (typeof ResizeObserver !== 'function' || tabInfo._panelObserver || !tabInfo.termContainer) return;
-        tabInfo._panelObserver = new ResizeObserver(() => this._queuePanelFit(tabInfo));
+        tabInfo._panelObserver = new ResizeObserver(entries => {
+            const rect = (entries || []).find(entry => entry.target === tabInfo.termContainer)?.contentRect;
+            const changed = rect && (!tabInfo._panelBox || tabInfo._panelBox.width !== rect.width || tabInfo._panelBox.height !== rect.height);
+            if (rect) tabInfo._panelBox = { width: rect.width, height: rect.height };
+            this._queuePanelFit(tabInfo, { forceResize: Boolean(changed) });
+        });
         tabInfo._panelObserver.observe(tabInfo.termContainer);
     }
 
-    _queuePanelFit(tabInfo) {
+    _terminalPanelVisible(tabInfo) {
+        if (document.hidden) return false;
+        const rect = tabInfo.termContainer?.getBoundingClientRect?.();
+        return !rect || (rect.width > 0 && rect.height > 0);
+    }
+
+    _queueActiveRefresh() {
+        const tab = this.getActiveTab();
+        if (tab) this._queuePanelFit(tab, { forceResize: true });
+    }
+
+    _refreshTerminalScreen(tabInfo) {
+        tabInfo.term?._core?.viewport?.syncScrollArea?.(true);
+        this._resyncViewportScroll(tabInfo);
+        try { tabInfo.term?.refresh?.(0, Math.max(0, tabInfo.term.rows - 1)); }
+        catch (error) { console.warn('[term] renderer refresh deferred:', error); }
+    }
+
+    _queuePanelFit(tabInfo, { forceResize = false } = {}) {
+        tabInfo._pendingForceResize = Boolean(tabInfo._pendingForceResize || forceResize);
         if (tabInfo._panelFitRAF !== undefined && tabInfo._panelFitRAF !== null) return;
         const fit = () => {
             tabInfo._panelFitRAF = null;
             if (tabInfo.finalizing || tabInfo.isDead || tabInfo !== this.getActiveTab()) return;
-            if (tabInfo._bootstrapGate || tabInfo._historyBrowsing) {
+            if (tabInfo._bootstrapGate || !this._terminalPanelVisible(tabInfo)) {
                 tabInfo._pendingPanelFit = true;
                 return;
             }
             tabInfo._pendingPanelFit = false;
-            this.fitActiveTerminal();
+            const force = tabInfo._pendingForceResize;
+            tabInfo._pendingForceResize = false;
+            this.fitActiveTerminal({ forceResize: force });
         };
         if (typeof requestAnimationFrame === 'function') tabInfo._panelFitRAF = requestAnimationFrame(fit);
         else fit();
@@ -3249,7 +3308,7 @@ export class TabManager {
         termContainer.addEventListener(
             'wheel',
             (e) => {
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
+                if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
 
                 const isUp = e.deltaY < 0;
 
@@ -3277,7 +3336,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchstart',
             (e) => {
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
+                if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1) {
                     termTouchStartY = e.touches[0].clientY;
                     termTouchRemainder = 0;
@@ -3289,7 +3348,7 @@ export class TabManager {
         termContainer.addEventListener(
             'touchmove',
             (e) => {
-                if (tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
+                if (tabInfo._historyBrowsing || tabInfo.coder !== 'opencode' || isOpenCodeMini(tabInfo)) return;
                 if (e.touches.length === 1 && termTouchStartY !== null) {
                     const currentY = e.touches[0].clientY;
                     const rawDelta = currentY - termTouchStartY;
@@ -3348,6 +3407,10 @@ export class TabManager {
                     } catch (e) {
                         console.error('[term] WebGL dispose failed:', e);
                     }
+                    requestAnimationFrame(() => {
+                        const tab = this.tabs.get(paneId);
+                        if (tab) this._queuePanelFit(tab, { forceResize: true });
+                    });
                 });
             }
             term.loadAddon(webgl);
@@ -3648,7 +3711,7 @@ export class TabManager {
             const buf = tabInfo.term?.buffer?.active;
             if (!buf) return;
             const atBottom = buf.viewportY >= buf.baseY;
-            if (atBottom) {
+            if (atBottom && !tabInfo._historyBrowsing) {
                 scrollToBottomBtn.classList.add('hidden');
             } else {
                 scrollToBottomBtn.classList.remove('hidden');
@@ -3727,11 +3790,17 @@ export class TabManager {
         // Full-screen Pi scrolls its own transcript via SGR mouse reports;
         // dropping these leaves a perfectly drawn but unscrollable screen.
         // Route through tabInfo.ws so a reconnect swaps the destination.
+        let terminalUserInput = false;
+        term._core?.coreService?.onUserInput?.(() => { terminalUserInput = true; });
         term.onData((data) => {
+            const fromUser = terminalUserInput;
+            terminalUserInput = false;
+            // Archive queries must not send old DSR/OSC/DCS replies into the
+            // live app. Keep real keyboard/IME/paste input distinguishable.
+            if ((tabInfo._historyParsing || tabInfo._historyBrowsing) && !fromUser) return;
             const protocolReply =
                 /^(?:\x1b\[<\d+;\d+;\d+[Mm])+$/.test(data) ||
                 /^\x1b\[\??[\d;:]*[cnRu]$/.test(data);
-            if (tabInfo._historyParsing && protocolReply) return;
             if (tabInfo.directMode || protocolReply) {
                 this.sendInput(tabInfo, data);
                 if (tabInfo.directMode && data.includes('\r')) {
@@ -3743,7 +3812,7 @@ export class TabManager {
         // X10 mouse reports use byte-valued strings, not UTF-8 text.
         // Forwarding through sendInput would corrupt non-ASCII coordinates.
         term.onBinary?.((data) => {
-            if (!tabInfo.isDead) tabInfo.ws.sendBinaryInput(data);
+            if (!tabInfo.isDead && !tabInfo._historyParsing && !tabInfo._historyBrowsing) tabInfo.ws.sendBinaryInput(data);
         });
 
         // Double click terminal → toggle direct focus mode
@@ -5497,6 +5566,7 @@ export class TabManager {
         // the fetch — the second caller would otherwise race the first.
         if (tab.finalizing) return;
         tab.finalizing = true;
+        this._cancelHistoryRequest(tab);
         tab._panelObserver?.disconnect();
         if (tab._panelFitRAF != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tab._panelFitRAF);
         tab._panelFitRAF = null;
@@ -8086,6 +8156,7 @@ export class TabManager {
         if (activeTab) {
             activeTab.isAtBottom = undefined;
             activeTab.lastScrollY = undefined;
+            this._queuePanelFit?.(activeTab, { forceResize: true });
         }
     }
 
@@ -8121,13 +8192,16 @@ export class TabManager {
 
     fitActiveTerminal({ forceResize = false } = {}) {
         const activeTab = this.getActiveTab();
-        if (!activeTab || activeTab.isDead || activeTab._historyBrowsing) return;
+        if (!activeTab || activeTab.isDead) return;
         if (activeTab._bootstrapGate) {
             activeTab._pendingPanelFit = true;
+            activeTab._pendingForceResize = Boolean(activeTab._pendingForceResize || forceResize);
             return;
         }
 
         try {
+            if (forceResize) activeTab.term._core?._charSizeService?.measure?.();
+            const oldCols = activeTab.term.cols, oldRows = activeTab.term.rows;
             // One DOM measurement per fit: the proposal feeds both font
             // resolution and the same-geometry skip check below.
             const proposed = activeTab.fitAddon?.proposeDimensions?.();
@@ -8164,6 +8238,10 @@ export class TabManager {
                     // restore a stale viewport position (visible jump).
                     activeTab.isAtBottom = undefined;
                     activeTab.lastScrollY = undefined;
+                    if (activeTab._historyLiveState) {
+                        activeTab._historyLiveState.cols = activeTab.term.cols;
+                        activeTab._historyLiveState.rows = activeTab.term.rows;
+                    }
                     if (forceResize || activeTab._sizedWs !== activeTab.ws) {
                         // First fit on a fresh socket: the client reflow is
                         // correctly skipped, but the backend PTY still has
@@ -8172,6 +8250,7 @@ export class TabManager {
                         // records only a resize that actually went out — a
                         // send swallowed while CONNECTING must not suppress
                         // the retry after open.
+                        this._refreshTerminalScreen?.(activeTab);
                         if (this.sendResizeToBackend(activeTab)) {
                             activeTab._sizedWs = activeTab.ws;
                         }
@@ -8233,8 +8312,14 @@ export class TabManager {
                 activeTab.lastScrollY = undefined;
             }
 
-            // Record only a resize that went out (see the skip path).
-            if (this.sendResizeToBackend(activeTab)) {
+            this._refreshTerminalScreen?.(activeTab);
+            if (activeTab._historyLiveState) {
+                activeTab._historyLiveState.cols = activeTab.term.cols;
+                activeTab._historyLiveState.rows = activeTab.term.rows;
+            }
+            // Coalesce sub-cell drag movements; final settle/activation forces
+            // a redraw even at the same grid without SIGWINCH on every pixel.
+            if ((forceResize || activeTab._sizedWs !== activeTab.ws || oldCols !== activeTab.term.cols || oldRows !== activeTab.term.rows) && this.sendResizeToBackend(activeTab)) {
                 activeTab._sizedWs = activeTab.ws;
             }
         } catch (e) {
@@ -8248,13 +8333,9 @@ export class TabManager {
     ) {
         if (!tabInfo) return;
 
-        setTimeout(() => {
-            if (tabInfo === this.getActiveTab()) {
-                // Activation/refresh reasserts ownership of the panel grid,
-                // even when another client changed the shared PTY size.
-                this.fitActiveTerminal({ forceResize: true });
-            }
-        }, 50);
+        // Fit after layout, not after a guessed 50ms settling interval.
+        // Coalescing retains the force bit through bootstrap/history gates.
+        this._queuePanelFit(tabInfo, { forceResize: true });
 
         if (scrollToBottom && tabInfo.term && !tabInfo.isDead) {
             this._spamScrollToBottom(tabInfo);
@@ -8312,7 +8393,7 @@ export class TabManager {
     // an unsent sizing later. Fakes returning undefined count as sent
     // (the historical assumption); only an explicit false means dropped.
     sendResizeToBackend(tab) {
-        if (!tab || tab.isDead) return false;
+        if (!tab || tab.isDead || this._terminalPanelVisible?.(tab) === false) return false;
         const term = tab.term;
         if (term?.cols && term.rows && tab.ws) {
             return tab.ws.sendResize(term.cols, term.rows) !== false;
@@ -9870,3 +9951,5 @@ export class TabManager {
         }
     }
 }
+
+Object.assign(TabManager.prototype, terminalHistoryMethods);

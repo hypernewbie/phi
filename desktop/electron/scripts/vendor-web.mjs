@@ -37,6 +37,7 @@ const WEB_JS_MODULES = [
   'app.js',
   'terminal.js',
   'terminal-state.js',
+  'terminal-history.js',
   'ws.js',
   'sessions.js',
   'path-picker.js',
