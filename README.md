@@ -103,7 +103,7 @@ go build -o phic ./cmd/phic
 ./phic .
 ```
 
-`phic` reads the desktop client's saved servers. Backend output stays raw; Ctrl-] opens inline server, session, diff, worktree, and help views. The next release that includes the client also installs the `phic` npm command on macOS/Linux. See [native client setup, keys, and compatibility limits](docs/PHIC.md).
+`phic` reads the desktop client's saved servers. Backend output stays raw; Ctrl-] opens inline server, session, diff, worktree, and help views. The next release that includes the client also installs the `phic` npm command on macOS/Linux.
 
 ### Frontend dev (live reload)
 
@@ -173,7 +173,7 @@ Custom backend files still override the built-in defaults. Keep `"mini"` as the 
 
 ### Codex CLI
 
-Install the official CLI with `npm install -g @openai/codex`, then run `codex login` on the Phi server's computer. Phi opens its interactive CLI with native scrollback and resumes saved conversations by UUID. **Models** opens Codex's own model/reasoning picker; no stale model-name list or guessed selection sequence is shipped. Current official options include `gpt-6.1-sol`, `gpt-6-astra`, and `gpt-6-luna`, subject to account availability. See [Codex setup and verified commands](docs/CODEX.md).
+Install the official CLI with `npm install -g @openai/codex`, then run `codex login` on the Phi server's computer. Phi opens its interactive CLI with native scrollback and resumes saved conversations by UUID. **Models** opens Codex's own model/reasoning picker; no stale model-name list or guessed selection sequence is shipped. Current official options include `gpt-6.1-sol`, `gpt-6-astra`, and `gpt-6-luna`, subject to account availability.
 
 ## Supported assistants
 
