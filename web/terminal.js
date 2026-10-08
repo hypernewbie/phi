@@ -6809,7 +6809,7 @@ export class TabManager {
         this.inputTextArea.focus({ preventScroll: true });
     }
 
-    sendRawInput(bytes) {
+    sendRawInput(bytes, { focusInputOnMobile = true } = {}) {
         const activeTab = this.getActiveTab();
         if (!activeTab || activeTab.coder === 'pi-rpc') return;
         // The backend PTY layer handles the Windows ConPTY quirk where a \r
@@ -6818,8 +6818,12 @@ export class TabManager {
         if (!sent) return;
 
         const isMobile = prefersInputBarFocus();
-        if (isMobile && !activeTab.directMode && this.inputTextArea) {
-            this.inputTextArea.focus({ preventScroll: true });
+        if (isMobile) {
+            if (focusInputOnMobile && !activeTab.directMode && this.inputTextArea) {
+                this.inputTextArea.focus({ preventScroll: true });
+            } else {
+                this.inputTextArea?.blur();
+            }
         } else {
             this.focusActiveTerminal();
         }
@@ -6906,7 +6910,7 @@ export class TabManager {
      * Keep its 200ms gap pinned to the clicked tab. V2 Mini queues Enter
      * behind a pending paste, so it uses the atomic form, like Pi.
      */
-    sendSlashCommand(tabInfo, cmd) {
+    sendSlashCommand(tabInfo, cmd, { focusInputOnMobile = true } = {}) {
         if (tabInfo?.coder === 'pi-rpc') return false;
         const paste = `\x1b[200~${cmd}\x1b[201~`;
         const legacyOpenCode = tabInfo.coder === 'opencode' && !isOpenCodeMini(tabInfo);
@@ -6921,8 +6925,12 @@ export class TabManager {
             }, 200);
         }
         const isMobile = prefersInputBarFocus();
-        if (isMobile && !tabInfo.directMode && this.inputTextArea) {
-            this.inputTextArea.focus({ preventScroll: true });
+        if (isMobile) {
+            if (focusInputOnMobile && !tabInfo.directMode && this.inputTextArea) {
+                this.inputTextArea.focus({ preventScroll: true });
+            } else {
+                this.inputTextArea?.blur();
+            }
         } else {
             this.focusActiveTerminal();
         }
@@ -8506,7 +8514,7 @@ export class TabManager {
                     btn.className = 'preset-btn';
                     btn.innerText = p.name;
                     btn.addEventListener('click', () => {
-                        this.sendRawInput(p.value);
+                        this.sendRawInput(p.value, { focusInputOnMobile: false });
                     });
                     this.presetsContainer.appendChild(btn);
                 });
@@ -8728,9 +8736,9 @@ export class TabManager {
                 ) {
                     const cmd = p.value.slice(0, -1);
                     // OpenCode delays Enter after the paste; Pi stays atomic.
-                    this.sendSlashCommand(activeTab, cmd);
+                    this.sendSlashCommand(activeTab, cmd, { focusInputOnMobile: false });
                 } else {
-                    this.sendRawInput(p.value);
+                    this.sendRawInput(p.value, { focusInputOnMobile: false });
                 }
                 dropup.classList.add('hidden');
             });
@@ -9282,7 +9290,11 @@ export class TabManager {
                 this.lastInputValue = '';
                 this.saveActiveDraft();
                 this.adjustInputHeight();
-                this.inputTextArea.focus({ preventScroll: true });
+                if (prefersInputBarFocus()) {
+                    this.inputTextArea.blur();
+                } else {
+                    this.inputTextArea.focus({ preventScroll: true });
+                }
                 this._spamScrollToBottom(activeTab);
                 dropup.classList.add('hidden');
             });
@@ -9468,7 +9480,7 @@ export class TabManager {
                     e.stopPropagation();
                     const activeTab = this.getActiveTab();
                     if (!activeTab || activeTab.coder === 'pi-rpc') return;
-                    this.sendRawInput(k.value);
+                    this.sendRawInput(k.value, { focusInputOnMobile: false });
                     btn.classList.add('key-pressed');
                     setTimeout(() => btn.classList.remove('key-pressed'), 120);
                 });
