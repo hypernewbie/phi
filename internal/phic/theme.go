@@ -13,6 +13,45 @@ var phiAccents = map[string]string{
 	"purple": "7c6af7", "blue": "38bdf8", "green": "10b981", "amber": "fbbf24", "red": "f87171", "pink": "ec4899", "teal": "14b8a6", "indigo": "6366f1", "orange": "f97316", "cyan": "06b6d4", "rose": "f43f5e", "lime": "84cc16", "white": "ffffff", "gold": "d4af37", "violet": "a78bfa", "emerald": "059669", "neon": "00f0ff", "coral": "e07a5f", "fuchsia": "d946ef", "canary": "ffee10", "copper": "d35400", "mint": "2ed573", "arc": "00d4ff", "ember": "ff4500", "fog": "94a3b8", "ash": "a8a29e", "dusk": "b8a9c9", "pine": "84a59d", "fern": "9caf88",
 }
 
+type agyAnsiTones struct {
+	Dim    string `json:"dim"`
+	Bright string `json:"bright"`
+}
+
+// These are the blue dim/bright accent tokens from web/theme.js. Agy's ANSI
+// palette remapping in phic must stay in parity with the browser client.
+var phiAgyAnsiTones = map[string]agyAnsiTones{
+	"purple":  {Dim: "5b4ec2", Bright: "9a8dfa"},
+	"blue":    {Dim: "0284c7", Bright: "7dd3fc"},
+	"green":   {Dim: "047857", Bright: "34d399"},
+	"amber":   {Dim: "b45309", Bright: "fcd34d"},
+	"red":     {Dim: "b91c1c", Bright: "fca5a5"},
+	"pink":    {Dim: "be185d", Bright: "f472b6"},
+	"teal":    {Dim: "0f766e", Bright: "5eead4"},
+	"indigo":  {Dim: "4338ca", Bright: "818cf8"},
+	"orange":  {Dim: "c2410c", Bright: "fdba74"},
+	"cyan":    {Dim: "0e7490", Bright: "67e8f9"},
+	"rose":    {Dim: "be123c", Bright: "fb7185"},
+	"lime":    {Dim: "4d7c0f", Bright: "a3e635"},
+	"white":   {Dim: "94a3b8", Bright: "ffffff"},
+	"gold":    {Dim: "997a15", Bright: "f3e5ab"},
+	"violet":  {Dim: "6d28d9", Bright: "ddd6fe"},
+	"emerald": {Dim: "065f46", Bright: "34d399"},
+	"neon":    {Dim: "008b99", Bright: "70f8ff"},
+	"coral":   {Dim: "9e4731", Bright: "f4a261"},
+	"fuchsia": {Dim: "86198f", Bright: "f0abfc"},
+	"canary":  {Dim: "b8ad00", Bright: "ffff66"},
+	"copper":  {Dim: "8a3700", Bright: "e59866"},
+	"mint":    {Dim: "1a8a4a", Bright: "7bed9f"},
+	"arc":     {Dim: "0080c0", Bright: "66e0ff"},
+	"ember":   {Dim: "cc2200", Bright: "ff7733"},
+	"fog":     {Dim: "64748b", Bright: "cbd5e1"},
+	"ash":     {Dim: "78716c", Bright: "d6d3d1"},
+	"dusk":    {Dim: "7c6f8a", Bright: "d4cae0"},
+	"pine":    {Dim: "5b7065", Bright: "a8c2bc"},
+	"fern":    {Dim: "6b8e5f", Bright: "bccbab"},
+}
+
 func osColorEnabled() bool { return os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb" }
 
 func themeText(theme, text string, selected bool) string {
