@@ -6,6 +6,34 @@ const HISTORY_MIN_STEP_BYTES = 4096;
 export const HISTORY_BOOK_BYTES = 64 << 10;
 
 export const terminalHistoryMethods = {
+    _updateHistoryButton(tabInfo) {
+        const button = tabInfo.loadHistoryBtn;
+        if (!button) return;
+        const buffer = tabInfo.term?.buffer?.active;
+        // Scrolling only reveals this affordance. Fetching an older book
+        // requires a click, even at the very first retained row.
+        const visible = !tabInfo.isDead && !tabInfo.finalizing &&
+            tabInfo._historyOmitted && tabInfo.ws?.mode === 'hot' &&
+            (tabInfo._historyBrowsing || buffer?.type === 'normal') &&
+            buffer?.viewportY <= tabInfo.term.rows;
+        const loading = Boolean(tabInfo._historyLoading);
+        button.classList.toggle('hidden', !visible);
+        const disabled = !visible || loading;
+        const tabIndex = visible ? 0 : -1;
+        const busy = String(loading);
+        const hidden = String(!visible);
+        const title = loading ? 'Loading older history…' : 'Load older history';
+        const icon = loading ? '…' : '\u2191';
+        // Live output often leaves these unchanged. Avoid rewriting hidden
+        // button text and attributes on every parsed terminal batch.
+        if (button.disabled !== disabled) button.disabled = disabled;
+        if (button.tabIndex !== tabIndex) button.tabIndex = tabIndex;
+        if (button.getAttribute('aria-busy') !== busy) button.setAttribute('aria-busy', busy);
+        if (button.getAttribute('aria-hidden') !== hidden) button.setAttribute('aria-hidden', hidden);
+        if (button.title !== title) button.title = title;
+        if (button.textContent !== icon) button.textContent = icon;
+    },
+
     // New servers own the parser. A book starts from an exact parser state,
     // never a guessed byte boundary; the recording still owns every byte.
     async _fetchTerminalState(paneId, epoch, through, signal) {
@@ -73,6 +101,7 @@ export const terminalHistoryMethods = {
         const request = new AbortController();
         tabInfo._historyRequest = request;
         tabInfo._historyLoading = true;
+        this._updateHistoryButton(tabInfo);
         const epoch = tabInfo.paneEpoch;
         const current = () => !request.signal.aborted && !tabInfo.finalizing && tabInfo.paneEpoch === epoch;
         const task = (async () => {
@@ -162,6 +191,7 @@ export const terminalHistoryMethods = {
                     tabInfo._historyRequest = null;
                     tabInfo._historyLoading = false;
                     tabInfo._historyParsing = false;
+                    this._updateHistoryButton(tabInfo);
                 }
                 if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
                 finishGate?.();

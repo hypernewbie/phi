@@ -54,6 +54,8 @@ async function attached(source) {
         ansi,
     );
     await h.settle();
+    h.tab.loadHistoryBtn = document.createElement('button');
+    h.manager._updateHistoryButton(h.tab);
     return h;
 }
 
@@ -244,6 +246,42 @@ it('same-epoch reconnect preserves a visible local history book', async () => {
     }
 });
 
+it('reconnecting an archived view restores the manual button without replacing the book', async () => {
+    const h = await attached(encode('archive\r\n'.repeat(10000)));
+    try {
+        h.tab._historyBrowsing = true;
+        const before = rows(h.term);
+        h.tab.isDead = true;
+        h.manager._updateHistoryButton(h.tab);
+        expect(h.tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
+        h.tab.isDead = false;
+        const next = h.socket();
+        const bytes = encode('DIFFERENT LIVE SCREEN');
+        next.ws.head(
+            {
+                epoch: 7,
+                oldest: 0,
+                head: h.tab.drainedSeq,
+                ckpt: {
+                    kind: 'ansi-v1',
+                    through: h.tab.drainedSeq,
+                    cols: 240,
+                    rows: 12,
+                    len: bytes.length,
+                },
+            },
+            bytes,
+        );
+        await h.settle();
+        expect(rows(h.term)).toEqual(before);
+        expect(h.tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
+        expect(h.tab.loadHistoryBtn.disabled).toBe(false);
+        expect(h.requests).toHaveLength(0);
+    } finally {
+        h.dispose();
+    }
+});
+
 it('returning to live requests only a bounded latest state and adopts its exact frontier', async () => {
     const source = encode('archive\r\n'.repeat(20000));
     const h = await attached(source);
@@ -318,6 +356,8 @@ it('permanent epoch rejection preserves the current view and reports the undeliv
         expect(rows(h.term)).toEqual(before);
         expect(h.tab._historyLoading).toBe(false);
         expect(h.tab._historyError).toContain('409');
+        expect(h.tab.loadHistoryBtn.disabled).toBe(false);
+        expect(h.tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('false');
         expect(h.manager.app.showToast).toHaveBeenCalledWith(
             expect.stringContaining('not skipped'),
             expect.objectContaining({ type: 'error' }),
@@ -351,6 +391,10 @@ it('canceling a slow history request does not hold live frames or reset the curr
         );
         const pending = h.manager._loadColdHistory(h.tab);
         await admission;
+        expect(h.tab.loadHistoryBtn.disabled).toBe(true);
+        expect(h.tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('true');
+        await h.manager._loadColdHistory(h.tab);
+        expect(fetch).toHaveBeenCalledOnce();
         h.pty.ws.output(source.length, encode(' LIVE_WHILE_WAITING'));
         await h.settle();
         expect(rows(h.term)).toContain('LIVE SCREEN LIVE_WHILE_WAITING');
@@ -358,6 +402,8 @@ it('canceling a slow history request does not hold live frames or reset the curr
         await pending;
         expect(h.tab._historyLoading).toBe(false);
         expect(h.tab._historyBrowsing).not.toBe(true);
+        expect(h.tab.loadHistoryBtn.disabled).toBe(false);
+        expect(h.tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('false');
         expect(h.manager.app.showToast).not.toHaveBeenCalled();
     } finally {
         h.dispose();

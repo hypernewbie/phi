@@ -166,7 +166,7 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             .poll(async () => (await buffer()).type)
             .toBe(mode === 'mini' ? 'normal' : 'alternate');
         // Drive the real capture listener deterministically. For Mini,
-        // xterm owns scrolling; its first older page is fetched on demand.
+        // xterm owns scrolling; older pages require the manual history button.
         // Legacy TUIs route wheel-up as navigation keys instead.
         const prevented = await terminal.evaluate((el) => {
             const event = new WheelEvent('wheel', {
@@ -178,6 +178,7 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             return event.defaultPrevented;
         });
         if (mode === 'mini') {
+            await terminal.locator('.load-history-btn').click();
             await expect
                 .poll(async () => (await buffer()).baseY)
                 .toBeGreaterThan(100);
@@ -187,8 +188,8 @@ for (const mode of ['tui', 'mini', 'legacy']) {
             await expect(terminal.locator('.tab-loader')).toBeHidden();
             await terminal.locator('.xterm-screen').hover();
             const before = (await buffer()).viewportY;
-            // The deterministic wheel-up above fetched and opened the older
-            // page at its top. A real wheel-down now scrolls within that book.
+            // The explicit button click opened the older page at its top.
+            // A real wheel-down now scrolls within that book.
             await page.mouse.wheel(0, 240);
             await expect
                 .poll(async () => (await buffer()).viewportY)

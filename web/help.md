@@ -108,6 +108,8 @@ Automatic reconnection is **on by default** (`auto_reconnect: "visible"`) and ca
 
 Terminal scrollback is set to 10000 lines so the replay buffer is not truncated client-side.
 
+The circular ↑ button appears near the top of normal terminal scrollback when older output is available. This button loads one older book per click. Scrolling alone does not fetch older books. The ↓ button returns to the latest output.
+
 ## Input Bar
 
 The bottom input bar is a staged input area.

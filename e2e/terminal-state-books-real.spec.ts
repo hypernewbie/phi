@@ -169,16 +169,11 @@ while True: time.sleep(1)
             )
             .toBe(true);
         expect(ranges).toHaveLength(0);
-        const older = () =>
-            page.locator(`#term-${id}`).evaluate((node) =>
-                node.dispatchEvent(
-                    new WheelEvent('wheel', {
-                        deltaY: -120,
-                        bubbles: true,
-                        cancelable: true,
-                    }),
-                ),
-            );
+        const older = async () => {
+            const button = page.locator(`#term-${id} .load-history-btn`);
+            await expect(button).toBeEnabled();
+            await button.click();
+        };
         await older();
         await expect.poll(async () => (await probe())?.color).toBe(1);
         await expect.poll(() => ranges.length).toBeGreaterThan(0);

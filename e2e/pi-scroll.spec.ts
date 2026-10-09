@@ -113,7 +113,7 @@ async function firstRow(page: Page, pane: string): Promise<string> {
     }, pane);
 }
 
-test('scroll-up fetches history omitted by a valid compact checkpoint', async ({
+test('manual history button fetches output omitted by a valid compact checkpoint', async ({
     page,
 }) => {
     await observeXterm(page);
@@ -201,10 +201,15 @@ test('scroll-up fetches history omitted by a valid compact checkpoint', async ({
     expect(fetched).toHaveLength(0);
     await page.locator(`#term-${pane} .xterm-screen`).hover();
     await page.mouse.wheel(0, -1200);
+    const historyButton = page.locator(`#term-${pane} .load-history-btn`);
+    await expect(historyButton).toBeEnabled();
+    expect(fetched).toHaveLength(0);
+    await historyButton.click();
     await expect
         .poll(() => fetched.some((range) => range.from === 0))
         .toBe(true);
     await expect.poll(() => firstRow(page, pane)).toBe('ARCHIVE ROW 0000');
+    await expect(historyButton).toHaveClass(/hidden/);
 });
 
 for (const situation of [

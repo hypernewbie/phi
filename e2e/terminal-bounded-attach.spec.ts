@@ -17,6 +17,7 @@ interface AttachTerminal {
     buffer: {
         active: {
             baseY: number;
+            viewportY: number;
             length: number;
             getLine(
                 i: number,
@@ -24,6 +25,8 @@ interface AttachTerminal {
         };
     };
     write(data: string | Uint8Array, callback?: () => void): void;
+    scrollToLine(line: number): void;
+    scrollToTop(): void;
 }
 interface TerminalConstructor {
     new (options: Record<string, unknown>): AttachTerminal;
@@ -37,7 +40,7 @@ interface PerfWindow {
     Terminal: TerminalConstructor;
 }
 
-test('long archive attaches from bounded screen state and fetches older books only when scrolled up', async ({
+test('long archive attaches from bounded state and fetches older books only on a near-top button click', async ({
     page,
 }) => {
     const id = 'two-hour-terminal';
@@ -48,13 +51,22 @@ test('long archive attaches from bounded screen state and fetches older books on
     for (let at = 0; at < archive.length; at += line.length)
         line.copy(archive, at);
     const checkpoint = Buffer.from(
-        '\x1b[2J\x1b[H\x1b[32mCURRENT SCREEN READY\x1b[0m\x1b[24;1Hprompt> ',
+        '\x1b[2J\x1b[H' +
+            Array.from({ length: 200 }, (_, i) => `RESIDENT ROW ${i}\r\n`).join(
+                '',
+            ) +
+            '\x1b[32mCURRENT SCREEN READY\x1b[0m\r\nprompt> ',
     );
     const epoch = 9001,
         cols = 100,
         rows = 30;
     let sentAttachBytes = 0,
         recordingRequests: { from: number; through: number }[] = [];
+    let stateRequests = 0;
+    page.on('request', (request) => {
+        if (request.url().includes(`/api/terminals/${id}/state?`))
+            stateRequests++;
+    });
     const socketRoutes: WebSocketRoute[] = [];
     const frames: { type: number; bytes: number }[] = [];
     await page.addInitScript(() => {
@@ -227,18 +239,59 @@ test('long archive attaches from bounded screen state and fetches older books on
     expect(attachWriteBytes).toBeLessThan(archive.length / 100);
     expect(recordingRequests).toHaveLength(0);
     expect(frames[0]?.type).toBe(0x08);
-    // The source is retained server-side. UI asks for a bounded older page only
-    // after the user scrolls; the test verifies exact byte authority and range.
-    await page.locator(`#term-${id}`).evaluate((node) =>
-        node.dispatchEvent(
-            new WheelEvent('wheel', {
-                deltaY: -120,
-                bubbles: true,
-                cancelable: true,
+    const historyButton = page.locator(`#term-${id} .load-history-btn`);
+    await page.locator(`#term-${id} .xterm-screen`).hover();
+    await page.mouse.wheel(0, -40);
+    await expect
+        .poll(() =>
+            page.evaluate(() => {
+                const term = (window as unknown as PerfWindow).attachTerms.find(
+                    (t) =>
+                        t.element?.closest('.term-container')?.id ===
+                        'term-two-hour-terminal',
+                );
+                const buffer = term?.buffer.active;
+                return (
+                    !!term &&
+                    !!buffer &&
+                    buffer.viewportY < buffer.baseY &&
+                    buffer.viewportY > term.rows
+                );
             }),
-        ),
-    );
-    await expect.poll(() => recordingRequests.length).toBeGreaterThan(0);
+        )
+        .toBe(true);
+    await expect(historyButton).toHaveClass(/hidden/);
+    expect(recordingRequests).toHaveLength(0);
+    expect(stateRequests).toBe(0);
+    // Even near the top, scrolling reveals a button without fetching a book.
+    await page.evaluate(() => {
+        const term = (window as unknown as PerfWindow).attachTerms.find(
+            (t) =>
+                t.element?.closest('.term-container')?.id ===
+                'term-two-hour-terminal',
+        );
+        term?.scrollToLine(term.rows);
+    });
+    await expect(historyButton).not.toHaveClass(/hidden/);
+    await expect(historyButton).toBeEnabled();
+    expect(recordingRequests).toHaveLength(0);
+    expect(stateRequests).toBe(0);
+    await page.evaluate(() => {
+        (window as unknown as PerfWindow).attachTerms
+            .find(
+                (t) =>
+                    t.element?.closest('.term-container')?.id ===
+                    'term-two-hour-terminal',
+            )
+            ?.scrollToTop();
+    });
+    await page.mouse.wheel(0, -120);
+    await expect(historyButton).toBeEnabled();
+    expect(recordingRequests).toHaveLength(0);
+    expect(stateRequests).toBe(0);
+    // An explicit click retains the existing exact, bounded book contract.
+    await historyButton.click();
+    await expect.poll(() => recordingRequests.length).toBe(1);
     const pageRequest = recordingRequests.at(-1);
     expect(pageRequest).toBeDefined();
     if (!pageRequest) throw new Error('history request disappeared');
@@ -269,6 +322,11 @@ test('long archive attaches from bounded screen state and fetches older books on
             }),
         )
         .toBe(true);
+    await expect(historyButton).toBeEnabled();
+    await page.mouse.wheel(0, -120);
+    await expect(historyButton).toBeEnabled();
+    expect(recordingRequests).toHaveLength(1);
+    expect(stateRequests).toBe(1);
     const metrics = await page.evaluate(() => {
         const w = window as unknown as PerfWindow;
         return {

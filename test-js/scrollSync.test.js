@@ -118,7 +118,14 @@ function stubXtermGlobals() {
         rootEl.appendChild(viewportEl);
         const dataListeners = [];
         const binaryListeners = [];
+        const scrollListeners = [];
+        const write = vi.fn((_data, cb) => cb?.());
         return {
+            rows: 24,
+            emitScroll: () =>
+                scrollListeners.forEach((fn) => {
+                    fn();
+                }),
             emitData: (data) =>
                 dataListeners.forEach((fn) => {
                     fn(data);
@@ -128,7 +135,7 @@ function stubXtermGlobals() {
                     fn(data);
                 }),
             element: rootEl,
-            buffer: { active: { viewportY: 100, baseY: 100 } },
+            buffer: { active: { type: 'normal', viewportY: 100, baseY: 100 } },
             // Real xterm.js renders term.element into the container passed
             // to open() — without this, .xterm-viewport is never actually a
             // descendant of termContainer, and the capture-phase listener
@@ -140,13 +147,12 @@ function stubXtermGlobals() {
             attachCustomKeyEventHandler: () => {},
             onSelectionChange: () => {},
             onBell: () => {},
-            onScroll: () => {},
+            onScroll: (fn) => scrollListeners.push(fn),
             onData: (fn) => dataListeners.push(fn),
             onBinary: (fn) => binaryListeners.push(fn),
             getSelection: () => '',
-            write: vi.fn((_data, cb) => {
-                if (cb) cb();
-            }),
+            write,
+            nativeWrite: write,
             scrollToBottom: vi.fn(),
             scrollLines: vi.fn(),
             _core: { viewport: { syncScrollArea: vi.fn() } },
@@ -334,6 +340,133 @@ describe('DOM scroll listener installed by createTab (drives the real handler)',
             f();
         });
         expect(tabInfo.userFollowBottom).toBe(true);
+    });
+});
+
+describe('manual older-history button', () => {
+    function historyTab(viewportY = 0) {
+        const tab = mountRealTab();
+        tab.ws.mode = 'hot';
+        tab._historyOmitted = true;
+        tab.term.buffer.active.viewportY = viewportY;
+        tab.term.emitScroll();
+        return tab;
+    }
+
+    it('appears within one screen of the top, not for a tiny scroll from the bottom', () => {
+        const load = vi
+            .spyOn(TabManager.prototype, '_loadColdHistory')
+            .mockResolvedValue();
+        const tab = historyTab(99);
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
+        tab.term.buffer.active.viewportY = tab.term.rows;
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
+        expect(tab.loadHistoryBtn.disabled).toBe(false);
+        expect(load).not.toHaveBeenCalled();
+        tab.term.buffer.active.viewportY = tab.term.rows + 1;
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
+    });
+
+    it('wheel, touch, scrollbar, keyboard, and programmatic scrolls never request an older book', () => {
+        const load = vi
+            .spyOn(TabManager.prototype, '_loadColdHistory')
+            .mockResolvedValue();
+        const tab = historyTab();
+        tab.termContainer.dispatchEvent(
+            new WheelEvent('wheel', { deltaY: -120, bubbles: true }),
+        );
+        for (const [type, clientY] of [
+            ['touchstart', 100],
+            ['touchmove', 200],
+        ]) {
+            const event = new Event(type, { bubbles: true });
+            Object.assign(event, { touches: [{ clientY }] });
+            tab.termContainer.dispatchEvent(event);
+        }
+        tab.term.element
+            .querySelector('.xterm-viewport')
+            .dispatchEvent(new Event('scroll'));
+        tab.termContainer.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }),
+        );
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
+        expect(load).not.toHaveBeenCalled();
+        tab.loadHistoryBtn.click();
+        expect(load).toHaveBeenCalledExactlyOnceWith(tab);
+    });
+
+    it.each([
+        ['no omitted history', { _historyOmitted: false }],
+        ['dead pane', { isDead: true }],
+        ['closing pane', { finalizing: true }],
+    ])('hides for %s', (_reason, state) => {
+        const tab = historyTab();
+        Object.assign(tab, state);
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
+        expect(tab.loadHistoryBtn.disabled).toBe(true);
+        expect(tab.loadHistoryBtn.tabIndex).toBe(-1);
+    });
+
+    it('does not offer archive loading inside a live alternate-screen application', () => {
+        const tab = historyTab();
+        tab.term.buffer.active.type = 'alternate';
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(true);
+        tab._historyBrowsing = true;
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
+    });
+
+    it('shows a disabled busy state during a request, then lets the user retry', () => {
+        const load = vi
+            .spyOn(TabManager.prototype, '_loadColdHistory')
+            .mockResolvedValue();
+        const tab = historyTab();
+        tab._historyLoading = true;
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.disabled).toBe(true);
+        expect(tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('true');
+        tab.loadHistoryBtn.click();
+        expect(load).not.toHaveBeenCalled();
+        tab._historyLoading = false;
+        tab.term.emitScroll();
+        expect(tab.loadHistoryBtn.disabled).toBe(false);
+        expect(tab.loadHistoryBtn.getAttribute('aria-busy')).toBe('false');
+        tab.loadHistoryBtn.click();
+        expect(load).toHaveBeenCalledExactlyOnceWith(tab);
+    });
+
+    it('keeps terminal/input focus on pointer activation', () => {
+        const tab = historyTab();
+        const input = document.createElement('textarea');
+        document.body.appendChild(input);
+        input.focus();
+        const event = new MouseEvent('mousedown', {
+            bubbles: true,
+            cancelable: true,
+        });
+        tab.loadHistoryBtn.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(input);
+    });
+
+    it('updates visibility after a write is parsed, including a checkpoint with no local scrollback', () => {
+        const tab = historyTab(99);
+        let parsed;
+        tab.term.nativeWrite.mockImplementation((_data, cb) => {
+            parsed = cb;
+        });
+        const callback = vi.fn();
+        tab.term.write('checkpoint', callback);
+        tab.term.buffer.active.viewportY = 0;
+        tab.term.buffer.active.baseY = 0;
+        parsed();
+        expect(callback).toHaveBeenCalledOnce();
+        expect(tab.loadHistoryBtn.classList.contains('hidden')).toBe(false);
     });
 });
 
