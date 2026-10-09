@@ -38,7 +38,7 @@ interface Observed {
 }
 
 for (const checkpoint of [false, true]) {
-    test(`tablet history stays bounded on ${checkpoint ? 'one older-page gesture' : 'cold attach'}`, async ({
+    test(`tablet history stays bounded on ${checkpoint ? 'manual older-page loads' : 'cold attach'}`, async ({
         browser,
     }, info) => {
         test.setTimeout(180000);
@@ -296,6 +296,12 @@ for (const checkpoint of [false, true]) {
                     gestureSourceType: 'touch',
                     speed: 400,
                 });
+                const historyButton = page.locator(
+                    `#term-${pane} .load-history-btn`,
+                );
+                await expect(historyButton).toBeEnabled();
+                expect(requests).toHaveLength(requestIndex);
+                await historyButton.click();
                 await expect
                     .poll(() => requests.length)
                     .toBeGreaterThan(requestIndex);
@@ -352,13 +358,8 @@ for (const checkpoint of [false, true]) {
                                 ?.id === `term-${id}`,
                     );
                     term?.scrollToTop?.();
-                    term?.element?.closest('.term-container')?.dispatchEvent(
-                        new WheelEvent('wheel', {
-                            deltaY: -100,
-                            bubbles: true,
-                        }),
-                    );
                 }, pane);
+                await historyButton.click();
                 await expect
                     .poll(() => requests.length)
                     .toBeGreaterThan(requestIndex);
@@ -413,15 +414,8 @@ for (const checkpoint of [false, true]) {
                                     ?.id === `term-${id}`,
                         );
                         term?.scrollToTop?.();
-                        term?.element
-                            ?.closest('.term-container')
-                            ?.dispatchEvent(
-                                new WheelEvent('wheel', {
-                                    deltaY: -100,
-                                    bubbles: true,
-                                }),
-                            );
                     }, pane);
+                    await historyButton.click();
                     await expect
                         .poll(() => requests.length)
                         .toBeGreaterThan(requestIndex);

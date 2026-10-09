@@ -2577,11 +2577,10 @@ body.has-terminal-bg
     background-color: var(--bg-base) !important;
 }
 
-/* Floating scroll-to-bottom button. Sits in the bottom-right of the
-   terminal viewport, fades in when the user scrolls up into
-   scrollback, fades out when they return to live output. Pattern
-   borrowed from iTerm / VS Code terminal / Hyper. */
-.scroll-to-bottom-btn {
+/* Floating terminal navigation buttons: jump to live at the bottom-right,
+   load older history at the top-right. Both use the same circular style. */
+.scroll-to-bottom-btn,
+.load-history-btn {
     position: absolute;
     right: 14px;
     bottom: 14px;
@@ -2609,12 +2608,21 @@ body.has-terminal-bg
         transform 0.18s ease,
         background-color 0.15s ease;
 }
-.scroll-to-bottom-btn.hidden {
+.load-history-btn {
+    top: 14px;
+    bottom: auto;
+}
+.load-history-btn:disabled {
+    cursor: wait;
+}
+.scroll-to-bottom-btn.hidden,
+.load-history-btn.hidden {
     opacity: 0;
     transform: translateY(8px);
     pointer-events: none;
 }
-.scroll-to-bottom-btn:hover {
+.scroll-to-bottom-btn:hover,
+.load-history-btn:not(:disabled):hover {
     background-color: rgba(20, 20, 25, 0.95);
     border-color: var(--accent);
     box-shadow:

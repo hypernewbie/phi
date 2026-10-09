@@ -1920,6 +1920,7 @@ export class TabManager {
                 // A hidden pane must not steal geometry from another client.
                 this._queuePanelFit(tabInfo, { forceResize: true });
                 pty.release();
+                this._updateHistoryButton(tabInfo);
                 return;
             }
             // Finish old-socket writes before choosing the resume point.
@@ -2177,6 +2178,7 @@ export class TabManager {
         if (tabInfo.term?.buffer?.active?.type !== 'normal' ||
             !tabInfo._historyOmitted || tabInfo._historyLoading || tabInfo.finalizing || pty?.mode !== 'hot') return;
         tabInfo._historyLoading = true;
+        this._updateHistoryButton(tabInfo);
         let finishGate;
         let gate;
         const epoch = tabInfo.paneEpoch;
@@ -2243,8 +2245,8 @@ export class TabManager {
                 tabInfo._historyLiveState = null;
                 tabInfo.queuedSeq = range.end;
                 tabInfo.drainedSeq = range.end;
-                // Scroll-up still asks for the oldest row when the entire
-                // archive fits in this window. Live writes preserve that view.
+                // Loading older history still shows the oldest row when the
+                // entire archive fits. Live writes preserve that view.
                 tabInfo.term.scrollToTop();
             }
         } catch (error) {
@@ -2254,6 +2256,7 @@ export class TabManager {
             if (current()) {
                 tabInfo._historyLoading = false;
                 tabInfo._historyParsing = false;
+                this._updateHistoryButton(tabInfo);
             }
             if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
             finishGate?.();
@@ -2268,6 +2271,7 @@ export class TabManager {
         if (!tabInfo._historyBrowsing || !saved || saved.epoch !== tabInfo.paneEpoch || tabInfo._historyLoading ||
             tabInfo.finalizing || pty?.mode !== 'hot') return;
         tabInfo._historyLoading = true;
+        this._updateHistoryButton(tabInfo);
         let finishGate;
         let gate;
         const epoch = tabInfo.paneEpoch;
@@ -2320,6 +2324,7 @@ export class TabManager {
             if (current()) {
                 tabInfo._historyLoading = false;
                 tabInfo._historyParsing = false;
+                this._updateHistoryButton(tabInfo);
             }
             if (tabInfo._bootstrapGate === gate) tabInfo._bootstrapGate = null;
             finishGate?.();
@@ -3090,12 +3095,9 @@ export class TabManager {
             fontSize: terminalPreferredFontSize(this.app?.terminalFontSize),
             fontFamily:
                 this.app?.terminalFontFamily || 'JetBrains Mono, monospace',
-            // UX law: the live terminal keeps the full scrollback. Normal
-            // scroll-up must show history with no button hunt and no mode
-            // switch. Open-path speed comes from the hot-v1 live-only
-            // attach (no 1 MiB replay) + checkpoint bootstrap, not from
-            // truncating what the user can see. A full-buffer reflow on a
-            // genuine resize is accepted cost: lag beats missing history.
+            // Resident output scrolls locally. Older output remains in the
+            // recording and loads through the manual history button; the
+            // hot-v1 state attach stays bounded.
             // Mobile may shrink via _liveScrollbackRows (fast-mode gate);
             // desktop always keeps LIVE_SCROLLBACK_ROWS.
             scrollback: this._liveScrollbackRows(),
@@ -3583,9 +3585,6 @@ export class TabManager {
         // user intent without changing that loop's timing or behavior.
         const cancelFollowForUserScroll = () =>
             this._cancelScrollFollowForUserScroll(tabInfo);
-        const loadOlder = () => {
-            if (tabInfo.term.buffer.active.viewportY === 0) this._loadColdHistory(tabInfo);
-        };
         const loadNewer = () => {
             const buffer = tabInfo.term?.buffer?.active;
             if (tabInfo._historyBrowsing && buffer && buffer.viewportY >= buffer.baseY) {
@@ -3593,22 +3592,18 @@ export class TabManager {
             }
         };
         termContainer.addEventListener('wheel', e => {
-            if (e.deltaY < 0) loadOlder();
-            else if (e.deltaY > 0) loadNewer();
+            if (e.deltaY > 0) loadNewer();
         }, { capture: true, passive: true });
         let touchY;
         termContainer.addEventListener('touchstart', e => { touchY = e.touches?.[0]?.clientY; }, { passive: true });
         termContainer.addEventListener('touchmove', e => {
             if (e.touches?.length !== 1) return;
-            if (e.touches[0].clientY > touchY) loadOlder();
-            else loadNewer();
+            if (e.touches[0].clientY < touchY) loadNewer();
         }, { passive: true });
-        term.onScroll?.(() => {
-            if (tabInfo.userFollowBottom === false) loadOlder();
-        });
-        // Detect native buffer eviction too; cold scroll-up can recover it.
+        // Detect native buffer eviction too; the manual button can recover it.
         term._core?._bufferService?.buffers?.normal?.lines?.onTrim?.(() => {
             if (!tabInfo._historyLoading) tabInfo._historyOmitted = true;
+            this._updateHistoryButton(tabInfo);
         });
         termContainer.addEventListener('wheel', cancelFollowForUserScroll, {
             capture: true,
@@ -3697,7 +3692,24 @@ export class TabManager {
         termContainer.appendChild(scrollToBottomBtn);
         tabInfo.scrollToBottomBtn = scrollToBottomBtn;
 
+        // Mirror the bottom affordance at the top of the viewport. An older
+        // book replaces the local view only on explicit activation, never
+        // because a wheel, touch, scrollbar, or parser reached row zero.
+        const loadHistoryBtn = document.createElement('button');
+        loadHistoryBtn.className = 'load-history-btn hidden';
+        loadHistoryBtn.type = 'button';
+        loadHistoryBtn.setAttribute('aria-label', 'Load older terminal history');
+        loadHistoryBtn.addEventListener('mousedown', e => e.preventDefault());
+        loadHistoryBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (!loadHistoryBtn.disabled) this._loadColdHistory(tabInfo);
+        });
+        termContainer.appendChild(loadHistoryBtn);
+        tabInfo.loadHistoryBtn = loadHistoryBtn;
+        this._updateHistoryButton(tabInfo);
+
         const updateScrollBtn = () => {
+            this._updateHistoryButton(tabInfo);
             if (
                 tabInfo.isDead ||
                 tabInfo.coder === 'review' ||
@@ -3730,6 +3742,8 @@ export class TabManager {
                 }
             });
         }
+        term.onResize?.(updateScrollBtn);
+        term.buffer?.onBufferChange?.(updateScrollBtn);
         // xterm's public onScroll fires only for PROGRAMMATIC scrolls: the
         // vendored build passes suppressScrollEvent=true for user wheel /
         // scrollbar input (Viewport._handleScroll), so the two onScroll
@@ -3769,14 +3783,13 @@ export class TabManager {
             },
             { capture: true, passive: true },
         );
-        // Also re-evaluate on every write so a button shown while
-        // scrolled up hides itself once new output catches up to bottom.
+        // Read coordinates after the parser completes, not before the write.
+        // Checkpoint restores and buffer switches can change button visibility.
         const origWrite = tabInfo.term.write.bind(tabInfo.term);
-        tabInfo.term.write = (data, cb) => {
-            const r = origWrite(data, cb);
+        tabInfo.term.write = (data, cb) => origWrite(data, () => {
+            cb?.();
             updateScrollBtn();
-            return r;
-        };
+        });
 
         // Refresh the tab-list selector NOW that the tab is registered in
         // this.tabs. Previously this was called much earlier in
@@ -3869,6 +3882,7 @@ export class TabManager {
         // and unlike them a buffer write is permanent scrollback that
         // survives every later reconnect.
         tabInfo.isDead = true;
+        this._updateHistoryButton(tabInfo);
         tabInfo.tabEl.classList.add('dead');
         this.updateDocumentTitle();
         this._showReconnectOverlay(tabInfo);

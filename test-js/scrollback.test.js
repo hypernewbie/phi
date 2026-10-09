@@ -4,12 +4,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// UX law: the live xterm keeps the full scrollback — normal scroll-up
-// must show history with no button hunt and no mode switch. Open-path
-// speed comes from the hot-v1 live-only attach (no 1 MiB replay) +
-// checkpoint bootstrap, never from truncating the visible buffer.
-// The earlier "replay truncation at xterm's 1000-line default" regression
-// is now covered structurally here.
+// Resident output scrolls locally, without a request or mode switch.
+// Older recorded books load only through the manual history button.
+// Open-path speed comes from bounded state attach. Preserve the resident
+// budget so xterm's 1000-line default cannot truncate the visible buffer.
 const terminalJsPath = path.join(
     path.dirname(fileURLToPath(import.meta.url)),
     '..',
