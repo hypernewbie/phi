@@ -2,6 +2,8 @@ package phic
 
 import (
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestTabSwitchSyncsProjectCoderWorktree(t *testing.T) {
@@ -102,5 +104,42 @@ func TestSidebarLivePanesFilterByWorkspace(t *testing.T) {
 	}
 	if !seen["a1"] || !seen["legacy"] || seen["b1"] {
 		t.Fatalf("workspace filter wrong: %v", seen)
+	}
+}
+
+func TestReaderResizeBracketsGrowLeft(t *testing.T) {
+	m := coderStateModel(t, nil)
+	m.width, m.height = 200, 30
+	m.diff.open = true
+	m.diff.markdown = false
+	m.focus = focusDiff
+	before := m.readerPanelWidth()
+	m.Update(tea.KeyPressMsg{Code: '['})
+	if got := m.readerPanelWidth(); got <= before {
+		t.Fatalf("[ did not grow reader: %d -> %d", before, got)
+	}
+	before = m.readerPanelWidth()
+	m.Update(tea.KeyPressMsg{Code: ']'})
+	if got := m.readerPanelWidth(); got >= before {
+		t.Fatalf("] did not shrink reader: %d -> %d", before, got)
+	}
+	// Markdown uses the same reader geometry.
+	m.diff.markdown = true
+	before = m.readerPanelWidth()
+	m.Update(tea.KeyPressMsg{Code: '['})
+	if got := m.readerPanelWidth(); got <= before {
+		t.Fatalf("markdown [ did not grow reader: %d -> %d", before, got)
+	}
+	before = m.readerPanelWidth()
+	m.Update(tea.KeyPressMsg{Code: ']'})
+	if got := m.readerPanelWidth(); got >= before {
+		t.Fatalf("markdown ] did not shrink reader: %d -> %d", before, got)
+	}
+	// Left sidebar keeps the existing direction.
+	m.focus = focusSessions
+	m.sidebarWidth = 30
+	m.Update(tea.KeyPressMsg{Code: '['})
+	if got := m.sessionPanelWidth(); got >= 30 {
+		t.Fatalf("sidebar [ did not shrink: 30 -> %d", got)
 	}
 }

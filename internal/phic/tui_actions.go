@@ -511,10 +511,10 @@ func (m *tuiModel) handleDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.Key()
 	k.Code = chromeKeyCode(k)
 	if k.Code == '[' {
-		return m, m.resizePanel(false, -4)
+		return m, m.resizePanel(false, 4)
 	}
 	if k.Code == ']' {
-		return m, m.resizePanel(false, 4)
+		return m, m.resizePanel(false, -4)
 	}
 	switch k.Code {
 	case tea.KeyUp, 'k':

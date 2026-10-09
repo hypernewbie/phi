@@ -225,10 +225,10 @@ func (m *tuiModel) applyMarkdownLoaded(msg markdownLoadedMsg) (tea.Model, tea.Cm
 func (m *tuiModel) handleMarkdownKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.Key()
 	if k.Code == '[' {
-		return m, m.resizePanel(false, -4)
+		return m, m.resizePanel(false, 4)
 	}
 	if k.Code == ']' {
-		return m, m.resizePanel(false, 4)
+		return m, m.resizePanel(false, -4)
 	}
 	d := &m.markdown
 	switch k.Code {
