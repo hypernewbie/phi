@@ -1708,7 +1708,9 @@ func (m *tuiModel) openHelp() {
   Ctrl-] u        undo the most recent close
   Ctrl-] d        toggle reader panel (Diff / Markdown)
   Ctrl-] M        Markdown file list and viewer
-  Ctrl-] h        history browser
+  Ctrl-] h        recording browser
+  Ctrl-] PgUp     load one older terminal history book
+  Ctrl-] End      return to live output
   Ctrl-] p        project context
   Ctrl-] w        worktree context
   Ctrl-] c        coder selector
@@ -1727,7 +1729,9 @@ Tab strip: [x] soft close with 3s [u] undo, [X] final close,
 [r] rename, [p] pin, [m] mark.
 
 In terminal focus: Tab, arrows, digits, Escape, and Ctrl-C go to the
-backend. Application chrome: Tab cycles regions, Enter activates,
+backend. Wheel scrolling stays within the loaded history book.
+Older books require Ctrl-] PgUp. They never load automatically.
+Application chrome: Tab cycles regions, Enter activates,
 Esc returns to terminal focus; Esc twice in chrome opens the Quit dialog.`
 
 	m.modal.help = strings.TrimRight(m.modal.help, "\n")

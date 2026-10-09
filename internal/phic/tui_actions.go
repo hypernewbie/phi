@@ -224,6 +224,14 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.showMarkdown()
 	case 'h':
 		return m, m.openHistory()
+	case tea.KeyPgUp:
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.loadHistory()
+		}
+	case tea.KeyEnd:
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			tab.actor.jumpLive()
+		}
 	case 'D':
 		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
 			tab.actor.close()

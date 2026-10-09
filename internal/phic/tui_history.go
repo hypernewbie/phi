@@ -17,6 +17,12 @@ import (
 // A page stays within the client row budget even for one-byte newline output.
 const historyByteStep = 4 << 10
 
+// paneHistoryView is UI metadata, published with the copied terminal frame.
+// Scrolling reveals a hint; only paneInputHistory requests an older book.
+type paneHistoryView struct {
+	Older, NearTop, Browsing, Loading bool
+}
+
 type historyResult struct {
 	epoch, through, gen uint64
 	header              wireproto.AttachHeadHeader
@@ -66,6 +72,12 @@ func (p *paneActor) requestHistory() {
 	if p.historyPending || p.api == nil {
 		return
 	}
+	if p.history == nil {
+		alt, _ := p.emu.Mode(termemu.ModeAlternateScreen)
+		if alt {
+			return
+		}
+	}
 	p.mu.Lock()
 	epoch, frontier := p.epoch, p.frontier
 	p.mu.Unlock()
@@ -83,6 +95,7 @@ func (p *paneActor) requestHistory() {
 	p.historyGen++
 	gen := p.historyGen
 	p.historyPending = true
+	p.dirty = true
 	ctx, cancel := context.WithCancel(p.ctx)
 	p.historyCancel = cancel
 	go func() {
@@ -104,6 +117,7 @@ func (p *paneActor) applyHistory(result historyResult) error {
 		return nil
 	}
 	p.historyPending = false
+	p.dirty = true
 	if p.historyCancel != nil {
 		p.historyCancel()
 		p.historyCancel = nil
@@ -169,6 +183,9 @@ func (p *paneActor) applyHistory(result historyResult) error {
 	return nil
 }
 func (p *paneActor) returnLive() {
+	if p.historyPending {
+		p.dirty = true
+	}
 	p.historyGen++
 	p.historyPending = false
 	if p.historyCancel != nil {

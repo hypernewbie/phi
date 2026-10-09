@@ -52,6 +52,8 @@ const (
 	paneInputResize
 	paneInputFocus
 	paneInputScroll
+	paneInputHistory
+	paneInputLive
 	// paneInputRaw carries already-encoded backend bytes (TUI navigation
 	// sequences the emulator must not reinterpret). Delivery goes through
 	// the same uncertain/exited/connection guards as keys.
@@ -96,6 +98,7 @@ type paneActor struct {
 	epochSet                           bool
 	frame                              termemu.Frame
 	frameOK                            bool
+	historyView                        paneHistoryView // copied with the painted frame under mu
 	lastPaint, lastInteraction         time.Time
 	cols, rows                         int
 	dirty, exited, uncertainInput      bool
@@ -295,6 +298,13 @@ func (p *paneActor) sendFocus(focused bool) {
 	p.submit(paneInput{Kind: paneInputFocus, Focused: focused})
 }
 func (p *paneActor) scroll(delta int) { p.submit(paneInput{Kind: paneInputScroll, Scroll: delta}) }
+func (p *paneActor) loadHistory()     { p.submit(paneInput{Kind: paneInputHistory}) }
+func (p *paneActor) jumpLive()        { p.submit(paneInput{Kind: paneInputLive}) }
+func (p *paneActor) historyViewCopy() paneHistoryView {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.historyView
+}
 func (p *paneActor) sendMouse(a termemu.MouseAction, b termemu.MouseButton, m termemu.Modifier, x, y int) {
 	in := paneInput{Kind: paneInputMouse}
 	in.Mouse.Action, in.Mouse.Button, in.Mouse.Mods, in.Mouse.X, in.Mouse.Y = a, b, m, x, y
@@ -759,6 +769,14 @@ func (p *paneActor) handleInput(in paneInput) error {
 		}
 		return nil
 	}
+	if in.Kind == paneInputHistory {
+		p.requestHistory()
+		return nil
+	}
+	if in.Kind == paneInputLive {
+		p.returnLive()
+		return nil
+	}
 	if in.Kind == paneInputScroll {
 		target := p.emu
 		if p.history != nil {
@@ -767,10 +785,6 @@ func (p *paneActor) handleInput(in paneInput) error {
 		p.mu.Lock()
 		historyRows := p.frame.History
 		p.mu.Unlock()
-		if in.Scroll < 0 && p.historyOffset+in.Scroll < -historyRows {
-			p.requestHistory()
-			return nil
-		}
 		if p.history != nil && in.Scroll > 0 && p.historyOffset+in.Scroll >= 0 {
 			p.returnLive()
 			return nil
@@ -833,6 +847,16 @@ func (p *paneActor) refreshFrame() error {
 	p.mu.Lock()
 	p.frame = frame
 	p.frameOK = true
+	older := p.frontier > 0
+	if p.history != nil {
+		older = p.historyThrough > 0
+	}
+	p.historyView = paneHistoryView{
+		Older:    older && (!frame.Alt || p.history != nil),
+		NearTop:  frame.History+p.historyOffset <= frame.Rows,
+		Browsing: p.history != nil,
+		Loading:  p.historyPending,
+	}
 	p.lastPaint = time.Now()
 	p.mouseButton, p.mouseMotion, p.mouseAny = mb, mm, ma
 	p.mu.Unlock()

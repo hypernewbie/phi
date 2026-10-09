@@ -747,6 +747,19 @@ func (m *tuiModel) renderFooter() string {
 	}
 	left := style.Render(" " + status)
 	hints := "Ctrl-] commands  Tab focus  [n] new  [d] diff  [?] help"
+	if m.focus == focusTerminal {
+		if tab := m.activeTabModel(); tab != nil && tab.actor != nil {
+			history := tab.actor.historyViewCopy()
+			switch {
+			case history.Loading:
+				hints = "Loading older history…  Ctrl-] End live"
+			case history.Older && history.NearTop:
+				hints = "Ctrl-] PgUp older history  Ctrl-] End live  Ctrl-] ? help"
+			case history.Browsing:
+				hints = "Ctrl-] End live  Ctrl-] ? help"
+			}
+		}
+	}
 	if m.focus == focusDiff {
 		hints = "Enter pretty diff  ↑↓ commits  Tab Markdown  [ ] width  Esc terminal"
 	}
