@@ -984,7 +984,7 @@ func (m *tuiModel) applySessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cm
 	if d == nil {
 		return m, nil
 	}
-	if msg.coder != m.selectedCoderID() || msg.dir != m.project {
+	if msg.coder != m.selectedCoderID() || msg.dir != m.contextDir() {
 		// A late list result cannot overwrite another context.
 		return m, nil
 	}
@@ -1003,7 +1003,7 @@ func (m *tuiModel) applySessionsLoaded(msg sessionsLoadedMsg) (tea.Model, tea.Cm
 }
 
 func (m *tuiModel) applyDiffLoaded(msg diffLoadedMsg) (tea.Model, tea.Cmd) {
-	if msg.gen != m.gen || msg.origin != m.currentOrigin() || msg.project != m.project {
+	if msg.gen != m.gen || msg.origin != m.currentOrigin() || msg.project != m.contextDir() {
 		return m, nil
 	}
 	m.diff.loading = false
@@ -1332,7 +1332,7 @@ func (m *tuiModel) reconcileTabs(panes []TerminalView) {
 	}
 }
 
-func (m *tuiModel) activateTab(origin string, tab *paneTab) {
+func (m *tuiModel) activateTab(origin string, tab *paneTab) bool {
 	if m.compose.open && m.compose.tab != tab.key {
 		m.closeCompose() // draft kept on the old tab
 	}
@@ -1357,6 +1357,7 @@ func (m *tuiModel) activateTab(origin string, tab *paneTab) {
 	} else {
 		m.resizeActivePane()
 	}
+	return m.syncTabContext(tab)
 }
 
 // attachTab creates the pane actor for a listed live pane. Attaching replays
@@ -1408,6 +1409,7 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 		tab.closing = true
 		tab.token++
 		tab.closeAt = time.Now().Add(3 * time.Second)
+		var syncCmd tea.Cmd
 		if tab.key == m.activeTabKeyOrZero() {
 			m.activeTab[tab.key.Origin] = -1
 			for i, candidate := range m.tabs[tab.key.Origin] {
@@ -1416,7 +1418,7 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 					break
 				}
 			}
-			m.activateCurrentTab()
+			syncCmd = m.activateCurrentTab()
 		}
 		m.setStatus("closed tab; click [u] undo or press Ctrl-] u within 3 seconds", false)
 		token := tab.token
@@ -1425,9 +1427,13 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 		if s := m.serverForOrigin(key.Origin); s != nil {
 			api = s.api
 		}
-		return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		expire := tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 			return msgCloseExpired{key: key, token: token, api: api}
 		})
+		if syncCmd != nil {
+			return tea.Batch(expire, syncCmd)
+		}
+		return expire
 	}
 	tab.closing = false
 	tab.finalizing = true
@@ -1436,11 +1442,15 @@ func (m *tuiModel) closeTab(tab *paneTab, final bool) tea.Cmd {
 	return m.deletePaneCmd(tab.key)
 }
 
-func (m *tuiModel) undoClose(tab *paneTab) {
+func (m *tuiModel) undoClose(tab *paneTab) tea.Cmd {
 	tab.closing = false
 	tab.token++
-	m.activateTab(tab.key.Origin, tab)
+	var syncCmd tea.Cmd
+	if m.activateTab(tab.key.Origin, tab) {
+		syncCmd = tea.Batch(m.refreshSessions(), m.refreshDiff(), m.persistIntent())
+	}
 	m.setStatus("restored "+tab.label(), false)
+	return syncCmd
 }
 
 func (m *tuiModel) removeTabEverywhere(key paneKey) {
@@ -1484,6 +1494,91 @@ func (m *tuiModel) selectedCoder() (CoderDescriptor, bool) {
 		m.coderIdx = 0
 	}
 	return d.coders[m.coderIdx], true
+}
+
+// contextDir is the effective backend directory: the selected worktree when
+// one is chosen, otherwise the selected project. Sessions, diff, and
+// Markdown all follow this directory, mirroring the website's activeCWD.
+func (m *tuiModel) contextDir() string {
+	if m.worktree != "" {
+		return m.worktree
+	}
+	return m.project
+}
+
+// syncTabContext mirrors the website's tab switch: the active terminal's
+// workspace, cwd, and coder become the selected project, worktree, and
+// coder. It returns true when the visible context changed and the
+// Sessions/Diff/Markdown panels need a refresh.
+func (m *tuiModel) syncTabContext(tab *paneTab) bool {
+	if tab == nil {
+		return false
+	}
+	if tab.key.Origin != m.currentOrigin() {
+		return false
+	}
+	workspace := tab.view.Workspace
+	cwd := tab.view.Dir
+	if cwd == "" {
+		cwd = tab.dir
+	}
+	coder := tab.coder
+	if coder == "" {
+		coder = tab.view.Coder
+	}
+	if workspace == "" {
+		if cwd != "" {
+			workspace = cwd
+		} else {
+			// No directory info; still sync the coder below.
+			workspace = m.project
+			if workspace == "" {
+				return m.syncTabCoder(coder)
+			}
+		}
+	}
+	newProject := workspace
+	newWorktree := ""
+	if cwd != "" && !MatchDir(cwd, workspace) {
+		newWorktree = cwd
+	}
+	changed := false
+	if newProject != "" && newProject != m.project {
+		m.project = newProject
+		changed = true
+	}
+	if newWorktree != m.worktree {
+		m.worktree = newWorktree
+		changed = true
+	}
+	if m.syncTabCoder(coder) {
+		changed = true
+	}
+	return changed
+}
+
+func (m *tuiModel) syncTabCoder(coder string) bool {
+	if coder == "" {
+		return false
+	}
+	d := m.current()
+	if d == nil || len(d.coders) == 0 {
+		return false
+	}
+	for i, c := range d.coders {
+		if c.ID == coder {
+			if m.coderIdx != i {
+				m.coderIdx = i
+				d.coderID = coder
+				return true
+			}
+			if d.coderID != coder {
+				d.coderID = coder
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // Restore by stable ID, including after the server reorders its catalog.
@@ -1562,15 +1657,16 @@ func (m *tuiModel) projectValid() bool { return m.project != "" }
 
 func (m *tuiModel) refreshSessions() tea.Cmd {
 	coder := m.selectedCoderID()
-	if coder == "" || m.project == "" {
+	dir := m.contextDir()
+	if coder == "" || dir == "" {
 		return nil
 	}
 	d := m.current()
-	if d != nil && d.sessionsCoder == coder && d.sessionsDir == m.project {
+	if d != nil && d.sessionsCoder == coder && d.sessionsDir == dir {
 		return nil
 	}
 	m.sessionCursor = 0
-	return m.sessionsCmd(m.active, coder, m.project)
+	return m.sessionsCmd(m.active, coder, dir)
 }
 
 // ---- modal helpers ----
@@ -1727,6 +1823,8 @@ func (m *tuiModel) openHelp() {
 
 Tab strip: [x] soft close with 3s [u] undo, [X] final close,
 [r] rename, [p] pin, [m] mark.
+Switching tabs syncs project, worktree, coder, sessions, diff,
+and Markdown to the active terminal.
 
 In terminal focus: Tab, arrows, digits, Escape, and Ctrl-C go to the
 backend. Wheel scrolling stays within the loaded history book.

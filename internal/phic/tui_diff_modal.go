@@ -90,7 +90,7 @@ func renderPrettyDiffText(raw string, width int, accent string) ([]string, error
 }
 
 func (m *tuiModel) applyDiffContentLoaded(msg diffContentLoadedMsg) (tea.Model, tea.Cmd) {
-	if msg.gen != m.gen || msg.ticket != m.diff.modalTicket || msg.origin != m.currentOrigin() || msg.project != m.project || msg.commit != m.diff.selectedCommit {
+	if msg.gen != m.gen || msg.ticket != m.diff.modalTicket || msg.origin != m.currentOrigin() || msg.project != m.contextDir() || msg.commit != m.diff.selectedCommit {
 		return m, nil
 	}
 	m.diff.modalLoading = false

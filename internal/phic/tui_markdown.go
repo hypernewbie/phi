@@ -39,13 +39,13 @@ type markdownLoadedMsg struct {
 }
 
 func (m *tuiModel) markdownDir() string {
+	if dir := m.contextDir(); dir != "" {
+		return dir
+	}
 	if tab := m.activeTabModel(); tab != nil && tab.dir != "" {
 		return tab.dir
 	}
-	if m.worktree != "" {
-		return m.worktree
-	}
-	return m.project
+	return ""
 }
 func (m *tuiModel) markdownWidth() int { return max(1, m.width-4) }
 func (m *tuiModel) showMarkdown() tea.Cmd {
@@ -60,6 +60,8 @@ func (m *tuiModel) refreshMarkdownList() tea.Cmd {
 	if m.markdown.origin != origin || m.markdown.dir != dir {
 		ticket := m.markdown.ticket
 		m.markdown = markdownState{ticket: ticket, origin: origin, dir: dir}
+	} else if m.markdown.loading {
+		return nil
 	}
 	if s == nil || s.api == nil || dir == "" {
 		m.markdown.err = "Choose a connected server and project"
