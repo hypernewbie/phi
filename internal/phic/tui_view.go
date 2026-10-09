@@ -214,18 +214,13 @@ func (m *tuiModel) tabTitle(t *paneTab) string {
 	return ansi.Truncate(t.label(), limit, "…")
 }
 
-func (m *tuiModel) renderTabs() string {
-	accent := m.accentColor()
-	muted := lg.NewStyle().Foreground(tuiMuted)
+// tabStripLayout computes the visible tab window shared by rendering and
+// mouse hit-testing so clicks land on the painted tab.
+func (m *tuiModel) tabStripLayout() (labels []string, widths []int, start, end, offset int) {
 	origin := m.currentOrigin()
 	tabs := m.tabs[origin]
-	prefix := muted.Render(" ▣ ")
-	suffix := muted.Render(tabControls)
-	if len(tabs) == 0 {
-		return prefix + muted.Render("no open panes — [n] New Session")
-	}
-	labels := make([]string, len(tabs))
-	widths := make([]int, len(tabs))
+	labels = make([]string, len(tabs))
+	widths = make([]int, len(tabs))
 	total := 0
 	active := m.activeTab[origin]
 	for i, t := range tabs {
@@ -248,11 +243,11 @@ func (m *tuiModel) renderTabs() string {
 			label = " " + mark + " " + title + " ⌂ "
 		}
 		labels[i] = label
-		widths[i] = lg.Width(label)
+		widths[i] = ansi.StringWidth(label)
 		total += widths[i]
 	}
-	avail := m.width - lg.Width(prefix) - lg.Width(suffix) - 6
-	start, end := 0, len(tabs)
+	avail := m.width - ansi.StringWidth(" ▣ ") - ansi.StringWidth(tabControls) - 6
+	start, end = 0, len(tabs)
 	if total > avail {
 		// Window the strip around the active tab; overflow is reported as
 		// +N markers instead of silently hiding panes.
@@ -270,6 +265,25 @@ func (m *tuiModel) renderTabs() string {
 			used += widths[start]
 		}
 	}
+	offset = ansi.StringWidth(" ▣ ")
+	if start > 0 {
+		offset += ansi.StringWidth(fmt.Sprintf("+%d ", start))
+	}
+	return labels, widths, start, end, offset
+}
+
+func (m *tuiModel) renderTabs() string {
+	accent := m.accentColor()
+	muted := lg.NewStyle().Foreground(tuiMuted)
+	origin := m.currentOrigin()
+	tabs := m.tabs[origin]
+	prefix := muted.Render(" ▣ ")
+	suffix := muted.Render(tabControls)
+	if len(tabs) == 0 {
+		return prefix + muted.Render("no open panes — [n] New Session")
+	}
+	labels, _, start, end, _ := m.tabStripLayout()
+	active := m.activeTab[origin]
 	var b strings.Builder
 	b.WriteString(prefix)
 	if start > 0 {

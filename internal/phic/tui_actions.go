@@ -969,6 +969,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				return m, m.undoLastClose()
 			}
 		}
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
 		m.focus = focusTabs
 		if index, ok := m.tabHit(mouse.X); ok {
 			m.activeTab[m.currentOrigin()] = index
@@ -1072,42 +1075,7 @@ func (m *tuiModel) tabHit(x int) (int, bool) {
 	if len(tabs) == 0 {
 		return 0, false
 	}
-	active := m.activeTab[m.currentOrigin()]
-	if active < 0 || active >= len(tabs) {
-		active = 0
-	}
-	widths := make([]int, len(tabs))
-	total := 0
-	for i, t := range tabs {
-		title := m.tabTitle(t)
-		label := " ● " + title + " "
-		if t.unread && i != active {
-			label = " ● " + title + "• "
-		}
-		if t.view.Pinned {
-			label = " ● " + title + " ⌂ "
-		}
-		widths[i] = ansi.StringWidth(label)
-		total += widths[i]
-	}
-	avail := m.width - ansi.StringWidth(" TERMINALS ") - ansi.StringWidth(" [x] close  [u] undo") - 6
-	start, end := 0, len(tabs)
-	if total > avail {
-		start, end = active, active+1
-		used := widths[active]
-		for end < len(tabs) && used+widths[end] <= avail-4 {
-			used += widths[end]
-			end++
-		}
-		for start > 0 && used+widths[start-1] <= avail-4 {
-			start--
-			used += widths[start]
-		}
-	}
-	offset := ansi.StringWidth(" TERMINALS ")
-	if start > 0 {
-		offset += ansi.StringWidth(fmt.Sprintf("+%d ", start))
-	}
+	_, widths, start, end, offset := m.tabStripLayout()
 	for i := start; i < end; i++ {
 		if x >= offset && x < offset+widths[i] {
 			return i, true
