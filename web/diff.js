@@ -264,7 +264,8 @@ export class DiffController {
                 this.syncCommitTarget = null;
                 this._syncModalCommitSelect();
                 void this.refreshDiff(true); // Don't reload the list when user just changes selection
-                if (this.diffModal && !this.diffModal.classList.contains('hidden')) {
+                if (this.diffModal &&
+                    !this.diffModal.classList.contains('hidden')) {
                     void this.loadRichDiff();
                 }
             });
