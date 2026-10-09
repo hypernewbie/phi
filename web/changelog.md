@@ -2,6 +2,22 @@
 
 All notable changes to phi are documented here. Newest versions first.
 
+## v0.25.0 — 2026-10-08
+
+### Added
+- **Phi-themed Agy colors in `phic`** (`f922b60`). Agy ANSI blue, cyan, and magenta colors and selection highlighting now follow the server's Phi accent; other coders keep their terminal palette.
+- **Sync Board completion cards** (`bfeb595`). `done` messages show a whitespace-normalized summary of up to ten words and the sender-reported machine label.
+- **Commit cards open pretty diffs** (`4a772f3`, `b0cd2c3`, `cde0b46`). Commit selection opens the unified pretty-diff viewer in `phic` and the web UI; Sync Board commit cards open it directly.
+- **Local battery indicator in `phic`** (`fdaccd9`). The console client displays battery percentage with low-frequency polling.
+
+### Fixed
+- **Terminal history and refresh recovery** (`01b27a1`, `0c0a310`, `0ce4f6b`, `631c86e`). Reconnects use bounded parser state and exact history ranges; refresh rebuilds views without restarting sessions or losing their state.
+- **Mobile terminal controls** (`90c7131`, `57a9113`). Toolbar actions no longer open the keyboard, and preview modals stay above navigation drawers.
+- **`phic` server names and coder selection** (`e403ad6`, `f5d6a46`). Displayed hostnames omit `.local`; the coder picker retains focus and remembers its selection per server.
+
+### Performance
+- **`phic` render and compose work** (`bf1ffaa`, `083bc43`, `d184d92`). Dirty frames are paced, snapshot rows use known sizes, and compose rendering updates incrementally.
+
 ## v0.24.1 — 2026-10-07
 
 ### Added
