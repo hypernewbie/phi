@@ -42,7 +42,7 @@ func (m *tuiModel) refreshDiff() tea.Cmd {
 	if m.diff.markdown {
 		return m.refreshMarkdownList()
 	}
-	origin, project := m.currentOrigin(), m.project
+	origin, project := m.currentOrigin(), m.contextDir()
 	if origin == "" || project == "" {
 		m.diff.commits = nil
 		m.diff.loading = false

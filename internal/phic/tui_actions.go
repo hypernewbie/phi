@@ -53,7 +53,12 @@ func (m *tuiModel) sidebarRows() []sidebarRow {
 		if tabIDs[p.ID] {
 			continue
 		}
-		if !MatchDir(p.Dir, m.project) {
+		want := m.project
+		if p.Workspace != "" {
+			if !MatchDir(p.Workspace, want) {
+				continue
+			}
+		} else if !MatchDir(p.Dir, want) {
 			continue
 		}
 		label := p.Title
@@ -209,7 +214,9 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.closeTab(tab, false)
 		}
 	case 'u':
-		m.undoLastClose()
+		if cmd := m.undoLastClose(); cmd != nil {
+			return m, cmd
+		}
 	case 'd':
 		m.diff.open = !m.diff.open
 		if m.diff.open {
@@ -394,15 +401,26 @@ func (m *tuiModel) activateSidebarRow(row sidebarRow) tea.Cmd {
 	case rowLivePane:
 		p := row.pane
 		origin := m.currentOrigin()
+		project := p.Workspace
+		if project == "" {
+			project = p.Dir
+		}
+		worktree := ""
+		if p.Dir != "" && project != "" && !MatchDir(p.Dir, project) {
+			worktree = p.Dir
+		}
 		tab := m.ensureTab(origin, p.ID, spawnCapture{
-			origin: origin, index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
+			origin: origin, index: m.active, project: project, worktree: worktree, coder: p.Coder, title: p.Title,
 		})
 		tab.view = p
 		tab.title = p.Title
 		tab.coder = p.Coder
 		tab.dir = p.Dir
-		m.activateTab(origin, tab)
+		changed := m.activateTab(origin, tab)
 		m.focus = focusTerminal
+		if changed {
+			return tea.Batch(m.refreshSessions(), m.refreshDiff(), m.persistIntent())
+		}
 		return m.persistIntent()
 	}
 	return nil
@@ -417,15 +435,22 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyLeft, 'h':
 		if m.activeTab[origin] > 0 {
 			m.activeTab[origin]--
-			m.activateCurrentTab()
+			if cmd := m.activateCurrentTab(); cmd != nil {
+				return m, cmd
+			}
 		}
 	case tea.KeyRight, 'l':
 		if m.activeTab[origin] < len(tabs)-1 {
 			m.activeTab[origin]++
-			m.activateCurrentTab()
+			if cmd := m.activateCurrentTab(); cmd != nil {
+				return m, cmd
+			}
 		}
 	case tea.KeyEnter:
-		m.activateCurrentTab()
+		if cmd := m.activateCurrentTab(); cmd != nil {
+			m.focus = focusTerminal
+			return m, cmd
+		}
 		m.focus = focusTerminal
 	case tea.KeyEscape:
 		m.focus = focusTerminal
@@ -444,7 +469,9 @@ func (m *tuiModel) handleTabsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.closeTab(tab, true)
 		}
 	case 'u':
-		m.undoLastClose()
+		if cmd := m.undoLastClose(); cmd != nil {
+			return m, cmd
+		}
 	case 'r':
 		m.openRenamePane()
 	case 'p':
@@ -939,15 +966,15 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "undo":
-				m.undoLastClose()
-				return m, nil
+				return m, m.undoLastClose()
 			}
 		}
 		m.focus = focusTabs
 		if index, ok := m.tabHit(mouse.X); ok {
 			m.activeTab[m.currentOrigin()] = index
-			m.activateCurrentTab()
+			syncCmd := m.activateCurrentTab()
 			m.focus = focusTerminal
+			return m, syncCmd
 		}
 		return m, nil
 	case mouse.Y == m.height-1:
@@ -1013,7 +1040,7 @@ func (m *tuiModel) tabControlHit(x int) string {
 	return ""
 }
 
-func (m *tuiModel) undoLastClose() {
+func (m *tuiModel) undoLastClose() tea.Cmd {
 	var latest *paneTab
 	for _, tab := range m.tabs[m.currentOrigin()] {
 		if tab.closing && (latest == nil || tab.closeAt.After(latest.closeAt)) {
@@ -1021,8 +1048,9 @@ func (m *tuiModel) undoLastClose() {
 		}
 	}
 	if latest != nil {
-		m.undoClose(latest)
+		return m.undoClose(latest)
 	}
+	return nil
 }
 
 func (m *tuiModel) railHit(x int) (int, bool) {
@@ -1173,16 +1201,19 @@ func (m *tuiModel) copyActiveText() tea.Cmd {
 
 // ---- actions ----
 
-func (m *tuiModel) activateCurrentTab() {
+func (m *tuiModel) activateCurrentTab() tea.Cmd {
 	key, ok := m.activeTabKey()
 	if !ok {
-		return
+		return nil
 	}
 	tab := m.findTab(key)
 	if tab == nil {
-		return
+		return nil
 	}
-	m.activateTab(m.currentOrigin(), tab)
+	if m.activateTab(m.currentOrigin(), tab) {
+		return tea.Batch(m.refreshSessions(), m.refreshDiff(), m.persistIntent())
+	}
+	return nil
 }
 
 func (m *tuiModel) cycleFocus(delta int) {
@@ -1400,13 +1431,24 @@ func (m *tuiModel) openPaneDirect(id string) tea.Cmd {
 	for _, p := range d.panes {
 		if p.ID == id {
 			origin := m.currentOrigin()
+			project := p.Workspace
+			if project == "" {
+				project = p.Dir
+			}
+			worktree := ""
+			if p.Dir != "" && project != "" && !MatchDir(p.Dir, project) {
+				worktree = p.Dir
+			}
 			tab := m.ensureTab(origin, p.ID, spawnCapture{
-				origin: origin, index: m.active, project: p.Dir, coder: p.Coder, title: p.Title,
+				origin: origin, index: m.active, project: project, worktree: worktree, coder: p.Coder, title: p.Title,
 			})
 			tab.view = p
-			m.activateTab(origin, tab)
+			changed := m.activateTab(origin, tab)
 			m.focus = focusTerminal
-			return nil
+			if changed {
+				return tea.Batch(m.refreshSessions(), m.refreshDiff(), m.persistIntent())
+			}
+			return m.persistIntent()
 		}
 	}
 	m.setStatus("pane is not live: "+QuotedID(id), true)

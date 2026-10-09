@@ -23,8 +23,8 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 			http.Error(w, "read only", 405)
 			return
 		}
-		if r.URL.Query().Get("cwd") != dir {
-			t.Errorf("Markdown cwd is not active remote pane: %q", r.URL.Query().Get("cwd"))
+		if (r.URL.Path == "/api/markdown/files" || r.URL.Path == "/api/markdown/file") && r.URL.Query().Get("cwd") != dir {
+			t.Errorf("Markdown cwd is not active remote pane: path=%s cwd=%q want=%q", r.URL.Path, r.URL.Query().Get("cwd"), dir)
 		}
 		switch r.URL.Path {
 		case "/api/markdown/files":
@@ -42,7 +42,8 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 	m := newModelWithServer(t, srv)
 	defer m.closeAll()
 	m.project = "/wrong-local-project"
-	m.ensureTab(m.currentOrigin(), "p", spawnCapture{title: "remote", project: dir, coder: "shell"})
+	tab := m.ensureTab(m.currentOrigin(), "p", spawnCapture{title: "remote", project: dir, coder: "shell"})
+	m.syncTabContext(tab)
 	m.diff.open = true
 	m.diff.markdown = true
 	m.focus = focusDiff
