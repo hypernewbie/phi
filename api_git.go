@@ -161,6 +161,33 @@ func appendUntrackedDiff(out []byte, fname string, content []byte, ansi bool) []
 	return out
 }
 
+// worktreeDiffOutput returns staged plus unstaged tracked changes as one
+// patch. With a resolvable HEAD a single `git diff HEAD` covers both
+// halves; on an unborn branch HEAD does not exist, so the staged
+// (`--cached`) and unstaged halves are concatenated instead.
+func worktreeDiffOutput(ctx context.Context, cwd, colorFlag, contextLines string) ([]byte, error) {
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = cwd
+		return cmd.Output()
+	}
+	if _, err := run("rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		return run("diff", "HEAD", "-w", colorFlag, "-U"+contextLines)
+	}
+	staged, err := run("diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+	if err != nil {
+		return staged, err
+	}
+	unstaged, err := run("diff", "-w", colorFlag, "-U"+contextLines)
+	if err != nil {
+		return unstaged, err
+	}
+	if len(staged) > 0 && len(unstaged) > 0 && staged[len(staged)-1] != '\n' {
+		staged = append(staged, '\n')
+	}
+	return append(staged, unstaged...), nil
+}
+
 func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	cwd := r.URL.Query().Get("cwd")
 	commit := r.URL.Query().Get("commit")
@@ -192,17 +219,26 @@ func handleRawDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, end := obs.Span(r.Context(), spanName, "cwd", cwd, "commit", commit)
 
-	var cmd *exec.Cmd
-	if commit == "staged" {
-		cmd = exec.CommandContext(ctx, "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
-	} else if commit == "" || commit == "unstaged" {
-		cmd = exec.CommandContext(ctx, "git", "diff", "-w", colorFlag, "-U"+contextLines)
+	// An empty commit selects the whole working tree (phic): staged changes
+	// (git adds) plus unstaged ones. Plain `git diff` hides the staged
+	// half, the classic gotcha. The explicit "unstaged" selector keeps
+	// plain `git diff` semantics for the web panel.
+	var out []byte
+	var err error
+	if commit == "" {
+		out, err = worktreeDiffOutput(ctx, cwd, colorFlag, contextLines)
 	} else {
-		cmd = exec.CommandContext(ctx, "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
+		var cmd *exec.Cmd
+		if commit == "staged" {
+			cmd = exec.CommandContext(ctx, "git", "diff", "--cached", "-w", colorFlag, "-U"+contextLines)
+		} else if commit == "unstaged" {
+			cmd = exec.CommandContext(ctx, "git", "diff", "-w", colorFlag, "-U"+contextLines)
+		} else {
+			cmd = exec.CommandContext(ctx, "git", "show", "-w", colorFlag, "-U"+contextLines, commit)
+		}
+		cmd.Dir = cwd
+		out, err = cmd.Output()
 	}
-	cmd.Dir = cwd
-
-	out, err := cmd.Output()
 	end(err)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -86,7 +86,7 @@ func TestPrettyDiffRejectsLateCommitContent(t *testing.T) {
 func TestPrettyDiffCloseButtonIsClickable(t *testing.T) {
 	m, _, _ := closeControlsModel(t)
 	m.width, m.height = 150, 30
-	m.modal.open(modalDiff, "Pretty Diff")
+	m.modal.open(modalDiff, "Diff")
 	m.focus = focusTerminal
 	m.Update(tea.MouseClickMsg{X: m.width - 5, Y: 1, Button: tea.MouseLeft})
 	if m.modal.kind != modalNone || m.focus != focusDiff {

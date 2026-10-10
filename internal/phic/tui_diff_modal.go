@@ -41,7 +41,7 @@ func (m *tuiModel) openDiffCommit(index int) tea.Cmd {
 	m.diff.modalLoading = true
 	m.diff.modalTicket++
 	ticket := m.diff.modalTicket
-	m.modal.open(modalDiff, "Pretty Diff")
+	m.modal.open(modalDiff, "Diff")
 	return m.diffContentCmd(commit.Hash, ticket)
 }
 
@@ -124,7 +124,7 @@ func (m *tuiModel) openDiffCommitPicker() {
 			m.modal.cursor = i
 		}
 	}
-	m.modal.help = "Choose a commit to load its pretty diff"
+	m.modal.help = "Choose a commit to load its diff"
 }
 
 func (m *tuiModel) handlePrettyDiffKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -195,7 +195,7 @@ func (m *tuiModel) renderDiffModal() string {
 			break
 		}
 	}
-	title := accent.Render(" Pretty Diff")
+	title := accent.Render(" Diff")
 	close := accent.Render("[×]")
 	header := title + strings.Repeat(" ", max(1, innerW-lg.Width(title)-lg.Width(close))) + close
 	lines := []string{
@@ -205,7 +205,7 @@ func (m *tuiModel) renderDiffModal() string {
 	visible := max(1, innerH-4)
 	switch {
 	case m.diff.modalLoading:
-		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render(" Loading pretty diff…"))
+		lines = append(lines, lg.NewStyle().Foreground(tuiMuted).Render(" Loading diff…"))
 	case m.diff.modalErr != "":
 		lines = append(lines, lg.NewStyle().Foreground(tuiError).Render(" "+menuLabel(m.diff.modalErr)))
 	case len(m.diff.modalLines) == 0:
@@ -235,7 +235,7 @@ func diffCommitOptionLabel(commit GitCommit) string {
 
 func (m *tuiModel) selectDiffCommit(index int) tea.Cmd {
 	if index < 0 || index >= len(m.diff.commits) {
-		m.modal.open(modalDiff, "Pretty Diff")
+		m.modal.open(modalDiff, "Diff")
 		return nil
 	}
 	return m.openDiffCommit(index)
