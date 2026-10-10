@@ -199,6 +199,46 @@ func TestTUISpawnCaptureEmptyResumeIdentity(t *testing.T) {
 	}
 }
 
+// TestPrefixUpperSOpensShellWithoutTouchingCoder asserts Ctrl-] S (Shift+s)
+// spawns the server-advertised shell backend directly: the coder selector
+// index is neither consulted nor changed.
+func TestPrefixUpperSOpensShellWithoutTouchingCoder(t *testing.T) {
+	got := make(chan map[string]any, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/terminals" && r.Method == http.MethodPost {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got <- body
+			_, _ = w.Write([]byte(`{"pane_id":"sh1","session_id":"fresh"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	m := newModelWithServer(t, srv)
+	m.coderIdx = 1 // opencode selected; the shortcut must not care or change it.
+	m.prefix = true
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 's', Text: "S", Mod: tea.ModShift})
+	if cmd == nil {
+		t.Fatal("Ctrl-] S produced no spawn command")
+	}
+	if msg, ok := cmd().(spawnDoneMsg); !ok || msg.err != "" {
+		t.Fatalf("shell spawn failed: %+v", msg)
+	}
+	select {
+	case body := <-got:
+		if body["coder"] != "shell" {
+			t.Fatalf("shortcut spawned coder %v, want shell", body["coder"])
+		}
+	default:
+		t.Fatal("no spawn request arrived")
+	}
+	if m.coderIdx != 1 {
+		t.Fatalf("shortcut moved the coder selector to %d", m.coderIdx)
+	}
+}
+
 // TestTUIResumeUsesExactSessionIdentity asserts a saved row resumes by its
 // exact identity, preferring session_path when the adapter requires it.
 func TestTUIResumeUsesExactSessionIdentity(t *testing.T) {

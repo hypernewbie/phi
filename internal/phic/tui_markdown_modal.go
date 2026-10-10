@@ -11,7 +11,7 @@ import (
 
 const markdownCloseLabel = "[×]"
 const markdownCopyLabel = "[y] Copy Markdown"
-const markdownFilenameLabel = "[f] Copy Filename"
+const markdownFilenameLabel = "[f] Insert Filename"
 
 func (m *tuiModel) markdownFilename() string {
 	if i := m.markdown.cursor; i >= 0 && i < len(m.markdown.files) && m.markdown.files[i].Path == m.markdown.path {
@@ -27,25 +27,21 @@ func (m *tuiModel) closeMarkdownModal() {
 	m.closeModal()
 	m.focus = focusDiff
 }
-func (m *tuiModel) copyMarkdown(filename bool) tea.Cmd {
+func (m *tuiModel) copyMarkdown() tea.Cmd {
 	if m.markdown.loading || m.markdown.err != "" {
 		return nil
 	}
-	text := m.markdown.source
-	if filename {
-		text = m.markdownFilename()
-	}
 	m.setStatus("clipboard copy requested; terminal permission may be required", false)
-	return tea.SetClipboard(text)
+	return tea.SetClipboard(m.markdown.source)
 }
 func (m *tuiModel) handleMarkdownModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.Key().Code {
 	case tea.KeyEscape, tea.KeyLeft, tea.KeyBackspace, 'q', 'b':
 		m.closeMarkdownModal()
 	case 'y':
-		return m, m.copyMarkdown(false)
+		return m, m.copyMarkdown()
 	case 'f':
-		return m, m.copyMarkdown(true)
+		m.insertMarkdownFilename()
 	case 'r':
 		return m, m.openMarkdownFile(m.markdown.cursor)
 	case tea.KeyUp, 'k':
@@ -62,6 +58,24 @@ func (m *tuiModel) handleMarkdownModalKey(msg tea.KeyPressMsg) (tea.Model, tea.C
 		m.markdown.scroll = max(0, len(m.markdown.lines)-1)
 	}
 	return m, nil
+}
+
+// insertMarkdownFilename types the viewed file's name into the active
+// terminal instead of copying it: f means "use this file here".
+func (m *tuiModel) insertMarkdownFilename() {
+	if m.markdown.loading || m.markdown.err != "" {
+		return
+	}
+	name := m.markdownFilename()
+	tab := m.activeTabModel()
+	if tab == nil || tab.actor == nil {
+		m.setStatus("no active terminal for filename", true)
+		return
+	}
+	m.closeMarkdownModal()
+	m.focus = focusTerminal
+	tab.actor.sendPaste([]byte(name))
+	m.setStatus("inserted "+name+" into terminal", false)
 }
 func (m *tuiModel) handleMarkdownModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := msg.Mouse()
@@ -82,11 +96,12 @@ func (m *tuiModel) handleMarkdownModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 	}
 	if mouse.Y == 2 {
 		if mouse.X >= 2 && mouse.X < 2+len(markdownCopyLabel) {
-			return m, m.copyMarkdown(false)
+			return m, m.copyMarkdown()
 		}
 		start := 2 + len(markdownCopyLabel) + 2
 		if mouse.X >= start && mouse.X < start+len(markdownFilenameLabel) {
-			return m, m.copyMarkdown(true)
+			m.insertMarkdownFilename()
+			return m, nil
 		}
 	}
 	return m, nil

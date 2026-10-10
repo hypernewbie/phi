@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gorilla/websocket"
 )
 
 func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
@@ -63,9 +64,27 @@ func TestMarkdownUsesExistingRemoteEndpointsAndOnlyReads(t *testing.T) {
 	if _, cmd := m.handleModalKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil || fmt.Sprintf("%s", cmd()) != m.markdown.source {
 		t.Fatal("explicit Markdown copy did not use the exact source")
 	}
-	if _, cmd := m.handleModalKey(tea.KeyPressMsg{Code: 'f', Text: "f"}); cmd == nil || fmt.Sprintf("%s", cmd()) != "notes #1.md" {
-		t.Fatal("filename copy did not copy the filename")
+	tab.actor = &paneActor{ctx: t.Context(), conn: &websocket.Conn{}, inbox: make(chan paneInput, 4)}
+	if _, cmd := m.handleModalKey(tea.KeyPressMsg{Code: 'f', Text: "f"}); cmd != nil {
+		t.Fatal("filename insert returned a clipboard command")
 	}
+	if m.modal.kind != modalNone || m.focus != focusTerminal {
+		t.Fatal("filename insert did not return to the terminal")
+	}
+	select {
+	case in := <-tab.actor.inbox:
+		if in.Kind != paneInputPaste || string(in.Paste) != "notes #1.md" {
+			t.Fatalf("filename insert typed %+v, want paste notes #1.md", in)
+		}
+	default:
+		t.Fatal("filename insert sent no terminal input")
+	}
+	// Hand-rolled actor has no run loop; detach before closeAll cleanup.
+	tab.actor = nil
+	// Reopen the viewer for the remaining modal-state checks.
+	m.modal.open(modalMarkdown, "Markdown")
+	m.markdown.reading = true
+	m.focus = focusDiff
 	m.handlePaste(tea.PasteMsg{Content: "do not edit or paste"})
 	if strings.Contains(m.markdown.raw, "do not edit") {
 		t.Fatal("Markdown paste mutated content")
@@ -156,4 +175,29 @@ func TestMarkdownHeaderAndRowsAreClickable(t *testing.T) {
 	if m.diff.markdown {
 		t.Fatal("Diff header click did nothing")
 	}
+}
+
+func TestMarkdownFilenameKeyTypesIntoTerminal(t *testing.T) {
+	m, tab, _ := closeControlsModel(t)
+	m.width = 140
+	m.height = 40
+	m.diff.open = true
+	m.diff.markdown = true
+	m.markdown = markdownState{origin: m.currentOrigin(), dir: m.markdownDir(), path: "/work/temp/proposal.md", files: []markdownFile{{Path: "/work/temp/proposal.md", Name: "proposal.md"}}, reading: true}
+	m.modal.open(modalMarkdown, "Markdown")
+	tab.actor = &paneActor{ctx: t.Context(), conn: &websocket.Conn{}, inbox: make(chan paneInput, 4)}
+	m.Update(tea.KeyPressMsg{Code: 'f'})
+	if m.modal.kind != modalNone || m.focus != focusTerminal {
+		t.Fatal("f did not close the viewer and return to the terminal")
+	}
+	select {
+	case in := <-tab.actor.inbox:
+		if in.Kind != paneInputPaste || string(in.Paste) != "proposal.md" {
+			t.Fatalf("f typed %+v, want paste proposal.md", in)
+		}
+	default:
+		t.Fatal("f sent no terminal input")
+	}
+	// Hand-rolled actor has no run loop; detach before closeAll cleanup.
+	tab.actor = nil
 }
