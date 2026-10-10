@@ -7,10 +7,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gorilla/websocket"
 )
 
 func TestMarkdownModalUsesViewportNotDiffWidthAndHasClickableActions(t *testing.T) {
-	m, _, _ := closeControlsModel(t)
+	m, tab, _ := closeControlsModel(t)
 	m.width = 140
 	m.height = 40
 	m.diff.open = true
@@ -27,7 +28,7 @@ func TestMarkdownModalUsesViewportNotDiffWidthAndHasClickableActions(t *testing.
 	}
 	m.markdown.lines = lines
 	view := ansi.Strip(m.render())
-	if !strings.Contains(view, "one word per line") || !strings.Contains(view, "[×]") || !strings.Contains(view, "Copy Markdown") || !strings.Contains(view, "Copy Filename") {
+	if !strings.Contains(view, "one word per line") || !strings.Contains(view, "[×]") || !strings.Contains(view, "Copy Markdown") || !strings.Contains(view, "Insert Filename") {
 		t.Fatalf("fullscreen controls/content missing: %q", view)
 	}
 	if len(strings.Split(view, "\n")) != m.height {
@@ -37,10 +38,24 @@ func TestMarkdownModalUsesViewportNotDiffWidthAndHasClickableActions(t *testing.
 	if cmd == nil || fmt.Sprintf("%s", cmd()) != source {
 		t.Fatal("copy button changed source whitespace")
 	}
-	_, cmd = m.Update(tea.MouseClickMsg{X: 23, Y: 2, Button: tea.MouseLeft})
-	if cmd == nil || fmt.Sprintf("%s", cmd()) != "proposal.md" {
-		t.Fatal("filename button did not copy filename")
+	tab.actor = &paneActor{ctx: t.Context(), conn: &websocket.Conn{}, inbox: make(chan paneInput, 4)}
+	m.Update(tea.MouseClickMsg{X: 23, Y: 2, Button: tea.MouseLeft})
+	if m.modal.kind != modalNone || m.focus != focusTerminal {
+		t.Fatal("filename button did not type into the terminal")
 	}
+	select {
+	case in := <-tab.actor.inbox:
+		if in.Kind != paneInputPaste || string(in.Paste) != "proposal.md" {
+			t.Fatalf("filename button typed %+v, want paste proposal.md", in)
+		}
+	default:
+		t.Fatal("filename button sent no terminal input")
+	}
+	// Hand-rolled actor has no run loop; detach before closeAll cleanup.
+	tab.actor = nil
+	// The filename action closed the viewer; reopen it for the close-button check.
+	m.modal.open(modalMarkdown, "Markdown")
+	m.markdown.reading = true
 	m.Update(tea.MouseClickMsg{X: m.width - 3, Y: 1, Button: tea.MouseLeft})
 	if m.modal.kind != modalNone || m.markdown.reading || m.focus != focusDiff {
 		t.Fatal("Unicode close button did not return to file list")
