@@ -775,7 +775,7 @@ func (m *tuiModel) renderFooter() string {
 		}
 	}
 	if m.focus == focusDiff {
-		hints = "Enter pretty diff  ↑↓ commits  Tab Markdown  [ ] width  Esc terminal"
+		hints = "Enter diff  ↑↓ commits  Tab Markdown  [ ] width  Esc terminal"
 	}
 	if !m.chromeEscAt.IsZero() {
 		hints = "Esc again: Quit dialog · any other key cancels"

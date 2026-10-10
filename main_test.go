@@ -1417,6 +1417,70 @@ func TestHandleRawDiff(t *testing.T) {
 		!strings.Contains(bodyUntracked, "+brand new") {
 		t.Errorf("Untracked file missing pretty patch structure: %s", bodyUntracked)
 	}
+
+	// Staged changes (git adds) must also appear in the working-tree
+	// output. Plain `git diff` hides the staged half, the classic gotcha:
+	// after `git add`, neither hunk below would survive without the fix.
+	runGit("add", "file.txt", "new_untracked.txt")
+
+	reqStaged := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&context=3", nil)
+	wStaged := httptest.NewRecorder()
+	handleRawDiff(wStaged, reqStaged)
+
+	if wStaged.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for staged diff, got %d", wStaged.Code)
+	}
+
+	bodyStaged := wStaged.Body.String()
+	if !strings.Contains(bodyStaged, "-line 5") || !strings.Contains(bodyStaged, "+line 5 modified") {
+		t.Errorf("Staged modification missing from working-tree diff: %s", bodyStaged)
+	}
+	if !strings.Contains(bodyStaged, "diff --git a/new_untracked.txt b/new_untracked.txt") ||
+		!strings.Contains(bodyStaged, "+brand new") {
+		t.Errorf("Staged new file missing from working-tree diff: %s", bodyStaged)
+	}
+}
+
+// TestHandleRawDiff_UnbornHeadStaged: a repo with no commits yet has no
+// HEAD for `git diff HEAD` to resolve. The working-tree view must still
+// show staged changes (via the --cached fallback) alongside untracked ones.
+func TestHandleRawDiff_UnbornHeadStaged(t *testing.T) {
+	tempDir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+	runGit("init")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(tempDir, "staged.txt"), []byte("staged content\n"), 0644); err != nil {
+		t.Fatalf("write staged file: %v", err)
+	}
+	runGit("add", "staged.txt")
+	if err := os.WriteFile(filepath.Join(tempDir, "unstaged.txt"), []byte("unstaged content\n"), 0644); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/raw-diff?cwd="+tempDir+"&context=3", nil)
+	w := httptest.NewRecorder()
+	handleRawDiff(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200 for unborn-HEAD diff, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "+staged content") {
+		t.Errorf("Staged file missing from unborn-HEAD working-tree diff: %s", body)
+	}
+	if !strings.Contains(body, "+unstaged content") {
+		t.Errorf("Untracked file missing from unborn-HEAD working-tree diff: %s", body)
+	}
 }
 
 // TestHandleRawDiff_CancelledContext (L6): a request whose ctx is already

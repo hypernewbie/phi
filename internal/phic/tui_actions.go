@@ -555,7 +555,7 @@ func (m *tuiModel) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handlePrettyDiffKey(msg)
 	}
 	if m.modal.kind == modalDiffSelect && msg.Key().Code == tea.KeyEscape {
-		m.modal.open(modalDiff, "Pretty Diff")
+		m.modal.open(modalDiff, "Diff")
 		return m, nil
 	}
 	if m.modal.kind == modalQuit {
