@@ -22,6 +22,14 @@ func (m *tuiModel) refreshConsole() tea.Cmd {
 	m.mouseCapture = false
 	m.selection = selectionState{}
 	m.panelDrag = 0
+	for _, d := range m.data {
+		d.identity, d.coders, d.panes = serverIdentity{}, nil, nil
+		d.loaded, d.err, d.needAuth, d.health = false, "", false, ""
+	}
+	for _, s := range m.servers {
+		s.identity, s.health = serverIdentity{}, ""
+	}
+	m.cpuTiers = nil
 	var keys []paneKey
 	var actors []*paneActor
 	for _, tabs := range m.tabs {

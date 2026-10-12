@@ -1,6 +1,7 @@
 package phic
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -96,4 +97,69 @@ func mustRGB(t *testing.T, hex string) uint32 {
 		}
 	}
 	return value
+}
+
+func TestApplyServerLoadedPreservesIdentityOnError(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	origin := m.currentOrigin()
+
+	// 1. Initial load where identity was retrieved, but panes/coders failed with err.
+	msg := serverLoadedMsg{
+		gen:      m.gen,
+		index:    m.active,
+		identity: serverIdentity{Theme: "green", Hostname: "hyperion"},
+		err:      "connection reset by peer",
+	}
+	m.applyServerLoaded(msg)
+
+	d := m.data[origin]
+	if d == nil {
+		t.Fatal("expected serverData to exist")
+	}
+	if d.identity.Theme != "green" {
+		t.Fatalf("expected d.identity.Theme = green, got %q", d.identity.Theme)
+	}
+	if m.servers[m.active].identity.Theme != "green" {
+		t.Fatalf("expected serverState.identity.Theme = green, got %q", m.servers[m.active].identity.Theme)
+	}
+	if hex := m.accentHex(); hex != strings.TrimPrefix(phiAccents["green"], "#") {
+		t.Fatalf("expected accentHex for green, got %q", hex)
+	}
+
+	// 2. A subsequent load with needAuth and empty identity should not wipe the known identity.
+	emptyAuthMsg := serverLoadedMsg{
+		gen:      m.gen,
+		index:    m.active,
+		needAuth: true,
+	}
+	m.applyServerLoaded(emptyAuthMsg)
+	if d.identity.Theme != "green" {
+		t.Fatalf("empty/auth message wiped existing theme: got %q", d.identity.Theme)
+	}
+}
+
+func TestCPUPollTriggersSelfHealingIdentityWhenThemeEmpty(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	origin := m.currentOrigin()
+
+	// Empty theme: successful CPU poll should emit self-healing command.
+	m.data[origin].identity.Theme = ""
+	cmd := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
+	if cmd == nil {
+		t.Fatal("expected identityPollCmd when theme is empty")
+	}
+
+	// Populated theme: successful CPU poll should not emit identity command.
+	m.data[origin].identity.Theme = "emerald"
+	cmdPopulated := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
+	if cmdPopulated != nil {
+		t.Fatal("expected no identityPollCmd when theme is already populated")
+	}
+
+	// Error CPU poll: should not emit identity command.
+	m.data[origin].identity.Theme = ""
+	cmdErr := m.applyCPUResult(msgCPUResult{origin: origin, err: context.DeadlineExceeded})
+	if cmdErr != nil {
+		t.Fatal("expected no identityPollCmd when CPU poll failed")
+	}
 }
