@@ -2,8 +2,12 @@ package phic
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hypernewbie/phi/internal/termemu"
 )
@@ -142,24 +146,99 @@ func TestCPUPollTriggersSelfHealingIdentityWhenThemeEmpty(t *testing.T) {
 	m, _, _ := closeControlsModel(t)
 	origin := m.currentOrigin()
 
-	// Empty theme: successful CPU poll should emit self-healing command.
+	// 1. Empty theme: successful CPU poll should emit self-healing command.
 	m.data[origin].identity.Theme = ""
 	cmd := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
 	if cmd == nil {
 		t.Fatal("expected identityPollCmd when theme is empty")
 	}
 
-	// Populated theme: successful CPU poll should not emit identity command.
+	// 2. Immediate second poll with empty theme should be rate-limited by cooldown.
+	cmdThrottled := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
+	if cmdThrottled != nil {
+		t.Fatal("expected no identityPollCmd within cooldown window")
+	}
+
+	// 3. Advancing past cooldown allows polling again.
+	m.identityPolls[origin] = time.Now().Add(-identityPollCooldown - time.Second)
+	cmdAfterCooldown := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
+	if cmdAfterCooldown == nil {
+		t.Fatal("expected identityPollCmd after cooldown elapsed")
+	}
+
+	// 4. Populated theme: successful CPU poll should not emit identity command.
 	m.data[origin].identity.Theme = "emerald"
+	m.identityPolls = nil
 	cmdPopulated := m.applyCPUResult(msgCPUResult{origin: origin, percent: 10})
 	if cmdPopulated != nil {
 		t.Fatal("expected no identityPollCmd when theme is already populated")
 	}
 
-	// Error CPU poll: should not emit identity command.
+	// 5. Error CPU poll: should not emit identity command.
 	m.data[origin].identity.Theme = ""
 	cmdErr := m.applyCPUResult(msgCPUResult{origin: origin, err: context.DeadlineExceeded})
 	if cmdErr != nil {
 		t.Fatal("expected no identityPollCmd when CPU poll failed")
+	}
+}
+
+func TestIdentityPollAndApplyLifecycle(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/config" {
+			_ = json.NewEncoder(w).Encode(serverIdentity{
+				Theme:    "mint",
+				Hostname: "hyperion",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	m, _, _ := closeControlsModel(t)
+	api, err := newAPIClient(ts.URL)
+	if err != nil {
+		t.Fatalf("newAPIClient failed: %v", err)
+	}
+
+	m.servers = append(m.servers, &serverState{
+		profile: desktopProfile{ID: "hyperion", Origin: ts.URL},
+		api:     api,
+	})
+	m.active = len(m.servers) - 1
+	m.data[ts.URL] = &serverData{}
+
+	// Run identityPollCmd end-to-end
+	cmd := m.identityPollCmd(ts.URL)
+	if cmd == nil {
+		t.Fatal("expected non-nil identityPollCmd")
+	}
+	resMsg := cmd()
+	idRes, ok := resMsg.(msgIdentityResult)
+	if !ok {
+		t.Fatalf("expected msgIdentityResult, got %T: %#v", resMsg, resMsg)
+	}
+	if idRes.origin != ts.URL || idRes.identity.Theme != "mint" || idRes.identity.Hostname != "hyperion" {
+		t.Fatalf("unexpected identity result: %+v", idRes)
+	}
+
+	// Apply identity result
+	m.applyIdentityResult(idRes)
+	d := m.data[ts.URL]
+	if d.identity.Theme != "mint" || d.identity.Hostname != "hyperion" {
+		t.Fatalf("applyIdentityResult failed to update serverData: %+v", d.identity)
+	}
+	s := m.servers[m.active]
+	if s.identity.Theme != "mint" || s.identity.Hostname != "hyperion" {
+		t.Fatalf("applyIdentityResult failed to update serverState: %+v", s.identity)
+	}
+	if hex := m.accentHex(); hex != strings.TrimPrefix(phiAccents["mint"], "#") {
+		t.Fatalf("expected accentHex = mint (%q), got %q", strings.TrimPrefix(phiAccents["mint"], "#"), hex)
+	}
+
+	// Empty identity result should be a no-op and never wipe known identity
+	m.applyIdentityResult(msgIdentityResult{origin: ts.URL, identity: serverIdentity{}})
+	if d.identity.Theme != "mint" {
+		t.Fatalf("empty identity wiped theme: got %q", d.identity.Theme)
 	}
 }

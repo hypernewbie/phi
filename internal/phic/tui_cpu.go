@@ -66,6 +66,8 @@ const cpuFlourishDuration = 480 * time.Millisecond
 
 const cpuPollInterval = 2 * time.Second
 
+const identityPollCooldown = 15 * time.Second
+
 const cpuPulseStep = 120 * time.Millisecond
 
 // accentHex is the brand accent as hex without '#': the server theme wins,
@@ -167,7 +169,13 @@ func (m *tuiModel) applyCPUResult(msg msgCPUResult) tea.Cmd {
 	var extraCmd tea.Cmd
 	if msg.err == nil && msg.origin != "" {
 		if d := m.data[msg.origin]; d == nil || d.identity.Theme == "" {
-			extraCmd = m.identityPollCmd(msg.origin)
+			if m.identityPolls == nil {
+				m.identityPolls = map[string]time.Time{}
+			}
+			if time.Since(m.identityPolls[msg.origin]) >= identityPollCooldown {
+				m.identityPolls[msg.origin] = time.Now()
+				extraCmd = m.identityPollCmd(msg.origin)
+			}
 		}
 	}
 	if !seen || prev == tier {
@@ -198,7 +206,7 @@ func (m *tuiModel) identityPollCmd(origin string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		var identity serverIdentity
-		if err := api.getJSON(ctx, "/api/config", &identity); err == nil && (identity.Theme != "" || identity.Hostname != "") {
+		if err := api.getJSON(ctx, "/api/config", &identity); err == nil && identity.present() {
 			return msgIdentityResult{origin: origin, identity: identity}
 		}
 		return nil
@@ -206,7 +214,7 @@ func (m *tuiModel) identityPollCmd(origin string) tea.Cmd {
 }
 
 func (m *tuiModel) applyIdentityResult(msg msgIdentityResult) tea.Cmd {
-	if msg.origin == "" {
+	if msg.origin == "" || !msg.identity.present() {
 		return nil
 	}
 	d := m.data[msg.origin]
@@ -214,15 +222,9 @@ func (m *tuiModel) applyIdentityResult(msg msgIdentityResult) tea.Cmd {
 		d = &serverData{}
 		m.data[msg.origin] = d
 	}
-	if msg.identity.Theme != "" || msg.identity.Hostname != "" {
-		d.identity = msg.identity
-	}
-	for _, s := range m.servers {
-		if s.api != nil && s.api.base.String() == msg.origin {
-			if msg.identity.Theme != "" || msg.identity.Hostname != "" {
-				s.identity = msg.identity
-			}
-		}
+	d.identity = msg.identity
+	if s := m.serverForOrigin(msg.origin); s != nil {
+		s.identity = msg.identity
 	}
 	return nil
 }
