@@ -34,6 +34,10 @@ type serverIdentity struct {
 	ActiveCwd  string   `json:"active_cwd"`
 }
 
+func (id serverIdentity) present() bool {
+	return id.Theme != "" || id.Hostname != ""
+}
+
 func desktopProfilePaths(configDir string) []string {
 	return []string{filepath.Join(configDir, "phi-client", "profiles.json"), filepath.Join(configDir, "phi-desktop-electron", "profiles.json"), filepath.Join(configDir, "Phi", "profiles.json")}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
@@ -133,7 +134,7 @@ func TestRefreshConsoleResetsServerIdentityAndMetadata(t *testing.T) {
 	m, _, _ := closeControlsModel(t)
 	origin := m.currentOrigin()
 
-	// Setup known server metadata
+	// Setup known server metadata for active server and a secondary server
 	m.data[origin].identity = serverIdentity{Theme: "indigo", Hostname: "callisto"}
 	m.data[origin].loaded = true
 	m.data[origin].health = "up"
@@ -143,13 +144,28 @@ func TestRefreshConsoleResetsServerIdentityAndMetadata(t *testing.T) {
 	m.servers[0].identity = serverIdentity{Theme: "indigo", Hostname: "callisto"}
 	m.servers[0].health = "up"
 	m.cpuTiers = map[string]cpuTier{origin: cpuModerate}
+	m.identityPolls = map[string]time.Time{origin: time.Now()}
+
+	otherOrigin := "http://jupiter:7070"
+	otherAPI, _ := newAPIClient(otherOrigin)
+	m.servers = append(m.servers, &serverState{
+		profile:  desktopProfile{ID: "jupiter", Origin: otherOrigin},
+		api:      otherAPI,
+		identity: serverIdentity{Theme: "emerald", Hostname: "jupiter"},
+		health:   "up",
+	})
+	m.data[otherOrigin] = &serverData{
+		identity: serverIdentity{Theme: "emerald", Hostname: "jupiter"},
+		loaded:   true,
+		health:   "up",
+	}
 
 	// Trigger manual refresh
 	_ = m.refreshConsole()
 
-	// Verify server metadata was reset for cold repopulation
+	// Verify active server metadata was reset for cold repopulation
 	d := m.data[origin]
-	if d.identity.Theme != "" || d.identity.Hostname != "" {
+	if d.identity.present() {
 		t.Fatalf("refreshConsole did not reset serverData identity: %+v", d.identity)
 	}
 	if d.loaded {
@@ -158,7 +174,7 @@ func TestRefreshConsoleResetsServerIdentityAndMetadata(t *testing.T) {
 	if d.health != "" {
 		t.Fatal("refreshConsole did not reset serverData health")
 	}
-	if m.servers[0].identity.Theme != "" {
+	if m.servers[0].identity.present() {
 		t.Fatalf("refreshConsole did not reset serverState identity: %+v", m.servers[0].identity)
 	}
 	if m.servers[0].health != "" {
@@ -166,6 +182,21 @@ func TestRefreshConsoleResetsServerIdentityAndMetadata(t *testing.T) {
 	}
 	if m.cpuTiers != nil {
 		t.Fatal("refreshConsole did not reset cpuTiers")
+	}
+	if m.identityPolls != nil {
+		t.Fatal("refreshConsole did not reset identityPolls")
+	}
+
+	// Verify non-active server metadata was preserved
+	otherD := m.data[otherOrigin]
+	if otherD.identity.Theme != "emerald" || otherD.identity.Hostname != "jupiter" {
+		t.Fatalf("refreshConsole unexpectedly wiped non-active serverData identity: %+v", otherD.identity)
+	}
+	if m.servers[1].identity.Theme != "emerald" || m.servers[1].identity.Hostname != "jupiter" {
+		t.Fatalf("refreshConsole unexpectedly wiped non-active serverState identity: %+v", m.servers[1].identity)
+	}
+	if otherD.health != "up" || m.servers[1].health != "up" {
+		t.Fatal("refreshConsole unexpectedly wiped non-active server health")
 	}
 
 	// Verify user intent/context was preserved

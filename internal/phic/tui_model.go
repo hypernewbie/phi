@@ -263,6 +263,7 @@ type tuiModel struct {
 	// cpuPulseUntil bounds the finite tier-change pulse window.
 	cpuTiers      map[string]cpuTier
 	cpuPulseUntil time.Time
+	identityPolls map[string]time.Time
 
 	refreshToken   int
 	refreshing     bool
@@ -825,7 +826,7 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 	d.needAuth = msg.needAuth
 	d.auth = msg.auth
 	d.loginWarning = msg.warning
-	if msg.identity.Theme != "" || msg.identity.Hostname != "" {
+	if msg.identity.present() {
 		d.identity = msg.identity
 		if msg.index >= 0 && msg.index < len(m.servers) && m.servers[msg.index] != nil {
 			m.servers[msg.index].identity = msg.identity
