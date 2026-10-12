@@ -753,6 +753,8 @@ func (m *tuiModel) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, tea.Batch(m.cpuPollCmd(), m.cpuPollTick())
 	case msgCPUResult:
 		return m, m.applyCPUResult(msg)
+	case msgIdentityResult:
+		return m, m.applyIdentityResult(msg)
 	case msgCPUPulse:
 		if time.Now().Before(m.cpuPulseUntil) {
 			return m, tea.Tick(cpuPulseStep, func(time.Time) tea.Msg { return msgCPUPulse{} })
@@ -823,6 +825,12 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 	d.needAuth = msg.needAuth
 	d.auth = msg.auth
 	d.loginWarning = msg.warning
+	if msg.identity.Theme != "" || msg.identity.Hostname != "" {
+		d.identity = msg.identity
+		if msg.index >= 0 && msg.index < len(m.servers) && m.servers[msg.index] != nil {
+			m.servers[msg.index].identity = msg.identity
+		}
+	}
 	if msg.err != "" {
 		m.setStatus(msg.err, true)
 		return m, nil
@@ -832,7 +840,6 @@ func (m *tuiModel) applyServerLoaded(msg serverLoadedMsg) (tea.Model, tea.Cmd) {
 		m.openPassword(msg.index, msg.auth)
 		return m, nil
 	}
-	d.identity = msg.identity
 	d.coders = msg.coders
 	d.panes = msg.panes
 	// The active server selection is only meaningful for the server the

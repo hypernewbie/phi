@@ -128,3 +128,65 @@ func TestExplicitRefreshClosesAllClientsAndRebuildsEachOriginWithoutDeletingPane
 		t.Fatal("late old-client event corrupted the replacement")
 	}
 }
+
+func TestRefreshConsoleResetsServerIdentityAndMetadata(t *testing.T) {
+	m, _, _ := closeControlsModel(t)
+	origin := m.currentOrigin()
+
+	// Setup known server metadata
+	m.data[origin].identity = serverIdentity{Theme: "indigo", Hostname: "callisto"}
+	m.data[origin].loaded = true
+	m.data[origin].health = "up"
+	m.data[origin].project = "/my/project"
+	m.data[origin].worktree = "/my/worktree"
+	m.data[origin].coderID = "pi"
+	m.servers[0].identity = serverIdentity{Theme: "indigo", Hostname: "callisto"}
+	m.servers[0].health = "up"
+	m.cpuTiers = map[string]cpuTier{origin: cpuModerate}
+
+	// Trigger manual refresh
+	_ = m.refreshConsole()
+
+	// Verify server metadata was reset for cold repopulation
+	d := m.data[origin]
+	if d.identity.Theme != "" || d.identity.Hostname != "" {
+		t.Fatalf("refreshConsole did not reset serverData identity: %+v", d.identity)
+	}
+	if d.loaded {
+		t.Fatal("refreshConsole did not reset serverData loaded")
+	}
+	if d.health != "" {
+		t.Fatal("refreshConsole did not reset serverData health")
+	}
+	if m.servers[0].identity.Theme != "" {
+		t.Fatalf("refreshConsole did not reset serverState identity: %+v", m.servers[0].identity)
+	}
+	if m.servers[0].health != "" {
+		t.Fatal("refreshConsole did not reset serverState health")
+	}
+	if m.cpuTiers != nil {
+		t.Fatal("refreshConsole did not reset cpuTiers")
+	}
+
+	// Verify user intent/context was preserved
+	if d.project != "/my/project" || d.worktree != "/my/worktree" || d.coderID != "pi" {
+		t.Fatalf("refreshConsole lost project/worktree/coder context: %q, %q, %q", d.project, d.worktree, d.coderID)
+	}
+
+	// Verify subsequent server load repopulates the new theme and updates accentHex
+	m.applyServerLoaded(serverLoadedMsg{
+		gen:      m.gen,
+		index:    0,
+		identity: serverIdentity{Theme: "coral", Hostname: "callisto"},
+		health:   "up",
+	})
+	if d.identity.Theme != "coral" {
+		t.Fatalf("expected d.identity.Theme = coral, got %q", d.identity.Theme)
+	}
+	if m.servers[0].identity.Theme != "coral" {
+		t.Fatalf("expected serverState.identity.Theme = coral, got %q", m.servers[0].identity.Theme)
+	}
+	if hex := m.accentHex(); hex != strings.TrimPrefix(phiAccents["coral"], "#") {
+		t.Fatalf("expected accentHex = coral (%q), got %q", strings.TrimPrefix(phiAccents["coral"], "#"), hex)
+	}
+}

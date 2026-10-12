@@ -164,11 +164,65 @@ func (m *tuiModel) applyCPUResult(msg msgCPUResult) tea.Cmd {
 	tier := tierForCPU(percent)
 	prev, seen := m.cpuTiers[msg.origin]
 	m.cpuTiers[msg.origin] = tier
+	var extraCmd tea.Cmd
+	if msg.err == nil && msg.origin != "" {
+		if d := m.data[msg.origin]; d == nil || d.identity.Theme == "" {
+			extraCmd = m.identityPollCmd(msg.origin)
+		}
+	}
 	if !seen || prev == tier {
-		return nil
+		return extraCmd
 	}
 	// Tier change (never the first classification): finite pulse, then the
 	// static tier look holds. The pulse chain repaints only for its window.
 	m.cpuPulseUntil = time.Now().Add(cpuFlourishDuration)
-	return tea.Tick(cpuPulseStep, func(time.Time) tea.Msg { return msgCPUPulse{} })
+	pulseCmd := tea.Tick(cpuPulseStep, func(time.Time) tea.Msg { return msgCPUPulse{} })
+	if extraCmd != nil {
+		return tea.Batch(pulseCmd, extraCmd)
+	}
+	return pulseCmd
+}
+
+type msgIdentityResult struct {
+	origin   string
+	identity serverIdentity
+}
+
+func (m *tuiModel) identityPollCmd(origin string) tea.Cmd {
+	s := m.serverForOrigin(origin)
+	if s == nil || s.api == nil {
+		return nil
+	}
+	api := s.api
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var identity serverIdentity
+		if err := api.getJSON(ctx, "/api/config", &identity); err == nil && (identity.Theme != "" || identity.Hostname != "") {
+			return msgIdentityResult{origin: origin, identity: identity}
+		}
+		return nil
+	}
+}
+
+func (m *tuiModel) applyIdentityResult(msg msgIdentityResult) tea.Cmd {
+	if msg.origin == "" {
+		return nil
+	}
+	d := m.data[msg.origin]
+	if d == nil {
+		d = &serverData{}
+		m.data[msg.origin] = d
+	}
+	if msg.identity.Theme != "" || msg.identity.Hostname != "" {
+		d.identity = msg.identity
+	}
+	for _, s := range m.servers {
+		if s.api != nil && s.api.base.String() == msg.origin {
+			if msg.identity.Theme != "" || msg.identity.Hostname != "" {
+				s.identity = msg.identity
+			}
+		}
+	}
+	return nil
 }
