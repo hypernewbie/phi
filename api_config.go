@@ -514,6 +514,11 @@ func handleUseHiddenTerminal(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": cfg.UseHiddenTerminal})
 }
 
+// handleFastMode persists the legacy per-server effects flag. Retained
+// for backwards compatibility (old clients, the field in handleConfig);
+// current clients store low power mode in the browser (localStorage
+// `phi_low_power`) and never call this — a true value here is only a
+// one-time migration seed the client adopts locally.
 func handleFastMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

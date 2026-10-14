@@ -18,11 +18,13 @@ import {
     clampPanelWidth,
     setServerHostOverride,
     openExternalLink,
+    resolveLowPowerEnabled,
+    writeLowPowerLocal,
 } from './util.js';
 import { SyncManager } from './sync.js';
 import { initQuotaButton } from './quota.js';
 import { bootstrapAccessAuth } from './auth.js';
-import { openSettingsModal } from './settings.js';
+import { openSettingsModal, broadcastConfigSync } from './settings.js';
 import { markDesktopView } from './desktop.js';
 import { ACCENT_COLORS, applyThemeTokens } from './theme.js';
 export { ACCENT_COLORS };
@@ -1371,10 +1373,13 @@ export class App {
         }
     }
 
-    // applyFastMode computes the effects profile from both sources of
-    // truth: the shared config tick (desktop) and the viewport — the
-    // profile is forced on for mobile, where the animations and blurs
-    // cost the most (see research/2026-08-01-2138-mobile-is-fast-mode.md).
+    // applyFastMode computes the effects profile. The preference is
+    // browser-stored (localStorage `phi_low_power`) — GPU burn is a
+    // property of this machine, not of the server being viewed — with the
+    // legacy per-server `config.fast_mode` kept only as a one-time
+    // migration source (see resolveLowPowerEnabled). The profile is
+    // forced on for mobile, where the animations and blurs cost the most
+    // (see research/2026-08-01-2138-mobile-is-fast-mode.md).
     // Single writer of the body class; never toggle it directly elsewhere.
     // matchMedia guard: jsdom (tests) has no matchMedia — treat as not
     // mobile, same idiom as the isTouch check in terminal.js.
@@ -1389,8 +1394,25 @@ export class App {
         const deviceMobile =
             typeof navigator !== 'undefined' &&
             navigator.userAgentData?.mobile === true;
-        const on = !!this.config?.fast_mode || mobile || deviceMobile;
+        const on =
+            resolveLowPowerEnabled(!!this.config?.fast_mode) ||
+            mobile ||
+            deviceMobile;
         document.body.classList.toggle('fast-mode', on);
+    }
+
+    // setLowPowerMode is the single writer of the browser preference:
+    // persists to localStorage, mirrors in-memory onto config.fast_mode
+    // (read-only compat for old readers — never POSTed to the server),
+    // re-applies the body class, and notifies same-origin tabs. On
+    // phi-desktop the tray fan-out writes this same key into every
+    // retained server view, so the tray checkbox is the one global
+    // switch; this method covers the in-page settings toggle.
+    setLowPowerMode(enabled) {
+        writeLowPowerLocal(enabled);
+        if (this.config) this.config.fast_mode = enabled;
+        this.applyFastMode();
+        broadcastConfigSync('low-power', { enabled });
     }
 
     openSettingsModal(opts) {
@@ -1760,6 +1782,26 @@ export class App {
                     this.tabManager?.applyTerminalFontSizeToAll?.(
                         this.terminalFontSize,
                     );
+                } else if (msg.type === 'low-power') {
+                    // Browser-stored preference changed in a same-origin
+                    // tab (or fanned out by the desktop tray): localStorage
+                    // is already the new truth, so just re-apply and keep
+                    // an open settings checkbox in sync. No server fetch —
+                    // the server no longer owns this flag.
+                    this.applyFastMode?.();
+                    try {
+                        const input = document.getElementById(
+                            'settings-fast-mode',
+                        );
+                        if (input && 'checked' in input) {
+                            input.checked =
+                                typeof msg.enabled === 'boolean'
+                                    ? msg.enabled
+                                    : document.body.classList.contains(
+                                          'fast-mode',
+                                      );
+                        }
+                    } catch {}
                 } else if (msg.type === 'behavior') {
                     try {
                         const res = await fetch('/api/config');

@@ -65,6 +65,50 @@ export const READ_FILE_ACTION_SCRIPT = `(() => {
 })()`;
 
 /**
+ * The browser preference key for low power mode. Mirrors
+ * LOW_POWER_STORAGE_KEY in web-src/util.ts (duplicated, not imported:
+ * this module ships fixed page scripts and must not pull the web build
+ * into the desktop bundle).
+ */
+export const LOW_POWER_STORAGE_KEY = 'phi_low_power';
+
+/**
+ * Builds the fixed script that applies the desktop-global low power mode
+ * to one retained server view: persists the browser preference in that
+ * origin's own localStorage, toggles the page's `fast-mode` body class,
+ * syncs an open settings checkbox, and notifies same-origin tabs over
+ * the page's own BroadcastChannel (so every tab in that view follows
+ * without a reload). The enabled flag is embedded as a JSON literal,
+ * never interpolated raw.
+ *
+ * The compact-viewport query below must stay equivalent to
+ * COMPACT_VIEWPORT_QUERY (web-src/util.ts) and the CSS prelude — mobile
+ * viewports force the profile on, mirroring App.applyFastMode, so the
+ * tray toggle can never re-enable expensive effects on a phone layout.
+ */
+export function lowPowerApplyScript(enabled: boolean): string {
+  return `(() => {
+    const enabled = ${JSON.stringify(enabled)};
+    try { localStorage.setItem(${JSON.stringify(LOW_POWER_STORAGE_KEY)}, enabled ? '1' : '0'); } catch {}
+    var mobile = false;
+    try {
+      mobile = typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)').matches;
+    } catch {}
+    var deviceMobile = false;
+    try {
+      deviceMobile = typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.mobile === true;
+    } catch {}
+    try { document.body.classList.toggle('fast-mode', enabled || mobile || deviceMobile); } catch {}
+    try {
+      var input = document.getElementById('settings-fast-mode');
+      if (input && 'checked' in input) input.checked = enabled;
+    } catch {}
+    try { new BroadcastChannel('phi_config_sync').postMessage({ type: 'low-power', enabled: enabled }); } catch {}
+  })()`;
+}
+
+/**
  * Builds a toast script for a file-action failure. The message is
  * embedded as a JSON.stringify literal (never raw text) and rendered
  * with textContent only. Mirrors the page's own toast DOM

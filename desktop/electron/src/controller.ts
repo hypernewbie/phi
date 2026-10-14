@@ -107,6 +107,10 @@ export interface ControllerState {
   syncAlerts: boolean;
   /** The persisted low-memory mode preference (default false, auto true if <10GB RAM). */
   lowMemoryMode: boolean;
+  /** The persisted low-power mode preference (default false). One switch
+   *  fanned out to every retained server view (each origin keeps its own
+   *  localStorage copy of the same key); see lowPowerApplyScript. */
+  lowPowerMode: boolean;
   /** The persisted desktop-pet preference (default false). */
   petEnabled: boolean;
   /** The persisted desktop-pet zoom percentage (default 100). */
@@ -126,6 +130,7 @@ export type ControllerEvent =
   | { kind: 'close-to-tray-changed' }
   | { kind: 'sync-alerts-changed' }
   | { kind: 'low-memory-changed' }
+  | { kind: 'low-power-changed' }
   | { kind: 'pet-enabled-changed' }
   | { kind: 'pet-zoom-changed' }
   | { kind: 'content-zoom-changed'; percent: number }
@@ -417,6 +422,7 @@ interface LoadedStore {
   closeToTray: boolean;
   syncAlerts: boolean;
   lowMemoryMode: boolean;
+  lowPowerMode: boolean;
   petEnabled: boolean;
   petZoomPercent: number;
   contentZoomPercent: number;
@@ -504,6 +510,7 @@ function readStore(
       closeToTray: true,
       syncAlerts: true,
       lowMemoryMode: false,
+      lowPowerMode: false,
       petEnabled: false,
       petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
       contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
@@ -524,6 +531,7 @@ function readStore(
         closeToTray: true,
         syncAlerts: true,
         lowMemoryMode: false,
+        lowPowerMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
@@ -557,6 +565,7 @@ function readStore(
         closeToTray: true,
         syncAlerts: true,
         lowMemoryMode: false,
+        lowPowerMode: false,
         petEnabled: false,
         petZoomPercent: PET_ZOOM_DEFAULT_PERCENT,
         contentZoomPercent: CONTENT_ZOOM_DEFAULT_PERCENT,
@@ -574,6 +583,10 @@ function readStore(
   const lowMemoryMode =
     typeof (obj as Record<string, unknown>).lowMemoryMode === 'boolean'
       ? ((obj as Record<string, unknown>).lowMemoryMode as boolean)
+      : false;
+  const lowPowerMode =
+    typeof (obj as Record<string, unknown>).lowPowerMode === 'boolean'
+      ? ((obj as Record<string, unknown>).lowPowerMode as boolean)
       : false;
   const petEnabled =
     typeof obj.petEnabled === 'boolean' ? obj.petEnabled : false;
@@ -630,6 +643,7 @@ function readStore(
     closeToTray: typeof obj.closeToTray === 'boolean' ? obj.closeToTray : true,
     syncAlerts,
     lowMemoryMode,
+    lowPowerMode,
     petEnabled,
     petZoomPercent,
     contentZoomPercent,
@@ -649,6 +663,7 @@ function saveStore(
   closeToTray: boolean,
   syncAlerts: boolean,
   lowMemoryMode: boolean,
+  lowPowerMode: boolean,
   petEnabled: boolean,
   petZoomPercent: number,
   contentZoomPercent: number,
@@ -685,6 +700,7 @@ function saveStore(
           closeToTray,
           syncAlerts,
           lowMemoryMode,
+          lowPowerMode,
           petEnabled,
           petZoomPercent,
           contentZoomPercent,
@@ -762,6 +778,7 @@ export class Controller {
   private closeToTray = true;
   private syncAlerts = true;
   private lowMemoryMode = false;
+  private lowPowerMode = false;
   private petEnabled = false;
   private petZoomPercent = PET_ZOOM_DEFAULT_PERCENT;
   private contentZoomPercent = CONTENT_ZOOM_DEFAULT_PERCENT;
@@ -775,6 +792,7 @@ export class Controller {
     this.closeToTray = store.closeToTray;
     this.syncAlerts = store.syncAlerts;
     this.lowMemoryMode = store.lowMemoryMode;
+    this.lowPowerMode = store.lowPowerMode;
     this.petEnabled = store.petEnabled;
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
@@ -819,6 +837,7 @@ export class Controller {
     this.closeToTray = store.closeToTray;
     this.syncAlerts = store.syncAlerts;
     this.lowMemoryMode = store.lowMemoryMode;
+    this.lowPowerMode = store.lowPowerMode;
     this.petEnabled = store.petEnabled;
     this.petZoomPercent = store.petZoomPercent;
     this.contentZoomPercent = store.contentZoomPercent;
@@ -863,6 +882,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -905,6 +925,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -942,6 +963,7 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
@@ -986,6 +1008,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -1012,6 +1035,7 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
@@ -1039,6 +1063,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -1089,6 +1114,7 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
@@ -1122,6 +1148,7 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
@@ -1144,12 +1171,42 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
       this.petIdleDwellSeconds,
     );
     this.emit({ kind: 'low-memory-changed' });
+  }
+
+  /**
+   * The persisted low-power mode preference (default false): one switch
+   * fanned out to every retained server view (see DesktopHost
+   * applyLowPowerMode + lowPowerApplyScript). Unlike low-memory mode
+   * there is no RAM-based auto-enable — GPU burn is user-judged.
+   */
+  getLowPowerMode(): boolean {
+    return this.lowPowerMode;
+  }
+
+  setLowPowerMode(value: boolean): void {
+    this.refreshSharedStore();
+    if (value === this.lowPowerMode) return;
+    this.lowPowerMode = value;
+    saveStore(
+      this.persistPath,
+      this.profiles,
+      this.closeToTray,
+      this.syncAlerts,
+      this.lowMemoryMode,
+      this.lowPowerMode,
+      this.petEnabled,
+      this.petZoomPercent,
+      this.contentZoomPercent,
+      this.petIdleDwellSeconds,
+    );
+    this.emit({ kind: 'low-power-changed' });
   }
 
   /**
@@ -1175,6 +1232,7 @@ export class Controller {
       this.closeToTray,
       this.syncAlerts,
       this.lowMemoryMode,
+      this.lowPowerMode,
       this.petEnabled,
       this.petZoomPercent,
       this.contentZoomPercent,
@@ -1206,6 +1264,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -1242,6 +1301,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -1272,6 +1332,7 @@ export class Controller {
         this.closeToTray,
         this.syncAlerts,
         this.lowMemoryMode,
+        this.lowPowerMode,
         this.petEnabled,
         this.petZoomPercent,
         this.contentZoomPercent,
@@ -1329,6 +1390,7 @@ export class Controller {
       closeToTray: this.closeToTray,
       syncAlerts: this.syncAlerts,
       lowMemoryMode: this.lowMemoryMode,
+      lowPowerMode: this.lowPowerMode,
       petEnabled: this.petEnabled,
       petZoomPercent: this.petZoomPercent,
       contentZoomPercent: this.contentZoomPercent,

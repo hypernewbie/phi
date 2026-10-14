@@ -20,6 +20,8 @@ import {
   setWorkspaceScript,
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
+  LOW_POWER_STORAGE_KEY,
+  lowPowerApplyScript,
 } from '../src/injected.js';
 
 /** The injected scripts' recording surface (window.__phiFileAction / guard). */
@@ -468,5 +470,72 @@ describe('headerActionClickScript + setWorkspaceScript (header->body relays)', (
     ) as HTMLSelectElement;
     expect(window.eval(setWorkspaceScript('/nope'))).toBe(false);
     expect(select.value).toBe('/a');
+  });
+});
+
+describe('lowPowerApplyScript (the desktop-global low power fan-out)', () => {
+  const RealBroadcastChannel = globalThis.BroadcastChannel;
+  let posted: unknown[] = [];
+
+  beforeEach(() => {
+    posted = [];
+    window.localStorage.clear();
+    document.body.className = '';
+    document.body.innerHTML = '';
+    vi.stubGlobal(
+      'BroadcastChannel',
+      class {
+        postMessage(msg: unknown): void {
+          posted.push(msg);
+        }
+        close(): void {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear();
+    document.body.className = '';
+    document.body.innerHTML = '';
+  });
+
+  it('embeds the flag as a JSON.stringify literal with no template interpolation', () => {
+    expect(lowPowerApplyScript(true)).not.toContain('${');
+    expect(lowPowerApplyScript(false)).not.toContain('${');
+    expect(lowPowerApplyScript(true)).toContain('const enabled = true;');
+    expect(lowPowerApplyScript(false)).toContain('const enabled = false;');
+    expect(RealBroadcastChannel).toBeDefined();
+  });
+
+  it('persists the browser preference under the documented key (jsdom)', () => {
+    window.eval(lowPowerApplyScript(true));
+    expect(window.localStorage.getItem(LOW_POWER_STORAGE_KEY)).toBe('1');
+    window.eval(lowPowerApplyScript(false));
+    expect(window.localStorage.getItem(LOW_POWER_STORAGE_KEY)).toBe('0');
+  });
+
+  it('toggles the fast-mode body class and notifies same-origin tabs (jsdom)', () => {
+    window.eval(lowPowerApplyScript(true));
+    expect(document.body.classList.contains('fast-mode')).toBe(true);
+    expect(posted).toEqual([{ type: 'low-power', enabled: true }]);
+    window.eval(lowPowerApplyScript(false));
+    // jsdom has no matchMedia: not mobile, so the class follows the flag.
+    expect(document.body.classList.contains('fast-mode')).toBe(false);
+    expect(posted).toEqual([
+      { type: 'low-power', enabled: true },
+      { type: 'low-power', enabled: false },
+    ]);
+  });
+
+  it('syncs an open settings checkbox without requiring it (jsdom)', () => {
+    document.body.innerHTML = '<input type="checkbox" id="settings-fast-mode">';
+    const input = document.getElementById(
+      'settings-fast-mode',
+    ) as HTMLInputElement;
+    window.eval(lowPowerApplyScript(true));
+    expect(input.checked).toBe(true);
+    document.body.innerHTML = '';
+    expect(() => window.eval(lowPowerApplyScript(false))).not.toThrow();
   });
 });

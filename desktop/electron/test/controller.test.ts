@@ -707,6 +707,63 @@ describe('Controller: close-to-tray preference', () => {
   });
 });
 
+describe('Controller: low-power preference', () => {
+  it('defaults to false (empty store and legacy stores without the field)', () => {
+    const c = makeController();
+    expect(c.getLowPowerMode()).toBe(false);
+    expect(c.state().lowPowerMode).toBe(false);
+    // A legacy store file (profiles only, no lowPowerMode) loads with the default.
+    writeFileSync(
+      persistPath(),
+      JSON.stringify({
+        profiles: [{ id: 'x', name: 'X', origin: 'http://x.example/' }],
+      }),
+      'utf8',
+    );
+    expect(makeController().getLowPowerMode()).toBe(false);
+  });
+
+  it('persists a toggle through the store file (a fresh controller reads it back)', () => {
+    const c = makeController();
+    c.setLowPowerMode(true);
+    expect(c.getLowPowerMode()).toBe(true);
+    const onDisk = JSON.parse(readFileSync(persistPath(), 'utf8')) as {
+      lowPowerMode?: boolean;
+    };
+    expect(onDisk.lowPowerMode).toBe(true);
+    expect(
+      new Controller({ persistPath: persistPath() }).getLowPowerMode(),
+    ).toBe(true);
+    c.setLowPowerMode(false);
+    expect(
+      new Controller({ persistPath: persistPath() }).getLowPowerMode(),
+    ).toBe(false);
+  });
+
+  it('emits low-power-changed on a change and stays silent on a no-op', () => {
+    const c = makeController();
+    const events: ControllerEvent[] = [];
+    c.subscribe((e) => events.push(e));
+    c.setLowPowerMode(true);
+    c.setLowPowerMode(true); // unchanged: no event, no extra save
+    expect(events).toEqual([{ kind: 'low-power-changed' }]);
+    expect(c.getLowPowerMode()).toBe(true);
+  });
+
+  it('survives profile mutations and leaves low-memory mode untouched', () => {
+    const c = makeController();
+    c.setLowPowerMode(true);
+    const p = c.add('http://127.0.0.1:7070/');
+    c.rename(p.id, 'Home');
+    c.remove(p.id);
+    expect(c.getLowPowerMode()).toBe(true);
+    expect(c.getLowMemoryMode()).toBe(false);
+    expect(
+      new Controller({ persistPath: persistPath() }).getLowPowerMode(),
+    ).toBe(true);
+  });
+});
+
 describe('Controller: sync-alerts preference', () => {
   it('defaults to true (empty store and legacy stores without the field)', () => {
     const c = makeController();

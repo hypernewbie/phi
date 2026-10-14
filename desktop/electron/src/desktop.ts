@@ -690,6 +690,7 @@ export class DesktopHost {
       getCloseToTray: () => this.controller?.state().closeToTray ?? true,
       getSyncAlerts: () => this.controller?.state().syncAlerts ?? true,
       getLowMemoryMode: () => this.controller?.state().lowMemoryMode ?? false,
+      getLowPowerMode: () => this.controller?.state().lowPowerMode ?? false,
       getPetAvailable: () => isPetAvailable(this.petRoot),
       getPetInstallable: () =>
         isPetInstallable(
@@ -770,6 +771,20 @@ export class DesktopHost {
               console.log(
                 `phi-desktop: tray toggle-low-memory: ${String(err)}`,
               );
+            }
+            break;
+          }
+          case 'toggle-low-power': {
+            const ctrl = this.controller;
+            if (!ctrl) break;
+            try {
+              ctrl.setLowPowerMode(!ctrl.getLowPowerMode());
+              // Apply immediately: one switch fans out to every server.
+              // (The low-power-changed subscription below re-applies +
+              // rebuilds the menu as well; both paths are idempotent.)
+              this.applyLowPowerMode(ctrl.getLowPowerMode());
+            } catch (err) {
+              console.log(`phi-desktop: tray toggle-low-power: ${String(err)}`);
             }
             break;
           }
@@ -1156,6 +1171,38 @@ export class DesktopHost {
       (mgr as { restoreAll: () => void }).restoreAll();
       console.log('phi-desktop: low-memory OFF — hibernation disabled');
     }
+    this.trayHandle?.rebuildMenu();
+  }
+
+  applyLowPowerMode(enabled: boolean): void {
+    // One switch for every server: persist is already done by the
+    // controller; here fan the same browser preference out to each
+    // retained view's own localStorage (per-origin isolation means a
+    // write in one view can never reach another). Views still loading
+    // converge on their pending did-finish-load, which reads the same
+    // controller global.
+    const mgr = this.profileViews as unknown as
+      | ProfileViewManager
+      | {
+          applyLowPowerToViews?: (enabled: boolean) => void;
+        }
+      | undefined;
+    if (
+      !mgr ||
+      typeof (mgr as { applyLowPowerToViews?: unknown })
+        .applyLowPowerToViews !== 'function'
+    ) {
+      console.log(
+        `phi-desktop: applyLowPowerMode(${enabled}) — no view manager yet`,
+      );
+      return;
+    }
+    (
+      mgr as { applyLowPowerToViews: (enabled: boolean) => void }
+    ).applyLowPowerToViews(enabled);
+    console.log(
+      `phi-desktop: low-power ${enabled ? 'ON' : 'OFF'} — fanned out to every server`,
+    );
     this.trayHandle?.rebuildMenu();
   }
 
@@ -2904,6 +2951,7 @@ export class DesktopHost {
         }),
         railWidth: RAIL_WIDTH,
         getContentZoomPercent: () => CONTENT_ZOOM_DEFAULT_PERCENT,
+        getLowPowerMode: () => this.controller?.getLowPowerMode() ?? false,
         onZoomAction: () => {},
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
       });
@@ -3057,6 +3105,9 @@ export class DesktopHost {
         // the tray snapshot and never echoes the event back to the renderer.
         this.refreshPetTrayForZoom(event);
         return;
+      } else if (event.kind === 'low-power-changed') {
+        this.trayHandle?.rebuildMenu();
+        this.applyLowPowerMode(this.controller?.getLowPowerMode() ?? false);
       } else if (event.kind === 'low-memory-changed') {
         this.trayHandle?.rebuildMenu();
         this.applyLowMemoryMode(this.controller?.getLowMemoryMode() ?? false);
@@ -3460,6 +3511,7 @@ export class DesktopHost {
         defaultBounds,
         railWidth: RAIL_WIDTH,
         getContentZoomPercent: () => this.getContentZoomPercent(),
+        getLowPowerMode: () => this.controller?.getLowPowerMode() ?? false,
         onZoomAction: (action) => this.requestContentZoom(action),
         onFullscreenToggle: (next) => this.notifyFullscreen(next),
         log: (msg) => console.log(`phi-desktop: views: ${msg}`),
