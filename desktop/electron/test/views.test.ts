@@ -608,3 +608,88 @@ describe('ProfileViewManager (retained per-profile views)', () => {
     expect(zoomFactorApplied).toBe(1.25);
   });
 });
+
+describe('ProfileViewManager low-power fan-out (tray global -> every server)', () => {
+  function makeScriptManager(lowPower: boolean): {
+    manager: ProfileViewManager;
+    scripts: string[][];
+    loadHandlers: Array<() => void>[];
+  } {
+    const win = makeFakeWindow();
+    const scripts: string[][] = [];
+    const loadHandlers: Array<() => void>[] = [];
+    const manager = new ProfileViewManager({
+      win: win.win,
+      makeView: () => {
+        const idx = scripts.length;
+        scripts.push([]);
+        loadHandlers.push([]);
+        return {
+          setBounds: () => {},
+          setVisible: () => {},
+          webContents: {
+            on: (event: string, cb: () => void) => {
+              if (event === 'did-finish-load') loadHandlers[idx].push(cb);
+            },
+            loadURL: () => Promise.resolve(),
+            isDestroyed: () => false,
+            focus: () => {},
+            setZoomFactor: () => {},
+            executeJavaScript: (script: string) => {
+              scripts[idx].push(script);
+              return Promise.resolve(null);
+            },
+          },
+        } as unknown as WebContentsView;
+      },
+      defaultBounds: () => ({ ...DEFAULT_BOUNDS }),
+      railWidth: 72,
+      getContentZoomPercent: () => 100,
+      getLowPowerMode: () => lowPower,
+      onZoomAction: () => {},
+      log: () => {},
+    });
+    return { manager, scripts, loadHandlers };
+  }
+
+  const lowPowerScripts = (scripts: string[]): string[] =>
+    scripts.filter((s) => s.includes('phi_low_power'));
+
+  it('did-finish-load applies the desktop-global low power script (on)', () => {
+    const { manager, scripts, loadHandlers } = makeScriptManager(true);
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    expect(lowPowerScripts(scripts[0])).toHaveLength(0);
+    loadHandlers[0][0]();
+    const applied = lowPowerScripts(scripts[0]);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toContain('const enabled = true;');
+  });
+
+  it('did-finish-load applies off when the desktop global is off', () => {
+    const { manager, scripts, loadHandlers } = makeScriptManager(false);
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.setActive('p1');
+    loadHandlers[0][0]();
+    const applied = lowPowerScripts(scripts[0]);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toContain('const enabled = false;');
+  });
+
+  it('applyLowPowerToViews fans out immediately but skips views still loading', () => {
+    const { manager, scripts, loadHandlers } = makeScriptManager(true);
+    manager.addProfile('p1', 'http://127.0.0.1:7070/');
+    manager.addProfile('p2', 'http://127.0.0.1:8080/');
+    manager.setActive('p1');
+    manager.setActive('p2');
+    loadHandlers[1][0](); // only p2 finishes loading
+    manager.applyLowPowerToViews(false);
+    // p1 never loaded: no fan-out (its pending load converges later).
+    expect(lowPowerScripts(scripts[0])).toHaveLength(0);
+    // p2: one load-time apply (global on) + one immediate fan-out (off).
+    const p2 = lowPowerScripts(scripts[1]);
+    expect(p2).toHaveLength(2);
+    expect(p2[0]).toContain('const enabled = true;');
+    expect(p2[1]).toContain('const enabled = false;');
+  });
+});

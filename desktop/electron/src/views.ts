@@ -48,7 +48,7 @@ import {
   installZoomShortcuts,
   type ZoomAction,
 } from './zoom.js';
-import { WAKE_PAGE_SCRIPT } from './injected.js';
+import { WAKE_PAGE_SCRIPT, lowPowerApplyScript } from './injected.js';
 
 /** Electron Rectangle (bounds). */
 export interface ViewBounds {
@@ -70,6 +70,11 @@ export interface ProfileViewManagerOptions {
   railWidth: number;
   /** Reads the persisted global content-zoom percentage. */
   getContentZoomPercent: () => number;
+  /** Reads the persisted global low-power mode. Optional (defaults to
+   *  false) so older hosts keep compiling; the host loop supplies the
+   *  controller-owned global, applied to every view on load (global
+   *  wins, content-zoom parity). */
+  getLowPowerMode?: () => boolean;
   /** Routes a body-view zoom chord to the controller-owned global action. */
   onZoomAction: (action: ZoomAction) => void;
   /** Optional callback fired when plain F11 toggles fullscreen on any body view. */
@@ -109,6 +114,7 @@ export class ProfileViewManager {
   private readonly defaultBounds: () => ViewBounds;
   private readonly railWidth: number;
   private readonly getContentZoomPercent: () => number;
+  private readonly getLowPowerMode: () => boolean;
   private readonly onZoomAction: (action: ZoomAction) => void;
   private readonly onFullscreenToggle?: (nextFullscreen: boolean) => void;
   private readonly log: (s: string) => void;
@@ -122,6 +128,7 @@ export class ProfileViewManager {
     this.defaultBounds = opts.defaultBounds;
     this.railWidth = opts.railWidth;
     this.getContentZoomPercent = opts.getContentZoomPercent;
+    this.getLowPowerMode = opts.getLowPowerMode ?? (() => false);
     this.onZoomAction = opts.onZoomAction;
     this.onFullscreenToggle = opts.onFullscreenToggle;
     this.log = opts.log ?? (() => {});
@@ -362,6 +369,29 @@ export class ProfileViewManager {
     );
   }
 
+  /**
+   * Immediate low-power fan-out: applies `enabled` to every LOADED
+   * retained view right now (the tray toggle path). Views still loading
+   * are skipped — their pending did-finish-load reads the same global
+   * and converges there. Never throws; per-view failures are logged.
+   */
+  applyLowPowerToViews(enabled: boolean): void {
+    const script = lowPowerApplyScript(enabled);
+    for (const [id, entry] of [...this.views.entries()]) {
+      if (!entry.loaded) continue;
+      try {
+        if (typeof entry.view.webContents.executeJavaScript !== 'function')
+          continue;
+        void entry.view.webContents.executeJavaScript(script).catch(() => {});
+      } catch (err) {
+        this.log(`views: applyLowPowerToViews ${id}: ${String(err)}`);
+      }
+    }
+    this.log(
+      `views: applyLowPowerToViews(${enabled}) — fanned out to loaded views`,
+    );
+  }
+
   private hideActiveView(): void {
     if (this.activeId === null) return;
     const prev = this.views.get(this.activeId);
@@ -397,6 +427,16 @@ export class ProfileViewManager {
       view.setBounds(fresh);
       current.lastBounds = fresh;
       applyContentZoom(view.webContents, this.getContentZoomPercent());
+      // Desktop-global low power mode wins on every load (content-zoom
+      // parity): the tray checkbox is the one durable switch, so a view
+      // that missed the fan-out (created later, reloaded, navigated)
+      // converges here. An in-page toggle still applies immediately but
+      // reverts on the next load while the global is set.
+      if (typeof view.webContents.executeJavaScript === 'function') {
+        void view.webContents
+          .executeJavaScript(lowPowerApplyScript(this.getLowPowerMode()))
+          .catch(() => {});
+      }
       current.loaded = true;
       // If an access-auth modal is currently open (or the active id
       // switched away), leave the view hidden. ProfileViewManager

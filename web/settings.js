@@ -1,4 +1,9 @@
-import { displayHostname, setServerHostOverride } from './util.js';
+import {
+    displayHostname,
+    setServerHostOverride,
+    readLowPowerLocal,
+    writeLowPowerLocal,
+} from './util.js';
 import { setAccessPassword, clearAccessPassword } from './auth.js';
 import { tryNative } from './desktop.js';
 
@@ -316,10 +321,14 @@ export function openSettingsModal(app, accentColors, opts = {}) {
         (app.config?.auto_reconnect || 'visible') === 'visible',
     );
     behGroup.appendChild(autoReconnectRow);
+    // Low power mode is a browser preference (localStorage), not a server
+    // flag: an explicit local choice wins, otherwise the legacy per-server
+    // fast_mode seeds the checkbox until the first toggle migrates it.
+    const storedLowPower = readLowPowerLocal();
     const fastModeRow = _buildCheckboxRow(
-        'Fast mode (disable expensive visual effects)',
+        'Low power mode (disable expensive visual effects)',
         'settings-fast-mode',
-        !!app.config?.fast_mode,
+        storedLowPower !== null ? storedLowPower : !!app.config?.fast_mode,
     );
     fastModeRow.classList.add('settings-fast-mode-row');
     behGroup.appendChild(fastModeRow);
@@ -716,22 +725,27 @@ export function openSettingsModal(app, accentColors, opts = {}) {
                 );
             }
         });
+    // Browser-stored: delegate to the app's single writer (localStorage +
+    // re-apply + same-origin broadcast). No server POST — per-server
+    // persistence was the wrong home for a this-machine GPU preference.
+    // Prefer app.setLowPowerMode when the host provides it; otherwise
+    // (duck-typed hosts in tests) fall back to the same steps inline.
     fastModeRow
         .querySelector('input')
         ?.addEventListener('change', async (e) => {
             const enabled = !!e.target.checked;
-            if (app.config) app.config.fast_mode = enabled;
-            app.applyFastMode();
             try {
-                await fetch('/api/config/fast-mode', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled }),
-                });
-                broadcastConfigSync('behavior');
+                if (typeof app.setLowPowerMode === 'function') {
+                    app.setLowPowerMode(enabled);
+                } else {
+                    writeLowPowerLocal(enabled);
+                    if (app.config) app.config.fast_mode = enabled;
+                    app.applyFastMode?.();
+                    broadcastConfigSync('low-power', { enabled });
+                }
             } catch (err) {
                 console.warn(
-                    '[settings] failed to persist fast-mode toggle',
+                    '[settings] failed to persist low-power toggle',
                     err,
                 );
             }

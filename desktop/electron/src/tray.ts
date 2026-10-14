@@ -76,6 +76,7 @@ export type TrayCommand =
   | { kind: 'toggle-close-to-tray' }
   | { kind: 'toggle-sync-alerts' }
   | { kind: 'toggle-low-memory' }
+  | { kind: 'toggle-low-power' }
   | { kind: 'toggle-pet' }
   | { kind: 'install-pet' }
   | { kind: 'pet-zoom-in' }
@@ -119,6 +120,9 @@ export interface TrayDeps {
   getSyncAlerts(): boolean;
   /** The persisted low-memory mode preference (default false, massively aggro: 1 tab). */
   getLowMemoryMode(): boolean;
+  /** The persisted low-power mode preference (default false, one switch
+   *  fanned out to every retained server view). */
+  getLowPowerMode(): boolean;
   /** True when the optional desktop/pet package was discovered (enables the checkbox). */
   getPetAvailable(): boolean;
   /** True when a released build may offer the pet installer. */
@@ -182,6 +186,7 @@ export interface TrayMenuHandlers {
   toggleCloseToTray: () => void;
   toggleSyncAlerts: () => void;
   toggleLowMemory: () => void;
+  toggleLowPower: () => void;
   togglePet: () => void;
   installPet: () => void;
   petZoomIn: () => void;
@@ -285,9 +290,10 @@ export function formatProfileLabel(
 
 /**
  * Builds the tray context menu (pure, testable): Show Phi, Profiles >
- * {id} {name} (one entry per saved profile), the Close to tray and Sync
- * board alerts checkboxes (checked state from closeToTray/syncAlerts)
- * and Quit. The Profiles submenu is omitted when there are no saved
+ * {id} {name} (one entry per saved profile), the Close to tray, Sync
+ * board alerts, Low power mode and Low memory mode checkboxes (checked
+ * state from closeToTray/syncAlerts/lowPowerMode/lowMemoryMode) and
+ * Quit. The Profiles submenu is omitted when there are no saved
  * profiles (Wails parity). The menu is a snapshot of the profile list
  * and the preferences at build time; the host loop calls
  * TrayHandle.rebuildMenu() (src/tray.ts) to refresh it when either
@@ -298,6 +304,7 @@ export function buildTrayMenu(
   handlers: TrayMenuHandlers,
   closeToTray: boolean,
   syncAlerts: boolean,
+  lowPowerMode: boolean,
   lowMemoryMode: boolean,
   petAvailable: boolean,
   petInstallable: boolean = false,
@@ -329,6 +336,12 @@ export function buildTrayMenu(
     type: 'checkbox',
     checked: syncAlerts,
     click: handlers.toggleSyncAlerts,
+  });
+  entries.push({
+    label: 'Low power mode',
+    type: 'checkbox',
+    checked: lowPowerMode,
+    click: handlers.toggleLowPower,
   });
   entries.push({
     label: 'Low memory mode (1 tab)',
@@ -525,6 +538,8 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-sync-alerts' }),
     toggleLowMemory: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-low-memory' }),
+    toggleLowPower: () =>
+      deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-low-power' }),
     togglePet: () => deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'toggle-pet' }),
     installPet: () =>
       deps.ipcSend(TRAY_COMMAND_CHANNEL, { kind: 'install-pet' }),
@@ -558,6 +573,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       handlers,
       deps.getCloseToTray(),
       deps.getSyncAlerts(),
+      deps.getLowPowerMode(),
       deps.getLowMemoryMode(),
       deps.getPetAvailable(),
       deps.getPetInstallable(),
@@ -578,6 +594,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         handlers,
         deps.getCloseToTray(),
         deps.getSyncAlerts(),
+        deps.getLowPowerMode(),
         deps.getLowMemoryMode(),
         deps.getPetAvailable(),
         deps.getPetInstallable(),

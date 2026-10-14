@@ -11582,7 +11582,8 @@ html[data-phi-config-page] .settings-modal {
     }
 }
 
-/* ── Fast mode (config.fast_mode; forced on mobile): perf crutch ───────
+/* ── Fast mode = low power mode (browser-stored `phi_low_power`, forced
+   on mobile): perf crutch ────────────────────────────────────────────
    Disables the idle-capable infinite animations and the always-visible
    backdrop blurs. Any single running animation keeps the 60fps repaint
    pipeline alive (~1 core on this page) — see

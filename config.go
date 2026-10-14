@@ -81,8 +81,14 @@ type Config struct {
 	// interactive tabs. When enabled, it overrides UseExistingTerminalTab.
 	UseHiddenTerminal bool `json:"use_hidden_terminal"`
 
-	// FastMode, when true, disables the expensive idle animations and
-	// backdrop blurs (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
+	// FastMode is a LEGACY migration source, not the live setting. The
+	// effects profile (low power mode) is browser-stored now (localStorage
+	// `phi_low_power`) because GPU burn is a property of the viewing
+	// machine, not of the server — a per-server flag was the wrong home.
+	// New clients never POST it; they adopt a true value into localStorage
+	// once and ignore the server afterwards. The field and its endpoint
+	// stay so old clients/exports keep working.
+	// (perf crutch — see research/2026-08-01-2019-ui-idle-cpu-burn.md).
 	FastMode bool `json:"fast_mode"`
 
 	// PiOffline passes --offline when spawning the pi coder. Applies to pi

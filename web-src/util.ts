@@ -638,6 +638,65 @@ export function prefersInputBarFocus(): boolean {
     return isCompactViewport() || isCoarseViewport();
 }
 
+// ── Low power mode (browser-stored effects profile) ────────────────────
+// The effects profile (disables expensive idle animations and backdrop
+// blurs) used to live per-server in ~/.phi/config.json as `fast_mode`,
+// which was the wrong home: GPU burn is a property of THIS browser/
+// machine, not of the server it happens to be viewing. It is now a
+// browser preference under LOW_POWER_STORAGE_KEY ('1' = on, '0' = off,
+// absent = unset). The server's `fast_mode` field is retained only as a
+// one-time migration source (see resolveLowPowerEnabled) and as a legacy
+// read for old clients — the settings toggle never writes it anymore.
+// On phi-desktop the tray's single "Low power mode" checkbox fans this
+// same key out to every retained server view (see
+// desktop/electron/src/injected.ts lowPowerApplyScript), so one switch
+// covers all servers; each origin's localStorage keeps its own copy.
+export const LOW_POWER_STORAGE_KEY = 'phi_low_power';
+
+// readLowPowerLocal returns the browser's stored preference: true/false
+// when explicitly set, null when unset (caller falls back to the legacy
+// server flag, then to off). Never throws (private-mode / blocked
+// storage reads null, same fail-safe direction as the scrollback lane).
+export function readLowPowerLocal(): boolean | null {
+    try {
+        const raw =
+            typeof localStorage !== 'undefined'
+                ? localStorage.getItem(LOW_POWER_STORAGE_KEY)
+                : null;
+        if (raw === '1') return true;
+        if (raw === '0') return false;
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+// writeLowPowerLocal persists the browser's preference. Best-effort:
+// a blocked-storage failure warns and leaves the in-memory/body-class
+// state (applied by the caller) as the session's truth.
+export function writeLowPowerLocal(enabled: boolean): void {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(LOW_POWER_STORAGE_KEY, enabled ? '1' : '0');
+        }
+    } catch (e) {
+        console.warn('[low-power] localStorage write failed', e);
+    }
+}
+
+// resolveLowPowerEnabled computes the effective profile: the browser
+// preference wins when set; otherwise the legacy per-server `fast_mode`
+// flag is adopted AND persisted locally (one-time migration, so a later
+// server-side reset cannot flip the browser back). Mobile viewports are
+// NOT folded in here — the caller (applyFastMode) forces those on top,
+// keeping this function pure over (local, serverFlag) for tests.
+export function resolveLowPowerEnabled(serverFastMode: boolean): boolean {
+    const local = readLowPowerLocal();
+    if (local !== null) return local;
+    if (serverFastMode) writeLowPowerLocal(true);
+    return serverFastMode;
+}
+
 // ── Terminal-first panel topology ──────────────────────────────────────
 // A terminal is the primary work surface. Navigation and diff columns are
 // useful only while they leave it a usable grid, so each docked panel may

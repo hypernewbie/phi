@@ -18,6 +18,11 @@ function mgr({ fastMode = false, mobileRows } = {}) {
 
 afterEach(() => {
     document.body.classList.remove('fast-mode');
+    // applyFastMode now reads the browser preference: clear it so tests
+    // never leak into each other through localStorage.
+    try {
+        localStorage.removeItem('phi_low_power');
+    } catch {}
 });
 
 describe('_liveScrollbackRows', () => {
@@ -61,6 +66,9 @@ describe('applyFastMode device-mobile input', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         document.body.classList.remove('fast-mode');
+        try {
+            localStorage.removeItem('phi_low_power');
+        } catch {}
     });
 
     function apply({ config = {}, userAgentData } = {}) {
@@ -92,5 +100,41 @@ describe('applyFastMode device-mobile input', () => {
                 userAgentData: { mobile: false },
             }),
         ).toBe(true);
+    });
+});
+
+describe('applyFastMode browser preference (low power mode)', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        document.body.classList.remove('fast-mode');
+        try {
+            localStorage.removeItem('phi_low_power');
+        } catch {}
+    });
+
+    function applyLowPower({ config = {} } = {}) {
+        vi.stubGlobal('navigator', {});
+        App.prototype.applyFastMode.call({ config });
+        return document.body.classList.contains('fast-mode');
+    }
+
+    it('stored ON forces fast-mode with no server flag', () => {
+        localStorage.setItem('phi_low_power', '1');
+        expect(applyLowPower()).toBe(true);
+    });
+
+    it('stored OFF wins over a legacy server fast_mode', () => {
+        localStorage.setItem('phi_low_power', '0');
+        expect(applyLowPower({ config: { fast_mode: true } })).toBe(false);
+    });
+
+    it('unset migrates a legacy server fast_mode into local storage', () => {
+        expect(applyLowPower({ config: { fast_mode: true } })).toBe(true);
+        expect(localStorage.getItem('phi_low_power')).toBe('1');
+    });
+
+    it('unset with no server flag stays off and writes nothing', () => {
+        expect(applyLowPower()).toBe(false);
+        expect(localStorage.getItem('phi_low_power')).toBeNull();
     });
 });

@@ -152,6 +152,7 @@ function setupTrayForTest(
     getSyncAlerts: () => false,
     getPetAvailable: () => false,
     getLowMemoryMode: () => false,
+    getLowPowerMode: () => false,
     getPetInstallable: () => false,
     getPetInstalling: () => false,
     getPetEnabled: () => false,
@@ -180,6 +181,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
     selectProfile: () => {},
     toggleCloseToTray: () => {},
     toggleSyncAlerts: () => {},
+    toggleLowPower: () => {},
     toggleLowMemory: () => {},
     togglePet: () => {},
     installPet: () => {},
@@ -207,6 +209,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -218,6 +221,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Low power mode',
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
@@ -239,6 +243,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -249,6 +254,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       'Show Phi',
       'Close to tray',
       'Sync board alerts',
+      'Low power mode',
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
@@ -264,6 +270,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -273,6 +280,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
     const off = buildTrayMenu(
       [],
       mkHandlers(),
+      false,
       false,
       false,
       false,
@@ -299,6 +307,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -319,6 +328,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -329,11 +339,12 @@ describe('buildTrayMenu (pure menu builder)', () => {
     expect(toggleCloseToTray).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the Sync board alerts entry as a checkbox carrying the preference state', () => {
+  it('renders the Low power mode entry as a checkbox carrying the preference state', () => {
     const on = buildTrayMenu(
       [],
       mkHandlers(),
       true,
+      false,
       true,
       false,
       true,
@@ -346,6 +357,74 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    const entryOn = on.find((e) => e.label === 'Low power mode');
+    const entryOff = off.find((e) => e.label === 'Low power mode');
+    expect(entryOn?.type).toBe('checkbox');
+    expect(entryOn?.checked).toBe(true);
+    expect(entryOff?.type).toBe('checkbox');
+    expect(entryOff?.checked).toBe(false);
+  });
+
+  it('calls the toggle handler from the Low power mode checkbox', () => {
+    const toggleLowPower = vi.fn();
+    const menu = buildTrayMenu(
+      [home],
+      mkHandlers({ toggleLowPower }),
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    clickEntry(menu.find((e) => e.label === 'Low power mode'));
+    expect(toggleLowPower).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts the toggle-low-power intent through setupTray', () => {
+    const { ipcSend } = setupTrayForTest({
+      deps: { getLowPowerMode: () => true },
+    });
+    const entry = lastTemplate().find((e) => e.label === 'Low power mode');
+    expect(entry?.type).toBe('checkbox');
+    expect(entry?.checked).toBe(true);
+    clickEntry(entry);
+    expect(ipcSend).toHaveBeenCalledWith(TRAY_COMMAND_CHANNEL, {
+      kind: 'toggle-low-power',
+    });
+  });
+
+  it('renders the Sync board alerts entry as a checkbox carrying the preference state', () => {
+    const on = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      100,
+    );
+    const off = buildTrayMenu(
+      [],
+      mkHandlers(),
+      true,
+      false,
       false,
       false,
       true,
@@ -370,6 +449,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -387,6 +467,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -397,6 +478,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
       false,
       false,
       false,
@@ -420,6 +502,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -441,6 +524,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -457,6 +541,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers({ installPet }),
       true,
+      false,
       false,
       false,
       false,
@@ -482,6 +567,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       false,
       false,
       false,
+      false,
       true,
       true,
       false,
@@ -497,6 +583,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
       false,
       false,
       true,
@@ -516,6 +603,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
       false,
       false,
       true,
@@ -546,6 +634,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -571,6 +660,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       false,
       false,
       false,
+      false,
       true,
       125,
     ).find((entry) => entry.label === 'Pet');
@@ -588,6 +678,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       handlers,
       true,
+      false,
       false,
       false,
       true,
@@ -609,6 +700,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
       false,
       false,
       true,
@@ -635,6 +727,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -651,6 +744,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       mkHandlers(),
       true,
+      false,
       false,
       false,
       true,
@@ -674,6 +768,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       true,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -695,6 +790,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [],
       handlers,
       true,
+      false,
       false,
       false,
       true,
@@ -765,6 +861,7 @@ describe('buildTrayMenu (pure menu builder)', () => {
       [home, work],
       mkHandlers({ selectProfile }),
       true,
+      false,
       false,
       false,
       true,
@@ -905,6 +1002,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Low power mode',
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
@@ -953,6 +1051,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Profiles',
       'Close to tray',
       'Sync board alerts',
+      'Low power mode',
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
@@ -989,6 +1088,7 @@ describe('setupTray (wiring, recording fakes)', () => {
       'Show Phi',
       'Close to tray',
       'Sync board alerts',
+      'Low power mode',
       'Low memory mode (1 tab)',
       'Show pet',
       'Pet',
