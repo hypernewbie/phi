@@ -65,7 +65,10 @@ NSStatusItem/StatusNotifierItem code paths):
   second-instance listener). The context menu is `Show Phi` /
   `Profiles > {id} {name}` (one entry per saved profile) / `Quit`;
   right-click shows it everywhere, left-click also on macOS (the platform
-  convention). Menu intents are posted on the typed `phi:tray-command`
+  convention). Linux uses `Tray.setContextMenu` on creation **and every
+  menu rebuild**: KDE/StatusNotifier hosts read the exported D-Bus menu
+  and need not emit Electron's `right-click` event. Windows/macOS use
+  explicit popup handlers. Menu intents are posted on the typed `phi:tray-command`
   channel: `{kind:'show'}`, `{kind:'select-profile', id}`,
   `{kind:'quit'}`; the host loop in `main.ts` is the bridge (Show Phi ->
   `restore()+focus()`; select-profile -> the step-5 controller's

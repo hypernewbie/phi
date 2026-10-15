@@ -206,6 +206,7 @@ export interface TrayMenuHandlers {
 export interface TrayLike {
   on(event: string, listener: () => void): unknown;
   popUpContextMenu(menu?: unknown): void;
+  setContextMenu(menu: Menu): void;
 }
 
 /**
@@ -423,23 +424,31 @@ export function buildTrayMenu(
 }
 
 /**
- * Wires the tray's menu events: right-click pops the context menu on
- * every platform; on macOS the menu also pops on left-click (the platform
- * convention). popUpContextMenu is used (not setContextMenu) so the
- * wiring is explicit, the menu pops at the cursor, and macOS never shows
- * a double menu. The menu is fetched through the getMenu() getter at
- * popup time, so a rebuildMenu() swap is picked up by the next popup
- * (the events are wired once, against the mutable current menu).
+ * Linux StatusNotifier hosts (including KDE Plasma) fetch the menu over
+ * D-Bus; they need setContextMenu and need not emit a right-click event.
+ * Without an attached menu the icon appears but KDE gets an empty menu.
+ * Re-attach after EVERY rebuild: Linux checkbox/submenu changes are not
+ * exported merely by replacing our local Menu reference.
+ *
+ * Windows/macOS retain explicit popup handling (including macOS left
+ * click) to avoid duplicate native menus there. Returns a refresh hook
+ * so setupTray can update the exported Linux menu without new listeners.
  */
 export function wireTrayEvents(
   tray: TrayLike,
   getMenu: () => Menu,
   platform: NodeJS.Platform,
-): void {
+): () => void {
+  if (platform === 'linux') {
+    const refresh = (): void => tray.setContextMenu(getMenu());
+    refresh();
+    return refresh;
+  }
   tray.on('right-click', () => tray.popUpContextMenu(getMenu()));
   if (platform === 'darwin') {
     tray.on('click', () => tray.popUpContextMenu(getMenu()));
   }
+  return () => {};
 }
 
 /**
@@ -583,7 +592,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
       process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
     ),
   );
-  wireTrayEvents(tray, () => menu, process.platform);
+  const refreshNativeMenu = wireTrayEvents(tray, () => menu, process.platform);
   // Plain left-click restores+focuses the main window (the Show Phi intent).
   tray.on('click', () => handlers.show());
 
@@ -604,6 +613,7 @@ export function setupTray(deps: TrayDeps): TrayHandle {
         process.platform === 'darwin' ? null : deps.getContentZoomPercent(),
       ),
     );
+    refreshNativeMenu();
   };
 
   const refreshTooltip = (): void => {

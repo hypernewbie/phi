@@ -282,6 +282,7 @@ vi.mock('electron', () => ({
   shell: { openExternal: vi.fn(), openPath: vi.fn() },
   Tray: class {
     setToolTip(): void {}
+    setContextMenu(): void {}
     on(): void {}
     destroy(): void {}
   },

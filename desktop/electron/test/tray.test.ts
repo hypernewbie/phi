@@ -32,6 +32,7 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
     toolTip = '';
     listeners = new Map<string, () => void>();
     popups: unknown[] = [];
+    contextMenus: Menu[] = [];
     destroyed = false;
     constructor() {
       if (FakeTray.constructHook) {
@@ -47,6 +48,9 @@ const { fakeApp, fakeMenu, fakeNativeImage, FakeTray } = vi.hoisted(() => {
     }
     popUpContextMenu(menu?: unknown): void {
       this.popups.push(menu);
+    }
+    setContextMenu(menu: Menu): void {
+      this.contextMenus.push(menu);
     }
     destroy(): void {
       this.destroyed = true;
@@ -1020,12 +1024,18 @@ describe('setupTray (wiring, recording fakes)', () => {
     expect(tray.toolTip).toBe('Phi');
   });
 
-  it('registers the right-click menu and pops it at the cursor', () => {
+  it('exports the menu on Linux; other platforms pop it on right-click', () => {
     const { tray } = setupTrayForTest();
-    expect(tray.listeners.has('right-click')).toBe(true);
     const menu = lastTemplate();
-    tray.listeners.get('right-click')?.();
-    expect(tray.popups).toEqual([{ template: menu }]);
+    if (process.platform === 'linux') {
+      expect(tray.contextMenus).toEqual([{ template: menu }]);
+      expect(tray.listeners.has('right-click')).toBe(false);
+      expect(tray.popups).toEqual([]);
+    } else {
+      expect(tray.listeners.has('right-click')).toBe(true);
+      tray.listeners.get('right-click')?.();
+      expect(tray.popups).toEqual([{ template: menu }]);
+    }
   });
 
   it('posts the show intent on plain left-click (restores+focuses the window)', () => {
@@ -1067,8 +1077,14 @@ describe('setupTray (wiring, recording fakes)', () => {
     expect(tray.destroyed).toBe(false);
     // The popup at click time uses the rebuilt menu (the getter is read
     // at popup time, not at wire time).
-    tray.listeners.get('right-click')?.();
-    expect(tray.popups).toEqual([{ template }]);
+    if (process.platform === 'linux') {
+      expect(tray.contextMenus).toHaveLength(2);
+      expect(tray.contextMenus.at(-1)).toEqual({ template });
+      expect(tray.popups).toEqual([]);
+    } else {
+      tray.listeners.get('right-click')?.();
+      expect(tray.popups).toEqual([{ template }]);
+    }
     // The rebuilt menu's actions still route through the retained handlers.
     const profilesEntry =
       template.find((e) => e.label === 'Profiles')?.submenu ?? [];
@@ -1078,6 +1094,37 @@ describe('setupTray (wiring, recording fakes)', () => {
       id: 'work',
     });
   });
+
+  it.runIf(process.platform === 'linux')(
+    're-exports checkbox and pet-install changes to the Linux host',
+    () => {
+      let lowPower = false;
+      let petAvailable = false;
+      const { tray, handle } = setupTrayForTest({
+        deps: {
+          getLowPowerMode: () => lowPower,
+          getPetAvailable: () => petAvailable,
+          getPetInstallable: () => !petAvailable,
+        },
+      });
+      expect(lastTemplate().some((e) => e.label === 'Install Pet…')).toBe(true);
+      expect(tray.contextMenus.at(-1)).toEqual({ template: lastTemplate() });
+      lowPower = true;
+      petAvailable = true;
+      handle.rebuildMenu();
+      expect(
+        lastTemplate().find((e) => e.label === 'Low power mode')?.checked,
+      ).toBe(true);
+      expect(lastTemplate().some((e) => e.label === 'Install Pet…')).toBe(
+        false,
+      );
+      expect(lastTemplate().find((e) => e.label === 'Show pet')?.enabled).toBe(
+        true,
+      );
+      expect(tray.contextMenus).toHaveLength(2);
+      expect(tray.contextMenus.at(-1)).toEqual({ template: lastTemplate() });
+    },
+  );
 
   it('rebuildMenu drops the Profiles submenu when the profile list empties', () => {
     const profiles = [home];
@@ -1230,12 +1277,18 @@ describe('wireTrayEvents (platform menu convention)', () => {
   function fakeTray(): TrayLike & {
     listeners: Map<string, () => void>;
     popups: unknown[];
+    contextMenus: Menu[];
   } {
     const listeners = new Map<string, () => void>();
     const popups: unknown[] = [];
+    const contextMenus: Menu[] = [];
     return {
       listeners,
       popups,
+      contextMenus,
+      setContextMenu(menu: Menu) {
+        contextMenus.push(menu);
+      },
       on(event: string, listener: () => void) {
         listeners.set(event, listener);
       },
@@ -1245,12 +1298,27 @@ describe('wireTrayEvents (platform menu convention)', () => {
     };
   }
 
-  it('shows the menu on right-click on every platform', () => {
-    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+  it('shows the menu on right-click on Windows/macOS without attaching a second menu', () => {
+    for (const platform of ['win32', 'darwin'] as const) {
       const tray = fakeTray();
       wireTrayEvents(tray, () => ({ m: 1 }) as unknown as Menu, platform);
       expect(tray.listeners.has('right-click')).toBe(true);
+      tray.listeners.get('right-click')?.();
+      expect(tray.popups).toEqual([{ m: 1 }]);
+      expect(tray.contextMenus).toEqual([]);
     }
+  });
+
+  it('exports a native Linux menu even when KDE emits no click events, and refreshes replacements', () => {
+    const tray = fakeTray();
+    let menu = { m: 1 } as unknown as Menu;
+    const refresh = wireTrayEvents(tray, () => menu, 'linux');
+    expect(tray.contextMenus).toEqual([{ m: 1 }]);
+    expect(tray.listeners.size).toBe(0);
+    menu = { m: 2 } as unknown as Menu;
+    refresh();
+    expect(tray.contextMenus).toEqual([{ m: 1 }, { m: 2 }]);
+    expect(tray.popups).toEqual([]);
   });
 
   it('shows the menu on left-click on macOS only (the platform convention)', () => {
