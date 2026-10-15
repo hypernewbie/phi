@@ -53,6 +53,25 @@ native registry calls):
 Deliberately **not** implemented yet (later migration slices): multi-server
 views, retained per-profile `WebContentsView`s, popups, packaging.
 
+## Desktop low-power rendering
+
+The tray preference applies to every retained remote body **and** local
+header/rail on load and when toggled. It persists independently of server
+config. A per-page controller guards the `fast-mode` class against older
+server UIs that overwrite it after asynchronous config loads.
+
+Low power disables CSS motion/backdrop effects and batches animation-frame
+callbacks (including xterm/WebGL redraws) to **at most 10fps while focused**
+and **1fps while unfocused/hidden**. Focus wakes pending rendering promptly;
+turning the mode off restores native cadence. PTY processes, network input,
+and terminal parsing are not paused or discarded. The display intentionally
+updates less often, especially when another application has focus. This is
+render pacing, not a hard GPU-utilization quota.
+
+The implementation is self-contained in `src/lowPowerRendering.ts`, serialized
+by `lowPowerApplyScript`, so it works without upgrading the remote servers.
+The narrow local rail does not inherit the remote UI's mobile-width policy.
+
 ## Phase 4 scope (this slice)
 
 Native system tray (parity with `desktop/internal/tray`), public Electron

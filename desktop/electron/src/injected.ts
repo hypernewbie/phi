@@ -8,6 +8,8 @@
  * (toastErrorScript, applyDividersScript, PLAY_ALARM_CHIME_SCRIPT).
  */
 
+import { installLowPowerRendering } from './lowPowerRendering.js';
+
 /** One desktop file-tree gesture recorded by the injected page listener. */
 export interface FileAction {
   /** 'open': double-click a file — open with the local default handler; 'folder': reveal in Explorer via context menu. */
@@ -75,13 +77,12 @@ export const LOW_POWER_STORAGE_KEY = 'phi_low_power';
 /**
  * Builds the fixed script that applies the desktop-global low power mode
  * to one retained server view: persists the browser preference in that
- * origin's own localStorage, toggles the page's `fast-mode` body class,
- * syncs an open settings checkbox, and notifies same-origin tabs over
- * the page's own BroadcastChannel (so every tab in that view follows
- * without a reload). The enabled flag is embedded as a JSON literal,
- * never interpolated raw.
+ * origin's own localStorage, installs the persistent class/effects guard
+ * and frame pacer, syncs an open settings checkbox, and notifies same-origin
+ * tabs over BroadcastChannel. The enabled flag is embedded as a JSON
+ * literal, never interpolated raw.
  *
- * The compact-viewport query below must stay equivalent to
+ * The remote-body compact-viewport query in lowPowerRendering must match
  * COMPACT_VIEWPORT_QUERY (web-src/util.ts) and the CSS prelude — mobile
  * viewports force the profile on, mirroring App.applyFastMode, so the
  * tray toggle can never re-enable expensive effects on a phone layout.
@@ -90,21 +91,16 @@ export function lowPowerApplyScript(enabled: boolean): string {
   return `(() => {
     const enabled = ${JSON.stringify(enabled)};
     try { localStorage.setItem(${JSON.stringify(LOW_POWER_STORAGE_KEY)}, enabled ? '1' : '0'); } catch {}
-    var mobile = false;
-    try {
-      mobile = typeof window.matchMedia === 'function' &&
-        window.matchMedia('(max-width: 768px), (max-height: 500px) and (orientation: landscape) and (pointer: coarse)').matches;
-    } catch {}
-    var deviceMobile = false;
-    try {
-      deviceMobile = typeof navigator !== 'undefined' && navigator.userAgentData && navigator.userAgentData.mobile === true;
-    } catch {}
-    try { document.body.classList.toggle('fast-mode', enabled || mobile || deviceMobile); } catch {}
+    (${installLowPowerRendering.toString()})(enabled);
     try {
       var input = document.getElementById('settings-fast-mode');
       if (input && 'checked' in input) input.checked = enabled;
     } catch {}
-    try { new BroadcastChannel('phi_config_sync').postMessage({ type: 'low-power', enabled: enabled }); } catch {}
+    try {
+      const channel = new BroadcastChannel('phi_config_sync');
+      channel.postMessage({ type: 'low-power', enabled: enabled });
+      channel.close();
+    } catch {}
   })()`;
 }
 

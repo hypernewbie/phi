@@ -494,6 +494,9 @@ describe('lowPowerApplyScript (the desktop-global low power fan-out)', () => {
   });
 
   afterEach(() => {
+    (
+      windowField().__phiDesktopPower as { dispose(): void } | undefined
+    )?.dispose();
     vi.unstubAllGlobals();
     window.localStorage.clear();
     document.body.className = '';
@@ -526,6 +529,19 @@ describe('lowPowerApplyScript (the desktop-global low power fan-out)', () => {
       { type: 'low-power', enabled: true },
       { type: 'low-power', enabled: false },
     ]);
+  });
+
+  it('keeps the desktop preference after a legacy UI asynchronously reapplies server config', async () => {
+    window.eval(lowPowerApplyScript(true));
+    document.body.classList.remove('fast-mode');
+    await Promise.resolve();
+    expect(document.body.classList.contains('fast-mode')).toBe(true);
+    expect(document.documentElement.dataset.phiDesktopLowPower).toBe('true');
+    window.eval(lowPowerApplyScript(false));
+    document.body.classList.add('fast-mode');
+    await Promise.resolve();
+    expect(document.body.classList.contains('fast-mode')).toBe(false);
+    expect(document.documentElement.dataset.phiDesktopLowPower).toBe('false');
   });
 
   it('syncs an open settings checkbox without requiring it (jsdom)', () => {
