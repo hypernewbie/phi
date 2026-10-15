@@ -379,6 +379,39 @@ describe('DesktopHost fake-Electron lifecycle', () => {
     expect(await pending).toBeNull();
   });
 
+  it('applies the saved power profile to desktop chrome on load and on tray changes', async () => {
+    const host = new DesktopHost();
+    await host.start(primary);
+    const win = fake.FakeBrowserWindow.instances[0];
+    const rail = fake.FakeWebContentsView.instances[0];
+    const mainExecute = vi.spyOn(win.webContents, 'executeJavaScript');
+    const railExecute = vi.spyOn(rail.webContents, 'executeJavaScript');
+    host.controller?.setLowPowerMode(true);
+    expect(mainExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = true;'),
+    );
+    expect(railExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = true;'),
+    );
+    mainExecute.mockClear();
+    railExecute.mockClear();
+    win.webContents.emit('did-finish-load');
+    rail.webContents.emit('did-finish-load');
+    expect(mainExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = true;'),
+    );
+    expect(railExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = true;'),
+    );
+    host.controller?.setLowPowerMode(false);
+    expect(mainExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = false;'),
+    );
+    expect(railExecute).toHaveBeenCalledWith(
+      expect.stringContaining('const enabled = false;'),
+    );
+  });
+
   it('installs the second-instance listener exactly once during host.start (listener singleton)', async () => {
     const host = new DesktopHost();
     await host.start(primary);

@@ -1,6 +1,13 @@
 # Phi low-power profiling and KDE tray repair — Venus, 2026-10-15
 
-## Results: normal vs low power on this laptop
+> **Correction:** these captures measured a specific view/workload, not a
+> reliable terminal-rendering reduction. A later A1 test still found ~42–44%
+> Phi GPU usage with the saved setting on. We confirmed a legacy-UI startup
+> overwrite and unpaced xterm rendering. See
+> [the follow-up investigation](2026-10-15-low-power-terminal-rendering.md).
+> Do not generalize the 91% figure below to busy terminals or restored sessions.
+
+## Original results: normal vs low power on this laptop
 
 Measured the **real installed desktop client on KDE Wayland**, not Xvfb,
 headless Chromium, CPU utilization, or GPU memory allocation.

@@ -430,8 +430,8 @@ export class ProfileViewManager {
       // Desktop-global low power mode wins on every load (content-zoom
       // parity): the tray checkbox is the one durable switch, so a view
       // that missed the fan-out (created later, reloaded, navigated)
-      // converges here. An in-page toggle still applies immediately but
-      // reverts on the next load while the global is set.
+      // converges here. The installed controller also guards against
+      // legacy UIs overwriting the class after asynchronous config loads.
       if (typeof view.webContents.executeJavaScript === 'function') {
         void view.webContents
           .executeJavaScript(lowPowerApplyScript(this.getLowPowerMode()))

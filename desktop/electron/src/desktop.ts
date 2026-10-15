@@ -105,6 +105,7 @@ import {
   READ_WORKSPACE_SCRIPT,
   bodyAuthLoginScript,
   WAKE_PAGE_SCRIPT,
+  lowPowerApplyScript,
 } from './injected.js';
 import type { FileAction, Dividers } from './injected.js';
 import { installFullscreenToggle } from './fullscreen.js';
@@ -1174,7 +1175,26 @@ export class DesktopHost {
     this.trayHandle?.rebuildMenu();
   }
 
+  private applyLowPowerToChrome(
+    contents: WebContents | undefined,
+    enabled: boolean,
+  ): void {
+    if (
+      !contents ||
+      contents.isDestroyed() ||
+      typeof contents.executeJavaScript !== 'function'
+    )
+      return;
+    void contents
+      .executeJavaScript(lowPowerApplyScript(enabled))
+      .catch((err) => {
+        console.log(`phi-desktop: low-power chrome: ${String(err)}`);
+      });
+  }
+
   applyLowPowerMode(enabled: boolean): void {
+    this.applyLowPowerToChrome(this.mainWindow?.webContents, enabled);
+    this.applyLowPowerToChrome(this.railView?.webContents, enabled);
     // One switch for every server: persist is already done by the
     // controller; here fan the same browser preference out to each
     // retained view's own localStorage (per-origin isolation means a
@@ -3620,6 +3640,10 @@ export class DesktopHost {
       rail.webContents.on('did-finish-load', () => {
         if (!isCurrent()) return;
         layoutRail();
+        this.applyLowPowerToChrome(
+          rail.webContents,
+          this.controller?.getLowPowerMode() ?? false,
+        );
         this.pushRailState();
       });
       layoutRail();
@@ -3640,6 +3664,10 @@ export class DesktopHost {
       win.webContents.on('did-finish-load', () => {
         if (!isCurrent()) return;
         this.mainPageReady = true;
+        this.applyLowPowerToChrome(
+          win.webContents,
+          this.controller?.getLowPowerMode() ?? false,
+        );
         this.pushWindowState();
         this.pushActiveServer();
         this.drainLaunchPayloads();
