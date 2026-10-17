@@ -84,6 +84,12 @@ Tabs are the active working surface.
 - Phi stores open tab state in browser storage and attempts to restore tabs on reload.
 - Switching tabs updates the active workspace/CWD context for Git and Markdown panels.
 
+### Terminal toolbar
+
+- Reconnect reattaches an existing terminal. The banner offers Reconnect all only for disconnected terminals.
+- The counterclockwise arrow reloads only the current terminal connection and visible state, then follows current output. It does not restart the terminal process or reload background terminals.
+- The red bomb closes all open sessions after the existing count-based confirmation. The ordinary tab X closes one tab. The bomb does not quit Phi.
+
 ### Reconnect And Replay
 
 When a WebSocket drops (WiFi hiccup, browser crash, laptop lid), the tab goes dead but the underlying PTY survives for a 30-minute grace period. Reconnecting replays the server-side ring buffer (1 MiB default) so you see what the agent did while you were gone.

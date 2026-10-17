@@ -1574,7 +1574,6 @@ html[data-phi-desktop-root] .app-header {
     height: 100%;
 }
 
-.reconnect-all-tabs-btn,
 .close-all-tabs-btn,
 .refresh-console-btn {
     background-color: transparent;
@@ -1849,19 +1848,13 @@ html[data-phi-desktop-root] .app-header {
     background-color: var(--accent-wash);
 }
 
-.reconnect-all-tabs-btn:hover {
-    background-color: var(--accent-wash);
-    color: var(--accent-bright);
-    border-color: var(--accent-soft);
-    box-shadow: 0 0 12px var(--accent-glow);
+.close-all-tabs-btn,
+#mobile-close-all-tabs-btn {
+    color: var(--red);
 }
 
-.reconnect-all-tabs-btn .icon {
-    width: 14px;
-    height: 14px;
-}
-
-.close-all-tabs-btn:hover {
+.close-all-tabs-btn:hover,
+#mobile-close-all-tabs-btn:hover {
     background-color: rgba(239, 68, 68, 0.1);
     color: var(--red);
     border-color: rgba(239, 68, 68, 0.2);
@@ -5081,7 +5074,7 @@ html[data-phi-config-page] .settings-modal {
         scrollbar-width: none; /* Firefox */
         -webkit-overflow-scrolling: touch;
         flex: 1;
-        justify-content: flex-end;
+        justify-content: safe flex-end;
     }
     .header-actions::-webkit-scrollbar {
         display: none; /* Chrome/Safari */
@@ -5235,8 +5228,7 @@ html[data-phi-config-page] .settings-modal {
         padding-top: 5px !important;
     }
 
-    /* Reconnect/Close All square icon-only buttons */
-    .reconnect-all-tabs-btn,
+    /* Reload/Close All square icon-only buttons */
     .close-all-tabs-btn,
     .refresh-console-btn {
         width: 32px !important;
@@ -5250,12 +5242,10 @@ html[data-phi-config-page] .settings-modal {
         align-items: center !important;
         display: inline-flex !important;
     }
-    .reconnect-all-tabs-btn span,
     .close-all-tabs-btn span,
     .refresh-console-btn span {
         display: none !important;
     }
-    .reconnect-all-tabs-btn .icon,
     .close-all-tabs-btn .icon,
     .refresh-console-btn .icon {
         width: 16px !important;
