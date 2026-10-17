@@ -150,29 +150,10 @@ eager to avoid a first-open unstyled flash. -->
                 <div class="header-actions">
                     <!-- Mobile only merged terminal buttons -->
                     <button
-                        id="mobile-reconnect-all-tabs-btn"
-                        class="header-btn mobile-only"
-                        title="Reconnect all sessions"
-                    >
-                        <svg
-                            class="icon"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                        >
-                            <polyline points="23 4 23 10 17 10"></polyline>
-                            <path
-                                d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"
-                            ></path>
-                        </svg>
-                    </button>
-                    <button
                         id="mobile-close-all-tabs-btn"
                         class="header-btn mobile-only"
                         title="Close all sessions"
+                        aria-label="Close all sessions"
                     >
                         <svg
                             class="icon"
@@ -182,23 +163,19 @@ eager to avoid a first-open unstyled flash. -->
                             stroke-width="2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
+                            aria-hidden="true"
                         >
-                            <rect
-                                x="3"
-                                y="3"
-                                width="18"
-                                height="18"
-                                rx="2"
-                                ry="2"
-                            ></rect>
-                            <line x1="9" y1="9" x2="15" y2="15"></line>
-                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <circle cx="10" cy="14" r="7"></circle>
+                            <path d="m15 9 3-3"></path>
+                            <path d="M18 6c-1-3 2-5 4-3"></path>
+                            <path d="M20 1v2m1 4h2"></path>
                         </svg>
                     </button>
                     <button
                         id="mobile-refresh-console-btn"
                         class="header-btn mobile-only"
-                        title="Refresh Console"
+                        title="Reload current terminal"
+                        aria-label="Reload current terminal"
                     >
                         <svg
                             class="icon"
@@ -592,31 +569,10 @@ eager to avoid a first-open unstyled flash. -->
                             role="menu"
                         ></div>
                         <button
-                            id="reconnect-all-tabs-btn"
-                            class="reconnect-all-tabs-btn"
-                            title="Reconnect all disconnected sessions"
-                            aria-label="Reconnect all disconnected sessions"
-                        >
-                            <svg
-                                class="icon"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            >
-                                <polyline points="23 4 23 10 17 10"></polyline>
-                                <path
-                                    d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"
-                                ></path>
-                            </svg>
-                        </button>
-                        <button
                             id="close-all-tabs-btn"
                             class="close-all-tabs-btn"
-                            title="Close all active sessions"
-                            aria-label="Close all active sessions"
+                            title="Close all sessions"
+                            aria-label="Close all sessions"
                         >
                             <svg
                                 class="icon"
@@ -626,24 +582,19 @@ eager to avoid a first-open unstyled flash. -->
                                 stroke-width="2"
                                 stroke-linecap="round"
                                 stroke-linejoin="round"
+                                aria-hidden="true"
                             >
-                                <rect
-                                    x="3"
-                                    y="3"
-                                    width="18"
-                                    height="18"
-                                    rx="2"
-                                    ry="2"
-                                ></rect>
-                                <line x1="9" y1="9" x2="15" y2="15"></line>
-                                <line x1="15" y1="9" x2="9" y2="15"></line>
+                                <circle cx="10" cy="14" r="7"></circle>
+                                <path d="m15 9 3-3"></path>
+                                <path d="M18 6c-1-3 2-5 4-3"></path>
+                                <path d="M20 1v2m1 4h2"></path>
                             </svg>
                         </button>
                         <button
                             id="refresh-console-btn"
                             class="refresh-console-btn"
-                            title="Refresh Console (refit layout, scroll to bottom)"
-                            aria-label="Refresh Console (refit layout, scroll to bottom)"
+                            title="Reload current terminal"
+                            aria-label="Reload current terminal"
                         >
                             <svg
                                 class="icon"

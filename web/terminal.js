@@ -1405,18 +1405,6 @@ export class TabManager {
         closeAllBtn?.addEventListener('click', handleCloseAll);
         mobileCloseAllBtn?.addEventListener('click', handleCloseAll);
 
-        const reconnectAllBtn = document.getElementById(
-            'reconnect-all-tabs-btn',
-        );
-        const mobileReconnectAllBtn = document.getElementById(
-            'mobile-reconnect-all-tabs-btn',
-        );
-        const handleReconnectAll = () => {
-            this.reconnectAllDead();
-        };
-        reconnectAllBtn?.addEventListener('click', handleReconnectAll);
-        mobileReconnectAllBtn?.addEventListener('click', handleReconnectAll);
-
         const refreshConsoleBtn = document.getElementById(
             'refresh-console-btn',
         );
@@ -3898,14 +3886,6 @@ export class TabManager {
                     type: 'error',
                     title: 'Terminal disconnected',
                     duration: 8000,
-                    action:
-                        tabInfo.exitCode === undefined ||
-                        tabInfo.exitCode === null
-                            ? {
-                                  text: 'Reconnect',
-                                  callback: () => this.reconnectTab(tabInfo),
-                              }
-                            : null,
                 },
             );
         }
@@ -7086,16 +7066,15 @@ export class TabManager {
         setTimeout(poll, 1000);
     }
 
-    // Explicit Refresh rebuilds terminal client connections/state. It never
+    // Reload rebuilds the current terminal's connection/state. It never
     // restarts backend processes, deletes panes or fetches the whole archive.
     refreshConsole() {
-        for (const tab of this.tabs.values()) {
-            if (!tab.term || tab.finalizing || ['pi-rpc', 'review', 'kanban'].includes(tab.coder)) continue;
-            this._cancelHistoryRequest(tab);
-            tab._forceStateRefresh = true;
-            tab.userFollowBottom = true;
-            this.reconnectTab(tab);
-        }
+        const tab = this.getActiveTab();
+        if (!tab?.term || tab.finalizing || ['pi-rpc', 'review', 'kanban'].includes(tab.coder)) return;
+        this._cancelHistoryRequest(tab);
+        tab._forceStateRefresh = true;
+        tab.userFollowBottom = true;
+        this.reconnectTab(tab);
     }
 
     reconnectTab(tabInfo, { auto = false } = {}) {

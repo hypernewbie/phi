@@ -33,6 +33,58 @@ describe('Disconnect Banner UX', () => {
         tabManager.activateTabViewport = vi.fn();
     });
 
+    it.each([undefined, null, 0, -1])(
+        'disconnect notifications have no action for exit code %s',
+        (exitCode) => {
+            const tab = makeTab({ exitCode });
+            tabManager.tabs.set(tab.paneId, tab);
+            tabManager.app.showToast = vi.fn();
+            tabManager._updateHistoryButton = vi.fn();
+            tabManager.updateDocumentTitle = vi.fn();
+            tabManager.maybeAutoReconnect = vi.fn();
+
+            tabManager._handleTerminalDisconnect(tab);
+
+            const [message, options] = tabManager.app.showToast.mock.calls[0];
+            expect(message).toBe('Connection lost on "bash"');
+            expect(options).toEqual({
+                type: 'error',
+                title: 'Terminal disconnected',
+                duration: 8000,
+            });
+            expect(options).not.toHaveProperty('action');
+            expect(tabManager._updateHistoryButton).toHaveBeenCalledWith(tab);
+            expect(tabManager.updateDocumentTitle).toHaveBeenCalledOnce();
+            expect(tabManager.maybeAutoReconnect).toHaveBeenCalledWith(tab);
+        },
+    );
+
+    it('keeps overlay and banner reconnect actions for a recoverable disconnect', () => {
+        const tab = makeTab();
+        tabManager.tabs.set(tab.paneId, tab);
+        tabManager.app.showToast = vi.fn();
+        tabManager._updateHistoryButton = vi.fn();
+        tabManager.updateDocumentTitle = vi.fn();
+        tabManager.maybeAutoReconnect = vi.fn();
+
+        tabManager._handleTerminalDisconnect(tab);
+
+        const overlay = tab.termContainer.querySelector('.reconnect-overlay');
+        expect(overlay.querySelector('.reconnect-btn')).not.toBeNull();
+        expect(overlay.querySelector('.restart-btn')).not.toBeNull();
+        expect(
+            banner.querySelector('.reconnect-all-banner-btn'),
+        ).not.toBeNull();
+
+        overlay.querySelector('.reconnect-btn').click();
+        banner.querySelector('.reconnect-all-banner-btn').click();
+
+        expect(tabManager.reconnectTab.mock.calls).toEqual([
+            [tab],
+            [tab, { auto: false }],
+        ]);
+    });
+
     it('does not report an expected WebSocket close during tab finalization', () => {
         const tab = makeTab({ finalizing: true });
         tabManager.app.showToast = vi.fn();

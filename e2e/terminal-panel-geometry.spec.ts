@@ -46,6 +46,10 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
         [one, []],
         [two, []],
     ]);
+    const connections = new Map<string, number>([
+        [one, 0],
+        [two, 0],
+    ]);
     await page.addInitScript(() => {
         const w = window as unknown as GeometryWindow;
         w.geometryTerms = [];
@@ -113,6 +117,7 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
     });
     await page.routeWebSocket('**/ws/pane/panel-*?*', (socket) => {
         const id = new URL(socket.url()).pathname.split('/').at(-1)!;
+        connections.set(id, connections.get(id)! + 1);
         const header = Buffer.from(
             JSON.stringify({
                 epoch: 7,
@@ -206,8 +211,16 @@ test('actual panel CSS resize, tab activation and refresh synchronize backend di
     await page.locator(`.tab[data-pane-id="${one}"]`).click();
     await expect.poll(() => sizes.get(one)!.length > count).toBe(true);
     await expect.poll(synced).toBe(true);
+    const connectionsBeforeReload = {
+        selected: connections.get(one)!,
+        background: connections.get(two)!,
+    };
     const refreshCount = sizes.get(one)!.length;
     await page.locator('#refresh-console-btn').dispatchEvent('click');
     await expect.poll(() => sizes.get(one)!.length > refreshCount).toBe(true);
+    await expect
+        .poll(() => connections.get(one))
+        .toBe(connectionsBeforeReload.selected + 1);
+    expect(connections.get(two)).toBe(connectionsBeforeReload.background);
     await expect.poll(synced).toBe(true);
 });

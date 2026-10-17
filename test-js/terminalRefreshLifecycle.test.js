@@ -39,24 +39,145 @@ function harness() {
     });
     return { tab, term, ws, manager, frames };
 }
-it('explicit Refresh reconnects every terminal without restarting or losing tab identities', () => {
+function reloadHarness() {
     const h = harness();
-    const other = { term: {}, coder: 'shell', paneId: 'other' };
-    const rpc = { term: {}, coder: 'pi-rpc' };
-    h.manager.tabs = new Map([
-        ['main', h.tab],
-        ['other', other],
-        ['rpc', rpc],
+    const active = Object.assign(h.tab, {
+        paneId: 'active',
+        coder: 'bash',
+        isDead: false,
+        _historyRequestId: 'active-history',
+        _historyBrowsing: true,
+        _forceStateRefresh: false,
+        userFollowBottom: false,
+    });
+    const healthyBackground = {
+        paneId: 'healthy-background',
+        coder: 'bash',
+        term: {},
+        ws: { close: vi.fn() },
+        isDead: false,
+        _historyRequestId: 'healthy-history',
+        _historyBrowsing: true,
+        _forceStateRefresh: 'preserve-healthy',
+        userFollowBottom: false,
+    };
+    const deadBackground = {
+        paneId: 'dead-background',
+        coder: 'bash',
+        term: {},
+        ws: { close: vi.fn() },
+        isDead: true,
+        _historyRequestId: 'dead-history',
+        _historyBrowsing: true,
+        _forceStateRefresh: 'preserve-dead',
+        userFollowBottom: true,
+    };
+    const tabs = new Map([
+        [active.paneId, active],
+        [healthyBackground.paneId, healthyBackground],
+        [deadBackground.paneId, deadBackground],
     ]);
-    h.manager.reconnectTab = vi.fn();
-    h.manager._cancelHistoryRequest = vi.fn();
+    Object.assign(h.manager, {
+        tabs,
+        activePaneId: active.paneId,
+        getActiveTab: TabManager.prototype.getActiveTab,
+        reconnectTab: vi.fn(),
+        _cancelHistoryRequest: vi.fn(),
+        restartTab: vi.fn(),
+        closeTab: vi.fn(),
+        createTab: vi.fn(),
+        finalizeCloseTab: vi.fn(),
+    });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    return { ...h, active, healthyBackground, deadBackground, tabs, fetchSpy };
+}
+
+it.each([
+    ['healthy', false],
+    ['disconnected', true],
+])(
+    'reload targets only the %s active terminal without restarting it',
+    (_state, isDead) => {
+        const h = reloadHarness();
+        h.active.isDead = isDead;
+        const keys = [...h.tabs.keys()];
+        const entries = [...h.tabs.entries()];
+        const healthyState = { ...h.healthyBackground };
+        const deadState = { ...h.deadBackground };
+        const activeSocket = h.active.ws;
+
+        h.manager.refreshConsole();
+
+        expect(h.manager._cancelHistoryRequest.mock.calls).toEqual([
+            [h.active],
+        ]);
+        expect(h.active._forceStateRefresh).toBe(true);
+        expect(h.active.userFollowBottom).toBe(true);
+        expect(h.manager.reconnectTab.mock.calls).toEqual([[h.active]]);
+        expect(h.manager.tabs).toBe(h.tabs);
+        expect([...h.manager.tabs.keys()]).toEqual(keys);
+        expect([...h.manager.tabs.entries()]).toEqual(entries);
+        expect(h.active.paneId).toBe('active');
+        expect(h.active.ws).toBe(activeSocket);
+        expect(h.healthyBackground).toMatchObject(healthyState);
+        expect(h.healthyBackground.ws).toBe(healthyState.ws);
+        expect(h.deadBackground).toMatchObject(deadState);
+        expect(h.deadBackground.ws).toBe(deadState.ws);
+        expect(h.manager.restartTab).not.toHaveBeenCalled();
+        expect(h.manager.closeTab).not.toHaveBeenCalled();
+        expect(h.manager.createTab).not.toHaveBeenCalled();
+        expect(h.manager.finalizeCloseTab).not.toHaveBeenCalled();
+        expect(h.fetchSpy).not.toHaveBeenCalled();
+    },
+);
+
+it('uses the current active selection on each reload call', () => {
+    const h = reloadHarness();
     h.manager.refreshConsole();
-    expect(h.manager.reconnectTab.mock.calls).toEqual([[h.tab], [other]]);
-    expect(h.manager._cancelHistoryRequest).toHaveBeenCalledTimes(2);
-    expect(h.tab._forceStateRefresh).toBe(true);
-    expect(other._forceStateRefresh).toBe(true);
-    expect(other.paneId).toBe('other');
-    expect(h.manager.tabs.size).toBe(3);
+    h.manager.activePaneId = h.healthyBackground.paneId;
+    h.manager.refreshConsole();
+
+    expect(h.manager._cancelHistoryRequest.mock.calls).toEqual([
+        [h.active],
+        [h.healthyBackground],
+    ]);
+    expect(h.manager.reconnectTab.mock.calls).toEqual([
+        [h.active],
+        [h.healthyBackground],
+    ]);
+    expect(h.deadBackground._forceStateRefresh).toBe('preserve-dead');
+    expect(h.deadBackground.userFollowBottom).toBe(true);
+    expect(h.fetchSpy).not.toHaveBeenCalled();
+});
+
+it.each([
+    ['no active ID', undefined, 'eligible'],
+    ['unknown active ID', 'missing', 'eligible'],
+    ['missing terminal', 'active', 'missing-terminal'],
+    ['finalizing tab', 'active', 'finalizing'],
+    ['Pi RPC panel', 'active', 'pi-rpc'],
+    ['Review panel', 'active', 'review'],
+    ['Kanban panel', 'active', 'kanban'],
+])('does not reload with %s', (_name, activePaneId, activeKind) => {
+    const h = reloadHarness();
+    h.manager.activePaneId = activePaneId;
+    if (activeKind === 'missing-terminal') h.active.term = null;
+    if (activeKind === 'finalizing') h.active.finalizing = true;
+    if (['pi-rpc', 'review', 'kanban'].includes(activeKind))
+        h.active.coder = activeKind;
+    const before = { ...h.active };
+
+    h.manager.refreshConsole();
+
+    expect(h.manager._cancelHistoryRequest).not.toHaveBeenCalled();
+    expect(h.manager.reconnectTab).not.toHaveBeenCalled();
+    expect(h.active).toMatchObject(before);
+    expect(h.manager.restartTab).not.toHaveBeenCalled();
+    expect(h.manager.closeTab).not.toHaveBeenCalled();
+    expect(h.manager.createTab).not.toHaveBeenCalled();
+    expect(h.manager.finalizeCloseTab).not.toHaveBeenCalled();
+    expect(h.fetchSpy).not.toHaveBeenCalled();
 });
 
 it('a same-size forced refresh repaints xterm, resyncs its viewport and resizes the backend', () => {
