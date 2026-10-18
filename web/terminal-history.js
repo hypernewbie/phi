@@ -177,7 +177,7 @@ export const terminalHistoryMethods = {
                     tabInfo.userFollowBottom = true;
                     tabInfo.term.scrollToBottom();
                 }
-                tabInfo.fitAddon?.fit?.();
+                this._fitVisibleTerminal(tabInfo);
                 if (tabInfo._historyBrowsing) tabInfo.scrollToBottomBtn?.classList.remove('hidden');
                 this._refreshTerminalScreen(tabInfo);
             } catch (error) {

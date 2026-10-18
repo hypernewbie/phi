@@ -99,6 +99,7 @@ test('corrupt saved tabs do not abort Phi startup and Shell still launches', asy
         },
     });
     try {
+        // The static Shell control is clickable before quick-launch is ready.
         await Promise.all([
             page.waitForEvent(
                 'console',
